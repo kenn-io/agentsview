@@ -35,8 +35,8 @@ coding yesterday?" — across multiple coding agents from one archive.
     IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual Studio Copilot**, **Mistral
     Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**, and **StepCode**. Coverage
     also includes **Cline CLI**, **Tencent CodeBuddy CN**, **Augure Code**,
-    **Augure Desktop 3 beta**, and **Charm Crush**, and reads **DeepSeek Harness**
-    formats through version 3.
+    **Augure Desktop 3 beta**, **Charm Crush**, and **fx**, and reads **DeepSeek
+    Harness** formats through version 3.
 
     Coverage depends on what each agent records. AgentsView uses recorded costs
     when available; otherwise it estimates cost from usable token counts and a
@@ -48,6 +48,18 @@ Crush contributes recorded session totals and cost, with no per-message token or
 cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
+
+fx stopped writing `usage-v2.json` in
+[vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226).
+AgentsView reads it when an older session has one, as cumulative totals per
+model dated at the earlier of the session's latest event and the usage file's
+modification time. Sessions from current fx have no token usage. An old session
+resumed in newer fx keeps its old totals. Costs use AgentsView's pricing catalog.
+Tool results use saved `.txt` output only when it is a regular UTF-8 file that
+matches the saved byte count or reaches the 16 MiB cap. Otherwise, the preview
+stays. Restored files refresh the result on the next sync. Freshness checks
+cover entry names, sizes, and modification times in `tool-results/`. This
+suffices because fx names result files by content hash.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

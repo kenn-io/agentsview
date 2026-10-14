@@ -43,6 +43,7 @@ const (
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
 	AgentTau            AgentType = "tau"
+	AgentFx             AgentType = "fx"
 	AgentPrimeAgent     AgentType = "prime-agent"
 	AgentOMP            AgentType = "omp"
 	AgentOMO            AgentType = "omo"
@@ -550,6 +551,16 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".pi/agent/sessions"},
 		IDPrefix:          "pi:",
 		FileBased:         true,
+	},
+	{
+		Type:        AgentFx,
+		DisplayName: "fx",
+		EnvVar:      "FX_SESSIONS_DIR",
+		ConfigKey:   "fx_dirs",
+		DefaultDirs: []string{".fx/sessions"},
+		IDPrefix:    "fx:",
+		FileBased:   true,
+		Usage:       UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
 		Type:        AgentTau,
@@ -1461,11 +1472,14 @@ type ParsedSession struct {
 	// current releases may omit session_index.jsonl entirely, while an older
 	// index entry with a blank thread_name explicitly clears a stored title.
 	SessionNamePresent bool
-	StartedAt          time.Time
-	EndedAt            time.Time
-	MessageCount       int
-	UserMessageCount   int
-	File               FileInfo
+	// PRLinks lists the pull or merge requests the source associated with
+	// this session, deduplicated by URL in first-appearance order.
+	PRLinks          []PRLink
+	StartedAt        time.Time
+	EndedAt          time.Time
+	MessageCount     int
+	UserMessageCount int
+	File             FileInfo
 
 	// TerminationStatus describes how the session appears to have
 	// ended. Empty string = unknown (parser did not classify, or

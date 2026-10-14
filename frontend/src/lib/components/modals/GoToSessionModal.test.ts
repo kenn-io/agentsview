@@ -2,8 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { ui } from "../../stores/ui.svelte.js";
-import { sessions } from "../../stores/sessions.svelte.js";
-import { router } from "../../stores/router.svelte.js";
 // @ts-ignore
 import GoToSessionModal from "./GoToSessionModal.svelte";
 
@@ -22,7 +20,6 @@ vi.mock("../../api/generated/index", () => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-
   isAbortError: vi.fn(
     (error: unknown) => error instanceof DOMException && error.name === "AbortError",
   ),
@@ -216,10 +213,16 @@ describe("GoToSessionModal", () => {
     let resolveSecond!: (value: { ids: string[] }) => void;
     harness.resolveSessionIds
       .mockImplementationOnce(
-        () => new Promise<{ ids: string[] }>((resolve) => { resolveFirst = resolve; }),
+        () =>
+          new Promise<{ ids: string[] }>((resolve) => {
+            resolveFirst = resolve;
+          }),
       )
       .mockImplementationOnce(
-        () => new Promise<{ ids: string[] }>((resolve) => { resolveSecond = resolve; }),
+        () =>
+          new Promise<{ ids: string[] }>((resolve) => {
+            resolveSecond = resolve;
+          }),
       );
 
     await setInput(UUID);
@@ -235,7 +238,9 @@ describe("GoToSessionModal", () => {
     const latestUuid = UUID.replace("000", "001");
     resolveSecond({ ids: [`codex:${latestUuid}`] });
     await settle();
-    expect(harness.sessions.navigateToSession).toHaveBeenCalledExactlyOnceWith(`codex:${latestUuid}`);
+    expect(harness.sessions.navigateToSession).toHaveBeenCalledExactlyOnceWith(
+      `codex:${latestUuid}`,
+    );
     expect(harness.router.navigateToSession).toHaveBeenCalledExactlyOnceWith(`codex:${latestUuid}`);
   });
 
@@ -243,7 +248,10 @@ describe("GoToSessionModal", () => {
     await open();
     let resolve!: (value: { ids: string[] }) => void;
     harness.resolveSessionIds.mockImplementation(
-      () => new Promise<{ ids: string[] }>((done) => { resolve = done; }),
+      () =>
+        new Promise<{ ids: string[] }>((done) => {
+          resolve = done;
+        }),
     );
     await setInput(UUID);
     await pressKey("Enter");
@@ -259,7 +267,10 @@ describe("GoToSessionModal", () => {
     ui.activeModal = "goToSession";
     let resolveReplacement!: (value: { ids: string[] }) => void;
     harness.resolveSessionIds.mockImplementationOnce(
-      () => new Promise<{ ids: string[] }>((done) => { resolveReplacement = done; }),
+      () =>
+        new Promise<{ ids: string[] }>((done) => {
+          resolveReplacement = done;
+        }),
     );
     await open();
     await setInput(UUID);

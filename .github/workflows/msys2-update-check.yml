@@ -22,6 +22,13 @@ jobs:
         include:
           - name: Other packages
             package: ./...
+          # Keep CLI filters aligned with the CLI entries in ci.yml.
+          - name: CLI A-P
+            package: ./cmd/agentsview
+            run: '^Test[A-P]'
+          - name: CLI remaining
+            package: ./cmd/agentsview
+            skip: '^Test[A-P]'
           - name: Capture, Database, Parser
             package: ./internal/capture ./internal/db ./internal/parser
           - name: DuckDB
@@ -33,7 +40,7 @@ jobs:
           - name: Sync remaining
             package: ./internal/sync
             skip: '^Test[A-R]'
-    runs-on: namespace-profile-windows-16cpu
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -79,10 +86,11 @@ jobs:
         run: |
           $packages = '${{ matrix.package }}' -split ' '
           if ('${{ matrix.package }}' -eq './...') {
-            # Keep SQLite-heavy packages on separate runners, as in normal CI.
+            # Keep isolated packages on separate runners, as in normal CI.
             $packages = @(go list ./...)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $isolatedPackages = @(
+              'go.kenn.io/agentsview/cmd/agentsview'
               'go.kenn.io/agentsview/internal/capture'
               'go.kenn.io/agentsview/internal/db'
               'go.kenn.io/agentsview/internal/duckdb'

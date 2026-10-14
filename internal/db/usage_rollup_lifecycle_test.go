@@ -251,6 +251,35 @@ func TestUsageBackfillLocationsPrunesStaleLocalTimezones(t *testing.T) {
 	}
 }
 
+func TestUsageRollupCompletionWaitsForCallRemoval(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "session", "project-a",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	snapshot, fills, cache := prepareUsageRollupTest(t, database)
+	started := make(chan struct{})
+	cache.rollup.observer.beforeEnsure = func() {
+		cache.rollup.mu.Lock()
+		close(started)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
+			export.NewPricingResolver(snapshot.PricingRows))
+		done <- err
+	}()
+	<-started
+	func() {
+		defer cache.rollup.mu.Unlock()
+		// Hold call removal until the worker has finished writing the rollup.
+		require.Eventually(t, func() bool {
+			return usageCacheCount(t, cache, "usage_rollup_installs") == 1
+		}, 5*time.Second, time.Millisecond)
+		assert.Never(t, func() bool { return len(done) != 0 }, time.Second, time.Millisecond,
+			"a completed request must be removed before its caller can request another rollup")
+	}()
+	require.NoError(t, <-done)
+}
+
 func TestUsageRollupCallKeyIncludesCursorHighWater(t *testing.T) {
 	snapshot := usageQuerySnapshot{CursorHighWater: 1, location: time.UTC}
 	first := usageRollupCallKey(snapshot, nil, "pricing")

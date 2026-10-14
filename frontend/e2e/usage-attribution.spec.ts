@@ -22,20 +22,29 @@ test.describe("Usage attribution touch", () => {
 });
 
 test.describe("Usage attribution selection", () => {
-  for (const [view, selector, brushed] of [["treemap", ".tile", false], ["list", ".list-row", false], ["list", ".list-row", true]] as const) {
+  for (const [view, selector, brushed] of [
+    ["treemap", ".tile", false],
+    ["list", ".list-row", false],
+    ["list", ".list-row", true],
+  ] as const) {
     test(`selecting keeps ${brushed ? "brushed " : ""}${view} geometry`, async ({ page }) => {
       // Summary cards wrap at this width, so a card dropping out on select would shift the panel.
       await page.setViewportSize({ width: 700, height: 900 });
       // A refresh includes both summaries and the comparison requests they start afterward.
-      const refresh = (selected: boolean) => Promise.all(
-        ["summary", "top-sessions", "comparison", "pairwise-comparison"].map(async (endpoint) => {
-          const response = await page.waitForResponse((response) => {
-            const url = new URL(response.url());
-            return url.pathname === `/api/v1/usage/${endpoint}` && url.searchParams.has("project_key") === selected && response.ok();
-          });
-          await response.finished();
-        }),
-      );
+      const refresh = (selected: boolean) =>
+        Promise.all(
+          ["summary", "top-sessions", "comparison", "pairwise-comparison"].map(async (endpoint) => {
+            const response = await page.waitForResponse((response) => {
+              const url = new URL(response.url());
+              return (
+                url.pathname === `/api/v1/usage/${endpoint}` &&
+                url.searchParams.has("project_key") === selected &&
+                response.ok()
+              );
+            });
+            await response.finished();
+          }),
+        );
       const loaded = refresh(false);
       await page.goto("/usage");
       await loaded;
@@ -51,19 +60,24 @@ test.describe("Usage attribution selection", () => {
         await page.mouse.down();
         await page.mouse.move(bounds.x + bounds.width * 0.75, y, { steps: 8 });
         await page.mouse.up();
-        await expect(page.locator(".chart-container").getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
+        await expect(
+          page
+            .locator(".chart-container")
+            .getByRole("button", { name: "Clear selection", exact: true }),
+        ).toBeVisible();
       }
       await expect(page.locator(".usage-content")).toHaveAttribute("aria-busy", "false");
       const items = panel.locator(selector);
       // Content coordinates, so clicking's scroll into view and scroll anchoring cannot mask a shift.
-      const geometry = () => items.evaluateAll((nodes) => {
-        const content = document.querySelector(".usage-content")!;
-        const top = content.getBoundingClientRect().top - content.scrollTop;
-        return nodes.map((node) => {
-          const { x, y, width, height } = node.getBoundingClientRect();
-          return [x, y - top, width, height].map(Math.round);
+      const geometry = () =>
+        items.evaluateAll((nodes) => {
+          const content = document.querySelector(".usage-content")!;
+          const top = content.getBoundingClientRect().top - content.scrollTop;
+          return nodes.map((node) => {
+            const { x, y, width, height } = node.getBoundingClientRect();
+            return [x, y - top, width, height].map(Math.round);
+          });
         });
-      });
       const before = await geometry();
       const narrowed = refresh(true);
       await items.nth(1).click();
@@ -93,13 +107,26 @@ test.describe("Usage attribution selection", () => {
     await expect(panelClear).toBeVisible();
     const style = (button: Element) => {
       const css = getComputedStyle(button);
-      return { height: css.height, padding: css.padding, font: css.font, background: css.backgroundColor, border: css.border, radius: css.borderRadius };
+      return {
+        height: css.height,
+        padding: css.padding,
+        font: css.font,
+        background: css.backgroundColor,
+        border: css.border,
+        radius: css.borderRadius,
+      };
     };
-    expect(await chart.getByRole("button", { name: "Clear selection", exact: true }).evaluate(style)).toEqual(expect.objectContaining({ height: "22px", padding: "0px 8px" }));
-    expect(await panel.getByRole("button", { name: "Open", exact: true }).evaluate(style)).toEqual(await panelClear.evaluate(style));
+    expect(
+      await chart.getByRole("button", { name: "Clear selection", exact: true }).evaluate(style),
+    ).toEqual(expect.objectContaining({ height: "22px", padding: "0px 8px" }));
+    expect(await panel.getByRole("button", { name: "Open", exact: true }).evaluate(style)).toEqual(
+      await panelClear.evaluate(style),
+    );
   });
 
-  test("Back and Forward follow page history and retain populated project rows", async ({ page }) => {
+  test("Back and Forward follow page history and retain populated project rows", async ({
+    page,
+  }) => {
     await page.goto("/sessions");
     await clickNavTab(page, "Usage");
     const panel = page.locator(".attribution-panel");

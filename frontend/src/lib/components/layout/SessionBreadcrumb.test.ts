@@ -387,7 +387,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const teardown of [...live.values()]) teardown();
+  for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
   document.body.innerHTML = "";
@@ -1208,7 +1208,7 @@ describe("SessionBreadcrumb", () => {
   it("leaves tool-effectiveness out of the menu when the server can't generate insights", async () => {
     const previous = sync.serverVersion;
     sync.serverVersion = {
-      ...(previous ?? {}),
+      ...previous,
       insight_generation_available: false,
     } as typeof sync.serverVersion;
     const component = mount(SessionBreadcrumb, {

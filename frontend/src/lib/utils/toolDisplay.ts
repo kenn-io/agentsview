@@ -15,12 +15,7 @@ export function displayToolName(call: { tool_name: string; category?: string | n
 }
 
 // Keep this list aligned with internal/assets/assets.go mediaTypeToExt.
-const INLINE_IMAGE_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
+const INLINE_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const INLINE_IMAGE_DATA_URI = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 
 function inlineImageMarkdown(imageURL: unknown): string | null {

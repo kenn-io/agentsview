@@ -54,14 +54,15 @@ type manifestSession struct {
 	// session_quality_signals field is the single canonical carrier, built
 	// from StoredQualitySignals and restored with ApplyQualitySignals.
 
-	Cwd                  string `json:"cwd,omitempty"`
-	GitBranch            string `json:"git_branch,omitempty"`
-	SourceSessionID      string `json:"source_session_id,omitempty"`
-	SourceVersion        string `json:"source_version,omitempty"`
-	GroupKey             string `json:"group_key,omitempty"`
-	TranscriptFidelity   string `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines int    `json:"parser_malformed_lines,omitzero"`
-	IsTruncated          bool   `json:"is_truncated,omitzero"`
+	Cwd                  string      `json:"cwd,omitempty"`
+	GitBranch            string      `json:"git_branch,omitempty"`
+	PRLinks              []db.PRLink `json:"pr_links,omitempty"`
+	SourceSessionID      string      `json:"source_session_id,omitempty"`
+	SourceVersion        string      `json:"source_version,omitempty"`
+	GroupKey             string      `json:"group_key,omitempty"`
+	TranscriptFidelity   string      `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines int         `json:"parser_malformed_lines,omitzero"`
+	IsTruncated          bool        `json:"is_truncated,omitzero"`
 
 	DeletedAt          *string `json:"deleted_at,omitempty"`
 	TerminationStatus  *string `json:"termination_status,omitempty"`
@@ -130,6 +131,7 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 
 		Cwd:                  s.Cwd,
 		GitBranch:            s.GitBranch,
+		PRLinks:              s.PRLinks,
 		SourceSessionID:      s.SourceSessionID,
 		SourceVersion:        s.SourceVersion,
 		GroupKey:             s.GroupKey,
@@ -192,6 +194,7 @@ func (m manifestSession) dbSession() db.Session {
 
 		Cwd:                  m.Cwd,
 		GitBranch:            m.GitBranch,
+		PRLinks:              m.PRLinks,
 		SourceSessionID:      m.SourceSessionID,
 		SourceVersion:        m.SourceVersion,
 		GroupKey:             m.GroupKey,

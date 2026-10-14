@@ -28,15 +28,20 @@ The script reads the provider headings in
 audit until its heading and evidence entry exist there; confirm that first. It
 reports:
 
+- chips that still use a two-letter text tag. Each is a sourcing target for step
+  2; a vendor may have published a logo since the last run. When a sourcing pass
+  finds nothing, add the chip to `TEXT_TAG_ACCEPTED` in the script with the
+  month and what was searched, so later runs skip it until someone has a new
+  lead.
 - providers with no landing-grid chip, matched by normalized name against the
-  chip list. Judge each line. Importers and IDE/CLI variants of a brand
-  already on the grid stay off it; add such keys to `INTENTIONALLY_UNLISTED`
-  in the script with the reason. A provider the matcher missed because its
-  chip has a different display name needs no action; note it in the report.
-  Everything else needs a mark.
+  chip list. Judge each line. Importers and IDE/CLI variants of a brand already
+  on the grid stay off it; add such keys to `INTENTIONALLY_UNLISTED` in the
+  script with the reason. A provider the matcher missed because its chip has a
+  different display name (`codebuddy` is the CodeBuddy CN chip) goes in
+  `CHIP_NAMES`. Everything else needs a mark.
 - sprite symbols with no kit-ui id, which is the kit-ui gap list.
-- chips whose name appears in no kit-ui `agents` list. A chip that uses a text
-  tag instead of a glyph (IcodeMate) is expected here and needs no action.
+- chips whose name appears in no kit-ui `agents` list. A chip listed in
+  `TEXT_TAG_ACCEPTED` is expected here and needs no action.
 
 ## 2. Source a mark for each missing harness
 
@@ -45,27 +50,43 @@ scratch directory outside any repository:
 
 - Find the vendor repository from the provider's entry in
   `docs/internal/session-format-sources.md`; if the entry has no repository,
-  search the product site. Look for a first-party vector: `assets/`, `docs/`,
-  `.github/`, the README header image, `favicon.svg`, a VS Code or JetBrains
-  extension icon.
+  search the product site. Look for a first-party vector, in roughly this order:
+  - The repository: `assets/`, `docs/`, `.github/assets/`, the README header
+    image, and web packages such as `packages/web/public/`.
+  - The product site: follow the page's `<link rel="icon">` and the header
+    `<img src>` targets rather than guessing `/favicon.svg`. Products sold in
+    China often have a separate `.cn` site with the current mark.
+  - A JetBrains plugin: `https://plugins.jetbrains.com/api/plugins/<id>` returns
+    an `icon` path such as `/files/<id>/<update>/icon/default.svg` (fetch with
+    `curl -L`). The `/api/icon?pluginId=` endpoint returns 403.
+  - A VS Code extension: find the publisher and name with the Marketplace
+    `extensionquery` API, download
+    `https://marketplace.visualstudio.com/_apis/public/gallery/publishers/<publisher>/vsextensions/<name>/latest/vspackage`,
+    and open the `.vsix` with Python's `zipfile` if `unzip` is missing. Check
+    both the extension icon and the webview assets; they can show different
+    generations of the mark. Prefer the one the product site shows.
 - Fallbacks in order: the lobehub monochrome redraw
-  (`npm pack @lobehub/icons-static-svg`, file `icons/<name>.svg`) when a
-  side-by-side render matches the official mark's silhouette; the publisher's
-  mark when the product has no distinct logo (this is how Codex draws OpenAI
-  and QClaw draws Tencent); potrace of an official raster of at least 512 px,
-  stated as such. Never hand-draw.
+  (`npm pack @lobehub/icons-static-svg`, file `icons/<name>.svg`; its `-color`
+  variants can be older designs) when a side-by-side render matches the official
+  mark's silhouette; the publisher's mark when the product has no distinct logo
+  (this is how Codex draws OpenAI and QClaw draws Tencent); potrace of an
+  official raster of at least 512 px, stated as such. Never hand-draw.
 - Normalize: parse the source, compute the mark's bounding box, then scale and
   translate it into a 20-unit box centred at (12,12) on `viewBox="0 0 24 24"`,
-  either by rewriting the path coordinates or by wrapping in
-  `<g transform="…">` (the sprite already contains both styles). Use
-  `fill-rule="evenodd"` for holes. Strip fill and stroke colours, gradients,
-  masks, clip paths, filters, and `<style>`. Valid XML, under 4 KB.
-- Render with `rsvg-convert` at 64 px and 16 px as a light glyph on a dark
-  background (add a temporary `fill="#fff"` for the preview only) and view the
-  PNGs.
+  either by rewriting the path coordinates or by wrapping in `<g transform="…">`
+  (the sprite already contains both styles). Use `fill-rule="evenodd"` for
+  holes. A mark drawn as a light glyph on a coloured tile or disc becomes one
+  shape with the glyph cut out as a hole; when the glyph overflows the tile,
+  clip it with an exact boolean operation (for example `skia-pathops` in a
+  scratch venv), never by hand. Strip fill and stroke colours, gradients, masks,
+  clip paths, filters, and `<style>`. Valid XML, under 4 KB.
+- Render at 64 px and 16 px as a light glyph on a dark background (add a
+  temporary `fill="#fff"` for the preview only) and view the PNGs. Use
+  `rsvg-convert`, or ImageMagick when it is missing:
+  `magick -background '#1a1a1a' -density 600 in.svg -resize 64x64 out.png`.
 - Report a table: agent, slug, source URL, licence, confidence, and anything
-  that has no usable vector. A harness with no findable logo keeps a
-  two-letter text tag, as IcodeMate does.
+  that has no usable vector, plus the places searched. A harness with no
+  findable logo keeps a two-letter text tag and goes in `TEXT_TAG_ACCEPTED`.
 
 Look at every rendered PNG yourself before using a mark. Same-hue accent pixels
 and thin decorative rings vanish in monochrome; drop them rather than keep an
@@ -78,32 +99,41 @@ unreadable silhouette.
 1. Wrap each file's inner markup as
    `<symbol id="i-<slug>" viewBox="0 0 24 24">…</symbol>` and insert it after
    the last existing `<symbol>` line. A publisher fallback reuses the existing
-   symbol id instead of adding one.
+   symbol id instead of adding one. Products of one brand share a symbol (Augure
+   Code and Augure Desktop both use `i-augure`).
+
+1. To replace a text tag, swap the chip's glyph text for the `<svg>` below and
+   keep the chip where it is unless it sits out of alphabetical order after
+   Zencoder.
 
 1. Add a chip. The grid opens with a fixed run of chips that ends at Zencoder;
    the chips after Zencoder are roughly alphabetical, so place the new chip by
    name among them. Use the display name from the README session discovery
    table:
 
-    ```html
-    <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-<slug>"/></svg></span><span class="agent-chip-name"><Name></span></a>
-    ```
+   ```html
+   <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-<slug>"/></svg></span><span class="agent-chip-name"><Name></span></a>
+   ```
 
-    Keep `xlink:href`; the built-site check requires it.
+   Keep `xlink:href`; the built-site check requires it.
 
 1. Verify: `make docs-check`, then
 
-    ```bash
-    (cd docs/website && python3 -m http.server 8766 --bind 127.0.0.1 &)
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-      --window-size=1280,2000 --screenshot=/tmp/grid.png http://127.0.0.1:8766/index.html
-    ```
+   ```bash
+   (cd docs/website && python3 -m http.server 8766 --bind 127.0.0.1 &)
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+     --window-size=1280,2000 --screenshot=/tmp/grid.png http://127.0.0.1:8766/index.html
+   ```
 
-    Crop to the grid and show the person the image.
+   On Linux, use Playwright's Chromium
+   (`~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`) with the same
+   flags plus `--no-sandbox`.
 
-1. Rerun the audit; the grid list must be empty. Commit and open the pull
-   request with `kenn:commit-push-pr`. The PR body lists where each mark came
-   from and its licence, since the diff cannot show that.
+   Crop to the grid and show the person the image.
+
+1. Rerun the audit; the grid and text-tag lists must be empty. Commit and open
+   the pull request with `kenn:commit-push-pr`. The PR body lists where each
+   mark came from and its licence, since the diff cannot show that.
 
 ## 4. Mirror into kit-ui
 
@@ -117,8 +147,11 @@ Work in a fresh worktree from kit-ui `main`. One commit touches:
 | `docs/components/harness-icon.md`         | A row in the Harnesses table: id in backticks, brand, then the agent names comma separated, in the same three columns as the rows above it   |
 | `tests/browser/harness-icon.spec.ts`      | Raise both `toHaveCount` values by the number added                                                                                          |
 
-Run `bun install`, `bun run fmt`, `bun run check`, `bun run lint`,
-`bun run test:browser`, and `bun run build`. Screenshot the HarnessIcon page of
+Run `bun install`, `bun run fmt`, `bun run generate:types` (kit-ui commits the
+generated `types/` declarations, and `bun run check:types` fails until they
+match), `bun run check`, `bun run lint`, `bun run test:browser`, and
+`bun run build`. Use the brand as the id and label, not the product: StepCode
+draws `stepfun`, as QClaw draws `tencent`. Screenshot the HarnessIcon page of
 the demo gallery (`bun run dev -- --port <n>`, then `/#harness-icon` with the
 same headless Chrome command). Open the PR; its body references the AgentsView
 PR for provenance.
@@ -152,5 +185,5 @@ bump for icon work.
 - A mark that renders black on a dark preview: the file still carries a fill
   colour, or the preview omitted one.
 - Skipping the private-terms scrub before push. SVG path data trips the
-  IP-address heuristic, which is a false positive, but a private repository
-  name in a comment is not.
+  IP-address heuristic, which is a false positive, but a private repository name
+  in a comment is not.

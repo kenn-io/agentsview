@@ -83,7 +83,9 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
-	token             string
+	// apiVersion is the probed server API version, or 0 when unknown.
+	apiVersion int
+	token      string
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -115,13 +117,15 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
 ) service.SessionService {
-	return newHTTPBackend(
+	b := newHTTPBackend(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
+	b.apiVersion = capabilities.APIVersion
+	return b
 }
 
 func newHTTPBackend(
@@ -275,9 +279,34 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
+// Probe only when the backend has no version so unfiltered lists need no extra request.
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+	version := b.apiVersion
+	if version == 0 {
+		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		if err != nil {
+			return err
+		}
+		version = capabilities.APIVersion
+	}
+	if version < service.SessionAnnotationsAPIVersion {
+		return fmt.Errorf(
+			"server API version %d does not support session labels, parent links, or their filters; "+
+				"restart or upgrade the server",
+			version,
+		)
+	}
+	return nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
+	if len(f.Labels) > 0 || f.PR != "" {
+		if err := b.requireSessionAnnotations(ctx); err != nil {
+			return nil, err
+		}
+	}
 	q, err := filterToQuery(f)
 	if err != nil {
 		return nil, err
@@ -373,11 +402,11 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(f.MinUserMessages))
 	}
-	if f.IncludeOneShot {
-		q.IncludeOneShot = new(true)
+	if f.IncludeOneShot || f.OneShotFilterSet {
+		q.IncludeOneShot = new(f.IncludeOneShot)
 	}
-	if f.IncludeAutomated {
-		q.IncludeAutomated = new(true)
+	if f.IncludeAutomated || f.AutomatedFilterSet {
+		q.IncludeAutomated = new(f.IncludeAutomated)
 	}
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
@@ -402,6 +431,12 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	}
 	if f.Starred {
 		q.Starred = new(true)
+	}
+	if len(f.Labels) > 0 {
+		q.Label = f.Labels
+	}
+	if f.PR != "" {
+		q.Pr = new(f.PR)
 	}
 	if f.Cursor != "" {
 		q.Cursor = new(f.Cursor)
@@ -510,6 +545,61 @@ func (b *httpBackend) ToolCalls(
 		return nil, err
 	}
 	return out, nil
+}
+
+func (b *httpBackend) ChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDChildrenWithResponse(ctx, &apiclient.GetAPIV1SessionsIDChildrenRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDChildrenPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	children := []db.Session{}
+	if response.JSON200 != nil {
+		children = append(children, *response.JSON200...)
+	}
+	for i := range children {
+		children[i].WebURL = b.sessionWebURL(children[i].ID)
+	}
+	return children, nil
+}
+
+func (b *httpBackend) RecentEdits(
+	ctx context.Context, f service.RecentEditsFilter,
+) (*db.RecentEditsResult, error) {
+	// Clamp like the direct backend so out-of-range paging is not rejected.
+	p := db.NormalizeRecentEditsParams(db.RecentEditsParams{
+		Project: f.Project, Search: f.Search, Limit: f.Limit, Offset: f.Offset,
+	})
+	q := &apiclient.GetAPIV1RecentEditsQuery{Limit: new(int64(p.Limit))}
+	if p.Project != "" {
+		q.Project = new(p.Project)
+	}
+	if p.Search != "" {
+		q.Search = new(p.Search)
+	}
+	if p.Offset > 0 {
+		q.Offset = new(int64(p.Offset))
+	}
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1RecentEditsWithResponse(ctx, &apiclient.GetAPIV1RecentEditsRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200, nil
 }
 
 func (b *httpBackend) Sync(

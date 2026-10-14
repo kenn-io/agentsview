@@ -1,7 +1,7 @@
 <!-- ABOUTME: Session Vital Signs panel — replaces ActivityMinimap on the right column. -->
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CopyButton, Tooltip } from "@kenn-io/kit-ui";
+  import { Chip, CopyButton, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../../api/generated/sessions/sessions.js";
@@ -25,16 +25,22 @@
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
   import SubagentCalls from "./SubagentCalls.svelte";
-  import { ChevronRightIcon, XIcon } from "../../icons.js";
+  import { ChevronRightIcon, GitPullRequestIcon, XIcon } from "../../icons.js";
+  import { displayPRLinks } from "../../utils/prLinks.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import type { Session } from "../../api/types/core.js";
 
   interface Props {
     sessionId: string;
     session: Session | undefined;
+    /** Called when a label chip is clicked; chips are static without it. */
+    onFilterLabel?: (label: string) => void;
   }
 
-  let { sessionId, session }: Props = $props();
+  let { sessionId, session, onFilterLabel }: Props = $props();
+
+  let prLinks = $derived(displayPRLinks(session?.pr_links));
+  let labels = $derived(session?.labels ?? []);
 
   $effect(() => {
     void sessionTiming.load(sessionId);
@@ -377,6 +383,61 @@
               />
             {/if}
           </div>
+          {#if prLinks.length > 0}
+            <div class="context-row">
+              <div class="context-text">
+                <div class="context-label">
+                  {m.session_vitals_pull_requests()}
+                </div>
+                <ul class="context-list">
+                  {#each prLinks as link (link.href)}
+                    <li>
+                      <a
+                        class="context-value context-link"
+                        href={link.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={m.session_vitals_open_pull_request({ pr: link.label })}
+                      >
+                        <GitPullRequestIcon size="11" strokeWidth="2" aria-hidden="true" />
+                        <bdi dir="ltr">{link.label}</bdi>
+                      </a>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            </div>
+          {/if}
+          {#if labels.length > 0}
+            <div class="context-row">
+              <div class="context-text">
+                <div class="context-label">
+                  {m.session_vitals_labels()}
+                </div>
+                <div class="context-chips">
+                  {#each labels as label (label)}
+                    {#if onFilterLabel}
+                      <Chip
+                        size="xs"
+                        tone="neutral"
+                        uppercase={false}
+                        interactive
+                        title={m.session_vitals_filter_by_label({ label })}
+                        onclick={() => onFilterLabel(label)}
+                      >{label}</Chip>
+                    {:else}
+                      <Chip
+                        size="xs"
+                        tone="neutral"
+                        uppercase={false}
+                        title={label}
+                      >{label}</Chip>
+                    {/if}
+                  {/each}
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
       {/if}
       {#if timing}
@@ -837,6 +898,47 @@
 
   .context-tooltip {
     min-width: 0;
+  }
+
+  .context-list {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .context-link {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+
+  .context-link :global(svg) {
+    flex-shrink: 0;
+  }
+
+  .context-link bdi {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .context-link:hover,
+  .context-link:focus-visible {
+    text-decoration: underline;
+  }
+
+  .context-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .context-chips :global(.kit-chip) {
+    max-width: 100%;
   }
 
   .context-tooltip :global(.kit-tooltip-trigger) {

@@ -251,6 +251,14 @@ func (b *directBackend) List(
 			f.OrderBy, err, strings.Join(db.SortKeys(), ", "),
 		)
 	}
+	pr, err := db.ParsePRFilter(f.PR)
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+	f.Labels, err = db.LabelFilterValues(f.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
 	// Match the HTTP handler's clampLimit semantics: values over
 	// MaxSessionLimit clamp to the max, not reset to the default.
 	if f.Limit > db.MaxSessionLimit {
@@ -261,6 +269,7 @@ func (b *directBackend) List(
 	}
 
 	filter := listFilterToDB(f)
+	filter.PR = pr
 	page, err := b.db.ListSessions(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -293,6 +302,8 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		MaxMessages:          f.MaxMessages,
 		MinUserMessages:      f.MinUserMessages,
 		ExcludeOneShot:       !f.IncludeOneShot,
+		OneShotFilterSet:     f.OneShotFilterSet,
+		AutomatedFilterSet:   f.AutomatedFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
 		IncludeSource:        f.IncludeSource,
@@ -301,6 +312,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		MinToolFailures:      f.MinToolFailures,
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
+		Labels:               f.Labels,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
 	}
 	// Parse the public sort spec into the structured, per-key form. The spec is
@@ -514,6 +526,35 @@ func (b *directBackend) ToolCalls(
 		}
 	}
 	return &ToolCallList{ToolCalls: out, Count: len(out)}, nil
+}
+
+func (b *directBackend) ChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	children, err := b.db.GetChildSessions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if children == nil {
+		children = []db.Session{}
+	}
+	return children, nil
+}
+
+func (b *directBackend) RecentEdits(
+	ctx context.Context, f RecentEditsFilter,
+) (*db.RecentEditsResult, error) {
+	res, err := b.db.RecentEdits(ctx, db.RecentEditsParams{
+		Project:         f.Project,
+		Search:          f.Search,
+		Limit:           f.Limit,
+		Offset:          f.Offset,
+		MaxEditsPerFile: recentEditsPerFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // Sync runs a one-off sync for the file path associated with the

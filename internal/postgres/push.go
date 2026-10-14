@@ -2058,6 +2058,8 @@ func sessionPushFingerprint(
 		sess.AgentLabel,
 		sess.Entrypoint,
 		sess.SessionKind,
+		db.EncodePRLinks(sess.PRLinks),
+		strconv.Itoa(len(sess.Labels)),
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
 		stringValue(sess.SessionName),
@@ -2117,6 +2119,7 @@ func sessionPushFingerprint(
 		sess.SecretsRulesVersion,
 		usageEventFingerprint,
 	}
+	fields = append(fields, sess.Labels...)
 	var b strings.Builder
 	for _, f := range fields {
 		fmt.Fprintf(&b, "%d:%s", len(f), f)
@@ -2316,7 +2319,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
 			project_assigned, prompt_evidence_discarded, group_key,
-			trash_includes_codex_pages, source_trash_includes_codex_pages, updated_at
+			trash_includes_codex_pages, source_trash_includes_codex_pages,
+			pr_links, labels, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2335,7 +2339,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, $71, $72, $72, NOW()
+				$70, $71, $72, $72, $73, $74::text[], NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_session
 			)
@@ -2347,6 +2351,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			agent_label = EXCLUDED.agent_label,
 			entrypoint = EXCLUDED.entrypoint,
 			session_kind = EXCLUDED.session_kind,
+			pr_links = EXCLUDED.pr_links,
+			labels = EXCLUDED.labels,
 			source_archive_id = EXCLUDED.source_archive_id,
 			source_database_generation = EXCLUDED.source_database_generation,
 			file_path = EXCLUDED.file_path,
@@ -2458,6 +2464,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
 			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
 			OR sessions.session_kind IS DISTINCT FROM EXCLUDED.session_kind
+			OR sessions.pr_links IS DISTINCT FROM EXCLUDED.pr_links
+			OR sessions.labels IS DISTINCT FROM EXCLUDED.labels
 			OR sessions.source_archive_id IS DISTINCT FROM EXCLUDED.source_archive_id
 			OR sessions.source_database_generation IS DISTINCT FROM
 				EXCLUDED.source_database_generation
@@ -2579,6 +2587,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		options.UsageOnly,
 		sanitizePG(sess.GroupKey),
 		sess.TrashIncludesCodexPages,
+		db.EncodePRLinks(sess.PRLinks),
+		db.LabelsArg(sess.Labels),
 	)
 	if err != nil {
 		return err

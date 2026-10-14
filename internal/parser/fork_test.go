@@ -40,7 +40,7 @@ func TestForkDetection_LinearSession(t *testing.T) {
 	assertMessageCount(t, len(results[0].Messages), 4)
 }
 
-func TestForkDetection_LargeGapFork(t *testing.T) {
+func TestForkDetection_LargeGapForkPropagatesPRLinks(t *testing.T) {
 	// Main branch: a->b->c->d->e->f->g->h (4+ user turns after fork)
 	// Fork from b: i->j
 	// Fork point is at node b, which has children c (first) and i.
@@ -74,6 +74,10 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork q1", "i", "b").
 		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork a1", "j", "i").
 		String()
+	content = testjsonl.JoinJSONL(content,
+		`{"type":"pr-link","prNumber":7,`+
+			`"prUrl":"https://github.com/owner/repo/pull/7",`+
+			`"prRepository":"owner/repo","timestamp":"2024-01-01T10:01:02Z"}`)
 
 	results := parseTestContent(t, "fork.jsonl", content, 2)
 
@@ -90,6 +94,11 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 	assert.Equal(t, "fork", fork.Session.ParentSessionID, "fork ParentSessionID")
 	assert.Equal(t, RelFork, fork.Session.RelationshipType, "fork RelationshipType")
 	assert.Equal(t, "fork q1", fork.Session.FirstMessage, "fork FirstMessage")
+
+	for _, r := range results {
+		require.Len(t, r.Session.PRLinks, 1, r.Session.ID)
+		assert.Equal(t, 7, r.Session.PRLinks[0].Number, r.Session.ID)
+	}
 }
 
 func TestForkDetection_SmallGapRetry(t *testing.T) {

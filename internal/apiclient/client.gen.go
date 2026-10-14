@@ -161,6 +161,138 @@ func (o *GetAPIV1ActivityReportReportIDSessionsRequestOptions) GetHeader() (map[
 	return nil, nil
 }
 
+// GetAPIV1AnalyticsSignalSessionsRequestOptions is the options needed to make a request to GetAPIV1AnalyticsSignalSessions.
+type GetAPIV1AnalyticsSignalSessionsRequestOptions struct {
+	Query *GetAPIV1AnalyticsSignalSessionsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1AnalyticsSignalSessionsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1AnalyticsSignalSessionsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1AnalyticsSignalSessionsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1AnalyticsSignalSessionsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1AnalyticsSignalSessionsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// GetAPIV1AnalyticsSignalsRequestOptions is the options needed to make a request to GetAPIV1AnalyticsSignals.
+type GetAPIV1AnalyticsSignalsRequestOptions struct {
+	Query *GetAPIV1AnalyticsSignalsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1AnalyticsSignalsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1AnalyticsSignalsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1AnalyticsSignalsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1AnalyticsSignalsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1AnalyticsSignalsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// GetAPIV1AnalyticsToolsRequestOptions is the options needed to make a request to GetAPIV1AnalyticsTools.
+type GetAPIV1AnalyticsToolsRequestOptions struct {
+	Query *GetAPIV1AnalyticsToolsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1AnalyticsToolsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1AnalyticsToolsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1AnalyticsToolsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1AnalyticsToolsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1AnalyticsToolsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // PostAPIV1ArtifactsExchangeRequestOptions is the options needed to make a request to PostAPIV1ArtifactsExchange.
 type PostAPIV1ArtifactsExchangeRequestOptions struct {
 	Body *PostAPIV1ArtifactsExchangeBody
@@ -1325,6 +1457,50 @@ func (o *PostAPIV1RecallQueryRequestOptions) GetHeader() (map[string]string, err
 	return nil, nil
 }
 
+// GetAPIV1RecentEditsRequestOptions is the options needed to make a request to GetAPIV1RecentEdits.
+type GetAPIV1RecentEditsRequestOptions struct {
+	Query *GetAPIV1RecentEditsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1RecentEditsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1RecentEditsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1RecentEditsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1RecentEditsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1RecentEditsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // PostAPIV1RemoteSyncArchiveRequestOptions is the options needed to make a request to PostAPIV1RemoteSyncArchive.
 type PostAPIV1RemoteSyncArchiveRequestOptions struct {
 	Body   *PostAPIV1RemoteSyncArchiveBody
@@ -1880,6 +2056,103 @@ func (o *GetAPIV1SessionsIDRequestOptions) GetHeader() (map[string]string, error
 	return nil, nil
 }
 
+// GetAPIV1SessionsIDChildrenRequestOptions is the options needed to make a request to GetAPIV1SessionsIDChildren.
+type GetAPIV1SessionsIDChildrenRequestOptions struct {
+	PathParams *GetAPIV1SessionsIDChildrenPath
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1SessionsIDChildrenRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1SessionsIDChildrenRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1SessionsIDChildrenRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1SessionsIDChildrenRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1SessionsIDChildrenRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PatchAPIV1SessionsIDLabelsRequestOptions is the options needed to make a request to PatchAPIV1SessionsIDLabels.
+type PatchAPIV1SessionsIDLabelsRequestOptions struct {
+	PathParams *PatchAPIV1SessionsIDLabelsPath
+	Body       *PatchAPIV1SessionsIDLabelsBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PatchAPIV1SessionsIDLabelsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PatchAPIV1SessionsIDLabelsRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *PatchAPIV1SessionsIDLabelsRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PatchAPIV1SessionsIDLabelsRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PatchAPIV1SessionsIDLabelsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1SessionsIDMessagesRequestOptions is the options needed to make a request to GetAPIV1SessionsIDMessages.
 type GetAPIV1SessionsIDMessagesRequestOptions struct {
 	PathParams *GetAPIV1SessionsIDMessagesPath
@@ -1930,6 +2203,59 @@ func (o *GetAPIV1SessionsIDMessagesRequestOptions) GetBody() any {
 
 // GetHeader returns the headers as a map.
 func (o *GetAPIV1SessionsIDMessagesRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PutAPIV1SessionsIDParentRequestOptions is the options needed to make a request to PutAPIV1SessionsIDParent.
+type PutAPIV1SessionsIDParentRequestOptions struct {
+	PathParams *PutAPIV1SessionsIDParentPath
+	Body       *PutAPIV1SessionsIDParentBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PutAPIV1SessionsIDParentRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PutAPIV1SessionsIDParentRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *PutAPIV1SessionsIDParentRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PutAPIV1SessionsIDParentRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PutAPIV1SessionsIDParentRequestOptions) GetHeader() (map[string]string, error) {
 	return nil, nil
 }
 
@@ -4842,6 +5168,9 @@ type ClientInterface interface {
 	GetAPIV1ActivityReportWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.Context, options *GetAPIV1ActivityReportReportIDSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportReportIDSessionsResp, error)
+	GetAPIV1AnalyticsSignalSessionsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsSignalSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsSignalSessionsResp, error)
+	GetAPIV1AnalyticsSignalsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsSignalsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsSignalsResp, error)
+	GetAPIV1AnalyticsToolsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsToolsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsToolsResp, error)
 	PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, options *PostAPIV1ArtifactsExchangeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ArtifactsExchangeResp, error)
 	PostAPIV1DataCompactWithResponse(ctx context.Context, options *PostAPIV1DataCompactRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DataCompactResp, error)
 	PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsBuildRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsBuildResp, error)
@@ -4872,6 +5201,7 @@ type ClientInterface interface {
 	GetAPIV1RecallEntriesIDWithResponse(ctx context.Context, options *GetAPIV1RecallEntriesIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RecallEntriesIDResp, error)
 	PostAPIV1RecallImportWithResponse(ctx context.Context, options *PostAPIV1RecallImportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RecallImportResp, error)
 	PostAPIV1RecallQueryWithResponse(ctx context.Context, options *PostAPIV1RecallQueryRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RecallQueryResp, error)
+	GetAPIV1RecentEditsWithResponse(ctx context.Context, options *GetAPIV1RecentEditsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RecentEditsResp, error)
 	PostAPIV1RemoteSyncArchiveWithResponse(ctx context.Context, options *PostAPIV1RemoteSyncArchiveRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RemoteSyncArchiveResp, error)
 	PostAPIV1RemoteSyncManifestWithResponse(ctx context.Context, options *PostAPIV1RemoteSyncManifestRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RemoteSyncManifestResp, error)
 	GetAPIV1RemoteSyncTargetsWithResponse(ctx context.Context, options *GetAPIV1RemoteSyncTargetsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RemoteSyncTargetsResp, error)
@@ -4887,7 +5217,10 @@ type ClientInterface interface {
 	GetAPIV1SessionsWithResponse(ctx context.Context, options *GetAPIV1SessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsResp, error)
 	PostAPIV1SessionsSyncWithResponse(ctx context.Context, options *PostAPIV1SessionsSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsSyncResp, error)
 	GetAPIV1SessionsIDWithResponse(ctx context.Context, options *GetAPIV1SessionsIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDResp, error)
+	GetAPIV1SessionsIDChildrenWithResponse(ctx context.Context, options *GetAPIV1SessionsIDChildrenRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDChildrenResp, error)
+	PatchAPIV1SessionsIDLabelsWithResponse(ctx context.Context, options *PatchAPIV1SessionsIDLabelsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PatchAPIV1SessionsIDLabelsResp, error)
 	GetAPIV1SessionsIDMessagesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDMessagesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDMessagesResp, error)
+	PutAPIV1SessionsIDParentWithResponse(ctx context.Context, options *PutAPIV1SessionsIDParentRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1SessionsIDParentResp, error)
 	GetAPIV1SessionsIDToolCallsWithResponse(ctx context.Context, options *GetAPIV1SessionsIDToolCallsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDToolCallsResp, error)
 	GetAPIV1SessionsIDToolSequencesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDToolSequencesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDToolSequencesResp, error)
 	GetAPIV1SessionsIDUsageWithResponse(ctx context.Context, options *GetAPIV1SessionsIDUsageRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDUsageResp, error)
@@ -5375,6 +5708,675 @@ func (c *Client) GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1AnalyticsSignalSessions Get signal session examples
+func (c *Client) GetAPIV1AnalyticsSignalSessionsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsSignalSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsSignalSessionsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/analytics/signal-sessions",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/analytics/signal-sessions")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1AnalyticsSignalSessionsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1AnalyticsSignalSessionsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1AnalyticsSignalSessionsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1AnalyticsSignalSessionsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalSessionsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1AnalyticsSignals Get signal analytics
+func (c *Client) GetAPIV1AnalyticsSignalsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsSignalsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsSignalsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/analytics/signals",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/analytics/signals")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1AnalyticsSignalsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1AnalyticsSignalsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1AnalyticsSignalsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1AnalyticsSignalsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsSignalsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1AnalyticsTools Get tool analytics
+func (c *Client) GetAPIV1AnalyticsToolsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsToolsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsToolsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/analytics/tools",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/analytics/tools")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1AnalyticsToolsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1AnalyticsToolsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1AnalyticsToolsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1AnalyticsToolsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1AnalyticsToolsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1AnalyticsToolsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1AnalyticsToolsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1AnalyticsToolsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1AnalyticsToolsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1AnalyticsToolsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1AnalyticsToolsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1AnalyticsToolsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1AnalyticsToolsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1AnalyticsToolsErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -10862,6 +11864,229 @@ func (c *Client) PostAPIV1RecallQueryWithResponse(ctx context.Context, options *
 	}
 }
 
+// GetAPIV1RecentEdits List recent edits
+func (c *Client) GetAPIV1RecentEditsWithResponse(ctx context.Context, options *GetAPIV1RecentEditsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RecentEditsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/recent-edits",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/recent-edits")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1RecentEditsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1RecentEditsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1RecentEditsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1RecentEditsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1RecentEditsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1RecentEditsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1RecentEditsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1RecentEditsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1RecentEditsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1RecentEditsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1RecentEditsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1RecentEditsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1RecentEditsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RecentEditsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // PostAPIV1RemoteSyncArchive Download remote source archive
 func (c *Client) PostAPIV1RemoteSyncArchiveWithResponse(ctx context.Context, options *PostAPIV1RemoteSyncArchiveRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RemoteSyncArchiveResp, error) {
 	var err error
@@ -13450,6 +14675,453 @@ func (c *Client) GetAPIV1SessionsIDWithResponse(ctx context.Context, options *Ge
 	}
 }
 
+// GetAPIV1SessionsIDChildren List child sessions
+func (c *Client) GetAPIV1SessionsIDChildrenWithResponse(ctx context.Context, options *GetAPIV1SessionsIDChildrenRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDChildrenResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/sessions/{id}/children",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/{id}/children")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1SessionsIDChildrenResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1SessionsIDChildrenResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1SessionsIDChildrenErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1SessionsIDChildrenErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDChildrenErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PatchAPIV1SessionsIDLabels Change session labels
+func (c *Client) PatchAPIV1SessionsIDLabelsWithResponse(ctx context.Context, options *PatchAPIV1SessionsIDLabelsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PatchAPIV1SessionsIDLabelsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/sessions/{id}/labels",
+		Method:      "PATCH",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/{id}/labels")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PatchAPIV1SessionsIDLabelsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PatchAPIV1SessionsIDLabelsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PatchAPIV1SessionsIDLabelsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PatchAPIV1SessionsIDLabelsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PatchAPIV1SessionsIDLabelsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // GetAPIV1SessionsIDMessages List session messages
 func (c *Client) GetAPIV1SessionsIDMessagesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDMessagesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDMessagesResp, error) {
 	var err error
@@ -13662,6 +15334,230 @@ func (c *Client) GetAPIV1SessionsIDMessagesWithResponse(ctx context.Context, opt
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1SessionsIDMessagesErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PutAPIV1SessionsIDParent Set or remove session parent link
+func (c *Client) PutAPIV1SessionsIDParentWithResponse(ctx context.Context, options *PutAPIV1SessionsIDParentRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1SessionsIDParentResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/sessions/{id}/parent",
+		Method:      "PUT",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/{id}/parent")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PutAPIV1SessionsIDParentResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PutAPIV1SessionsIDParentResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PutAPIV1SessionsIDParentErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PutAPIV1SessionsIDParentErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PutAPIV1SessionsIDParentErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PutAPIV1SessionsIDParentErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PutAPIV1SessionsIDParentErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PutAPIV1SessionsIDParentErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PutAPIV1SessionsIDParentErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PutAPIV1SessionsIDParentErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PutAPIV1SessionsIDParentErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PutAPIV1SessionsIDParentErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PutAPIV1SessionsIDParentErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1SessionsIDParentErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -16059,6 +17955,63 @@ func (g GetAPIV1ActivityReportReportIDSessionsQueryDirection) Validate() error {
 	}
 }
 
+// GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope Automation scope
+type GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope string
+
+const (
+	All       GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope = "all"
+	Automated GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope = "automated"
+	Human     GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope = "human"
+)
+
+// Validate checks if the GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope value is valid
+func (g GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope) Validate() error {
+	switch g {
+	case All, Automated, Human:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope value, got: %v", g))
+	}
+}
+
+// GetAPIV1AnalyticsSignalsQueryAutomatedScope Automation scope
+type GetAPIV1AnalyticsSignalsQueryAutomatedScope string
+
+const (
+	GetAPIV1AnalyticsSignalsQueryAutomatedScopeAll       GetAPIV1AnalyticsSignalsQueryAutomatedScope = "all"
+	GetAPIV1AnalyticsSignalsQueryAutomatedScopeAutomated GetAPIV1AnalyticsSignalsQueryAutomatedScope = "automated"
+	GetAPIV1AnalyticsSignalsQueryAutomatedScopeHuman     GetAPIV1AnalyticsSignalsQueryAutomatedScope = "human"
+)
+
+// Validate checks if the GetAPIV1AnalyticsSignalsQueryAutomatedScope value is valid
+func (g GetAPIV1AnalyticsSignalsQueryAutomatedScope) Validate() error {
+	switch g {
+	case GetAPIV1AnalyticsSignalsQueryAutomatedScopeAll, GetAPIV1AnalyticsSignalsQueryAutomatedScopeAutomated, GetAPIV1AnalyticsSignalsQueryAutomatedScopeHuman:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1AnalyticsSignalsQueryAutomatedScope value, got: %v", g))
+	}
+}
+
+// GetAPIV1AnalyticsToolsQueryAutomatedScope Automation scope
+type GetAPIV1AnalyticsToolsQueryAutomatedScope string
+
+const (
+	GetAPIV1AnalyticsToolsQueryAutomatedScopeAll       GetAPIV1AnalyticsToolsQueryAutomatedScope = "all"
+	GetAPIV1AnalyticsToolsQueryAutomatedScopeAutomated GetAPIV1AnalyticsToolsQueryAutomatedScope = "automated"
+	GetAPIV1AnalyticsToolsQueryAutomatedScopeHuman     GetAPIV1AnalyticsToolsQueryAutomatedScope = "human"
+)
+
+// Validate checks if the GetAPIV1AnalyticsToolsQueryAutomatedScope value is valid
+func (g GetAPIV1AnalyticsToolsQueryAutomatedScope) Validate() error {
+	switch g {
+	case GetAPIV1AnalyticsToolsQueryAutomatedScopeAll, GetAPIV1AnalyticsToolsQueryAutomatedScopeAutomated, GetAPIV1AnalyticsToolsQueryAutomatedScopeHuman:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1AnalyticsToolsQueryAutomatedScope value, got: %v", g))
+	}
+}
+
 type PostAPIV1ImportClaudeAiSyncQueryBrowser string
 
 const (
@@ -16119,15 +18072,15 @@ func (g GetAPIV1SearchContentQueryMode) Validate() error {
 type GetAPIV1SearchContentQueryScope string
 
 const (
-	All         GetAPIV1SearchContentQueryScope = "all"
-	Subordinate GetAPIV1SearchContentQueryScope = "subordinate"
-	Top         GetAPIV1SearchContentQueryScope = "top"
+	GetAPIV1SearchContentQueryScopeAll GetAPIV1SearchContentQueryScope = "all"
+	Subordinate                        GetAPIV1SearchContentQueryScope = "subordinate"
+	Top                                GetAPIV1SearchContentQueryScope = "top"
 )
 
 // Validate checks if the GetAPIV1SearchContentQueryScope value is valid
 func (g GetAPIV1SearchContentQueryScope) Validate() error {
 	switch g {
-	case All, Subordinate, Top:
+	case GetAPIV1SearchContentQueryScopeAll, Subordinate, Top:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1SearchContentQueryScope value, got: %v", g))
@@ -16268,6 +18221,24 @@ func (g GetAPIV1SessionsIDPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
+type GetAPIV1SessionsIDChildrenPath struct {
+	// ID Session ID
+	ID string `json:"id" validate:"required"`
+}
+
+func (g GetAPIV1SessionsIDChildrenPath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
+type PatchAPIV1SessionsIDLabelsPath struct {
+	// ID Session ID
+	ID string `json:"id" validate:"required"`
+}
+
+func (p PatchAPIV1SessionsIDLabelsPath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
+
 type GetAPIV1SessionsIDMessagesPath struct {
 	// ID Session ID
 	ID string `json:"id" validate:"required"`
@@ -16275,6 +18246,15 @@ type GetAPIV1SessionsIDMessagesPath struct {
 
 func (g GetAPIV1SessionsIDMessagesPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
+type PutAPIV1SessionsIDParentPath struct {
+	// ID Session ID
+	ID string `json:"id" validate:"required"`
+}
+
+func (p PutAPIV1SessionsIDParentPath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
 }
 
 type GetAPIV1SessionsIDToolCallsPath struct {
@@ -16348,6 +18328,10 @@ type PostAPIV1RemoteSyncArchiveBody = RemotesyncArchiveRequest
 type PostAPIV1RemoteSyncManifestBody = RemotesyncTargetSet
 
 type PostAPIV1SessionsSyncBody = ServiceSyncInput
+
+type PatchAPIV1SessionsIDLabelsBody = UpdateSessionLabelsInputBody
+
+type PutAPIV1SessionsIDParentBody = SetSessionParentInputBody
 
 type PostAPIV1SyncRemotesBody = RemoteSyncRequest
 
@@ -16475,6 +18459,316 @@ func (g GetAPIV1ActivityReportReportIDSessionsQuery) Validate() error {
 	return errors
 }
 
+type GetAPIV1AnalyticsSignalSessionsQuery struct {
+	// ToolCategory Tool category for a tool rate
+	ToolCategory *string `json:"tool_category,omitempty"`
+
+	// ToolName Tool name for a tool rate
+	ToolName *string `json:"tool_name,omitempty"`
+
+	// Offset Session evidence offset for a tool rate
+	Offset *int64 `json:"offset,omitempty" validate:"omitempty,gte=0"`
+
+	// From Range start date
+	From *runtime.Date `json:"from,omitempty"`
+
+	// To Range end date
+	To *runtime.Date `json:"to,omitempty"`
+
+	// Timezone IANA timezone name
+	Timezone *string `json:"timezone,omitempty"`
+
+	// Machine Filter by machine
+	Machine *string `json:"machine,omitempty"`
+
+	// Project Filter by project
+	Project *string `json:"project,omitempty"`
+
+	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+	GitBranch *string `json:"git_branch,omitempty"`
+
+	// Agent Filter by agent
+	Agent *string `json:"agent,omitempty"`
+
+	// Model Comma-separated model filter
+	Model *string `json:"model,omitempty"`
+
+	// Dow Day of week, Monday=0 through Sunday=6
+	Dow *int64 `json:"dow,omitempty" validate:"omitempty,gte=0,lte=6"`
+
+	// Hour Hour of day, 0 through 23
+	Hour *int64 `json:"hour,omitempty" validate:"omitempty,gte=0,lte=23"`
+
+	// MinUserMessages Minimum user message count
+	MinUserMessages *int64 `json:"min_user_messages,omitempty" validate:"omitempty,gte=0"`
+
+	// ActiveSince Filter sessions active since this RFC3339 timestamp
+	ActiveSince *time.Time `json:"active_since,omitempty"`
+
+	// AutomatedScope Automation scope
+	AutomatedScope *GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope `json:"automated_scope,omitempty"`
+
+	// IncludeOneShot Include one-shot sessions
+	IncludeOneShot *bool `json:"include_one_shot,omitempty"`
+
+	// IncludeAutomated Include automated sessions
+	IncludeAutomated *bool `json:"include_automated,omitempty"`
+
+	// Termination Filter by termination reason
+	Termination *string `json:"termination,omitempty"`
+
+	// Signal Signal name
+	Signal string `json:"signal" validate:"required"`
+
+	// Limit Maximum number of session examples
+	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=0,lte=20"`
+}
+
+func (g GetAPIV1AnalyticsSignalSessionsQuery) Validate() error {
+	var errors runtime.ValidationErrors
+	if g.Offset != nil {
+		if err := typesValidator.Var(g.Offset, "omitempty,gte=0"); err != nil {
+			errors = errors.Append("Offset", err)
+		}
+	}
+	if g.From != nil {
+		if v, ok := any(g.From).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("From", err)
+			}
+		}
+	}
+	if g.To != nil {
+		if v, ok := any(g.To).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("To", err)
+			}
+		}
+	}
+	if g.Dow != nil {
+		if err := typesValidator.Var(g.Dow, "omitempty,gte=0,lte=6"); err != nil {
+			errors = errors.Append("Dow", err)
+		}
+	}
+	if g.Hour != nil {
+		if err := typesValidator.Var(g.Hour, "omitempty,gte=0,lte=23"); err != nil {
+			errors = errors.Append("Hour", err)
+		}
+	}
+	if g.MinUserMessages != nil {
+		if err := typesValidator.Var(g.MinUserMessages, "omitempty,gte=0"); err != nil {
+			errors = errors.Append("MinUserMessages", err)
+		}
+	}
+	if g.AutomatedScope != nil {
+		if v, ok := any(g.AutomatedScope).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("AutomatedScope", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(g.Signal, "required"); err != nil {
+		errors = errors.Append("Signal", err)
+	}
+	if g.Limit != nil {
+		if err := typesValidator.Var(g.Limit, "omitempty,gte=0,lte=20"); err != nil {
+			errors = errors.Append("Limit", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type GetAPIV1AnalyticsSignalsQuery struct {
+	// From Range start date
+	From *runtime.Date `json:"from,omitempty"`
+
+	// To Range end date
+	To *runtime.Date `json:"to,omitempty"`
+
+	// Timezone IANA timezone name
+	Timezone *string `json:"timezone,omitempty"`
+
+	// Machine Filter by machine
+	Machine *string `json:"machine,omitempty"`
+
+	// Project Filter by project
+	Project *string `json:"project,omitempty"`
+
+	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+	GitBranch *string `json:"git_branch,omitempty"`
+
+	// Agent Filter by agent
+	Agent *string `json:"agent,omitempty"`
+
+	// Model Comma-separated model filter
+	Model *string `json:"model,omitempty"`
+
+	// Dow Day of week, Monday=0 through Sunday=6
+	Dow *int64 `json:"dow,omitempty" validate:"omitempty,gte=0,lte=6"`
+
+	// Hour Hour of day, 0 through 23
+	Hour *int64 `json:"hour,omitempty" validate:"omitempty,gte=0,lte=23"`
+
+	// MinUserMessages Minimum user message count
+	MinUserMessages *int64 `json:"min_user_messages,omitempty" validate:"omitempty,gte=0"`
+
+	// ActiveSince Filter sessions active since this RFC3339 timestamp
+	ActiveSince *time.Time `json:"active_since,omitempty"`
+
+	// AutomatedScope Automation scope
+	AutomatedScope *GetAPIV1AnalyticsSignalsQueryAutomatedScope `json:"automated_scope,omitempty"`
+
+	// IncludeOneShot Include one-shot sessions
+	IncludeOneShot *bool `json:"include_one_shot,omitempty"`
+
+	// IncludeAutomated Include automated sessions
+	IncludeAutomated *bool `json:"include_automated,omitempty"`
+
+	// Termination Filter by termination reason
+	Termination *string `json:"termination,omitempty"`
+}
+
+func (g GetAPIV1AnalyticsSignalsQuery) Validate() error {
+	var errors runtime.ValidationErrors
+	if g.From != nil {
+		if v, ok := any(g.From).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("From", err)
+			}
+		}
+	}
+	if g.To != nil {
+		if v, ok := any(g.To).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("To", err)
+			}
+		}
+	}
+	if g.Dow != nil {
+		if err := typesValidator.Var(g.Dow, "omitempty,gte=0,lte=6"); err != nil {
+			errors = errors.Append("Dow", err)
+		}
+	}
+	if g.Hour != nil {
+		if err := typesValidator.Var(g.Hour, "omitempty,gte=0,lte=23"); err != nil {
+			errors = errors.Append("Hour", err)
+		}
+	}
+	if g.MinUserMessages != nil {
+		if err := typesValidator.Var(g.MinUserMessages, "omitempty,gte=0"); err != nil {
+			errors = errors.Append("MinUserMessages", err)
+		}
+	}
+	if g.AutomatedScope != nil {
+		if v, ok := any(g.AutomatedScope).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("AutomatedScope", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type GetAPIV1AnalyticsToolsQuery struct {
+	// From Range start date
+	From *runtime.Date `json:"from,omitempty"`
+
+	// To Range end date
+	To *runtime.Date `json:"to,omitempty"`
+
+	// Timezone IANA timezone name
+	Timezone *string `json:"timezone,omitempty"`
+
+	// Machine Filter by machine
+	Machine *string `json:"machine,omitempty"`
+
+	// Project Filter by project
+	Project *string `json:"project,omitempty"`
+
+	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+	GitBranch *string `json:"git_branch,omitempty"`
+
+	// Agent Filter by agent
+	Agent *string `json:"agent,omitempty"`
+
+	// Model Comma-separated model filter
+	Model *string `json:"model,omitempty"`
+
+	// Dow Day of week, Monday=0 through Sunday=6
+	Dow *int64 `json:"dow,omitempty" validate:"omitempty,gte=0,lte=6"`
+
+	// Hour Hour of day, 0 through 23
+	Hour *int64 `json:"hour,omitempty" validate:"omitempty,gte=0,lte=23"`
+
+	// MinUserMessages Minimum user message count
+	MinUserMessages *int64 `json:"min_user_messages,omitempty" validate:"omitempty,gte=0"`
+
+	// ActiveSince Filter sessions active since this RFC3339 timestamp
+	ActiveSince *time.Time `json:"active_since,omitempty"`
+
+	// AutomatedScope Automation scope
+	AutomatedScope *GetAPIV1AnalyticsToolsQueryAutomatedScope `json:"automated_scope,omitempty"`
+
+	// IncludeOneShot Include one-shot sessions
+	IncludeOneShot *bool `json:"include_one_shot,omitempty"`
+
+	// IncludeAutomated Include automated sessions
+	IncludeAutomated *bool `json:"include_automated,omitempty"`
+
+	// Termination Filter by termination reason
+	Termination *string `json:"termination,omitempty"`
+}
+
+func (g GetAPIV1AnalyticsToolsQuery) Validate() error {
+	var errors runtime.ValidationErrors
+	if g.From != nil {
+		if v, ok := any(g.From).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("From", err)
+			}
+		}
+	}
+	if g.To != nil {
+		if v, ok := any(g.To).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("To", err)
+			}
+		}
+	}
+	if g.Dow != nil {
+		if err := typesValidator.Var(g.Dow, "omitempty,gte=0,lte=6"); err != nil {
+			errors = errors.Append("Dow", err)
+		}
+	}
+	if g.Hour != nil {
+		if err := typesValidator.Var(g.Hour, "omitempty,gte=0,lte=23"); err != nil {
+			errors = errors.Append("Hour", err)
+		}
+	}
+	if g.MinUserMessages != nil {
+		if err := typesValidator.Var(g.MinUserMessages, "omitempty,gte=0"); err != nil {
+			errors = errors.Append("MinUserMessages", err)
+		}
+	}
+	if g.AutomatedScope != nil {
+		if v, ok := any(g.AutomatedScope).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("AutomatedScope", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type GetAPIV1EmbeddingsGenerationsQuery struct {
 	Store *string `json:"store,omitempty"`
 }
@@ -16552,6 +18846,24 @@ type PostAPIV1RecallImportQuery struct {
 	RequireExistingSessions  *bool `json:"require_existing_sessions,omitempty"`
 	AllowPlaceholderSessions *bool `json:"allow_placeholder_sessions,omitempty"`
 	AllowProductionImport    *bool `json:"allow_production_import,omitempty"`
+}
+
+type GetAPIV1RecentEditsQuery struct {
+	// Limit Max files per page
+	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=1,lte=200"`
+
+	// Offset Files to skip
+	Offset *int64 `json:"offset,omitempty" validate:"omitempty,gte=0"`
+
+	// Project Filter by project
+	Project *string `json:"project,omitempty"`
+
+	// Search Filter by file path substring (case-insensitive)
+	Search *string `json:"search,omitempty"`
+}
+
+func (g GetAPIV1RecentEditsQuery) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
 type GetAPIV1SearchQuery struct {
@@ -16977,6 +19289,12 @@ type GetAPIV1SessionsQuery struct {
 
 	// Starred Filter sessions by starred status
 	Starred *bool `json:"starred,omitempty"`
+
+	// Label Keep sessions carrying this exact label; repeat to require several
+	Label []string `json:"label,omitempty"`
+
+	// Pr Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123
+	Pr *string `json:"pr,omitempty"`
 
 	// OrderBy Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
 	OrderBy *string `json:"order_by,omitempty"`
@@ -17477,6 +19795,78 @@ type GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON502 = APIErrorRespon
 type GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON504 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsResponse = db.SignalSessionsResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponse = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalSessionsErrorResponseJSON504 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsResponse = db.SignalsAnalyticsResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponse = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1AnalyticsSignalsErrorResponseJSON504 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsResponse = db.ToolsAnalyticsResponse
+
+type GetAPIV1AnalyticsToolsErrorResponse = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1AnalyticsToolsErrorResponseJSON504 = APIErrorResponse
 
 type PostAPIV1ArtifactsExchangeResponse = ArtifactSyncResult
 
@@ -18081,6 +20471,30 @@ type PostAPIV1RecallQueryErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1RecallQueryErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1RecentEditsResponse = db.RecentEditsResult
+
+type GetAPIV1RecentEditsErrorResponse = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1RecentEditsErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1RemoteSyncArchiveResponse = []byte
 
 type PostAPIV1RemoteSyncArchiveErrorResponse string
@@ -18399,6 +20813,54 @@ type GetAPIV1SessionsIDErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1SessionsIDChildrenResponse []DBSession
+
+type GetAPIV1SessionsIDChildrenErrorResponse = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1SessionsIDChildrenErrorResponseJSON504 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsResponse = db.SessionLabels
+
+type PatchAPIV1SessionsIDLabelsErrorResponse = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON403 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON404 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON409 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON422 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON500 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON501 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON502 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON503 = APIErrorResponse
+
+type PatchAPIV1SessionsIDLabelsErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1SessionsIDMessagesResponse = service.MessageList
 
 type GetAPIV1SessionsIDMessagesErrorResponse = APIErrorResponse
@@ -18422,6 +20884,30 @@ type GetAPIV1SessionsIDMessagesErrorResponseJSON502 = APIErrorResponse
 type GetAPIV1SessionsIDMessagesErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDMessagesErrorResponseJSON504 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentResponse = db.SessionExternalParent
+
+type PutAPIV1SessionsIDParentErrorResponse = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON403 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON404 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON409 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON422 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON500 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON501 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON502 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON503 = APIErrorResponse
+
+type PutAPIV1SessionsIDParentErrorResponseJSON504 = APIErrorResponse
 
 type GetAPIV1SessionsIDToolCallsResponse = service.ToolCallList
 
@@ -18707,6 +21193,60 @@ type GetAPIV1ActivityReportReportIDSessionsResp struct {
 	JSON502      *GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON502
 	JSON503      *GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON503
 	JSON504      *GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON504
+}
+
+type GetAPIV1AnalyticsSignalSessionsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1AnalyticsSignalSessionsResponse
+	JSON400      *GetAPIV1AnalyticsSignalSessionsErrorResponse
+	JSON401      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON
+	JSON403      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON403
+	JSON404      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON404
+	JSON409      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON409
+	JSON422      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON422
+	JSON500      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON500
+	JSON501      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON501
+	JSON502      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON502
+	JSON503      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON503
+	JSON504      *GetAPIV1AnalyticsSignalSessionsErrorResponseJSON504
+}
+
+type GetAPIV1AnalyticsSignalsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1AnalyticsSignalsResponse
+	JSON400      *GetAPIV1AnalyticsSignalsErrorResponse
+	JSON401      *GetAPIV1AnalyticsSignalsErrorResponseJSON
+	JSON403      *GetAPIV1AnalyticsSignalsErrorResponseJSON403
+	JSON404      *GetAPIV1AnalyticsSignalsErrorResponseJSON404
+	JSON409      *GetAPIV1AnalyticsSignalsErrorResponseJSON409
+	JSON422      *GetAPIV1AnalyticsSignalsErrorResponseJSON422
+	JSON500      *GetAPIV1AnalyticsSignalsErrorResponseJSON500
+	JSON501      *GetAPIV1AnalyticsSignalsErrorResponseJSON501
+	JSON502      *GetAPIV1AnalyticsSignalsErrorResponseJSON502
+	JSON503      *GetAPIV1AnalyticsSignalsErrorResponseJSON503
+	JSON504      *GetAPIV1AnalyticsSignalsErrorResponseJSON504
+}
+
+type GetAPIV1AnalyticsToolsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1AnalyticsToolsResponse
+	JSON400      *GetAPIV1AnalyticsToolsErrorResponse
+	JSON401      *GetAPIV1AnalyticsToolsErrorResponseJSON
+	JSON403      *GetAPIV1AnalyticsToolsErrorResponseJSON403
+	JSON404      *GetAPIV1AnalyticsToolsErrorResponseJSON404
+	JSON409      *GetAPIV1AnalyticsToolsErrorResponseJSON409
+	JSON422      *GetAPIV1AnalyticsToolsErrorResponseJSON422
+	JSON500      *GetAPIV1AnalyticsToolsErrorResponseJSON500
+	JSON501      *GetAPIV1AnalyticsToolsErrorResponseJSON501
+	JSON502      *GetAPIV1AnalyticsToolsErrorResponseJSON502
+	JSON503      *GetAPIV1AnalyticsToolsErrorResponseJSON503
+	JSON504      *GetAPIV1AnalyticsToolsErrorResponseJSON504
 }
 
 type PostAPIV1ArtifactsExchangeResp struct {
@@ -19186,6 +21726,24 @@ type PostAPIV1RecallQueryResp struct {
 	JSON504      *PostAPIV1RecallQueryErrorResponseJSON504
 }
 
+type GetAPIV1RecentEditsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1RecentEditsResponse
+	JSON400      *GetAPIV1RecentEditsErrorResponse
+	JSON401      *GetAPIV1RecentEditsErrorResponseJSON
+	JSON403      *GetAPIV1RecentEditsErrorResponseJSON403
+	JSON404      *GetAPIV1RecentEditsErrorResponseJSON404
+	JSON409      *GetAPIV1RecentEditsErrorResponseJSON409
+	JSON422      *GetAPIV1RecentEditsErrorResponseJSON422
+	JSON500      *GetAPIV1RecentEditsErrorResponseJSON500
+	JSON501      *GetAPIV1RecentEditsErrorResponseJSON501
+	JSON502      *GetAPIV1RecentEditsErrorResponseJSON502
+	JSON503      *GetAPIV1RecentEditsErrorResponseJSON503
+	JSON504      *GetAPIV1RecentEditsErrorResponseJSON504
+}
+
 type PostAPIV1RemoteSyncArchiveResp200Headers struct {
 	XAgentsViewRemoteSyncVersion string `header:"X-AgentsView-Remote-Sync-Version"`
 }
@@ -19433,6 +21991,42 @@ type GetAPIV1SessionsIDResp struct {
 	JSON504      *GetAPIV1SessionsIDErrorResponseJSON504
 }
 
+type GetAPIV1SessionsIDChildrenResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1SessionsIDChildrenResponse
+	JSON400      *GetAPIV1SessionsIDChildrenErrorResponse
+	JSON401      *GetAPIV1SessionsIDChildrenErrorResponseJSON
+	JSON403      *GetAPIV1SessionsIDChildrenErrorResponseJSON403
+	JSON404      *GetAPIV1SessionsIDChildrenErrorResponseJSON404
+	JSON409      *GetAPIV1SessionsIDChildrenErrorResponseJSON409
+	JSON422      *GetAPIV1SessionsIDChildrenErrorResponseJSON422
+	JSON500      *GetAPIV1SessionsIDChildrenErrorResponseJSON500
+	JSON501      *GetAPIV1SessionsIDChildrenErrorResponseJSON501
+	JSON502      *GetAPIV1SessionsIDChildrenErrorResponseJSON502
+	JSON503      *GetAPIV1SessionsIDChildrenErrorResponseJSON503
+	JSON504      *GetAPIV1SessionsIDChildrenErrorResponseJSON504
+}
+
+type PatchAPIV1SessionsIDLabelsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PatchAPIV1SessionsIDLabelsResponse
+	JSON400      *PatchAPIV1SessionsIDLabelsErrorResponse
+	JSON401      *PatchAPIV1SessionsIDLabelsErrorResponseJSON
+	JSON403      *PatchAPIV1SessionsIDLabelsErrorResponseJSON403
+	JSON404      *PatchAPIV1SessionsIDLabelsErrorResponseJSON404
+	JSON409      *PatchAPIV1SessionsIDLabelsErrorResponseJSON409
+	JSON422      *PatchAPIV1SessionsIDLabelsErrorResponseJSON422
+	JSON500      *PatchAPIV1SessionsIDLabelsErrorResponseJSON500
+	JSON501      *PatchAPIV1SessionsIDLabelsErrorResponseJSON501
+	JSON502      *PatchAPIV1SessionsIDLabelsErrorResponseJSON502
+	JSON503      *PatchAPIV1SessionsIDLabelsErrorResponseJSON503
+	JSON504      *PatchAPIV1SessionsIDLabelsErrorResponseJSON504
+}
+
 type GetAPIV1SessionsIDMessagesResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -19449,6 +22043,24 @@ type GetAPIV1SessionsIDMessagesResp struct {
 	JSON502      *GetAPIV1SessionsIDMessagesErrorResponseJSON502
 	JSON503      *GetAPIV1SessionsIDMessagesErrorResponseJSON503
 	JSON504      *GetAPIV1SessionsIDMessagesErrorResponseJSON504
+}
+
+type PutAPIV1SessionsIDParentResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PutAPIV1SessionsIDParentResponse
+	JSON400      *PutAPIV1SessionsIDParentErrorResponse
+	JSON401      *PutAPIV1SessionsIDParentErrorResponseJSON
+	JSON403      *PutAPIV1SessionsIDParentErrorResponseJSON403
+	JSON404      *PutAPIV1SessionsIDParentErrorResponseJSON404
+	JSON409      *PutAPIV1SessionsIDParentErrorResponseJSON409
+	JSON422      *PutAPIV1SessionsIDParentErrorResponseJSON422
+	JSON500      *PutAPIV1SessionsIDParentErrorResponseJSON500
+	JSON501      *PutAPIV1SessionsIDParentErrorResponseJSON501
+	JSON502      *PutAPIV1SessionsIDParentErrorResponseJSON502
+	JSON503      *PutAPIV1SessionsIDParentErrorResponseJSON503
+	JSON504      *PutAPIV1SessionsIDParentErrorResponseJSON504
 }
 
 type GetAPIV1SessionsIDToolCallsResp struct {
@@ -20402,6 +23014,17 @@ func (d DBProjectBreakdown) Validate() error {
 
 type DBProjectInfo = db.ProjectInfo
 
+type DBQualitySignalTotals struct {
+	DuplicatePromptCount        int64 `json:"duplicate_prompt_count"`
+	FrustrationMarkerCount      int64 `json:"frustration_marker_count"`
+	MissingSuccessCriteriaCount int64 `json:"missing_success_criteria_count"`
+	MissingVerificationCount    int64 `json:"missing_verification_count"`
+	NoCodeContextCount          int64 `json:"no_code_context_count"`
+	RunawayToolLoopCount        int64 `json:"runaway_tool_loop_count"`
+	ShortPromptCount            int64 `json:"short_prompt_count"`
+	UnstructuredStart           int64 `json:"unstructured_start"`
+}
+
 type DBQualitySignals struct {
 	DuplicatePromptCount        int64 `json:"duplicate_prompt_count"`
 	MissingSuccessCriteriaCount int64 `json:"missing_success_criteria_count"`
@@ -20448,6 +23071,56 @@ func (d DBRecallImportItem) Validate() error {
 type DBRecallImportResult = db.RecallImportResult
 
 type DBRecallResult = db.RecallResult
+
+type DBRecentEdit struct {
+	CallIndex int64   `json:"call_index"`
+	Category  string  `json:"category" validate:"required"`
+	Ordinal   int64   `json:"ordinal"`
+	SessionID string  `json:"session_id" validate:"required"`
+	Timestamp *string `json:"timestamp,omitempty"`
+	ToolName  string  `json:"tool_name" validate:"required"`
+	ToolUseID *string `json:"tool_use_id,omitempty"`
+}
+
+func (d DBRecentEdit) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBRecentEditFile struct {
+	EditCount      int64          `json:"edit_count"`
+	Edits          []DBRecentEdit `json:"edits" validate:"required"`
+	EditsTruncated bool           `json:"edits_truncated"`
+	FilePath       string         `json:"file_path" validate:"required"`
+	LastEditedAt   *string        `json:"last_edited_at,omitempty"`
+	LastSessionID  string         `json:"last_session_id" validate:"required"`
+	Project        string         `json:"project" validate:"required"`
+}
+
+func (d DBRecentEditFile) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range d.Edits {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Edits[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(d.FilePath, "required"); err != nil {
+		errors = errors.Append("FilePath", err)
+	}
+	if err := typesValidator.Var(d.LastSessionID, "required"); err != nil {
+		errors = errors.Append("LastSessionID", err)
+	}
+	if err := typesValidator.Var(d.Project, "required"); err != nil {
+		errors = errors.Append("Project", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type DBRecentEditsResult = db.RecentEditsResult
 
 type DBScopedDistribution struct {
 	Buckets []DBDistributionBucketV1 `json:"buckets" validate:"required"`
@@ -20515,113 +23188,104 @@ func (d DBSecretFindingRow) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
-type DBSession struct {
-	Agent                  string            `json:"agent" validate:"required"`
-	AgentLabel             *string           `json:"agent_label,omitempty"`
-	CompactionCount        int64             `json:"compaction_count"`
-	ConsecutiveFailureMax  int64             `json:"consecutive_failure_max"`
-	ContextPressureMax     *float64          `json:"context_pressure_max,omitempty"`
-	CreatedAt              string            `json:"created_at" validate:"required"`
-	Cwd                    *string           `json:"cwd,omitempty"`
-	DeletedAt              *string           `json:"deleted_at,omitempty"`
-	DisplayName            *string           `json:"display_name,omitempty"`
-	EditChurnCount         int64             `json:"edit_churn_count"`
-	EndedAt                *string           `json:"ended_at,omitempty" validate:"required"`
-	EndedWithRole          string            `json:"ended_with_role" validate:"required"`
-	Entrypoint             *string           `json:"entrypoint,omitempty"`
-	FileDevice             *int64            `json:"file_device,omitempty"`
-	FileHash               *string           `json:"file_hash,omitempty"`
-	FileInode              *int64            `json:"file_inode,omitempty"`
-	FileMtime              *int64            `json:"file_mtime,omitempty"`
-	FilePath               *string           `json:"file_path,omitempty"`
-	FileSize               *int64            `json:"file_size,omitempty"`
-	FinalFailureStreak     int64             `json:"final_failure_streak"`
-	FirstMessage           *string           `json:"first_message,omitempty" validate:"required"`
-	GitBranch              *string           `json:"git_branch,omitempty"`
-	GroupKey               *string           `json:"group_key,omitempty"`
-	HasPeakContextTokens   bool              `json:"has_peak_context_tokens"`
-	HasTotalOutputTokens   bool              `json:"has_total_output_tokens"`
-	HealthGrade            *string           `json:"health_grade,omitempty"`
-	HealthScore            *int64            `json:"health_score,omitempty"`
-	ID                     string            `json:"id" validate:"required"`
-	IsAutomated            bool              `json:"is_automated"`
-	IsTruncated            *bool             `json:"is_truncated,omitempty"`
-	LocalModifiedAt        *string           `json:"local_modified_at,omitempty"`
-	Machine                string            `json:"machine" validate:"required"`
-	MessageCount           int64             `json:"message_count"`
-	MidTaskCompactionCount int64             `json:"mid_task_compaction_count"`
-	Outcome                string            `json:"outcome" validate:"required"`
-	OutcomeConfidence      string            `json:"outcome_confidence" validate:"required"`
-	ParentSessionID        *string           `json:"parent_session_id,omitempty"`
-	ParentSessionIds       []string          `json:"parent_session_ids,omitempty"`
-	ParserMalformedLines   *int64            `json:"parser_malformed_lines,omitempty"`
-	PeakContextTokens      int64             `json:"peak_context_tokens"`
-	Project                string            `json:"project" validate:"required"`
-	ProjectAssigned        *bool             `json:"project_assigned,omitempty"`
-	QualitySignals         *DBQualitySignals `json:"quality_signals,omitempty"`
-	RelationshipType       *string           `json:"relationship_type,omitempty"`
-	SecretLeakCount        int64             `json:"secret_leak_count"`
-	SessionKind            *string           `json:"session_kind,omitempty"`
-	SignalsPendingSince    *string           `json:"signals_pending_since,omitempty"`
-	SourceSessionID        *string           `json:"source_session_id,omitempty"`
-	SourceVersion          *string           `json:"source_version,omitempty"`
-	StartedAt              *string           `json:"started_at,omitempty" validate:"required"`
-	TerminationStatus      *string           `json:"termination_status,omitempty"`
-	ToolFailureSignalCount int64             `json:"tool_failure_signal_count"`
-	ToolRetryCount         int64             `json:"tool_retry_count"`
-	TotalOutputTokens      int64             `json:"total_output_tokens"`
-	TranscriptFidelity     *string           `json:"transcript_fidelity,omitempty"`
-	TranscriptRevision     *string           `json:"transcript_revision,omitempty"`
-	UserMessageCount       int64             `json:"user_message_count"`
-	WebURL                 *string           `json:"web_url,omitempty"`
+type DBSession = db.Session
+
+type DBSessionExternalParent = db.SessionExternalParent
+
+type DBSessionLabels = db.SessionLabels
+
+type DBSessionStats = db.SessionStats
+
+type DBSignalCalibration struct {
+	AffectedIncompleteRate float64  `json:"affected_incomplete_rate"`
+	AffectedSessions       int64    `json:"affected_sessions"`
+	AvgScoreDelta          *float64 `json:"avg_score_delta,omitempty"`
+	BaselineIncompleteRate float64  `json:"baseline_incomplete_rate"`
+	BaselineSessions       int64    `json:"baseline_sessions"`
+	IncompleteLift         *float64 `json:"incomplete_lift,omitempty"`
+	Signal                 string   `json:"signal" validate:"required"`
 }
 
-func (d DBSession) Validate() error {
+func (d DBSignalCalibration) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBSignalSessionExample struct {
+	Agent          string  `json:"agent" validate:"required"`
+	Date           string  `json:"date" validate:"required"`
+	EditChurn      *int64  `json:"edit_churn,omitempty"`
+	Excerpt        string  `json:"excerpt" validate:"required"`
+	FailureSignals *int64  `json:"failure_signals,omitempty"`
+	HealthGrade    *string `json:"health_grade,omitempty" validate:"required"`
+	HealthScore    *int64  `json:"health_score,omitempty"`
+	IsAutomated    *bool   `json:"is_automated,omitempty"`
+	MessageOrdinal *int64  `json:"message_ordinal,omitempty"`
+	Outcome        string  `json:"outcome" validate:"required"`
+	Project        string  `json:"project" validate:"required"`
+	ReasonCode     string  `json:"reason_code" validate:"required"`
+	Retries        *int64  `json:"retries,omitempty"`
+	SessionID      string  `json:"session_id" validate:"required"`
+	SignalTotal    int64   `json:"signal_total"`
+}
+
+func (d DBSignalSessionExample) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBSignalSessionsResponse = db.SignalSessionsResponse
+
+type DBSignalsAgentRow struct {
+	Agent             string   `json:"agent" validate:"required"`
+	AvgFailureSignals float64  `json:"avg_failure_signals"`
+	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	CompletedRate     float64  `json:"completed_rate"`
+	SessionCount      int64    `json:"session_count"`
+}
+
+func (d DBSignalsAgentRow) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBSignalsAnalyticsResponse = db.SignalsAnalyticsResponse
+
+type DBSignalsContextHealth struct {
+	AvgCompactionCount            float64  `json:"avg_compaction_count"`
+	AvgContextPressure            *float64 `json:"avg_context_pressure,omitempty"`
+	HighPressureSessions          int64    `json:"high_pressure_sessions"`
+	MidTaskCompactionCount        int64    `json:"mid_task_compaction_count"`
+	SessionsWithCompaction        int64    `json:"sessions_with_compaction"`
+	SessionsWithContextData       int64    `json:"sessions_with_context_data"`
+	SessionsWithMidTaskCompaction int64    `json:"sessions_with_mid_task_compaction"`
+}
+
+type DBSignalsProjectRow struct {
+	AvgFailureSignals float64  `json:"avg_failure_signals"`
+	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	CompletedRate     float64  `json:"completed_rate"`
+	Project           string   `json:"project" validate:"required"`
+	SessionCount      int64    `json:"session_count"`
+}
+
+func (d DBSignalsProjectRow) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBSignalsQualityHealth struct {
+	ComputedSessions   int64                 `json:"computed_sessions"`
+	SessionsWithSignal DBQualitySignalTotals `json:"sessions_with_signal"`
+	Totals             DBQualitySignalTotals `json:"totals"`
+}
+
+func (d DBSignalsQualityHealth) Validate() error {
 	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(d.Agent, "required"); err != nil {
-		errors = errors.Append("Agent", err)
-	}
-	if err := typesValidator.Var(d.CreatedAt, "required"); err != nil {
-		errors = errors.Append("CreatedAt", err)
-	}
-	if d.EndedAt != nil {
-		if err := typesValidator.Var(d.EndedAt, "required"); err != nil {
-			errors = errors.Append("EndedAt", err)
+	if v, ok := any(d.SessionsWithSignal).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("SessionsWithSignal", err)
 		}
 	}
-	if err := typesValidator.Var(d.EndedWithRole, "required"); err != nil {
-		errors = errors.Append("EndedWithRole", err)
-	}
-	if d.FirstMessage != nil {
-		if err := typesValidator.Var(d.FirstMessage, "required"); err != nil {
-			errors = errors.Append("FirstMessage", err)
-		}
-	}
-	if err := typesValidator.Var(d.ID, "required"); err != nil {
-		errors = errors.Append("ID", err)
-	}
-	if err := typesValidator.Var(d.Machine, "required"); err != nil {
-		errors = errors.Append("Machine", err)
-	}
-	if err := typesValidator.Var(d.Outcome, "required"); err != nil {
-		errors = errors.Append("Outcome", err)
-	}
-	if err := typesValidator.Var(d.OutcomeConfidence, "required"); err != nil {
-		errors = errors.Append("OutcomeConfidence", err)
-	}
-	if err := typesValidator.Var(d.Project, "required"); err != nil {
-		errors = errors.Append("Project", err)
-	}
-	if d.QualitySignals != nil {
-		if v, ok := any(d.QualitySignals).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("QualitySignals", err)
-			}
-		}
-	}
-	if d.StartedAt != nil {
-		if err := typesValidator.Var(d.StartedAt, "required"); err != nil {
-			errors = errors.Append("StartedAt", err)
+	if v, ok := any(d.Totals).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Totals", err)
 		}
 	}
 	if len(errors) == 0 {
@@ -20630,7 +23294,27 @@ func (d DBSession) Validate() error {
 	return errors
 }
 
-type DBSessionStats = db.SessionStats
+type DBSignalsToolHealth struct {
+	FailureRate          float64 `json:"failure_rate"`
+	SessionsWithFailures int64   `json:"sessions_with_failures"`
+	TotalEditChurn       int64   `json:"total_edit_churn"`
+	TotalFailureSignals  int64   `json:"total_failure_signals"`
+	TotalRetries         int64   `json:"total_retries"`
+}
+
+type DBSignalsTrendBucket struct {
+	Abandoned         int64    `json:"abandoned"`
+	AvgFailureSignals float64  `json:"avg_failure_signals"`
+	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	Completed         int64    `json:"completed"`
+	Date              string   `json:"date" validate:"required"`
+	Errored           int64    `json:"errored"`
+	SessionCount      int64    `json:"session_count"`
+}
+
+func (d DBSignalsTrendBucket) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
 
 type DBStatsAdoption struct {
 	ClaudeOnly          bool    `json:"claude_only"`
@@ -20882,6 +23566,30 @@ func (d DBTemporalHourlyUTCEntry) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
+type DBToolAgentBreakdown struct {
+	Agent      string                `json:"agent" validate:"required"`
+	Categories []DBToolCategoryCount `json:"categories" validate:"required"`
+	Total      int64                 `json:"total"`
+}
+
+func (d DBToolAgentBreakdown) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Agent, "required"); err != nil {
+		errors = errors.Append("Agent", err)
+	}
+	for i, item := range d.Categories {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Categories[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type DBToolCall struct {
 	Category            string              `json:"category" validate:"required"`
 	InputJSON           *string             `json:"input_json,omitempty"`
@@ -20915,6 +23623,16 @@ func (d DBToolCall) Validate() error {
 	return errors
 }
 
+type DBToolCategoryCount struct {
+	Category string  `json:"category" validate:"required"`
+	Count    int64   `json:"count"`
+	Pct      float64 `json:"pct"`
+}
+
+func (d DBToolCategoryCount) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
 type DBToolResultEvent struct {
 	AgentID           *string `json:"agent_id,omitempty"`
 	Content           string  `json:"content" validate:"required"`
@@ -20930,6 +23648,41 @@ type DBToolResultEvent struct {
 func (d DBToolResultEvent) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
+
+type DBToolTrendEntry struct {
+	ByCategory map[string]int64 `json:"by_category"`
+	Date       string           `json:"date" validate:"required"`
+}
+
+func (d DBToolTrendEntry) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBToolUsageAnalysis struct {
+	AbandonedSequences int64    `json:"abandoned_sequences"`
+	AnalyzedCalls      int64    `json:"analyzed_calls"`
+	CallCount          int64    `json:"call_count"`
+	Category           string   `json:"category" validate:"required"`
+	EmptyCalls         int64    `json:"empty_calls"`
+	EmptyRate          *float64 `json:"empty_rate,omitempty"`
+	KnownOutcomeCalls  int64    `json:"known_outcome_calls"`
+	MissingCalls       int64    `json:"missing_calls"`
+	OpenSequences      int64    `json:"open_sequences"`
+	Pct                float64  `json:"pct"`
+	RecoveredSequences int64    `json:"recovered_sequences"`
+	RecoveryRate       *float64 `json:"recovery_rate,omitempty"`
+	RepeatRate         *float64 `json:"repeat_rate,omitempty"`
+	RepeatedCalls      int64    `json:"repeated_calls"`
+	SessionCount       int64    `json:"session_count"`
+	ToolName           string   `json:"tool_name" validate:"required"`
+	UnknownSequences   int64    `json:"unknown_sequences"`
+}
+
+func (d DBToolUsageAnalysis) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type DBToolsAnalyticsResponse = db.ToolsAnalyticsResponse
 
 type DBUsageSessionCounts = db.UsageSessionCounts
 
@@ -21176,6 +23929,17 @@ func (m MachinesResponse) Validate() error {
 type ModelTotal = service.ModelTotal
 
 type MoneyMoney = money.Money
+
+type ParserPRLink struct {
+	Host       string `json:"host" validate:"required"`
+	Number     int64  `json:"number"`
+	Repository string `json:"repository" validate:"required"`
+	URL        string `json:"url" validate:"required"`
+}
+
+func (p ParserPRLink) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
 
 type ProjectTotal = service.ProjectTotal
 
@@ -22099,6 +24863,11 @@ func (s SessionUsageResponse) Validate() error {
 	return errors
 }
 
+type SetSessionParentInputBody struct {
+	// ParentSessionID ID of the session that launched this one; empty or omitted removes the link
+	ParentSessionID *string `json:"parent_session_id,omitempty"`
+}
+
 type SyncAnomalyStats struct {
 	GenMetadataWithoutUsageByAgent  map[string]int64   `json:"gen_metadata_without_usage_by_agent,omitempty"`
 	GenMetadataWithoutUsageTotal    *int64             `json:"gen_metadata_without_usage_total,omitempty"`
@@ -22226,6 +24995,17 @@ func (s SyncWatchRename) Validate() error {
 }
 
 type UnsupportedUsage = service.UnsupportedUsage
+
+type UpdateSessionLabelsInputBody struct {
+	// Add Labels to add. Labels are free text, often key=value.
+	Add []string `json:"add,omitempty"`
+
+	// Clear Remove every existing label before adding; with add, replaces the set
+	Clear *bool `json:"clear,omitempty"`
+
+	// Remove Labels to remove; absent labels are ignored
+	Remove []string `json:"remove,omitempty"`
+}
 
 type UsageSummaryResponse struct {
 	AgentTotals      []AgentTotal                     `json:"agentTotals" validate:"required"`

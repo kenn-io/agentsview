@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { setLocale } from "../../i18n/index.js";
 import type { DbSignalsAnalyticsResponse as SignalsAnalyticsResponse } from "../../api/generated/index.js";
 import {

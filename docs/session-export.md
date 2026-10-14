@@ -7,6 +7,10 @@ Export session metadata and token and cost totals without transcript text. Use
 `agentsview export sessions` for reporting scripts that need pricing and project
 identity. JSON produces one document; NDJSON writes one JSON object per line.
 
+Labels and launcher parent links belong to the local archive and are excluded
+from artifact export and import. Transcript parents and spawn edges remain
+part of the artifact.
+
 ## Commands
 
 ```bash
@@ -196,6 +200,7 @@ Schema v6 adds two fields to each session row, in JSON and NDJSON:
   Transcript and standalone usage-event writes can update it while
   `last_activity_at` stays unchanged. It is a wall-clock signal: equal values,
   clock changes, and rebuilds prevent treating it as a monotonic revision.
+  Labels and launcher parent links update only the mirror sync marker.
 
 For a materialized session receipt, retain a tuple of independent version
 evidence: **transcript revision, project identity (or a digest of the complete

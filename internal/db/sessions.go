@@ -76,7 +76,17 @@ const sessionBaseCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	pr_links, ` + sessionLabelsSelectSQL
+
+// sessionLabelsSelectSQL reads a session's labels as a sorted JSON array.
+// The correlated lookup seeks the session_labels primary key.
+const sessionLabelsSelectSQL = `(
+		SELECT json_group_array(label) FROM (
+			SELECT sl.label FROM session_labels sl
+			WHERE sl.session_id = sessions.id ORDER BY sl.label
+		)
+	) AS labels`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -108,14 +118,21 @@ const sessionPruneCols = `id, project, machine, agent,
 	group_key, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision,
-	file_path, file_size, created_at`
+	file_path, file_size, created_at,
+	pr_links, ` + sessionLabelsSelectSQL
 
 // sessionFullCols includes all columns for a complete session record.
-const sessionFullCols = `id, project, machine, agent,
+const sessionFullCols = sessionFullColsBeforeParent + "parent_session_id" + sessionFullColsAfterParent
+
+const sessionFullColsBeforeParent = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
-	parent_session_id, parser_parent_session_id, relationship_type,
+`
+
+const sessionFullColsAfterParent = `, parser_parent_session_id, ` + "relationship_type" + sessionFullColsAfterRelationship
+
+const sessionFullColsAfterRelationship = `,
 	total_output_tokens, peak_context_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
 	is_automated,
@@ -147,7 +164,8 @@ const sessionFullCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	pr_links, ` + sessionLabelsSelectSQL
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -202,6 +220,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		prLinksColumn{&s.PRLinks},
+		labelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
@@ -367,12 +387,21 @@ type Session struct {
 	Cwd                         string          `json:"cwd,omitempty"`
 	GitBranch                   string          `json:"git_branch,omitempty"`
 	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	GroupKey                    string          `json:"group_key,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	// PRLinks lists the pull or merge requests the source transcript
+	// associated with the session. Parser-owned: a full reparse replaces it.
+	// Always serialized, as [] when empty, so a client merging a fresh
+	// response over a cached one drops cleared values.
+	PRLinks []PRLink `json:"pr_links" required:"false"`
+	// Labels are user- or tool-supplied tags. They are stored apart from
+	// parsed transcript data, so a reparse or resync never changes them.
+	// Always serialized, as [] when empty, like PRLinks.
+	Labels               []string `json:"labels" required:"false"`
+	SourceSessionID      string   `json:"source_session_id,omitempty"`
+	SourceVersion        string   `json:"source_version,omitempty"`
+	GroupKey             string   `json:"group_key,omitempty"`
+	TranscriptFidelity   string   `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines int      `json:"parser_malformed_lines,omitzero"`
+	IsTruncated          bool     `json:"is_truncated,omitzero"`
 
 	DeletedAt               *string `json:"deleted_at,omitempty"`
 	TrashIncludesCodexPages bool    `json:"-"`
@@ -548,17 +577,19 @@ type SessionFilter struct {
 	GitBranch string
 	// GitBranchExact matches one raw branch name in any project. It is ANDed
 	// with GitBranch when both are set.
-	GitBranchExact  string
-	Agent           string
-	Date            string // date overlapped by session activity, YYYY-MM-DD
-	DateFrom        string // activity range start (inclusive)
-	DateTo          string // activity range end (inclusive)
-	Timezone        string // IANA timezone for date filters; empty means UTC
-	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
-	MinMessages     int    // message_count >= N (0 = no filter)
-	MaxMessages     int    // message_count <= N (0 = no filter)
-	MinUserMessages int    // user_message_count >= N (0 = no filter)
-	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
+	GitBranchExact     string
+	Agent              string
+	Date               string // date overlapped by session activity, YYYY-MM-DD
+	DateFrom           string // activity range start (inclusive)
+	DateTo             string // activity range end (inclusive)
+	Timezone           string // IANA timezone for date filters; empty means UTC
+	ActiveSince        string // ISO-8601 timestamp; filters on most recent activity
+	MinMessages        int    // message_count >= N (0 = no filter)
+	MaxMessages        int    // message_count <= N (0 = no filter)
+	MinUserMessages    int    // user_message_count >= N (0 = no filter)
+	ExcludeOneShot     bool   // exclude sessions with user_message_count <= 1
+	OneShotFilterSet   bool   // preserve an explicit one-shot exclusion with annotation filters
+	AutomatedFilterSet bool   // preserve an explicit automated exclusion with annotation filters
 	// ExcludeActiveSince keeps sessions whose last activity is at or before
 	// this instant, or unknown. The zero time disables the filter.
 	ExcludeActiveSince time.Time
@@ -582,6 +613,11 @@ type SessionFilter struct {
 	MinToolFailures    *int     // minimum tool_failure_signal_count
 	HasSecret          bool     // only sessions with current secret_leak_count > 0
 	Starred            bool     // only sessions starred by the user
+	// Labels keeps sessions carrying every listed label (exact match).
+	Labels []string
+	// PR keeps sessions linked to a repository, optionally narrowed to one
+	// pull request number.
+	PR PRFilter
 	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
 	// current scanner versions. Empty preserves raw DB semantics for tests and
 	// direct store callers that explicitly want unversioned counts.
@@ -878,22 +914,76 @@ func (db *DB) GetSidebarSessionIndex(
 	return index, nil
 }
 
-func (db *DB) getSidebarSessionIndexPage(
-	ctx context.Context, f SessionFilter,
-) (SidebarSessionIndex, error) {
-	f.Limit = NormalizeSessionLimit(f.Limit)
+type sidebarPredicates struct {
+	rootWhere          string
+	rootArgs           []any
+	canonicalRootWhere string
+	treeMemberWhere    string
+}
 
+func buildSidebarPredicates(f SessionFilter) sidebarPredicates {
 	rootFilter := f
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
 	rootFilter.IncludeChildren = false
 	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
 	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
-	childAutomationPred := SQLiteQueryDialect().AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
+	treeMemberWhere := SessionTreeMemberPredicate(f, SQLiteQueryDialect(), "s")
+	return sidebarPredicates{
+		rootWhere:          rootWhere,
+		rootArgs:           rootArgs,
+		canonicalRootWhere: canonicalRootWhere,
+		treeMemberWhere:    treeMemberWhere,
 	}
+}
+
+func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebarPredicates) (string, []any) {
+	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(predicates.rootArgs))
+	cursorWhere := ""
+	if f.Cursor != "" {
+		cursorWhere = "WHERE (activity, id) < (" +
+			pageBuilder.Add(cur.EndedAt) + ", " +
+			pageBuilder.Add(cur.ID) + ")"
+	}
+	query := `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + predicates.rootWhere + `
+			  AND ` + predicates.canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		)
+		` + sidebarStarredRootCTE(f.Starred) + `,
+		root_activity(id, activity) AS (
+			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
+			FROM tree t
+			` + sidebarStarredRootJoin(f.Starred) + `
+			JOIN sessions s ON s.id = t.id
+			GROUP BY t.root_id
+		)
+		SELECT id, activity
+		FROM root_activity
+		` + cursorWhere + `
+		ORDER BY activity DESC, id DESC
+		` + pageBuilder.Limit(f.Limit+1)
+	args := append([]any{}, predicates.rootArgs...)
+	args = append(args, pageBuilder.Args()...)
+	return query, args
+}
+
+func (db *DB) getSidebarSessionIndexPage(
+	ctx context.Context, f SessionFilter,
+) (SidebarSessionIndex, error) {
+	f.Limit = NormalizeSessionLimit(f.Limit)
+
+	predicates := buildSidebarPredicates(f)
 
 	var total int
 	var cur SessionCursor
@@ -911,8 +1001,8 @@ func (db *DB) getSidebarSessionIndexPage(
 				WITH RECURSIVE root_candidates(id) AS (
 					SELECT id
 					FROM sessions
-					WHERE ` + rootWhere + `
-					  AND ` + canonicalRootWhere + `
+					WHERE ` + predicates.rootWhere + `
+					  AND ` + predicates.canonicalRootWhere + `
 				),
 				tree(root_id, id) AS (
 					SELECT id, id FROM root_candidates
@@ -920,9 +1010,7 @@ func (db *DB) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON s.parent_session_id = t.id
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
+					WHERE ` + predicates.treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -931,16 +1019,16 @@ func (db *DB) getSidebarSessionIndexPage(
 				)
 				SELECT COUNT(*) FROM eligible_roots`
 			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
+				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
 				return SidebarSessionIndex{},
 					fmt.Errorf("counting sidebar roots: %w", err)
 			}
 		} else {
 			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-				rootWhere + " AND " + canonicalRootWhere
+				predicates.rootWhere + " AND " + predicates.canonicalRootWhere
 			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
+				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
 				return SidebarSessionIndex{},
 					fmt.Errorf("counting sidebar roots: %w", err)
@@ -948,45 +1036,7 @@ func (db *DB) getSidebarSessionIndexPage(
 		}
 	}
 
-	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(rootArgs))
-	cursorWhere := ""
-	if f.Cursor != "" {
-		cursorWhere = "WHERE (activity, id) < (" +
-			pageBuilder.Add(cur.EndedAt) + ", " +
-			pageBuilder.Add(cur.ID) + ")"
-	}
-	rootQuery := `
-		WITH RECURSIVE root_candidates(id) AS (
-			SELECT id
-			FROM sessions
-			WHERE ` + rootWhere + `
-			  AND ` + canonicalRootWhere + `
-		),
-		tree(root_id, id) AS (
-			SELECT id, id FROM root_candidates
-			UNION
-			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
-		)
-		` + sidebarStarredRootCTE(f.Starred) + `,
-		root_activity(id, activity) AS (
-			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
-			FROM tree t
-			` + sidebarStarredRootJoin(f.Starred) + `
-			JOIN sessions s ON s.id = t.id
-			GROUP BY t.root_id
-		)
-		SELECT id, activity
-		FROM root_activity
-		` + cursorWhere + `
-		ORDER BY activity DESC, id DESC
-		` + pageBuilder.Limit(f.Limit+1)
-	rootQueryArgs := append([]any{}, rootArgs...)
-	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
+	rootQuery, rootQueryArgs := sidebarRootPageQuery(f, cur, predicates)
 
 	rows, err := db.getReader().QueryContext(ctx, rootQuery, rootQueryArgs...)
 	if err != nil {
@@ -1050,9 +1100,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + predicates.treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord
@@ -1174,12 +1222,19 @@ func (db *DB) GetSessionFull(
 	return s, nil
 }
 
-// GetArtifactExportSession returns raw user- and agent-owned session names so
-// canonical manifests do not publish session_name as a user display_name.
+// GetArtifactExportSession returns uncoalesced names and omits applied launcher parents.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*Session, error) {
-	return db.getSessionFullUncoalesced(ctx, id)
+	launcherApplied := `COALESCE(parser_parent_session_id, '') = ''
+		AND NOT ` + spawnEdgeExistsSQL("sessions") + `
+		AND EXISTS (SELECT 1 FROM session_external_parents ep
+			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
+	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
+	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
+	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
+	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
+		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1231,6 +1286,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1347,14 +1403,30 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	children, err := sessionIDsTx(ctx, tx, `id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+excluded+`)
+		AND tc.session_id IS NOT tc.subagent_session_id)`)
+	if err != nil {
+		return 0, err
+	}
 	for _, id := range ids {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
 		}
 	}
+	if err := deleteSessionAnnotationsTx(ctx, tx, excluded); err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+excluded)
 	if err != nil {
 		return 0, fmt.Errorf("purging excluded sessions: %w", err)
+	}
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, append(ids, children...)); err != nil {
+		return 0, err
 	}
 	return res.RowsAffected()
 }
@@ -1427,8 +1499,9 @@ const insertSessionSQL = `
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			file_inode, file_device, file_hash,
+			pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1456,6 +1529,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			parent_session_id = excluded.parent_session_id,
 			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
+			parser_relationship_type = excluded.parser_relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -1490,7 +1564,8 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
-			file_hash = excluded.file_hash`
+			file_hash = excluded.file_hash,
+			pr_links = excluded.pr_links`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1534,6 +1609,8 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		EncodePRLinks(s.PRLinks),
+		s.RelationshipType,
 	}
 }
 
@@ -1571,15 +1648,6 @@ func (db *DB) upsertSession(ctx context.Context,
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
-	if !db.usageOnlyStorage() {
-		return upsertSessionExec(
-			ctx,
-			writer.Exec,
-			writer.QueryRow,
-			s,
-			reviveSourceMissing,
-		)
-	}
 	// The upsert leaves stored titles, signals, and findings alone on
 	// purpose in full mode; a usage archive must not keep any that predate
 	// the policy, so the row is settled in the same transaction.
@@ -1600,8 +1668,10 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
-		return result, err
+	if db.usageOnlyStorage() {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+			return result, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing session upsert: %w", err)
@@ -1641,12 +1711,15 @@ func upsertSessionExec(
 	var previousProject string
 	var previousSessionName sql.NullString
 	var previousAutomated bool
+	var previousParent sql.NullString
+	var previousRelationship string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
+		&previousParent, &previousRelationship,
 	)
 	result := sessionUpsertResult{
 		inserted:        errors.Is(err, sql.ErrNoRows),
@@ -1702,6 +1775,12 @@ func upsertSessionExec(
 	if err != nil {
 		return sessionUpsertResult{},
 			fmt.Errorf("upserting session %s: %w", s.ID, err)
+	}
+	parentChanged := !nullableStringEqual(previousParent, s.ParentSessionID)
+	if result.inserted || parentChanged || previousRelationship != s.RelationshipType {
+		if _, err := applySessionExternalParentsFor(ctx, exec, queryRow, []string{s.ID}); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 	return result, nil
 }
@@ -1953,10 +2032,14 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
 	}
+	launched, err := applySessionExternalParents(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing subagent linking: %w", err)
 	}
-	return repaired + int(updated), nil
+	return repaired + int(updated) + launched, nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the
@@ -2110,15 +2193,27 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 		return 0, fmt.Errorf("beginning scoped subagent linking: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	updated, err := linkSubagentSessionsForSessionsTx(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
+	}
+	return updated, nil
+}
+
+func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, error) {
 	updated := 0
+	seeds := append([]string{}, ids...)
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
-	err = QueryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+	err := QueryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
-		res, err := tx.ExecContext(ctx,
-			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		rows, err := tx.QueryContext(ctx,
+			linkSubagentSessionsForSessionsQuery(ph)+" RETURNING id", allArgs...,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -2126,19 +2221,28 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 				len(chunk), err,
 			)
 		}
-		count, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("counting scoped subagent links: %w", err)
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("reading scoped subagent link: %w", err)
+			}
+			seeds = append(seeds, id)
+			updated++
 		}
-		updated += int(count)
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
+	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, seeds)
+	if err != nil {
+		return 0, err
 	}
+	updated += launched
 	return updated, nil
 }
 
@@ -2359,6 +2463,11 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			onProgress(done, total)
 		}
 	}
+	launched, err := applySessionExternalParents(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	updated += launched
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing queued subagent parent repair: %w", err)
 	}
@@ -2872,13 +2981,15 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 	id string,
 ) (count int, version int64, ok bool) {
 	var fileMtime int64
-	var fileHash, localModifiedAt string
+	var fileHash, localModifiedAt, syncMarker, labels, parent, relationship, launcherParent string
 	err := db.getReader().QueryRow(ctx,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
-			" COALESCE(file_hash, ''), COALESCE(local_modified_at, '')"+
-			" FROM sessions WHERE id = ?",
+			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
+			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
+			" COALESCE(parent_session_id, ''), COALESCE(relationship_type, ''),"+
+			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
 		id,
-	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt)
+	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -2886,6 +2997,11 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		strconv.FormatInt(fileMtime, 10),
 		fileHash,
 		localModifiedAt,
+		syncMarker,
+		labels,
+		parent,
+		relationship,
+		launcherParent,
 	), true
 }
 
@@ -5550,6 +5666,13 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 	if err != nil {
 		return 0, err
 	}
+	children, err := sessionIDsTx(ctx, tx, `id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+where+`)
+		AND tc.session_id IS NOT tc.subagent_session_id)`, args...)
+	if err != nil {
+		return 0, err
+	}
 	var threadScope bool
 	if err := tx.QueryRowContext(ctx,
 		"SELECT EXISTS (SELECT 1 FROM sessions WHERE ("+where+")"+
@@ -5576,6 +5699,9 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 			return 0, fmt.Errorf("pre-deleting session %s messages: %w", id, err)
 		}
 	}
+	if err := deleteSessionAnnotationsTx(ctx, tx, where, args...); err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+where, args...)
 	if err != nil {
 		return 0, fmt.Errorf("deleting sessions: %w", err)
@@ -5591,7 +5717,22 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 		}
 		n += pages
 	}
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, append(ids, children...)); err != nil {
+		return 0, err
+	}
 	return n, nil
+}
+
+func deleteSessionAnnotationsTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
+	for _, table := range []string{"session_labels", "session_external_parents"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE session_id IN (SELECT id FROM sessions WHERE "+where+")", args...); err != nil {
+			return fmt.Errorf("deleting %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func excludeSessionIDTx(ctx context.Context, tx *sql.Tx, id string, filePath sql.NullString) error {
@@ -6035,6 +6176,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 			&s.FilePath, &s.FileSize, &s.CreatedAt,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -6424,6 +6566,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
@@ -6533,6 +6676,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

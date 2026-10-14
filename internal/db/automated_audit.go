@@ -12,6 +12,11 @@ const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
 
+const parentlessRelationshipSQL = `IIF(sessions.session_kind = 'non-interactive', 'subagent', '')`
+
+// parserRelationshipSQL restores parser provenance, falling back to kind for legacy rows.
+const parserRelationshipSQL = `COALESCE(sessions.parser_relationship_type, ` + parentlessRelationshipSQL + `)`
+
 func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

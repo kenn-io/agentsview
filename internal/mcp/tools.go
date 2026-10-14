@@ -256,32 +256,37 @@ func (t *toolset) queryRecall(
 // --- list_sessions ---
 
 type listSessionsIn struct {
-	Project          string `json:"project,omitempty" jsonschema:"Filter by project name."`
-	Agent            string `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
-	Machine          string `json:"machine,omitempty" jsonschema:"Filter by machine name."`
-	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
-	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	ActiveSince      string `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
-	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
-	Limit            int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
-	Cursor           string `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	Project          string   `json:"project,omitempty" jsonschema:"Filter by project name."`
+	Agent            string   `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
+	Machine          string   `json:"machine,omitempty" jsonschema:"Filter by machine name."`
+	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
+	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
+	IncludeAutomated *bool    `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
+	Labels           []string `json:"labels,omitempty" jsonschema:"Only sessions carrying every one of these exact labels, such as ticket=example."`
+	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123."`
+	Limit            int      `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
+	Cursor           string   `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }
 
 type sessionRow struct {
-	WebURL           string `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
-	SessionID        string `json:"session_id"`
-	Project          string `json:"project,omitempty"`
-	Machine          string `json:"machine,omitempty"`
-	Agent            string `json:"agent"`
-	Name             string `json:"name"`
-	StartedAt        string `json:"started_at"`
-	EndedAt          string `json:"ended_at"`
-	MessageCount     int    `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
-	UserMessageCount int    `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
-	OutputTokens     int64  `json:"output_tokens,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`
-	HealthGrade      string `json:"health_grade,omitempty"`
-	GitBranch        string `json:"git_branch,omitempty"`
+	WebURL           string      `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
+	SessionID        string      `json:"session_id"`
+	Project          string      `json:"project,omitempty"`
+	Machine          string      `json:"machine,omitempty"`
+	Agent            string      `json:"agent"`
+	Name             string      `json:"name"`
+	StartedAt        string      `json:"started_at"`
+	EndedAt          string      `json:"ended_at"`
+	MessageCount     int         `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
+	UserMessageCount int         `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
+	OutputTokens     int64       `json:"output_tokens,omitempty"`
+	Outcome          string      `json:"outcome,omitempty"`
+	HealthGrade      string      `json:"health_grade,omitempty"`
+	GitBranch        string      `json:"git_branch,omitempty"`
+	ParentSessionID  string      `json:"parent_session_id,omitempty"`
+	Labels           []string    `json:"labels,omitempty"`
+	PullRequests     []db.PRLink `json:"pull_requests,omitempty" jsonschema:"Pull or merge requests the session's transcript linked to."`
 }
 
 type listSessionsOut struct {
@@ -294,15 +299,18 @@ func (t *toolset) listSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in listSessionsIn,
 ) (*mcp.CallToolResult, listSessionsOut, error) {
 	res, err := t.svc.List(ctx, service.ListFilter{
-		Project:          in.Project,
-		Agent:            in.Agent,
-		Machine:          in.Machine,
-		DateFrom:         in.DateFrom,
-		DateTo:           in.DateTo,
-		ActiveSince:      in.ActiveSince,
-		IncludeAutomated: in.IncludeAutomated,
-		Cursor:           in.Cursor,
-		Limit:            clampLimit(in.Limit, defaultListLimit, maxListLimit),
+		Project:            in.Project,
+		Agent:              in.Agent,
+		Machine:            in.Machine,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		ActiveSince:        in.ActiveSince,
+		IncludeAutomated:   in.IncludeAutomated != nil && *in.IncludeAutomated,
+		AutomatedFilterSet: in.IncludeAutomated != nil,
+		Labels:             in.Labels,
+		PR:                 in.PR,
+		Cursor:             in.Cursor,
+		Limit:              clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
 	if err != nil {
 		return nil, listSessionsOut{}, err
@@ -339,6 +347,9 @@ func toSessionRow(s db.Session) sessionRow {
 		Outcome:          s.Outcome,
 		HealthGrade:      strval(s.HealthGrade),
 		GitBranch:        s.GitBranch,
+		ParentSessionID:  strval(s.ParentSessionID),
+		Labels:           s.Labels,
+		PullRequests:     s.PRLinks,
 	}
 }
 

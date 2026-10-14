@@ -358,20 +358,14 @@ describe("renderMarkdown", () => {
 
     it("does not treat backticks in a fence info string as an opening fence", () => {
       const source = "```bad`info\n<policy>\n# heading\n</policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
-      expect(dom.querySelector("pre > code")?.textContent).toBe(
-        "<policy>\n# heading\n</policy>\n",
-      );
+      expect(dom.querySelector("pre > code")?.textContent).toBe("<policy>\n# heading\n</policy>\n");
     });
 
     it("keeps a closing tag visible after invalid fence info", () => {
       const source = "<policy>\n```bad`info </policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
     });
@@ -383,9 +377,7 @@ describe("renderMarkdown", () => {
         }),
       );
 
-      expect(dom.querySelector("pre > code")?.textContent).toBe(
-        "<policy>\n# heading\n</policy>\n",
-      );
+      expect(dom.querySelector("pre > code")?.textContent).toBe("<policy>\n# heading\n</policy>\n");
     });
 
     it("keeps markdown angle autolinks intact", () => {
@@ -398,18 +390,45 @@ describe("renderMarkdown", () => {
 
     it("keeps native protected constructs inside a complete unknown block", () => {
       for (const [source, expected] of [
-        ["<policy>\n<https://example.com>\n# heading\n</policy>", "<policy>\n<https://example.com>\n# heading\n</policy>\n"],
-        ["<policy>\n<urn:foo>\n# heading\n</policy>", "<policy>\n<urn:foo>\n# heading\n</policy>\n"],
-        ["<policy>\n<a+b.c-1:foo>\n# heading\n</policy>", "<policy>\n<a+b.c-1:foo>\n# heading\n</policy>\n"],
-        ["<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com", "<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n"],
-        ["<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>", "<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>\n"],
-        ["<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>", "<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>\n"],
+        [
+          "<policy>\n<https://example.com>\n# heading\n</policy>",
+          "<policy>\n<https://example.com>\n# heading\n</policy>\n",
+        ],
+        [
+          "<policy>\n<urn:foo>\n# heading\n</policy>",
+          "<policy>\n<urn:foo>\n# heading\n</policy>\n",
+        ],
+        [
+          "<policy>\n<a+b.c-1:foo>\n# heading\n</policy>",
+          "<policy>\n<a+b.c-1:foo>\n# heading\n</policy>\n",
+        ],
+        [
+          "<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com",
+          "<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n",
+        ],
+        [
+          "<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>",
+          "<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>\n",
+        ],
+        [
+          '<policy>\n<!doctype "<inner>\n</wrong>">\n# heading\n</policy>',
+          '<policy>\n<!doctype "<inner>\n</wrong>">\n# heading\n</policy>\n',
+        ],
         ["<policy>\n\\`\n# heading\n</policy>\n`", "<policy>\n\\`\n# heading\n</policy>\n"],
-        ["<policy>\n```\n<pre>\n```\n# heading\n</policy>", "<policy>\n```\n<pre>\n```\n# heading\n</policy>\n"],
+        [
+          "<policy>\n```\n<pre>\n```\n# heading\n</policy>",
+          "<policy>\n```\n<pre>\n```\n# heading\n</policy>\n",
+        ],
         ["<policy>\n`<pre>`\n# heading\n</policy>", "<policy>\n`<pre>`\n# heading\n</policy>\n"],
-        ["<policy>\n```\n<!--\n```\n# heading\n</policy>", "<policy>\n```\n<!--\n```\n# heading\n</policy>\n"],
+        [
+          "<policy>\n```\n<!--\n```\n# heading\n</policy>",
+          "<policy>\n```\n<!--\n```\n# heading\n</policy>\n",
+        ],
         ["<policy>\n`<!--`\n# heading\n</policy>", "<policy>\n`<!--`\n# heading\n</policy>\n"],
-        ["<policy>\n<!-- <pre> -->\n# heading\n</policy>", "<policy>\n<!-- <pre> -->\n# heading\n</policy>\n"],
+        [
+          "<policy>\n<!-- <pre> -->\n# heading\n</policy>",
+          "<policy>\n<!-- <pre> -->\n# heading\n</policy>\n",
+        ],
       ] as const) {
         const dom = parseHTML(
           renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
@@ -421,7 +440,7 @@ describe("renderMarkdown", () => {
     it("keeps namespaced element pairs inside a complete unknown block", () => {
       for (const source of [
         "<policy>\n<ns:item>value</ns:item>\n# heading\n</policy>",
-        "<policy>\n<ns:item id=\"1\">\nvalue\n</ns:item>\n# heading\n</policy>",
+        '<policy>\n<ns:item id="1">\nvalue\n</ns:item>\n# heading\n</policy>',
       ]) {
         const dom = parseHTML(
           renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
@@ -475,9 +494,7 @@ describe("renderMarkdown", () => {
 
     it("renders a complete unknown block as one preformatted code block when enabled", () => {
       const source = "<policy>\n# heading\n\n  indented body\n</policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe(`${source}\n`);
@@ -573,23 +590,17 @@ describe("renderMarkdown", () => {
 
     it("preserves prose before a complete block", () => {
       const source = "Intro **text**\n<policy>\n# heading\n</policy>\nAfter";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("p")?.textContent).toContain("Intro text");
-      expect(dom.querySelector("pre > code")?.textContent).toBe(
-        "<policy>\n# heading\n</policy>\n",
-      );
+      expect(dom.querySelector("pre > code")?.textContent).toBe("<policy>\n# heading\n</policy>\n");
       expect(dom.textContent).toContain("After");
       expect(dom.querySelector("h1")).toBeNull();
     });
 
     it("captures a complete block across a blank line", () => {
       const source = "Intro\n<outer>\n# heading\n\nmore\n</outer>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
       expect(dom.querySelector("pre > code")?.textContent).toContain("# heading\n\nmore");
@@ -612,9 +623,7 @@ describe("renderMarkdown", () => {
 
     it("preserves indentation when a complete block follows prose", () => {
       const source = "Intro\n  <policy>\n# heading\n  </policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("p")?.textContent).toContain("Intro");
       expect(dom.querySelector("pre > code")?.textContent).toBe(
@@ -681,21 +690,20 @@ describe("renderMarkdown", () => {
     });
 
     it("keeps known HTML closing tags on the HTML path", () => {
-      const dom = parseHTML(renderMarkdown("  </div>\n</span>\n<policy>\n# heading\n</policy>", {
-        renderUnknownXmlBlocksAsPreformatted: true,
-      }));
-
-      expect(dom.querySelector("pre > code")?.textContent).toBe(
-        "<policy>\n# heading\n</policy>\n",
+      const dom = parseHTML(
+        renderMarkdown("  </div>\n</span>\n<policy>\n# heading\n</policy>", {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        }),
       );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe("<policy>\n# heading\n</policy>\n");
       expect(dom.textContent).not.toContain("</div>");
     });
 
     it("captures one block in the second list item", () => {
-      const source = "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const source =
+        "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
       expect(dom.querySelector("li pre > code")?.textContent).toContain("<policy>");
@@ -707,9 +715,7 @@ describe("renderMarkdown", () => {
         "- outer\n  - <nested>\n    # two\n    </nested>",
         "- <first>\n  # one\n  </first>\n- <second>\n  # two\n  </second>",
       ].join("\n");
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("ol li pre > code")?.textContent).toContain("<ordered>");
       expect(dom.querySelector("ul ul li pre > code")?.textContent).toContain("<nested>");
@@ -718,9 +724,7 @@ describe("renderMarkdown", () => {
 
     it("captures an independent block after malformed nesting and a blank line", () => {
       const source = "<outer>\n<inner>\n</outer>\n\n<later>\n# later\n</later>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
       expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
@@ -729,9 +733,7 @@ describe("renderMarkdown", () => {
 
     it("recovers after an incomplete candidate and a blank line", () => {
       const source = "<outer>\n<inner>\n\n<later>\n# later\n</later>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
       expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
@@ -772,16 +774,14 @@ describe("renderMarkdown", () => {
     it("bounds the candidate search for Markdown without unknown tags", () => {
       const source = "Intro **text**\n\n- one\n- two\n\n> quoted\n\n```\ncode\n```";
 
-      expect(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      ).toBe(renderMarkdown(source));
+      expect(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true })).toBe(
+        renderMarkdown(source),
+      );
     });
 
     it("captures complete blocks with up to three leading spaces", () => {
       const source = "  <policy>\n# heading\n  </policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
       expect(dom.querySelector("h1")).toBeNull();
@@ -789,9 +789,7 @@ describe("renderMarkdown", () => {
 
     it("balances nested blocks with the same tag name", () => {
       const source = "<example>\n1\n<example>\ninner\n</example>\ntail\n</example>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
       const code = dom.querySelector("pre > code");
 
       expect(code).not.toBeNull();
@@ -826,9 +824,7 @@ describe("renderMarkdown", () => {
         "\n<later>\n# later\n</later>\n" +
         tick.repeat(2) +
         " after";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("p > code")?.textContent).toBe("literal `` inside");
       expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
@@ -855,16 +851,8 @@ describe("renderMarkdown", () => {
       for (const source of [
         "`before\n<later>\nbody\n</later>\nafter`",
         "`before `` inner\n<later>\nbody\n</later>\nafter`",
-        "Intro\n" +
-          "\\" +
-          tick.repeat(2) +
-          "before\n<later>\nbody\n</later>\nafter" +
-          tick,
-        "Intro " +
-          "\\\\" +
-          tick +
-          "before\n<later>\nbody\n</later>\nafter" +
-          tick,
+        "Intro\n" + "\\" + tick.repeat(2) + "before\n<later>\nbody\n</later>\nafter" + tick,
+        "Intro " + "\\\\" + tick + "before\n<later>\nbody\n</later>\nafter" + tick,
       ]) {
         const omitted = renderMarkdown(source);
         const enabled = renderMarkdown(source, {
@@ -881,9 +869,7 @@ describe("renderMarkdown", () => {
 
     it("captures a block before a later unmatched inline delimiter", () => {
       const source = "Intro\n<later>\n# later\n</later>\nafter `code`";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
       expect(dom.querySelector("h1")).toBeNull();
@@ -891,9 +877,7 @@ describe("renderMarkdown", () => {
 
     it("keeps internal whitespace inside the captured block", () => {
       const source = "<policy>\n\n    first\n\n      second\n\n</policy>";
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
       expect(dom.querySelector("pre > code")!.textContent).toBe(`${source}\n`);
     });
 
@@ -907,9 +891,9 @@ describe("renderMarkdown", () => {
       });
 
       expect(renderMarkdown(source)).toBe(defaultHtml);
-      expect(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      ).toBe(preformattedHtml);
+      expect(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true })).toBe(
+        preformattedHtml,
+      );
       expect(preformattedHtml).not.toBe(defaultHtml);
 
       const reverseSource = "<reverse-cache-policy>\n# reverse heading\n</reverse-cache-policy>";
@@ -937,9 +921,7 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("img")!.hasAttribute("onerror")).toBe(false);
       expect(dom.querySelector("p > code")!.textContent).toBe("<policy>inline</policy>");
       expect(dom.querySelectorAll("pre > code")[0]!.textContent).toBe("!echo hi\n");
-      expect(dom.querySelectorAll("pre > code")[1]!.textContent).toBe(
-        "<policy>fenced</policy>\n",
-      );
+      expect(dom.querySelectorAll("pre > code")[1]!.textContent).toBe("<policy>fenced</policy>\n");
     });
 
     it("does not capture unknown tags inside multiline inline code or known HTML", () => {
@@ -971,18 +953,14 @@ describe("renderMarkdown", () => {
           expect(enabled).toBe(omitted);
           expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
         } else {
-          expect(parseHTML(enabled).querySelector("pre > code")?.textContent).toContain(
-            "<policy>",
-          );
+          expect(parseHTML(enabled).querySelector("pre > code")?.textContent).toContain("<policy>");
         }
       }
     });
 
     it("treats comment-like text in an XML attribute as literal", () => {
       const source = '<policy data="<!--">\n# body\n</policy>';
-      const dom = parseHTML(
-        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
-      );
+      const dom = parseHTML(renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }));
 
       expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
     });

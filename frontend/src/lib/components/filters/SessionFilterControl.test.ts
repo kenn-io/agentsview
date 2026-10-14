@@ -19,6 +19,8 @@ afterEach(() => {
   sessions.machineLabels = {};
   sessions.filters.machine = "";
   sessions.filters.minUserMessages = 0;
+  sessions.filters.labels = [];
+  sessions.filters.pr = "";
   vi.restoreAllMocks();
 });
 
@@ -107,5 +109,62 @@ describe("SessionFilterControl minimum prompt filter", () => {
     expect(sessions.filters.agent).toBe("claude");
     expect(filtersToParams(sessions.filters).agent).toBe("claude");
     expect(filtersToParams(sessions.filters).min_user_messages).toBeUndefined();
+  });
+});
+
+describe("SessionFilterControl label and pull request filters", () => {
+  async function openControl(props: Record<string, unknown> = {}) {
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+
+    component = mount(SessionFilterControl, { target: document.body, props });
+    await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  }
+
+  async function submit(input: HTMLElement, value: string) {
+    await fireEvent.input(input, { target: { value } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+  }
+
+  it("adds labels on Enter and removes one from its row", async () => {
+    await openControl();
+    const input = screen.getByRole("textbox", { name: "Filter by label" });
+
+    await submit(input, "ticket=example");
+    await submit(input, "role=reviewer");
+    expect(sessions.filters.labels).toEqual(["ticket=example", "role=reviewer"]);
+    expect((input as HTMLInputElement).value).toBe("");
+
+    await fireEvent.click(screen.getByRole("button", { name: "ticket=example" }));
+    expect(sessions.filters.labels).toEqual(["role=reviewer"]);
+  });
+
+  it("applies a pull request filter and clears it from its row", async () => {
+    await openControl();
+    const input = screen.getByRole("textbox", { name: "Filter by pull request" });
+
+    await submit(input, "acme/widgets#42");
+    expect(sessions.filters.pr).toBe("acme/widgets#42");
+
+    await fireEvent.click(screen.getByRole("button", { name: "acme/widgets#42" }));
+    expect(sessions.filters.pr).toBe("");
+  });
+
+  it("preserves hidden label and pull request filters when shared filters clear", async () => {
+    sessions.filters.labels = ["ticket=example"];
+    sessions.filters.pr = "acme/widgets#42";
+    await openControl({ showLabelFilters: false });
+
+    expect(screen.queryByRole("textbox", { name: "Filter by label" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Filter by pull request" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+
+    sessions.filters.agent = "claude";
+    flushSync();
+    await fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(sessions.filters.agent).toBe("");
+    expect(sessions.filters.labels).toEqual(["ticket=example"]);
+    expect(sessions.filters.pr).toBe("acme/widgets#42");
   });
 });

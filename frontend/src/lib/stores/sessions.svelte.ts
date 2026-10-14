@@ -11,7 +11,15 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
+import {
+  SESSION_ANALYTICS_WINDOW_PARAM,
+  SESSION_LABEL_PARAM,
+  SESSION_PR_PARAM,
+  joinLabelFilterParam,
+  normalizeLabelFilters,
+  parseWindowDaysParam,
+  splitLabelFilterParam,
+} from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
@@ -21,6 +29,7 @@ type SidebarIndexParams = NonNullable<
 type MetadataParams = NonNullable<Parameters<typeof MetadataService.getApiV1Projects>[0]>;
 type ClearSessionFiltersOptions = {
   clearDateYoke?: boolean;
+  preserveLabelsAndPR?: boolean;
 };
 type LoadOptions = {
   force?: boolean;
@@ -92,6 +101,11 @@ export interface Filters {
   minUserMessages: number;
   includeOneShot: boolean;
   includeAutomated: boolean;
+  automatedFilterSet: boolean;
+  /** Exact labels a session must carry; every label must match. */
+  labels: string[];
+  /** Pull request reference: owner/repo or owner/repo#123. */
+  pr: string;
 }
 
 function defaultFilters(): Filters {
@@ -110,6 +124,9 @@ function defaultFilters(): Filters {
     minUserMessages: 0,
     includeOneShot: true,
     includeAutomated: false,
+    automatedFilterSet: false,
+    labels: [],
+    pr: "",
   };
 }
 
@@ -138,6 +155,8 @@ function loadSavedFilters(): SavedFilters {
         windowDays?: unknown;
       };
       const filters = { ...defaultFilters(), ...saved };
+      filters.labels = normalizeLabelFilters(filters.labels);
+      filters.pr = typeof filters.pr === "string" ? filters.pr.trim() : "";
       // Deliberately `!==`, not `<`: an entry written by a newer (or older)
       // format is not trusted either way — dropping date bounds is the
       // fail-safe direction in both.
@@ -203,7 +222,12 @@ export function filtersToParams(f: Filters): Record<string, string> {
     p["min_user_messages"] = String(f.minUserMessages);
   }
   if (!f.includeOneShot) p["include_one_shot"] = "false";
-  if (f.includeAutomated) p["include_automated"] = "true";
+  if (f.includeAutomated || f.automatedFilterSet)
+    p["include_automated"] = String(f.includeAutomated);
+  const labels = joinLabelFilterParam(f.labels);
+  if (labels) p[SESSION_LABEL_PARAM] = labels;
+  const pr = f.pr.trim();
+  if (pr) p[SESSION_PR_PARAM] = pr;
   return p;
 }
 
@@ -266,6 +290,9 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
     minUserMessages: Number.isFinite(minUserMsgs) ? minUserMsgs : 0,
     includeOneShot,
     includeAutomated: params["include_automated"] === "true",
+    automatedFilterSet: params["include_automated"] !== undefined,
+    labels: splitLabelFilterParam(params[SESSION_LABEL_PARAM]),
+    pr: (params[SESSION_PR_PARAM] ?? "").trim(),
   };
 }
 
@@ -288,6 +315,8 @@ class SessionsStore {
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
+  /** Why the server rejected the current sidebar filters, or null. */
+  sidebarLoadError: string | null = $state(null);
   #savedFilters = loadSavedFilters();
   private filterPersistenceHeld = false;
   filters: Filters = $state(this.#savedFilters.filters);
@@ -365,9 +394,12 @@ class SessionsStore {
       min_messages: f.minMessages > 0 ? f.minMessages : undefined,
       max_messages: f.maxMessages > 0 ? f.maxMessages : undefined,
       min_user_messages: f.minUserMessages > 0 ? f.minUserMessages : undefined,
-      include_one_shot: f.includeOneShot || undefined,
-      include_automated: f.includeAutomated || undefined,
+      include_one_shot: f.includeOneShot,
+      include_automated:
+        f.includeAutomated || f.automatedFilterSet ? f.includeAutomated : undefined,
       starred: starred.filterOnly || undefined,
+      label: f.labels.length > 0 ? [...f.labels] : undefined,
+      pr: f.pr || undefined,
     };
   }
 
@@ -416,7 +448,8 @@ class SessionsStore {
     this.filterPersistenceHeld = true;
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
-      previous.includeAutomated !== this.filters.includeAutomated
+      previous.includeAutomated !== this.filters.includeAutomated ||
+      previous.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
@@ -432,7 +465,8 @@ class SessionsStore {
     this.normalizeMachineFilter();
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
-      previous.includeAutomated !== this.filters.includeAutomated
+      previous.includeAutomated !== this.filters.includeAutomated ||
+      previous.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
@@ -456,13 +490,18 @@ class SessionsStore {
   initFromParams(params: Record<string, string>) {
     const prevOneShot = this.filters.includeOneShot;
     const prevAutomated = this.filters.includeAutomated;
+    const prevAutomatedSet = this.filters.automatedFilterSet;
     const next = parseFiltersFromParams(params);
     this.filters = next;
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
     this.normalizeMachineFilter();
-    if (prevOneShot !== next.includeOneShot || prevAutomated !== next.includeAutomated) {
+    if (
+      prevOneShot !== next.includeOneShot ||
+      prevAutomated !== next.includeAutomated ||
+      prevAutomatedSet !== next.automatedFilterSet
+    ) {
       this.invalidateFilterCaches();
     }
     this.setActiveSession(null);
@@ -551,14 +590,24 @@ class SessionsStore {
       }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-    } catch {
+      this.sidebarLoadError = null;
+    } catch (error) {
+      if (this.loadVersion !== version) return;
+      // A rejected filter has no matching rows; showing the previous
+      // filter's rows under it would mislabel them.
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        this.sessions = [];
+        this.sidebarIndexIds = new Set();
+        this.nextCursor = null;
+        this.total = 0;
+        this.sidebarLoadError = error.message;
+        return;
+      }
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
-      if (this.loadVersion === version) {
-        this.sessions = prev.sessions;
-        this.nextCursor = prev.nextCursor;
-        this.total = prev.total;
-      }
+      this.sessions = prev.sessions;
+      this.nextCursor = prev.nextCursor;
+      this.total = prev.total;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -601,9 +650,9 @@ class SessionsStore {
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
+    const uncached = uniqueIds.filter((id) => !cache.has(id));
     await Promise.all(
-      uniqueIds.map((id) => {
-        if (cache.has(id)) return;
+      uncached.map((id) => {
         const existing = inflight.get(id);
         if (existing) return existing;
 
@@ -665,6 +714,9 @@ class SessionsStore {
     this.sessions[idx] = {
       ...current,
       ...hydrated,
+      parent_session_id: hydrated.parent_session_id,
+      parent_session_ids: hydrated.parent_session_ids,
+      relationship_type: hydrated.relationship_type,
       display_name: hydrated.display_name ?? current.display_name,
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
       is_index_only: false,
@@ -1102,17 +1154,18 @@ class SessionsStore {
     this.setActiveSession(null);
     if (
       prev.includeOneShot !== this.filters.includeOneShot ||
-      prev.includeAutomated !== this.filters.includeAutomated
+      prev.includeAutomated !== this.filters.includeAutomated ||
+      prev.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
-    this.load();
+    void this.load();
   }
 
   setMachineFilter(machine: string) {
     this.filters.machine = this.filters.machine === machine ? "" : machine;
     this.activeSessionId = null;
-    this.load();
+    void this.load();
   }
 
   toggleMachineFilter(machine: string) {
@@ -1125,7 +1178,7 @@ class SessionsStore {
     }
     this.filters.machine = current.join(",");
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   isMachineSelected(machine: string): boolean {
@@ -1145,7 +1198,7 @@ class SessionsStore {
       this.filters.agent = agent;
     }
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   toggleAgentFilter(agent: string) {
@@ -1158,7 +1211,7 @@ class SessionsStore {
     }
     this.filters.agent = current.join(",");
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   isAgentSelected(agent: string): boolean {
@@ -1174,13 +1227,13 @@ class SessionsStore {
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setMinUserMessagesFilter(n: number) {
     this.filters.minUserMessages = n;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setHideUnknownProjectFilter(hide: boolean) {
@@ -1189,27 +1242,28 @@ class SessionsStore {
       this.filters.project = "";
     }
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setIncludeOneShotFilter(include: boolean) {
     this.filters.includeOneShot = include;
     this.setActiveSession(null);
     this.invalidateFilterCaches();
-    this.load();
+    void this.load();
   }
 
   setIncludeAutomatedFilter(include: boolean) {
     this.filters.includeAutomated = include;
+    this.filters.automatedFilterSet = true;
     this.setActiveSession(null);
     this.invalidateFilterCaches();
-    this.load();
+    void this.load();
   }
 
   setTerminationFilter(termination: string) {
     this.filters.termination = termination;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   /** Add or remove a status from the comma-separated termination
@@ -1228,7 +1282,44 @@ class SessionsStore {
     return this.filters.termination.split(",").includes(status);
   }
 
+  /** Adds an exact-match label filter. Sessions must carry every label. */
+  addLabelFilter(label: string) {
+    const next = normalizeLabelFilters([...this.filters.labels, label]);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  removeLabelFilter(label: string) {
+    const next = this.filters.labels.filter((l) => l !== label);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  /** Sets the pull request filter; an empty value clears it. */
+  setPRFilter(pr: string) {
+    const next = pr.trim();
+    if (next === this.filters.pr) return;
+    this.filters.pr = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  /** Label and pull request filters narrow only the session list; the
+   *  usage and analytics pages do not apply them. */
+  get hasSessionListOnlyFilters(): boolean {
+    return this.filters.labels.length > 0 || !!this.filters.pr;
+  }
+
   get hasActiveFilters(): boolean {
+    return this.hasSharedFilters || this.hasSessionListOnlyFilters;
+  }
+
+  /** Filters the session list shares with the usage and analytics pages. */
+  get hasSharedFilters(): boolean {
     const f = this.filters;
     return !!(
       f.machine ||
@@ -1241,24 +1332,30 @@ class SessionsStore {
       f.date ||
       f.minUserMessages > 0 ||
       !f.includeOneShot ||
-      f.includeAutomated
+      f.includeAutomated ||
+      f.automatedFilterSet
     );
   }
 
   clearSessionFilters(options: ClearSessionFiltersOptions = {}) {
     const project = this.filters.project;
     const wasOneShot = this.filters.includeOneShot;
-    const wasAutomated = this.filters.includeAutomated;
+    const wasAutomated = this.filters.includeAutomated || this.filters.automatedFilterSet;
     if (options.clearDateYoke || hasDateFilters(this.filters)) {
       yokedDates.clear();
     }
-    this.filters = { ...defaultFilters(), project };
+    const filters = { ...defaultFilters(), project };
+    if (options.preserveLabelsAndPR) {
+      filters.labels = this.filters.labels;
+      filters.pr = this.filters.pr;
+    }
+    this.filters = filters;
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {
       this.invalidateFilterCaches();
     }
-    this.load();
+    void this.load();
   }
 
   /** Recently deleted session batches for undo toast. */
@@ -1374,16 +1471,16 @@ class SessionsStore {
     this.machinesVersion++;
     this.machinesLoaded = false;
     this.machinesPromise = null;
-    this.loadAgents();
-    this.loadMachines();
-    sync.loadStats(this.metadataParams);
+    void this.loadAgents();
+    void this.loadMachines();
+    void sync.loadStats(this.metadataParams);
   }
 
   invalidateProjectCache() {
     this.projectsVersion++;
     this.projectsLoaded = false;
     this.projectsPromise = null;
-    this.loadProjects();
+    void this.loadProjects();
   }
 
   /** Remove one or all entries from the undo toast list. */
@@ -1484,7 +1581,7 @@ class SessionsStore {
       this.handleLiveRefreshEvent(event);
     });
     this.safetyNetTimer = setInterval(() => {
-      this.load();
+      void this.load();
       this.refreshActiveChildSessions();
       this.bumpActiveSessionUsageVersion();
     }, SAFETY_NET_REFRESH_MS);
@@ -1498,6 +1595,7 @@ class SessionsStore {
       return;
     }
     if (event.scope === "sessions" || event.scope === "sync") {
+      if (event.scope === "sessions") void this.refreshActiveSession();
       this.invalidateProjectCache();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();
@@ -1512,7 +1610,7 @@ class SessionsStore {
     }
     this.liveRefreshTimer = setTimeout(() => {
       this.liveRefreshTimer = null;
-      this.load();
+      void this.load();
     }, LIVE_REFRESH_DEBOUNCE_MS);
   }
 

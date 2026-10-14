@@ -37,9 +37,37 @@ const report = {
       { reason: "previews", count: 1, kept_chars: 800 },
     ],
     cited_calls: [
-      { ordinal: 1, call_index: 0, call_fingerprint: "0000aaaa", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16, message_calls: 1 },
-      { ordinal: 2, call_index: 0, call_fingerprint: "0000bbbb", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16, message_calls: 1 },
-      { ordinal: 3, call_index: 0, call_fingerprint: "0000cccc", tool_name: "mcp__onemcp__context7_1mcp_resolve_library_id", input_preview: '{"file_path":"app/config.json"}', outcome: "content", result_bytes: 16, result_kept_bytes: 12, message_calls: 1 },
+      {
+        ordinal: 1,
+        call_index: 0,
+        call_fingerprint: "0000aaaa",
+        tool_name: "Grep",
+        input_preview: '{"pattern":"config"}',
+        outcome: "empty",
+        result_bytes: 16,
+        message_calls: 1,
+      },
+      {
+        ordinal: 2,
+        call_index: 0,
+        call_fingerprint: "0000bbbb",
+        tool_name: "Grep",
+        input_preview: '{"pattern":"config"}',
+        outcome: "empty",
+        result_bytes: 16,
+        message_calls: 1,
+      },
+      {
+        ordinal: 3,
+        call_index: 0,
+        call_fingerprint: "0000cccc",
+        tool_name: "mcp__onemcp__context7_1mcp_resolve_library_id",
+        input_preview: '{"file_path":"app/config.json"}',
+        outcome: "content",
+        result_bytes: 16,
+        result_kept_bytes: 12,
+        message_calls: 1,
+      },
     ],
   }),
   created_at: "2026-04-26T12:00:00Z",
@@ -47,9 +75,33 @@ const report = {
 
 // The seeded calls, with fingerprints of each call's tool name and input.
 const SEEDED_CALLS = [
-  { ordinal: 1, tool_use_id: "grep-1", call_fingerprint: "a82053b1", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16 },
-  { ordinal: 2, tool_use_id: "grep-2", call_fingerprint: "a82053b1", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16 },
-  { ordinal: 3, tool_use_id: "read-1", call_fingerprint: "7111f37f", tool_name: "Read", input_preview: '{"file_path":"app/config.json"}', outcome: "content", result_bytes: 16 },
+  {
+    ordinal: 1,
+    tool_use_id: "grep-1",
+    call_fingerprint: "a82053b1",
+    tool_name: "Grep",
+    input_preview: '{"pattern":"config"}',
+    outcome: "empty",
+    result_bytes: 16,
+  },
+  {
+    ordinal: 2,
+    tool_use_id: "grep-2",
+    call_fingerprint: "a82053b1",
+    tool_name: "Grep",
+    input_preview: '{"pattern":"config"}',
+    outcome: "empty",
+    result_bytes: 16,
+  },
+  {
+    ordinal: 3,
+    tool_use_id: "read-1",
+    call_fingerprint: "7111f37f",
+    tool_name: "Read",
+    input_preview: '{"file_path":"app/config.json"}',
+    outcome: "content",
+    result_bytes: 16,
+  },
 ];
 
 /** A report whose citations name the seeded calls and the transcript revision they came from. */
@@ -69,7 +121,9 @@ function seededReport(transcriptRevision: string) {
 }
 
 function serveReports(page: Page, reports: object[]) {
-  return page.route("**/api/v1/insights", (route) => route.fulfill({ json: { insights: reports } }));
+  return page.route("**/api/v1/insights", (route) =>
+    route.fulfill({ json: { insights: reports } }),
+  );
 }
 
 async function openReport(page: Page, width: number, id = report.id) {
@@ -93,7 +147,9 @@ test("saved tool-effectiveness report keeps conclusions, sequences, and omission
       await expect(detail).toContainText("The second Grep repeated an empty search.");
       await expect(detail).toContainText("1 message shown as a preview of 800 characters");
       await expect(detail).toContainText("3 of 3 calls cited");
-      await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(0);
+      await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(
+        0,
+      );
       await expect(detail.locator(".citations .citation")).toHaveText([
         /Grep\s*config\s*· Message 1/,
         /Grep\s*config\s*· Message 2/,
@@ -114,7 +170,10 @@ test("saved tool-effectiveness report keeps conclusions, sequences, and omission
     // The long tool name must not squeeze the input preview out.
     expect(input!.width).toBeGreaterThan(40);
     const overlaps = (a: typeof result, b: typeof result) =>
-      a!.x < b!.x + b!.width && b!.x < a!.x + a!.width && a!.y < b!.y + b!.height && b!.y < a!.y + a!.height;
+      a!.x < b!.x + b!.width &&
+      b!.x < a!.x + a!.width &&
+      a!.y < b!.y + b!.height &&
+      b!.y < a!.y + a!.height;
     expect(overlaps(result, jump)).toBe(false);
     expect(overlaps(input, jump)).toBe(false);
 
@@ -138,7 +197,9 @@ test("cited calls and sequence calls open the transcript at the cited call", asy
   const conclusion = detail.locator(".conclusion").nth(1);
   await conclusion.locator(".citation").click();
   await expect(conclusion).toHaveClass(/open/);
-  await conclusion.getByRole("link", { name: "Message 3: open the Read call in the transcript", exact: true }).click();
+  await conclusion
+    .getByRole("link", { name: "Message 3: open the Read call in the transcript", exact: true })
+    .click();
   // The link names the call by tool ID and fingerprint, so the transcript can check it.
   await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=3(&|$)`));
   const url = new URL(page.url());
@@ -158,7 +219,9 @@ test("cited calls and sequence calls open the transcript at the cited call", asy
   const sequence = detail.locator(".tool-sequences-panel .sequence").first();
   await sequence.locator(".sequence-row").click();
   await expect(sequence.locator(".sequence-row")).toHaveAttribute("aria-expanded", "true");
-  await sequence.getByRole("link", { name: "Message 1: open the Grep call in the transcript", exact: true }).click();
+  await sequence
+    .getByRole("link", { name: "Message 1: open the Grep call in the transcript", exact: true })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=1(&|$)`));
   expect(new URL(page.url()).searchParams.get("fp")).toBe("a82053b1");
   await expect(selected).toHaveAttribute("data-index", "1");
@@ -176,6 +239,8 @@ test("a link whose call no longer matches its fingerprint selects nothing", asyn
   await page.goto(`/sessions/${SESSION_ID}?msg=3&call=0&tool_use_id=read-1&fp=00000000`, {
     waitUntil: "domcontentloaded",
   });
-  await expect(page.locator(".message-list-scroll .virtual-row").first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".message-list-scroll .virtual-row").first()).toBeVisible({
+    timeout: 10_000,
+  });
   await expect(selected).toHaveCount(0);
 });

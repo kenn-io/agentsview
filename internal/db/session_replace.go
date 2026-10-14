@@ -27,7 +27,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	// Writers hold db.mu, so the row read here matches the messages the transaction reads.
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	src, err := db.getSessionFullUncoalesced(ctx, id)
+	src, err := db.GetArtifactExportSession(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -73,6 +73,10 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if len(write.UsageEvents) == 0 {
 		write.UsageEvents = events
 	}
+	externalParent, err := loadSessionExternalParent(ctx, tx, id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
 	var pins []savedPin
 	if _, err := writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), &pins,
@@ -102,6 +106,16 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		); err != nil {
 			return "", fmt.Errorf("writing replaced session copy: %w", err)
 		}
+		if externalParent.SessionID != "" {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO session_external_parents (
+					session_id, parent_session_id, created_at, updated_at
+				) VALUES (?, ?, ?, ?)`, copyID, externalParent.ParentSessionID,
+				externalParent.CreatedAt, externalParent.UpdatedAt,
+			); err != nil {
+				return "", fmt.Errorf("copying replaced session parent: %w", err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET display_name = ?,
@@ -116,6 +130,9 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		}
 	}
 
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("committing session replace: %w", err)
 	}

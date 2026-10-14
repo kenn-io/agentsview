@@ -1704,7 +1704,13 @@ agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
+agentsview session label <id> k=v ...    # add or remove labels
+agentsview session parent <id> <parent>  # record the launching session
 ```
+
+`session list --label k=v` and `--pr owner/repo#123` filter by
+[labels](/docs/session-api/#agentsview-session-label) and
+[pull request links](/docs/session-api/#pull-request-links).
 
 `session usage` attributes each subagent transcript's spend to the session that
 spawned it, so a parent that delegated most of its work still reports the full
@@ -2105,6 +2111,7 @@ agentsview help
 | `GROK_DIR`                            | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
 | `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions` (macOS/Linux), `~/AppData/Local/hermes/sessions` (Windows) | Hermes Agent sessions root; sibling SQLite `state.db` is discovered even when `sessions/` is absent |
 | `IFLOW_DIR`                           | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
+| `FX_SESSIONS_DIR`                     | `~/.fx/sessions`                                     | fx sessions directory                                                                               |
 | `JUNIE_DIR`                           | `~/.junie/sessions`                                  | Junie CLI session store directory                                                                   |
 | `JUNIE_HOME`                          | `~/.junie`                                           | Junie home that re-roots the default `sessions/` discovery path                                     |
 | `KILO_DIR`                            | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |

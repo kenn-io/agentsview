@@ -755,6 +755,30 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 	assert.False(t, store.creates[1].Created)
 }
 
+func TestExportManifestVersionTracksPRLinks(t *testing.T) {
+	for _, links := range [][]db.PRLink{nil, {{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}} {
+		database := testExportDB(t)
+		store := newTestArtifactStore(t)
+		seedSession(t, database, "sess-1", "alpha", func(sess *db.Session) { sess.PRLinks = links })
+		result, err := ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
+		require.NoError(t, err)
+		require.Equal(t, 1, result.ExportedSessions)
+		checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
+		ref, err := NewRef(contractOrigin, KindManifests, checkpoint.Sessions[contractOrigin+"~sess-1"]+".json")
+		require.NoError(t, err)
+		data := readContractArtifact(t, store, ref)
+		published, err := decodeManifestWithLimits(data, productionArtifactLimits())
+		require.NoError(t, err)
+		if len(links) == 0 {
+			assert.Equal(t, 5, published.Version)
+			assert.NotContains(t, string(data), `"pr_links"`)
+		} else {
+			assert.Equal(t, 6, published.Version)
+			assert.Equal(t, links, published.Session.PRLinks)
+		}
+	}
+}
+
 func TestExportKeepsAgentSessionNameSeparateFromUserDisplayName(t *testing.T) {
 	t.Parallel()
 

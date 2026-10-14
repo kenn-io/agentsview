@@ -15,6 +15,76 @@ import (
 
 const importLocalOrigin = "local-b2c3d4"
 
+func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
+	for _, kind := range []string{"", "non-interactive"} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			source := testExportDB(t)
+			relationship := ""
+			if kind == "non-interactive" {
+				relationship = "subagent"
+			}
+			seedSession(t, source, "worker", "project", func(s *db.Session) {
+				s.SessionKind, s.RelationshipType = kind, relationship
+			})
+			seedSession(t, source, "manager-a", "project")
+			seedSession(t, source, "manager-b", "project")
+			store := newTestArtifactStore(t)
+			exportHash := func() string {
+				t.Helper()
+				_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+				require.NoError(t, err)
+				return latestStoreCheckpointForTest(t, store, contractOrigin).Sessions[contractOrigin+"~worker"]
+			}
+			before := exportHash()
+			for _, parent := range []string{"manager-a", "manager-b"} {
+				_, err := source.SetSessionExternalParent(t.Context(), "worker", parent)
+				require.NoError(t, err)
+				assert.Equal(t, before, exportHash(), "launcher annotations must not change canonical content")
+			}
+			destination := testDB(t)
+			coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+			recordAllImportEntries(t, coordinator, store, contractOrigin)
+			_, err := coordinator.Finalize(t.Context())
+			require.NoError(t, err)
+			id := contractOrigin + "~worker"
+			worker, err := destination.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, worker)
+			assert.Nil(t, worker.ParentSessionID)
+			assert.Equal(t, relationship, worker.RelationshipType)
+			_, err = source.ClearSessionExternalParent(t.Context(), "worker")
+			require.NoError(t, err)
+			assert.Equal(t, before, exportHash(), "clearing the annotation must preserve canonical content")
+		})
+	}
+}
+
+func TestArtifactImportPreservesNativeParents(t *testing.T) {
+	source := testExportDB(t)
+	parent := "manager"
+	seedSession(t, source, "worker", "project")
+	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: db.Session{ID: parent, Agent: "claude", Machine: "local", Project: "project", MessageCount: 1}, ReplaceMessages: true,
+		Messages: []db.Message{{SessionID: parent, Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}}}},
+	}})
+	require.NoError(t, err)
+	_, err = source.SetSessionExternalParent(t.Context(), "worker", parent)
+	require.NoError(t, err)
+	store := newTestArtifactStore(t)
+	_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+	recordAllImportEntries(t, coordinator, store, contractOrigin)
+	_, err = coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	worker, err := destination.GetSessionFull(t.Context(), contractOrigin+"~worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	require.NotNil(t, worker.ParentSessionID)
+	assert.Equal(t, contractOrigin+"~manager", *worker.ParentSessionID)
+}
+
 func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	t.Parallel()
 
@@ -228,7 +298,7 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json",
-					[]byte(fmt.Sprintf(`{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1)),
+					fmt.Appendf(nil, `{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1),
 				)
 			},
 			wantManifest: manifestFormatVersion + 1,
@@ -364,7 +434,7 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	sessionMap := map[string]string{
 		contractOrigin + "~000-future": createHashedImportArtifact(
 			t, store, KindManifests, ".json",
-			[]byte(fmt.Sprintf(`{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1)),
+			fmt.Appendf(nil, `{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1),
 		),
 	}
 	const supportedSessions = artifactImportDrainLimit + 1

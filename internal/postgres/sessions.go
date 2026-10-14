@@ -15,11 +15,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Store wraps a PostgreSQL connection for read-only session
 // queries.
 type Store struct {
+	readbase.ReadOnlyStubs
 	hostedRelations bool
 	pg              *sql.DB
 	cursorMu        sync.RWMutex
@@ -72,7 +74,8 @@ const pgSessionBaseCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	group_key, transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision, trash_includes_codex_pages`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	trash_includes_codex_pages, pr_links, array_to_json(labels)::text AS labels`
 
 // pgSessionCols is the column list for full PG session queries.
 // PostgreSQL retains the source file path used by read-side session
@@ -127,6 +130,7 @@ func scanPGSessionWithSource(
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
+	var prLinks string
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -156,7 +160,8 @@ func scanPGSessionWithSource(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.GroupKey, &s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision, &s.TrashIncludesCodexPages,
+		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		&s.TrashIncludesCodexPages, &prLinks, db.LabelsScanner(&s.Labels),
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -165,6 +170,7 @@ func scanPGSessionWithSource(
 	if err != nil {
 		return s, err
 	}
+	s.PRLinks = db.DecodePRLinks(prLinks)
 	if createdAt != nil {
 		s.CreatedAt = FormatISO8601(*createdAt)
 	}
@@ -436,7 +442,7 @@ func (s *Store) GetSidebarSessionIndex(
 	f.Cursor = ""
 	rootFilter := f
 	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
 	canonicalRootWhere := db.BuildCanonicalRootWhere(
 		s.sessionDialect(), "sessions", f.IncludeOrphans,
 	)
@@ -472,7 +478,7 @@ func (s *Store) GetSidebarSessionIndex(
 			user_message_count,
 			transcript_revision,
 			is_automated,
-			position('<teammate-message' in COALESCE(first_message, '')) > 0
+			` + s.sessionDialect().Position("COALESCE(first_message, '')", "'<teammate-message'") + ` > 0
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -507,16 +513,9 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
 	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	childAutomationPred := db.PostgresQueryDialect().AutomatedScopePredicate(
-		db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
-		"s.is_automated",
-	)
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
+	treeMemberWhere := db.SessionTreeMemberPredicate(f, s.sessionDialect(), "s")
 
 	var total int
 	var cur db.SessionCursor
@@ -543,9 +542,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
+					WHERE ` + treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -593,9 +590,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT t.root_id, s.id
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		)
 		` + pgSidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -682,9 +677,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord
@@ -711,7 +704,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.user_message_count,
 			s.transcript_revision,
 			s.is_automated,
-			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
+			` + s.sessionDialect().Position("COALESCE(s.first_message, '')", "'<teammate-message'") + ` > 0
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY

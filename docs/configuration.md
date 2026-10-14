@@ -443,6 +443,7 @@ keeps its default directories.
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
+| fx                    | `~/.fx/sessions/`                                                                                                                                                | Schema 4 session folders with `events.jsonl`, `session.json`, and optional `usage-v2.json` (older fx)                                                                           |
 | Tau                   | `~/.tau/sessions/`                                                                                                                                               | JSONL transcripts under `<project>/`, with metadata `index.jsonl` excluded                                                                                    |
 | Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                       | Flat Pi-family JSONL sessions                                                                                                                                 |
 | StepCode              | `~/.stepcode/agent/sessions/`                                                                                                                                    | JSONL per session                                                                                                                                             |
@@ -520,6 +521,21 @@ Prime Agent support targets the current flat session layout in v0.7.0. That
 release migrates the older per-project layout when Prime Agent opens its session
 store, so open the current Prime Agent once before syncing a legacy archive with
 AgentsView.
+
+fx sessions appear from `~/.fx/sessions/` when `session.json` uses schema 4.
+Subagent runs appear as children of their parent session. Usage comes from
+`usage-v2.json` when present (older fx only) as cumulative totals per model,
+dated at the earlier of the session's last event and the usage file's
+modification time.
+Tool results use larger `.txt` files from `tool-results/` only when they are
+regular files with valid UTF-8 and match the saved byte count or reach the
+16 MiB cap. Other files keep the stored preview. Restoring a missing file
+refreshes the result on the next sync. Freshness checks cover entry names,
+sizes, and modification times in `tool-results/`. This suffices because fx
+names result files by content hash.
+Costs use AgentsView's pricing catalog. Set `FX_SESSIONS_DIR` or `agents.fx.dirs`
+to scan another root, including a WSL path on Windows. The legacy `fx_dirs` key
+converts to `agents.fx.dirs`.
 
 Tau stores multiple session transcripts in each project directory under
 `~/.tau/sessions/`. AgentsView reads `.jsonl` files directly below those project
@@ -950,6 +966,7 @@ export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
 export PI_CODING_AGENT_DIR=~/custom/pi-home # sessions are under this home
 export PI_CODING_AGENT_SESSION_DIR=~/custom/pi-sessions # direct session directory
+export FX_SESSIONS_DIR=~/custom/fx/sessions
 export TAU_SESSIONS_DIR=~/custom/tau/sessions
 export PIEBALD_DIR=~/custom/piebald
 export POOLSIDE_DIR=~/custom/poolside/trajectories

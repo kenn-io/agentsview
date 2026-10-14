@@ -11,13 +11,12 @@ to handle a data-version change.
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
 Dashboard analytics, report, and search scans, and other multi-second scans over
-message or usage rows, take the lane; the list and sidebar reads every page loads
-(session list, stats, project list) and reads scoped to one session stay outside.
-The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1` reader
-connections so quick reads always get one.
-Each holder uses one reader connection at a time. Validate input before
-acquiring a permit. Release it before waiting for another bulk reader or doing
-host git/GitHub lookups.
+message or usage rows, take the lane; the list and sidebar reads every page
+loads (session list, stats, project list) and reads scoped to one session stay
+outside. The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1`
+reader connections so quick reads always get one. Each holder uses one reader
+connection at a time. Validate input before acquiring a permit. Release it
+before waiting for another bulk reader or doing host git/GitHub lookups.
 
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
@@ -350,8 +349,11 @@ their backend.
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
    an adapter implementing every `readbase.CatalogBackend` method; route
    DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
-   Forward common SQL to the shared builders; keep specialized SQL and typed
-   loaders in the backend.
+   Route mirror session and transcript reads through `readbase.NewSessions`,
+   with every `readbase.SessionsBackend` SQL method explicitly forwarding to
+   shared `readbase.SessionQueries` builders or supplying specialized SQL.
+   Embed `readbase.MirrorStubs` in mirror stores; PostgreSQL uses
+   `readbase.ReadOnlyStubs`. Keep typed loaders in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -437,6 +439,10 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 - DuckDB and ClickHouse share report orchestration in
   `internal/readbase.Analytics`. Backends supply every required SQL operation
   and retain typed loaders and caches.
+- DuckDB and ClickHouse share session and transcript reads in
+  `internal/readbase.Sessions`, with required backend SQL and typed scanners.
+  `readbase.ReadOnlyStubs` owns unsupported archive writes; `MirrorStubs` adds
+  mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
 
 ### Usage cache divergence
 
@@ -574,6 +580,21 @@ Full resync drops these indexes in the temporary database during the bulk load
 (the FTS trade: one post-load build instead of per-row B-tree maintenance) and
 must rebuild them before the swap; a failed rebuild aborts the swap because
 read-only opens require the indexes.
+
+### Sidebar tree index
+
+The sidebar's recursive child lookup and parent-only lookups share
+`idx_sessions_parent` on `(parent_session_id, is_automated)`, excluding null
+parents. Writable opens widen the parent-only form that `schema.sql` creates,
+after column migrations, and startup `PRAGMA optimize` gathers its statistics.
+Bulk imports retain the index, and widening it needs no parser resync. Read-only
+opens use whichever form the archive has until a writable open widens it.
+
+PostgreSQL keeps `idx_sessions_parent` on `parent_session_id` alone. The wider
+SQLite index exists because, without it, SQLite builds a temporary
+`is_automated` index on every recursive step of the child lookup. PostgreSQL
+never builds temporary indexes, so it filters `is_automated` while it uses the
+parent-only index.
 
 ### Dashboard metadata index
 

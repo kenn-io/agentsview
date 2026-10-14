@@ -14,21 +14,20 @@ inputs:
   artifact_dir:
     description: Bundle output directory
     required: true
-  namespace-cache:
-    description: Use Namespace cache volumes for this runner
-    default: 'false'
 runs:
   using: composite
   steps:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version-file: go.mod
-        cache: ${{ inputs.namespace-cache != 'true' }}
 
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
       with:
         node-version: "24"
-        package-manager-cache: ${{ inputs.namespace-cache != 'true' }}
+        cache: npm
+        cache-dependency-path: |
+          desktop/package-lock.json
+          frontend/package-lock.json
 
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
       id: rust-toolchain
@@ -43,15 +42,10 @@ runs:
       if: steps.rust-toolchain.outcome == 'failure'
       uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
 
-    - name: Configure Namespace build caches
-      if: inputs.namespace-cache == 'true'
-      uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
       with:
-        cache: |
-          go
-          npm
-          rust
-        path: desktop/src-tauri/target
+        workspaces: desktop/src-tauri -> target
 
     - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'
@@ -117,6 +111,8 @@ runs:
         fi
 
     - name: Desktop smoke tests (Rust unit tests)
+      # CI's desktop-windows-unit covers Windows on pull_request and push.
+      if: runner.os != 'Windows' || (github.event_name != 'pull_request' && github.event_name != 'push')
       shell: bash
       env:
         AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}

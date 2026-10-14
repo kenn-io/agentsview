@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -100,6 +101,11 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Equal(t, "alpha", sess.Project)
 
+		children, err := store.GetChildSessions(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		require.Len(t, children, 1)
+		assert.Equal(t, fixtureChildID, children[0].ID)
+
 		ids, err := store.FindSessionIDsByPartial(ctx, "ch-sync-alpha", 5)
 		require.NoError(t, err)
 		assert.Contains(t, ids, fixtureAlphaID)
@@ -135,6 +141,12 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		timing, err := store.GetSessionTiming(ctx, fixtureAlphaID)
 		require.NoError(t, err)
 		require.NotNil(t, timing)
+
+		activity, err := store.GetSessionActivity(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		require.NotNil(t, activity)
+		assert.Equal(t, 2, activity.TotalMessages)
+		assert.NotEmpty(t, activity.Buckets)
 	})
 
 	t.Run("search_and_secrets", func(t *testing.T) {
@@ -216,6 +228,13 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.Len(t, pins, 1)
 		require.NotNil(t, pins[0].Note)
 		assert.Equal(t, "pin alpha", *pins[0].Note)
+
+		projectPins, err := store.ListPinnedMessages(ctx, "", "alpha")
+		require.NoError(t, err)
+		require.Len(t, projectPins, 1)
+		assert.Equal(t, fixtureAlphaID, projectPins[0].SessionID)
+		require.NotNil(t, projectPins[0].Content)
+		assert.Equal(t, "alpha first", *projectPins[0].Content)
 	})
 
 	t.Run("writes_are_read_only", func(t *testing.T) {
@@ -326,6 +345,11 @@ func TestStoreGetSessionHidesTrash(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.DeletedAt)
 	assert.Equal(t, fixtureBetaID, full.ID)
+
+	trash, err := store.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, trash, 1)
+	assert.Equal(t, fixtureBetaID, trash[0].ID)
 }
 
 func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
@@ -394,4 +418,35 @@ func (s *activityVectorSearcher) PrepareSemanticSearch(context.Context, string) 
 
 func (s *activityVectorSearcher) ResolveMessageUnits(_ context.Context, refs []db.MessageRef) ([]db.UnitRef, error) {
 	return make([]db.UnitRef, len(refs)), nil
+}
+
+func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"parent set", func() error { _, err := local.SetSessionExternalParent(ctx, fixtureBetaID, fixtureAlphaID); return err }},
+		{"parent clear", func() error { _, err := local.ClearSessionExternalParent(ctx, fixtureBetaID); return err }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker = '2000-01-01T00:00:00Z' WHERE id = ?`, fixtureBetaID)
+				return err
+			}))
+			_, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err)
+			count, before, ok := store.GetSessionVersion(ctx, fixtureBetaID)
+			require.True(t, ok)
+			require.NoError(t, tt.write())
+			res, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, res.SessionsPushed)
+			afterCount, after, ok := store.GetSessionVersion(ctx, fixtureBetaID)
+			require.True(t, ok)
+			assert.Equal(t, count, afterCount)
+			assert.NotEqual(t, before, after)
+		})
+	}
 }

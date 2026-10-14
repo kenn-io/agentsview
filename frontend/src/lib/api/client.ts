@@ -399,7 +399,10 @@ export async function syncClaudeAI(
   if (signal?.aborted) abort();
   try {
     await claudeAIClosing;
-    const response = await ImportService.postApiV1ImportClaudeAiSync(host ? undefined : { browser: "chrome" }, { signal: controller.signal });
+    const response = await ImportService.postApiV1ImportClaudeAiSync(
+      host ? undefined : { browser: "chrome" },
+      { signal: controller.signal },
+    );
     let fail: (error: unknown) => void = () => {};
     const failed = new Promise<never>((_, reject) => {
       fail = reject;
@@ -407,24 +410,31 @@ export async function syncClaudeAI(
     const result = readImportResponse(
       response,
       cb,
-      host ? (id, path) => {
-        void (async () => {
-          let fetched;
-          try {
-            fetched = await host.fetch(path);
-          } catch (error) {
-            fetched = { status: 0, body: "", error: String(error) };
+      host
+        ? (id, path) => {
+            void (async () => {
+              let fetched;
+              try {
+                fetched = await host.fetch(path);
+              } catch (error) {
+                fetched = { status: 0, body: "", error: String(error) };
+              }
+              await ImportService.postApiV1ImportClaudeAiSyncResultsById(
+                { id },
+                {
+                  status: fetched.status,
+                  body: fetched.body,
+                  retry_after: fetched.retryAfter,
+                  error: fetched.error,
+                },
+                { signal: controller.signal },
+              );
+            })().catch((error) => {
+              fail(error);
+              abort();
+            });
           }
-          await ImportService.postApiV1ImportClaudeAiSyncResultsById(
-            { id },
-            { status: fetched.status, body: fetched.body, retry_after: fetched.retryAfter, error: fetched.error },
-            { signal: controller.signal },
-          );
-        })().catch((error) => {
-          fail(error);
-          abort();
-        });
-      } : undefined,
+        : undefined,
     );
     return await Promise.race([result, failed]);
   } finally {
@@ -436,26 +446,18 @@ export async function syncClaudeAI(
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportClaudeAi(
-      { file },
-      undefined,
-      {
-        headers: { Accept: "text/event-stream" },
-      },
-    ),
+    await ImportService.postApiV1ImportClaudeAi({ file }, undefined, {
+      headers: { Accept: "text/event-stream" },
+    }),
     cb,
   );
 }
 
 export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportChatgpt(
-      { file },
-      undefined,
-      {
-        headers: { Accept: "text/event-stream" },
-      },
-    ),
+    await ImportService.postApiV1ImportChatgpt({ file }, undefined, {
+      headers: { Accept: "text/event-stream" },
+    }),
     cb,
   );
 }

@@ -4974,6 +4974,70 @@ func (e *Engine) ClearSessionProjectAssignment(
 	return cleared, err
 }
 
+// SetSessionLabels replaces one session's labels, serialized with parser
+// writes, then publishes the session inventory when the labels changed.
+func (e *Engine) SetSessionLabels(
+	ctx context.Context, sessionID string, labels []string,
+) (db.SessionLabels, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.SetSessionLabels(ctx, sessionID, labels)
+	}, sessionLabelsChanged)
+}
+
+// UpdateSessionLabels adds and removes one session's labels, serialized
+// with parser writes, then publishes the session inventory when the labels
+// changed.
+func (e *Engine) UpdateSessionLabels(
+	ctx context.Context, sessionID string, add, remove []string,
+) (db.SessionLabels, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+	}, sessionLabelsChanged)
+}
+
+// SetSessionExternalParent records a launcher-supplied parent link,
+// serialized with parser writes so a concurrent parse cannot interleave
+// with the parent application.
+func (e *Engine) SetSessionExternalParent(
+	ctx context.Context, sessionID, parentID string,
+) (db.SessionExternalParent, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.SetSessionExternalParent(ctx, sessionID, parentID)
+	}, sessionExternalParentChanged)
+}
+
+// ClearSessionExternalParent removes a launcher-supplied parent link.
+func (e *Engine) ClearSessionExternalParent(
+	ctx context.Context, sessionID string,
+) (db.SessionExternalParent, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.ClearSessionExternalParent(ctx, sessionID)
+	}, sessionExternalParentChanged)
+}
+
+// sessionLabelsChanged skips labels stored ahead of sync, which change no
+// listed session.
+func sessionLabelsChanged(l db.SessionLabels) bool { return l.Changed && l.SessionFound }
+
+func sessionExternalParentChanged(l db.SessionExternalParent) bool { return l.Changed }
+
+// runSessionAnnotationWrite runs write under the engine's exclusive lock and
+// publishes the session inventory only when changed reports a visible change.
+func runSessionAnnotationWrite[T any](
+	e *Engine, write func() (T, error), changed func(T) bool,
+) (T, error) {
+	var result T
+	err := e.RunExclusive(func() error {
+		var err error
+		result, err = write()
+		return err
+	})
+	if err == nil && changed(result) {
+		e.emit("sessions")
+	}
+	return result, err
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
@@ -15937,9 +16001,16 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
 		var storedSessionName *string
+		var storedPRLinks map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
+			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
+			if lerr != nil {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					fmt.Errorf("read stored Claude pr links: %w", lerr)
+			}
+			storedPRLinks = links
 			if !e.db.ArchiveContent().UsageOnly() {
 				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
 				if nerr != nil {
@@ -15969,6 +16040,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
+				StoredPRLinks:             storedPRLinks,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)
@@ -20702,7 +20774,7 @@ func applyProviderFingerprintFileInfo(
 	results []parser.ParseResultOutcome,
 ) {
 	if agent != parser.AgentDevin && agent != parser.AgentHermes &&
-		agent != parser.AgentAugureDesktop {
+		agent != parser.AgentAugureDesktop && agent != parser.AgentFx {
 		return
 	}
 	for i := range results {

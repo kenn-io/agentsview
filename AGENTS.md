@@ -25,8 +25,8 @@
 The `README.md` and `Makefile` are the sources for project facts, setup, and
 commands. Do not copy their catalogues into this file.
 
-Before reviewing CI runner security, read the
-[Namespace runner policy](docs/agents/build.md#namespace-runner-policy).
+For CI runner selection and caching, read the
+[CI runner policy](docs/agents/build.md#ci-runner-policy).
 
 ## Roborev
 
@@ -132,7 +132,8 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - `cmd/agentsview/`: CLI and server entry points
 - `internal/db/`: SQLite archive and search
-- `internal/readbase/`: shared replica and mirror catalog and analytics reads
+- `internal/readbase/`: shared replica and mirror catalog, analytics, session
+  and transcript reads, and read-only stubs
 - `internal/postgres/`: PostgreSQL sync and read store
 - `internal/duckdb/`: disposable DuckDB mirror and Quack reads
 - `internal/clickhouse/`: ClickHouse remote mirror and read store

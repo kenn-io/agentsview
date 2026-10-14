@@ -34,7 +34,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
   const nestedRead = new LatestRead();
 
   $effect(() => {
-    sessionId;
+    void sessionId;
     nestedRead.cancel();
     expanded = false;
     messages = null;

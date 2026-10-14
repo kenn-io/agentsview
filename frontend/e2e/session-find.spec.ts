@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Message } from "../src/lib/api/types.js";
+import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
 const SESSION_ID = "test-session-xlarge-5500";
 const QUERY = "needle";
@@ -34,6 +34,8 @@ function fixtureMessages(): Message[] {
       model: "",
       context_tokens: 0,
       output_tokens: 0,
+      has_context_tokens: false,
+      has_output_tokens: false,
       is_system: false,
     };
   });

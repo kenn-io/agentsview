@@ -9,7 +9,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +35,7 @@ var errNotImplemented = errors.New("not implemented for the ClickHouse backend")
 // connection carries final=1 so reads see one row per ReplacingMergeTree key
 // without FINAL in the query text.
 type Store struct {
+	readbase.MirrorStubs
 	conn          *sql.DB
 	cursorMu      sync.RWMutex
 	cursorSecret  []byte
@@ -262,48 +262,4 @@ func formatDBTime(v any) string {
 	default:
 		return fmt.Sprint(t)
 	}
-}
-
-// Recall entries live only in the SQLite archive.
-
-func (s *Store) ListRecallEntries(_ context.Context, _ db.RecallQuery) ([]db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) GetRecallEntry(_ context.Context, _ string) (*db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) ReviewRecallEntry(
-	_ context.Context, _ string, _ db.RecallReviewAction,
-) (db.RecallEntry, error) {
-	return db.RecallEntry{}, db.ErrReadOnly
-}
-
-func (s *Store) QueryRecallEntries(_ context.Context, _ db.RecallQuery) (db.RecallPage, error) {
-	return db.RecallPage{}, db.ErrReadOnly
-}
-
-func (s *Store) RecordRecallQueryEvent(_ context.Context, _ db.RecallQueryEvent) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) InsertRecallEntry(_ context.Context, _ db.RecallEntry) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONL(_ context.Context, _ io.Reader) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
-	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) IngestEvalTrajectory(
-	_ context.Context, _ db.EvalTrajectoryIngest,
-) (db.EvalTrajectoryIngestResult, error) {
-	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
 }

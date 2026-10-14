@@ -170,7 +170,11 @@ afterEach(async () => {
 describe("MessageContent", () => {
   it("shows pin success only after persistence", async () => {
     let resolve!: (saved: boolean) => void;
-    pinMock.mockReturnValueOnce(new Promise<boolean>((done) => { resolve = done; }));
+    pinMock.mockReturnValueOnce(
+      new Promise<boolean>((done) => {
+        resolve = done;
+      }),
+    );
     await render(message({ id: 47, session_id: "pin-session", ordinal: 6 }));
     await click(".pin-btn");
     expect(pinMock).toHaveBeenCalledExactlyOnceWith("pin-session", 47, 6);

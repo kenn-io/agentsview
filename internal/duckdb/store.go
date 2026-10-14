@@ -7,13 +7,10 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +36,7 @@ func (s *Store) MemoryBackendName() string { return "duckdb" }
 // openMirrorAlias); it is "" for the original connection NewStore opens
 // directly on path.
 type Store struct {
+	readbase.MirrorStubs
 	path      string
 	handleMu  sync.RWMutex
 	duck      *sql.DB
@@ -233,58 +231,6 @@ func (s *Store) SetCursorSecret(secret []byte) {
 
 func (s *Store) ReadOnly() bool { return true }
 
-func (s *Store) ListRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) ([]db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) GetRecallEntry(
-	_ context.Context, _ string,
-) (*db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) ReviewRecallEntry(
-	_ context.Context, _ string, _ db.RecallReviewAction,
-) (db.RecallEntry, error) {
-	return db.RecallEntry{}, db.ErrReadOnly
-}
-
-func (s *Store) QueryRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) (db.RecallPage, error) {
-	return db.RecallPage{}, db.ErrReadOnly
-}
-
-func (s *Store) RecordRecallQueryEvent(
-	_ context.Context, _ db.RecallQueryEvent,
-) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) InsertRecallEntry(ctx context.Context, _ db.RecallEntry) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONL(
-	_ context.Context, _ io.Reader,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
-	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) IngestEvalTrajectory(
-	_ context.Context, _ db.EvalTrajectoryIngest,
-) (db.EvalTrajectoryIngestResult, error) {
-	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
-}
-
 const duckSessionCols = `id, project, project_assigned, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
@@ -309,7 +255,8 @@ const duckSessionCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version, group_key, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	pr_links, labels`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	return scanSessionWithSource(rs, false)
@@ -350,6 +297,8 @@ func scanSessionWithSource(
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		db.PRLinksScanner(&s.PRLinks),
+		duckLabelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &localModifiedAt)
@@ -374,8 +323,30 @@ func scanSessionWithSource(
 	return s, nil
 }
 
-func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
-	return scanSessionRowsWithSource(rows, false)
+// duckLabelsColumn scans the mirrored labels VARCHAR[] column, which the
+// DuckDB driver returns as []any, into a slice. NULL and an empty list
+// both decode to nil, matching the SQLite archive's session reads.
+type duckLabelsColumn struct{ dst *[]string }
+
+func (c duckLabelsColumn) Scan(src any) error {
+	*c.dst = nil
+	if src == nil {
+		return nil
+	}
+	items, ok := src.([]any)
+	if !ok {
+		return fmt.Errorf("scanning duckdb labels: unsupported type %T", src)
+	}
+	for _, item := range items {
+		label, ok := item.(string)
+		if !ok {
+			return fmt.Errorf(
+				"scanning duckdb labels: unsupported element type %T", item,
+			)
+		}
+		*c.dst = append(*c.dst, label)
+	}
+	return nil
 }
 
 func scanSessionRowsWithSource(
@@ -537,255 +508,6 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %w", db.ErrInvalidCursor, err)
 	}
 	return c, nil
-}
-
-func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.SessionPage, error) {
-	f.Limit = db.NormalizeSessionLimit(f.Limit)
-	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
-	rs := db.ResolveSort(f)
-	total := 0
-	var cur db.SessionCursor
-	if f.Cursor != "" {
-		var err error
-		cur, err = s.DecodeCursor(f.Cursor)
-		if err != nil {
-			return db.SessionPage{}, err
-		}
-		total = cur.Total
-	}
-	if total <= 0 {
-		if err := s.queryRowContext(ctx,
-			"SELECT COUNT(*) FROM sessions WHERE "+where,
-			args...,
-		).Scan(&total); err != nil {
-			return db.SessionPage{}, fmt.Errorf("counting duckdb sessions: %w", err)
-		}
-	}
-	cursorArgs := append([]any{}, args...)
-	pageBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), len(args))
-	cursorWhere := where
-	if f.Cursor != "" {
-		vals, err := db.CursorPredicateValues(cur, rs)
-		if err != nil {
-			return db.SessionPage{}, err
-		}
-		cursorWhere += " AND " + pageBuilder.CursorPredicate(rs, f, vals, cur.ID)
-	}
-	columns := duckSessionCols
-	if f.IncludeSource {
-		columns += ", file_path, file_size, local_modified_at"
-	}
-	query := "SELECT " + columns +
-		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(rs, f) + " " +
-		pageBuilder.Limit(f.Limit+1)
-	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
-	rows, err := s.queryContext(ctx, query, cursorArgs...)
-	if err != nil {
-		return db.SessionPage{}, fmt.Errorf("querying duckdb sessions: %w", err)
-	}
-	defer rows.Close()
-	sessions, err := scanSessionRowsWithSource(rows, f.IncludeSource)
-	if err != nil {
-		return db.SessionPage{}, err
-	}
-	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
-}
-
-func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
-	f.IncludeChildren = true
-	f.IncludeOrphans = true
-	f.Cursor = ""
-	f.Limit = 0
-
-	dialect := db.DuckDBQueryDialect()
-	where, args := db.BuildSessionFilterSQL(f, dialect)
-	rootFilter := f
-	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
-	canonicalRootWhere := db.BuildCanonicalRootWhere(
-		dialect, "sessions", f.IncludeOrphans,
-	)
-	var total int
-	if err := s.queryRowContext(
-		ctx,
-		"SELECT COUNT(*) FROM sessions WHERE "+rootWhere+
-			" AND "+canonicalRootWhere,
-		rootArgs...,
-	).Scan(&total); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("counting duckdb sidebar roots: %w", err)
-	}
-	query := `
-		SELECT
-			id,
-			parent_session_id,
-			relationship_type,
-			project,
-			project_assigned,
-			machine,
-			agent,
-			agent_label,
-			entrypoint,
-			session_kind,
-			COALESCE(display_name, session_name) AS display_name,
-			started_at,
-			ended_at,
-			created_at,
-			termination_status,
-			message_count,
-			user_message_count,
-			transcript_revision,
-			is_automated,
-			position('<teammate-message' in COALESCE(first_message, '')) > 0
-		FROM sessions
-		WHERE ` + where + `
-		ORDER BY COALESCE(
-			ended_at, started_at, created_at
-		) DESC, id DESC`
-
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("querying duckdb sidebar session index: %w", err)
-	}
-	defer rows.Close()
-
-	index := db.SidebarSessionIndex{
-		Sessions: []db.SidebarSessionIndexRow{},
-		Total:    total,
-	}
-	for rows.Next() {
-		var row db.SidebarSessionIndexRow
-		var startedAt, endedAt, createdAt any
-		if err := rows.Scan(
-			&row.ID,
-			&row.ParentSessionID,
-			&row.RelationshipType,
-			&row.Project,
-			&row.ProjectAssigned,
-			&row.Machine,
-			&row.Agent,
-			&row.AgentLabel,
-			&row.Entrypoint,
-			&row.SessionKind,
-			&row.DisplayName,
-			&startedAt,
-			&endedAt,
-			&createdAt,
-			&row.TerminationStatus,
-			&row.MessageCount,
-			&row.UserMessageCount,
-			&row.TranscriptRevision,
-			&row.IsAutomated,
-			&row.IsTeammate,
-		); err != nil {
-			return db.SidebarSessionIndex{},
-				fmt.Errorf(
-					"scanning duckdb sidebar session index: %w",
-					err,
-				)
-		}
-		if v := formatDBTime(startedAt); v != "" {
-			row.StartedAt = &v
-		}
-		if v := formatDBTime(endedAt); v != "" {
-			row.EndedAt = &v
-		}
-		row.CreatedAt = formatDBTime(createdAt)
-		index.Sessions = append(index.Sessions, row)
-	}
-	if err := rows.Err(); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("iterating duckdb sidebar session index: %w", err)
-	}
-	return index, nil
-}
-
-func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
-		id,
-	)
-	sess, err := scanSession(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting duckdb session: %w", err)
-	}
-	return &sess, nil
-}
-
-func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ?",
-		id,
-	)
-	sess, err := scanSession(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting duckdb full session: %w", err)
-	}
-	return &sess, nil
-}
-
-func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
-	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+
-			" FROM sessions WHERE deleted_at IS NOT NULL"+
-			" ORDER BY deleted_at DESC LIMIT 500",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing duckdb trash: %w", err)
-	}
-	defer rows.Close()
-	return scanSessionRows(rows)
-}
-
-func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {
-	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+` FROM sessions
-		 WHERE parent_session_id = ? AND deleted_at IS NULL
-		 ORDER BY COALESCE(started_at, created_at) ASC`,
-		parentID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying duckdb child sessions: %w", err)
-	}
-	defer rows.Close()
-	return scanSessionRows(rows)
-}
-
-func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
-	var count int
-	var fileMtime sql.NullInt64
-	var fileHash sql.NullString
-	var updated any
-	err := s.queryRowContext(ctx,
-		`SELECT message_count, file_mtime, file_hash,
-		        COALESCE(local_modified_at, ended_at, started_at, created_at)
-		 FROM sessions WHERE id = ?`,
-		id,
-	).Scan(&count, &fileMtime, &fileHash, &updated)
-	if err != nil {
-		return 0, 0, false
-	}
-	fileMtimePart := ""
-	if fileMtime.Valid {
-		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
-	}
-	fileHashPart := ""
-	if fileHash.Valid {
-		fileHashPart = fileHash.String
-	}
-	return count, db.SessionVersionMarker(
-		fileMtimePart,
-		fileHashPart,
-		formatDBTime(updated),
-	), true
 }
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {

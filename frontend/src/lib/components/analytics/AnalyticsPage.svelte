@@ -652,6 +652,7 @@
         <SessionFilterControl
           showDisplay={false}
           showStarred={false}
+          showLabelFilters={false}
           align="left"
         />
       </div>

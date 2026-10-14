@@ -11,9 +11,34 @@ The latest release is
 
 **New features**
 
+- Browse and search fx sessions, including tool results and child runs. Schema
+  4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
+- Assistants connected over MCP can see which tools a session ran, find which
+  sessions edited a file, list a session's sub-agents, read the Activity report,
+  see tool usage and where agents struggled, compare usage between two models or
+  projects, and search the AgentsView guides. The eight new tools are read-only
+  and stay out of the `memory` profile. The server now speaks MCP 2026-07-28
+  over stdio, and clients on older protocol versions keep working.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.
+- Sessions show the pull requests Claude Code linked them to. Find them on the
+  session page, in `session get`, and in session JSON, and filter with
+  `session list --pr owner/repo#123` or the `pr` API parameter. The first sync
+  after upgrading re-reads Claude sessions in place once to pick up existing links.
+- Label sessions by ticket, role, or run type with
+  `agentsview session label <id> ticket=example` or
+  `PATCH /api/v1/sessions/{id}/labels`, then filter with `--label`, the `label`
+  API parameter, the web UI, or the MCP `list_sessions` tool. Labels survive
+  reparses and resyncs. Label and pull request filters also find child and
+  headless sessions, such as orchestrator workers; the web UI shows the tree
+  that contains them. An explicit one-shot exclusion still applies.
+- An orchestrator can record which session launched a worker with
+  `agentsview session parent <worker-id> <manager-id>` or
+  `PUT /api/v1/sessions/{id}/parent`. The worker appears under its launcher in
+  the session tree, and its cost counts toward the launcher's usage. Transcript
+  links take precedence. Labels and parent links can be recorded before a
+  session syncs.
 - Sync Claude.ai chats from the desktop or Chrome Import dialog without
   downloading an export. Later runs fetch new or changed chats, including branch
   switches. Run `agentsview chrome setup` once and load the printed folder in

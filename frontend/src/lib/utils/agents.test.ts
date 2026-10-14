@@ -37,6 +37,7 @@ describe("KNOWN_AGENTS", () => {
       "visualstudio-copilot",
       "pi",
       "stepcode",
+      "fx",
       "tau",
       "prime-agent",
       "qwen",
@@ -176,6 +177,7 @@ describe("agentLabel", () => {
     expect(agentLabel("workbuddy")).toBe("WorkBuddy");
     expect(agentLabel("codebuddy")).toBe("CodeBuddy");
     expect(agentLabel("piebald")).toBe("Piebald");
+    expect(agentLabel("fx")).toBe("fx");
     expect(agentLabel("zed")).toBe("Zed");
     expect(agentLabel("qwen")).toBe("Qwen Code");
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");

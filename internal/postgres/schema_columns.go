@@ -461,5 +461,15 @@ func schemaColumnMigrations() []columnMigration {
 		{"excluded_sessions", "owner_marker", `owner_marker TEXT`, "adding excluded_sessions.owner_marker"},
 		{"excluded_sessions", "machine", `machine TEXT`, "adding excluded_sessions.machine"},
 		{"excluded_sessions", "agent", `agent TEXT`, "adding excluded_sessions.agent"},
+		{
+			"sessions", "pr_links",
+			`pr_links TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.pr_links",
+		},
+		{
+			"sessions", "labels",
+			`labels TEXT[] NOT NULL DEFAULT '{}'`,
+			"adding sessions.labels",
+		},
 	}
 }

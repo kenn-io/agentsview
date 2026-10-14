@@ -163,6 +163,11 @@ Key assumptions reviewers MUST account for:
     unmerged branch carry no such promise, so don't flag a missing
     migration for schema that only existed on that branch.
 
+22. AGENT CATALOG TESTS: TestRegistryCompleteness and the KNOWN_AGENTS
+    test are exhaustive on purpose and must list every agent, so a new
+    agent's row there is expected. Don't flag those lists as duplicating
+    production catalogs.
+
 For local/legacy modes, do not impose requirements that apply only to
 public-facing multi-tenant services. For opt-in hosted raw processing,
 review its actual tenant/role/catalog boundary, immutable source provenance,

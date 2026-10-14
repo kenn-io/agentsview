@@ -67,6 +67,7 @@ import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { m } from "../../i18n/index.js";
 // @ts-ignore
 import SessionVitals from "./SessionVitals.svelte";
+import { requestUrl } from "../../test-support/request-url.js";
 
 describe("SessionVitals", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -76,7 +77,7 @@ describe("SessionVitals", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
+        const url = requestUrl(input);
         if (url.includes("/api/v1/recall/entries?")) {
           return new Response(JSON.stringify({ entries: [], trusted_only: false }), {
             status: 200,
@@ -338,6 +339,48 @@ describe("SessionVitals", () => {
     );
     expect(rows[1]?.querySelector(".context-value")?.textContent?.trim()).toBe(traceSession.cwd);
     expect(document.querySelector('[title="agentsview"]')).not.toBeNull();
+  });
+
+  it("links pull requests in a new tab", async () => {
+    const session: Session = {
+      ...traceSession,
+      pr_links: [
+        {
+          url: "https://github.com/acme/widgets/pull/42",
+          host: "github.com",
+          repository: "acme/widgets",
+          number: 42,
+        },
+      ],
+    };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session },
+    });
+    await tick();
+
+    const link = screen.getByRole("link", { name: "acme/widgets#42" });
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/42");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it.each([true, false])("renders labels with a filter handler %s", async (interactive) => {
+    const onFilterLabel = interactive ? vi.fn() : undefined;
+    const session: Session = { ...traceSession, labels: ["ticket=example"] };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session, onFilterLabel },
+    });
+    await tick();
+
+    expect(document.body.textContent).toContain("ticket=example");
+    if (onFilterLabel) {
+      await fireEvent.click(screen.getByRole("button", { name: "ticket=example" }));
+      expect(onFilterLabel).toHaveBeenCalledWith("ticket=example");
+    } else {
+      expect(screen.queryByRole("button", { name: "ticket=example" })).toBeNull();
+    }
   });
 
   it("reveals the full worktree path in a tooltip", async () => {

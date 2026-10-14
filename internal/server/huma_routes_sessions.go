@@ -87,8 +87,8 @@ type sessionFilterInput struct {
 	MinMessages      int               `query:"min_messages" minimum:"0" doc:"Minimum total message count"`
 	MaxMessages      int               `query:"max_messages" minimum:"0" doc:"Maximum total message count"`
 	MinUserMessages  int               `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
-	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
-	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
+	IncludeOneShot   optionalBoolParam `query:"include_one_shot" doc:"Include one-shot sessions"`
+	IncludeAutomated optionalBoolParam `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
 	IncludeSource    bool              `query:"include_source" doc:"Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index"`
 	Outcome          string            `query:"outcome" doc:"Filter by detected outcome"`
@@ -99,6 +99,8 @@ type sessionFilterInput struct {
 	MinToolFailures  optionalIntParam  `query:"min_tool_failures" minimum:"0" doc:"Minimum tool failure count"`
 	HasSecret        bool              `query:"has_secret" doc:"Filter sessions with secret findings"`
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
+	Label            []string          `query:"label,explode" doc:"Keep sessions carrying this exact label; repeat to require several"`
+	PR               string            `query:"pr" doc:"Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123"`
 	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
 	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
 }
@@ -194,32 +196,36 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 	}
 	limit := clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	filter := service.ListFilter{
-		Project:          in.Project,
-		ExcludeProject:   in.ExcludeProject,
-		Machine:          in.Machine,
-		GitBranch:        in.GitBranch,
-		Agent:            in.Agent,
-		Date:             in.Date,
-		DateFrom:         in.DateFrom,
-		DateTo:           in.DateTo,
-		Timezone:         timezone,
-		ActiveSince:      in.ActiveSince,
-		MinMessages:      in.MinMessages,
-		MaxMessages:      in.MaxMessages,
-		MinUserMessages:  in.MinUserMessages,
-		IncludeOneShot:   in.IncludeOneShot,
-		IncludeAutomated: in.IncludeAutomated,
-		IncludeChildren:  in.IncludeChildren,
-		IncludeSource:    in.IncludeSource,
-		Outcome:          in.Outcome,
-		HealthGrade:      in.HealthGrade,
-		Cursor:           in.Cursor,
-		Limit:            limit,
-		Termination:      in.Termination,
-		HasSecret:        in.HasSecret,
-		Starred:          in.Starred,
-		OrderBy:          in.OrderBy,
-		Descending:       optionalBoolValue(in.Descending),
+		Project:            in.Project,
+		ExcludeProject:     in.ExcludeProject,
+		Machine:            in.Machine,
+		GitBranch:          in.GitBranch,
+		Agent:              in.Agent,
+		Date:               in.Date,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		Timezone:           timezone,
+		ActiveSince:        in.ActiveSince,
+		MinMessages:        in.MinMessages,
+		MaxMessages:        in.MaxMessages,
+		MinUserMessages:    in.MinUserMessages,
+		IncludeOneShot:     in.IncludeOneShot.Value,
+		OneShotFilterSet:   in.IncludeOneShot.IsSet,
+		IncludeAutomated:   in.IncludeAutomated.Value,
+		AutomatedFilterSet: in.IncludeAutomated.IsSet,
+		IncludeChildren:    in.IncludeChildren,
+		IncludeSource:      in.IncludeSource,
+		Outcome:            in.Outcome,
+		HealthGrade:        in.HealthGrade,
+		Cursor:             in.Cursor,
+		Limit:              limit,
+		Termination:        in.Termination,
+		HasSecret:          in.HasSecret,
+		Starred:            in.Starred,
+		Labels:             in.Label,
+		PR:                 in.PR,
+		OrderBy:            in.OrderBy,
+		Descending:         optionalBoolValue(in.Descending),
 	}
 	if in.MinToolFailures.IsSet {
 		filter.MinToolFailures = &in.MinToolFailures.Value
@@ -245,27 +251,39 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if in.Limit > 0 {
 		limit = clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	}
+	pr, err := db.ParsePRFilter(in.PR)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
+	labels, err := db.LabelFilterValues(in.Label)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
 	return db.SessionFilter{
-		Project:          in.Project,
-		ExcludeProject:   in.ExcludeProject,
-		Machine:          in.Machine,
-		GitBranch:        in.GitBranch,
-		Agent:            in.Agent,
-		Date:             in.Date,
-		DateFrom:         in.DateFrom,
-		DateTo:           in.DateTo,
-		Timezone:         timezone,
-		ActiveSince:      in.ActiveSince,
-		MinMessages:      in.MinMessages,
-		MaxMessages:      in.MaxMessages,
-		MinUserMessages:  in.MinUserMessages,
-		ExcludeOneShot:   !in.IncludeOneShot,
-		ExcludeAutomated: !in.IncludeAutomated,
-		IncludeChildren:  includeChildren,
-		Cursor:           in.Cursor,
-		Limit:            limit,
-		Termination:      in.Termination,
-		Starred:          in.Starred,
+		Project:            in.Project,
+		ExcludeProject:     in.ExcludeProject,
+		Machine:            in.Machine,
+		GitBranch:          in.GitBranch,
+		Agent:              in.Agent,
+		Date:               in.Date,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		Timezone:           timezone,
+		ActiveSince:        in.ActiveSince,
+		MinMessages:        in.MinMessages,
+		MaxMessages:        in.MaxMessages,
+		MinUserMessages:    in.MinUserMessages,
+		ExcludeOneShot:     !in.IncludeOneShot.Value,
+		OneShotFilterSet:   in.IncludeOneShot.IsSet,
+		ExcludeAutomated:   !in.IncludeAutomated.Value,
+		AutomatedFilterSet: in.IncludeAutomated.IsSet,
+		IncludeChildren:    includeChildren,
+		Cursor:             in.Cursor,
+		Limit:              limit,
+		Termination:        in.Termination,
+		Starred:            in.Starred,
+		Labels:             labels,
+		PR:                 pr,
 	}, nil
 }
 
@@ -287,6 +305,9 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		if errors.Is(err, db.ErrInvalidCursor) {
 			return nil, apiError(http.StatusBadRequest, "invalid cursor")
+		}
+		if errors.Is(err, db.ErrInvalidPRFilter) || errors.Is(err, db.ErrSessionLabelsInvalid) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)
 	}

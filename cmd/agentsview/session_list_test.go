@@ -123,6 +123,31 @@ func TestSessionListIncludeSource(t *testing.T) {
 	})
 }
 
+func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
+	for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
+		dataDir := newAgentDataDir(t)
+		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+			s.UserMessageCount = 1
+			s.IsAutomated = toggle == "--include-automated=false"
+			if s.IsAutomated {
+				s.UserMessageCount = 3
+				s.SessionKind = "roborev"
+			}
+		}})
+		_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
+		require.NoError(t, err)
+		args := []string{"session", "list", "--format", "json", "--label", "nightly", toggle}
+		cmd := newRootCommand()
+		var stdout, stderr bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		cmd.SetArgs(args)
+		require.NoError(t, cmd.Execute())
+		list := decodeCLIJSON[cliSessionList](t, stdout.String())
+		assert.Empty(t, list.Sessions)
+	}
+}
+
 // TestSessionListSinceMutuallyExclusiveWithActiveSince verifies the error is
 // returned before any service/DB access is attempted (no data dir is set up
 // here): --since resolution runs ahead of resolveService in the command.

@@ -14,6 +14,10 @@
     parseFiltersFromParams,
     splitExcludeProjectParam,
   } from "../../stores/sessions.svelte.js";
+  import {
+    SESSION_LABEL_PARAM,
+    SESSION_PR_PARAM,
+  } from "../../stores/sessionRouteParams.js";
   import { events } from "../../stores/events.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -335,17 +339,24 @@
         return;
       }
       if (hasSessionFilterKeys) {
-        const nextSessionParams = filtersToParams(
-          parseFiltersFromParams(supportedSessionParams),
-        );
         const currentSessionParams = filtersToParams(
           sessions.filters,
+        );
+        // Usage URLs carry only shared filters; keep the session list's
+        // own label and pull request filters across the hydration.
+        const hydratedParams = { ...supportedSessionParams };
+        for (const key of [SESSION_LABEL_PARAM, SESSION_PR_PARAM]) {
+          const value = currentSessionParams[key];
+          if (value) hydratedParams[key] = value;
+        }
+        const nextSessionParams = filtersToParams(
+          parseFiltersFromParams(hydratedParams),
         );
         if (
           JSON.stringify(nextSessionParams) !==
           JSON.stringify(currentSessionParams)
         ) {
-          sessions.initFromParams(supportedSessionParams);
+          sessions.initFromParams(hydratedParams);
           sessionChanged = true;
         }
       }
@@ -468,6 +479,7 @@
         <SessionFilterControl
           showDisplay={false}
           showStarred={false}
+          showLabelFilters={false}
           align="left"
           extraActive={usage.hasActiveFilters || !!sessions.filters.project}
           onClearExtra={() => {

@@ -5,6 +5,8 @@ import type {
   BatchDeleteInputBody,
   DbSession,
   DbSessionActivityResponse,
+  DbSessionExternalParent,
+  DbSessionLabels,
   DbSessionTiming,
   DbSidebarSessionIndex,
   DeleteApiV1SessionsByIdPathParameters,
@@ -33,6 +35,7 @@ import type {
   OpenRequest,
   OpenSessionResponse,
   OrdinalsResponse,
+  PatchApiV1SessionsByIdLabelsPathParameters,
   PatchApiV1SessionsByIdRenamePathParameters,
   PostApiV1SessionsByIdOpenPathParameters,
   PostApiV1SessionsByIdPublishParams,
@@ -42,6 +45,7 @@ import type {
   PostApiV1SessionsUploadBody,
   PostApiV1SessionsUploadParams,
   PublishResponse,
+  PutApiV1SessionsByIdParentPathParameters,
   RenameRequest,
   ResolveSessionIDsResponse,
   ResumeRequest,
@@ -53,7 +57,9 @@ import type {
   SessionDirectoryResponse,
   SessionToolSequencesResponse,
   SessionUsageResponse,
+  SetSessionParentInputBody,
   TrashResponse,
+  UpdateSessionLabelsInputBody,
   UploadSessionResponse,
 } from "../models";
 
@@ -109,6 +115,15 @@ export const getGetApiV1SessionsUrl = (params?: GetApiV1SessionsParams) => {
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["label"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+
     if (value !== undefined) {
       normalizedParams.append(key, value === null ? "null" : String(value));
     }
@@ -176,6 +191,15 @@ export const getGetApiV1SessionsSidebarIndexUrl = (params?: GetApiV1SessionsSide
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["label"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+
     if (value !== undefined) {
       normalizedParams.append(key, value === null ? "null" : String(value));
     }
@@ -347,6 +371,47 @@ export const getApiV1SessionsByIdExport = async (
   });
 };
 
+export const getPatchApiV1SessionsByIdLabelsUrl = ({
+  id,
+}: PatchApiV1SessionsByIdLabelsPathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/labels`;
+};
+
+/**
+ * @summary Change session labels
+ */
+export const patchApiV1SessionsByIdLabels = async (
+  { id }: PatchApiV1SessionsByIdLabelsPathParameters,
+  updateSessionLabelsInputBody: UpdateSessionLabelsInputBody,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionLabels> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalFetch<DbSessionLabels>(getPatchApiV1SessionsByIdLabelsUrl({ id }), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(updateSessionLabelsInputBody),
+  });
+};
+
 export const getGetApiV1SessionsByIdMdUrl = (
   { id }: GetApiV1SessionsByIdMdPathParameters,
   params?: GetApiV1SessionsByIdMdParams,
@@ -451,6 +516,47 @@ export const postApiV1SessionsByIdOpen = async (
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(openRequest),
+  });
+};
+
+export const getPutApiV1SessionsByIdParentUrl = ({
+  id,
+}: PutApiV1SessionsByIdParentPathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/parent`;
+};
+
+/**
+ * @summary Set or remove session parent link
+ */
+export const putApiV1SessionsByIdParent = async (
+  { id }: PutApiV1SessionsByIdParentPathParameters,
+  setSessionParentInputBody: SetSessionParentInputBody,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionExternalParent> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalFetch<DbSessionExternalParent>(getPutApiV1SessionsByIdParentUrl({ id }), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(setSessionParentInputBody),
   });
 };
 

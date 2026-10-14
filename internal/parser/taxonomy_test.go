@@ -152,6 +152,16 @@ func TestNormalizeToolCategory(t *testing.T) {
 		// bash, view, edit, and write are covered in earlier sections.
 		{"todos", "Tool"},
 
+		{"glob_files", "Glob"},
+		{"grep_files", "Grep"},
+		{"vision", "Read"},
+		{"read_tool_result", "Read"},
+		{"capability_search", "Tool"},
+		{"install_skill", "Tool"},
+		{"mcp_select_tool", "Tool"},
+		{"mcp_features", "Tool"},
+		{"ask_user_question", "Tool"},
+
 		// Unknown
 		{"view_image", "Other"},
 		{"update_plan", "Other"},

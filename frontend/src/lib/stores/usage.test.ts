@@ -697,61 +697,66 @@ describe("UsageStore session filter params", () => {
     );
   });
 
-  it.each(["excluded", "selected", "zoomed"] as const)("refreshes response-scoped %s project keys after archive identity changes", async (scope) => {
-    const original = usageServiceMocks.getApiV1UsageSummary.getMockImplementation();
-    const { usage } = await loadStore();
-    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
-    if (scope === "excluded") {
-      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
-        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
-      );
-      usage.excludedProjectKeys = "pl1:sha256:stale";
-      usage.pairwiseSelection = {
-        left: { dimension: "project", value: "pl1:sha256:stale" },
-        right: { dimension: "model", value: "gpt-4o" },
-      };
-    } else {
-      usage.selectedProjectKey = "pl1:sha256:stale";
-      if (scope === "zoomed") usage.setOpenProject(usage.selectedProjectKey);
-      usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
-      usageServiceMocks.getApiV1UsageSummary.mockImplementation((params) =>
-        params.project_key || params.exclude_project_key
-          ? Promise.reject(new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"))
-          : Promise.resolve(usageSummary(9)),
-      );
-    }
+  it.each(["excluded", "selected", "zoomed"] as const)(
+    "refreshes response-scoped %s project keys after archive identity changes",
+    async (scope) => {
+      const original = usageServiceMocks.getApiV1UsageSummary.getMockImplementation();
+      const { usage } = await loadStore();
+      const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+      if (scope === "excluded") {
+        usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
+          new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+        );
+        usage.excludedProjectKeys = "pl1:sha256:stale";
+        usage.pairwiseSelection = {
+          left: { dimension: "project", value: "pl1:sha256:stale" },
+          right: { dimension: "model", value: "gpt-4o" },
+        };
+      } else {
+        usage.selectedProjectKey = "pl1:sha256:stale";
+        if (scope === "zoomed") usage.setOpenProject(usage.selectedProjectKey);
+        usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+        usageServiceMocks.getApiV1UsageSummary.mockImplementation((params) =>
+          params.project_key || params.exclude_project_key
+            ? Promise.reject(
+                new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+              )
+            : Promise.resolve(usageSummary(9)),
+        );
+      }
 
-    await usage.fetchAll({ preserveTimeRange: scope !== "excluded" });
+      await usage.fetchAll({ preserveTimeRange: scope !== "excluded" });
 
-    expect(usage.excludedProjectKeys).toBe("");
-    expect(usage.summary).not.toBeNull();
-    expect(back).not.toHaveBeenCalled();
-    if (scope === "excluded") {
-      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
-      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({
-          exclude_project_key: "pl1:sha256:stale",
-        }),
-      );
-      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
-        expect.not.objectContaining({ exclude_project_key: expect.anything() }),
-      );
-      expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
-      expect(usage.pairwiseSelection.left.value).not.toBe("pl1:sha256:stale");
-    } else {
-      expect(usage.selectedProjectKey).toBe("");
-      expect(usage.zoomedProject).toBeNull();
-      expect(usage.errors.summary).toBeNull();
-      expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
-      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(6);
-      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[5]![0]).toEqual(
-        expect.objectContaining({ from: usage.from, to: usage.to }),
-      );
-    }
-    back.mockRestore();
-    usage.cancelInFlightReads();
-    if (original) usageServiceMocks.getApiV1UsageSummary.mockImplementation(original);
-  });
+      expect(usage.excludedProjectKeys).toBe("");
+      expect(usage.summary).not.toBeNull();
+      expect(back).not.toHaveBeenCalled();
+      if (scope === "excluded") {
+        expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+        expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            exclude_project_key: "pl1:sha256:stale",
+          }),
+        );
+        expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
+          expect.not.objectContaining({ exclude_project_key: expect.anything() }),
+        );
+        expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+        expect(usage.pairwiseSelection.left.value).not.toBe("pl1:sha256:stale");
+      } else {
+        expect(usage.selectedProjectKey).toBe("");
+        expect(usage.zoomedProject).toBeNull();
+        expect(usage.errors.summary).toBeNull();
+        expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+        expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(6);
+        expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[5]![0]).toEqual(
+          expect.objectContaining({ from: usage.from, to: usage.to }),
+        );
+      }
+      back.mockRestore();
+      usage.cancelInFlightReads();
+      if (original) usageServiceMocks.getApiV1UsageSummary.mockImplementation(original);
+    },
+  );
 
   it("stores pairwise comparison data from the generated API", async () => {
     const { usage } = await loadStore();
@@ -1046,7 +1051,8 @@ describe("UsageStore session filter params", () => {
         attachResponseTiming(data, { sentAt, headersAt: at, bodyAt: at });
         return data;
       };
-      for (let i = 0; i < 4; i++) usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(timedSummary);
+      for (let i = 0; i < 4; i++)
+        usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(timedSummary);
 
       await usage.fetchAll({ preserveTimeRange: true });
 
@@ -1057,7 +1063,9 @@ describe("UsageStore session filter params", () => {
         "referenceSummary",
       ]);
       const step = (name: string) => usage.lastQuerySteps.find((entry) => entry.name === name)!;
-      const referenceBody = step("referenceSummary").segments!.find((segment) => segment.phase === "download")!;
+      const referenceBody = step("referenceSummary").segments!.find(
+        (segment) => segment.phase === "download",
+      )!;
       expect(step("summary").segments!.find((segment) => segment.phase === "apply")!.startMs).toBe(
         referenceBody.startMs + referenceBody.durationMs,
       );
@@ -1633,121 +1641,128 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("shows locally aggregated daily data before the range request finishes, project selected=%s", async (selected) => {
-    const { usage } = await loadStore();
-    usage.applyDateRange("2026-06-04", "2026-06-18");
-    const context = usageSummary(6);
-    context.daily = [
-      {
-        date: "2026-06-07",
-        inputTokens: 10,
-        outputTokens: 1,
-        cacheCreationTokens: 2,
-        cacheReadTokens: 3,
-        totalCost: testMoney(1),
-        modelsUsed: ["model-a"],
-        projectBreakdowns: [
-          {
-            project_key: "pl1:sha256:alpha",
-            project: "alpha",
-            inputTokens: 10,
-            outputTokens: 1,
-            cacheCreationTokens: 2,
-            cacheReadTokens: 3,
-            cost: testMoney(1),
-          },
-        ],
-        modelBreakdowns: [],
-        agentBreakdowns: [],
-        machineBreakdowns: [],
-      },
-      {
-        date: "2026-06-08",
-        inputTokens: 20,
-        outputTokens: 2,
-        cacheCreationTokens: 4,
-        cacheReadTokens: 6,
-        totalCost: testMoney(2),
-        modelsUsed: ["model-a"],
-        projectBreakdowns: [
-          {
-            project_key: "pl1:sha256:alpha",
-            project: "alpha",
-            inputTokens: 20,
-            outputTokens: 2,
-            cacheCreationTokens: 4,
-            cacheReadTokens: 6,
-            cost: testMoney(2),
-          },
-        ],
-        modelBreakdowns: [],
-        agentBreakdowns: [],
-        machineBreakdowns: [],
-      },
-      {
-        date: "2026-06-09",
-        inputTokens: 30,
-        outputTokens: 3,
-        cacheCreationTokens: 6,
-        cacheReadTokens: 9,
-        totalCost: testMoney(3),
-        modelsUsed: ["model-b"],
-        projectBreakdowns: [
-          {
+  it.each([false, true])(
+    "shows locally aggregated daily data before the range request finishes, project selected=%s",
+    async (selected) => {
+      const { usage } = await loadStore();
+      usage.applyDateRange("2026-06-04", "2026-06-18");
+      const context = usageSummary(6);
+      context.daily = [
+        {
+          date: "2026-06-07",
+          inputTokens: 10,
+          outputTokens: 1,
+          cacheCreationTokens: 2,
+          cacheReadTokens: 3,
+          totalCost: testMoney(1),
+          modelsUsed: ["model-a"],
+          projectBreakdowns: [
+            {
+              project_key: "pl1:sha256:alpha",
+              project: "alpha",
+              inputTokens: 10,
+              outputTokens: 1,
+              cacheCreationTokens: 2,
+              cacheReadTokens: 3,
+              cost: testMoney(1),
+            },
+          ],
+          modelBreakdowns: [],
+          agentBreakdowns: [],
+          machineBreakdowns: [],
+        },
+        {
+          date: "2026-06-08",
+          inputTokens: 20,
+          outputTokens: 2,
+          cacheCreationTokens: 4,
+          cacheReadTokens: 6,
+          totalCost: testMoney(2),
+          modelsUsed: ["model-a"],
+          projectBreakdowns: [
+            {
+              project_key: "pl1:sha256:alpha",
+              project: "alpha",
+              inputTokens: 20,
+              outputTokens: 2,
+              cacheCreationTokens: 4,
+              cacheReadTokens: 6,
+              cost: testMoney(2),
+            },
+          ],
+          modelBreakdowns: [],
+          agentBreakdowns: [],
+          machineBreakdowns: [],
+        },
+        {
+          date: "2026-06-09",
+          inputTokens: 30,
+          outputTokens: 3,
+          cacheCreationTokens: 6,
+          cacheReadTokens: 9,
+          totalCost: testMoney(3),
+          modelsUsed: ["model-b"],
+          projectBreakdowns: [
+            {
+              project_key: "pl1:sha256:beta",
+              project: "beta",
+              inputTokens: 30,
+              outputTokens: 3,
+              cacheCreationTokens: 6,
+              cacheReadTokens: 9,
+              cost: testMoney(3),
+            },
+          ],
+          modelBreakdowns: [],
+          agentBreakdowns: [],
+          machineBreakdowns: [],
+        },
+      ];
+      usage.summary = context;
+      if (selected) {
+        usage.toggles.attribution.groupBy = "project";
+        usage.selectedProjectKey = "pl1:sha256:beta";
+        usage.attributionSummary = context;
+        usage.referenceSummary = context;
+      }
+
+      usage.setTimeRange("2026-06-08", "2026-06-09");
+
+      if (selected)
+        expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual([
+          "beta",
+          "alpha",
+        ]);
+      expect(usage.timeSeriesSummary).toEqual(context);
+      expect(usage.summary).toMatchObject({
+        from: "2026-06-08",
+        to: "2026-06-09",
+        totals: {
+          inputTokens: 50,
+          outputTokens: 5,
+          cacheCreationTokens: 10,
+          cacheReadTokens: 15,
+          totalCost: testMoney(5),
+        },
+        projectTotals: [
+          expect.objectContaining({
             project_key: "pl1:sha256:beta",
-            project: "beta",
-            inputTokens: 30,
-            outputTokens: 3,
-            cacheCreationTokens: 6,
-            cacheReadTokens: 9,
             cost: testMoney(3),
-          },
+          }),
+          expect.objectContaining({
+            project_key: "pl1:sha256:alpha",
+            cost: testMoney(2),
+          }),
         ],
-        modelBreakdowns: [],
-        agentBreakdowns: [],
-        machineBreakdowns: [],
-      },
-    ];
-    usage.summary = context;
-    if (selected) {
-      usage.toggles.attribution.groupBy = "project";
-      usage.selectedProjectKey = "pl1:sha256:beta";
-      usage.attributionSummary = context;
-      usage.referenceSummary = context;
-    }
-
-    usage.setTimeRange("2026-06-08", "2026-06-09");
-
-    if (selected) expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual(["beta", "alpha"]);
-    expect(usage.timeSeriesSummary).toEqual(context);
-    expect(usage.summary).toMatchObject({
-      from: "2026-06-08",
-      to: "2026-06-09",
-      totals: {
-        inputTokens: 50,
-        outputTokens: 5,
-        cacheCreationTokens: 10,
-        cacheReadTokens: 15,
-        totalCost: testMoney(5),
-      },
-      projectTotals: [
-        expect.objectContaining({
-          project_key: "pl1:sha256:beta",
-          cost: testMoney(3),
-        }),
-        expect.objectContaining({
-          project_key: "pl1:sha256:alpha",
-          cost: testMoney(2),
-        }),
-      ],
-    });
-    expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
-    if (selected) {
-      usage.clearTimeRange(false);
-      expect(usage.attributionSummary).toEqual(context);
-    }
-    usage.cancelInFlightReads();
-  });
+      });
+      expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
+      if (selected) {
+        usage.clearTimeRange(false);
+        expect(usage.attributionSummary).toEqual(context);
+      }
+      usage.cancelInFlightReads();
+    },
+  );
 
   it("restores the parent summary when the selected-range request fails", async () => {
     const { usage } = await loadStore();
@@ -2168,15 +2183,25 @@ describe("UsageStore attribution focus", () => {
     usage.applyDateRange("2024-01-01", "2024-01-31");
     await usage.fetchAll();
     let release!: () => void;
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(usageSummary(1)))));
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve(usageSummary(1)))),
+    );
     usage.toggleSelection("project", "pl1:sha256:alpha");
     const selected = usageSummary(4);
-    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => params.project_key && params.from === "2024-01-01" ? selected : usageSummary(2));
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) =>
+      params.project_key && params.from === "2024-01-01" ? selected : usageSummary(2),
+    );
     usage.setTimeRange("2024-01-08", "2024-01-14");
     release();
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params)).toContainEqual(
-      expect.objectContaining({ project_key: "pl1:sha256:alpha", from: "2024-01-01", to: "2024-01-31" }),
+    expect(
+      usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
+    ).toContainEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        from: "2024-01-01",
+        to: "2024-01-31",
+      }),
     );
     expect(usage.timeSeriesSummary).toEqual(selected);
     usage.cancelInFlightReads();
@@ -2191,7 +2216,9 @@ describe("UsageStore attribution focus", () => {
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBe("gpt-4o");
     expect(buildUsageUrlParams(usage)).toEqual({ exclude_model: "hidden-model" });
-    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toEqual(expect.objectContaining({ excludedModels: "hidden-model" }));
+    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toEqual(
+      expect.objectContaining({ excludedModels: "hidden-model" }),
+    );
     expect(JSON.parse(localStorage.getItem("usage-filters")!).selectedModel).toBeUndefined();
     usage.cancelInFlightReads();
     const restored = (await loadStore()).usage;
@@ -2227,61 +2254,93 @@ describe("UsageStore attribution focus", () => {
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     usage.clearSelection("model");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      project_key: "pl1:sha256:alpha", exclude_model: "hidden", from: "2024-01-08", to: "2024-01-14",
-    }));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        exclude_model: "hidden",
+        from: "2024-01-08",
+        to: "2024-01-14",
+      }),
+    );
     expect(usage.selectedModel).toBe("");
     usage.cancelInFlightReads();
   });
 
-  it.each(["project", "agent"] as const)("keeps every %s colored through brush and grouping changes", async (by) => {
-    const { usage } = await loadStore();
-    const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
-    const { sessions } = await import("./sessions.svelte.js");
-    const full = usageSummary(12);
-    full.projectTotals[0]!.cost = testMoney(8);
-    full.projectTotals[1]!.cost = testMoney(4);
-    full.agentTotals = [
-      { agent: "claude", cost: testMoney(4), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
-      { agent: "codex", cost: testMoney(8), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
-    ];
-    const brushed = structuredClone(full);
-    brushed.projectTotals[0]!.cost = testMoney(1);
-    brushed.agentTotals[0]!.cost = testMoney(1);
-    usage.applyDateRange("2024-01-01", "2024-01-31");
-    usage.toggles.attribution.groupBy = by;
-    if (by === "agent") sessions.filters.agent = "claude";
-    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
-      const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
-      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
-      if (params.agent) response.agentTotals = response.agentTotals.filter((entry) => entry.agent === params.agent);
-      return response;
-    });
-    await usage.fetchAll();
-    const colors = {
-      agentsview: usageChartColorMaps(usage.colorSummary, "agentsview")[by],
-      matplotlib: usageChartColorMaps(usage.colorSummary, "matplotlib")[by],
-    };
-    usage.setTimeRange("2024-01-08", "2024-01-14");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    if (by === "project") {
-      usage.toggleSelection("project", "pl1:sha256:beta");
+  it.each(["project", "agent"] as const)(
+    "keeps every %s colored through brush and grouping changes",
+    async (by) => {
+      const { usage } = await loadStore();
+      const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
+      const { sessions } = await import("./sessions.svelte.js");
+      const full = usageSummary(12);
+      full.projectTotals[0]!.cost = testMoney(8);
+      full.projectTotals[1]!.cost = testMoney(4);
+      full.agentTotals = [
+        {
+          agent: "claude",
+          cost: testMoney(4),
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+        },
+        {
+          agent: "codex",
+          cost: testMoney(8),
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+        },
+      ];
+      const brushed = structuredClone(full);
+      brushed.projectTotals[0]!.cost = testMoney(1);
+      brushed.agentTotals[0]!.cost = testMoney(1);
+      usage.applyDateRange("2024-01-01", "2024-01-31");
+      usage.toggles.attribution.groupBy = by;
+      if (by === "agent") sessions.filters.agent = "claude";
+      usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+        const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
+        if (params.project_key)
+          response.projectTotals = response.projectTotals.filter(
+            (entry) => entry.project_key === params.project_key,
+          );
+        if (params.agent)
+          response.agentTotals = response.agentTotals.filter(
+            (entry) => entry.agent === params.agent,
+          );
+        return response;
+      });
+      await usage.fetchAll();
+      const colors = {
+        agentsview: usageChartColorMaps(usage.colorSummary, "agentsview")[by],
+        matplotlib: usageChartColorMaps(usage.colorSummary, "matplotlib")[by],
+      };
+      usage.setTimeRange("2024-01-08", "2024-01-14");
       await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-      usage.setAttributionGroupBy("model");
+      if (by === "project") {
+        usage.toggleSelection("project", "pl1:sha256:beta");
+        await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+        usage.setAttributionGroupBy("model");
+        await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      }
+      usage.setAttributionGroupBy(by);
       await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    }
-    usage.setAttributionGroupBy(by);
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
-    expect(by === "project" ? usage.attributionSummary?.projectTotals.length : usage.attributionSummary?.agentTotals.length).toBe(2);
-    for (const palette of ["agentsview", "matplotlib"] as const) {
-      const result = usageChartColorMaps(usage.colorSummary, palette)[by];
-      for (const [id, color] of colors[palette]) expect(result.get(id)).toBe(color);
-      expect(result.size).toBe(2);
-      expect(new Set(result.values()).size).toBe(2);
-    }
-    usage.cancelInFlightReads();
-  });
+      expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+      expect(
+        by === "project"
+          ? usage.attributionSummary?.projectTotals.length
+          : usage.attributionSummary?.agentTotals.length,
+      ).toBe(2);
+      for (const palette of ["agentsview", "matplotlib"] as const) {
+        const result = usageChartColorMaps(usage.colorSummary, palette)[by];
+        for (const [id, color] of colors[palette]) expect(result.get(id)).toBe(color);
+        expect(result.size).toBe(2);
+        expect(new Set(result.values()).size).toBe(2);
+      }
+      usage.cancelInFlightReads();
+    },
+  );
 
   it("restores full-window attribution offline after a successful selected brush followed by a failed brush", async () => {
     const { usage } = await loadStore();
@@ -2297,7 +2356,10 @@ describe("UsageStore attribution focus", () => {
     usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
       if (offline) throw new Error("range request failed");
       const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
-      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
+      if (params.project_key)
+        response.projectTotals = response.projectTotals.filter(
+          (entry) => entry.project_key === params.project_key,
+        );
       return response;
     });
     await usage.fetchAll();
@@ -2338,11 +2400,22 @@ describe("UsageStore attribution focus", () => {
     expect(
       usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
     ).toContainEqual(
-      expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model" }),
+      expect.objectContaining({
+        [param]: id,
+        from: "2024-01-08",
+        to: "2024-01-14",
+        exclude_model: "hidden-model",
+      }),
     );
     const unfocused = usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0];
     expect(unfocused[param]).toBeUndefined();
-    expect(unfocused).toEqual(expect.objectContaining({ from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model" }));
+    expect(unfocused).toEqual(
+      expect.objectContaining({
+        from: "2024-01-08",
+        to: "2024-01-14",
+        exclude_model: "hidden-model",
+      }),
+    );
     expect(usage.summary?.projectTotals).toHaveLength(1);
     expect(usage.attributionSummary?.projectTotals).toHaveLength(2);
     usage.setTimeRange("2024-01-09", "2024-01-10");
@@ -2481,42 +2554,45 @@ describe("UsageStore project zoom", () => {
     expect(usage.zoomRows).toEqual([]);
   });
 
-  it.each(["returning to projects", "metric and token selection changes"])("drops stale zoom results after %s", async (event) => {
-    const { usage } = await loadStore();
-    const pending: Array<(rows: DbTopSessionEntry[]) => void> = [];
-    usageServiceMocks.getUsageZoom.mockImplementation(
-      () => new Promise((resolve) => pending.push(resolve)),
-    );
-    usage.setOpenProject("pl1:sha256:alpha");
-    if (event === "returning to projects") {
-      usage.backToProjects();
-      expect(usage.loading.zoom).toBe(false);
-      pending[0]!([group(1)]);
-      await Promise.resolve();
+  it.each(["returning to projects", "metric and token selection changes"])(
+    "drops stale zoom results after %s",
+    async (event) => {
+      const { usage } = await loadStore();
+      const pending: Array<(rows: DbTopSessionEntry[]) => void> = [];
+      usageServiceMocks.getUsageZoom.mockImplementation(
+        () => new Promise((resolve) => pending.push(resolve)),
+      );
+      usage.setOpenProject("pl1:sha256:alpha");
+      if (event === "returning to projects") {
+        usage.backToProjects();
+        expect(usage.loading.zoom).toBe(false);
+        pending[0]!([group(1)]);
+        await Promise.resolve();
+        expect(usage.zoomRows).toBeNull();
+        expect(usage.zoomedProject).toBeNull();
+        return;
+      }
+      const firstSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+      usage.setMode("token");
+      const secondSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+      usage.setSelectedTokenTypes(["output"]);
+      expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(3);
+      expect(firstSignal.aborted).toBe(true);
+      expect(secondSignal.aborted).toBe(true);
       expect(usage.zoomRows).toBeNull();
-      expect(usage.zoomedProject).toBeNull();
-      return;
-    }
-    const firstSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
-    usage.setMode("token");
-    const secondSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
-    usage.setSelectedTokenTypes(["output"]);
-    expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(3);
-    expect(firstSignal.aborted).toBe(true);
-    expect(secondSignal.aborted).toBe(true);
-    expect(usage.zoomRows).toBeNull();
-    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({
-        project_key: "pl1:sha256:alpha",
-        sort: "tokens",
-        token_types: "output",
-      }),
-    );
-    pending[2]!([group(9)]);
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    pending[0]!([group(1)]);
-    pending[1]!([group(2)]);
-    await Promise.resolve();
-    expect(usage.zoomRows).toEqual([group(9)]);
-  });
+      expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          project_key: "pl1:sha256:alpha",
+          sort: "tokens",
+          token_types: "output",
+        }),
+      );
+      pending[2]!([group(9)]);
+      await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+      pending[0]!([group(1)]);
+      pending[1]!([group(2)]);
+      await Promise.resolve();
+      expect(usage.zoomRows).toEqual([group(9)]);
+    },
+  );
 });

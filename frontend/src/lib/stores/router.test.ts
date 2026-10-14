@@ -434,6 +434,20 @@ describe("RouterStore", () => {
     expect(result).toBe(false);
   });
 
+  it("writes label and pull request filters and reads them back", () => {
+    setURL("/");
+    store = new RouterStore();
+    store.navigate("sessions", {
+      label: "ticket=example\nrole=reviewer",
+      pr: "acme/widgets#42",
+    });
+
+    expect(parsePath().params).toEqual({
+      label: "ticket=example\nrole=reviewer",
+      pr: "acme/widgets#42",
+    });
+  });
+
   it("navigate with params builds query string", () => {
     setURL("/");
     store = new RouterStore();

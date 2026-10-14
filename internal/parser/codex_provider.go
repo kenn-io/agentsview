@@ -393,7 +393,13 @@ func (p *codexProvider) PlanRawCapture(
 	}}
 	var sidecarRoots []string
 	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
-		seen := map[string]bool{filepath.Clean(src.Path): true}
+		resolvedSource, err := filepath.EvalSymlinks(src.Path)
+		if err != nil {
+			return RawCapturePlan{}, invalidRawCapturePlan(
+				"resolve Codex source: %s", rawCaptureFilesystemError(err),
+			)
+		}
+		seen := map[string]bool{resolvedSource: true}
 		for _, root := range p.sources.roots {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
@@ -408,10 +414,17 @@ func (p *codexProvider) PlanRawCapture(
 			}
 			for _, parentPath := range parentPaths {
 				parentPath = filepath.Clean(parentPath)
-				if seen[parentPath] {
+				// Match the file identity used by raw-capture validation.
+				resolvedParent, err := filepath.EvalSymlinks(parentPath)
+				if err != nil {
+					return RawCapturePlan{}, invalidRawCapturePlan(
+						"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
+					)
+				}
+				if seen[resolvedParent] {
 					continue
 				}
-				seen[parentPath] = true
+				seen[resolvedParent] = true
 				// Separate flat roots preserve even same-named external
 				// rollouts and let hosted discovery find every captured file.
 				parentRel := filepath.Join(fmt.Sprintf("replay-parent-%d", len(entries)), filepath.Base(parentPath))

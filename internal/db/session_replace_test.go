@@ -103,6 +103,43 @@ func TestReplaceSessionKeepingTrashedCopy(t *testing.T) {
 	assert.Equal(t, int64(1), restored)
 }
 
+func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
+	for _, prior := range []string{"", "subagent"} {
+		t.Run(prior, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			seedReplaceSession(t, d)
+			original, err := d.GetSessionFull(ctx, "replace")
+			require.NoError(t, err)
+			original.RelationshipType = prior
+			require.NoError(t, d.UpsertSession(ctx, *original))
+			insertSession(t, d, "manager", "proj")
+			link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
+			require.NoError(t, err)
+			require.True(t, link.Applied)
+
+			copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new transcript"))
+			require.NoError(t, err)
+			for _, id := range []string{"replace", copyID} {
+				session, err := d.GetSessionFull(ctx, id)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.Equal(t, Ptr("manager"), session.ParentSessionID, id)
+				assert.Equal(t, "subagent", session.RelationshipType, id)
+			}
+			_, err = d.RestoreSession(ctx, copyID)
+			require.NoError(t, err)
+			link, err = d.GetSessionExternalParent(ctx, copyID)
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+			exported, err := d.GetArtifactExportSession(ctx, copyID)
+			require.NoError(t, err)
+			assert.Nil(t, exported.ParentSessionID)
+			assert.Equal(t, prior, exported.RelationshipType)
+		})
+	}
+}
+
 func TestReplaceSessionKeepingTrashedCopyRollsBack(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

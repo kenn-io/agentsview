@@ -111,7 +111,7 @@ class PinsStore {
   /** Re-fetch session pins after the last in-flight mutation settles. */
   #refetchAfterMutation() {
     if (this.#inflight.size === 0 && this.#currentSessionId) {
-      this.loadForSession(this.#currentSessionId);
+      void this.loadForSession(this.#currentSessionId);
     }
   }
 
@@ -127,8 +127,8 @@ class PinsStore {
         (p) => !(p.session_id === pin.session_id && p.message_key === pin.message_key),
       );
     } finally {
-      this.loadAll(this.#loadedProject);
-      if (this.#currentSessionId) this.loadForSession(this.#currentSessionId);
+      void this.loadAll(this.#loadedProject);
+      if (this.#currentSessionId) void this.loadForSession(this.#currentSessionId);
     }
   }
 

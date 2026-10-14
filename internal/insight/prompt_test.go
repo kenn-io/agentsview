@@ -631,6 +631,26 @@ func TestBuildPrompt_SessionAnalysisUnchanged(t *testing.T) {
 	assert.Equal(t, strings.ReplaceAll(string(want), "\r\n", "\n"), prompt)
 }
 
+func TestBuildPrompt_OpenSessionOmitsDuration(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "duration", "my-app", func(s *db.Session) {
+		s.StartedAt = new("2026-04-26T10:00:00Z")
+		s.EndedAt = nil
+		s.MessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "duration", []db.Message{
+		{
+			SessionID: "duration", Ordinal: 0, Role: "assistant", Content: "Reading the file",
+			Timestamp: "2026-04-26T10:00:01Z", HasToolUse: true,
+			ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "r1", InputJSON: `{}`, ResultContent: "content", ResultContentLength: 7}},
+		},
+	}))
+	prompt, err := BuildPrompt(t.Context(), d, GenerateRequest{Type: "agent_analysis", SessionID: "duration"})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "- Tool calls: 1\n")
+	assert.NotContains(t, prompt, "- Duration:")
+}
+
 func TestBuildPrompt_RefusesPromptOverAgentLimit(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedSessionAnalysisGoldenSession(t, d)

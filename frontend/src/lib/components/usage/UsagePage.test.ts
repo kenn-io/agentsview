@@ -154,12 +154,52 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("keeps session-list label and pull request filters when the URL sets a shared filter", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const saved = sessions.filters;
+    sessions.filters = { ...saved, labels: ["ticket=example"], pr: "acme/widgets" };
+    router.route = "usage";
+    router.params = { project: "proj-a" };
+    usage.summary = usageSummaryWithUnsupported();
+    try {
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+
+      expect(sessions.filters.project).toBe("proj-a");
+      expect(sessions.filters.labels).toEqual(["ticket=example"]);
+      expect(sessions.filters.pr).toBe("acme/widgets");
+    } finally {
+      sessions.filters = saved;
+    }
+  });
+
   it("ignores a legacy model URL and shows all models", async () => {
-    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     const summary = tenModelUsageSummary();
     const requests = vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue(summary);
     vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
-    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({ priorFrom: "2026-06-01", priorTo: "2026-06-30", priorTotalCost: testMoney(0), deltaPct: 0 });
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
+      priorFrom: "2026-06-01",
+      priorTo: "2026-06-30",
+      priorTotalCost: testMoney(0),
+      deltaPct: 0,
+    });
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
     router.params = { model: "model-alpha", exclude_agent: "hidden-agent" };
@@ -841,18 +881,6 @@ describe("UsagePage refresh behavior", () => {
     expect(filterKeysBlock).not.toContain('"date_to"');
   });
 
-  it("sanitizes mixed usage URL session params before hydrating", () => {
-    const initStart = source.indexOf("if (hasSessionFilterKeys)");
-    const initEnd = source.indexOf("if (hasDateParam)", initStart);
-    const initBlock = source.slice(initStart, initEnd);
-
-    expect(source).toContain("function usageSupportedSessionParams");
-    expect(initBlock).toContain("parseFiltersFromParams(supportedSessionParams)");
-    expect(initBlock).toContain("sessions.initFromParams(supportedSessionParams)");
-    expect(initBlock).not.toContain("parseFiltersFromParams(params)");
-    expect(initBlock).not.toContain("sessions.initFromParams(params)");
-  });
-
   it("mounts the pairwise comparison panel additively", () => {
     expect(source).toContain("UsagePairwiseComparisonPanel");
     expect(source).toContain("<UsagePairwiseComparisonPanel />");
@@ -872,7 +900,6 @@ describe("UsagePage refresh behavior", () => {
     expect(source).toContain("overflow: auto;");
   });
 });
-
 
 describe("Usage attribution navigation", () => {
   it("refreshes once after an agent click under a brush and project selection", async () => {
@@ -900,11 +927,17 @@ describe("Usage attribution navigation", () => {
     usage.selectedTimeRange = null;
   });
 
-
   it.each(["button", "Escape"])("%s Back keeps the current dates and selection", async (action) => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     window.history.replaceState(null, "", "/usage?from=2024-01-01&to=2024-01-31");
     router.route = "usage";
     router.params = { from: "2024-01-01", to: "2024-01-31" };
@@ -920,16 +953,25 @@ describe("Usage attribution navigation", () => {
     expect(window.location.search).toContain("to=2024-03-31");
     if (action === "button") {
       [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
-        .find((button) => button.textContent?.trim() === "← All projects")!.click();
+        .find((button) => button.textContent?.trim() === "← All projects")!
+        .click();
     } else {
       const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
       panel.focus();
-      panel.dispatchEvent(new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true }));
+      panel.dispatchEvent(
+        new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true }),
+      );
     }
     await flushEffects();
     expect(usage.zoomedProject).toBeNull();
     expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
-    expect(router.params).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-03-31", exclude_model: "model-hidden" }));
+    expect(router.params).toEqual(
+      expect.objectContaining({
+        from: "2024-01-01",
+        to: "2024-03-31",
+        exclude_model: "model-hidden",
+      }),
+    );
     expect(usage.to).toBe("2024-03-31");
     expect(window.location.search).toContain("to=2024-03-31");
   });

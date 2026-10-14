@@ -86,7 +86,7 @@ class StarredStore {
     this.retryCount++;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      this.load();
+      void this.load();
     }, delay);
   }
 
@@ -180,8 +180,12 @@ class StarredStore {
         () => op(),
       )
       .then(
-        () => { delete this.errors[sessionId]; },
-        (error) => { this.errors[sessionId] = generatedErrorMessage(error); },
+        () => {
+          delete this.errors[sessionId];
+        },
+        (error) => {
+          this.errors[sessionId] = generatedErrorMessage(error);
+        },
       )
       .then(() => {
         if (this.queues.get(sessionId) === chain) {

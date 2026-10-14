@@ -679,7 +679,7 @@ describe("MessagesStore", () => {
     const { promise: p1Promise, resolve: resolveP1 } = createDeferred<Session>();
     vi.mocked(api.getSession).mockReturnValue(p1Promise);
 
-    messages.reload();
+    const p1 = messages.reload();
 
     // 3. Switch to Session B
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s2", 5));
@@ -699,7 +699,7 @@ describe("MessagesStore", () => {
     // This should NOT interfere with Session B's pending reload.
     const callsBeforeP1 = vi.mocked(api.getSession).mock.calls.length;
     resolveP1(makeSession("s1", 10));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await p1;
 
     // P1 completing must not trigger an auto-reload for
     // Session B — getSession call count should be unchanged
