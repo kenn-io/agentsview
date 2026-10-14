@@ -3251,6 +3251,15 @@ schemas keep their existing ordering behavior.
   transcript or recorded end time and advances it when a state message is
   newer than both that value and `started_at`. The aggregate usage event still
   uses the recorded `ended_at`, falling back to `started_at`.
+- **Incremental sync check (2026-10-14):** Reverified the pinned
+  `hermes_state.py`: the `sessions` table has no modification timestamp, and
+  message contents, titles and usage can change without updating `ended_at`.
+  Agentsview therefore syncs each session as a virtual `state.db#<session ID>`
+  source and compares that session's content fingerprint before parsing it.
+  Hermes opens `state.db` in WAL mode, falling back to a rollback journal on
+  filesystems without WAL support, so a commit can change only
+  `state.db-wal`. Session freshness includes the WAL file's modification time
+  while the WAL contains frames.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

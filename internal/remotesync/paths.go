@@ -296,17 +296,31 @@ func cleanPathWithSeparator(p string, sep byte) string {
 	return strings.ReplaceAll(cleaned, "/", sepStr)
 }
 
+func splitHermesMemberPath(source string) (physical, suffix string) {
+	idx := strings.LastIndex(source, "#")
+	if idx < 0 || idx == len(source)-1 {
+		return source, ""
+	}
+	physical = source[:idx]
+	base := physical[strings.LastIndexAny(physical, `/\`)+1:]
+	if base != "state.db" {
+		return source, ""
+	}
+	return physical, source[idx:]
+}
+
 func tempPathToRemotePath(
 	tempPath string,
 	remoteDirs []string,
 	tempDirs []string,
 ) (string, bool) {
+	tempPath, suffix := splitHermesMemberPath(tempPath)
 	for i, tempDir := range tempDirs {
 		rel, ok := localPathRel(tempDir, tempPath)
 		if !ok {
 			continue
 		}
-		return joinRemoteRelative(remoteDirs[i], rel), true
+		return joinRemoteRelative(remoteDirs[i], rel) + suffix, true
 	}
 	return "", false
 }

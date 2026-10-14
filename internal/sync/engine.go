@@ -1810,7 +1810,12 @@ func (e *Engine) prepareChangedPathSync(
 // different pass while waiting to enter the serialized sync path.
 func (e *Engine) syncChangedPathsLocked(
 	ctx context.Context, paths []string,
-) (SyncStats, int, error) {
+) (stats SyncStats, tombstoned int, retErr error) {
+	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, paths)
+	if err != nil {
+		return SyncStats{Aborted: true}, 0, err
+	}
+	defer func() { retErr = errors.Join(retErr, closeProviderCache()) }()
 	e.reportProgress(nil, Progress{
 		Phase:  PhaseDiscovering,
 		Detail: "Preparing changed session paths",
@@ -1830,6 +1835,34 @@ func (e *Engine) syncChangedPathsLocked(
 		stats.Failed += titleStats.Failed
 	}
 	return stats, tombstoned, err
+}
+
+func (e *Engine) withProviderFingerprintCache(
+	ctx context.Context, paths []string,
+) (context.Context, func() error, error) {
+	sources := e.sources()
+	for agent, roots := range sources.agentDirs {
+		factory := sources.providerFactories[agent]
+		if len(roots) == 0 || factory == nil || !factory.Capabilities().Sync.BatchFingerprintCache {
+			continue
+		}
+		if len(paths) == 0 {
+			return parser.WithReconciliationCache(ctx)
+		}
+		provider := factory.NewProvider(parser.ProviderConfig{Roots: roots})
+		plan, err := provider.WatchPlan(ctx)
+		if err != nil {
+			return ctx, nil, err
+		}
+		for _, path := range paths {
+			for _, root := range plan.Roots {
+				if changedPathWithinAnyRoot(path, []string{root.Path}) {
+					return parser.WithReconciliationCache(ctx)
+				}
+			}
+		}
+	}
+	return ctx, func() error { return nil }, nil
 }
 
 func (e *Engine) applyChangedPathSyncLocked(
@@ -2233,7 +2266,9 @@ func (e *Engine) classifyProviderChangedPath(
 						),
 					)
 				}
-				continue
+				if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+					continue
+				}
 			}
 			if def.Type == parser.AgentOmnigent {
 				sources, err = e.expandOmnigentInheritedMetadataSources(
@@ -8064,6 +8099,17 @@ func (e *Engine) syncAllLocked(
 		return SyncStats{Aborted: true}
 	}
 	e.invalidateAntigravityTitleCache(nil)
+	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, nil)
+	if err != nil {
+		return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+	}
+	defer func() {
+		if err := closeProviderCache(); err != nil {
+			stats.Aborted = true
+			stats.RecordFailed()
+			stats.Warnings = append(stats.Warnings, err.Error())
+		}
+	}()
 	ctx = e.parsePolicyContext(ctx)
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
@@ -8493,7 +8539,9 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
-			continue
+			if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+				continue
+			}
 		}
 		if agentType == parser.AgentKiro {
 			sources = filterProviderSourcesToScope(sources, scope)

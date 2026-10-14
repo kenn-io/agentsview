@@ -151,7 +151,7 @@ func (p *hermesProvider) ReconciliationAggregateMemberPaths(
 		return nil
 	}
 	rawID := strings.TrimPrefix(fullSessionID, string(p.sources.agent)+":")
-	if rawID == fullSessionID || !IsValidSessionID(rawID) {
+	if rawID == fullSessionID || !isValidHermesSessionID(rawID) {
 		return nil
 	}
 	sessionsDir := filepath.Join(filepath.Dir(path), "sessions")
@@ -380,7 +380,7 @@ func (p *hermesProvider) parseStateMember(
 	if fingerprint.Hash != "" {
 		result.Session.File.Hash = fingerprint.Hash
 	}
-	// Store the fingerprint's freshness identity (state.db plus selected
+	// Store the fingerprint's freshness identity (state.db, WAL and selected
 	// transcript) so the engine's stored size+mtime skip recognizes an
 	// unchanged member while the container is untouched. The stat is shared
 	// by every member, so after any sibling change the engine falls back to
@@ -402,10 +402,11 @@ func (p *hermesProvider) parseStateMember(
 }
 
 type hermesSource struct {
-	Root      string
-	Path      string
-	StateDB   string
-	SessionID string
+	Root                    string
+	Path                    string
+	StateDB                 string
+	SessionID               string
+	FingerprintSingleMember bool
 }
 
 type hermesSourceSet struct {
@@ -512,24 +513,12 @@ func hermesProfileRootForPath(profilesRoot, changedPath string) (string, bool) {
 func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	roots, expandErr := s.expandedRoots()
-	for _, root := range roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		for _, file := range discoverHermesSessions(root) {
-			source, ok := s.sourceRef(root, file.Path)
-			if !ok {
-				continue
-			}
-			addJSONLSource(source, &sources, seen)
-		}
-	}
+	err := s.DiscoverEach(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
 	sortJSONLSources(sources)
-	if expandErr != nil {
-		return sources, incompleteProfileExpansionError(expandErr)
-	}
-	return sources, nil
+	return sources, err
 }
 
 func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
@@ -641,7 +630,7 @@ func (s hermesSourceSet) discoverStateEach(
 		if err := rows.Scan(&id); err != nil {
 			return yieldedAny, fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			continue
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
@@ -673,7 +662,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		}
 		name := entry.Name()
 		id := HermesSessionID(name)
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			return nil
 		}
 		switch {
@@ -1088,52 +1077,77 @@ func (s hermesSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	allowMissing := jsonlMissingPathFallbackAllowed(req)
-	if req.WatchRoot != "" {
-		watchRoot := filepath.Clean(req.WatchRoot)
-		for _, root := range s.roots {
-			if isHermesProfilesContainer(root) && samePath(root, watchRoot) {
-				profileRoot, ok := hermesProfileRootForPath(root, req.Path)
-				if !ok {
-					return nil, nil
-				}
-				source, ok := s.sourceForChangedPath(
-					profileRoot, req.Path, allowMissing,
-				)
-				if ok {
-					return []SourceRef{source}, nil
-				}
-				return nil, nil
-			}
-			if !hermesWatchRootMatches(root, watchRoot) {
-				continue
-			}
-			source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
-			if ok {
-				return []SourceRef{source}, nil
-			}
-		}
-		return nil, nil
-	}
 	for _, root := range s.roots {
 		if isHermesProfilesContainer(root) {
+			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) {
+				continue
+			}
 			profileRoot, ok := hermesProfileRootForPath(root, req.Path)
 			if !ok {
 				continue
 			}
-			source, ok := s.sourceForChangedPath(
-				profileRoot, req.Path, allowMissing,
-			)
-			if ok {
-				return []SourceRef{source}, nil
-			}
+			root = profileRoot
+		} else if req.WatchRoot != "" && !hermesWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
-		if ok {
-			return []SourceRef{source}, nil
+		sources, err := s.changedPathSources(ctx, root, req.Path, allowMissing)
+		if err != nil || len(sources) > 0 {
+			return sources, err
 		}
 	}
 	return nil, nil
+}
+
+func (s hermesSourceSet) changedPathSources(
+	ctx context.Context, root, path string, allowMissing bool,
+) ([]SourceRef, error) {
+	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
+		if hermesStatePathAffectsArchive(path, stateDB) {
+			if samePath(path, stateDB+"-wal") && !sqliteWALHasFrames(path) {
+				return nil, nil
+			}
+			var sources []SourceRef
+			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
+				sources = append(sources, source)
+				return nil
+			})
+			return sources, err
+		}
+		if hermesPathInTranscriptDir(sessionsDir, path) {
+			id := HermesSessionID(filepath.Base(path))
+			if !isValidHermesSessionID(id) {
+				return nil, nil
+			}
+			found, lookupErr := hermesStateDBHasSession(ctx, stateDB, id)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if lookupErr != nil {
+				lookupErr = incompleteDiscoveryError(s.agent, "resolve transcript membership", lookupErr)
+			}
+			if found {
+				source := s.stateMemberSourceRef(root, stateDB, id)
+				src := source.Opaque.(hermesSource)
+				src.FingerprintSingleMember = true
+				source.Opaque = src
+				return []SourceRef{source}, nil
+			}
+			selected := findHermesSourceFile(sessionsDir, id)
+			if selected == "" {
+				if !allowMissing {
+					return nil, lookupErr
+				}
+				selected = path
+			}
+			source, _ := s.transcriptSourceRef(root, selected)
+			return []SourceRef{source}, lookupErr
+		}
+	}
+	source, ok := s.sourceForChangedPath(root, path, allowMissing)
+	if !ok {
+		return nil, nil
+	}
+	return []SourceRef{source}, nil
 }
 
 func (s hermesSourceSet) FindSource(
@@ -1168,7 +1182,7 @@ func (s hermesSourceSet) FindSource(
 	}
 	for _, root := range roots {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
-			IsValidSessionID(req.RawSessionID) {
+			isValidHermesSessionID(req.RawSessionID) {
 			found, err := hermesStateDBHasSession(ctx, stateDB, req.RawSessionID)
 			switch {
 			case err != nil:
@@ -1215,6 +1229,7 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 		return false, fmt.Errorf("open hermes state db: %w", err)
 	}
 	defer conn.Close()
+	observeSharedContainerScan(ctx)
 
 	var found int
 	err = conn.QueryRowContext(
@@ -1309,7 +1324,7 @@ func (s hermesSourceSet) sourceForChangedPath(
 	path = filepath.Clean(path)
 	if stateDB, sessionID, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
 		if expected, _, valid := hermesArchivePathsForEvent(root, stateDB); valid &&
-			samePath(expected, stateDB) && IsValidSessionID(sessionID) {
+			samePath(expected, stateDB) && isValidHermesSessionID(sessionID) {
 			return s.stateMemberSourceRef(root, stateDB, sessionID), true
 		}
 		return SourceRef{}, false
@@ -1602,7 +1617,7 @@ func hermesStateMemberFingerprint(
 	if !IsRegularFile(src.StateDB) {
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
-	if reconciliationCacheAvailable(ctx) {
+	if reconciliationCacheAvailable(ctx) && !src.FingerprintSingleMember {
 		if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
 			return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
 		}
@@ -1652,6 +1667,13 @@ func hermesStateMemberFingerprintFinish(
 	fingerprint := SourceFingerprint{
 		Key:  firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path),
 		Size: info.Size(), MTimeNS: info.ModTime().UnixNano(),
+	}
+	walInfo, err := os.Stat(src.StateDB + "-wal")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return SourceFingerprint{}, err
+	}
+	if err == nil && sqliteWALInfoHasFrames(walInfo) {
+		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
 	if selectedPath != src.StateDB {
 		selectedInfo, err := os.Stat(selectedPath)
@@ -1720,7 +1742,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 		if err := rows.Scan(&id); err != nil {
 			return fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			continue
 		}
 		retainedIDBytes := int64(len(id))
@@ -1959,6 +1981,7 @@ func hermesProviderCapabilities() Capabilities {
 		},
 		Sync: ProviderSyncSemantics{
 			FingerprintHashRequiredForFreshness: true,
+			BatchFingerprintCache:               true,
 		},
 	}
 }
