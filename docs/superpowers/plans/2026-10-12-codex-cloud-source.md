@@ -1048,11 +1048,10 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
 
 - [x] **Step 6: Idle tracking.** Each sync run is daemon work: it calls the
   daemon idle tracker's `BeginWork` and ends it when the run returns, like the
-  other background jobs in `cmd/agentsview/main.go`. Commit.
-
-- [x] **Step 7: Test idle tracking.**
-  `TestCodexCloudJobsKeepTheDaemonAwakeWhileRunning` checks that a sync or
-  live run holds the idle tracker while it runs.
+  other background jobs in `cmd/agentsview/main.go`. The test
+  `TestCodexCloudJobsKeepTheDaemonAwakeWhileRunning` was written and
+  committed; it checks that a sync run and a live run each hold the idle
+  tracker while they run.
 
 **Milestone: working locally.** The gate's probe answers are in. Ask the user to
 run `AGENTSVIEW_DATA_DIR=<scratch> agentsview serve` with
@@ -1146,7 +1145,7 @@ Spec: Live token capture (Finding running threads), gates.
 
 - [x] **Step 1: Write failing tests** `TestDiscoveryFindsIdleListedRunning`,
   `TestDiscoveryIgnoresOldThreads` (Review Focus: `inProgress` newest turn,
-  `updatedAt` 3 minutes old, listed `active`: no turn check, no resume),
+  `updatedAt` 6 minutes old, listed `active`: no turn check, no resume),
   `TestDiscoveryJoinsDelegatedChild`, `TestDiscoverySecondPage`,
   `TestDiscoverySkipsSubAgents`, `TestDiscoveryGatesCloseJoins`,
   `TestSync429HoldsDiscovery`, `TestDiscovery5xxDelaysSync`,
