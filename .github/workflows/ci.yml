@@ -298,7 +298,7 @@ jobs:
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
-  # Share setup for isolated Windows Go suites; keep CLI and Sync on their own runners.
+  # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
