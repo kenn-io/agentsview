@@ -233,7 +233,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			budget := 30 * time.Second
-			if blocked {
+			if blocked && tc.wantError == nil {
 				budget = 100 * time.Millisecond
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), budget)
