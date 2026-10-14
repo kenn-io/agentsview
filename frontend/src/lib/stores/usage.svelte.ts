@@ -424,6 +424,7 @@ class UsageStore {
     zoom: 0,
   };
   private fetchAllVersion = 0;
+  private pairwiseParams: UsageParams | null = null;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -553,12 +554,13 @@ class UsageStore {
     const current = this.pairwiseSelection;
     const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
     const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
-    const leftValid = current.left.value === "" || currentLeftOptions.includes(current.left.value);
-    const rightValid =
-      current.right.value === "" || currentRightOptions.includes(current.right.value);
+    if (!current.left.value && !current.right.value) return false;
+    const leftValid = currentLeftOptions.includes(current.left.value);
+    const rightValid = currentRightOptions.includes(current.right.value);
     if (leftValid && rightValid) return false;
 
     this.pairwiseSelection = emptyPairwiseSelection();
+    this.clearPairwiseComparisonState();
     return true;
   }
 
@@ -930,7 +932,6 @@ class UsageStore {
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
     this.dropExcludedSelection();
-    this.clearPairwiseComparisonState();
     const startedAt = performance.now();
     this.stepTimings.clear();
     this.refreshStartedAt = startedAt;
@@ -1014,12 +1015,9 @@ class UsageStore {
         })
       : zoomPromise;
     const currentPairwisePromise =
-      loadedSummary.pairwiseSelectionInvalidated || loadedSummary.projectScopeRecovered
-        ? pairwisePromise.then(() => {
-            if (fetchVersion !== this.fetchAllVersion || pairwiseVersion !== this.versions.pairwise)
-              return "aborted";
-            return this.fetchPairwise(loadedSummary.params);
-          })
+      (loadedSummary.pairwiseSelectionInvalidated || loadedSummary.projectScopeRecovered) &&
+      pairwiseVersion === this.versions.pairwise
+        ? this.fetchPairwise(loadedSummary.params)
         : pairwisePromise;
     const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
       await Promise.all([
@@ -1313,19 +1311,24 @@ class UsageStore {
   }
 
   private async fetchPairwise(params: UsageParams): Promise<FetchResult> {
+    if (
+      !this.pairwiseParams ||
+      Object.keys({ ...this.pairwiseParams, ...params }).some(
+        (key) => this.pairwiseParams?.[key as keyof UsageParams] !== params[key as keyof UsageParams],
+      )
+    ) {
+      this.clearPairwiseComparisonState();
+    }
+    this.pairwiseParams = { ...params };
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
-    const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
-    if (!request && !useDefault) {
-      this.pairwiseComparison = null;
-      this.errors.pairwise = null;
-      this.loading.pairwise = false;
-      this.abortPanel("pairwise");
-      return "ok";
+    const useDefault = !request;
+    if (useDefault) {
+      this.pairwiseSelection = emptyPairwiseSelection();
     }
     const signal = this.nextAbortSignal("pairwise");
     const isFirstLoad = this.pairwiseComparison === null;
-    if (isFirstLoad) this.loading.pairwise = true;
+    this.loading.pairwise = isFirstLoad;
     if (isFirstLoad) this.errors.pairwise = null;
     const started = performance.now();
     const liveStep = this.liveQuery.start("pairwise", started);

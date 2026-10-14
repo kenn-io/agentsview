@@ -166,6 +166,17 @@ describe("UsagePairwiseComparisonPanel", () => {
     const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
     await tick();
     expect(document.querySelector(".pairwise-note")?.textContent?.trim()).toBe(m.shared_refresh());
+    const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
+    expect(pickers).toHaveLength(4);
+    expect([...pickers].every((picker) => picker.disabled)).toBe(true);
+    usage.pairwiseSelection = {
+      left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+      right: { dimension: "model", value: "gpt-4o" },
+    };
+    usage.pairwiseComparison = pairwiseComparison();
+    usage.loading.pairwise = false;
+    await tick();
+    expect([...pickers].every((picker) => !picker.disabled)).toBe(true);
     await unmount(component);
   });
 

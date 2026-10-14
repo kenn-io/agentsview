@@ -798,11 +798,24 @@ describe("UsageStore session filter params", () => {
     const replacement = usagePairwiseComparison();
     replacement.left = { ...replacement.left, dimension: "project", value: "pl1:sha256:beta" };
     replacement.right = { ...replacement.right, dimension: "project", value: "pl1:sha256:gamma" };
+    let resolveStale!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    let resolveDefault!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
     usageServiceMocks.getApiV1UsagePairwiseComparison
-      .mockResolvedValueOnce(usagePairwiseComparison())
-      .mockResolvedValueOnce(replacement);
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveDefault = resolve; }));
 
-    await usage.fetchAll();
+    const refresh = usage.fetchAll();
+
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2));
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    expect(usage.loading.pairwise).toBe(true);
+    expect(usage.pairwiseComparison).toBeNull();
+    resolveStale(usagePairwiseComparison());
+    await Promise.resolve();
+    expect(usage.loading.pairwise).toBe(true);
+    expect(usage.pairwiseComparison).toBeNull();
+    resolveDefault(replacement);
+    await refresh;
 
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2);
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[0]).toMatchObject({
@@ -849,6 +862,37 @@ describe("UsageStore session filter params", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("retains the previous pairwise comparison when an unchanged refresh fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { usage } = await loadStore();
+      await usage.fetchAll();
+      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("totals failed"));
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockRejectedValueOnce(new Error("pairwise failed"));
+      await usage.fetchAll();
+      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+      expect(usage.errors.pairwise).toBeNull();
+      expect(usage.loading.pairwise).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("repairs a partially empty pair on refresh by requesting the default", async () => {
+    const { usage } = await loadStore();
+    usage.pairwiseSelection = {
+      left: { dimension: "model", value: "gpt-4o" },
+      right: { dimension: "model", value: "" },
+    };
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[0]).not.toHaveProperty("left_value");
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+      right: { dimension: "model", value: "gpt-4o" },
+    });
   });
 
   it("clears pairwise loading when an aborted first load resolves to no selection", async () => {
@@ -943,7 +987,7 @@ describe("UsageStore session filter params", () => {
     }
   });
 
-  it("clears pairwise querying when a selector change leaves no comparable values", async () => {
+  it("requests the default when a selector change leaves a partially empty pair", async () => {
     const { usage } = await loadStore();
     usage.pairwiseSelection = {
       left: { dimension: "model", value: "claude-sonnet-4-20250514" },
@@ -966,10 +1010,9 @@ describe("UsageStore session filter params", () => {
 
     usage.setPairwiseSide("left", { dimension: "project" });
 
-    expect(usage.pairwiseSelection.left).toEqual({
-      dimension: "project",
-      value: "",
-    });
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2));
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[0]).not.toHaveProperty("left_value");
+    await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
     expect(usage.loading.pairwise).toBe(false);
     expect(usage.querying.pairwise).toBe(false);
   });

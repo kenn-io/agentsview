@@ -938,6 +938,43 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }
 
+type pairwiseRankingStore struct {
+	db.Store
+	t *testing.T
+}
+
+func (s *pairwiseRankingStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	if f.Breakdowns {
+		assert.True(s.t, f.SkipSessionCounts)
+	}
+	return s.Store.GetDailyUsage(ctx, f)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	seedCommaProjectUsageFixture(t, d)
+	catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
+	require.NoError(t, err)
+	be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
+	res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		UsageRequest: service.UsageRequest{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
+			IncludeOneShot: true,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "project", res.Left.Dimension)
+	assert.Equal(t, "project", res.Right.Dimension)
+	assert.NotEqual(t, res.Left.Value, res.Right.Value)
+	assert.Equal(t, map[string]int{
+		catalog["team,core"].ProjectKey: 100,
+		catalog["other"].ProjectKey:     25,
+	}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
+	assert.Equal(t, 1, res.Left.SessionCount)
+	assert.Equal(t, 1, res.Right.SessionCount)
+}
+
 func TestDefaultUsagePairwiseSelection(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

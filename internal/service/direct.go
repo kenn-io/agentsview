@@ -948,10 +948,28 @@ func (b *directBackend) UsageSummary(
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
+	var err error
+	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
+	if err != nil {
+		return nil, err
+	}
+	req.UsageRequest, err = ResolveUsageProjectKeys(ctx, b.db, req.UsageRequest)
+	if err != nil {
+		return nil, err
+	}
 	if req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == "" {
 		rankingRequest := req.UsageRequest
 		rankingRequest.Breakdowns = new(true)
-		summary, err := b.UsageSummary(ctx, rankingRequest)
+		rankingRequest.SessionCounts = new(false)
+		filter, err := BuildUsageFilter(rankingRequest)
+		if err != nil {
+			return nil, err
+		}
+		result, err := b.db.GetDailyUsage(ctx, filter)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := buildUsageSummary(filter, result)
 		if err != nil {
 			return nil, err
 		}
@@ -960,11 +978,6 @@ func (b *directBackend) UsagePairwiseComparison(
 			out, err := BuildUsagePairwiseComparisonResult(db.DailyUsageResult{}, db.DailyUsageResult{})
 			return &out, err
 		}
-	}
-	var err error
-	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
-	if err != nil {
-		return nil, err
 	}
 	req, err = ResolveUsagePairwiseProjectKeys(ctx, b.db, req)
 	if err != nil {
