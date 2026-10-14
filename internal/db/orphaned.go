@@ -1360,22 +1360,12 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
-		priorRelationship := "NULL"
-		if oldDBHasColumn(ctx, tx, "session_external_parents", "prior_relationship_type") {
-			priorRelationship = "ep.prior_relationship_type"
-		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_external_parents (
-				session_id, parent_session_id, prior_relationship_type, created_at, updated_at
+				session_id, parent_session_id, created_at, updated_at
 			)
-			SELECT ep.session_id, ep.parent_session_id,
-				CASE WHEN sessions.id IS NULL THEN `+priorRelationship+`
-					WHEN COALESCE(sessions.parser_parent_session_id, '') = ''
-						AND `+spawnEdgeExistsSQL("sessions")+` THEN `+parentlessRelationshipSQL+`
-					ELSE COALESCE(sessions.parser_relationship_type, sessions.relationship_type) END,
-				ep.created_at, ep.updated_at
+			SELECT ep.session_id, ep.parent_session_id, ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
-			LEFT JOIN main.sessions ON sessions.id = ep.session_id
 			WHERE true
 			ON CONFLICT(session_id) DO UPDATE SET
 				parent_session_id = excluded.parent_session_id,
@@ -2184,15 +2174,11 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying sessions: %w", err)
 	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
-		priorRelationship := "NULL"
-		if oldDBHasColumn(ctx, tx, "session_external_parents", "prior_relationship_type") {
-			priorRelationship = "ep.prior_relationship_type"
-		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.session_external_parents (
-				session_id, parent_session_id, prior_relationship_type, created_at, updated_at
+				session_id, parent_session_id, created_at, updated_at
 			)
-			SELECT copied.id, ep.parent_session_id, `+priorRelationship+`, ep.created_at, ep.updated_at
+			SELECT copied.id, ep.parent_session_id, ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
 			JOIN `+tempIDsTable+` copied ON copied.source_id = ep.session_id`); err != nil {
 			return fmt.Errorf("copying retained session parents: %w", err)

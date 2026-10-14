@@ -109,9 +109,9 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		if externalParent.SessionID != "" {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO session_external_parents (
-					session_id, parent_session_id, prior_relationship_type, created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?)`, copyID, externalParent.ParentSessionID,
-				externalParent.priorRelationship, externalParent.CreatedAt, externalParent.UpdatedAt,
+					session_id, parent_session_id, created_at, updated_at
+				) VALUES (?, ?, ?, ?)`, copyID, externalParent.ParentSessionID,
+				externalParent.CreatedAt, externalParent.UpdatedAt,
 			); err != nil {
 				return "", fmt.Errorf("copying replaced session parent: %w", err)
 			}

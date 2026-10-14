@@ -2352,15 +2352,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN parser_relationship_type TEXT",
 		},
 		{
-			"session_external_parents", "prior_relationship_type",
-			"ALTER TABLE session_external_parents ADD COLUMN prior_relationship_type TEXT;" +
-				" UPDATE session_external_parents SET prior_relationship_type =" +
-				" (SELECT COALESCE(s.parser_relationship_type, CASE WHEN COALESCE(s.parent_session_id, '') = session_external_parents.parent_session_id" +
-				" AND COALESCE(s.parser_parent_session_id, '') = ''" +
-				" THEN IIF(s.session_kind = 'non-interactive', 'subagent', '') ELSE s.relationship_type END)" +
-				" FROM sessions s WHERE s.id = session_external_parents.session_id)",
-		},
-		{
 			"sessions", "session_name",
 			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},

@@ -475,15 +475,16 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 
 func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 	for _, tc := range []struct {
-		name, saved, fresh               string
-		pending, copied, trashed, legacy bool
+		name, saved, fresh       string
+		pending, copied, trashed bool
 	}{
 		{name: "pending worker first parsed", fresh: "subagent", pending: true},
 		{name: "reparsed native worker", fresh: "subagent"},
 		{name: "reparsed ordinary worker", saved: "subagent"},
 		{name: "orphan", copied: true},
+		{name: "native orphan", saved: "subagent", copied: true},
 		{name: "trash", copied: true, trashed: true},
-		{name: "legacy pending worker", fresh: "subagent", pending: true, legacy: true},
+		{name: "native trash", saved: "subagent", copied: true, trashed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -498,10 +499,6 @@ func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 			require.NoError(t, err)
 			if tc.trashed {
 				_, err = source.getWriter().ExecContext(ctx, "UPDATE sessions SET deleted_at = '2026-10-01T00:00:00Z' WHERE id = 'worker'")
-				require.NoError(t, err)
-			}
-			if tc.legacy {
-				_, err = source.getWriter().ExecContext(ctx, "ALTER TABLE session_external_parents DROP COLUMN prior_relationship_type")
 				require.NoError(t, err)
 			}
 			destination := testDB(t)
@@ -997,28 +994,4 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestLauncherRelationshipProvenanceSchemaUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-	d, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
-	_, err = d.SetSessionExternalParent(t.Context(), "worker", "missing")
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(t.Context(), "ALTER TABLE session_external_parents DROP COLUMN prior_relationship_type")
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(t.Context(), "ALTER TABLE sessions DROP COLUMN parser_relationship_type")
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	insertSession(t, d, "missing", "proj")
-	_, err = d.ClearSessionExternalParent(t.Context(), "worker")
-	require.NoError(t, err)
-	worker, err := d.GetSession(t.Context(), "worker")
-	require.NoError(t, err)
-	assert.Nil(t, worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
 }

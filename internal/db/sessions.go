@@ -1209,7 +1209,7 @@ func (db *DB) GetArtifactExportSession(
 		AND EXISTS (SELECT 1 FROM session_external_parents ep
 			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
 	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
-	relationship := `CASE WHEN ` + launcherApplied + ` THEN COALESCE((SELECT ep.prior_relationship_type FROM session_external_parents ep WHERE ep.session_id = sessions.id), ` + parentlessRelationshipSQL + `) ELSE relationship_type END`
+	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parentlessRelationshipSQL + ` ELSE relationship_type END`
 	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
 	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
@@ -1756,9 +1756,6 @@ func upsertSessionExec(
 	}
 	parentChanged := !nullableStringEqual(previousParent, s.ParentSessionID)
 	if result.inserted || parentChanged || previousRelationship != s.RelationshipType {
-		if _, err := exec(ctx, "UPDATE session_external_parents SET prior_relationship_type = ? WHERE session_id = ?", SessionRelationship(s), s.ID); err != nil {
-			return sessionUpsertResult{}, fmt.Errorf("saving parser relationship for %s: %w", s.ID, err)
-		}
 		if _, err := applySessionExternalParentsFor(ctx, exec, queryRow, []string{s.ID}); err != nil {
 			return sessionUpsertResult{}, err
 		}
