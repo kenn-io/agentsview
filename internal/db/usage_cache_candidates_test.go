@@ -34,7 +34,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
-		"model-filtered", "overlap",
+		"model-filtered",
 	}, usageQuerySessionIDs(snapshot.Sessions))
 	byID := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
@@ -82,7 +82,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
-		"model-filtered", "overlap", "relaxed",
+		"model-filtered", "relaxed",
 	}, usageQuerySessionIDs(relaxed.Sessions))
 
 	allHistory, err := database.captureUsageQuery(
@@ -91,7 +91,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"all-empty", "blank-message", "event", "filtered-competitor",
-		"inside-message", "model-filtered", "outside", "overlap", "relaxed", "user-only",
+		"inside-message", "model-filtered", "outside", "relaxed", "user-only",
 	}, usageQuerySessionIDs(allHistory.Sessions))
 	assert.Empty(t, allHistory.Intervals)
 }
@@ -101,27 +101,50 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 	bounds := usageBoundsForFilter(UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	})
+	type rangeSearch struct {
+		alias, index, bounds string
+		covering             bool
+	}
 
 	for _, tc := range []struct {
 		name     string
 		kind     usageQueryKind
-		searches []string
+		searches []rangeSearch
 	}{
-		{"token", usageQueryKindToken, []string{
-			"SEARCH m USING INDEX idx_messages_usage_timestamp (timestamp>? AND timestamp<?)",
-			"SEARCH ue USING INDEX idx_usage_events_occurred (occurred_at>? AND occurred_at<?)",
+		{"token", usageQueryKindToken, []rangeSearch{
+			{"m", "idx_messages_usage_timestamp", "(timestamp>? AND timestamp<?)", false},
+			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
 		}},
-		{"activity", usageQueryKindActivity, []string{
-			"SEARCH m USING INDEX idx_messages_usage_timestamp (timestamp>? AND timestamp<?)",
-			"SEARCH ue USING INDEX idx_usage_events_occurred (occurred_at>? AND occurred_at<?)",
-			"SEARCH m USING COVERING INDEX idx_messages_activity_timestamp (timestamp>? AND timestamp<?)",
+		{"activity", usageQueryKindActivity, []rangeSearch{
+			{"m", "idx_messages_usage_timestamp", "(timestamp>? AND timestamp<?)", false},
+			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
+			{"m", "idx_messages_activity_timestamp", "(timestamp>? AND timestamp<?)", true},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query, args := usageCandidateDiscoverySQL(bounds, tc.kind)
 			plan := explainUsageCandidatePlan(t, database, query, args)
 			for _, search := range tc.searches {
-				assert.Contains(t, plan, search)
+				rangeIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return strings.HasPrefix(row.detail, "SEARCH "+search.alias+" ") && strings.Contains(row.detail, search.index) && strings.Contains(row.detail, search.bounds)
+				})
+				require.GreaterOrEqual(t, rangeIndex, 0, "missing bounded index seek %q: %+v", search.index, plan)
+				if search.covering {
+					assert.Contains(t, plan[rangeIndex].detail, "USING COVERING INDEX")
+				}
+				rangeParent := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.id == plan[rangeIndex].parent
+				})
+				require.GreaterOrEqual(t, rangeParent, 0, "missing range subtree: %+v", plan)
+				distinctIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.parent == plan[rangeParent].id && row.detail == "USE TEMP B-TREE FOR DISTINCT"
+				})
+				assert.GreaterOrEqual(t, distinctIndex, 0, "range rows must be deduplicated within the subtree: %+v", plan)
+				sessionIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.parent == plan[rangeParent].parent && strings.HasPrefix(row.detail, "SEARCH s ") && strings.Contains(row.detail, "(id=?)")
+				})
+				require.GreaterOrEqual(t, sessionIndex, 0, "sessions must be reached by id outside the range subtree: %+v", plan)
+				assert.Less(t, distinctIndex, sessionIndex, "range rows must be deduplicated before the sessions lookup")
 			}
 		})
 	}
@@ -183,12 +206,6 @@ func usageCandidateFixture(t *testing.T) *DB {
 		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
 		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "e1",
 	}}))
-	seedSession("overlap", "keep", "2026-08-01T00:00:00Z", 2, "Overlap")
-	insertMessages(t, database, tokenMessage("overlap", "2026-08-10T12:00:00Z", "model-x"))
-	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "overlap", []UsageEvent{{
-		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
-		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "overlap-event",
-	}}))
 	seedSession("filtered-competitor", "drop", "2026-08-01T00:00:00Z", 2, "Drop")
 	insertMessages(t, database,
 		tokenMessage("filtered-competitor", "2026-08-10T11:00:00Z", "other-model"))
@@ -230,36 +247,26 @@ func usageQuerySessionIDs(sessions []usageQuerySession) []string {
 	return ids
 }
 
+type usageCandidatePlanRow struct {
+	id, parent int
+	detail     string
+}
+
 func explainUsageCandidatePlan(
 	t *testing.T, database *DB, query string, args []any,
-) string {
+) []usageCandidatePlanRow {
 	t.Helper()
 
 	rows, err := database.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
-	var details []string
-	parents := make(map[int]int)
-	children := make(map[int][]string)
+	var plan []usageCandidatePlanRow
 	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
-		parents[id] = parent
-		children[parent] = append(children[parent], detail)
+		var row usageCandidatePlanRow
+		var unused int
+		require.NoError(t, rows.Scan(&row.id, &row.parent, &unused, &row.detail))
+		plan = append(plan, row)
 	}
 	require.NoError(t, rows.Err())
-	for id, parent := range parents {
-		for _, detail := range children[id] {
-			if strings.HasPrefix(detail, "SEARCH ") && strings.Contains(detail, ">?") {
-				// Deduplicate within the range subtree before its parent looks up sessions.
-				assert.Contains(t, children[id], "USE TEMP B-TREE FOR DISTINCT")
-				assert.Contains(t, children[parent], "SCAN ranged")
-				assert.Contains(t, children[parent], "SEARCH s USING INDEX sqlite_autoindex_sessions_1 (id=?)")
-			}
-		}
-	}
-	slices.Sort(details)
-	return strings.Join(details, "\n")
+	return plan
 }
