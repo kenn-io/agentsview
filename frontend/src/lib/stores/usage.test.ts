@@ -967,81 +967,149 @@ describe("UsageStore session filter params", () => {
     },
   );
 
-  it.each(["empty options", "rejected", "rejected after date change"])(
-    "finishes the comparison after refreshed totals are %s",
-    async (outcome) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const { usage } = await loadStore();
-        const changed = outcome === "rejected after date change";
-        let rejectSummary!: (error: Error) => void;
-        if (changed) await usage.fetchAll();
-        else {
-          usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
-            () => new Promise(() => {}),
-          );
-          void usage.fetchAll();
-          await vi.waitFor(() =>
-            expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1),
-          );
-          expect(usage.loading.pairwise).toBe(true);
-        }
-        usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
-        const comparison =
-          outcome === "empty options" ? emptyUsagePairwiseComparison() : usagePairwiseComparison();
-        if (outcome === "empty options") {
-          usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
-            usageSummaryWithOptions({ projects: [], models: ["gpt-4o"] }),
-          );
-          usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(comparison);
-        } else if (changed) {
-          usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
-            () =>
-              new Promise((_, reject) => {
-                rejectSummary = reject;
-              }),
-          );
+  it.each([
+    "empty options",
+    "rejected",
+    "rejected after date change",
+    "rejected after filter clears brush",
+    "rejected after selector and project recovery",
+  ])("finishes the comparison after refreshed totals are %s", async (outcome) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { usage } = await loadStore();
+      const changed = outcome === "rejected after date change";
+      const clearedBrush = outcome === "rejected after filter clears brush";
+      const recoveredScope = outcome === "rejected after selector and project recovery";
+      let rejectSummary!: (error: Error) => void;
+      if (changed || clearedBrush || recoveredScope) await usage.fetchAll();
+      else {
+        usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+          () => new Promise(() => {}),
+        );
+        void usage.fetchAll();
+        await vi.waitFor(() =>
+          expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1),
+        );
+        expect(usage.loading.pairwise).toBe(true);
+      }
+      if (clearedBrush) {
+        usage.applyDateRange("2024-01-01", "2024-01-31");
+        usage.setTimeRange("2024-01-08", "2024-01-14");
+        await vi.waitFor(() => {
+          expect(usage.isTimeRangeSummaryProvisional).toBe(false);
+          expect(usage.pairwiseComparison).not.toBeNull();
+          expect(usage.isQuerying).toBe(false);
+        });
+        usage.selectedModel = "gpt-4o";
+      }
+      if (recoveredScope) usage.excludedProjectKeys = "pl1:sha256:stale";
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+      const comparison =
+        outcome === "empty options" ? emptyUsagePairwiseComparison() : usagePairwiseComparison();
+      if (recoveredScope) comparison.left.value = "gpt-4o";
+      if (outcome === "empty options") {
+        usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+          usageSummaryWithOptions({ projects: [], models: ["gpt-4o"] }),
+        );
+        usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(comparison);
+      } else if (changed || clearedBrush || recoveredScope) {
+        usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+          () =>
+            new Promise((_, reject) => {
+              rejectSummary = reject;
+            }),
+        );
+        if (changed) {
           usageServiceMocks.getApiV1UsagePairwiseComparison.mockRejectedValueOnce(
             new Error("pairwise failed"),
           );
           usage.applyDateRange("2024-02-01", "2024-02-29");
-        } else {
-          usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("summary failed"));
-        }
-
-        const refresh = usage.fetchAll();
-        expect(usage.loading.pairwise).toBe(true);
-        if (changed) {
-          expect(usage.pairwiseComparison).toBeNull();
-          expect(usage.errors.pairwise).toBeNull();
-          expect(usageServiceMocks.getApiV1UsagePairwiseComparison).not.toHaveBeenCalled();
-          rejectSummary(new Error("summary failed"));
-        } else {
-          expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledOnce();
-        }
-        await refresh;
-
-        if (changed) {
-          expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ from: "2024-02-01", to: "2024-02-29" }),
-            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        } else if (recoveredScope) {
+          usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
+            new Error("summary retry failed"),
           );
+          usageServiceMocks.getApiV1UsagePairwiseComparison
+            .mockRejectedValueOnce(
+              new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+            )
+            .mockResolvedValueOnce(comparison);
         }
-        expect(usage.pairwiseSelection).toEqual({
-          left: {
-            dimension: "model",
-            value: outcome === "empty options" ? "" : "claude-sonnet-4-20250514",
-          },
-          right: { dimension: "model", value: outcome === "empty options" ? "" : "gpt-4o" },
-        });
-        expect(usage.loading.pairwise).toBe(false);
-        expect(usage.pairwiseComparison).toEqual(changed ? null : comparison);
-        expect(usage.errors.pairwise).toBe(changed ? "pairwise failed" : null);
-      } finally {
-        warn.mockRestore();
+      } else {
+        usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("summary failed"));
       }
-    },
-  );
+
+      const refresh = usage.fetchAll();
+      expect(usage.loading.pairwise).toBe(true);
+      if (changed || clearedBrush || recoveredScope) {
+        expect(usage.pairwiseComparison).toBeNull();
+        expect(usage.errors.pairwise).toBeNull();
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).not.toHaveBeenCalled();
+        if (recoveredScope) {
+          usage.setPairwiseSide("left", { value: "gpt-4o" });
+          expect(
+            usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0],
+          ).toMatchObject({
+            exclude_project_key: "pl1:sha256:stale",
+            left_value: "gpt-4o",
+            right_value: "gpt-4o",
+          });
+          await vi.waitFor(() => expect(usage.errors.pairwise).toBe("unknown project key"));
+          rejectSummary(
+            new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+          );
+        } else rejectSummary(new Error("summary failed"));
+      } else {
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledOnce();
+      }
+      await refresh;
+
+      if (changed) {
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ from: "2024-02-01", to: "2024-02-29" }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+      }
+      if (clearedBrush) {
+        expect(usage.selectedTimeRange).toBeNull();
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ from: "2024-01-01", to: "2024-01-31", model: "gpt-4o" }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+      }
+      if (recoveredScope) {
+        expect(usage.excludedProjectKeys).toBe("");
+        expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+          expect.not.objectContaining({ exclude_project_key: expect.anything() }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2);
+        const params = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0];
+        expect(params).not.toHaveProperty("exclude_project_key");
+        expect(params).toMatchObject({ left_value: "gpt-4o", right_value: "gpt-4o" });
+        expect(warn).toHaveBeenCalledWith(
+          "usage.fetchSummary refetch failed:",
+          expect.objectContaining({ message: "summary retry failed" }),
+        );
+      }
+      expect(usage.pairwiseSelection).toEqual({
+        left: {
+          dimension: "model",
+          value:
+            outcome === "empty options"
+              ? ""
+              : recoveredScope
+                ? "gpt-4o"
+                : "claude-sonnet-4-20250514",
+        },
+        right: { dimension: "model", value: outcome === "empty options" ? "" : "gpt-4o" },
+      });
+      expect(usage.loading.pairwise).toBe(false);
+      expect(usage.pairwiseComparison).toEqual(changed ? null : comparison);
+      expect(usage.errors.pairwise).toBe(changed ? "pairwise failed" : null);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

@@ -987,13 +987,12 @@ class UsageStore {
         ? { ...params, from: this.from, to: this.to }
         : undefined;
     if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
-    let restoredPairwisePromise: Promise<FetchResult> | undefined;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
       contextParams,
       onTimeRangeRestored: () => {
-        restoredPairwisePromise = this.fetchPairwise(this.baseParams());
+        void this.fetchPairwise(this.baseParams());
       },
     });
     const pairwisePromise = deferPairwise ? undefined : this.fetchPairwise(params);
@@ -1005,6 +1004,12 @@ class UsageStore {
       return "aborted";
     }
     if (!loadedSummary) {
+      const recoveredParams = this.baseParams();
+      const currentPairwisePromise =
+        this.versions.pairwise !== pairwiseVersion &&
+        sameUsageParams(this.pairwiseParams, recoveredParams)
+          ? this.pairwiseRequest
+          : this.fetchPairwise(recoveredParams);
       if (
         selectedRangeAtStart !== null &&
         this.selectedTimeRange === null &&
@@ -1014,18 +1019,12 @@ class UsageStore {
         this.topSessions = null;
         this.errors.topSessions = null;
         await Promise.all([
-          restoredPairwisePromise,
+          currentPairwisePromise,
           this.fetchTopSessions(this.baseParams()),
           this.fetchZoom(this.baseParams()),
         ]);
       } else {
-        await Promise.all([
-          topSessionsPromise,
-          zoomPromise,
-          deferPairwise && this.versions.pairwise === pairwiseVersion
-            ? this.fetchPairwise(this.baseParams())
-            : this.pairwiseRequest,
-        ]);
+        await Promise.all([topSessionsPromise, zoomPromise, currentPairwisePromise]);
       }
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       return "error";
