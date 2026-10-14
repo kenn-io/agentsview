@@ -22,8 +22,12 @@ jobs:
         include:
           - name: Other packages
             package: ./...
-          - name: CLI
+          - name: CLI A-P
             package: ./cmd/agentsview
+            run: '^Test[A-P]'
+          - name: CLI remaining
+            package: ./cmd/agentsview
+            skip: '^Test[A-P]'
           - name: Capture, Database, Parser
             package: ./internal/capture ./internal/db ./internal/parser
           - name: DuckDB
