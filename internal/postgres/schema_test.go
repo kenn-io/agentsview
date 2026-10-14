@@ -1193,10 +1193,12 @@ func TestServeSchemaErrorAsksForAGrantWhenReadIsDenied(t *testing.T) {
 	denied := fmt.Errorf("session_plan_usage table missing required columns: %w",
 		&pgconn.PgError{Code: "42501", Message: "permission denied for table session_plan_usage"})
 
-	err := serveSchemaError(denied)
+	err := serveSchemaError(denied, "agentsview")
 
 	require.ErrorIs(t, err, denied)
-	assert.Contains(t, err.Error(), "Grant the serve role SELECT")
+	assert.Contains(t, err.Error(), `GRANT USAGE ON SCHEMA "agentsview" TO <serve role>;`,
+		"a denial on the schema itself needs USAGE, not only SELECT")
+	assert.Contains(t, err.Error(), `GRANT SELECT ON ALL TABLES IN SCHEMA "agentsview" TO <serve role>;`)
 	assert.NotContains(t, err.Error(), "Drop and recreate")
 }
 
@@ -1204,5 +1206,5 @@ func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
 	missing := fmt.Errorf("session_plan_usage table missing required columns: %w",
 		&pgconn.PgError{Code: "42703", Message: `column "credits" does not exist`})
 
-	assert.Contains(t, serveSchemaError(missing).Error(), "Drop and recreate the PG schema")
+	assert.Contains(t, serveSchemaError(missing, "agentsview").Error(), "Drop and recreate the PG schema")
 }
