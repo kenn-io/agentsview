@@ -1,8 +1,11 @@
 # Muse Code fixture
 
 `sessions/` is a synthetic Muse Code data tree. The content was written for
-these tests; the record shapes follow the public evidence listed under Muse Code
-in `docs/internal/session-format-sources.md`.
+these tests. Each record's fields and order follow real Muse logs: the public
+0.2.1 capture and a Muse 1.4.7 install, listed under Muse Code in
+`docs/internal/session-format-sources.md`. Usage records carry `finish_reason`
+only for tool calls, and every usage record follows its response's
+`model_response_created`.
 
 The parent log under `2026/09/10/` covers:
 
@@ -11,8 +14,7 @@ The parent log under `2026/09/10/` covers:
 - a task `started` event that is not a user turn
 - a response whose usage is logged before its tool calls
 - a response whose usage is logged after its text
-- a `model_completed` record with no open response; this shape is synthetic and
-  has not appeared in a real Muse log
+- a task `completed` event after the final reply
 - a record mirrored from the subagent's stream
 - automatic and user-chosen session names
 - a partial last line, as a session still being written leaves it

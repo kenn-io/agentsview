@@ -107,18 +107,9 @@ func TestParseMuseSessionFoldsRunEvents(t *testing.T) {
 		assert.NotContains(t, message.Content, "mirrored child output")
 	}
 
-	// The usage record with no open response stays priced as an event.
-	// That record is synthetic; no real Muse log has shown one.
-	require.Len(t, result.UsageEvents, 1)
-	event := result.UsageEvents[0]
-	assert.Equal(t, session.ID, event.SessionID)
-	assert.Nil(t, event.MessageOrdinal)
-	assert.Equal(t, "muse-spark-1.3", event.Model)
-	assert.Equal(t, 300, event.InputTokens)
-	assert.Equal(t, 10, event.OutputTokens)
-	assert.Equal(t, 0, event.CacheReadInputTokens)
-	assert.Equal(t, "session:muse:"+museFixtureParentID+"|sequence:19", event.DedupKey)
-	assert.Equal(t, result.UsageEvents, session.UsageEvents)
+	// Every usage record follows its response's model_response_created,
+	// as in real logs, so all usage lands on a reply.
+	assert.Empty(t, result.UsageEvents)
 }
 
 func TestParseMuseSubagentLinksParentAndInheritsWorkspace(t *testing.T) {

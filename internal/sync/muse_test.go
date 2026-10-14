@@ -77,17 +77,15 @@ func TestMuseSyncStoresSessionsSubagentsAndUsage(t *testing.T) {
 
 	events, err := database.GetUsageEvents(t.Context(), parentID)
 	require.NoError(t, err)
-	require.Len(t, events, 1)
-	assert.Equal(t, 300, events[0].InputTokens)
+	assert.Empty(t, events)
 
-	// Two replies and the standalone event, with cached reads billed once
-	// at the cached rate:
+	// Two replies, with cached reads billed once at the cached rate:
 	// (200*1.25 + 1000*0.15 + 80*4.25) + (200*1.25 + 1300*0.15 + 40*4.25)
-	// + (300*1.25 + 10*4.25) = 1772.5 microdollars.
+	// = 1355 microdollars.
 	usage, err := database.GetSessionUsage(t.Context(), parentID, false)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	assert.Equal(t, money.MustParseDollars("0.0017725"), usage.Cost)
+	assert.Equal(t, money.MustParseDollars("0.001355"), usage.Cost)
 
 	// Later records extend an existing reply and start a new turn. An
 	// ordinary sync must rewrite the stored reply, not only append.
@@ -115,7 +113,7 @@ func TestMuseSyncStoresSessionsSubagentsAndUsage(t *testing.T) {
 	assert.Equal(t, "Now add a regression test", messages[3].Content)
 	events, err = database.GetUsageEvents(t.Context(), parentID)
 	require.NoError(t, err)
-	assert.Len(t, events, 1)
+	assert.Empty(t, events)
 }
 
 const museFixturePartialTail = `{"schema_version":1,"id":"rec-partial","stream":{"kind":"session"`
