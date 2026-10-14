@@ -162,7 +162,7 @@ describe("describePlanUsage", () => {
     );
     expect(display?.headline).toBe(`Plan usage, as of ${formatTimestamp(AS_OF)}`);
     expect(display?.staleNote).toBe(
-      `Later: AgentsView could not check plan usage (${formatTimestamp(OUTCOME_AT)}). ` +
+      `A later check found: AgentsView could not check plan usage (${formatTimestamp(OUTCOME_AT)}). ` +
         "These figures may be out of date.",
     );
     expect(display?.hasFigures).toBe(true);
@@ -174,10 +174,9 @@ describe("describePlanUsage", () => {
       plan({ ...figures, final: true, outcome_kind: "left_out", outcome_at: OUTCOME_AT }),
     );
     expect(display?.staleNote).toBe(
-      `Later: OpenAI's usage report left this chat out (${formatTimestamp(OUTCOME_AT)}). ` +
+      `A later check found: OpenAI's usage report left this chat out (${formatTimestamp(OUTCOME_AT)}). ` +
         "These figures may be out of date.",
     );
-    expect(display?.staleNote).not.toContain("not reported yet");
   });
 
   it("replaces the figures with the usage root for a counted-under thread", () => {

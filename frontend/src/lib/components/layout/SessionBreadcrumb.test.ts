@@ -1716,6 +1716,38 @@ describe("SessionBreadcrumb", () => {
       expect(menu).toContain(missed);
     });
 
+    it("warns on the closed trigger when a later check makes the figures stale", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          data_as_of: "2026-03-02T09:15:00Z",
+          data_status: "available",
+          weekly_percent: 4.125,
+          credits: "0E-10",
+          final: false,
+          groups: [],
+          outcome_kind: "could_not_check",
+          outcome_at: "2026-03-03T10:30:00Z",
+        },
+      });
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")).not.toBeNull();
+      });
+      const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
+      const headline = `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`;
+      const stale =
+        `A later check found: AgentsView could not check plan usage (${formatTimestamp("2026-03-03T10:30:00Z")}). ` +
+        "These figures may be out of date.";
+      expect(trigger.title.split("\n")).toEqual([headline, stale]);
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(`, ${headline}, ${stale}`);
+      expect(trigger.querySelector("svg"), "the warning icon shows").not.toBeNull();
+    });
+
     it("links a counted-under thread to its usage root by title", async () => {
       sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
         ...makeUsage({ agent: "codex-cloud" }),
