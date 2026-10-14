@@ -7444,68 +7444,109 @@ func TestSyncPathsCodexIndexEventRefreshesStoredLegacyPageDuplicate(t *testing.T
 
 // The per-root lookup keeps one path per root and prefers the dated layout,
 // so a tracked flat legacy page and a dated duplicate under the same root must
-// still resolve to the tracked copy on an index rename.
+// still resolve to the tracked copy on an index rename. A mirrored session
+// records host:/remote paths, which the stored-path resolver maps back to the
+// local copy before the tracked file is checked.
 func TestSyncPathsCodexIndexEventRefreshesTrackedLegacyPageInSameRoot(t *testing.T) {
-	root := t.TempDir()
-	codexDir := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(codexDir, 0o755))
-	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
-
 	const (
 		thread  = "f7a8b9ca-7890-1234-ef01-456789012352"
 		rollout = "f7a8b9ca-7890-1234-ef01-456789012353"
 	)
-	pageID := "codex:" + rollout
-	pageName := "rollout-2026-05-04T14-31-58-" + thread + "_" + rollout + ".jsonl"
-	page := func(messages ...string) string {
-		lines := []string{testjsonl.CodexSessionMetaWithFieldsJSON(rollout, "/home/user/code/api", "user", tsEarly,
-			map[string]any{
-				"session_id":   thread,
-				"history_mode": "paginated",
-				"history_base": map[string]any{"thread_id": thread, "end_ordinal_exclusive": 2},
-			})}
-		return testjsonl.JoinJSONL(append(lines, messages...)...)
+	for _, tc := range []struct {
+		name     string
+		mirrored bool
+	}{
+		{name: "local"},
+		{name: "mirrored", mirrored: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			codexDir := filepath.Join(root, "sessions")
+			dayDir := filepath.Join(codexDir, "2026", "05", "04")
+			require.NoError(t, os.MkdirAll(dayDir, 0o755))
+			cfg := sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexDir}},
+				Machine:   "local",
+			}
+			stored := func(path string) string { return path }
+			if tc.mirrored {
+				const logicalRoot = "host:/codex"
+				stored = func(path string) string {
+					rel, err := filepath.Rel(root, path)
+					if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+						return path
+					}
+					return logicalRoot + "/" + filepath.ToSlash(rel)
+				}
+				cfg.Machine, cfg.IDPrefix = "host", "host~"
+				cfg.PathRewriter = stored
+				cfg.StoredPathResolver = func(path string) (string, bool) {
+					rel, ok := strings.CutPrefix(path, logicalRoot+"/")
+					if !ok || rel == "" {
+						return "", false
+					}
+					return filepath.Join(root, filepath.FromSlash(rel)), true
+				}
+			}
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+
+			pageID := cfg.IDPrefix + "codex:" + rollout
+			pageName := "rollout-2026-05-04T14-31-58-" + thread + "_" + rollout + ".jsonl"
+			write := func(path string, messages ...string) {
+				t.Helper()
+				lines := []string{testjsonl.CodexSessionMetaWithFieldsJSON(rollout, "/home/user/code/api", "user", tsEarly,
+					map[string]any{
+						"session_id":   thread,
+						"history_mode": "paginated",
+						"history_base": map[string]any{"thread_id": thread, "end_ordinal_exclusive": 2},
+					})}
+				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(append(lines, messages...)...)), 0o600))
+			}
+			indexPath := filepath.Join(root, "session_index.jsonl")
+			writeIndex := func(title string, mtime time.Time) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+					`{"id":"%s","thread_name":"%s","updated_at":"2026-05-04T15:00:00Z"}`+"\n", thread, title,
+				), 0o644))
+				require.NoError(t, os.Chtimes(indexPath, mtime, mtime))
+				parser.EvictCodexSessionIndex(indexPath)
+			}
+
+			// Only the flat copy exists at first sync, so the DB tracks it.
+			flatPath := filepath.Join(codexDir, pageName)
+			write(flatPath,
+				testjsonl.CodexMsgJSON("user", "Tracked copy", tsEarlyS1),
+				testjsonl.CodexMsgJSON("assistant", "Tracked reply", tsEarlyS5),
+			)
+			initialTime := time.Now().Add(-2 * time.Hour)
+			require.NoError(t, os.Chtimes(flatPath, initialTime, initialTime))
+			writeIndex("Original title", initialTime)
+
+			engine.SyncAll(t.Context(), nil)
+			require.Equal(t, stored(flatPath), database.GetSessionFilePath(t.Context(), pageID),
+				"DB must track the flat copy before the rename")
+			assertSessionMessageCount(t, database, pageID, 2)
+
+			// A shorter dated duplicate appears in the same root, and the index
+			// records a rename.
+			datedPath := filepath.Join(dayDir, pageName)
+			write(datedPath, testjsonl.CodexMsgJSON("user", "Stale dated copy", tsEarlyS1))
+			require.NoError(t, os.Chtimes(datedPath, initialTime, initialTime))
+			writeIndex("Renamed title", time.Now().Add(-30*time.Minute))
+
+			engine.SyncPaths([]string{indexPath})
+
+			assert.Equal(t, stored(flatPath), database.GetSessionFilePath(t.Context(), pageID),
+				"index rename must refresh the tracked flat copy, not the dated duplicate")
+			name, found, err := database.GetSessionName(t.Context(), pageID)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, "Renamed title", name)
+			assertSessionMessageCount(t, database, pageID, 2)
+		})
 	}
-
-	// Only the flat copy exists at first sync, so the DB tracks it.
-	flatPath := env.writeSession(t, codexDir, pageName, page(
-		testjsonl.CodexMsgJSON("user", "Tracked copy", tsEarlyS1),
-		testjsonl.CodexMsgJSON("assistant", "Tracked reply", tsEarlyS5),
-	))
-	indexPath := filepath.Join(root, "session_index.jsonl")
-	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
-		`{"id":"%s","thread_name":"Original title","updated_at":"2026-05-04T15:00:00Z"}`+"\n",
-		thread,
-	), 0o644))
-	initialTime := time.Now().Add(-2 * time.Hour)
-	require.NoError(t, os.Chtimes(flatPath, initialTime, initialTime), "chtimes flat")
-	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
-
-	env.engine.SyncAll(t.Context(), nil)
-	require.Equal(t, flatPath, env.db.GetSessionFilePath(t.Context(), pageID),
-		"DB must track the flat copy before the rename")
-	assertSessionMessageCount(t, env.db, pageID, 2)
-
-	// A shorter dated duplicate appears in the same root, and the index records a rename.
-	datedPath := env.writeCodexSession(t, filepath.Join("2026", "05", "04"), pageName,
-		page(testjsonl.CodexMsgJSON("user", "Stale dated copy", tsEarlyS1)))
-	require.NoError(t, os.Chtimes(datedPath, initialTime, initialTime), "chtimes dated")
-	newIndexTime := time.Now().Add(-30 * time.Minute)
-	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
-		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-05-04T16:00:00Z"}`+"\n",
-		thread,
-	), 0o644))
-	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index rename")
-
-	env.engine.SyncPaths([]string{indexPath})
-
-	assert.Equal(t, flatPath, env.db.GetSessionFilePath(t.Context(), pageID),
-		"index rename must refresh the tracked flat copy, not the dated duplicate")
-	name, found, err := env.db.GetSessionName(t.Context(), pageID)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "Renamed title", name)
-	assertSessionMessageCount(t, env.db, pageID, 2)
 }
 
 func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
