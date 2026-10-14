@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestCodexRevertPageSessionIDs(t *testing.T) {
@@ -422,6 +423,63 @@ func TestCopyExcludedCodexThreadFromArchiveOnly(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+// Legacy revert pages are stored as codex:<rollout> and found through their
+// continuation links; the recorded filename must name the thread and the
+// page's own id, and deleted rows are skipped.
+func TestCodexLegacyRevertPageSources(t *testing.T) {
+	const (
+		thread  = "11111111-1111-4111-8111-111111111111"
+		page1   = "22222222-2222-4222-8222-222222222222"
+		page2   = "33333333-3333-4333-8333-333333333333"
+		other   = "44444444-4444-4444-8444-444444444444"
+		deleted = "55555555-5555-4555-8555-555555555555"
+		current = "66666666-6666-4666-8666-666666666666"
+	)
+	d := testDB(t)
+	ctx := t.Context()
+	for _, prefix := range []string{"", "devbox~"} {
+		t.Run("prefix="+prefix, func(t *testing.T) {
+			threadID := prefix + "codex:" + thread
+			dir := "/codex/sessions/2026/09/05/"
+			if prefix != "" {
+				dir = "devbox:" + dir
+			}
+			add := func(id, parent, file string) {
+				t.Helper()
+				insertSession(t, d, prefix+"codex:"+id, "project", func(s *Session) {
+					s.Agent = "codex"
+					s.FilePath = &file
+					if parent != "" {
+						s.ParentSessionID = &parent
+						s.RelationshipType = string(parser.RelContinuation)
+					}
+				})
+			}
+			add(thread, "", dir+"rollout-2026-09-05T10-00-00-"+thread+".jsonl")
+			add(page1, threadID, dir+"rollout-2026-09-05T11-00-00-"+thread+"_"+page1+".jsonl")
+			add(page2, prefix+"codex:"+page1, dir+"rollout-2026-09-05T12-00-00-"+thread+"_"+page2+".jsonl")
+			// A continuation whose file is not a page of this thread.
+			add(other, threadID, dir+"rollout-2026-09-05T13-00-00-"+other+".jsonl")
+			add(deleted, threadID, dir+"rollout-2026-09-05T14-00-00-"+thread+"_"+deleted+".jsonl")
+			require.NoError(t, d.SoftDeleteSession(ctx, prefix+"codex:"+deleted))
+			// A current-format page is listed by CodexRevertPageSessionIDs instead.
+			add(thread+"_"+current, threadID, dir+"rollout-2026-09-05T15-00-00-"+thread+"_"+current+".jsonl")
+
+			pages, err := d.CodexLegacyRevertPageSources(ctx, threadID, thread)
+			require.NoError(t, err)
+			var ids []string
+			for _, page := range pages {
+				ids = append(ids, page.ID)
+			}
+			assert.Equal(t, []string{prefix + "codex:" + page1, prefix + "codex:" + page2}, ids)
+
+			pages, err = d.CodexLegacyRevertPageSources(ctx, threadID, other)
+			require.NoError(t, err)
+			assert.Empty(t, pages, "the thread id must match the session id")
 		})
 	}
 }

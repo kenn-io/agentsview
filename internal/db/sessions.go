@@ -2803,6 +2803,64 @@ func (db *DB) CodexRevertPageSessionIDs(
 	return ids, rows.Err()
 }
 
+// CodexPageSource is a stored Codex revert page and its recorded source file.
+type CodexPageSource struct {
+	ID       string
+	FilePath string
+}
+
+// CodexLegacyRevertPageSources returns stored, non-deleted legacy revert pages
+// of a Codex thread. Older Codex builds wrote a page's own rollout id as its
+// session id, so the page is codex:<rollout>, outside the thread's id range
+// that CodexRevertPageSessionIDs reads. The page is reached through its
+// continuation links from the thread, and its recorded filename
+// (rollout-<ts>-<thread>_<rollout>.jsonl) must name the thread and the page's
+// own id. threadSessionID must end with "codex:" + threadID.
+func (db *DB) CodexLegacyRevertPageSources(
+	ctx context.Context, threadSessionID, threadID string,
+) ([]CodexPageSource, error) {
+	prefix, ok := strings.CutSuffix(threadSessionID, threadID)
+	if threadID == "" || !ok || !strings.HasSuffix(prefix, "codex:") {
+		return nil, nil
+	}
+	rows, err := db.getReader().QueryContext(ctx,
+		`WITH RECURSIVE pages(id, file_path) AS (
+			SELECT id, COALESCE(file_path, '') FROM sessions
+			 WHERE parent_session_id = ?1
+			   AND relationship_type = ?2 AND deleted_at IS NULL
+			UNION
+			SELECT s.id, COALESCE(s.file_path, '') FROM sessions s
+			 JOIN pages p ON s.parent_session_id = p.id
+			 WHERE s.relationship_type = ?2 AND s.deleted_at IS NULL
+		 )
+		 SELECT id, file_path FROM pages ORDER BY id`,
+		threadSessionID, string(parser.RelContinuation),
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding legacy codex revert pages of %q: %w",
+			threadSessionID, err,
+		)
+	}
+	defer rows.Close()
+	var pages []CodexPageSource
+	for rows.Next() {
+		var page CodexPageSource
+		if err := rows.Scan(&page.ID, &page.FilePath); err != nil {
+			return nil, fmt.Errorf("scanning legacy codex revert page: %w", err)
+		}
+		raw, ok := strings.CutPrefix(page.ID, prefix)
+		if !ok || page.FilePath == "" {
+			continue
+		}
+		key := parser.CodexSessionUUIDFromFilename(pathpkg.Base(filepath.ToSlash(page.FilePath)))
+		if key == threadID+"_"+raw {
+			pages = append(pages, page)
+		}
+	}
+	return pages, rows.Err()
+}
+
 // GetSessionDataVersion returns the data_version for a session.
 // Returns 0 when the session does not exist.
 func (db *DB) GetSessionDataVersion(ctx context.Context, id string) int {

@@ -16901,6 +16901,43 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 				out = append(out, chosen)
 			}
 		}
+		out = append(out, e.codexIndexRenamedLegacyPages(ctx, sessionRoots, uuid, title)...)
+	}
+	return out
+}
+
+// codexIndexRenamedLegacyPages lists the stored legacy revert pages of one
+// index entry whose stored title differs from it. Older Codex builds stored
+// such a page as codex:<rollout>, so codexIndexRenamedRawIDs does not see it
+// and its rollout id does not locate its file, which is named for the thread.
+// The page is refreshed through its recorded path when that path lies under
+// one of the index's session roots.
+func (e *Engine) codexIndexRenamedLegacyPages(ctx context.Context,
+	sessionRoots []string, uuid, title string,
+) []parser.DiscoveredFile {
+	threadSessionID := e.idPrefix + "codex:" + uuid
+	pages, err := e.db.CodexLegacyRevertPageSources(ctx, threadSessionID, uuid)
+	if err != nil {
+		log.Printf("codex index rename: listing legacy revert pages of %s: %v", threadSessionID, err)
+		return nil
+	}
+	var out []parser.DiscoveredFile
+	for _, page := range pages {
+		if !e.codexStoredNameDiffersBySessionID(page.ID, title, false) {
+			continue
+		}
+		if !slices.ContainsFunc(sessionRoots, func(root string) bool {
+			return pathWithinRoot(page.FilePath, root)
+		}) {
+			continue
+		}
+		out = append(out, parser.DiscoveredFile{
+			Path:            page.FilePath,
+			Agent:           parser.AgentCodex,
+			Machine:         e.machineForPath(parser.AgentCodex, page.FilePath),
+			ProviderProcess: true,
+			ProviderSource:  e.codexPinnedProviderSource(parser.AgentCodex, page.FilePath),
+		})
 	}
 	return out
 }

@@ -763,3 +763,103 @@ func TestCodexRevertPageSpawnedSubagentLinksToThePage(t *testing.T) {
 		"the spawn edge in the page outranks the thread id in the child's meta")
 	assert.Equal(t, "subagent", child.RelationshipType)
 }
+
+// Older Codex builds stored a revert page as codex:<rollout>, outside the
+// thread's id range, with session_meta.session_id naming the thread. A rename
+// in session_index.jsonl must still reach those pages, including one whose
+// history_base names an earlier legacy page, and leave other threads alone.
+func TestSyncPathsCodexIndexEventRefreshesLegacyRevertPageName(t *testing.T) {
+	const (
+		thread      = "11111111-1111-4111-8111-111111111111"
+		page1       = "22222222-2222-4222-8222-222222222222"
+		page2       = "33333333-3333-4333-8333-333333333333"
+		otherThread = "44444444-4444-4444-8444-444444444444"
+		otherPage   = "55555555-5555-4555-8555-555555555555"
+	)
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	head := func(id, ts string) string {
+		return testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work/project", "codex_cli_rs", ts,
+				map[string]any{"session_id": id, "history_mode": "paginated"}),
+			codexUserEntryJSON(ts, "thread prompt"),
+		)
+	}
+	legacyPage := func(id, threadID, base, ts string) string {
+		return testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work/project", "codex_cli_rs", ts,
+				map[string]any{
+					"session_id":   threadID,
+					"history_mode": "paginated",
+					"history_base": map[string]any{"thread_id": base, "end_ordinal_exclusive": 2},
+				}),
+			codexUserEntryJSON(ts, "page prompt"),
+		)
+	}
+	headPath := writeCodexRollout(t, root, "05", "rollout-2026-09-05T10-00-00-"+thread+".jsonl",
+		head(thread, "2026-09-05T10:00:00Z"))
+	page1Path := writeCodexRollout(t, root, "05", "rollout-2026-09-05T11-00-00-"+thread+"_"+page1+".jsonl",
+		legacyPage(page1, thread, thread, "2026-09-05T11:00:00Z"))
+	page2Path := writeCodexRollout(t, root, "05", "rollout-2026-09-05T12-00-00-"+thread+"_"+page2+".jsonl",
+		legacyPage(page2, thread, page1, "2026-09-05T12:00:00Z"))
+	writeCodexRollout(t, root, "05", "rollout-2026-09-05T13-00-00-"+otherThread+".jsonl",
+		head(otherThread, "2026-09-05T13:00:00Z"))
+	writeCodexRollout(t, root, "05", "rollout-2026-09-05T14-00-00-"+otherThread+"_"+otherPage+".jsonl",
+		legacyPage(otherPage, otherThread, otherThread, "2026-09-05T14:00:00Z"))
+	indexPath := filepath.Join(home, parser.CodexSessionIndexFilename)
+	writeIndex := func(title string, mtime time.Time) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+			`{"id":"%s","thread_name":"%s"}`+"\n"+`{"id":"%s","thread_name":"Other title"}`+"\n",
+			thread, title, otherThread), 0o644))
+		require.NoError(t, os.Chtimes(indexPath, mtime, mtime))
+		parser.EvictCodexSessionIndex(indexPath)
+	}
+	writeIndex("Original title", time.Now().Add(-2*time.Hour))
+
+	database := openTestDB(t)
+	engine := newCodexRevertEngine(t, database, root)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	sessionName := func(id string) string {
+		t.Helper()
+		name, found, err := database.GetSessionName(t.Context(), id)
+		require.NoError(t, err)
+		require.True(t, found, "session %s", id)
+		return name
+	}
+	parent := func(id string) string {
+		t.Helper()
+		sess, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		require.NotNil(t, sess.ParentSessionID)
+		return *sess.ParentSessionID
+	}
+	require.Equal(t, "codex:"+thread, parent("codex:"+page1))
+	require.Equal(t, "codex:"+page1, parent("codex:"+page2), "a chained legacy page continues the page its base names")
+	threadIDs := []string{"codex:" + thread, "codex:" + page1, "codex:" + page2}
+	otherIDs := []string{"codex:" + otherThread, "codex:" + otherPage}
+	for _, id := range threadIDs {
+		assert.Equal(t, "Original title", sessionName(id))
+	}
+	for _, id := range otherIDs {
+		assert.Equal(t, "Other title", sessionName(id))
+	}
+
+	writeIndex("Renamed title", time.Now().Add(-30*time.Minute))
+	var classified []string
+	for _, f := range engine.classifyCodexIndexPath(t.Context(), indexPath) {
+		classified = append(classified, f.Path)
+	}
+	assert.ElementsMatch(t, []string{headPath, page1Path, page2Path}, classified,
+		"a rename reaches the thread's legacy pages and nothing else")
+
+	engine.SyncPaths([]string{indexPath})
+	for _, id := range threadIDs {
+		assert.Equal(t, "Renamed title", sessionName(id))
+	}
+	for _, id := range otherIDs {
+		assert.Equal(t, "Other title", sessionName(id))
+	}
+}

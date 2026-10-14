@@ -895,6 +895,15 @@ func (hs HTTPSync) prepareMirror(
 			if err != nil {
 				return nil, err
 			}
+			// Legacy pages keep their rollout id (codex:<rollout>) and carry
+			// the thread's title too.
+			legacyPages, err := hs.DB.CodexLegacyRevertPageSources(ctx, threadID, uuid)
+			if err != nil {
+				return nil, err
+			}
+			for _, page := range legacyPages {
+				pageIDs = append(pageIDs, page.ID)
+			}
 			for _, id := range append([]string{threadID}, pageIDs...) {
 				storedPath := hs.DB.GetSessionFilePath(ctx, id)
 				remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
