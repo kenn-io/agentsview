@@ -454,6 +454,14 @@ func isPerSessionDBVirtualSource(agent parser.AgentType, path string) bool {
 	); ok {
 		return agent == parser.AgentWindsurf
 	}
+	// Hermes and Augure Desktop share the "state.db#<sessionID>" virtual
+	// path, but that literal filename is not unique to them, so this case
+	// stays keyed to their agent types rather than joining the base list.
+	if _, _, ok := parser.ParseVirtualSourcePathForBase(
+		path, "state.db",
+	); ok {
+		return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
+	}
 	for _, base := range perSessionDBVirtualSourceBases {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, base); ok {
 			return true

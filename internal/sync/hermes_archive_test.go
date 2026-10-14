@@ -1773,6 +1773,115 @@ func TestProviderFingerprintCacheRequiresExistingRoot(t *testing.T) {
 	}
 }
 
+// TestParseDiffHermesLimitScopesPerSession is the per-session-keying acid
+// test for Hermes/Augure Desktop's "state.db#<sessionID>" virtual path. A
+// shared state.db holds two sessions; --limit 1 samples one and cuts the
+// other. Before isPerSessionDBVirtualSource recognized "state.db", the cut
+// sibling's virtual path collapsed to the bare state.db path and the
+// --limit sample (or a parse failure) would fan out across both sessions.
+func TestParseDiffHermesLimitScopesPerSession(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	execHermesState(t, stateDB, `INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+	execHermesState(t, stateDB, `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	diffEngine := NewDiffEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(diffEngine.Close)
+	report, err := diffEngine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentHermes},
+		Limit:  1,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, ParseDiffTotals{
+		Examined: 1, Identical: 1, Skipped: 1,
+	}, report.Totals, "one session sampled, one cut")
+	assert.Zero(t, report.Totals.Changed,
+		"the untouched sibling must not be reported as changed")
+
+	var skipped []SessionDiff
+	for _, s := range report.Sessions {
+		if s.Class == DiffSkipped {
+			skipped = append(skipped, s)
+		}
+	}
+	require.Len(t, skipped, 1, "exactly one skipped session listed")
+	assert.Contains(t, skipped[0].Reason, "limit",
+		"cut sibling must read as not-sampled, not as 'database-backed agent'")
+}
+
+// TestParseDiffHermesPerSessionParseErrorStaysScoped proves a malformed
+// session inside a shared state.db surfaces as DiffParseError attributed to
+// its own "state.db#<sessionID>" virtual path, leaving an unrelated sibling
+// session Identical. Before isPerSessionDBVirtualSource recognized
+// "state.db", both sessions' virtual paths collapsed to the bare state.db
+// path and the failure would have attributed to the sibling too.
+func TestParseDiffHermesPerSessionParseErrorStaysScoped(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	// Never synced: a session row whose non-numeric started_at is listed
+	// for fan-out but fails the per-session parse afterward.
+	execHermesState(t, stateDB, `INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('broken', 'cli', 'model', 'not-a-number', 1778767900, 1)`)
+
+	diffEngine := NewDiffEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(diffEngine.Close)
+	report, err := diffEngine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentHermes},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, ParseDiffTotals{
+		Examined: 1, Identical: 1, ParseErrors: 1,
+	}, report.Totals,
+		"the good session compares clean; the malformed session is a parse error")
+
+	var errEntry *SessionDiff
+	for i := range report.Sessions {
+		if report.Sessions[i].Class == DiffParseError {
+			errEntry = &report.Sessions[i]
+		}
+	}
+	require.NotNil(t, errEntry, "parse error entry listed")
+	assert.Contains(t, errEntry.FilePath, "state.db#broken",
+		"error attributed to the per-session virtual path")
+
+	var childEntry *SessionDiff
+	for i := range report.Sessions {
+		if report.Sessions[i].SessionID == "hermes:child" {
+			childEntry = &report.Sessions[i]
+		}
+	}
+	if childEntry != nil {
+		assert.Equal(t, DiffIdentical, childEntry.Class,
+			"the sibling session must not be reported as failed")
+	}
+}
+
 func writeHermesSessionsFile(t *testing.T, root, name, content string) string {
 	t.Helper()
 	path := filepath.Join(root, "sessions", name)
