@@ -1174,7 +1174,11 @@ func (s hermesSourceSet) FindSource(
 			continue
 		}
 		for _, root := range roots {
-			if source, ok := s.sourceForPath(root, path); ok {
+			source, ok := s.sourceRef(root, path)
+			if !ok {
+				source, ok = s.sourceForPath(root, path)
+			}
+			if ok {
 				return source, true, nil
 			}
 		}

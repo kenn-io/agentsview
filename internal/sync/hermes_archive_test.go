@@ -1621,6 +1621,27 @@ func TestHermesSingleSessionSyncAfterStateDBRemoval(t *testing.T) {
 	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
 }
 
+func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "standalone")
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	writeHermesSessionsFile(t, root, "standalone.jsonl",
+		`{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}`+"\n")
+
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:standalone"))
+
+	assert.Equal(t, []string{"edited prompt"}, messageContents(t, database, "hermes:standalone"))
+	assert.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"),
+		"refreshing one transcript must not reparse the whole archive")
+}
+
 func writeHermesSessionsFile(t *testing.T, root, name, content string) string {
 	t.Helper()
 	path := filepath.Join(root, "sessions", name)
