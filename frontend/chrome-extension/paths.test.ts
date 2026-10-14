@@ -10,7 +10,7 @@ const fetchShapes = vi.fn(async (url: string) => {
 });
 vi.stubGlobal("chrome", { runtime: { getURL } });
 vi.stubGlobal("fetch", fetchShapes);
-let allowedPath: (path: string) => Promise<boolean>;
+let allowedPath: (platform: string, path: string) => Promise<boolean>;
 beforeEach(async () => {
   vi.resetModules();
   ({ allowedPath } = await import("./paths.js"));
