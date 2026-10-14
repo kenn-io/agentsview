@@ -190,7 +190,7 @@ func usageExitCode(out *sessionUsageOutput) int {
 	if out == nil {
 		return tokenUseExitNotFound
 	}
-	if out.HasTokenData || out.HasCost || planFiguresShown(out.Plan) {
+	if out.HasTokenData || out.HasCost || hasPlanFigures(out.Plan) {
 		return tokenUseExitOK
 	}
 	return tokenUseExitNoTokenData

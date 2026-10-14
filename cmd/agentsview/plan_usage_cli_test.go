@@ -130,7 +130,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 			want: []string{
 				"Plan usage:    2.25% of weekly limit, 12.5% of 5-hour limit, 0 credits, as of 2026-10-02 04:30 EST",
-				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, their tokens are not in the totals; " +
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, so some of their tokens may be missing from the totals; " +
 					"plan usage counts the ones that ran before 2026-10-02 04:30 EST",
 			},
 		},
@@ -141,7 +141,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 				Coverage:     &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 2},
 			},
 			want: []string{
-				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, their tokens are not in the totals",
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, so some of their tokens may be missing from the totals",
 			},
 		},
 		{
@@ -163,7 +163,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			out: sessionUsageOutput{
 				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:b", Agent: "codex-cloud"},
 			},
-			want: []string{"Plan usage:    not checked yet; a sync with Codex cloud import on checks it"},
+			want: []string{"Plan usage:    not checked yet; a sync checks it when Codex cloud import is on"},
 		},
 		{
 			name: "newer failure after figures",
@@ -179,7 +179,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 				"Plan usage:    2.25% of weekly limit, as of 2026-10-02 04:30 EST; " +
 					"later, AgentsView could not check plan usage (2026-10-09 04:30 EST), so these figures may be out of date",
 				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; " +
-					"2 turns not captured, their tokens are not in the totals",
+					"2 turns not captured, so some of their tokens may be missing from the totals",
 			},
 		},
 		{
@@ -206,7 +206,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 				Coverage: &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 1},
 			},
 			want: []string{
-				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 1 turn not captured, its tokens are not in the totals; " +
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 1 turn not captured, so some of its tokens may be missing from the totals; " +
 					"plan usage counts it if it ran before 2026-10-02 04:30 EST",
 			},
 		},
@@ -221,7 +221,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 			want: []string{
 				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; " +
-					"1 turn not captured, its tokens are not in the totals",
+					"1 turn not captured, so some of its tokens may be missing from the totals",
 			},
 		},
 		{

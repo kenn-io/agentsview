@@ -439,7 +439,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 			out.SubagentCount)
 	}
 	switch {
-	case planOnly && planFiguresShown(out.Plan):
+	case planOnly && hasPlanFigures(out.Plan):
 		fmt.Fprintf(w, "%s billed as plan usage\n", label("Cost"))
 	case planOnly:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
@@ -481,7 +481,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 func planUsageLine(agent string, plan *db.PlanUsageView) string {
 	if plan == nil {
 		if agent == string(parser.AgentCodexCloud) {
-			return "not checked yet; a sync with Codex cloud import on checks it"
+			return "not checked yet; a sync checks it when Codex cloud import is on"
 		}
 		return ""
 	}
@@ -566,12 +566,6 @@ func hasPlanFigures(plan *db.PlanUsageView) bool {
 	return plan != nil && (plan.WeeklyPercent != nil || plan.FiveHourPercent != nil || plan.Credits != nil)
 }
 
-// planFiguresShown reports whether planUsageLine prints figures for the
-// session itself; a sub-agent counted under its root shows none.
-func planFiguresShown(plan *db.PlanUsageView) bool {
-	return hasPlanFigures(plan) && plan.OutcomeKind != "counted_under"
-}
-
 // planFigure rounds a plan usage percentage or credit amount to two
 // decimal places. A nonzero amount that rounds to zero prints as "<0.01",
 // so a small share never reads as none.
@@ -611,9 +605,9 @@ func captureCoverageLine(
 	}
 	line += fmt.Sprintf("; %d %s not captured", coverage.UncapturedTurns, turns)
 	if coverage.UncapturedTurns == 1 {
-		line += ", its tokens are not in the totals"
+		line += ", so some of its tokens may be missing from the totals"
 	} else {
-		line += ", their tokens are not in the totals"
+		line += ", so some of their tokens may be missing from the totals"
 	}
 	// A complete report with no later failure counts every turn that ran
 	// before its data time. Whether a missed turn ran before it is not
