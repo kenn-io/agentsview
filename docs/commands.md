@@ -480,12 +480,16 @@ to publish its runtime record. The five-second readiness window measures startup
 inactivity, so continuing startup progress can keep the parent waiting longer.
 It then prints the URL, PID, and log path. Background server output is written
 to `~/.agentsview/serve.log`. `serve status` reports the preferred managed
-process, URL, version, uptime, and read-only mode when available. When the
-[Codex Cloud](/docs/configuration/#codex-cloud) source is configured, it adds
-that source's status: one line per ChatGPT account or Codex home, followed by
-its live tokens and plan usage lines. If the daemon cannot return that status,
-`serve status` prints one line saying why. `serve stop`
-retains its broad lifecycle scope: it gracefully terminates confirmed writable
+process, URL, version, uptime, and read-only mode when available. For a writable
+server, `serve status` also asks for the
+[Codex Cloud](/docs/configuration/#codex-cloud) source's status. When the
+source is configured, it prints a status line for each ChatGPT account or Codex
+home, each followed by its live tokens and plan usage lines when they have
+something to report. When the source is off or its settings are wrong, it
+prints one line for the whole source. If the server cannot return the status,
+`serve status` prints one line saying why, even when the source is not
+configured. Read-only servers, and older servers without this status, add no
+lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates confirmed writable
 SQLite and read-only PostgreSQL or DuckDB server processes for the data
 directory and cleans up their runtime records.
 

@@ -86,11 +86,15 @@ The latest release is
   in usage totals. Set `live_tokens = false` to import without listening in.
   Chats that ran while AgentsView was not listening in show their share of your
   plan's weekly and five-hour limits instead, and token totals say how many
-  sessions were left out for that reason. The endpoints are private and
+  chats were left out for that reason. The endpoints are private and
   undocumented, so a change on OpenAI's side can stop the import until
   AgentsView is updated. Enable the source, or at least live capture, on one
-  machine only. See [Codex Cloud](/docs/configuration/#codex-cloud) for what it
-  sends to OpenAI, what listening in does to a chat, and its limits.
+  machine only: every machine gives a chat the same session ID, so a second
+  machine listens in on the same chats and its copies can conflict when synced
+  to PostgreSQL or ClickHouse. See
+  [Codex Cloud](/docs/configuration/#codex-cloud) for what it sends to OpenAI,
+  how listening in can show on OpenAI's side, such as AgentsView appearing as a
+  chat's client, and its limits.
   `agentsview export sessions` now reports schema version 7, because
   `model_usage` is `null` for a Codex cloud chat whose token counts are unknown;
   update consumers that expect an object there.

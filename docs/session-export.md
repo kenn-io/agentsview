@@ -167,19 +167,23 @@ outputs live in `testdata/golden/session_export_v7.json` and
 
 ### Codex Cloud usage
 
-Codex Cloud sessions can export no token figures at all, and add two fields:
+A Codex Cloud session can have no token figures at all, so its `model_usage` can
+be `null`. It also adds two fields, `plan_usage` and `capture_coverage`:
 
-- `model_usage` is `null` when AgentsView never listened in on the chat while it
-  ran, so it has no token counts. That chat's usage is unknown and is billed
-  as plan usage; it is not zero. Do not count it as zero tokens or zero cost.
-  Sessions from other agents that recorded no usage still export zeros.
-- `plan_usage` is OpenAI's plan usage report for the chat, with the fields
-  listed under
-  [`agentsview session usage`](/docs/session-api/#agentsview-session-usage). It
-  is omitted until AgentsView has stored a report for the chat.
-- `capture_coverage` has `last_capture_at` and `uncaptured_turns`, the number of
-  finished turns that no token record covers. It is omitted when AgentsView
-  never listened in on the chat.
+- `model_usage` is `null` when AgentsView has no token counts for the chat. It
+  never listened in while the chat ran, or it listened in but received no
+  token update. The chat's usage is unknown, not zero: do not count it as zero
+  tokens or zero cost. OpenAI's plan usage report covers it instead. Sessions
+  from other agents that recorded no usage still export zeros.
+- `plan_usage` holds OpenAI's newest plan usage report for the chat, the outcome
+  of a later check, or both. Its fields are listed in the
+  [`plan_usage` row of the session usage fields](/docs/session-api/#agentsview-session-usage).
+  An object with only an outcome, such as `account_unavailable`, has no
+  figures. It is omitted when AgentsView has stored neither.
+- `capture_coverage` has `last_capture_at`, when AgentsView last received a
+  token update for the chat, and `uncaptured_turns`, the number of finished
+  turns live capture did not fully see. It is omitted when AgentsView never
+  listened in on the chat.
 
 ### Archive and database identity
 
