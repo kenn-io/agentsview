@@ -256,6 +256,10 @@ func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, seen)
+	got, err := d.activityReportCandidates(t.Context(), []string{"cancel"}, dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []int{0, 1, 2}, []int{got[0].StartOrdinal, got[1].StartOrdinal, got[2].StartOrdinal})
 }
 
 func TestSQLiteActivityReportCandidateSourceDoesNotRequireGlobalTimestampIndex(

@@ -1,9 +1,11 @@
 package db
 
 import (
+	"container/heap"
 	"container/list"
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -12,6 +14,27 @@ import (
 )
 
 var activityMemoMaxCandidates = 200_000
+var activityMemoMaxEntries = 1_000_000
+
+type activityMemoHits [][]activity.IntervalCandidate
+
+func (h activityMemoHits) Len() int           { return len(h) }
+func (h activityMemoHits) Less(i, j int) bool { return activityMemoLess(h[i][0], h[j][0]) }
+func (h activityMemoHits) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *activityMemoHits) Push(v any)        { *h = append(*h, v.([]activity.IntervalCandidate)) }
+func (h *activityMemoHits) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
+}
+
+func activityMemoLess(a, b activity.IntervalCandidate) bool {
+	if a.Start.UnixMicro() != b.Start.UnixMicro() {
+		return a.Start.UnixMicro() < b.Start.UnixMicro()
+	}
+	return a.SessionID < b.SessionID
+}
 
 type activityMemoKey struct {
 	id    string
@@ -53,16 +76,16 @@ func (m *activityCandidateMemo) store(generation uint64, entry activityMemoEntry
 		m.entries = make(map[activityMemoKey]*list.Element)
 	}
 	if old := m.entries[entry.key]; old != nil {
-		m.rows -= len(old.Value.(activityMemoEntry).candidates) + 1
+		m.rows -= len(old.Value.(activityMemoEntry).candidates)
 		m.order.Remove(old)
 	}
 	m.entries[entry.key] = m.order.PushBack(entry)
-	m.rows += len(entry.candidates) + 1
-	for m.rows > activityMemoMaxCandidates {
+	m.rows += len(entry.candidates)
+	for m.rows > activityMemoMaxCandidates || len(m.entries) > activityMemoMaxEntries {
 		old := m.order.Front()
 		e := old.Value.(activityMemoEntry)
 		delete(m.entries, e.key)
-		m.rows -= len(e.candidates) + 1
+		m.rows -= len(e.candidates)
 		m.order.Remove(old)
 	}
 }
@@ -78,31 +101,34 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		m.mu.Unlock()
 		encoded, err := json.Marshal(ids)
 		if err != nil {
-			return err
+			return fmt.Errorf("encoding activity report session IDs: %w", err)
+		}
+		if len(ids) > activityMemoMaxEntries {
+			return db.activityReportCandidateSQLJSON(string(encoded), q)(ctx, yield)
 		}
 		rows, err := db.getReader().QueryContext(ctx, `SELECT id, transcript_revision || '|' || created_at FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, string(encoded))
 		if err != nil {
-			return err
+			return fmt.Errorf("querying activity report session versions: %w", err)
 		}
 		versions := make(map[string]string, len(ids))
 		for rows.Next() {
 			var id, version string
 			if err := rows.Scan(&id, &version); err != nil {
 				rows.Close()
-				return err
+				return fmt.Errorf("scanning activity report session version: %w", err)
 			}
 			versions[id] = version
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("iterating activity report session versions: %w", err)
 		}
 		lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()
 		upper := q.EffectiveEnd.UnixMicro()
-		var hits []activity.IntervalCandidate
+		var hits activityMemoHits
 		var misses []string
-		buffered := len(ids)
+		buffered := 0
 		m.mu.Lock()
 		for _, id := range ids {
 			element := m.entries[activityMemoKey{id, lower}]
@@ -110,7 +136,9 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 				e := element.Value.(activityMemoEntry)
 				if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
 					n := sort.Search(len(e.candidates), func(i int) bool { return e.candidates[i].Start.UnixMicro() >= upper })
-					hits = append(hits, e.candidates[:n]...)
+					if n > 0 {
+						hits = append(hits, e.candidates[:n])
+					}
 					buffered += len(e.candidates)
 					m.order.MoveToBack(element)
 					continue
@@ -119,7 +147,7 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			misses = append(misses, id)
 		}
 		m.mu.Unlock()
-		sort.SliceStable(hits, func(i, j int) bool { return activity.CandidateLess(hits[i], hits[j]) })
+		heap.Init(&hits)
 		wide := q
 		if wide.RangeEnd.After(wide.EffectiveEnd) {
 			wide.EffectiveEnd = wide.RangeEnd
@@ -131,10 +159,10 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 				buffers[id] = nil
 			}
 		}
-		if len(misses) != len(ids) {
+		if len(misses) > 0 && len(misses) != len(ids) {
 			encoded, err = json.Marshal(misses)
 			if err != nil {
-				return err
+				return fmt.Errorf("encoding activity report missing session IDs: %w", err)
 			}
 		}
 		source := func(ctx context.Context, emit func(activity.IntervalCandidate) error) error {
@@ -156,7 +184,32 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 				return nil
 			})
 		}
-		if err := activity.MergeCandidateSlice(hits, source)(ctx, yield); err != nil {
+		emitHits := func(before *activity.IntervalCandidate) error {
+			for len(hits) > 0 && (before == nil || activityMemoLess(hits[0][0], *before)) {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := yield(hits[0][0]); err != nil {
+					return err
+				}
+				hits[0] = hits[0][1:]
+				if len(hits[0]) == 0 {
+					heap.Pop(&hits)
+				} else {
+					heap.Fix(&hits, 0)
+				}
+			}
+			return nil
+		}
+		if err := source(ctx, func(c activity.IntervalCandidate) error {
+			if err := emitHits(&c); err != nil {
+				return err
+			}
+			return yield(c)
+		}); err != nil {
+			return err
+		}
+		if err := emitHits(nil); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {

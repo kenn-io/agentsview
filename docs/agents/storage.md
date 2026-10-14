@@ -541,12 +541,14 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
-SQLite keeps paired candidates in memory per session and range start, with a
-200,000-unit combined entry-and-candidate budget. Each session entry costs one
-unit plus its candidates. Entries run to `max(EffectiveEnd, RangeEnd)` and remain
+SQLite keeps paired candidates in memory per session and range start, with
+separate limits of 200,000 candidates and 1,000,000 entries. Empty sessions use
+only the entry budget. Entries run to `max(EffectiveEnd, RangeEnd)` and remain
 valid while the transcript revision and session creation time match. Reader
 swaps clear the entries and reject stores from earlier generations.
-Reports exceeding the limit remain uncached.
+Reports exceeding either limit remain uncached. Requests exceeding the entry
+limit skip revision lookup. Warm reads still load session revisions and merge
+the per-session candidates in SQLite's microsecond order.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial

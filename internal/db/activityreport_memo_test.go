@@ -36,6 +36,10 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			case "truncate":
 				_, err := d.WriteSessionIncremental(t.Context(), "s", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(1)})
 				require.NoError(t, err)
+				session, err := d.GetSession(t.Context(), "s")
+				require.NoError(t, err)
+				require.NotNil(t, session.TranscriptRevision)
+				assert.Equal(t, "3", *session.TranscriptRevision)
 				wantCount = 0
 			case "recreate":
 				_, err := d.DeleteParserExcludedSessions(t.Context(), []string{"s"})
@@ -99,7 +103,7 @@ func TestActivityMemoWindowAndAppend(t *testing.T) {
 
 func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	old := activityMemoMaxCandidates
-	activityMemoMaxCandidates = 5
+	activityMemoMaxCandidates = 4
 	t.Cleanup(func() { activityMemoMaxCandidates = old })
 	d := testDB(t)
 	for _, id := range []string{"large", "small"} {
@@ -129,15 +133,6 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	for _, c := range got {
 		assert.Equal(t, 4*time.Minute, c.End.Sub(c.Start))
 	}
-	require.NoError(t, d.Reopen())
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	err = d.activityReportCandidateSource([]string{"small"}, q)(ctx, func(activity.IntervalCandidate) error { cancel(); return nil })
-	assert.ErrorIs(t, err, context.Canceled)
-	got, err = d.activityReportCandidates(t.Context(), []string{"small"}, q)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, 4*time.Minute, got[0].End.Sub(got[0].Start))
 }
 
 func activityMemoPairingReads(t *testing.T, d *DB) map[string]int {
@@ -274,4 +269,117 @@ func TestActivityMemoEmptyIDsWithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.NoError(t, testDB(t).activityReportCandidateSource(nil, activity.Query{})(ctx, func(activity.IntervalCandidate) error { t.Fatal("unexpected candidate"); return nil }))
+}
+
+func TestActivityMemoRefreshPreservesTies(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+			d := testDB(t)
+			ids := []string{"b", "a"}
+			if terminal {
+				ids = ids[:1]
+			}
+			for _, id := range ids {
+				insertSession(t, d, id, "p", func(s *Session) {
+					s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+					s.EndedAt = Ptr("2026-06-16T10:02:00Z")
+				})
+				seedMessage(t, d, id, 0, "user", "2026-06-16T10:00:00.0000009Z", "")
+				seedMessage(t, d, id, 1, "assistant", "2026-06-16T10:01:00Z", "A")
+				seedMessage(t, d, id, 2, "user", "2026-06-16T10:00:00.0000001Z", "")
+				seedMessage(t, d, id, 3, "assistant", "2026-06-16T10:02:00Z", "B")
+				if terminal {
+					timingInsertToolResultEvent(t, d, id, 0, 0, "call", "completed", "2026-06-16T10:00:00.0000005Z", 0)
+					timingInsertToolResultEvent(t, d, id, 0, 0, "call", "completed", "2026-06-16T10:00:00.0000002Z", 1)
+				}
+			}
+			q := dayQuery(t, "2026-06-16", "UTC")
+			cold, err := d.activityReportCandidates(t.Context(), ids, q)
+			require.NoError(t, err)
+			for _, cached := range []int{2, 1} {
+				if cached == 1 {
+					d.activityMemo.swap(func() {})
+					_, err = d.activityReportCandidates(t.Context(), ids[:1], q)
+					require.NoError(t, err)
+				}
+				warm, err := d.activityReportCandidates(t.Context(), ids, q)
+				require.NoError(t, err)
+				assert.Equal(t, cold, warm)
+			}
+			d.activityMemo.swap(func() {})
+			coldReport, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q)
+			require.NoError(t, err)
+			warmReport, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q)
+			require.NoError(t, err)
+			assert.Equal(t, coldReport, warmReport)
+			if !terminal {
+				minutes := make(map[string]float64)
+				for _, row := range warmReport.ByModel {
+					minutes[row.Key] = row.AgentMinutes
+				}
+				assert.InDelta(t, 2.0, minutes["A"], 1e-6)
+				assert.InDelta(t, 2.0, minutes["B"], 1e-6)
+			}
+		})
+	}
+}
+
+func TestActivityMemoLRUAndBudgets(t *testing.T) {
+	oldCandidates, oldEntries := activityMemoMaxCandidates, activityMemoMaxEntries
+	activityMemoMaxCandidates, activityMemoMaxEntries = 3, 5
+	t.Cleanup(func() { activityMemoMaxCandidates, activityMemoMaxEntries = oldCandidates, oldEntries })
+	d := testDB(t)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	for _, id := range []string{"a", "b", "c", "empty-1", "empty-2", "empty-3", "empty-4"} {
+		insertSession(t, d, id, "p")
+		if len(id) == 1 {
+			seedMessage(t, d, id, 0, "user", "2026-06-16T10:00:00Z", "")
+			seedMessage(t, d, id, 1, "assistant", "2026-06-16T10:01:00Z", "m")
+		}
+	}
+	read := func(ids ...string) {
+		t.Helper()
+		_, err := d.activityReportCandidates(t.Context(), ids, q)
+		require.NoError(t, err)
+	}
+	key := func(id string) activityMemoKey {
+		return activityMemoKey{id, q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
+	}
+	read("a", "b")
+	read("a")
+	seedMessage(t, d, "c", 2, "assistant", "2026-06-16T10:02:00Z", "m")
+	read("c")
+	assert.Contains(t, d.activityMemo.entries, key("a"))
+	assert.NotContains(t, d.activityMemo.entries, key("b"))
+	assert.Equal(t, 3, d.activityMemo.rows)
+	_, err := d.WriteSessionIncremental(t.Context(), "c", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(2)})
+	require.NoError(t, err)
+	read("c", "b")
+	assert.Contains(t, d.activityMemo.entries, key("a"))
+	assert.Equal(t, 3, d.activityMemo.rows)
+	read("empty-1", "empty-2")
+	assert.Len(t, d.activityMemo.entries, 5)
+	assert.Equal(t, 3, d.activityMemo.rows)
+	read("empty-3", "empty-4")
+	assert.Len(t, d.activityMemo.entries, 5)
+	assert.NotContains(t, d.activityMemo.entries, key("a"))
+	assert.Equal(t, 1, d.activityMemo.rows)
+	d.activityMemo.swap(func() {})
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sessions" && column == "transcript_revision" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	got, err := d.activityReportCandidates(t.Context(), []string{"a", "b", "empty-1", "empty-2", "empty-3", "empty-4"}, q)
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.Empty(t, d.activityMemo.entries)
 }
