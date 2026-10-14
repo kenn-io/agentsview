@@ -10,8 +10,6 @@ export function emptyUsagePairwiseComparison(): ServiceUsagePairwiseComparisonRe
     cacheReadTokens: 0,
     totalTokens: 0,
     sessionCount: 0,
-    costPerSession: null,
-    tokensPerSession: null,
   };
   return {
     left: { ...metrics },
