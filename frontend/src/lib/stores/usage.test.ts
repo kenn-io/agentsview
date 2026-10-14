@@ -706,13 +706,23 @@ describe("UsageStore session filter params", () => {
     );
   });
 
-  it.each(["excluded", "selected", "zoomed"] as const)(
+  it.each(["excluded", "selected", "zoomed", "retry-failed"] as const)(
     "refreshes response-scoped %s project keys after archive identity changes",
     async (scope) => {
       const original = usageServiceMocks.getApiV1UsageSummary.getMockImplementation();
       const { usage } = await loadStore();
       const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
-      if (scope === "excluded") {
+      if (scope === "retry-failed") {
+        await usage.fetchAll();
+        usageServiceMocks.getApiV1UsageSummary.mockClear();
+        usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+        usage.excludedProjectKeys = "pl1:sha256:stale";
+        usageServiceMocks.getApiV1UsageSummary
+          .mockRejectedValueOnce(
+            new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+          )
+          .mockRejectedValueOnce(new Error("summary retry failed"));
+      } else if (scope === "excluded") {
         usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
           new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
         );
@@ -739,7 +749,24 @@ describe("UsageStore session filter params", () => {
       expect(usage.excludedProjectKeys).toBe("");
       expect(usage.summary).not.toBeNull();
       expect(back).not.toHaveBeenCalled();
-      if (scope === "excluded") {
+      if (scope === "retry-failed") {
+        expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+        expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
+          expect.not.objectContaining({ exclude_project_key: expect.anything() }),
+        );
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toEqual(
+          expect.objectContaining({
+            left_value: "claude-sonnet-4-20250514",
+            right_value: "gpt-4o",
+          }),
+        );
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toEqual(
+          expect.not.objectContaining({ exclude_project_key: expect.anything() }),
+        );
+        expect(usage.pairwiseComparison).not.toBeNull();
+        expect(usage.errors.pairwise).toBeNull();
+      } else if (scope === "excluded") {
         expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
         expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
           expect.objectContaining({

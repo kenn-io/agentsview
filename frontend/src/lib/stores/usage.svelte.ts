@@ -1023,7 +1023,7 @@ class UsageStore {
           topSessionsPromise,
           zoomPromise,
           deferPairwise && this.versions.pairwise === pairwiseVersion
-            ? this.fetchPairwise(params)
+            ? this.fetchPairwise(this.baseParams())
             : this.pairwiseRequest,
         ]);
       }
