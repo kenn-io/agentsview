@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -382,33 +383,48 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 }
 
 func TestClaudeRawCaptureRootReplacementIsIncomplete(t *testing.T) {
-	t.Run("project temporarily vanishes after enumeration", func(t *testing.T) {
-		base := t.TempDir()
-		root := filepath.Join(base, "sessions")
-		project := filepath.Join(root, "project")
-		writeSourceFile(t, filepath.Join(project, "session-main.jsonl"), claudeProviderFixture("hello claude"))
-		provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-		require.True(t, ok)
-		ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
-			return streamDirectoryEntriesDirect(ctx, path, func(entry os.DirEntry) error {
-				if path != root || entry.Name() != "project" {
-					return yield(entry)
-				}
-				moved := filepath.Join(base, "moved-project")
-				require.NoError(t, os.Rename(project, moved))
-				err := yield(entry)
-				require.NoError(t, os.Rename(moved, project))
-				return err
+	for _, tc := range []struct {
+		name string
+		file bool
+		err  error
+	}{
+		{name: "project temporarily vanishes after enumeration", err: os.ErrNotExist},
+		{name: "project temporarily becomes a file after enumeration", file: true, err: syscall.ENOTDIR},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			root := filepath.Join(base, "sessions")
+			project := filepath.Join(root, "project")
+			writeSourceFile(t, filepath.Join(project, "session-main.jsonl"), claudeProviderFixture("hello claude"))
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
+				return streamDirectoryEntriesDirect(ctx, path, func(entry os.DirEntry) error {
+					if path != root || entry.Name() != "project" {
+						return yield(entry)
+					}
+					moved := filepath.Join(base, "moved-project")
+					require.NoError(t, os.Rename(project, moved))
+					if tc.file {
+						require.NoError(t, os.WriteFile(project, []byte("replacement"), 0o600))
+					}
+					err := yield(entry)
+					if tc.file {
+						require.NoError(t, os.Remove(project))
+					}
+					require.NoError(t, os.Rename(moved, project))
+					return err
+				})
 			})
+
+			discovery, err := DiscoverRawCaptureSources(ctx, provider)
+
+			require.ErrorIs(t, err, tc.err)
+			var incomplete DiscoveryIncompleteError
+			require.ErrorAs(t, err, &incomplete)
+			assert.False(t, discovery.Complete)
 		})
-
-		discovery, err := DiscoverRawCaptureSources(ctx, provider)
-
-		require.ErrorIs(t, err, os.ErrNotExist)
-		var incomplete DiscoveryIncompleteError
-		require.ErrorAs(t, err, &incomplete)
-		assert.False(t, discovery.Complete)
-	})
+	}
 
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")

@@ -663,6 +663,9 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 		return nil
 	}
 	if !info.IsDir() {
+		if !allowMissing {
+			return incompleteDiscoveryError(s.spec.agent, "resolve "+s.spec.dirLabel+" "+path, syscall.ENOTDIR)
+		}
 		if err := emit(path, fs.FileInfoToDirEntry(info)); err != nil {
 			return discoveryYieldError{cause: err}
 		}

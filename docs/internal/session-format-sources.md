@@ -215,9 +215,10 @@ fixtures retain this field; missing identities remain source-local.
   contributor is absent. Hosted capture plans and watcher discovery are
   unchanged. Scoped discovery covers each affected project under its configured
   root so companion transcripts remain in scope.
-  Rechecked 2026-10-14 with discovery fixtures: a project that vanishes during
-  raw-capture enumeration makes discovery incomplete even if it returns before
-  enumeration ends. Scoped reconciliation accepts missing paths as absence.
+  Rechecked 2026-10-14 with discovery fixtures: a project that vanishes or becomes
+  a file during raw-capture enumeration makes discovery incomplete even if it
+  returns before enumeration ends. Scoped reconciliation accepts missing paths
+  as absence.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a

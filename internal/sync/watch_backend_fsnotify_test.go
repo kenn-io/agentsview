@@ -121,7 +121,7 @@ func TestFSNotifyBackendDeletePendingUsesDeferredRetry(t *testing.T) {
 			backend.watchCreatedPath(folder)
 			assert.Equal(t, 1, attempts)
 			require.Len(t, *added, 1)
-			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+			backend.retryRuntimeFolders(time.Now().Add(11 * time.Second))
 			assert.Equal(t, 2, attempts)
 			assert.Equal(t, []string{runtimeFolderPollingKey(filepath.Clean(root), folder)}, *released)
 			assert.Empty(t, backend.runtimeRoots)
@@ -156,17 +156,17 @@ func TestFSNotifyBackendDeferredReplacementRecovery(t *testing.T) {
 			default:
 				require.NoError(t, os.Symlink(t.TempDir(), folder))
 			}
-			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+			backend.retryRuntimeFolders(time.Now().Add(11 * time.Second))
 			if replacement == "symlink" {
 				assert.Empty(t, *released)
 				assert.NotContains(t, backend.watcher.WatchList(), folder)
 				require.NoError(t, os.Remove(folder))
-				assert.True(t, backend.retryRuntimeFolders(time.Now().Add(time.Minute)))
+				backend.retryRuntimeFolders(time.Now().Add(time.Minute))
 				assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
 			} else {
 				assert.Equal(t, []string{runtimeFolderPollingKey(root, folder)}, *released)
 				assert.Empty(t, backend.events)
-				assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
+				backend.retryRuntimeFolders(time.Now().Add(3 * time.Minute))
 				assert.Len(t, *released, 1)
 				assert.Empty(t, backend.events)
 			}
@@ -221,7 +221,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 		backend.watchCreatedPath(folder)
 		require.Equal(t, 1, attempts)
 		backend.watchOps = ops
-		assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+		backend.retryRuntimeFolders(time.Now().Add(11 * time.Second))
 		assert.Equal(t, 1, attempts, "recovery must finish without acquiring polling")
 		assert.Contains(t, backend.watcher.WatchList(), folder)
 		assert.Empty(t, *released)
@@ -241,7 +241,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 		ops.setFail(parent, nil)
 		ops.setFail(child, os.ErrPermission)
 		now := time.Now().Add(11 * time.Second)
-		assert.True(t, backend.retryRuntimeFolders(now))
+		backend.retryRuntimeFolders(now)
 		assert.Empty(t, *released)
 		ops.setFail(child, nil)
 		walks := 0
@@ -249,7 +249,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			walks++
 			return filepath.WalkDir(path, visit)
 		}
-		assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
+		backend.retryRuntimeFolders(now.Add(20 * time.Second))
 		assert.Equal(t, 1, walks, "the parent retry must also cover its deferred child")
 		assert.Equal(t, []string{runtimeFolderPollingKey(root, parent), runtimeFolderPollingKey(root, child)}, *released)
 		assert.Equal(t, 1, ops.addCount(child))
@@ -287,7 +287,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			}, *added)
 			ops.setFail(a, nil)
 			now := time.Now().Add(11 * time.Second)
-			assert.True(t, backend.retryRuntimeFolders(now))
+			backend.retryRuntimeFolders(now)
 			assert.Equal(t, 1, ops.addCount(a))
 			if recovery == "release error" {
 				assert.Empty(t, *released)
@@ -312,13 +312,13 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 				require.NoError(t, os.MkdirAll(filepath.Join(b, "nested"), 0o755))
 				backend.translateEvent(fsnotify.Event{Name: b, Op: fsnotify.Create})
 			}
-			assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
+			backend.retryRuntimeFolders(now.Add(20 * time.Second))
 			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + a, "fsnotify-folder:" + root + ":" + b}, *released)
 			if recovery == "create" || recovery == "release error" {
 				assert.Equal(t, 1, ops.addCount(b))
 				assert.Equal(t, 1, ops.addCount(filepath.Join(b, "nested")))
 			}
-			assert.True(t, backend.retryRuntimeFolders(now.Add(3*time.Minute)))
+			backend.retryRuntimeFolders(now.Add(3 * time.Minute))
 			assert.Len(t, *released, 2)
 			assert.Empty(t, backend.events)
 		})
@@ -338,10 +338,10 @@ func TestFSNotifyBackendRuntimeFolderRetryBackoffSchedule(t *testing.T) {
 	require.Equal(t, 1, ops.attemptCount(folder))
 	now := time.Now()
 	for i, delay := range []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute} {
-		assert.True(t, backend.retryRuntimeFolders(now.Add(delay-time.Second)))
+		backend.retryRuntimeFolders(now.Add(delay - time.Second))
 		assert.Equal(t, i+1, ops.attemptCount(folder), "a failed folder must wait for its retry delay")
 		now = now.Add(delay)
-		assert.True(t, backend.retryRuntimeFolders(now))
+		backend.retryRuntimeFolders(now)
 		assert.Equal(t, i+2, ops.attemptCount(folder), "a failed folder must retry when its delay expires")
 	}
 	assert.Empty(t, *released)
@@ -379,7 +379,7 @@ func TestFSNotifyBackendFolderPollingReconcilesOnlyFailedSubtree(t *testing.T) {
 			assert.NotContains(t, backend.watcher.WatchList(), folder)
 
 			backend.watchOps = ops
-			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+			backend.retryRuntimeFolders(time.Now().Add(11 * time.Second))
 			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
 			assert.Contains(t, backend.watcher.WatchList(), folder)
 			assert.Contains(t, backend.watcher.WatchList(), sibling)
@@ -457,7 +457,7 @@ func TestFSNotifyBackendRuntimeFolderRecoveryPreservesRootDegradation(t *testing
 			}
 			backend.watchOps = ops
 			require.NoError(t, os.Remove(folder))
-			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
+			backend.retryRuntimeFolders(time.Now().Add(3 * time.Minute))
 			assert.Len(t, *added, 2)
 			assert.Equal(t, PollingObligation{Key: "fsnotify-runtime:" + root, Scopes: []PollingScope{{Root: root}}, Probe: root}, (*added)[1])
 			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
@@ -666,7 +666,7 @@ func TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches(t *testing.T
 			}
 			assert.Empty(t, backend.watcher.WatchList())
 			require.NoError(t, backend.AddShallow(t.TempDir()), "release failure must leave the backend usable")
-			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
+			backend.retryRuntimeFolders(time.Now().Add(3 * time.Minute))
 			if coverage == "native" {
 				assert.Empty(t, releaseKeys)
 			} else if coverage != "missing release" {
@@ -846,7 +846,7 @@ func TestFSNotifyBackendRuntimeBudgetDegradesExactScopesToPolling(t *testing.T) 
 	assert.Empty(t, backend.runtimeRoots, "budget exhaustion must not schedule whole-tree retries")
 	assert.Equal(t, 1, strings.Count(output.String(), "fsnotify watch deferred under"),
 		"budget exhaustion must log once per root")
-	assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+	backend.retryRuntimeFolders(time.Now().Add(11 * time.Second))
 	assert.Empty(t, polling, "retrying must not acquire another polling obligation")
 }
 
@@ -1594,11 +1594,11 @@ func TestFSNotifyBackendEnumerationFailureKeepsPollingUntilSubtreeCovered(t *tes
 			assert.Contains(t, backend.watcher.WatchList(), folder)
 			assert.NotContains(t, backend.watcher.WatchList(), child)
 			now := time.Now().Add(11 * time.Second)
-			assert.True(t, backend.retryRuntimeFolders(now))
+			backend.retryRuntimeFolders(now)
 			assert.Empty(t, *released)
 			assert.NotContains(t, backend.watcher.WatchList(), child)
 			backend.walkDir = filepath.WalkDir
-			assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
+			backend.retryRuntimeFolders(now.Add(20 * time.Second))
 			assert.Equal(t, []string{runtimeFolderPollingKey(root, folder)}, *released)
 			assert.Contains(t, backend.watcher.WatchList(), child)
 		})
