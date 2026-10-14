@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/klauspost/compress/zstd"
+
 	"go.kenn.io/agentsview/internal/ctxio"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -20,11 +22,12 @@ import (
 // from extraction makes transfer progress independent from tar processing and
 // preserves meaningful Content-Length totals for compressed responses.
 type downloadedArchive struct {
-	dir        string
-	path       string
-	compressed bool
-	open       func() (io.ReadCloser, error)
-	remove     func(string) error
+	dir      string
+	path     string
+	encoding string
+	bytes    int64
+	open     func() (io.ReadCloser, error)
+	remove   func(string) error
 }
 
 type httpBodyReadError struct{ err error }
@@ -123,10 +126,10 @@ func (hs HTTPSync) downloadArchive(
 		return nil, fmt.Errorf("create archive spool dir: %w", err)
 	}
 	owned = &downloadedArchive{
-		dir:        tempDir,
-		path:       filepath.Join(tempDir, "archive"),
-		compressed: resp.Header.Get("Content-Encoding") == "gzip",
-		remove:     hs.removeArchiveSpool,
+		dir:      tempDir,
+		path:     filepath.Join(tempDir, "archive"),
+		encoding: resp.Header.Get("Content-Encoding"),
+		remove:   hs.removeArchiveSpool,
 	}
 	spool, err := os.Create(owned.path)
 	if err != nil {
@@ -146,7 +149,8 @@ func (hs HTTPSync) downloadArchive(
 			})
 		},
 	}
-	_, copyErr := io.Copy(spool, reader)
+	written, copyErr := io.Copy(spool, reader)
+	owned.bytes = written
 	closeErr := spool.Close()
 	if copyErr != nil {
 		return nil, errors.Join(
@@ -204,14 +208,22 @@ func (a *downloadedArchive) extractWithSelection(
 	}
 	defer func() { err = errors.Join(err, archive.Close()) }()
 
-	var stream io.Reader = archive
-	if a.compressed {
-		gz, gzipErr := gzip.NewReader(archive)
+	var stream io.Reader = ctxio.Reader{Context: ctx, Reader: archive}
+	switch a.encoding {
+	case "gzip":
+		gz, gzipErr := gzip.NewReader(stream)
 		if gzipErr != nil {
 			return fmt.Errorf("decode archive gzip: %w", gzipErr)
 		}
 		defer func() { err = errors.Join(err, gz.Close()) }()
 		stream = gz
+	case "zstd":
+		decoder, decodeErr := zstd.NewReader(stream, zstd.WithDecoderConcurrency(1))
+		if decodeErr != nil {
+			return fmt.Errorf("decode archive zstd: %w", decodeErr)
+		}
+		defer decoder.Close()
+		stream = decoder
 	}
 	stream = ctxio.Reader{Context: ctx, Reader: stream}
 	if _, err := extractTarStream(ctx, stream, dst, selected); err != nil {

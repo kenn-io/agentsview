@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -258,6 +259,49 @@ func TestHTTPSyncReportsCompressedTransferThenExtraction(t *testing.T) {
 	assert.Equal(t, int64(compressed.Len()), maxBytesTotal(progress))
 }
 
+func TestHTTPSyncZstdArchivePreservesContentAndWireProgress(t *testing.T) {
+	remotePath := "/srv/sessions/session.jsonl"
+	name, err := safeRemotePathArchiveName(remotePath)
+	require.NoError(t, err)
+	archive := buildHTTPTestTar(t, map[string]string{name: "session content"})
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, encoder.Close()) })
+	compressed := encoder.EncodeAll(archive, nil)
+
+	for _, truncated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("truncated=%t", truncated), func(t *testing.T) {
+			wire := compressed
+			if truncated {
+				wire = wire[:len(wire)-1]
+			}
+			ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "zstd, gzip", r.Header.Get("Accept-Encoding"))
+				w.Header().Set("Content-Encoding", "zstd")
+				w.Header().Set("Content-Length", strconv.Itoa(len(wire)))
+				_, _ = w.Write(wire)
+			}))
+			t.Cleanup(ts.Close)
+			var progress []syncpkg.Progress
+			hs := HTTPSync{Host: "host-a", URL: ts.URL, Progress: func(p syncpkg.Progress) {
+				progress = append(progress, p)
+			}}
+			root := filepath.Join(t.TempDir(), "mirror")
+			err := hs.downloadIntoMirror(t.Context(), ts.Client(), TargetSet{}, []string{remotePath}, false, root)
+			if truncated {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			content, err := os.ReadFile(remappedRemotePath(root, remotePath))
+			require.NoError(t, err)
+			assert.Equal(t, "session content", string(content))
+			assert.Equal(t, int64(len(compressed)), maxBytesDone(progress))
+			assert.Equal(t, int64(len(compressed)), maxBytesTotal(progress))
+		})
+	}
+}
+
 func TestHTTPSyncFullArchiveExtractsOnlyManifestFetchSet(t *testing.T) {
 	wanted := "/var/lib/agentsview-test/sessions/wanted.jsonl"
 	extra := "/var/lib/agentsview-test/sessions/appeared-after-manifest.jsonl"
@@ -323,7 +367,7 @@ func TestHTTPSyncLegacyCompressedTransferPreservesWireProgress(t *testing.T) {
 	require.NoError(t, gz.Close())
 
 	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "gzip", r.Header.Get("Accept-Encoding"))
+		assert.Equal(t, "zstd, gzip", r.Header.Get("Accept-Encoding"))
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(compressed.Len()))
 		_, _ = w.Write(compressed.Bytes())
@@ -653,14 +697,19 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gz.Close())
 	require.Greater(t, compressed.Len(), 1024)
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	zstdArchive := encoder.EncodeAll(archiveBytes, nil)
+	require.NoError(t, encoder.Close())
 
 	tests := []struct {
-		name       string
-		wire       []byte
-		compressed bool
+		name     string
+		wire     []byte
+		encoding string
 	}{
 		{name: "plain", wire: archiveBytes},
-		{name: "gzip", wire: compressed.Bytes(), compressed: true},
+		{name: "gzip", wire: compressed.Bytes(), encoding: "gzip"},
+		{name: "zstd", wire: zstdArchive, encoding: "zstd"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -679,10 +728,10 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 				release:   release,
 			}
 			archive := &downloadedArchive{
-				dir:        spoolDir,
-				path:       filepath.Join(spoolDir, "archive"),
-				compressed: tt.compressed,
-				open:       func() (io.ReadCloser, error) { return reader, nil },
+				dir:      spoolDir,
+				path:     filepath.Join(spoolDir, "archive"),
+				encoding: tt.encoding,
+				open:     func() (io.ReadCloser, error) { return reader, nil },
 			}
 			t.Cleanup(func() { require.NoError(t, archive.Close()) })
 			dst := filepath.Join(t.TempDir(), "extracted")
@@ -2139,6 +2188,12 @@ func TestHTTPDeltaProgressSeparatesTransferPendingAndImportScope(t *testing.T) {
 	assert.Contains(t, joined, "Synced 1 sessions from devbox")
 	assert.NotContains(t, joined, changed)
 	assert.NotContains(t, logs.String(), changed)
+	for _, field := range []string{
+		"phase=targets", "phase=manifest", "phase=compare",
+		"download_duration=", "extract_duration=", "wire_bytes=",
+	} {
+		assert.Contains(t, logs.String(), field)
+	}
 	assert.Equal(t, 2, stats.PendingPaths)
 	assert.Equal(t, 2, stats.FilesProcessed,
 		"deletion uncertainty may expand only the owning provider")
@@ -2146,8 +2201,29 @@ func TestHTTPDeltaProgressSeparatesTransferPendingAndImportScope(t *testing.T) {
 	assert.Equal(t, 2, stats.FallbackSources)
 	assert.Empty(t, stats.FullReason)
 	require.Len(t, remote.archiveRequests, 2)
-	assert.Empty(t, remote.archiveRequests[1].DeltaFiles,
-		"the 50-percent heuristic may widen transfer without widening import")
+	assert.Equal(t, []string{changed}, remote.archiveRequests[1].DeltaFiles,
+		"an unchanged file must not be transferred when half the files changed")
+}
+
+func TestHTTPSyncMirrorMajorityChangesTransferOnlyDelta(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	remote.writeSession(t, "history.jsonl", base, strings.Repeat("unchanged history ", 4096))
+	remote.writeSession(t, "a.jsonl", base, "first")
+	remote.writeSession(t, "b.jsonl", base, "second")
+	_, hs := newMirrorSync(t, remote, t.TempDir())
+	_, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	a := remote.writeSession(t, "a.jsonl", base.Add(time.Second), "first", "new")
+	b := remote.writeSession(t, "b.jsonl", base.Add(time.Second), "second", "new")
+	var transferred int64
+	hs.Progress = func(p syncpkg.Progress) { transferred = max(transferred, p.BytesDone) }
+	stats, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.SessionsSynced)
+	require.Len(t, remote.archiveRequests, 2)
+	assert.ElementsMatch(t, []string{a, b}, remote.archiveRequests[1].DeltaFiles)
+	assert.Less(t, transferred, int64(16<<10), "unchanged history must stay out of the archive")
 }
 
 func TestHTTPJournalRecoveryReplacesMalformedContentBeforeImport(t *testing.T) {
@@ -2195,9 +2271,8 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	require.Len(t, remote.archiveRequests, 1)
 	assert.Empty(t, remote.archiveRequests[0].DeltaFiles, "bootstrap uses the full archive")
 
-	// Append to one, add one, delete one on the remote. The fetch set
-	// (2 of the 5 files now in the manifest) stays under the bootstrap
-	// heuristic's half-corpus threshold, so this sync must go delta.
+	// Append to one, add one, delete one on the remote. The unchanged
+	// files must stay out of this transfer.
 	changed := remote.writeSession(t, "a.jsonl", base.Add(5*time.Second),
 		"session a", "session a continued")
 	added := remote.writeSession(t, "f.jsonl", base.Add(6*time.Second), "session f")
@@ -2500,9 +2575,7 @@ func TestHTTPSyncFallsBackToFullWhenDeltaRejected(t *testing.T) {
 func TestHTTPSyncIncrementalMatchesFreshFullSync(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	base := time.Date(2026, 7, 8, 10, 0, 0, 555666777, time.UTC)
-	// Enough unchanged files that the second sync's two changed files
-	// stay under the half-corpus bootstrap heuristic and exercise the
-	// delta path rather than a full re-download.
+	// Keep unchanged files to exercise a delta transfer on the second sync.
 	appended := remote.writeSession(t, "a.jsonl", base, "session a")
 	remote.writeSession(t, "b.jsonl", base, "session b")
 	remote.writeSession(t, "d.jsonl", base, "session d")

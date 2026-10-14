@@ -334,7 +334,9 @@ func (hs HTTPSync) prepare(
 		client = &http.Client{Timeout: 0}
 	}
 	hs.reportProgressResolvingTargets()
+	targetsStarted := time.Now()
 	targets, err := hs.fetchTargets(ctx, client)
+	log.Printf("remote sync HTTP: host=%s phase=targets duration=%s", hs.Host, time.Since(targetsStarted).Round(time.Millisecond))
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +386,9 @@ func (hs HTTPSync) prepare(
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
 	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
+	manifestStarted := time.Now()
 	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
+	log.Printf("remote sync HTTP: host=%s phase=manifest duration=%s", hs.Host, time.Since(manifestStarted).Round(time.Millisecond))
 	if err != nil {
 		return nil, err
 	}
@@ -782,7 +786,9 @@ func (hs HTTPSync) prepareMirror(
 	}
 	_, mirrorStatErr := os.Stat(mirrorRoot)
 	bootstrap := errors.Is(mirrorStatErr, os.ErrNotExist)
+	compareStarted := time.Now()
 	delta, err := MirrorDiff(mirrorRoot, manifest)
+	log.Printf("remote sync HTTP: host=%s phase=compare duration=%s", hs.Host, time.Since(compareStarted).Round(time.Millisecond))
 	if err != nil {
 		return nil, err
 	}
@@ -1010,7 +1016,7 @@ func (hs HTTPSync) prepareMirror(
 		return nil, err
 	}
 	if len(delta.Fetch) > 0 {
-		full := len(delta.Fetch)*2 >= delta.Total
+		full := len(delta.Fetch) == delta.Total
 		err := hs.downloadIntoMirror(
 			ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot,
 		)

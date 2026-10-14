@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
@@ -210,6 +212,7 @@ func (hs HTTPSync) downloadIntoMirror(
 	} else {
 		request.DeltaFiles = fetch
 	}
+	downloadStarted := time.Now()
 	resp, err := hs.requestArchive(ctx, client, request)
 	if err != nil {
 		return err
@@ -226,6 +229,7 @@ func (hs HTTPSync) downloadIntoMirror(
 	if err != nil {
 		return err
 	}
+	downloadDuration := time.Since(downloadStarted)
 	defer func() {
 		if cleanupErr := archive.Close(); cleanupErr != nil {
 			err = retainDownloadedArchiveCleanup(
@@ -236,6 +240,7 @@ func (hs HTTPSync) downloadIntoMirror(
 	if err := RemoveMirrorFetchFiles(mirrorRoot, fetch); err != nil {
 		return err
 	}
+	extractStarted := time.Now()
 	var extractErr error
 	if full && fetch != nil {
 		selected := make(map[string]struct{}, len(fetch))
@@ -252,6 +257,8 @@ func (hs HTTPSync) downloadIntoMirror(
 	} else {
 		extractErr = archive.extract(ctx, mirrorRoot, hs.Progress, extractLabel)
 	}
+	log.Printf("remote sync HTTP archive: host=%s encoding=%q wire_bytes=%d download_duration=%s extract_duration=%s",
+		hs.Host, archive.encoding, archive.bytes, downloadDuration.Round(time.Millisecond), time.Since(extractStarted).Round(time.Millisecond))
 	if extractErr != nil {
 		return fmt.Errorf("extract archive into mirror: %w", extractErr)
 	}
@@ -292,6 +299,7 @@ func (hs HTTPSync) downloadAndExtract(
 	client *http.Client,
 	targets TargetSet,
 ) (root string, err error) {
+	downloadStarted := time.Now()
 	resp, err := hs.requestArchive(ctx, client, ArchiveRequest{TargetSet: targets})
 	if err != nil {
 		return "", err
@@ -307,6 +315,7 @@ func (hs HTTPSync) downloadAndExtract(
 	if err != nil {
 		return "", err
 	}
+	downloadDuration := time.Since(downloadStarted)
 	var tmpDir string
 	defer func() {
 		cleanupErr := archive.Close()
@@ -338,8 +347,12 @@ func (hs HTTPSync) downloadAndExtract(
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	extractLabel := "Extracting session archive from " + hs.Host
-	if err := archive.extract(ctx, tmpDir, hs.Progress, extractLabel); err != nil {
-		return "", err
+	extractStarted := time.Now()
+	extractErr := archive.extract(ctx, tmpDir, hs.Progress, extractLabel)
+	log.Printf("remote sync HTTP archive: host=%s encoding=%q wire_bytes=%d download_duration=%s extract_duration=%s",
+		hs.Host, archive.encoding, archive.bytes, downloadDuration.Round(time.Millisecond), time.Since(extractStarted).Round(time.Millisecond))
+	if extractErr != nil {
+		return "", extractErr
 	}
 	return tmpDir, nil
 }
@@ -383,7 +396,7 @@ func (hs HTTPSync) transferHeaders(_ context.Context, req *http.Request) error {
 	}
 	SetProtocolHeader(req.Header)
 	if req.Method == http.MethodPost {
-		req.Header.Set("Accept-Encoding", "gzip")
+		req.Header.Set("Accept-Encoding", "zstd, gzip")
 	}
 	return nil
 }

@@ -182,10 +182,10 @@ host's syncable source corpus for it.
    removes mirror files that disappeared from the manifest. Before changing the
    mirror, it durably merges those paths into a bounded recovery journal next to
    the mirror.
-1. When fewer than half of the manifest's files need fetching, the collector
-   requests only that delta. At half or more, it requests a full archive instead
-   of sending a large file list. The current collector advertises gzip support
-   for both archive modes.
+1. The collector requests only missing or changed files. When every manifest
+   file needs fetching, it requests a full archive instead of sending the full
+   file list. Archive transfers prefer Zstandard compression; gzip remains
+   available through HTTP encoding negotiation. Manifests use gzip.
 1. The archive is extracted into the mirror with remote modification times
    preserved. AgentsView classifies the pending journal paths and imports only
    their affected sources. A provider whose exact scope cannot be proven falls
@@ -193,10 +193,14 @@ host's syncable source corpus for it.
    providers. The journal is retired only after session writes and the remote
    skip cache are durable.
 
-Transfer breadth and import breadth are independent. The half-manifest
-heuristic can download a full archive while the collector still processes only
-the changed-source plan. Conversely, an explicit full import reparses the
-complete mirror without forcing unchanged bytes across the network.
+An explicit full import reparses the complete mirror without forcing unchanged
+bytes across the network. If a rejected delta request requires a full archive,
+the collector still imports only the affected sources.
+
+Sync logs report target resolution, manifest fetch and comparison times, plus
+each archive's encoding, compressed byte count, download time, and extraction
+time. Download time includes waiting for the remote response. The existing
+import log reports planning, processing, and cache persistence times.
 
 For a configured full sync that includes local sources, mirror preparation
 finishes before database work begins. The collector then ingests local sources
@@ -267,7 +271,7 @@ fails that host's sync without touching the mirror.
 A full HTTP transfer occurs in these cases:
 
 - the per-host mirror is new or was removed
-- at least half of the manifest files are missing or changed
+- every manifest file is missing or changed
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
 
