@@ -969,8 +969,8 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
-| `plan_usage`            | Codex Cloud only; omitted for other agents and before the first report. OpenAI's plan usage report for the chat: `data_as_of`, `data_status` (`available`, `partial`, or `unavailable`), `weekly_percent`, `five_hour_percent`, `credits` (a decimal string), per-model `groups`, `final`, and the newest `outcome_kind` and `outcome_at`. A sub-agent chat has `outcome_kind` `counted_under` and the root session ID in `counted_under`|
-| `capture_coverage`      | Codex Cloud only; omitted when live capture never saw the chat. `last_capture_at` and `uncaptured_turns`, the number of finished turns that no token record covers |
+| `plan_usage`            | Codex Cloud only; omitted for other agents and until AgentsView has stored a report or a check outcome for the chat. An outcome-only object, such as one with `outcome_kind` `account_unavailable`, has no figures. OpenAI's plan usage report for the chat: `data_as_of`, `data_status` (`available`, `partial`, or `unavailable`), `weekly_percent`, `five_hour_percent`, `credits` (a decimal string), per-model `groups`, `final`, and the newest `outcome_kind` and `outcome_at`. A sub-agent chat has `outcome_kind` `counted_under` and the root session ID in `counted_under`|
+| `capture_coverage`      | Codex Cloud only; omitted when live capture never saw the chat. `last_capture_at`, when AgentsView last received a token update for the chat, and `uncaptured_turns`, the number of finished turns live capture did not fully see: no token update covers them directly or through a later turn's running total |
 
 A Codex Cloud session that live capture never saw has `has_token_data` and
 `has_cost` set to `false` and carries its figures in `plan_usage` instead. The
@@ -979,7 +979,7 @@ usage" for cost when the session has plan usage figures. A `Plan usage:` line
 follows, and, when live capture saw the chat, a `Captured:` line. When a later
 check left the chat out or failed, the `Plan usage:` line says what that check
 found and that the figures may be out of date. For missed turns, the `Captured:`
-line says their tokens are not in the totals. When the newest report is
+line says some of their tokens may be missing from the totals. When the newest report is
 complete and no later check failed, it adds that plan usage counts the turns
 that ran before the report's data time; AgentsView does not know whether each
 missed turn ran before that time, so it does not claim more.

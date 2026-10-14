@@ -1205,14 +1205,16 @@ ChatGPT account share one import.
 - If OpenAI does not accept a home's login, or asks for a fresh one, the status
   tells you to run `codex login` for that home. AgentsView tries the home again
   when its `auth.json` changes, or after one hour.
-- If OpenAI refuses the account's requests, AgentsView waits one hour, then
-  doubles the wait up to one day. A refusal does not show that the login is the
-  problem, so the status does not suggest `codex login`; it asks you to check
-  that the ChatGPT account can use Codex.
+- If OpenAI refuses the account's requests, check that the ChatGPT account can
+  use Codex. AgentsView waits one hour, then doubles the wait up to one day. A
+  refusal does not show that the login is wrong, so the status does not suggest
+  `codex login`.
 - Codex can keep the login in the system keyring instead of `auth.json`, or not
   save it at all. AgentsView does not read the keyring. To let AgentsView use
-  such a home, add `cli_auth_credentials_store = "file"` near the top of that
-  home's `config.toml`, before any `[section]`, and run `codex login`. Codex
+  such a home, set `cli_auth_credentials_store = "file"` in that home's
+  `config.toml`: change the existing line, or add one near the top, before any
+  `[section]`. A second line for the same key makes the file unreadable. Then
+  run `codex login`. Codex
   then keeps the ChatGPT login in `auth.json`, a plain file that any program
   running as you can read. With the default `auto` store, a refused login can
   mean either an expired login in `auth.json` or a current login in the
@@ -1230,9 +1232,12 @@ and asks you to update AgentsView, or to check an `endpoint` or
 - A reply from the chat service while importing pauses imports from that
   account. AgentsView tries again after one hour, then at longer waits up to
   one day.
-- A message AgentsView cannot read while it listens in on a chat stops live
-  capture for that account until AgentsView restarts or you set
-  `live_tokens = false` and back to `true`. Imports continue.
+- A reply AgentsView cannot read while it looks for running chats, connects to
+  one, or listens in on one stops live capture for that account. Imports
+  continue. To listen in again, restart AgentsView, or set
+  `live_tokens = false`, wait until the status says "Live tokens: off", then set
+  it back to `true`. A quick toggle can be missed, because AgentsView checks the
+  setting every 30 seconds.
 - A plan usage reply AgentsView cannot read is retried like any failed plan
   usage request.
 
@@ -1268,13 +1273,15 @@ AgentsView connects the way Codex reopens a chat, with the request OpenAI calls
 
 Set `live_tokens = false` to stop listening in. Fetching and plan usage
 continue. The status bar and `agentsview serve status` show a live tokens line
-for each account: how many running chats AgentsView is listening in on, idle,
-off and why, or stopped after a reply it could not read.
+for each account: how many running chats AgentsView is listening in on, that it
+is not listening in on any right now, off and why, or stopped after a reply it
+could not read.
 
 Each token update carries the chat's running total, so an update also covers
-every turn that finished before it. A finished turn counts as captured when
-AgentsView listened in until it ended, or when a token update from a later
-turn covers it. Any other finished turn, such as a chat's last turn that ran
+every turn that finished before it, back to the last time OpenAI restarted that
+total. A finished turn counts as captured when AgentsView received a token
+update for it and saw it end on the same connection, or when a token update
+from a later turn covers it. Any other finished turn, such as a chat's last turn that ran
 while AgentsView was not connected, is missing from the chat's token counts. A
 session with such turns counts in the token and cost totals, which then say "N
 sessions partly captured; their token counts are low."
@@ -1288,15 +1295,16 @@ as plan usage, not priced").
 
 AgentsView asks for plan usage again after a failed request or an incomplete
 report, waiting longer each time, up to 6 hours between requests. It refreshes
-complete figures once a day. It stops asking after the first answer that comes
-7 days or more after the chat's last change. If 3 requests in a row fail after
-that point, it stops too, and the session details then say AgentsView could
-not check plan usage.
+complete figures once a day. It stops asking when an answer arrives 7 days or
+more after the chat's last change. It also stops after 3 failed requests in a
+row past that point; the session details then say AgentsView could not check
+plan usage.
 
 Some problems pause plan usage for the whole account instead: OpenAI limiting
 requests, OpenAI saying the account has no usage report, or no Codex home with
-a usable login. While paused, no request is sent, so a chat can stay unsettled
-past its 7 days; it settles on the first answer after the pause ends.
+a usable login. While paused, no request is sent, so a chat can wait for final figures more
+than 7 days after its last change; it gets them from the first answer after the
+pause ends.
 
 #### Limits
 
@@ -1322,7 +1330,8 @@ past its 7 days; it settles on the first answer after the pause ends.
   are not captured. Dot-delegated tasks are not sub-agent chats in this sense,
   and AgentsView listens in on them like any other chat.
 - A chat that fails to import for 7 days without changing is no longer
-  retried, even while OpenAI lists it as active. The daemon log names it.
+  retried, even while OpenAI lists it as active. The AgentsView log, `serve.log`
+in the data directory, names it.
   AgentsView tries it again when it changes.
 - ChatGPT dot's own conversation has no turns and is never imported. Its
   delegated tasks appear as top-level sessions.
