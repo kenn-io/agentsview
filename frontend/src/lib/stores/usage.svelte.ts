@@ -968,10 +968,14 @@ class UsageStore {
         ? { ...params, from: this.from, to: this.to }
         : undefined;
     if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
+    let restoredPairwisePromise: Promise<FetchResult> | undefined;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
       contextParams,
+      onTimeRangeRestored: () => {
+        restoredPairwisePromise = this.fetchPairwise(this.baseParams());
+      },
     });
     const pairwisePromise = this.fetchPairwise(params);
     const pairwiseVersion = this.versions.pairwise;
@@ -983,24 +987,23 @@ class UsageStore {
       return "aborted";
     }
     if (!loadedSummary) {
-      await Promise.all([topSessionsPromise, zoomPromise, pairwisePromise]);
-      if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
         selectedRangeAtStart !== null &&
         this.selectedTimeRange === null &&
         fetchVersion === this.fetchAllVersion
       ) {
-        this.invalidatePanel("pairwise");
-        this.clearPairwiseComparisonState();
         this.invalidatePanel("topSessions");
         this.topSessions = null;
         this.errors.topSessions = null;
         await Promise.all([
-          this.fetchPairwise(this.baseParams()),
+          restoredPairwisePromise,
           this.fetchTopSessions(this.baseParams()),
           this.fetchZoom(this.baseParams()),
         ]);
+      } else {
+        await Promise.all([topSessionsPromise, zoomPromise, pairwisePromise]);
       }
+      if (fetchVersion !== this.fetchAllVersion) return "aborted";
       return "error";
     }
     const currentTopSessionsPromise = loadedSummary.projectScopeRecovered
@@ -1056,6 +1059,7 @@ class UsageStore {
       params?: UsageParams;
       contextParams?: UsageParams;
       recoverProjectScope?: boolean;
+      onTimeRangeRestored?: () => void;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
@@ -1195,6 +1199,7 @@ class UsageStore {
               }
             : undefined,
           recoverProjectScope: false,
+          onTimeRangeRestored: options.onTimeRangeRestored,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
@@ -1212,6 +1217,10 @@ class UsageStore {
           this.selectedTimeRange = null;
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
+          this.invalidatePanel("pairwise");
+          this.clearPairwiseComparisonState();
+          if (options.onTimeRangeRestored) options.onTimeRangeRestored();
+          else void this.fetchPairwise(this.baseParams());
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
           // The reference already holds this scope's full-window attribution.
           this.attributionSummary = this.referenceSummary;

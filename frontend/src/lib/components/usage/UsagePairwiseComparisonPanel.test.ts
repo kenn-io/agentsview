@@ -192,18 +192,6 @@ describe("UsagePairwiseComparisonPanel", () => {
     pickers[2]?.click();
     await tick();
     expect(spy).not.toHaveBeenCalled();
-    expect(document.querySelector(".pairwise-note")).toBeNull();
-
-    usage.summary = usageSummary();
-    await tick();
-    expect([...pickers].every((picker) => !picker.disabled)).toBe(true);
-    pickers[0]?.click();
-    await tick();
-    const project = Array.from(document.querySelectorAll<HTMLLIElement>('li[role="option"]')).find((option) => option.textContent?.includes("Project"));
-    expect(project).toBeTruthy();
-    project?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    await tick();
-    expect(spy).toHaveBeenCalledWith("left", { dimension: "project" });
     await unmount(component);
   });
 

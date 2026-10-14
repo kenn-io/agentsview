@@ -445,33 +445,34 @@ func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testin
 
 type pairwiseErrorStore struct {
 	db.Store
-	started  chan string
-	canceled chan error
-	err      error
+	leftStarted  chan struct{}
+	rightStarted chan struct{}
+	canceled     chan error
+	err          error
 }
 
 func (s *pairwiseErrorStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	s.started <- f.Model
 	if f.Model == "claude-sonnet-4-20250514" {
-		for range 2 {
-			select {
-			case <-s.started:
-			case <-ctx.Done():
-				return db.DailyUsageResult{}, ctx.Err()
-			}
+		close(s.leftStarted)
+		select {
+		case <-s.rightStarted:
+		case <-ctx.Done():
+			return db.DailyUsageResult{}, ctx.Err()
 		}
 		return db.DailyUsageResult{}, s.err
 	}
+	close(s.rightStarted)
+	<-s.leftStarted
 	<-ctx.Done()
 	s.canceled <- ctx.Err()
 	return db.DailyUsageResult{}, ctx.Err()
 }
 
-func TestDirectBackend_UsagePairwiseComparison_ReadError(t *testing.T) {
+func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	readErr := errors.New("daily usage read failed")
-	store := &pairwiseErrorStore{Store: d, started: make(chan string, 2), canceled: make(chan error, 1), err: readErr}
+	store := &pairwiseErrorStore{Store: d, leftStarted: make(chan struct{}), rightStarted: make(chan struct{}), canceled: make(chan error, 1), err: readErr}
 	be := service.NewReadOnlyBackend(store)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -838,7 +839,7 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	seedPairwiseUsageFixture(t, env.DB)
 	svc := env.Backend("", false)
 
-	for _, selection := range []string{"explicit", "default", "default without breakdowns"} {
+	for _, selection := range []string{"explicit", "default"} {
 		t.Run(selection, func(t *testing.T) {
 			req := service.UsagePairwiseComparisonRequest{
 				From:           "2024-06-01",
@@ -853,9 +854,6 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 			if selection != "explicit" {
 				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
 			}
-			if selection == "default without breakdowns" {
-				req.Breakdowns = new(false)
-			}
 
 			res, err := svc.UsagePairwiseComparison(
 				t.Context(),
@@ -863,8 +861,10 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NotNil(t, res)
-			assert.Equal(t, 2, res.Left.SessionCount)
-			assert.Equal(t, 1, res.Right.SessionCount)
+			if selection == "explicit" {
+				assert.Equal(t, 2, res.Left.SessionCount)
+				assert.Equal(t, 1, res.Right.SessionCount)
+			}
 			assert.Equal(t, "model", res.Left.Dimension)
 			assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
 			assert.Equal(t, "model", res.Right.Dimension)

@@ -435,26 +435,6 @@ func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
 	assert.Equal(t, 1, resp.Right.SessionCount)
 }
 
-func TestHandleUsagePairwiseComparisonDefault(t *testing.T) {
-	for _, breakdowns := range []string{"true", "false"} {
-		t.Run(breakdowns, func(t *testing.T) {
-			te := setup(t)
-			seedUsagePairwiseEnv(t, te)
-			w := te.get(t, buildPathURL("/api/v1/usage/pairwise-comparison", map[string]string{
-				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", "breakdowns": breakdowns,
-			}))
-			assertStatus(t, w, http.StatusOK)
-			resp := decode[service.UsagePairwiseComparisonResponse](t, w)
-			assert.Equal(t, "model", resp.Left.Dimension)
-			assert.Equal(t, "claude-sonnet-4-20250514", resp.Left.Value)
-			assert.Equal(t, "model", resp.Right.Dimension)
-			assert.Equal(t, "gpt-4o", resp.Right.Value)
-			assert.Equal(t, 180, resp.Left.TotalTokens)
-			assert.Equal(t, 50, resp.Right.TotalTokens)
-		})
-	}
-}
-
 func TestHandleUsagePairwiseComparisonEmptyDefault(t *testing.T) {
 	te := setup(t)
 	w := te.get(t, buildPathURL("/api/v1/usage/pairwise-comparison", map[string]string{

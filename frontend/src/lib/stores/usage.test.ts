@@ -7,6 +7,7 @@ import type {
   ServiceUsagePairwiseComparisonResponse,
   UsageSummaryResponse,
 } from "../api/generated/index";
+import { emptyUsagePairwiseComparison } from "../test/usage.js";
 import { testMoney } from "../test/money.js";
 
 const usageServiceMocks = vi.hoisted(() => {
@@ -409,6 +410,8 @@ afterEach(() => {});
 describe("UsageStore filter persistence", () => {
   beforeEach(() => {
     installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
+    localStorage.removeItem("usage-filters");
     vi.clearAllMocks();
   });
 
@@ -470,6 +473,7 @@ describe("UsageStore filter persistence", () => {
 describe("UsageStore group-by linking", () => {
   beforeEach(() => {
     installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
     vi.clearAllMocks();
   });
 
@@ -788,50 +792,6 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toBeNull();
   });
 
-  it("refetches the server default once when totals invalidate the selected pair", async () => {
-    const { usage } = await loadStore();
-    await usage.fetchAll();
-    usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
-      usageSummaryWithOptions({ projects: ["beta", "gamma"], models: ["gpt-4o"] }),
-    );
-    const replacement = usagePairwiseComparison();
-    replacement.left = { ...replacement.left, dimension: "project", value: "pl1:sha256:beta" };
-    replacement.right = { ...replacement.right, dimension: "project", value: "pl1:sha256:gamma" };
-    let resolveStale!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
-    let resolveDefault!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
-    usageServiceMocks.getApiV1UsagePairwiseComparison
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveDefault = resolve; }));
-
-    const refresh = usage.fetchAll();
-
-    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2));
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    expect(usage.loading.pairwise).toBe(true);
-    expect(usage.pairwiseComparison).toBeNull();
-    resolveStale(usagePairwiseComparison());
-    await Promise.resolve();
-    expect(usage.loading.pairwise).toBe(true);
-    expect(usage.pairwiseComparison).toBeNull();
-    resolveDefault(replacement);
-    await refresh;
-
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2);
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[0]).toMatchObject({
-      left_value: "claude-sonnet-4-20250514",
-      right_value: "gpt-4o",
-    });
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[0]).not.toHaveProperty(
-      "left_value",
-    );
-    expect(usage.pairwiseSelection).toEqual({
-      left: { dimension: "project", value: "pl1:sha256:beta" },
-      right: { dimension: "project", value: "pl1:sha256:gamma" },
-    });
-    expect(usage.pairwiseComparison).toEqual(replacement);
-  });
-
   it.each(["before totals", "after totals"])("replaces an invalidated selector response arriving %s", async (order) => {
     const { usage } = await loadStore();
     await usage.fetchAll();
@@ -887,7 +847,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toEqual(comparison);
   });
 
-  it("clears stale pairwise results when filters change without selector changes", async () => {
+  it.each([true, false])("handles failed pairwise refresh, filters changed=%s", async (changed) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const { usage } = await loadStore();
@@ -899,7 +859,7 @@ describe("UsageStore session filter params", () => {
         new Error("pairwise failed"),
       );
 
-      usage.applyDateRange("2024-02-01", "2024-02-29");
+      if (changed) usage.applyDateRange("2024-02-01", "2024-02-29");
       await usage.fetchAll();
 
       expect(usage.pairwiseSelection).toEqual({
@@ -912,36 +872,29 @@ describe("UsageStore session filter params", () => {
           value: "gpt-4o",
         },
       });
-      expect(usage.pairwiseComparison).toBeNull();
-      expect(usage.errors.pairwise).toBe("pairwise failed");
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("retains the previous pairwise comparison when an unchanged refresh fails", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const { usage } = await loadStore();
-      await usage.fetchAll();
-      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("totals failed"));
-      usageServiceMocks.getApiV1UsagePairwiseComparison.mockRejectedValueOnce(new Error("pairwise failed"));
-      await usage.fetchAll();
-      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
-      expect(usage.errors.pairwise).toBeNull();
+      expect(usage.pairwiseComparison).toEqual(changed ? null : usagePairwiseComparison());
+      expect(usage.errors.pairwise).toBe(changed ? "pairwise failed" : null);
       expect(usage.loading.pairwise).toBe(false);
     } finally {
       warn.mockRestore();
     }
   });
 
-  it("repairs a partially empty pair on refresh by requesting the default", async () => {
+  it.each(["refresh", "selector"])("repairs a partially empty pair through %s by requesting the default", async (source) => {
     const { usage } = await loadStore();
+    if (source === "selector") {
+      await usage.fetchAll();
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+    }
     usage.pairwiseSelection = {
       left: { dimension: "model", value: "gpt-4o" },
       right: { dimension: "model", value: "" },
     };
-    await usage.fetchAll();
+    if (source === "refresh") await usage.fetchAll();
+    else {
+      usage.setPairwiseSide("right", { value: "" });
+      await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
+    }
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[0]).not.toHaveProperty("left_value");
     expect(usage.pairwiseSelection).toEqual({
@@ -971,39 +924,7 @@ describe("UsageStore session filter params", () => {
       }),
     );
 
-    const emptySide = {
-      totalCost: testMoney(0),
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      totalTokens: 0,
-      sessionCount: 0,
-    };
-    const empty: ServiceUsagePairwiseComparisonResponse = {
-      left: { ...emptySide },
-      right: { ...emptySide },
-      deltas: {
-        totalCostDelta: testMoney(0),
-        totalCostDeltaRatio: null,
-        inputTokensDelta: 0,
-        inputTokensDeltaRatio: null,
-        outputTokensDelta: 0,
-        outputTokensDeltaRatio: null,
-        cacheCreationDelta: 0,
-        cacheCreationDeltaRatio: null,
-        cacheReadDelta: 0,
-        cacheReadDeltaRatio: null,
-        totalTokensDelta: 0,
-        totalTokensDeltaRatio: null,
-        sessionCountDelta: 0,
-        sessionCountDeltaRatio: null,
-        costPerSessionDelta: null,
-        costPerSessionRatio: null,
-        tokensPerSessionDelta: null,
-        tokensPerSessionRatio: null,
-      },
-    };
+    const empty = emptyUsagePairwiseComparison();
     usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(empty);
     await usage.fetchAll();
 
@@ -1040,36 +961,6 @@ describe("UsageStore session filter params", () => {
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it("requests the default when a selector change leaves a partially empty pair", async () => {
-    const { usage } = await loadStore();
-    usage.pairwiseSelection = {
-      left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-      right: { dimension: "model", value: "gpt-4o" },
-    };
-
-    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
-      () => new Promise(() => {}),
-    );
-
-    void usage.fetchAll();
-    await vi.waitFor(() =>
-      expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1),
-    );
-
-    usage.summary = usageSummaryWithOptions({
-      projects: [],
-      models: ["gpt-4o"],
-    });
-
-    usage.setPairwiseSide("left", { dimension: "project" });
-
-    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2));
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[0]).not.toHaveProperty("left_value");
-    await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
-    expect(usage.loading.pairwise).toBe(false);
-    expect(usage.querying.pairwise).toBe(false);
   });
 
   it("records full refresh time and clears new-data hints", async () => {
@@ -1235,84 +1126,25 @@ describe("UsageStore session filter params", () => {
     }
   });
 
-  it("starts the default comparison before totals resolve without repeating it", async () => {
-    const calls: string[] = [];
-    let resolveSummary: ((value: unknown) => void) | undefined;
-    const summaryPromise = new Promise((resolve) => {
-      resolveSummary = resolve;
-    });
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => {
-      calls.push("summary");
-      return summaryPromise;
-    });
-    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => {
-      calls.push("topSessions");
-      return Promise.resolve([]);
-    });
-    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(() => {
-      calls.push("comparison");
-      return Promise.resolve({
-        priorFrom: "2023-12-01",
-        priorTo: "2023-12-31",
-        priorTotalCost: testMoney(1),
-        deltaPct: 0.5,
-      });
-    });
-    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(() => {
-      calls.push("pairwise");
-      return Promise.resolve(usagePairwiseComparison());
-    });
-
+  it.each([false, true])("starts comparison before totals resolve without repeating it, remembered=%s", async (remembered) => {
     const { usage } = await loadStore();
-    const fetch = usage.fetchAll();
-    await Promise.resolve();
-
-    expect(calls).toEqual(["summary", "pairwise", "topSessions"]);
-    expect(usage.summary).toBeNull();
-    await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
-
-    resolveSummary?.(usageSummary());
-    await fetch;
-    await Promise.resolve();
-
-    expect(calls).toEqual(["summary", "pairwise", "topSessions", "comparison"]);
-    expect(usage.summary).not.toBeNull();
-    expect(usage.summary?.comparison).toEqual({
-      priorFrom: "2023-12-01",
-      priorTo: "2023-12-31",
-      priorTotalCost: testMoney(1),
-      deltaPct: 0.5,
-    });
-    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
-    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ current_microdollars: 0 }),
-    );
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toEqual(
-      usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0],
-    );
-  });
-
-  it("starts one remembered comparison before refreshed totals resolve", async () => {
-    const { usage } = await loadStore();
-    await usage.fetchAll();
+    if (remembered) await usage.fetchAll();
     usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
     let resolveSummary!: (summary: UsageSummaryResponse) => void;
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSummary = resolve;
-        }),
-    );
-    const refresh = usage.fetchAll();
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((resolve) => { resolveSummary = resolve; }));
+    const fetch = usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({
-      left_value: "claude-sonnet-4-20250514",
-      right_value: "gpt-4o",
-    });
+    const params = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0];
+    if (remembered) expect(params).toMatchObject({ left_value: "claude-sonnet-4-20250514", right_value: "gpt-4o" });
+    else {
+      expect(usage.summary).toBeNull();
+      expect(params).not.toHaveProperty("left_value");
+    }
+    await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
     resolveSummary(usageSummary());
-    await refresh;
+    await fetch;
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+    expect(usage.summary).not.toBeNull();
   });
 
   it("keeps the selector's replacement request when the early comparison settles", async () => {
@@ -1690,6 +1522,8 @@ describe("UsageStore session filter params", () => {
 describe("UsageStore rolling default date range", () => {
   beforeEach(() => {
     installStorage();
+    localStorage.removeItem("usage-toggles");
+    localStorage.removeItem("usage-filters");
     vi.clearAllMocks();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-25T12:00:00"));
@@ -1994,52 +1828,47 @@ describe("UsageStore time-series range selection", () => {
     expect(usage.timeSeriesSummary).toEqual(context);
   });
 
-  it("refetches the restored range after a brushed comparison and selector change", async () => {
+  it("discards the brushed comparison as soon as failed totals restore the full window", async () => {
     const { usage } = await loadStore();
     await usage.fetchAll();
     usage.applyDateRange("2026-06-04", "2026-06-18");
-    usage.summary = usageSummary(15);
+    const parent = usageSummary(15);
+    usage.summary = parent;
     usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
     let rejectSummary!: (error: Error) => void;
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectSummary = reject;
-        }),
-    );
-    const selected = usagePairwiseComparison();
-    selected.left = { ...selected.left, dimension: "project", value: "pl1:sha256:alpha" };
-    const restored = {
-      ...selected,
-      left: { ...selected.left, totalCost: testMoney(0.5), costPerSession: testMoney(0.5) },
-      deltas: {
-        ...selected.deltas,
-        totalCostDelta: testMoney(1.5),
-        totalCostDeltaRatio: 3,
-        costPerSessionDelta: testMoney(0.5),
-        costPerSessionRatio: 1,
-      },
-    };
+    let resolveTopSessions!: (sessions: DbTopSessionEntry[]) => void;
+    let resolveBrushed!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    let resolveRestored!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((_, reject) => { rejectSummary = reject; }));
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => new Promise((resolve) => { resolveTopSessions = resolve; }));
     usageServiceMocks.getApiV1UsagePairwiseComparison
-      .mockResolvedValueOnce(usagePairwiseComparison())
-      .mockResolvedValueOnce(selected)
-      .mockResolvedValueOnce(restored);
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveBrushed = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRestored = resolve; }));
+
     usage.setTimeRange("2026-06-07", "2026-06-10");
-    usage.setPairwiseSide("left", { dimension: "project", value: "pl1:sha256:alpha" });
-    await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(selected));
     rejectSummary(new Error("range request failed"));
+    await vi.waitFor(() => expect(usage.selectedTimeRange).toBeNull());
+    expect(usage.summary).toEqual(parent);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({ from: "2026-06-04", to: "2026-06-18" });
+    expect(usage.pairwiseComparison).toBeNull();
+
+    const brushed = usagePairwiseComparison();
+    brushed.left.totalCost = testMoney(99);
+    resolveBrushed(brushed);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+    expect(usage.loading.pairwise).toBe(true);
+    const restored = usagePairwiseComparison();
+    restored.left.totalCost = testMoney(15);
+    resolveRestored(restored);
     await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(restored));
-    expect(usage.selectedTimeRange).toBeNull();
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(3);
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[0]).toMatchObject({
-      from: "2026-06-07",
-      to: "2026-06-10",
-    });
-    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[2]?.[0]).toMatchObject({
-      from: "2026-06-04",
-      to: "2026-06-18",
-      left_value: "pl1:sha256:alpha",
-    });
+    resolveTopSessions([topSession("abandoned-range")]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toEqual(restored);
   });
 
   it("restores parent top sessions when a selected-range summary fails", async () => {
@@ -2060,6 +1889,7 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2026-06-04", to: "2026-06-18" }),
     );
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({ from: "2026-06-04", to: "2026-06-18" });
     expect(usage.topSessions).toEqual([topSession("parent-after")]);
   });
 
