@@ -1675,6 +1675,34 @@ func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
 	}
 }
 
+func TestProviderFingerprintCacheRequiresExistingRoot(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		rootExist bool
+		wantCache bool
+	}{
+		{name: "existing Hermes root", rootExist: true, wantCache: true},
+		{name: "missing Hermes root", rootExist: false, wantCache: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "hermes")
+			if test.rootExist {
+				require.NoError(t, os.MkdirAll(root, 0o755))
+			}
+			engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			ctx, closeCache, err := engine.withProviderFingerprintCache(t.Context(), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, closeCache()) })
+
+			assert.Equal(t, test.wantCache, ctx != t.Context())
+		})
+	}
+}
+
 func writeHermesSessionsFile(t *testing.T, root, name, content string) string {
 	t.Helper()
 	path := filepath.Join(root, "sessions", name)

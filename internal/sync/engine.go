@@ -1843,7 +1843,8 @@ func (e *Engine) withProviderFingerprintCache(
 	sources := e.sources()
 	for agent, roots := range sources.agentDirs {
 		factory := sources.providerFactories[agent]
-		if len(roots) == 0 || factory == nil || !factory.Capabilities().Sync.BatchFingerprintCache {
+		if factory == nil || !factory.Capabilities().Sync.BatchFingerprintCache ||
+			!slices.ContainsFunc(roots, statExists) {
 			continue
 		}
 		if len(paths) == 0 {
