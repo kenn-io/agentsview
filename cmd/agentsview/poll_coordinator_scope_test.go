@@ -114,43 +114,50 @@ func (s *groupedCountingPollSyncer) snapshot() [][]agentsync.ProviderRootsGroup 
 }
 
 func TestUnwatchedPollFolderRelease(t *testing.T) {
-	for _, tc := range []struct {
-		removed     string
-		mirrorWatch bool
-	}{
-		{removed: "transcript"},
-		{removed: "project"},
-		{removed: "transcript", mirrorWatch: true},
-		{removed: "project", mirrorWatch: true},
-	} {
-		t.Run(fmt.Sprintf("missing %s reconciled before release/mirror watch=%t", tc.removed, tc.mirrorWatch), func(t *testing.T) {
+	for _, removed := range []string{"transcript", "project"} {
+		t.Run(fmt.Sprintf("missing %s reconciled before release", removed), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				root := filepath.Clean(t.TempDir())
 				project := requireExistingPollRoot(t, root, "project")
 				sourcePath := filepath.Join(project, "archived.jsonl")
-				require.NoError(t, os.WriteFile(sourcePath, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2024-01-01T00:00:00Z", "archived question").String()), 0o600))
+				require.NoError(t, os.WriteFile(sourcePath, []byte(
+					testjsonl.NewSessionBuilder().
+						AddClaudeUser("2024-01-01T00:00:00Z", "archived question").
+						String(),
+				), 0o600))
 				database := dbtest.OpenTestDB(t)
 				const sessionID = "archived"
-				engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local"})
+				engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{
+						parser.AgentClaude: {root},
+					},
+					Machine: "local",
+				})
 				t.Cleanup(engine.Close)
-				require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(), []agentsync.ProviderRootsGroup{{Agent: parser.AgentClaude, Roots: []string{root}}}))
+				require.NoError(t, engine.ReconcileProviderRootsGrouped(
+					t.Context(), []agentsync.ProviderRootsGroup{{Agent: parser.AgentClaude, Roots: []string{root}}},
+				))
 				stored, err := database.GetSessionFull(t.Context(), sessionID)
 				require.NoError(t, err)
 				require.NotNil(t, stored)
 				assert.Nil(t, stored.SourceMissingAt)
-				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), engine, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
+				coordinator := newUnwatchedPollCoordinatorWithTicks(
+					t.Context(), engine, make(chan time.Time), func() {},
+					func(run func()) { run() }, nil, time.Now, time.After,
+				)
 				t.Cleanup(coordinator.Stop)
-				obligation := agentsync.PollingObligation{Key: agentsync.FSNotifyFolderPollingPrefix + root + ":" + project, Scopes: []agentsync.PollingScope{{Agent: "claude", Root: project}}, ReleaseScopes: []agentsync.PollingScope{{Agent: "claude", Root: root}}, Probe: project}
+				obligation := agentsync.PollingObligation{
+					Key:           agentsync.FSNotifyFolderPollingPrefix + root + ":" + project,
+					Scopes:        []agentsync.PollingScope{{Agent: "claude", Root: project}},
+					ReleaseScopes: []agentsync.PollingScope{{Agent: "claude", Root: root}},
+					Probe:         project,
+				}
 				add := func(obligation agentsync.PollingObligation) error {
 					return coordinator.AddObligation(syncObligationToPoller(obligation))
 				}
 				release := coordinator.RemoveObligation
-				if tc.mirrorWatch {
-					options := archivePushWatchWatcherOptions(nil, coordinator)
-					add, release = options.OnPollingRequired, options.OnPollingReleased
-				}
 				require.NoError(t, add(obligation))
-				if tc.removed == "project" {
+				if removed == "project" {
 					require.NoError(t, os.RemoveAll(project))
 				} else {
 					require.NoError(t, os.Remove(sourcePath))
@@ -160,7 +167,9 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 				stored, err = database.GetSessionFull(t.Context(), sessionID)
 				require.NoError(t, err)
 				require.NotNil(t, stored)
-				assert.Nil(t, stored.SourceMissingAt, "degraded polling cannot prove replacement-aware absence")
+				assert.Nil(t, stored.SourceMissingAt,
+					"degraded polling cannot prove replacement-aware absence")
+				// The release's root pass can check replacements before marking a source missing.
 				require.NoError(t, release(obligation.Key))
 				time.Sleep(unwatchedPollInterval)
 				synctest.Wait()
@@ -168,139 +177,183 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 				stored, err = database.GetSessionFull(t.Context(), sessionID)
 				require.NoError(t, err)
 				require.NotNil(t, stored)
-				assert.NotNil(t, stored.SourceMissingAt, "final root reconciliation must mark the archived source missing")
+				assert.NotNil(t, stored.SourceMissingAt,
+					"final root reconciliation must mark the archived source missing")
 			})
 		})
 	}
-	for _, tc := range []struct {
-		name         string
-		folders      int
-		missingProbe bool
-		failed       bool
-		superseded   bool
-		replaced     bool
-	}{
-		{name: "recovered folders=8", folders: 8},
-		{name: "folder recovery respects another provider's missing probe", folders: 1, missingProbe: true},
-		{name: "folder release retries after a failed pass", folders: 1, failed: true},
-		{name: "superseded folder disappears after failed pass", folders: 1, failed: true, superseded: true},
-		{name: "new release survives completion of an older pass", folders: 1, replaced: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				root := t.TempDir()
-				probe := filepath.Join(root, "tmp")
-				release := make(chan struct{})
-				started := make(chan struct{}, 1)
-				var fail atomic.Bool
-				fail.Store(tc.failed)
-				syncer := &groupedCountingPollSyncer{wake: make(chan struct{}, 4)}
-				syncer.reconcile = func([]agentsync.ProviderRootsGroup) error {
+	t.Run("coordinator release state", func(t *testing.T) {
+		for _, tc := range []struct {
+			name         string
+			folders      int
+			missingProbe bool
+			failed       bool
+			superseded   bool
+			replaced     bool
+			mirrorWatch  bool
+		}{
+			{name: "eight releases coalesce into one root pass", folders: 8, mirrorWatch: true},
+			{name: "folder recovery respects another provider's missing probe", folders: 1, missingProbe: true},
+			{name: "folder release retries after a failed pass", folders: 1, failed: true},
+			{name: "superseded folder disappears after failed pass", folders: 1, failed: true, superseded: true},
+			{name: "new release survives completion of an older pass", folders: 1, replaced: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					root := t.TempDir()
+					probe := filepath.Join(root, "tmp")
+					release := make(chan struct{})
+					started := make(chan struct{}, 1)
+					var fail atomic.Bool
+					fail.Store(tc.failed)
+					syncer := &groupedCountingPollSyncer{wake: make(chan struct{}, 4)}
+					syncer.reconcile = func([]agentsync.ProviderRootsGroup) error {
+						if tc.replaced {
+							started <- struct{}{}
+							<-release
+						}
+						if fail.Load() {
+							return os.ErrPermission
+						}
+						return nil
+					}
+					coordinator := newUnwatchedPollCoordinatorWithTicks(
+						t.Context(), syncer, make(chan time.Time), func() {},
+						func(run func()) { run() }, nil, time.Now, time.After,
+					)
+					t.Cleanup(func() {
+						select {
+						case <-release:
+						default:
+							close(release)
+						}
+						coordinator.Stop()
+					})
+					if tc.folders > 1 {
+						// Hold releases until the cooldown ends so they share one root pass.
+						coordinator.pollMu.Lock()
+						coordinator.lastCompletion = time.Now()
+						coordinator.pollMu.Unlock()
+					}
+					add := coordinator.AddObligation
+					releaseObligation := coordinator.RemoveObligation
+					if tc.mirrorWatch {
+						options := archivePushWatchWatcherOptions(nil, coordinator)
+						add = func(obligation pollingObligation) error {
+							return options.OnPollingRequired(agentsync.PollingObligation{
+								Key: obligation.Key, Probe: obligation.Probe,
+								Scopes: []agentsync.PollingScope{
+									{Agent: "claude", Root: obligation.Probe},
+									{Agent: "codex", Root: root},
+								},
+								ReleaseScopes: []agentsync.PollingScope{
+									{Agent: "claude", Root: root},
+									{Agent: "codex", Root: root},
+								},
+							})
+						}
+						releaseObligation = options.OnPollingReleased
+					}
+					var folders []string
+					var obligation pollingObligation
+					for i := range tc.folders {
+						folder := requireExistingPollRoot(t, root, fmt.Sprintf("project-%d", i))
+						folders = append(folders, folder)
+						obligation = pollingObligation{
+							Key:    "fsnotify-folder:" + root + ":" + folder,
+							Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}},
+							Probe:  folder,
+						}
+						if tc.folders > 1 {
+							obligation.Scopes = append(obligation.Scopes, pollingScope{Agent: parser.AgentCodex, Root: root})
+							obligation.ReleaseScopes = []pollingScope{
+								{Agent: parser.AgentClaude, Root: root},
+								{Agent: parser.AgentCodex, Root: root},
+							}
+						}
+						if tc.missingProbe {
+							obligation.Scopes = append(obligation.Scopes, pollingScope{Agent: parser.AgentGemini, Root: root})
+							require.NoError(t, coordinator.AddObligation(pollingObligation{
+								Key:    "gemini",
+								Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: root}},
+								Probe:  probe,
+							}))
+						}
+						if tc.superseded {
+							require.NoError(t, coordinator.AddObligation(pollingObligation{
+								Key:    "fsnotify-runtime:" + root,
+								Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: root}},
+								Probe:  root,
+							}))
+						}
+						require.NoError(t, add(obligation))
+						require.NoError(t, releaseObligation(obligation.Key))
+					}
+					want := []agentsync.ProviderRootsGroup{{Agent: parser.AgentClaude, Roots: folders}}
+					if tc.folders > 1 {
+						synctest.Wait()
+						assert.Empty(t, syncer.snapshot(), "folder releases must respect the poll cooldown")
+						time.Sleep(unwatchedPollInterval)
+						want[0].Roots = []string{root}
+						want = append(want, agentsync.ProviderRootsGroup{Agent: parser.AgentCodex, Roots: []string{root}})
+					}
+					if tc.superseded {
+						want[0].Roots = []string{root, folders[0]}
+					}
 					if tc.replaced {
-						started <- struct{}{}
-						<-release
-					}
-					if fail.Load() {
-						return os.ErrPermission
-					}
-					return nil
-				}
-				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-				t.Cleanup(func() {
-					select {
-					case <-release:
-					default:
+						requirePollWithin(t, started, time.Second)
+						require.NoError(t, add(obligation))
+						require.NoError(t, releaseObligation(obligation.Key))
 						close(release)
 					}
-					coordinator.Stop()
-				})
-				if tc.folders > 1 {
-					coordinator.pollMu.Lock()
-					coordinator.lastCompletion = time.Now()
-					coordinator.pollMu.Unlock()
-				}
-				var folders []string
-				var obligation pollingObligation
-				for i := range tc.folders {
-					folder := requireExistingPollRoot(t, root, fmt.Sprintf("project-%d", i))
-					folders = append(folders, folder)
-					obligation = pollingObligation{Key: "fsnotify-folder:" + root + ":" + folder, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}}, Probe: folder}
+					synctest.Wait()
+					assert.Equal(t, [][]agentsync.ProviderRootsGroup{want}, syncer.snapshot(),
+						"one pass must reconcile every released scope together")
 					if tc.folders > 1 {
-						obligation.Scopes = append(obligation.Scopes, pollingScope{Agent: parser.AgentCodex, Root: root})
-						obligation.ReleaseScopes = []pollingScope{{Agent: parser.AgentClaude, Root: root}, {Agent: parser.AgentCodex, Root: root}}
+						assert.Empty(t, coordinator.currentPollObligations())
+						return
+					}
+					remaining := 1
+					if tc.missingProbe || tc.superseded {
+						remaining = 2
+					}
+					require.Len(t, coordinator.currentPollObligations(), remaining)
+					for _, pending := range coordinator.currentPollObligations() {
+						if pending.Key == obligation.Key {
+							assert.True(t, pending.releasePending,
+								"an incomplete or replaced release must retain polling ownership")
+						}
 					}
 					if tc.missingProbe {
-						obligation.Scopes = append(obligation.Scopes, pollingScope{Agent: parser.AgentGemini, Root: root})
-						require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "gemini", Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: root}}, Probe: probe}))
+						require.NoError(t, os.Mkdir(probe, 0o755))
+						want = append(want, agentsync.ProviderRootsGroup{Agent: parser.AgentGemini, Roots: []string{root}})
 					}
 					if tc.superseded {
-						require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "fsnotify-runtime:" + root, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: root}}, Probe: root}))
+						require.NoError(t, os.Remove(folders[0]))
+						want[0].Roots = []string{root}
 					}
-					require.NoError(t, coordinator.AddObligation(obligation))
-					require.NoError(t, coordinator.RemoveObligation(obligation.Key))
-				}
-				want := []agentsync.ProviderRootsGroup{{Agent: parser.AgentClaude, Roots: folders}}
-				if tc.folders > 1 {
-					synctest.Wait()
-					assert.Empty(t, syncer.snapshot())
+					fail.Store(false)
+					coordinator.requestPoll()
 					time.Sleep(unwatchedPollInterval)
-					want[0].Roots = []string{root}
-					want = append(want, agentsync.ProviderRootsGroup{Agent: parser.AgentCodex, Roots: []string{root}})
-				}
-				if tc.superseded {
-					want[0].Roots = []string{root, folders[0]}
-				}
-				if tc.replaced {
-					requirePollWithin(t, started, time.Second)
-					require.NoError(t, coordinator.AddObligation(obligation))
-					require.NoError(t, coordinator.RemoveObligation(obligation.Key))
-					close(release)
-				}
-				synctest.Wait()
-				assert.Equal(t, [][]agentsync.ProviderRootsGroup{want}, syncer.snapshot())
-				if tc.folders > 1 {
-					assert.Empty(t, coordinator.currentPollObligations())
-					return
-				}
-				remaining := 1
-				if tc.missingProbe || tc.superseded {
-					remaining = 2
-				}
-				require.Len(t, coordinator.currentPollObligations(), remaining)
-				for _, pending := range coordinator.currentPollObligations() {
-					if pending.Key == obligation.Key {
-						assert.True(t, pending.releasePending)
+					synctest.Wait()
+					calls := syncer.snapshot()
+					require.Len(t, calls, 2)
+					assert.Equal(t, want, calls[1], "the retry must finish the pending release scopes")
+					if tc.missingProbe || tc.superseded {
+						pending := coordinator.currentPollObligations()
+						require.Len(t, pending, 1)
+						key := "gemini"
+						if tc.superseded {
+							key = "fsnotify-runtime:" + root
+						}
+						assert.Equal(t, key, pending[0].Key, "another obligation must survive the folder release")
+					} else {
+						assert.Empty(t, coordinator.currentPollObligations())
 					}
-				}
-				if tc.missingProbe {
-					require.NoError(t, os.Mkdir(probe, 0o755))
-					want = append(want, agentsync.ProviderRootsGroup{Agent: parser.AgentGemini, Roots: []string{root}})
-				}
-				if tc.superseded {
-					require.NoError(t, os.Remove(folders[0]))
-					want[0].Roots = []string{root}
-				}
-				fail.Store(false)
-				coordinator.requestPoll()
-				time.Sleep(unwatchedPollInterval)
-				synctest.Wait()
-				calls := syncer.snapshot()
-				require.Len(t, calls, 2)
-				assert.Equal(t, want, calls[1])
-				if tc.missingProbe || tc.superseded {
-					pending := coordinator.currentPollObligations()
-					require.Len(t, pending, 1)
-					key := "gemini"
-					if tc.superseded {
-						key = "fsnotify-runtime:" + root
-					}
-					assert.Equal(t, key, pending[0].Key)
-				} else {
-					assert.Empty(t, coordinator.currentPollObligations())
-				}
+				})
 			})
-		})
-	}
+		}
+	})
 }
 
 // TestUnwatchedPollIssuesOneGroupedReconcilePerPass is the cardinality

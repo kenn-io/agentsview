@@ -1520,9 +1520,15 @@ func TestWatcherNativeEventsDoNotWaitForFailedRetryBackoff(t *testing.T) {
 					assert.False(t, batch.LostEvents)
 				}
 			}
-			gaps := []time.Duration{at[1].Sub(at[0]), at[2].Sub(at[1]), at[3].Sub(at[2]), at[4].Sub(at[3]), at[5].Sub(at[4])}
+			gaps := []time.Duration{
+				at[1].Sub(at[0]), at[2].Sub(at[1]), at[3].Sub(at[2]),
+				at[4].Sub(at[3]), at[5].Sub(at[4]),
+			}
 			t.Logf("callback gaps: %v", gaps)
-			assert.Equal(t, []time.Duration{20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}, gaps)
+			assert.Equal(t, []time.Duration{
+				20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond,
+				20 * time.Millisecond, 20 * time.Millisecond,
+			}, gaps, "native events must bypass the retained batch's retry backoff")
 		})
 	})
 	t.Run("new project during capped discovery retry", func(t *testing.T) {
@@ -1530,14 +1536,20 @@ func TestWatcherNativeEventsDoNotWaitForFailedRetryBackoff(t *testing.T) {
 			backend := newFakeWatchBackend()
 			root := t.TempDir()
 			calls := make(chan WatchBatch, 16)
-			w, err := newWatcherWithBackend(5*time.Second, 5*time.Second, func(_ context.Context, batch WatchBatch) error {
-				calls <- batch
-				return retryScopedWatchError{retry: WatchBatch{ReconcileRoots: []string{root}}}
-			}, backend, 32, 100_000)
+			w, err := newWatcherWithBackend(
+				5*time.Second, 5*time.Second,
+				func(_ context.Context, batch WatchBatch) error {
+					calls <- batch
+					return retryScopedWatchError{retry: WatchBatch{ReconcileRoots: []string{root}}}
+				},
+				backend, 32, 100_000,
+			)
 			require.NoError(t, err)
 			w.Start()
 			defer w.Stop()
-			backend.sendBackendEvent(t, backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange})
+			backend.sendBackendEvent(t, backendEvent{
+				Path: root, Root: root, Op: backendOpReconcileRootChange,
+			})
 			for range 6 {
 				requireReceiveWithin(t, calls, 3*time.Minute)
 				synctest.Wait()
@@ -1546,13 +1558,17 @@ func TestWatcherNativeEventsDoNotWaitForFailedRetryBackoff(t *testing.T) {
 			writtenAt := time.Now()
 			project := filepath.Join(root, "new-project")
 			path := filepath.Join(project, "new-session.jsonl")
-			backend.sendBackendEvent(t, backendEvent{Path: project, Root: root, Op: backendOpCreate, ItemType: backendItemDirectory})
+			backend.sendBackendEvent(t, backendEvent{
+				Path: project, Root: root, Op: backendOpCreate, ItemType: backendItemDirectory,
+			})
 			backend.sendEvent(t, path)
 			batch := requireReceiveWithin(t, calls, 3*time.Minute)
-			assert.Contains(t, batch.Paths, path)
+			assert.Contains(t, batch.Paths, path, "the new transcript must join the pending discovery batch")
 			assert.Equal(t, []string{root}, batch.ReconcileRoots, "failed discovery remains retryable")
-			assert.Equal(t, 5*time.Second, time.Since(writtenAt))
-			t.Logf("new transcript callback after %s with discovery still failing and retry capped at %s", time.Since(writtenAt), watcherRetryMaxDelay)
+			assert.Equal(t, 5*time.Second, time.Since(writtenAt),
+				"a native event must use the debounce delay while discovery retries are capped")
+			t.Logf("new transcript callback after %s with discovery still failing and retry capped at %s",
+				time.Since(writtenAt), watcherRetryMaxDelay)
 		})
 	})
 }

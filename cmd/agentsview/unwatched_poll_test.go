@@ -774,28 +774,36 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 }
 
 func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing.T) {
-	for _, key := range []string{"empty", "fsnotify-folder:empty"} {
-		t.Run(key, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
-				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-				t.Cleanup(coordinator.Stop)
-				require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key}))
-				if key == "empty" {
-					coordinator.requestPoll()
-				} else {
-					require.NoError(t, coordinator.RemoveObligation(key))
-				}
-				synctest.Wait()
-				assert.Empty(t, syncer.snapshot())
-				if key == "empty" {
-					assert.Equal(t, []pollingObligation{{Key: "empty"}}, coordinator.currentPollObligations())
-				} else {
-					assert.Empty(t, coordinator.currentPollObligations())
-				}
-			})
+	t.Run("empty poll", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+			coordinator := newUnwatchedPollCoordinatorWithTicks(
+				t.Context(), syncer, make(chan time.Time), func() {},
+				func(run func()) { run() }, nil, time.Now, time.After,
+			)
+			t.Cleanup(coordinator.Stop)
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "empty"}))
+			coordinator.requestPoll()
+			synctest.Wait()
+			assert.Empty(t, syncer.snapshot(), "empty scopes must not trigger full reconciliation")
+			assert.Equal(t, []pollingObligation{{Key: "empty"}}, coordinator.currentPollObligations())
 		})
-	}
+	})
+	t.Run("empty folder release", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+			coordinator := newUnwatchedPollCoordinatorWithTicks(
+				t.Context(), syncer, make(chan time.Time), func() {},
+				func(run func()) { run() }, nil, time.Now, time.After,
+			)
+			t.Cleanup(coordinator.Stop)
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "fsnotify-folder:empty"}))
+			require.NoError(t, coordinator.RemoveObligation("fsnotify-folder:empty"))
+			synctest.Wait()
+			assert.Empty(t, syncer.snapshot(), "empty release scopes must not trigger full reconciliation")
+			assert.Empty(t, coordinator.currentPollObligations())
+		})
+	})
 }
 
 func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {

@@ -80,6 +80,7 @@ func TestReconcileProviderRootsDescendantDoesNotClaimSiblingScope(t *testing.T) 
 		"rehydration must stay bounded by the requested scope")
 }
 
+// Descendant discovery buffers only requested sources, even with many sibling projects.
 func TestReconcileProviderRootsClaudeDescendantBoundsDiscovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -88,21 +89,35 @@ func TestReconcileProviderRootsClaudeDescendantBoundsDiscovery(t *testing.T) {
 	claudeRoot := filepath.Join(t.TempDir(), "claude")
 	projectA := filepath.Join(claudeRoot, "projA")
 	writeClaudeProjectSession(t, claudeRoot, "projA", "a1")
-	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}}, Machine: "local"})
+
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeRoot},
+		},
+		Machine: "local",
+	})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
 	writeClaudeProjectSession(t, claudeRoot, "projA", "new-a")
 	for i := range 128 {
 		writeClaudeProjectSession(t, claudeRoot, fmt.Sprintf("projB-%d", i), "new-b")
 	}
-	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentClaude, []string{projectA}))
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentClaude, []string{projectA},
+	))
+
 	admitted, err := database.GetSession(t.Context(), "new-a")
 	require.NoError(t, err)
-	assert.NotNil(t, admitted)
+	assert.NotNil(t, admitted,
+		"traversal from the configured root must still discover the descendant")
 	sibling, err := database.GetSession(t.Context(), "new-b")
 	require.NoError(t, err)
-	assert.Nil(t, sibling)
-	assert.Equal(t, 2, engine.LastReconciliationResult().Metrics.MaxProviderBuffered, "discovery must read only the two requested project entries")
+	assert.Nil(t, sibling,
+		"admission must stay bounded to the requested descendant")
+	assert.Equal(t, 2, engine.LastReconciliationResult().Metrics.MaxProviderBuffered,
+		"discovery must buffer only the two sources in the requested project")
 }
 
 // TestReconcileProviderRootsProofBoundedTombstoneWithinDescendant verifies
