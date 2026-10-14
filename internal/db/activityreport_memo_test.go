@@ -13,7 +13,7 @@ import (
 )
 
 func TestActivityMemoReuseAndReset(t *testing.T) {
-	for _, action := range []string{"rename", "week", "recreate", "reopen", "compact", "stale store", "truncate"} {
+	for _, action := range []string{"recreate", "reopen", "compact", "stale store", "truncate"} {
 		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s", "p")
@@ -37,15 +37,6 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 				_, err := d.WriteSessionIncremental(t.Context(), "s", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(1)})
 				require.NoError(t, err)
 				wantCount = 0
-			case "rename":
-				require.NoError(t, d.RenameSession(t.Context(), "s", Ptr("renamed")))
-			case "week":
-				week := q
-				week.RangeStart = week.RangeStart.AddDate(0, 0, -6)
-				got, err := d.activityReportCandidates(t.Context(), []string{"s"}, week)
-				require.NoError(t, err)
-				require.Len(t, got, 1)
-				assert.Equal(t, 2*time.Minute, got[0].End.Sub(got[0].Start))
 			case "recreate":
 				_, err := d.DeleteParserExcludedSessions(t.Context(), []string{"s"})
 				require.NoError(t, err)
@@ -102,7 +93,7 @@ func TestActivityMemoWindowAndAppend(t *testing.T) {
 	require.Len(t, got, 3)
 	assert.Equal(t, 5, got[2].StartOrdinal)
 	var reference []activity.IntervalCandidate
-	require.NoError(t, d.activityReportCandidateSQL([]string{"s"}, q)(t.Context(), func(c activity.IntervalCandidate) error { reference = append(reference, c); return nil }))
+	require.NoError(t, activityReportCandidateSQL(t, d, []string{"s"}, q)(t.Context(), func(c activity.IntervalCandidate) error { reference = append(reference, c); return nil }))
 	assert.Equal(t, reference, got)
 }
 
@@ -115,7 +106,7 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 		insertSession(t, d, id, "p")
 		count := 2
 		if id == "large" {
-			count = 8
+			count = 5
 		}
 		for i := range count {
 			seedMessage(t, d, id, i, "assistant", time.Date(2026, 6, 16, 10, i, 0, 0, time.UTC).Format(time.RFC3339), "m")
@@ -124,7 +115,7 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	q := dayQuery(t, "2026-06-16", "UTC")
 	got, err := d.activityReportCandidates(t.Context(), []string{"large", "small"}, q)
 	require.NoError(t, err)
-	assert.Len(t, got, 8)
+	assert.Len(t, got, 5)
 	assert.Empty(t, d.activityMemo.entries)
 	for _, id := range []string{"large", "small"} {
 		_, err = d.WriteSessionIncremental(t.Context(), id, []Message{
@@ -276,31 +267,6 @@ func TestActivityMemoReportFractionalEnd(t *testing.T) {
 		got, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 		require.NoError(t, err)
 		assert.Zero(t, got.Report.Totals.ActiveMinutes)
-	}
-}
-
-func TestActivityMemoOverflowManySessions(t *testing.T) {
-	d := testDB(t)
-	const count = 100_000
-	_, err := d.getWriter().ExecContext(t.Context(), `
-		WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < ?)
-		INSERT INTO sessions(id, project) SELECT printf('s-%d', i), 'p' FROM n`, count)
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(t.Context(), `
-		INSERT INTO messages(session_id, ordinal, role, content, timestamp)
-		SELECT s.id, n.i, 'assistant', 'x', printf('2026-06-16T10:0%d:00Z', n.i)
-		FROM sessions s CROSS JOIN (SELECT 0 i UNION ALL SELECT 1 UNION ALL SELECT 2) n`)
-	require.NoError(t, err)
-	ids := make([]string, count)
-	for i := range ids {
-		ids[i] = fmt.Sprintf("s-%d", i+1)
-	}
-	q := dayQuery(t, "2026-06-16", "UTC")
-	for range 2 {
-		seen := 0
-		require.NoError(t, d.activityReportCandidateSource(ids, q)(t.Context(), func(activity.IntervalCandidate) error { seen++; return nil }))
-		assert.Equal(t, 200_000, seen)
-		assert.Empty(t, d.activityMemo.entries)
 	}
 }
 

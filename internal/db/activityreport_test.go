@@ -327,9 +327,16 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
 }
 
+func activityReportCandidateSQL(t testing.TB, d *DB, ids []string, q activity.Query) activity.CandidateSource {
+	t.Helper()
+	encodedIDs, err := json.Marshal(ids)
+	require.NoError(t, err)
+	return d.activityReportCandidateSQLJSON(string(encodedIDs), q)
+}
+
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportBenchmark(b)
-	source := d.activityReportCandidateSQL(ids, q)
+	source := activityReportCandidateSQL(b, d, ids, q)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -404,7 +411,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q)
+			source := activityReportCandidateSQL(b, d, []string{"bench-long"}, benchmark.q)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0
