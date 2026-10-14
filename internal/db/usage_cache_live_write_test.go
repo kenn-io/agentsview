@@ -376,6 +376,7 @@ func TestUsageNotificationLargeBurstBoundsOverflow(t *testing.T) {
 }
 
 func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
+	setUsageLocalLocation(t, time.UTC)
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "session", "project", "2026-08-10T09:00:00Z", 0, 10)
 	for _, zone := range []string{"Asia/Tokyo", "Europe/Paris", "Pacific/Auckland"} {
