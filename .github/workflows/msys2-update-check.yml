@@ -22,6 +22,7 @@ jobs:
         include:
           - name: Other packages
             package: ./...
+          # Keep CLI filters aligned with the CLI entries in ci.yml.
           - name: CLI A-P
             package: ./cmd/agentsview
             run: '^Test[A-P]'
