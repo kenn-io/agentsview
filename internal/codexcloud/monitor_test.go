@@ -218,7 +218,7 @@ func TestWarmJoinRecordsUntilTurnCompleted(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "a", resume.ThreadID)
-	assert.Equal(t, "Live tokens: on, no running chats to listen in on.", env.live(t))
+	assert.Equal(t, "Live tokens: on, not listening in on any running chat right now.", env.live(t))
 
 	from := env.resumes()
 	env.join(t, "a")
@@ -256,8 +256,9 @@ func TestUnknownResumeKindStopsCapture(t *testing.T) {
 			env.join(t, "a")
 			assert.Empty(t, env.monitor.Joined(passKey))
 			assert.Equal(t, "Live tokens: stopped. "+Message(FailProtocol, time.Time{})+
-				" After updating AgentsView or fixing the endpoint, restart AgentsView, or set live_tokens = false"+
-				" and back to true, to listen in again.", env.live(t))
+				" After updating AgentsView or fixing the endpoint, restart AgentsView to listen in again. Without"+
+				" a restart, set live_tokens = false under [agents.codex-cloud], wait until this line says"+
+				" \"Live tokens: off\", then set it back to true.", env.live(t))
 			assert.True(t, env.liveWarn(t), "a stop marks the status")
 			handshakes := len(env.host.Handshakes())
 			env.join(t, "b")

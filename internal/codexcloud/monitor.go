@@ -777,10 +777,11 @@ func (m *Monitor) updateLive(key AccountKey) {
 	switch {
 	case stopped != nil:
 		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{}) +
-			" After updating AgentsView or fixing the endpoint, restart AgentsView, or set live_tokens = false" +
-			" and back to true, to listen in again."
+			" After updating AgentsView or fixing the endpoint, restart AgentsView to listen in again. Without" +
+			" a restart, set live_tokens = false under [agents.codex-cloud], wait until this line says" +
+			" \"Live tokens: off\", then set it back to true."
 	case watching == 0:
-		text = "Live tokens: on, no running chats to listen in on."
+		text = "Live tokens: on, not listening in on any running chat right now."
 	default:
 		text = fmt.Sprintf("Live tokens: listening in on %s.", chats(watching, "running chat"))
 	}
