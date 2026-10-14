@@ -355,7 +355,7 @@ func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, StateError, row.State)
 	assert.Contains(t, row.Message, "the files that track what it imported")
-	assert.Contains(t, row.Message, "The AgentsView log, serve.log in its data directory, names the file and the error.")
+	assert.Contains(t, row.Message, "The AgentsView log, debug.log in its data directory, names the file and the error.")
 	assert.NotContains(t, row.Message, env.root, "the status is a sentence, not a raw error")
 }
 

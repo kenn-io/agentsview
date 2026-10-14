@@ -133,6 +133,10 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	return rows
 }
 
+// logName names the log that has the details a status line leaves out.
+// Every command that runs this source sends its log to debug.log.
+const logName = "The AgentsView log, debug.log in its data directory,"
+
 // fileStoreSetting tells the user how to make Codex keep the login in
 // auth.json. The key may already be set, and a second assignment would
 // make config.toml unreadable, so it says to change an existing line.

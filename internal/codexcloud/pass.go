@@ -148,7 +148,7 @@ func (s *Syncer) localErrorRow(key AccountKey, logins []Login) {
 		// The error names a local path; the log has it, and the status
 		// stays one plain message.
 		Message: "AgentsView could not read or save the files that track what it imported, so imports from this account are " +
-			"paused. The AgentsView log, serve.log in its data directory, names the file and the error. Check that AgentsView can read and " +
+			"paused. " + logName + " names the file and the error. Check that AgentsView can read and " +
 			"write its data directory; imports resume on the next sync after that.",
 	})
 }
@@ -168,7 +168,7 @@ func loginErrorMessage(err error) string {
 	if readErr, ok := errors.AsType[*LoginReadError](err); ok {
 		return readErr.Message
 	}
-	return "AgentsView could not read this Codex home's login. The AgentsView log, serve.log in its data directory, has the details."
+	return "AgentsView could not read this Codex home's login. " + logName + " has the details."
 }
 
 func (s *Syncer) homeRow(gates Gates, home, message string) {
@@ -855,7 +855,7 @@ func oldestFailure(acct AccountState) (*time.Time, string) {
 	}
 	days := int(unreadableAfter / (24 * time.Hour))
 	return &oldest, message + fmt.Sprintf(" AgentsView retries a failed chat for %d days; a change to the chat in OpenAI "+
-		"restarts the %d days. The AgentsView log, serve.log in its data directory, lists each chat by its ID. Chats already imported are not affected.", days, days)
+		"restarts the %d days. "+logName+" lists each chat by its ID. Chats already imported are not affected.", days, days)
 }
 
 func (p *pass) account() (AccountState, error) {

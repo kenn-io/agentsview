@@ -244,7 +244,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
 	default:
 		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The server log, "+
-			"serve.log in the AgentsView data directory, may say why.", resp.StatusCode))
+			"debug.log in the AgentsView data directory, may say why.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {

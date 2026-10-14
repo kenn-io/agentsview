@@ -23,7 +23,8 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
-├── serve.log        # Detached daemon log
+├── debug.log        # Log of the server, sync, and other commands
+├── serve.log        # Detached daemon output
 └── uploads/         # Uploaded session files
 ```
 
@@ -1330,9 +1331,8 @@ pause ends.
   are not captured. Dot-delegated tasks are not sub-agent chats in this sense,
   and AgentsView listens in on them like any other chat.
 - A chat that fails to import for 7 days without changing is no longer
-  retried, even while OpenAI lists it as active. The AgentsView log, `serve.log`
-in the data directory, names it.
-  AgentsView tries it again when it changes.
+  retried, even while OpenAI lists it as active. The AgentsView log, `debug.log`
+  in the data directory, names it. AgentsView tries it again when it changes.
 - ChatGPT dot's own conversation has no turns and is never imported. Its
   delegated tasks appear as top-level sessions.
 
