@@ -1199,12 +1199,12 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 			backgroundServeReadyWaitPolicy{
 				Observe: func(st *startupState, elapsed time.Duration) {
 					require.NotNil(t, st)
-					switch elapsed {
-					case 300 * time.Millisecond:
+					switch {
+					case elapsed == 300*time.Millisecond:
 						// Publish after the last poll so the timeout must discover new progress.
 						assert.Equal(t, "1/2 sessions", st.Detail)
 						writeState("2/2 sessions")
-					case 500 * time.Millisecond:
+					case elapsed == 500*time.Millisecond:
 						assert.Equal(t, "2/2 sessions", st.Detail)
 						_, err := WriteDaemonRuntime(dir, host, port, version, false)
 						require.NoError(t, err)
