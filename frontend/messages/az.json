@@ -2852,6 +2852,8 @@
   "plan_usage_could_not_check": "AgentsView plan istifadəsini yoxlaya bilmədi",
   "plan_usage_account_unavailable": "Bu hesab üçün istifadə məlumatı əlçatan deyil",
   "plan_usage_counted_under": "{title} söhbətində hesablanıb",
+  "plan_usage_stale": "Sonra: {reason} ({time}). Bu rəqəmlər köhnəlmiş ola bilər.",
+  "plan_usage_left_out_later": "OpenAI istifadə hesabatı bu söhbəti daxil etmədi",
   "plan_usage_weekly_share": "Həftəlik Codex limitinin {percent}%-i",
   "plan_usage_five_hour_share": "Beş saatlıq Codex limitinin {percent}%-i",
   "plan_usage_credits": [
@@ -2864,7 +2866,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "Kreditlər planın əhatə etdiyindən artıq istifadə üçün OpenAI vahididir, ona görə 0 kredit işi planın əhatə etdiyini bildirir.",
+  "plan_usage_credits_note": "Kreditlər OpenAI istifadə hesabatının verdiyi kimi göstərilir.",
   "plan_usage_col_split": "Model, səy, sürət",
   "plan_usage_col_weekly": "Həftəlik",
   "plan_usage_col_five_hour": "5 saat",
@@ -2936,6 +2938,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud: xəta",
   "status_bar_codex_cloud_off": "Codex Cloud: söndürülüb",
   "status_bar_codex_cloud_config_error": "Codex Cloud: ayarlar xətası",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud: canlı tokenlər diqqət tələb edir",
   "status_bar_codex_cloud_oldest_failure": "Ən köhnə uğursuzluq: {time}",
   "status_bar_codex_cloud_last_success": "Son uğurlu sinxronizasiya: {time}",
   "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}"

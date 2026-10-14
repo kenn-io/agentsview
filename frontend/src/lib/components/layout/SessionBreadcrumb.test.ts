@@ -1703,14 +1703,16 @@ describe("SessionBreadcrumb", () => {
         `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`,
         missed,
       ]);
-      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(`, ${missed}`);
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(
+        `, Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}, ${missed}`,
+      );
       const menu = await openPlanUsage();
       expect(menu).toContain("4.13% of the weekly Codex limit");
       expect(menu).toContain("0 credits");
       expect(document.querySelector(".plan-usage-menu tbody tr")?.textContent).toContain(
         "model-a · high · standard",
       );
-      expect(menu).toContain("so 0 credits means the plan covered the work");
+      expect(menu).toContain("Credits are shown as OpenAI's usage report gives them.");
       expect(menu).toContain(missed);
     });
 

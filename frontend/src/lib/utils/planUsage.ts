@@ -95,6 +95,16 @@ function outcomeMessage(plan: DbPlanUsageView): string | null {
   }
 }
 
+// staleNote says what a check after the row found, for an outcome that
+// leaves the row's figures possibly out of date. "Not reported yet" would
+// promise a report that may never come, so a left-out chat says so.
+function staleNote(plan: DbPlanUsageView): string | null {
+  if (!STALE_ROW_OUTCOMES.has(plan.outcome_kind ?? "")) return null;
+  const reason =
+    plan.outcome_kind === "left_out" ? m.plan_usage_left_out_later() : outcomeMessage(plan);
+  return m.plan_usage_stale({ reason: reason ?? "", time: formatTimestamp(plan.outcome_at) });
+}
+
 function groupLabel(group: DbPlanUsageView["groups"][number]): string {
   return [group.model, group.reasoning_effort, group.speed].filter(Boolean).join(" · ");
 }
@@ -182,7 +192,7 @@ export function describePlanUsage(
           })
         : m.plan_usage_title(),
     headline,
-    staleNote: STALE_ROW_OUTCOMES.has(plan.outcome_kind ?? "") ? outcomeMessage(plan) : null,
+    staleNote: staleNote(plan),
     totals,
     groups: plan.groups.map((group, index) => ({
       key: `${index}`,

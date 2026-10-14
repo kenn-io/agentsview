@@ -2766,6 +2766,8 @@
   "plan_usage_could_not_check": "AgentsView 無法檢查方案用量",
   "plan_usage_account_unavailable": "此帳戶無法取得用量",
   "plan_usage_counted_under": "計入聊天 {title}",
+  "plan_usage_stale": "之後：{reason}（{time}）。這些數字可能已過時。",
+  "plan_usage_left_out_later": "OpenAI 用量報告未納入此聊天",
   "plan_usage_weekly_share": "Codex 每週上限的 {percent}%",
   "plan_usage_five_hour_share": "Codex 五小時上限的 {percent}%",
   "plan_usage_credits": [
@@ -2777,7 +2779,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "點數是 OpenAI 對超出方案涵蓋範圍之用量的計量單位，因此 0 點數表示方案已涵蓋這些工作。",
+  "plan_usage_credits_note": "點數依 OpenAI 用量報告提供的數值顯示。",
   "plan_usage_col_split": "模型、推理強度、速度",
   "plan_usage_col_weekly": "每週",
   "plan_usage_col_five_hour": "5 小時",
@@ -2843,6 +2845,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud：錯誤",
   "status_bar_codex_cloud_off": "Codex Cloud：已關閉",
   "status_bar_codex_cloud_config_error": "Codex Cloud：設定錯誤",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud：即時權杖需要處理",
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"

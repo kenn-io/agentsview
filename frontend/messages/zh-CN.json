@@ -2763,6 +2763,8 @@
   "plan_usage_could_not_check": "AgentsView 无法检查套餐用量",
   "plan_usage_account_unavailable": "此账户无法获取用量",
   "plan_usage_counted_under": "计入聊天 {title}",
+  "plan_usage_stale": "之后：{reason}（{time}）。这些数字可能已过时。",
+  "plan_usage_left_out_later": "OpenAI 用量报告未包含此聊天",
   "plan_usage_weekly_share": "Codex 每周上限的 {percent}%",
   "plan_usage_five_hour_share": "Codex 五小时上限的 {percent}%",
   "plan_usage_credits": [
@@ -2774,7 +2776,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "积分是 OpenAI 对超出套餐包含范围的用量的计量单位，因此 0 积分表示套餐已覆盖这些工作。",
+  "plan_usage_credits_note": "积分按 OpenAI 用量报告提供的数值显示。",
   "plan_usage_col_split": "模型、推理强度、速度",
   "plan_usage_col_weekly": "每周",
   "plan_usage_col_five_hour": "5 小时",
@@ -2840,6 +2842,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud：错误",
   "status_bar_codex_cloud_off": "Codex Cloud：已关闭",
   "status_bar_codex_cloud_config_error": "Codex Cloud：设置错误",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud：实时令牌需要处理",
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
