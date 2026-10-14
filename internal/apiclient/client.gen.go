@@ -19512,17 +19512,17 @@ type GetAPIV1UsagePairwiseComparisonQuery struct {
 	// SessionCounts Include distinct session counts
 	SessionCounts *bool `json:"session_counts,omitempty"`
 
-	// LeftDimension Left-side comparison dimension
-	LeftDimension string `json:"left_dimension" validate:"required"`
+	// LeftDimension Left-side comparison dimension; omit all four sides for the default pair
+	LeftDimension *string `json:"left_dimension,omitempty"`
 
 	// LeftValue Left-side comparison value; opaque project key for the project dimension
-	LeftValue string `json:"left_value" validate:"required"`
+	LeftValue *string `json:"left_value,omitempty"`
 
 	// RightDimension Right-side comparison dimension
-	RightDimension string `json:"right_dimension" validate:"required"`
+	RightDimension *string `json:"right_dimension,omitempty"`
 
 	// RightValue Right-side comparison value; opaque project key for the project dimension
-	RightValue string `json:"right_value" validate:"required"`
+	RightValue *string `json:"right_value,omitempty"`
 }
 
 func (g GetAPIV1UsagePairwiseComparisonQuery) Validate() error {
@@ -19545,18 +19545,6 @@ func (g GetAPIV1UsagePairwiseComparisonQuery) Validate() error {
 		if err := typesValidator.Var(g.MinUserMessages, "omitempty,gte=0"); err != nil {
 			errors = errors.Append("MinUserMessages", err)
 		}
-	}
-	if err := typesValidator.Var(g.LeftDimension, "required"); err != nil {
-		errors = errors.Append("LeftDimension", err)
-	}
-	if err := typesValidator.Var(g.LeftValue, "required"); err != nil {
-		errors = errors.Append("LeftValue", err)
-	}
-	if err := typesValidator.Var(g.RightDimension, "required"); err != nil {
-		errors = errors.Append("RightDimension", err)
-	}
-	if err := typesValidator.Var(g.RightValue, "required"); err != nil {
-		errors = errors.Append("RightValue", err)
 	}
 	if len(errors) == 0 {
 		return nil
@@ -24665,12 +24653,14 @@ type ServiceUsagePairwiseComparisonSide struct {
 	CacheCreationTokens int64       `json:"cacheCreationTokens"`
 	CacheReadTokens     int64       `json:"cacheReadTokens"`
 	CostPerSession      *MoneyMoney `json:"costPerSession,omitempty"`
+	Dimension           string      `json:"dimension" validate:"required"`
 	InputTokens         int64       `json:"inputTokens"`
 	OutputTokens        int64       `json:"outputTokens"`
 	SessionCount        int64       `json:"sessionCount"`
 	TokensPerSession    *float64    `json:"tokensPerSession,omitempty"`
 	TotalCost           MoneyMoney  `json:"totalCost"`
 	TotalTokens         int64       `json:"totalTokens"`
+	Value               string      `json:"value" validate:"required"`
 }
 
 func (s ServiceUsagePairwiseComparisonSide) Validate() error {
@@ -24682,10 +24672,16 @@ func (s ServiceUsagePairwiseComparisonSide) Validate() error {
 			}
 		}
 	}
+	if err := typesValidator.Var(s.Dimension, "required"); err != nil {
+		errors = errors.Append("Dimension", err)
+	}
 	if v, ok := any(s.TotalCost).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("TotalCost", err)
 		}
+	}
+	if err := typesValidator.Var(s.Value, "required"); err != nil {
+		errors = errors.Append("Value", err)
 	}
 	if len(errors) == 0 {
 		return nil

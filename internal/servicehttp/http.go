@@ -1132,16 +1132,16 @@ func (b *httpBackend) UsagePairwiseComparison(
 		q.Termination = new(req.Termination)
 	}
 	if req.LeftDimension != "" {
-		q.LeftDimension = req.LeftDimension
+		q.LeftDimension = new(req.LeftDimension)
 	}
 	if req.LeftValue != "" {
-		q.LeftValue = req.LeftValue
+		q.LeftValue = new(req.LeftValue)
 	}
 	if req.RightDimension != "" {
-		q.RightDimension = req.RightDimension
+		q.RightDimension = new(req.RightDimension)
 	}
 	if req.RightValue != "" {
-		q.RightValue = req.RightValue
+		q.RightValue = new(req.RightValue)
 	}
 	if req.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(req.MinUserMessages))

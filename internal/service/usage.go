@@ -362,6 +362,8 @@ type UsageSummaryResult struct {
 // UsagePairwiseComparisonSide holds aggregate and derived
 // metrics for one side of a pairwise comparison.
 type UsagePairwiseComparisonSide struct {
+	Dimension           string       `json:"dimension"`
+	Value               string       `json:"value"`
 	TotalCost           money.Money  `json:"totalCost"`
 	InputTokens         int          `json:"inputTokens"`
 	OutputTokens        int          `json:"outputTokens"`
@@ -416,6 +418,19 @@ type UsagePairwiseComparisonRequest struct {
 	// preserve exact labels that cannot round-trip through CSV strings.
 	LeftProjectLabels  []string `json:"-"`
 	RightProjectLabels []string `json:"-"`
+}
+
+func DefaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
+	switch {
+	case len(summary.ModelTotals) >= 2:
+		return "model", summary.ModelTotals[0].Model, "model", summary.ModelTotals[1].Model
+	case len(summary.ProjectTotals) >= 2:
+		return "project", summary.ProjectTotals[0].ProjectKey, "project", summary.ProjectTotals[1].ProjectKey
+	case len(summary.ModelTotals) > 0 && len(summary.ProjectTotals) > 0:
+		return "model", summary.ModelTotals[0].Model, "project", summary.ProjectTotals[0].ProjectKey
+	default:
+		return "", "", "", ""
+	}
 }
 
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage

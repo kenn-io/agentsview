@@ -948,6 +948,17 @@ func (b *directBackend) UsageSummary(
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
+	if req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == "" {
+		summary, err := b.UsageSummary(ctx, req.UsageRequest)
+		if err != nil {
+			return nil, err
+		}
+		req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = DefaultUsagePairwiseSelection(summary)
+		if req.LeftDimension == "" {
+			out, err := BuildUsagePairwiseComparisonResult(db.DailyUsageResult{}, db.DailyUsageResult{})
+			return &out, err
+		}
+	}
 	var err error
 	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
 	if err != nil {
@@ -991,6 +1002,8 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
+	out.Left.Dimension, out.Left.Value = req.LeftDimension, req.LeftValue
+	out.Right.Dimension, out.Right.Value = req.RightDimension, req.RightValue
 	return &out, nil
 }
 

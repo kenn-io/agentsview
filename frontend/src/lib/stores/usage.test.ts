@@ -86,6 +86,8 @@ const usageServiceMocks = vi.hoisted(() => {
     }),
     getApiV1UsagePairwiseComparison: vi.fn().mockResolvedValue({
       left: {
+        dimension: "model",
+        value: "claude-sonnet-4-20250514",
         totalCost: money(1),
         inputTokens: 10,
         outputTokens: 5,
@@ -97,6 +99,8 @@ const usageServiceMocks = vi.hoisted(() => {
         tokensPerSession: 15,
       },
       right: {
+        dimension: "model",
+        value: "gpt-4o",
         totalCost: money(2),
         inputTokens: 20,
         outputTokens: 10,
@@ -352,6 +356,8 @@ function usageSummaryWithOptions(
 function usagePairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   return {
     left: {
+      dimension: "model",
+      value: "claude-sonnet-4-20250514",
       totalCost: testMoney(1),
       inputTokens: 10,
       outputTokens: 5,
@@ -363,6 +369,8 @@ function usagePairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
       tokensPerSession: 15,
     },
     right: {
+      dimension: "model",
+      value: "gpt-4o",
       totalCost: testMoney(2),
       inputTokens: 20,
       outputTokens: 10,
@@ -401,9 +409,6 @@ afterEach(() => {});
 describe("UsageStore filter persistence", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
-    localStorage.removeItem(TOGGLES_KEY);
-    localStorage.removeItem("usage-filters");
     vi.clearAllMocks();
   });
 
@@ -465,8 +470,6 @@ describe("UsageStore filter persistence", () => {
 describe("UsageStore group-by linking", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
-    localStorage.removeItem(TOGGLES_KEY);
     vi.clearAllMocks();
   });
 
@@ -552,7 +555,6 @@ describe("UsageStore group-by linking", () => {
 describe("UsageStore session filter params", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
     vi.clearAllMocks();
   });
 
@@ -823,7 +825,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toBeNull();
   });
 
-  it("keeps pairwise results when a refresh with the same selection fails", async () => {
+  it("clears stale pairwise results when filters change without selector changes", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const { usage } = await loadStore();
@@ -848,8 +850,8 @@ describe("UsageStore session filter params", () => {
           value: "gpt-4o",
         },
       });
-      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
-      expect(usage.errors.pairwise).toBeNull();
+      expect(usage.pairwiseComparison).toBeNull();
+      expect(usage.errors.pairwise).toBe("pairwise failed");
     } finally {
       warn.mockRestore();
     }
@@ -1103,7 +1105,7 @@ describe("UsageStore session filter params", () => {
     }
   });
 
-  it("starts a saved default pair beside summary and top sessions without repeating it", async () => {
+  it("applies an early default pair only after totals arrive without repeating it", async () => {
     const calls: string[] = [];
     let resolveSummary: ((value: unknown) => void) | undefined;
     const summaryPromise = new Promise((resolve) => {
@@ -1131,13 +1133,6 @@ describe("UsageStore session filter params", () => {
       return Promise.resolve(usagePairwiseComparison());
     });
 
-    localStorage.setItem(
-      "usage-default-pair",
-      JSON.stringify({
-        left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-        right: { dimension: "model", value: "gpt-4o" },
-      }),
-    );
     const { usage } = await loadStore();
     const fetch = usage.fetchAll();
     await Promise.resolve();
@@ -1164,25 +1159,16 @@ describe("UsageStore session filter params", () => {
       expect.objectContaining({ current_microdollars: 0 }),
     );
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({
-        left_dimension: expect.any(String),
-        left_value: expect.any(String),
-        right_dimension: expect.any(String),
-        right_value: expect.any(String),
-      }),
+      usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0],
     );
   });
 
-  it.each(["changed default", "selector change", "no seed", "summary failure"])(
+  it.each(["changed default", "selector change", "summary failure", "older daemon"])(
     "handles %s while totals are pending",
     async (scenario) => {
-      if (scenario !== "no seed") {
-        localStorage.setItem(
-          "usage-default-pair",
-          JSON.stringify({
-            left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-            right: { dimension: "model", value: "gpt-4o" },
-          }),
+      if (scenario === "older daemon") {
+        usageServiceMocks.getApiV1UsagePairwiseComparison.mockRejectedValueOnce(
+          new apiRuntimeMocks.ApiError(400, "missing sides"),
         );
       }
       let resolveSummary!: (summary: UsageSummaryResponse) => void;
@@ -1195,16 +1181,24 @@ describe("UsageStore session filter params", () => {
           }),
       );
       const { usage } = await loadStore();
+      if (scenario === "selector change") {
+        usage.pairwiseSelection = {
+          left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+          right: { dimension: "model", value: "gpt-4o" },
+        };
+      }
       const fetch = usage.fetchAll();
       await Promise.resolve();
-      expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(
-        scenario === "no seed" ? 0 : 1,
-      );
+      expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
       expect(usage.pairwiseComparison).toBeNull();
       if (scenario === "selector change") usage.setPairwiseSide("left", { value: "gpt-4o" });
       if (scenario === "changed default") {
+        let resolvePairwise!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
         usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
-          () => new Promise(() => {}),
+          () =>
+            new Promise((resolve) => {
+              resolvePairwise = resolve;
+            }),
         );
         resolveSummary(
           usageSummaryWithOptions({
@@ -1220,11 +1214,12 @@ describe("UsageStore session filter params", () => {
           right_value: "new-model",
         });
         expect(usage.pairwiseComparison).toBeNull();
-        expect(JSON.parse(localStorage.getItem("usage-default-pair") || "null")).toEqual({
-          left: { dimension: "model", value: "gpt-4o" },
-          right: { dimension: "model", value: "new-model" },
-        });
-        usage.cancelInFlightReads();
+        const current = usagePairwiseComparison();
+        current.left.value = "gpt-4o";
+        current.right.value = "new-model";
+        resolvePairwise(current);
+        await fetch;
+        expect(usage.pairwiseComparison).toEqual(current);
         return;
       }
       if (scenario === "summary failure") rejectSummary(new Error("summary failed"));
@@ -1234,9 +1229,7 @@ describe("UsageStore session filter params", () => {
         expect(usage.pairwiseComparison).toBeNull();
         expect(usage.loading.pairwise).toBe(false);
       } else {
-        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(
-          scenario === "no seed" ? 1 : 2,
-        );
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({
           left_value: scenario === "selector change" ? "gpt-4o" : "claude-sonnet-4-20250514",
           right_value: "gpt-4o",
@@ -1560,9 +1553,6 @@ describe("UsageStore session filter params", () => {
 describe("UsageStore rolling default date range", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
-    localStorage.removeItem("usage-toggles");
-    localStorage.removeItem("usage-filters");
     vi.clearAllMocks();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-25T12:00:00"));
@@ -1637,7 +1627,6 @@ describe("UsageStore rolling default date range", () => {
 describe("UsageStore time-series range selection", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
     vi.clearAllMocks();
   });
 
@@ -2218,7 +2207,6 @@ describe("parseWindowDays", () => {
 describe("UsageStore attribution focus", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
     vi.clearAllMocks();
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
@@ -2548,7 +2536,6 @@ describe("UsageStore attribution focus", () => {
 describe("UsageStore project zoom", () => {
   beforeEach(() => {
     installStorage();
-    localStorage.removeItem("usage-default-pair");
     vi.clearAllMocks();
     usageServiceMocks.getUsageZoom.mockReset().mockResolvedValue([]);
     usageServiceMocks.getApiV1UsageTopSessions.mockReset().mockResolvedValue([]);

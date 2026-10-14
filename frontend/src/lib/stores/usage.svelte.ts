@@ -15,7 +15,7 @@ import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
-type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
+type UsagePairwiseParams = NonNullable<Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0]>;
 type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "zoom";
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
@@ -68,33 +68,6 @@ interface Toggles {
 }
 
 const TOGGLES_KEY = "usage-toggles";
-const DEFAULT_PAIR_KEY = "usage-default-pair";
-
-function loadDefaultPair(): UsagePairwiseSelection | null {
-  try {
-    const pair = JSON.parse(localStorage.getItem(DEFAULT_PAIR_KEY) ?? "null");
-    if (
-      [pair?.left, pair?.right].every(
-        (side) =>
-          side &&
-          (side.dimension === "model" || side.dimension === "project") &&
-          typeof side.value === "string",
-      )
-    )
-      return pair;
-  } catch {
-    // Storage may be unavailable or contain invalid JSON.
-  }
-  return null;
-}
-
-function saveDefaultPair(pair: UsagePairwiseSelection): void {
-  try {
-    localStorage.setItem(DEFAULT_PAIR_KEY, JSON.stringify(pair));
-  } catch {
-    // Storage may be full or unavailable.
-  }
-}
 
 function defaultToggles(): Toggles {
   return {
@@ -387,11 +360,6 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
-    const pair = loadDefaultPair();
-    if (pair) {
-      this.pairwiseSelection = pair;
-      this.pairwiseSelectionSeeded = true;
-    }
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
@@ -408,7 +376,7 @@ class UsageStore {
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
-  private pairwiseSelectionSeeded = false;
+  private pairwiseComparisonScope: string | null = null;
   private zoomed = $state(false);
 
   get zoomedProject(): { key: string; label: string } | null {
@@ -600,8 +568,7 @@ class UsageStore {
     const leftValid = current.left.value !== "" && currentLeftOptions.includes(current.left.value);
     const rightValid =
       current.right.value !== "" && currentRightOptions.includes(current.right.value);
-    if (leftValid && rightValid && !this.pairwiseSelectionSeeded) return false;
-    this.pairwiseSelectionSeeded = false;
+    if (leftValid && rightValid) return false;
 
     const modelOptions = this.pairwiseModelOptions;
     const projectOptions = this.pairwiseProjectOptions;
@@ -624,7 +591,6 @@ class UsageStore {
     } else {
       next = emptyPairwiseSelection();
     }
-    saveDefaultPair(next);
     if (samePairwiseSelection(current, next)) {
       return false;
     }
@@ -634,6 +600,7 @@ class UsageStore {
 
   private clearPairwiseComparisonState(): void {
     this.pairwiseComparison = null;
+    this.pairwiseComparisonScope = null;
     this.errors.pairwise = null;
   }
 
@@ -727,7 +694,6 @@ class UsageStore {
 
     next[side] = { dimension, value };
     this.pairwiseSelection = next;
-    this.pairwiseSelectionSeeded = false;
     this.invalidatePanel("pairwise");
     this.clearPairwiseComparisonState();
     if (this.summary) {
@@ -1043,9 +1009,8 @@ class UsageStore {
       contextParams,
     });
     const summaryVersion = this.versions.summary;
-    const earlyPairwise = this.currentPairwiseParams(params)
-      ? this.fetchPairwise(summaryVersion, params, summaryPromise)
-      : null;
+    const earlyRequest = this.currentPairwiseParams(params);
+    const earlyPairwise = this.fetchPairwise(summaryVersion, params, summaryPromise);
     const pairwiseVersion = this.versions.pairwise;
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
@@ -1091,11 +1056,25 @@ class UsageStore {
         currentTopSessionsPromise,
         currentZoomPromise,
         this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
-        earlyPairwise &&
-        this.versions.summary === summaryVersion &&
-        this.versions.pairwise === pairwiseVersion
-          ? earlyPairwise
-          : this.fetchPairwise(loadedSummary.version, loadedSummary.params),
+        (async () => {
+          if (
+            loadedSummary.projectScopeRecovered ||
+            this.versions.summary !== summaryVersion ||
+            this.versions.pairwise !== pairwiseVersion ||
+            (earlyRequest &&
+              JSON.stringify(earlyRequest) !==
+                JSON.stringify(this.currentPairwiseParams(loadedSummary.params)))
+          )
+            return this.fetchPairwise(loadedSummary.version, loadedSummary.params);
+          const earlyResult = await earlyPairwise;
+          if (
+            earlyResult !== "aborted" &&
+            this.versions.summary === summaryVersion &&
+            this.versions.pairwise === pairwiseVersion
+          )
+            return earlyResult;
+          return this.fetchPairwise(loadedSummary.version, loadedSummary.params);
+        })(),
       ]);
     const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
@@ -1160,6 +1139,7 @@ class UsageStore {
       : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     const params = options.params ?? this.baseParams();
+    this.clearPairwiseOutsideScope(params);
     try {
       const contextParams = options.contextParams;
       let data: UsageSummaryResponse;
@@ -1221,9 +1201,10 @@ class UsageStore {
         }
         this.errors.summary = null;
         if (this.ensurePairwiseSelection()) {
-          this.invalidatePanel("pairwise");
+          if (loadComparison) this.invalidatePanel("pairwise");
           this.clearPairwiseComparisonState();
         }
+        this.clearPairwiseOutsideScope(params);
         const loaded = {
           version: v,
           summary: data,
@@ -1369,6 +1350,11 @@ class UsageStore {
     }
   }
 
+  private clearPairwiseOutsideScope(params: UsageParams): void {
+    const scope = JSON.stringify(this.currentPairwiseParams(params));
+    if (this.pairwiseComparisonScope !== scope) this.clearPairwiseComparisonState();
+  }
+
   private currentPairwiseParams(params: UsageParams): UsagePairwiseParams | null {
     const selection = this.pairwiseSelection;
     if (!selection.left.value || !selection.right.value) {
@@ -1390,8 +1376,9 @@ class UsageStore {
   ): Promise<FetchResult> {
     if (this.versions.summary !== summaryVersion) return "aborted";
     const pairwiseVersion = ++this.versions.pairwise;
-    const request = this.currentPairwiseParams(params);
-    if (!request) {
+    const selectedRequest = this.currentPairwiseParams(params);
+    const request = selectedRequest ?? params;
+    if (!selectedRequest && !pendingSummary) {
       this.pairwiseComparison = null;
       this.errors.pairwise = null;
       this.loading.pairwise = false;
@@ -1407,9 +1394,31 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const comparison = await UsageService.getApiV1UsagePairwiseComparison(request, { signal });
-      if (pendingSummary && !(await pendingSummary)) return "aborted";
+      if (pendingSummary) {
+        const loaded = await pendingSummary;
+        if (!loaded || loaded.projectScopeRecovered) return "aborted";
+        const left = selectedRequest
+          ? { dimension: selectedRequest.left_dimension, value: selectedRequest.left_value }
+          : comparison.left;
+        const right = selectedRequest
+          ? { dimension: selectedRequest.right_dimension, value: selectedRequest.right_value }
+          : comparison.right;
+        const selection = this.pairwiseSelection;
+        if (
+          (left.dimension || "model") !== selection.left.dimension ||
+          left.value !== selection.left.value ||
+          (right.dimension || "model") !== selection.right.dimension ||
+          right.value !== selection.right.value
+        )
+          return "aborted";
+      }
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
+        if (!this.currentPairwiseParams(params)) {
+          this.clearPairwiseComparisonState();
+          return "ok";
+        }
         this.pairwiseComparison = comparison;
+        this.pairwiseComparisonScope = JSON.stringify(this.currentPairwiseParams(params));
         this.errors.pairwise = null;
         this.noteStep("pairwise", liveStep, started, comparison);
         return "ok";
@@ -1419,6 +1428,18 @@ class UsageStore {
       if (isAbortError(e)) {
         status = "aborted";
         return "aborted";
+      }
+      if (!selectedRequest && pendingSummary && e instanceof ApiError && e.status === 400)
+        return "aborted";
+      if (pendingSummary) {
+        const loaded = await pendingSummary;
+        if (
+          !loaded ||
+          loaded.projectScopeRecovered ||
+          (selectedRequest &&
+            JSON.stringify(selectedRequest) !== JSON.stringify(this.currentPairwiseParams(params)))
+        )
+          return "aborted";
       }
       status = "error";
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {

@@ -439,7 +439,7 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 	assert.False(t, spy.filters[1].SkipSessionCounts)
 }
 
-func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
+func TestUsagePairwiseComparisonOpenAPIOptionalSideParams(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "get", "/api/v1/usage/pairwise-comparison")
@@ -451,10 +451,10 @@ func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
 		}
 	}
 
-	assert.True(t, required["left_dimension"])
-	assert.True(t, required["left_value"])
-	assert.True(t, required["right_dimension"])
-	assert.True(t, required["right_value"])
+	assert.False(t, required["left_dimension"])
+	assert.False(t, required["left_value"])
+	assert.False(t, required["right_dimension"])
+	assert.False(t, required["right_value"])
 }
 
 func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(

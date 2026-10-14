@@ -80,6 +80,8 @@ function usageSummary(): UsageSummaryResponse {
 function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   return {
     left: {
+      dimension: "model",
+      value: "claude-sonnet-4-20250514",
       totalCost: testMoney(4),
       inputTokens: 200,
       outputTokens: 100,
@@ -91,6 +93,8 @@ function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
       tokensPerSession: 150,
     },
     right: {
+      dimension: "project",
+      value: "pl1:sha256:beta",
       totalCost: testMoney(5.5),
       inputTokens: 100,
       outputTokens: 50,

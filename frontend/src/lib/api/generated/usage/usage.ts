@@ -46,7 +46,7 @@ export const getApiV1UsageComparison = async (
 };
 
 export const getGetApiV1UsagePairwiseComparisonUrl = (
-  params: GetApiV1UsagePairwiseComparisonParams,
+  params?: GetApiV1UsagePairwiseComparisonParams,
 ) => {
   const normalizedParams = new URLSearchParams();
 
@@ -67,7 +67,7 @@ export const getGetApiV1UsagePairwiseComparisonUrl = (
  * @summary Get usage pairwise comparison
  */
 export const getApiV1UsagePairwiseComparison = async (
-  params: GetApiV1UsagePairwiseComparisonParams,
+  params?: GetApiV1UsagePairwiseComparisonParams,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<ServiceUsagePairwiseComparisonResponse> => {
   return orvalFetch<ServiceUsagePairwiseComparisonResponse>(

@@ -83,10 +83,10 @@ type usageComparisonInput struct {
 
 type usagePairwiseComparisonInput struct {
 	UsageFilterInput
-	LeftDimension  string `query:"left_dimension" required:"true" doc:"Left-side comparison dimension"`
-	LeftValue      string `query:"left_value" required:"true" doc:"Left-side comparison value; opaque project key for the project dimension"`
-	RightDimension string `query:"right_dimension" required:"true" doc:"Right-side comparison dimension"`
-	RightValue     string `query:"right_value" required:"true" doc:"Right-side comparison value; opaque project key for the project dimension"`
+	LeftDimension  string `query:"left_dimension" doc:"Left-side comparison dimension; omit all four sides for the default pair"`
+	LeftValue      string `query:"left_value" doc:"Left-side comparison value; opaque project key for the project dimension"`
+	RightDimension string `query:"right_dimension" doc:"Right-side comparison dimension"`
+	RightValue     string `query:"right_value" doc:"Right-side comparison value; opaque project key for the project dimension"`
 }
 
 // usageRequestFromInput maps the HTTP query-param struct to the
@@ -120,6 +120,9 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 func usagePairwiseRequestFromInput(
 	in usagePairwiseComparisonInput,
 ) (service.UsagePairwiseComparisonRequest, error) {
+	if in.LeftDimension == "" && in.LeftValue == "" && in.RightDimension == "" && in.RightValue == "" {
+		return service.UsagePairwiseComparisonRequest{UsageRequest: usageRequestFromInput(in.UsageFilterInput)}, nil
+	}
 	if in.LeftDimension == "" || in.LeftValue == "" {
 		return service.UsagePairwiseComparisonRequest{}, &service.UsageInputError{
 			Msg: "left side requires left_dimension and left_value",

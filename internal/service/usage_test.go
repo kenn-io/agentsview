@@ -492,28 +492,41 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, 2, res.Left.SessionCount)
-	assert.Equal(t, 285, res.Left.TotalTokens)
-	assert.Equal(t, 1, res.Right.SessionCount)
-	assert.Equal(t, 50, res.Right.TotalTokens)
-	assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
-	require.NotNil(t, res.Left.CostPerSession)
-	require.NotNil(t, res.Right.CostPerSession)
+	for _, defaultPair := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default=%t", defaultPair), func(t *testing.T) {
+			req := service.UsagePairwiseComparisonRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+				LeftDimension:  "model",
+				LeftValue:      "claude-sonnet-4-20250514",
+				RightDimension: "model",
+				RightValue:     "gpt-4o",
+			}
+			if defaultPair {
+				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
+			}
+
+			res, err := be.UsagePairwiseComparison(
+				t.Context(),
+				req,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			assert.Equal(t, 2, res.Left.SessionCount)
+			assert.Equal(t, 285, res.Left.TotalTokens)
+			assert.Equal(t, 1, res.Right.SessionCount)
+			assert.Equal(t, 50, res.Right.TotalTokens)
+			assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
+			require.NotNil(t, res.Left.CostPerSession)
+			require.NotNil(t, res.Right.CostPerSession)
+			assert.Equal(t, "model", res.Left.Dimension)
+			assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
+			assert.Equal(t, "model", res.Right.Dimension)
+			assert.Equal(t, "gpt-4o", res.Right.Value)
+		})
+	}
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
@@ -825,23 +838,36 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	seedPairwiseUsageFixture(t, env.DB)
 	svc := env.Backend("", false)
 
-	res, err := svc.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, 2, res.Left.SessionCount)
-	assert.Equal(t, 1, res.Right.SessionCount)
+	for _, defaultPair := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default=%t", defaultPair), func(t *testing.T) {
+			req := service.UsagePairwiseComparisonRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+				LeftDimension:  "model",
+				LeftValue:      "claude-sonnet-4-20250514",
+				RightDimension: "model",
+				RightValue:     "gpt-4o",
+			}
+			if defaultPair {
+				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
+			}
+
+			res, err := svc.UsagePairwiseComparison(
+				t.Context(),
+				req,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			assert.Equal(t, 2, res.Left.SessionCount)
+			assert.Equal(t, 1, res.Right.SessionCount)
+			assert.Equal(t, "model", res.Left.Dimension)
+			assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
+			assert.Equal(t, "model", res.Right.Dimension)
+			assert.Equal(t, "gpt-4o", res.Right.Value)
+		})
+	}
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
@@ -910,4 +936,44 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "pl1:sha256:alpha", queryValues["project_key"])
 	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
+}
+
+func TestDefaultUsagePairwiseSelection(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		models   []service.ModelTotal
+		projects []service.ProjectTotal
+		want     [4]string
+	}{
+		{"models", []service.ModelTotal{{Model: "second-by-name"}, {Model: "first-by-name"}}, []service.ProjectTotal{{ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"model", "second-by-name", "model", "first-by-name"}},
+		{"projects", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-b", Project: "label-b"}, {ProjectKey: "key-a", Project: "label-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
+		{"mixed", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-a", Project: "label-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
+		{"one model", []service.ModelTotal{{Model: "only-model"}}, nil, [4]string{}},
+		{"one project", nil, []service.ProjectTotal{{ProjectKey: "key-a"}}, [4]string{}},
+		{"empty", nil, nil, [4]string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ld, lv, rd, rv := service.DefaultUsagePairwiseSelection(&service.UsageSummaryResult{ModelTotals: tc.models, ProjectTotals: tc.projects})
+			assert.Equal(t, tc.want, [4]string{ld, lv, rd, rv})
+		})
+	}
+}
+
+func TestDirectBackend_UsagePairwiseComparison_EmptyDefault(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	be := service.NewDirectBackend(d, nil)
+	res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		UsageRequest: service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Empty(t, res.Left.Dimension)
+	assert.Empty(t, res.Left.Value)
+	assert.Empty(t, res.Right.Dimension)
+	assert.Empty(t, res.Right.Value)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Zero(t, res.Right.TotalTokens)
 }
