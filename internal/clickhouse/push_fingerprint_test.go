@@ -26,7 +26,8 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 		return fp
 	}
 
-	// What main, which has no session_plan_usage, computes for this session.
+	// Fingerprint this session had before session_plan_usage existed; sessions
+	// without plan usage must keep it.
 	const withoutPlanUsage = "3ffa01ac4b265fffea3c52f5731cafd35b542c2db053e8d5f993bac323c0d07b"
 	assert.Equal(t, withoutPlanUsage, fingerprint())
 
