@@ -114,6 +114,11 @@ The latest release is
   undo files survive this upgrade, even when their source files are gone. Live
   updates follow the newest undo file even if the original file is gone.
 
+- Undo files from older Codex Desktop builds (August and September 2026) now
+  show as continuations of their thread with the thread's title, instead of as
+  separate untitled sessions. Startup re-reads Codex sessions once; their
+  session IDs, stars, and names stay the same.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

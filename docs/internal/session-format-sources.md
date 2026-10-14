@@ -718,6 +718,26 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexForkParentTurnsReuseCombinedSet`,
   `TestCodexRevertPageRebuildPreservesDeletionState`,
   `TestProviderParserHostedParseMatchesLocalCodexForkLineage`.
+- **Legacy revert page headers (observed 2026-10-13):** A reported archive held
+  15 revert pages written by Codex Desktop builds `0.148.0-alpha.15` through
+  `0.154.0-alpha.6.2` (August 19 to September 15, 2026) whose `session_meta`
+  stores the page's own rollout id in `id` and the thread id in `session_id`.
+  Their filenames and `history_base` match current pages, and `history_base`
+  names the thread or is absent. Pages from `0.156.1` and later store the thread
+  id in both fields. The open-source rollout recorder writes the thread id at
+  every version checked from
+  [4ef836f](https://github.com/openai/codex/blob/4ef836f883/codex-rs/rollout/src/recorder.rs)
+  through
+  [23ae65b](https://github.com/openai/codex/blob/23ae65bb06/codex-rs/rollout/src/recorder.rs),
+  so the legacy header likely comes from a Desktop-only build. Archives already
+  stored these pages under `codex:<rollout>`, so AgentsView keeps that id and
+  links the page as a continuation only when `session_id` and the filename agree
+  on the thread: of the thread's session, of the earlier legacy rollout
+  `history_base` names, or of the fork source when the base is inherited. The
+  page takes the thread's index title. Its resume command still names the
+  rollout id. Data version 132 reparses Codex-format sources in place. Tests:
+  `TestCodexLegacyRevertPageContinuesItsThread`,
+  `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`.
 
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
