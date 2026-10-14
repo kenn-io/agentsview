@@ -255,19 +255,20 @@ func TestRemovedLauncherRestoresParserRelationship(t *testing.T) {
 				assert.Equal(t, action == "delete launcher" || action == "clear vanished parent", link.Applied)
 				_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='worker'")
 				require.NoError(t, err)
-				if action == "clear vanished parent" {
+				switch action {
+				case "clear vanished parent":
 					_, err = d.getWriter().ExecContext(ctx, "DELETE FROM sessions WHERE id='manager'")
 					require.NoError(t, err)
 					link, err = d.ClearSessionExternalParent(ctx, "worker")
 					require.NoError(t, err)
 					assert.True(t, link.Changed)
-				} else if action == "parser exclusion" {
+				case "parser exclusion":
 					n, err := d.DeleteParserExcludedSessions(ctx, []string{"manager"})
 					require.NoError(t, err)
 					require.Equal(t, 1, n)
 					require.NoError(t, d.QueueSubagentParentCleanupRepairs(ctx, []string{"worker"}))
 					require.NoError(t, d.RepairQueuedSubagentParents())
-				} else {
+				default:
 					require.NoError(t, d.DeleteSession(ctx, "manager"))
 				}
 				worker, err := d.GetSession(ctx, "worker")

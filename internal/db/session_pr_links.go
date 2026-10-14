@@ -101,7 +101,7 @@ func ParsePRFilter(value string) (PRFilter, error) {
 			return PRFilter{}, fmt.Errorf("%w %q: invalid host", ErrInvalidPRFilter, value)
 		}
 	}
-	if !(repo == "" && hasNum && !qualified) && (!strings.Contains(repo, "/") || strings.Contains(repo, "://")) {
+	if (repo != "" || !hasNum || qualified) && (!strings.Contains(repo, "/") || strings.Contains(repo, "://")) {
 		return PRFilter{}, fmt.Errorf(
 			"%w %q: want #123, owner/repo, owner/repo#123, or host::owner/repo#123", ErrInvalidPRFilter, value,
 		)
