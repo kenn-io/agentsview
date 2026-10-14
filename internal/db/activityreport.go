@@ -886,7 +886,7 @@ ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
 	candidate.session_id, candidate.start_ordinal,
 	candidate.call_index, candidate.event_index`
 
-func (db *DB) activityReportCandidateSource(
+func (db *DB) activityReportCandidateSQL(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
 	return func(

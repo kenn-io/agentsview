@@ -90,7 +90,7 @@ func MergeCandidateSlice(
 	) error {
 		next := 0
 		emitExtraBefore := func(candidate IntervalCandidate) error {
-			for next < len(extra) && candidateLess(extra[next], candidate) {
+			for next < len(extra) && CandidateLess(extra[next], candidate) {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
@@ -117,7 +117,8 @@ func MergeCandidateSlice(
 	}
 }
 
-func candidateLess(a, b IntervalCandidate) bool {
+// CandidateLess orders candidates by start, session and start ordinal.
+func CandidateLess(a, b IntervalCandidate) bool {
 	if !a.Start.Equal(b.Start) {
 		return a.Start.Before(b.Start)
 	}
@@ -168,7 +169,7 @@ func PairActivityEvents(
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return candidateLess(out[i], out[j]) })
+	sort.Slice(out, func(i, j int) bool { return CandidateLess(out[i], out[j]) })
 	return out
 }
 

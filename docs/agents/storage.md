@@ -541,6 +541,11 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
+SQLite keeps paired candidates in memory per session and range start, with a
+200,000-candidate limit. Entries cover only the queried upper bound and remain
+valid while the transcript revision and session creation time match. Reader
+swaps clear the entries and reject stores from earlier generations.
+
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial
 `idx_tool_result_events_terminal` index on `(session_id, timestamp)` aligned

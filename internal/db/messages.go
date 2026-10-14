@@ -1773,7 +1773,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0
+	transcriptChanged := len(msgs) > 0 || replaced != nil && replaced.count > 0
 	var updatedMessageUsageOrdinals map[int]struct{}
 	for _, usageUpdate := range update.MessageTokenUsageUpdates {
 		changed, err := applyMessageTokenUsageUpdateTx(ctx,
