@@ -26,8 +26,8 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 		return fp
 	}
 
-	// Recorded before session_plan_usage existed.
-	const withoutPlanUsage = "30cbc4cbdcb2e8df98366ef537afdeedcd5c98d5dc0ac91c8fd9e629e8bbf76b"
+	// What main, which has no session_plan_usage, computes for this session.
+	const withoutPlanUsage = "3ffa01ac4b265fffea3c52f5731cafd35b542c2db053e8d5f993bac323c0d07b"
 	assert.Equal(t, withoutPlanUsage, fingerprint())
 
 	snapshot.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.0)}
