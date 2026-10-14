@@ -20,6 +20,7 @@ func TestCaptureDirectoryReplacesPermissiveDACLBeforeUse(t *testing.T) {
 	state, err := createState(dir, windowsPermissionManifest(t, "windows-private"))
 	require.NoError(t, err)
 	state.close()
+	assertProtectedCaptureDACL(t, dir)
 
 	require.NoError(t, setPermissiveCaptureDACL(dir))
 	recovered, err := openState(dir)
@@ -38,6 +39,7 @@ func TestCreateStateRejectsReplaceableParentDACL(t *testing.T) {
 	)
 
 	require.ErrorContains(t, err, "validating capture parent safety")
+	assert.ErrorContains(t, err, "permits replacement")
 }
 
 func TestOpenStateRejectsParentDACLMadeReplaceable(t *testing.T) {
@@ -52,6 +54,7 @@ func TestOpenStateRejectsParentDACLMadeReplaceable(t *testing.T) {
 	_, err = openState(dir)
 
 	require.ErrorContains(t, err, "validating capture parent safety")
+	assert.ErrorContains(t, err, "permits replacement")
 }
 
 func TestWindowsParentSecurity(t *testing.T) {
@@ -145,6 +148,7 @@ func TestClaudeProviderRootRejectsExistingPermissiveDACL(t *testing.T) {
 	_, err := prepareClaudeReservationDirectory(providerRoot)
 
 	require.ErrorContains(t, err, "validating Claude provider root")
+	assert.ErrorContains(t, err, "grants sensitive access")
 }
 
 func TestClaudeProviderRootAllowsExistingSafeUnprotectedDACL(t *testing.T) {
