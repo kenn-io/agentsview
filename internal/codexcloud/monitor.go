@@ -585,7 +585,8 @@ func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) erro
 // the one before it, since each starts a running total the parser adds in
 // full; the last record before the join, turn, or model changes; and, in
 // each run of dropped records, the one with the largest last-call context,
-// which the parser reports as the peak. A chat whose saves keep failing
+// which the parser reports as the peak; on a tie the later one, so a kept
+// record at the end of the run carries it. A chat whose saves keep failing
 // then holds about two token records per turn.
 func compactPending(records []mirror.Record) []mirror.Record {
 	tokens := make([]*mirror.TokenUsageData, len(records))
@@ -620,7 +621,7 @@ func compactPending(records []mirror.Record) []mirror.Record {
 		if data == nil {
 			continue
 		}
-		if peak < 0 || lastContext(data) > lastContext(tokens[peak]) {
+		if peak < 0 || lastContext(data) >= lastContext(tokens[peak]) {
 			peak = i
 		}
 		if !drop[i] {
