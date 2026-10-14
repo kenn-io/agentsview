@@ -138,7 +138,7 @@ func ReadLogin(home string) (Login, HomeState, error) {
 	if err != nil {
 		return login, HomeSignedOut, &LoginReadError{
 			Message: "AgentsView could not read this Codex home's auth.json. Check that you can read the file, " +
-				"or run `codex login` to write it again. The daemon log has the details.",
+				"or run `codex login` to write it again. The AgentsView log, serve.log in its data directory, has the details.",
 			err: fmt.Errorf("codex home %s: read auth.json: %w", home, err),
 		}
 	}
@@ -186,7 +186,7 @@ func credentialStore(home string) (string, error) {
 		// secrets, so only the log gets it.
 		return "", &LoginReadError{
 			Message: "AgentsView could not read this Codex home's config.toml, so it cannot tell where Codex " +
-				"keeps the login. The file may not be valid TOML; the daemon log has the error and where it is.",
+				"keeps the login. The file may not be valid TOML; the AgentsView log, serve.log in its data directory, has the error and where it is.",
 			err: fmt.Errorf("codex home %s: read config.toml: %w", home, err),
 		}
 	}

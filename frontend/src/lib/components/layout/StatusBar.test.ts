@@ -232,7 +232,7 @@ describe("StatusBar", () => {
       // The server appends these sentences to a retrying row's message.
       const retrySentences =
         "AgentsView retries a failed chat for 7 days; a change to the chat in OpenAI restarts the 7 days. " +
-        "The daemon log lists each chat by its ID. Chats already imported are not affected.";
+        "The AgentsView log, serve.log in its data directory, lists each chat by its ID. Chats already imported are not affected.";
       getCodexCloudStatus.mockResolvedValue([
         upToDate,
         {

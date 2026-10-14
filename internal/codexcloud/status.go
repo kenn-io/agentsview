@@ -133,12 +133,20 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	return rows
 }
 
+// fileStoreSetting tells the user how to make Codex keep the login in
+// auth.json. The key may already be set, and a second assignment would
+// make config.toml unreadable, so it says to change an existing line.
+const fileStoreSetting = "set `cli_auth_credentials_store = \"file\"` in this home's config.toml: change the " +
+	"existing line, or add one near the top, before any [section]"
+
+// fileStoreCost says what keeping the login in auth.json costs.
+const fileStoreCost = "Codex then keeps the ChatGPT login in auth.json, a plain file that any program running " +
+	"as you can read."
+
 // fileStoreFix tells the user how to give AgentsView a login Codex keeps
 // out of auth.json, and what that costs.
-const fileStoreFix = "To let AgentsView import from this home, add `cli_auth_credentials_store = \"file\"` " +
-	"near the top of its config.toml, before any [section], and run `codex login`; AgentsView picks up the " +
-	"new login on its next sync. Codex then keeps the ChatGPT login in auth.json, a plain file that any " +
-	"program running as you can read."
+const fileStoreFix = "To let AgentsView import from this home, " + fileStoreSetting + ". Then run " +
+	"`codex login`; AgentsView picks up the new login on its next sync. " + fileStoreCost
 
 // keyringHomeMessage is the text for a home whose config.toml keeps the
 // login in the system keyring.
@@ -147,11 +155,13 @@ const keyringHomeMessage = "This Codex home keeps its ChatGPT login in the syste
 
 // keyringRefusedMessage is the text for an HTTP 401 in auto mode: the
 // token in auth.json was refused. Either that saved login expired, or
-// Codex keeps the current login in the keyring.
+// Codex keeps the current login in the keyring. It names the login
+// command once, since a home's command can be long.
 const keyringRefusedMessage = "OpenAI did not accept the ChatGPT login in this Codex home's auth.json. " +
 	"Either that saved login expired, or, with `cli_auth_credentials_store = \"auto\"`, Codex keeps the " +
-	"current login in the system keyring, which AgentsView does not read. Run `codex login` first. " +
-	"If AgentsView still cannot use the login, Codex keeps it in the keyring. " + fileStoreFix
+	"current login in the system keyring, which AgentsView does not read. Run `codex login` first. If " +
+	"AgentsView still cannot use the login after that, " + fileStoreSetting + ", and sign in again the same " +
+	"way. " + fileStoreCost
 
 // Message is the user-facing text for a failure. retryAt is used only for
 // a rate limit.
