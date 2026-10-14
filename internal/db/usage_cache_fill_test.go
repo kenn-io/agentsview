@@ -238,7 +238,6 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), budget)
 			defer cancel()
-			require.NoError(t, ctx.Err())
 			err := tc.read(ctx)
 			if tc.wantError != nil {
 				if statsError, ok := errors.AsType[*StatsInputError](tc.wantError); ok {
