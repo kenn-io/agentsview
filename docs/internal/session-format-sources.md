@@ -3293,9 +3293,8 @@ schemas keep their existing ordering behavior.
   2026-10-13. No probe has shown a counter restart, so the baseline rule is a
   guard, not observed behavior.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
-  `internal/parser/codex_cloud_provider.go` discovers mirror files. Design and
-  open questions:
-  `docs/superpowers/specs/2026-10-11-codex-cloud-source-design.md`.
+  `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
+  limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).
 
 ## ChatGPT Export (`chatgpt`)
 
