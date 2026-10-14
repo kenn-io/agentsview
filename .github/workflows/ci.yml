@@ -191,6 +191,28 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - &windows-go-paths
+        name: Prepare Windows Go paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'GOTMPDIR', 'GOLANGCI_LINT_CACHE')) {
+            $path = Join-Path $env:RUNNER_TEMP $name
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+            "$name=$path" >> $env:GITHUB_ENV
+          }
+
+      - &windows-test-temp
+        name: Prepare Windows test temporary directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: &windows-test-temp-script |
+          foreach ($name in @('TEMP', 'TMP')) {
+            $path = Join-Path $env:RUNNER_TEMP $name
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+            "$name=$path" >> $env:GITHUB_ENV
+          }
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
@@ -326,6 +348,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - *windows-go-paths
+
+      - name: Prepare Windows test temporary directories
+        if: "!contains(matrix.package, './internal/capture')"
+        shell: pwsh
+        run: *windows-test-temp-script
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
@@ -490,6 +519,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - *windows-go-paths
+
+      - *windows-test-temp
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
