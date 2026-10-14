@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"io"
@@ -150,6 +151,47 @@ func TestChromeHostRelay(t *testing.T) {
 func TestChromeHostRelayEOFWhileServerDown(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
 	require.NoError(t, relayChromeHost(t.Context(), filepath.Join(dir, "host.sock"), strings.NewReader(""), io.Discard))
+}
+
+func TestChromeHostSocketReader(t *testing.T) {
+	var wire bytes.Buffer
+	frames := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`)}
+	for _, frame := range frames {
+		require.NoError(t, chromehost.WriteFrame(&wire, frame))
+	}
+	conn := &chromeHostTimeoutConn{data: bytes.NewReader(wire.Bytes())}
+	reader := chromeHostSocketReader{conn}
+	for _, want := range frames {
+		got, err := chromehost.ReadFrame(reader)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+	_, err := chromehost.ReadFrame(reader)
+	require.ErrorIs(t, err, io.EOF)
+	conn.deadlineErr = net.ErrClosed
+	_, err = chromehost.ReadFrame(reader)
+	require.ErrorIs(t, err, net.ErrClosed)
+}
+
+type chromeHostTimeoutConn struct {
+	net.Conn
+	data        *bytes.Reader
+	timeout     bool
+	deadlineErr error
+}
+
+func (c *chromeHostTimeoutConn) SetReadDeadline(time.Time) error { return c.deadlineErr }
+
+func (c *chromeHostTimeoutConn) Read(p []byte) (int, error) {
+	c.timeout = !c.timeout
+	if c.timeout {
+		return 0, os.ErrDeadlineExceeded
+	}
+	n, err := c.data.Read(p[:min(len(p), 2)])
+	if err == nil {
+		err = os.ErrDeadlineExceeded
+	}
+	return n, err
 }
 
 func TestChromeHostRelayRefusesLoosePermissions(t *testing.T) {

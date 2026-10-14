@@ -98,10 +98,14 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 		}
 		conn, err = (&net.Dialer{}).DialContext(ctx, "unix", socket)
 		if err == nil {
+			var reader io.Reader = conn
+			if runtime.GOOS == "windows" {
+				reader = chromeHostSocketReader{conn}
+			}
 			disconnected := make(chan error, 1)
 			go func() {
 				for {
-					frame, err := chromehost.ReadFrame(conn)
+					frame, err := chromehost.ReadFrame(reader)
 					if err == nil {
 						err = chromehost.WriteFrame(output, frame)
 					}
@@ -142,6 +146,25 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 		return err
 	default:
 		return ctx.Err()
+	}
+}
+
+type chromeHostSocketReader struct{ net.Conn }
+
+func (r chromeHostSocketReader) Read(p []byte) (int, error) {
+	for {
+		// Windows AF_UNIX can miss an early peer close until a pending read is cancelled.
+		if err := r.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			return 0, err
+		}
+		n, err := r.Conn.Read(p)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
 	}
 }
 
