@@ -886,9 +886,13 @@ ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
 	candidate.session_id, candidate.start_ordinal,
 	candidate.call_index, candidate.event_index`
 
-func (db *DB) activityReportCandidateSQLJSON(encodedIDs string, q activity.Query) activity.CandidateSource {
+func (db *DB) activityReportCandidateSQL(ids []string, q activity.Query) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
-		var err error
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return fmt.Errorf("encoding activity report session IDs: %w", err)
+		}
+		encodedIDs := string(encoded)
 		gapCap := time.Duration(q.GapCapSeconds) * time.Second
 		lowerTime := q.RangeStart.Add(-gapCap).UTC()
 		upperTime := q.EffectiveEnd.UTC()

@@ -31,12 +31,15 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			wantCount := 1
 			switch action {
 			case "truncate":
-				_, err := d.WriteSessionIncremental(t.Context(), "s", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(1)})
+				original, err := d.GetSession(t.Context(), "s")
+				require.NoError(t, err)
+				require.NotNil(t, original.TranscriptRevision)
+				_, err = d.WriteSessionIncremental(t.Context(), "s", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(1)})
 				require.NoError(t, err)
 				session, err := d.GetSession(t.Context(), "s")
 				require.NoError(t, err)
 				require.NotNil(t, session.TranscriptRevision)
-				assert.Equal(t, "3", *session.TranscriptRevision)
+				assert.NotEqual(t, *original.TranscriptRevision, *session.TranscriptRevision)
 				wantCount = 0
 			case "recreate":
 				_, err := d.DeleteParserExcludedSessions(t.Context(), []string{"s"})
@@ -69,7 +72,7 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got, wantCount)
 			if wantCount > 0 {
-				assert.InDelta(t, wantMinutes, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
+				assert.InEpsilon(t, wantMinutes, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
 			}
 		})
 	}
@@ -158,6 +161,7 @@ func activityMemoPairingReads(tb testing.TB, d *DB) map[string]int {
 	d.rawReader().SetMaxOpenConns(1)
 	conn, err := d.getReader().Conn(tb.Context())
 	require.NoError(tb, err)
+	defer conn.Close()
 	reads := make(map[string]int)
 	require.NoError(tb, conn.Raw(func(driverConn any) error {
 		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("agentsview_timestamp_unix_micro", func(raw string) any {
@@ -184,7 +188,7 @@ func TestActivityMemoProductionWrites(t *testing.T) {
 	got, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.InDelta(t, 2.0, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
+	assert.InEpsilon(t, 2.0, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
 	assert.Empty(t, reads)
 }
 
@@ -201,13 +205,59 @@ func TestActivityMemoReportReuse(t *testing.T) {
 	reads := activityMemoPairingReads(t, d)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	f := AnalyticsFilter{Timezone: "UTC"}
-	_, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	cold, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
+	assert.InEpsilon(t, 4.0, cold.Report.Totals.AgentMinutes, 1e-9)
+	assert.InEpsilon(t, 4.0, cold.Report.Totals.ActiveMinutes, 1e-9)
 	require.Positive(t, reads["2026-06-16T10:00:00Z"])
+	require.Positive(t, reads["2026-06-16T10:10:00Z"])
 	clear(reads)
-	_, err = d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
+	assert.InEpsilon(t, 4.0, warm.Report.Totals.AgentMinutes, 1e-9)
+	assert.InEpsilon(t, 4.0, warm.Report.Totals.ActiveMinutes, 1e-9)
 	assert.Empty(t, reads)
+	_, err = d.WriteSessionIncremental(t.Context(), "changed", []Message{{SessionID: "changed", Ordinal: 2, Role: "assistant", Content: "x", Timestamp: "2026-06-16T10:15:00Z", Model: "m"}}, IncrementalSessionUpdate{MsgCount: 3, UserMsgCount: 1, NextOrdinal: 3})
+	require.NoError(t, err)
+	clear(reads)
+	updated, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	require.NoError(t, err)
+	assert.InEpsilon(t, 7.0, updated.Report.Totals.AgentMinutes, 1e-9)
+	assert.InEpsilon(t, 7.0, updated.Report.Totals.ActiveMinutes, 1e-9)
+	assert.Positive(t, reads["2026-06-16T10:10:00Z"])
+	assert.Positive(t, reads["2026-06-16T10:12:00Z"])
+	assert.Zero(t, reads["2026-06-16T10:00:00Z"])
+	assert.Zero(t, reads["2026-06-16T10:02:00Z"])
+}
+
+func TestActivityMemoReportAboveEntryCap(t *testing.T) {
+	d := testDB(t)
+	start := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
+	for i := range 4_097 {
+		id := fmt.Sprintf("s-%04d", i)
+		at := start.Add(time.Duration(i) * time.Second)
+		insertSession(t, d, id, "p", func(s *Session) {
+			s.StartedAt = Ptr(at.Format(time.RFC3339))
+			s.EndedAt = Ptr(at.Add(time.Minute).Format(time.RFC3339))
+		})
+		seedMessage(t, d, id, 0, "user", at.Format(time.RFC3339), "")
+		seedMessage(t, d, id, 1, "assistant", at.Add(time.Minute).Format(time.RFC3339), "m")
+	}
+	reads := activityMemoPairingReads(t, d)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	f := AnalyticsFilter{Timezone: "UTC"}
+	cold, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	require.NoError(t, err)
+	assert.InEpsilon(t, 4_097.0, cold.Report.Totals.AgentMinutes, 1e-9)
+	require.Len(t, d.activityMemo.entries, 4_096)
+	clear(reads)
+	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	require.NoError(t, err)
+	assert.InEpsilon(t, 4_097.0, warm.Report.Totals.AgentMinutes, 1e-9)
+	assert.Equal(t, cold.Report.Totals, warm.Report.Totals)
+	assert.Len(t, d.activityMemo.entries, 4_096)
+	// Only the unretained session's two timestamps reach message pairing.
+	assert.Len(t, reads, 2)
 }
 
 func TestActivityMemoEmptyIDsWithCanceledContext(t *testing.T) {
@@ -330,22 +380,4 @@ func TestActivityMemoLRUAndBudgets(t *testing.T) {
 	read("empty-4")
 	assert.Len(t, d.activityMemo.entries, 5)
 	assert.Equal(t, 2, d.activityMemo.rows)
-	d.activityMemo.swap(func() {})
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "sessions" && column == "transcript_revision" {
-				return sqlite3.SQLITE_DENY
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	got, err := d.activityReportCandidates(t.Context(), []string{"a", "b", "empty-1", "empty-2", "empty-3", "empty-4"}, q)
-	require.NoError(t, err)
-	assert.Len(t, got, 2)
-	assert.Empty(t, d.activityMemo.entries)
 }

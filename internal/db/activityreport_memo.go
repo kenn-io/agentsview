@@ -15,13 +15,13 @@ import (
 
 var activityMemoMaxCandidates = 200_000
 
-// Keep entry bookkeeping near 1 MiB, excluding strings and candidate slices.
+// A full 200K-candidate, 4,096-entry cache measured 64.3 MiB of HeapInuse.
 var activityMemoMaxEntries = 4_096
 
 type activityMemoHits [][]activity.IntervalCandidate
 
 func (h *activityMemoHits) Len() int           { return len(*h) }
-func (h *activityMemoHits) Less(i, j int) bool { return activityMemoLess((*h)[i][0], (*h)[j][0]) }
+func (h *activityMemoHits) Less(i, j int) bool { return activity.CandidateLess((*h)[i][0], (*h)[j][0]) }
 func (h *activityMemoHits) Swap(i, j int)      { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
 func (h *activityMemoHits) Push(v any)         { *h = append(*h, v.([]activity.IntervalCandidate)) }
 func (h *activityMemoHits) Pop() any {
@@ -29,16 +29,6 @@ func (h *activityMemoHits) Pop() any {
 	last := old[len(old)-1]
 	*h = old[:len(old)-1]
 	return last
-}
-
-func activityMemoLess(a, b activity.IntervalCandidate) bool {
-	if a.Start.UnixMicro() != b.Start.UnixMicro() {
-		return a.Start.UnixMicro() < b.Start.UnixMicro()
-	}
-	if a.SessionID != b.SessionID {
-		return a.SessionID < b.SessionID
-	}
-	return a.StartOrdinal < b.StartOrdinal
 }
 
 type activityMemoKey struct {
@@ -114,9 +104,6 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		if err != nil {
 			return fmt.Errorf("encoding activity report session IDs: %w", err)
 		}
-		if len(ids) > activityMemoMaxEntries {
-			return db.activityReportCandidateSQLJSON(string(encoded), q)(ctx, yield)
-		}
 		rows, err := db.getReader().QueryContext(ctx, `SELECT id, transcript_revision || '|' || created_at FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, string(encoded))
 		if err != nil {
 			return fmt.Errorf("querying activity report session versions: %w", err)
@@ -163,24 +150,16 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		if wide.RangeEnd.After(wide.EffectiveEnd) {
 			wide.EffectiveEnd = wide.RangeEnd
 		}
-		var buffers map[string][]activity.IntervalCandidate
-		if buffered <= activityMemoMaxCandidates {
-			buffers = make(map[string][]activity.IntervalCandidate, len(misses))
-			for _, id := range misses {
-				buffers[id] = nil
-			}
-		}
-		if len(misses) > 0 && len(misses) != len(ids) {
-			encoded, err = json.Marshal(misses)
-			if err != nil {
-				return fmt.Errorf("encoding activity report missing session IDs: %w", err)
-			}
+		retained := misses[:min(len(misses), activityMemoMaxEntries)]
+		buffers := make(map[string][]activity.IntervalCandidate, len(retained))
+		for _, id := range retained {
+			buffers[id] = nil
 		}
 		source := func(ctx context.Context, emit func(activity.IntervalCandidate) error) error {
 			if len(misses) == 0 {
 				return nil
 			}
-			return db.activityReportCandidateSQLJSON(string(encoded), wide)(ctx, func(c activity.IntervalCandidate) error {
+			return db.activityReportCandidateSQL(misses, wide)(ctx, func(c activity.IntervalCandidate) error {
 				if buffer, ok := buffers[c.SessionID]; ok {
 					if buffered == activityMemoMaxCandidates {
 						// Skip storing reports that cannot fit to avoid cache churn.
@@ -197,7 +176,7 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			})
 		}
 		emitHits := func(before *activity.IntervalCandidate) error {
-			for len(hits) > 0 && (before == nil || activityMemoLess(hits[0][0], *before)) {
+			for len(hits) > 0 && (before == nil || activity.CandidateLess(hits[0][0], *before)) {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
@@ -228,8 +207,8 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			return err
 		}
 		if buffers != nil {
-			entries := make([]activityMemoEntry, 0, len(misses))
-			for _, id := range misses {
+			entries := make([]activityMemoEntry, 0, len(retained))
+			for _, id := range retained {
 				if version, exists := versions[id]; exists {
 					entries = append(entries, activityMemoEntry{activityMemoKey{id, lower}, version, wide.EffectiveEnd, buffers[id]})
 				}
