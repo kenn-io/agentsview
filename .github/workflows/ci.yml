@@ -196,7 +196,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'GOTMPDIR')) {
+          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'TMP', 'TEMP', 'SystemTemp')) {
             $path = Join-Path $env:RUNNER_TEMP $name
             New-Item -ItemType Directory -Force -Path $path | Out-Null
             "$name=$path" >> $env:GITHUB_ENV
@@ -324,8 +324,10 @@ jobs:
           - name: CLI remaining
             package: ./cmd/agentsview
             skip: *cli-test-prefix
-          - name: Capture, Database, Parser
-            package: ./internal/capture ./internal/db ./internal/parser
+          - name: Capture
+            package: ./internal/capture
+          - name: Database, Parser
+            package: ./internal/db ./internal/parser
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
             package: ./internal/sync
@@ -378,6 +380,8 @@ jobs:
           New-Item -ItemType Directory -Path $testTemp | Out-Null
           icacls $testTemp /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "TMP=$testTemp" >> $env:GITHUB_ENV
+          "TEMP=$testTemp" >> $env:GITHUB_ENV
           "SystemTemp=$testTemp" >> $env:GITHUB_ENV
           "AGENTSVIEW_CI_TEMP=$testTemp" >> $env:GITHUB_ENV
 
