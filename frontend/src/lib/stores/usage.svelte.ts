@@ -435,6 +435,7 @@ class UsageStore {
   private fetchAllVersion = 0;
   private pairwiseParams: UsageParams | null = null;
   private pairwiseSelectionParams: UsageParams | null = null;
+  private pairwiseRequest: Promise<FetchResult> = Promise.resolve("ok");
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -975,7 +976,10 @@ class UsageStore {
     const deferPairwise =
       this.currentPairwiseParams(params) !== null &&
       !sameUsageParams(this.pairwiseSelectionParams, params);
-    if (deferPairwise) this.clearPairwiseComparisonState();
+    if (deferPairwise) {
+      this.clearPairwiseComparisonState();
+      this.loading.pairwise = true;
+    }
     const contextParams =
       options.preserveTimeRange &&
       options.refreshTimeSeriesContext !== false &&
@@ -1015,7 +1019,13 @@ class UsageStore {
           this.fetchZoom(this.baseParams()),
         ]);
       } else {
-        await Promise.all([topSessionsPromise, zoomPromise, pairwisePromise]);
+        await Promise.all([
+          topSessionsPromise,
+          zoomPromise,
+          deferPairwise && this.versions.pairwise === pairwiseVersion
+            ? this.fetchPairwise(params)
+            : this.pairwiseRequest,
+        ]);
       }
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       return "error";
@@ -1038,14 +1048,20 @@ class UsageStore {
       (loadedSummary.projectScopeRecovered &&
         !sameUsageParams(this.pairwiseParams, loadedSummary.params))
         ? this.fetchPairwise(loadedSummary.params)
-        : (pairwisePromise ?? Promise.resolve("ok" as const));
-    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
+        : this.pairwiseRequest;
+    const [topSessionsResult, loadedZoomResult, comparisonResult, initialPairwiseResult] =
       await Promise.all([
         currentTopSessionsPromise,
         currentZoomPromise,
         this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
         currentPairwisePromise,
       ]);
+    let request = currentPairwisePromise;
+    let pairwiseResult = initialPairwiseResult;
+    while (fetchVersion === this.fetchAllVersion && request !== this.pairwiseRequest) {
+      request = this.pairwiseRequest;
+      pairwiseResult = await request;
+    }
     const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
@@ -1336,7 +1352,12 @@ class UsageStore {
     };
   }
 
-  private async fetchPairwise(params: UsageParams): Promise<FetchResult> {
+  private fetchPairwise(params: UsageParams): Promise<FetchResult> {
+    this.pairwiseRequest = this.loadPairwise(params);
+    return this.pairwiseRequest;
+  }
+
+  private async loadPairwise(params: UsageParams): Promise<FetchResult> {
     if (!sameUsageParams(this.pairwiseParams, params)) {
       this.clearPairwiseComparisonState();
     }
