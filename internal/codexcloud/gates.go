@@ -83,10 +83,11 @@ func (g Gates) offRow(noSync bool) (HomeStatus, bool) {
 	row := HomeStatus{Key: SourceRowKey}
 	switch {
 	case noSync:
-		row.State, row.Message = StateOffNoSync, "Off: this daemon does not sync sources. Either a command started it with --no-sync, "+
-			"or its archive is archive-only. For a --no-sync daemon, run `agentsview daemon stop`, then "+
-			"`agentsview serve`; replacing it with `serve --replace` keeps --no-sync. An archive made by seed import or "+
-			"restore is archive-only for good: it never syncs sources, and no flag or setting changes that."
+		row.State, row.Message = StateOffNoSync, "Off: this daemon does not sync sources. If a command started it with --no-sync, run "+
+			"`agentsview daemon stop`, then `agentsview serve`; `serve --replace` keeps --no-sync. If its "+
+			"archive came from seed import or restore, the archive is archive-only: it keeps what was "+
+			"imported and never syncs again, so it cannot import Codex Cloud chats. Use a separate data "+
+			"directory for that."
 	case g.Disabled:
 		row.State, row.Message = StateOffDisabledAgents, "Off: listed in disabled_agents."
 	case g.CodexCloud.Err != nil:

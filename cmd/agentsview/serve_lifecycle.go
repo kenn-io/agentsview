@@ -243,8 +243,8 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 		return unavailable("the server did not accept this command's auth token. " +
 			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
 	default:
-		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The server log, "+
-			"debug.log in the AgentsView data directory, may say why.", resp.StatusCode))
+		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The AgentsView log, "+
+			"debug.log in its data directory, may say why.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {
