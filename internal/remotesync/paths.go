@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func safeRemotePathArchiveName(remotePath string) (string, error) {
@@ -296,17 +298,21 @@ func cleanPathWithSeparator(p string, sep byte) string {
 	return strings.ReplaceAll(cleaned, "/", sepStr)
 }
 
+// splitHermesMemberPath reuses parser.ParseVirtualSourcePath for the "#"
+// member-suffix split, but still finds the physical path's basename itself
+// (LastIndexAny on both separators) rather than through filepath.Base:
+// a remote path can use the other OS's separator convention regardless of
+// the separator this process's filepath package expects.
 func splitHermesMemberPath(source string) (physical, suffix string) {
-	idx := strings.LastIndex(source, "#")
-	if idx < 0 || idx == len(source)-1 {
+	physical, sourceID, ok := parser.ParseVirtualSourcePath(source)
+	if !ok {
 		return source, ""
 	}
-	physical = source[:idx]
 	base := physical[strings.LastIndexAny(physical, `/\`)+1:]
 	if base != "state.db" {
 		return source, ""
 	}
-	return physical, source[idx:]
+	return physical, "#" + sourceID
 }
 
 func tempPathToRemotePath(
