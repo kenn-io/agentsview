@@ -568,6 +568,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+  # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest

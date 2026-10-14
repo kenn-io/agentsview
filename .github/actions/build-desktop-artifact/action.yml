@@ -112,8 +112,8 @@ runs:
         fi
 
     - name: Desktop smoke tests (Rust unit tests)
-      # desktop-windows-unit owns Windows Rust tests.
-      if: runner.os != 'Windows'
+      # CI's desktop-windows-unit covers Windows on pull_request and push.
+      if: runner.os != 'Windows' || (github.event_name != 'pull_request' && github.event_name != 'push')
       shell: bash
       env:
         AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
