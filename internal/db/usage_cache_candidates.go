@@ -241,49 +241,55 @@ func usageCandidateDiscoverySQL(
 
 	var branches []string
 	var args []any
-	appendBranch := func(prefix, column, suffix string) {
+	appendBranch := func(prefix, column string) {
 		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
-		branches = append(branches, prefix+"\n AND "+where+suffix)
+		branches = append(branches, prefix+"\n AND "+where)
 		args = append(args, branchArgs...)
 	}
 	appendRangeBranch := func(source, eligibility, column string) {
-		appendBranch(`SELECT ranged.session_id
-			FROM (SELECT DISTINCT session_id FROM `+source+` WHERE `+eligibility+
-			" AND "+column+" IS NOT NULL AND "+column+" != ''", column, `) ranged
+		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
+		branch := `SELECT ranged.session_id
+			FROM (SELECT DISTINCT session_id FROM ` + source + ` WHERE ` + eligibility +
+			" AND " + column + " IS NOT NULL AND " + column + " != ''\n AND " + where + `) ranged
 			JOIN sessions s ON s.id = ranged.session_id
-			WHERE s.deleted_at IS NULL`)
+			WHERE s.deleted_at IS NULL`
+		branches = append(branches, branch)
+		args = append(args, branchArgs...)
 	}
-	appendRangeBranch("messages AS m INDEXED BY idx_messages_usage_timestamp", usageMessageSourceEligibility, "m.timestamp")
+	appendRangeBranch("messages AS m INDEXED BY idx_messages_usage_timestamp",
+		usageMessageSourceEligibility, "m.timestamp")
 	appendBranch(`SELECT m.session_id
 		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
-		  AND s.deleted_at IS NULL AND m.timestamp IS NULL`, "s.started_at", "")
+		  AND s.deleted_at IS NULL AND m.timestamp IS NULL`, "s.started_at")
 	appendBranch(`SELECT m.session_id
 		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
-		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at", "")
-	appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred", usageEventSourceEligibility, "ue.occurred_at")
+		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")
+	appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred",
+		usageEventSourceEligibility, "ue.occurred_at")
 	appendBranch(`SELECT ue.session_id
 		FROM usage_events ue
 		JOIN sessions s ON s.id = ue.session_id
 		WHERE `+usageEventSourceEligibility+`
 		  AND s.deleted_at IS NULL
-		  AND (ue.occurred_at IS NULL OR ue.occurred_at = '')`, "s.started_at", "")
+		  AND (ue.occurred_at IS NULL OR ue.occurred_at = '')`, "s.started_at")
 
 	if kind == usageQueryKindActivity {
-		appendRangeBranch("messages AS m INDEXED BY idx_messages_activity_timestamp", "m.role = 'assistant' AND m.model != '<synthetic>'", "m.timestamp")
+		appendRangeBranch("messages AS m INDEXED BY idx_messages_activity_timestamp",
+			"m.role = 'assistant' AND m.model != '<synthetic>'", "m.timestamp")
 		appendBranch(`SELECT m.session_id
 			FROM messages AS m INDEXED BY idx_messages_activity_timestamp
 			JOIN sessions s ON s.id = m.session_id
 			WHERE m.role = 'assistant' AND m.model != '<synthetic>'
-			  AND s.deleted_at IS NULL AND m.timestamp IS NULL`, "s.started_at", "")
+			  AND s.deleted_at IS NULL AND m.timestamp IS NULL`, "s.started_at")
 		appendBranch(`SELECT m.session_id
 			FROM messages AS m INDEXED BY idx_messages_activity_timestamp
 			JOIN sessions s ON s.id = m.session_id
 			WHERE m.role = 'assistant' AND m.model != '<synthetic>'
-			  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at", "")
+			  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")
 	}
 
 	return `SELECT DISTINCT candidate.session_id

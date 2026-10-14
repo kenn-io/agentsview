@@ -126,7 +126,8 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 			plan := explainUsageCandidatePlan(t, database, query, args)
 			for _, search := range tc.searches {
 				rangeIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
-					return strings.HasPrefix(row.detail, "SEARCH "+search.alias+" ") && strings.Contains(row.detail, search.index) && strings.Contains(row.detail, search.bounds)
+					return strings.HasPrefix(row.detail, "SEARCH "+search.alias+" ") &&
+						strings.Contains(row.detail, search.index) && strings.Contains(row.detail, search.bounds)
 				})
 				require.GreaterOrEqual(t, rangeIndex, 0, "missing bounded index seek %q: %+v", search.index, plan)
 				if search.covering {
@@ -141,7 +142,8 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 				})
 				assert.GreaterOrEqual(t, distinctIndex, 0, "range rows must be deduplicated within the subtree: %+v", plan)
 				sessionIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
-					return row.parent == plan[rangeParent].parent && strings.HasPrefix(row.detail, "SEARCH s ") && strings.Contains(row.detail, "(id=?)")
+					return row.parent == plan[rangeParent].parent &&
+						strings.HasPrefix(row.detail, "SEARCH s ") && strings.Contains(row.detail, "(id=?)")
 				})
 				require.GreaterOrEqual(t, sessionIndex, 0, "sessions must be reached by id outside the range subtree: %+v", plan)
 				assert.Less(t, distinctIndex, sessionIndex, "range rows must be deduplicated before the sessions lookup")
