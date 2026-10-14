@@ -3256,10 +3256,10 @@ schemas keep their existing ordering behavior.
   message contents, titles and usage can change without updating `ended_at`.
   Agentsview therefore syncs each session as a virtual `state.db#<session ID>`
   source and compares that session's content fingerprint before parsing it.
-  Hermes opens `state.db` in WAL mode, falling back to a rollback journal on
-  filesystems without WAL support, so a commit can change only
-  `state.db-wal`. Session freshness includes the WAL file's modification time
-  while the WAL contains frames.
+  Hermes opens `state.db` in WAL mode and falls back to a rollback journal on
+  filesystems without WAL support. In WAL mode a commit can change only
+  `state.db-wal`, so session freshness includes the WAL file's modification
+  time while the WAL contains frames.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

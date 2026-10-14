@@ -58,7 +58,13 @@ func parseHermesTestArchive(
 // DiscoverHermesSessions entrypoint.
 func discoverHermesTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
-	return discoverHermesSessions(root)
+	sources, err := newHermesTestProvider(t, root).Discover(t.Context())
+	require.NoError(t, err)
+	var files []DiscoveredFile
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{Path: source.DisplayPath, Agent: source.Provider})
+	}
+	return files
 }
 
 // findHermesTestSourceFile resolves a Hermes session ID to a transcript path

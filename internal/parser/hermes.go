@@ -1355,27 +1355,6 @@ func HermesSessionID(name string) string {
 	return name
 }
 
-// discoverHermesSessions finds Hermes session sources under root. When a
-// sibling state.db exists, it prefers that archive root; otherwise it returns
-// transcript files from the sessions directory. It is the provider-owned
-// discovery body folded off the package-level entrypoint.
-func discoverHermesSessions(sessionsDir string) []DiscoveredFile {
-	if sessionsDir == "" {
-		return nil
-	}
-	if stateDB, _, ok := hermesStatePaths(sessionsDir); ok {
-		return []DiscoveredFile{{
-			Path:  stateDB,
-			Agent: AgentHermes,
-		}}
-	}
-	childSessions := filepath.Join(sessionsDir, "sessions")
-	if info, err := os.Stat(childSessions); err == nil && info.IsDir() {
-		return discoverHermesTranscriptFiles(childSessions)
-	}
-	return discoverHermesTranscriptFiles(sessionsDir)
-}
-
 func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
