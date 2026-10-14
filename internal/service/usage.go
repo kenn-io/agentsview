@@ -362,8 +362,8 @@ type UsageSummaryResult struct {
 // UsagePairwiseComparisonSide holds aggregate and derived
 // metrics for one side of a pairwise comparison.
 type UsagePairwiseComparisonSide struct {
-	Dimension           string       `json:"dimension"`
-	Value               string       `json:"value"`
+	Dimension           string       `json:"dimension,omitempty"`
+	Value               string       `json:"value,omitempty"`
 	TotalCost           money.Money  `json:"totalCost"`
 	InputTokens         int          `json:"inputTokens"`
 	OutputTokens        int          `json:"outputTokens"`

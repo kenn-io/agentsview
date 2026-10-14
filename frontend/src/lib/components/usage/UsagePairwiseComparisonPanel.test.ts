@@ -1,3 +1,4 @@
+import { m } from "../../i18n/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
@@ -153,6 +154,19 @@ describe("UsagePairwiseComparisonPanel", () => {
     usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+  });
+
+  it("shows loading while the server chooses the first pair", async () => {
+    usage.pairwiseSelection = {
+      left: { dimension: "model", value: "" },
+      right: { dimension: "model", value: "" },
+    };
+    usage.pairwiseComparison = null;
+    usage.loading.pairwise = true;
+    const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
+    await tick();
+    expect(document.querySelector(".pairwise-note")?.textContent?.trim()).toBe(m.shared_refresh());
+    await unmount(component);
   });
 
   it("routes selector changes through the usage store", async () => {

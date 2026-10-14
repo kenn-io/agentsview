@@ -24653,14 +24653,14 @@ type ServiceUsagePairwiseComparisonSide struct {
 	CacheCreationTokens int64       `json:"cacheCreationTokens"`
 	CacheReadTokens     int64       `json:"cacheReadTokens"`
 	CostPerSession      *MoneyMoney `json:"costPerSession,omitempty"`
-	Dimension           string      `json:"dimension" validate:"required"`
+	Dimension           *string     `json:"dimension,omitempty"`
 	InputTokens         int64       `json:"inputTokens"`
 	OutputTokens        int64       `json:"outputTokens"`
 	SessionCount        int64       `json:"sessionCount"`
 	TokensPerSession    *float64    `json:"tokensPerSession,omitempty"`
 	TotalCost           MoneyMoney  `json:"totalCost"`
 	TotalTokens         int64       `json:"totalTokens"`
-	Value               string      `json:"value" validate:"required"`
+	Value               *string     `json:"value,omitempty"`
 }
 
 func (s ServiceUsagePairwiseComparisonSide) Validate() error {
@@ -24672,16 +24672,10 @@ func (s ServiceUsagePairwiseComparisonSide) Validate() error {
 			}
 		}
 	}
-	if err := typesValidator.Var(s.Dimension, "required"); err != nil {
-		errors = errors.Append("Dimension", err)
-	}
 	if v, ok := any(s.TotalCost).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("TotalCost", err)
 		}
-	}
-	if err := typesValidator.Var(s.Value, "required"); err != nil {
-		errors = errors.Append("Value", err)
 	}
 	if len(errors) == 0 {
 		return nil

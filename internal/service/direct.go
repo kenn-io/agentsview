@@ -949,7 +949,9 @@ func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
 	if req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == "" {
-		summary, err := b.UsageSummary(ctx, req.UsageRequest)
+		rankingRequest := req.UsageRequest
+		rankingRequest.Breakdowns = new(true)
+		summary, err := b.UsageSummary(ctx, rankingRequest)
 		if err != nil {
 			return nil, err
 		}

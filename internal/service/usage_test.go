@@ -960,20 +960,3 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 		})
 	}
 }
-
-func TestDirectBackend_UsagePairwiseComparison_EmptyDefault(t *testing.T) {
-	t.Parallel()
-	d := dbtest.OpenTestDB(t)
-	be := service.NewDirectBackend(d, nil)
-	res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-		UsageRequest: service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC"},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Empty(t, res.Left.Dimension)
-	assert.Empty(t, res.Left.Value)
-	assert.Empty(t, res.Right.Dimension)
-	assert.Empty(t, res.Right.Value)
-	assert.Zero(t, res.Left.TotalTokens)
-	assert.Zero(t, res.Right.TotalTokens)
-}

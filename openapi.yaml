@@ -6950,8 +6950,6 @@ components:
         value:
           type: string
       required:
-        - dimension
-        - value
         - totalCost
         - inputTokens
         - outputTokens

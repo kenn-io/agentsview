@@ -7,12 +7,12 @@ export interface ServiceUsagePairwiseComparisonSide {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   costPerSession?: MoneyMoney;
-  dimension: string;
+  dimension?: string;
   inputTokens: number;
   outputTokens: number;
   sessionCount: number;
   tokensPerSession?: number;
   totalCost: MoneyMoney;
   totalTokens: number;
-  value: string;
+  value?: string;
 }

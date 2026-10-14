@@ -337,12 +337,12 @@
         {m.shared_retry()}
       </button>
     </Card>
+  {:else if usage.loading.pairwise && rows.length === 0}
+    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if !hasSelection}
     <Card level="default" padding="none" class="pairwise-note">
       {m.usage_pairwise_not_enough_data()}
     </Card>
-  {:else if usage.loading.pairwise && rows.length === 0}
-    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if rows.length > 0}
     <div class="table-wrap">
       <table>
