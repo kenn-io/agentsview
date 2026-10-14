@@ -563,8 +563,10 @@ func TestLocalErrorStaysLocalWhenTheConnectionEndsRightAfter(t *testing.T) {
 }
 
 func TestUnreadableConfigWithABadKeptValueSaysImportIsOff(t *testing.T) {
-	startup := config.Config{CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true,
-		Err: &config.CodexCloudConfigError{Path: "/data/config.toml", Key: "enabled", Reason: "expected true or false"}}}
+	startup := config.Config{CodexCloud: config.CodexCloudConfig{
+		Present: true, Enabled: true,
+		Err: &config.CodexCloudConfigError{Path: "/data/config.toml", Key: "enabled", Reason: "expected true or false"},
+	}}
 	env := newPassEnv(t)
 	env.syncer.Gates = NewGateSource("/data/config.toml", startup, func() (config.Config, error) {
 		return config.Config{}, assert.AnError

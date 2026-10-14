@@ -124,8 +124,10 @@ func TestUsageReplyErrorsMarkOnlyCutValues(t *testing.T) {
 		name, reply, want string
 		cut               bool
 	}{
-		{"short credits", `{"data_as_of":"2026-10-01T00:00:00Z","threads":[{"thread_id":"a","balance_usage_credits":"NaN"}]}`,
-			`credits "NaN" are not`, false},
+		{
+			"short credits", `{"data_as_of":"2026-10-01T00:00:00Z","threads":[{"thread_id":"a","balance_usage_credits":"NaN"}]}`,
+			`credits "NaN" are not`, false,
+		},
 		{"long data_as_of", `{"data_as_of":"` + long + `","threads":[]}`, `data_as_of "xxx`, true},
 		{"short data_as_of", `{"data_as_of":"soon","threads":[]}`, `data_as_of "soon" is not an RFC 3339 time`, false},
 	} {
