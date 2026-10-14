@@ -947,10 +947,10 @@ records every token update, and leaves when the turn ends.
       thread's stored `updatedAt`.
     - anything else: the monitor closes the connection, stops live capture for the
       account, and reports a protocol-change error. Capture stays off for that
-      account until AgentsView restarts, or until a discovery run, which comes
-      every 30 seconds, finds live capture off, as it does when it sees
-      `live_tokens = false`. A quick switch to false and back can fall between
-      two runs and leave capture stopped (see Status and errors).
+      account until AgentsView restarts, or until a discovery run finds live
+      capture off, as it does with `live_tokens = false`. Discovery runs every
+      30 seconds, so a quick switch to false and back can fall between two runs
+      and leave capture stopped (see Status and errors).
 
 **While joined.**
 
