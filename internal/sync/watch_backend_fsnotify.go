@@ -945,8 +945,10 @@ func (b *fsnotifyBackend) acquireRuntimePolling(roots []string, wholeRoot bool) 
 			if len(scopes) == 0 {
 				scopes = []PollingScope{{Root: root}}
 			}
-			requests = append(requests, acquisition{root: root, folder: folder, state: state, entry: entry,
-				obligation: PollingObligation{Key: runtimeFolderPollingKey(root, folder), Scopes: runtimeFolderPollingScopes(root, folder, scopes), Probe: folder}})
+			requests = append(requests, acquisition{
+				root: root, folder: folder, state: state, entry: entry,
+				obligation: PollingObligation{Key: runtimeFolderPollingKey(root, folder), Scopes: runtimeFolderPollingScopes(root, folder, scopes), Probe: folder},
+			})
 		}
 	}
 	b.watchMu.Unlock()
