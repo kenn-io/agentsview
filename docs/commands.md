@@ -486,12 +486,13 @@ server, `serve status` also asks for the
 source is configured, it prints a status line for each ChatGPT account or Codex
 home, each followed by its live tokens and plan usage lines when they have
 something to report. When the source is off or its settings are wrong, it
-prints one line for the whole source. If the server cannot return the status,
+prints one status line for the whole source, followed by a "Live tokens: off."
+line. If the server cannot return the status, or fails while answering,
 `serve status` prints one line saying why, even when the source is not
 configured. Read-only servers, and older servers without this status, add no
-lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates confirmed writable
-SQLite and read-only PostgreSQL or DuckDB server processes for the data
-directory and cleans up their runtime records.
+lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
+confirmed writable SQLite and read-only PostgreSQL or DuckDB server processes
+for the data directory and cleans up their runtime records.
 
 `serve restart` is intentionally narrower and config-driven. It restarts only
 the writable SQLite daemon, leaves read-only servers alive, and starts the

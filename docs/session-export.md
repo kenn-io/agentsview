@@ -177,9 +177,9 @@ be `null`. It also adds two fields, `plan_usage` and `capture_coverage`:
   from other agents that recorded no usage still export zeros.
 - `plan_usage` holds OpenAI's newest plan usage report for the chat, the outcome
   of a later check, or both. Its fields are listed in the
-  [`plan_usage` row of the session usage fields](/docs/session-api/#agentsview-session-usage).
-  An object with only an outcome, such as `account_unavailable`, has no
-  figures. It is omitted when AgentsView has stored neither.
+  [`plan_usage` fields](/docs/session-api/#agentsview-session-usage). An
+  object with only an outcome, such as `account_unavailable`, has no figures.
+  `plan_usage` is omitted when AgentsView has stored neither.
 - `capture_coverage` has `last_capture_at`, when AgentsView last received a
   token update for the chat, and `uncaptured_turns`, the number of finished
   turns live capture did not fully see. It is omitted when AgentsView never

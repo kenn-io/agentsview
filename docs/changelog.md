@@ -83,8 +83,8 @@ The latest release is
   chats were left out for that reason. The endpoints are private and
   undocumented, so a change on OpenAI's side can stop the import until
   AgentsView is updated. Enable the source, or at least live capture, on one
-  machine only: every machine gives a chat the same session ID, so a second
-  machine listens in on the same chats and its copies can conflict when synced
+  machine only. Every machine gives a chat the same session ID. A second machine
+  listens in on the same chats, and its copies of them can conflict when synced
   to PostgreSQL or ClickHouse. See
   [Codex Cloud](/docs/configuration/#codex-cloud) for what it sends to OpenAI,
   how listening in can show on OpenAI's side, such as AgentsView appearing as a
