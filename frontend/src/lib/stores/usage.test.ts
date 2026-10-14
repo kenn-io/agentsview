@@ -804,7 +804,7 @@ describe("UsageStore session filter params", () => {
     },
   );
 
-  it.each(["default", "rolled dates", "excluded model"] as const)(
+  it.each(["default", "rolled dates", "excluded model", "empty range"] as const)(
     "starts the %s comparison before totals and adopts its echo",
     async (scenario) => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -829,6 +829,7 @@ describe("UsageStore session filter params", () => {
         );
         if (scenario === "rolled dates") vi.setSystemTime(new Date("2026-06-16T16:00:00Z"));
         if (scenario === "excluded model") usage.excludedModels = "claude-sonnet-4-20250514";
+        if (scenario === "empty range") usage.applyDateRange("2024-02-01", "2024-02-29");
         const refresh = usage.fetchAll();
         const params = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0];
         if (scenario === "default") {
@@ -843,6 +844,8 @@ describe("UsageStore session filter params", () => {
           });
           if (scenario === "rolled dates")
             expect(params).toMatchObject({ from: "2026-05-18", to: "2026-06-16" });
+          else if (scenario === "empty range")
+            expect(params).toMatchObject({ from: "2024-02-01", to: "2024-02-29" });
           else expect(params).toMatchObject({ exclude_model: "claude-sonnet-4-20250514" });
         }
         expect(usage.pairwiseComparison).toBeNull();
@@ -855,19 +858,33 @@ describe("UsageStore session filter params", () => {
             value: "pl1:sha256:beta",
           };
         }
+        if (scenario === "empty range") {
+          delete comparison.left.dimension;
+          delete comparison.left.value;
+          delete comparison.right.dimension;
+          delete comparison.right.value;
+        }
         resolvePair(comparison);
         await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(comparison));
         resolveSummary(
           scenario === "excluded model"
             ? usageSummaryWithOptions({ projects: ["alpha", "beta"], models: ["gpt-4o"] })
-            : usageSummary(),
+            : scenario === "empty range"
+              ? usageSummaryWithOptions({ projects: [], models: [] })
+              : usageSummary(),
         );
         await refresh;
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
         expect(usage.lastUpdatedAt).not.toBeNull();
         expect(usage.pairwiseSelection).toEqual({
-          left: { dimension: comparison.left.dimension, value: comparison.left.value },
-          right: { dimension: comparison.right.dimension, value: comparison.right.value },
+          left: {
+            dimension: comparison.left.dimension ?? "model",
+            value: comparison.left.value ?? "",
+          },
+          right: {
+            dimension: comparison.right.dimension ?? "model",
+            value: comparison.right.value ?? "",
+          },
         });
       } finally {
         vi.useRealTimers();
