@@ -85,6 +85,10 @@ The latest release is
   `tool_calls` columns before upgrading, or hosted startup fails; see
   [Hosted Raw Sync](/docs/hosted-raw-sync/#http-control-plane).
 
+**Improvements**
+
+- Load Usage totals, top sessions and model comparison faster on large archives.
+
 **Bug fixes**
 
 - Hidden tabs release their live connections so new tabs load, and catch up when

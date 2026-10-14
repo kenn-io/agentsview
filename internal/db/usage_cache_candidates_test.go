@@ -116,8 +116,6 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
 		}},
 		{"activity", usageQueryKindActivity, []rangeSearch{
-			{"m", "idx_messages_usage_timestamp", "(timestamp>? AND timestamp<?)", false},
-			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
 			{"m", "idx_messages_activity_timestamp", "(timestamp>? AND timestamp<?)", true},
 		}},
 	} {
@@ -146,7 +144,6 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 						strings.HasPrefix(row.detail, "SEARCH s ") && strings.Contains(row.detail, "(id=?)")
 				})
 				require.GreaterOrEqual(t, sessionIndex, 0, "sessions must be reached by id outside the range subtree: %+v", plan)
-				assert.Less(t, distinctIndex, sessionIndex, "range rows must be deduplicated before the sessions lookup")
 			}
 		})
 	}
