@@ -1170,12 +1170,13 @@ func (s hermesSourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		if stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db"); member && !IsRegularFile(stateDB) {
+		stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db")
+		if member && !IsRegularFile(stateDB) {
 			continue
 		}
 		for _, root := range roots {
 			source, ok := s.sourceRef(root, path)
-			if !ok {
+			if !ok && member {
 				source, ok = s.sourceForPath(root, path)
 			}
 			if ok {
