@@ -240,7 +240,10 @@ func writeSessionBody(b *strings.Builder, sessionID string, in sessionPromptInpu
 		fmt.Fprintf(b, "- Cost: %s\n", money.FormatUSD(usage.Cost, money.DisplayCents))
 	}
 	if timing != nil {
-		fmt.Fprintf(b, "- Duration: %.1fs\n", float64(timing.TotalDurationMs)/1000)
+		// Open-session durations depend on the wall clock rather than stored evidence.
+		if !timing.Running {
+			fmt.Fprintf(b, "- Duration: %.1fs\n", float64(timing.TotalDurationMs)/1000)
+		}
 		fmt.Fprintf(b, "- Tool calls: %d\n", timing.ToolCallCount)
 	}
 
