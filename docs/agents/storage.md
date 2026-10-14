@@ -130,6 +130,29 @@ provenance with preserved sessions. Once all contributors are readable, a full
 parse can apply corrected or shortened transcripts. This metadata stays local to
 the archive; S3 materializations do not record temporary paths.
 
+### Claude persisted tool results
+
+Claude Code moves a large tool output to a side file in the session's
+`tool-results` folder and leaves a placeholder in the transcript. The parser
+inlines the side file while it exists, so the first sync archives the full
+output. Claude Code deletes the side file after its cleanup period, and a later
+full parse sees only the placeholder. When a parsed Claude result is a
+placeholder, sync keeps the archived result with the same `tool_use_id` instead
+of storing the placeholder over it
+(`internal/sync/claude_tool_result_splice.go`, called from
+`prepareSessionNormalizedContext`). The archived text is put back before
+`ingest.PrepareCandidate`, so blocked categories and the image policy treat it
+like parsed text; when a blocked category archived only a length, that length
+and the event's raw digest are kept. A side file that is present and differs
+still replaces the archived text, new messages and calls still land, and an
+output that only quotes the placeholder markers is not a placeholder
+(`parser.IsPersistedToolResultPlaceholder`). Rebuilds read the old archive, and
+S3 Claude sessions follow the same rule. The raw archive's scratch reparse
+(`EngineConfig.ArchiveReparse`) is left out, because it derives sessions only
+from verified captured inputs. iCodeMate CLI writes the same side files and
+placeholders but is not covered: its source fingerprints include the side files,
+so the next sync after one is deleted stores the placeholder.
+
 ### Codex deletion scope
 
 Before data version 131, deleting a Codex-format thread excluded all its rollout
