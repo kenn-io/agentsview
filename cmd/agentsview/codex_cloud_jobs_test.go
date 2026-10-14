@@ -59,11 +59,11 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 		},
 		{
 			"a refusal does not blame the token", http.StatusForbidden, "secret",
-			"  codex-cloud status unavailable: the server answered with HTTP status 403. The server log, serve.log in the AgentsView data directory, may say why.",
+			"  codex-cloud status unavailable: the server answered with HTTP status 403. The server log, debug.log in the AgentsView data directory, may say why.",
 		},
 		{
 			"another failure names its status", http.StatusInternalServerError, "",
-			"  codex-cloud status unavailable: the server answered with HTTP status 500. The server log, serve.log in the AgentsView data directory, may say why.",
+			"  codex-cloud status unavailable: the server answered with HTTP status 500. The server log, debug.log in the AgentsView data directory, may say why.",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

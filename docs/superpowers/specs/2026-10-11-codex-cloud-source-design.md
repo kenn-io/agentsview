@@ -1437,7 +1437,7 @@ States:
   but threads are in the retry set. The line goes on with the latest failure's
   message from the table below, followed by "AgentsView retries a failed chat
   for 7 days; a change to the chat in OpenAI restarts the 7 days. The
-  AgentsView log, serve.log in its data directory, lists each chat by its ID.
+  AgentsView log, debug.log in its data directory, lists each chat by its ID.
   Chats already imported are not affected." The web status shows this server
   text as is; it adds no translated copy of these sentences.
 - **Error:** the whole pass failed. Shows the message below, then "Last
@@ -1458,7 +1458,7 @@ source off, sync shows only the source row, so the line goes with that row and
 says "Live tokens: off."; the row's message already names the cause. When a save
 of token records failed, the line adds "Token counts for N chats are not saved
 yet. AgentsView keeps retrying; restarting it before a save works loses them.
-The AgentsView log, serve.log in its data directory, says why saving fails." The
+The AgentsView log, debug.log in its data directory, says why saving fails." The
 note stays when live tokens are off, and pending records are retried on every
 discovery run whatever the gates say. Cold resumes are logged per thread, not
 counted in the line: the count only grew until restart, so a normal event looked
@@ -1490,7 +1490,7 @@ that problem's message instead of the signed-out one.
 | Keyring-backed home, no token in `auth.json`        | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. (file fix)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ephemeral` credential store                        | This Codex home does not save its ChatGPT login, so AgentsView cannot use it. (file fix)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Codex home login settings or `auth.json` unreadable | One message per cause (a `config.toml` that does not parse, an unknown `cli_auth_credentials_store`, an `auth.json` that cannot be read or is not valid JSON), never quoting file content.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Local account state unreadable or unwritable        | AgentsView could not read or save the files that track what it imported, so imports from this account are paused. The AgentsView log, serve.log in its data directory, names the file and the error. Check that AgentsView can read and write its data directory; imports resume on the next sync after that.                                                                                                                                                                                                                                                                                                      |
+| Local account state unreadable or unwritable        | AgentsView could not read or save the files that track what it imported, so imports from this account are paused. The AgentsView log, debug.log in its data directory, names the file and the error. Check that AgentsView can read and write its data directory; imports resume on the next sync after that.                                                                                                                                                                                                                                                                                                      |
 | Bad value in `[agents.codex-cloud]`                 | `<config path>` has an invalid value for `"<key>"` under \[agents.codex-cloud\]: `<reason>`. Codex cloud import stays off until this is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | HTTP 401 from plan usage                            | Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Unknown key in `[agents.codex-cloud]`               | `<config path>` has an unknown setting `"<key>"` under [agents.codex-cloud]. Remove it or correct its name. Codex cloud import stays off until this is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -1525,9 +1525,9 @@ had. The replacement happens in two places only:
 Account rows, the live token line, and the other plan usage lines keep their
 text as is. None of their messages names `codex login`.
 
-Raw error details go to the daemon log, with the token redacted, the endpoint
-named (thread host or plan usage), and the thread ID for per-thread failures.
-The next successful pass clears the error.
+Raw error details go to the AgentsView log, debug.log in its data directory,
+with the token redacted, the endpoint named (thread host or plan usage), and the
+thread ID for per-thread failures. The next successful pass clears the error.
 
 ### Several machines
 
@@ -1997,7 +1997,7 @@ double-count its tokens.
     - a counter restart that the monitor does not see as a decrease undercounts
       the turns in between (see Live token capture);
     - a thread that fails for 7 days without changing stops being retried and is
-      named in the AgentsView log (serve.log in the data directory).
+      named in the AgentsView log (debug.log in the data directory).
 
 ## Open questions
 

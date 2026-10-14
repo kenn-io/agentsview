@@ -811,8 +811,7 @@ func pendingNote(unsaved int) string {
 		return ""
 	}
 	return fmt.Sprintf(" Token counts for %s are not saved yet. AgentsView keeps retrying;"+
-		" restarting it before a save works loses them. The AgentsView log, serve.log in its data"+
-		" directory, says why saving fails.",
+		" restarting it before a save works loses them. "+logName+" says why saving fails.",
 		chats(unsaved, "chat"))
 }
 
