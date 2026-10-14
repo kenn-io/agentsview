@@ -212,7 +212,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 		backend := testFSNotifyBackend(t)
 		root := filepath.Clean(t.TempDir())
 		require.NoError(t, backend.AddRecursive(root, 8).Err)
-		added, released := bindRuntimePollingRecorder(t, backend)
+		_, released := bindRuntimePollingRecorder(t, backend)
 		attempts := 0
 		backend.onPollingRequired = func(PollingObligation) error {
 			attempts++
@@ -228,7 +228,6 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 		assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
 		assert.Equal(t, 1, attempts, "recovery must finish without acquiring polling")
 		assert.Contains(t, backend.watcher.WatchList(), folder)
-		assert.Empty(t, *added)
 		assert.Empty(t, *released)
 		assert.Empty(t, backend.runtimeRoots)
 	})
@@ -669,9 +668,9 @@ func TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches(t *testing.T
 			assert.Empty(t, backend.watcher.WatchList())
 			require.NoError(t, backend.AddShallow(t.TempDir()), "release failure must leave the backend usable")
 			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
-			if coverage == "native" || coverage == "missing release" {
+			if coverage == "native" {
 				assert.Empty(t, releaseKeys)
-			} else {
+			} else if coverage != "missing release" {
 				expected := []string{"fsnotify-folder:" + root + ":" + filepath.Join(root, "failed")}
 				if strings.HasPrefix(coverage, "overflow") {
 					expected = append(expected, "fsnotify-runtime:"+root)

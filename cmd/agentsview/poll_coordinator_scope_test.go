@@ -114,8 +114,16 @@ func (s *groupedCountingPollSyncer) snapshot() [][]agentsync.ProviderRootsGroup 
 }
 
 func TestUnwatchedPollFolderRelease(t *testing.T) {
-	for _, removed := range []string{"transcript", "project"} {
-		t.Run("missing "+removed+" reconciled before release", func(t *testing.T) {
+	for _, tc := range []struct {
+		removed     string
+		mirrorWatch bool
+	}{
+		{removed: "transcript"},
+		{removed: "project"},
+		{removed: "transcript", mirrorWatch: true},
+		{removed: "project", mirrorWatch: true},
+	} {
+		t.Run(fmt.Sprintf("missing %s reconciled before release/mirror watch=%t", tc.removed, tc.mirrorWatch), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				root := filepath.Clean(t.TempDir())
 				project := requireExistingPollRoot(t, root, "project")
@@ -132,9 +140,17 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 				assert.Nil(t, stored.SourceMissingAt)
 				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), engine, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
 				t.Cleanup(coordinator.Stop)
-				obligation := syncObligationToPoller(agentsync.PollingObligation{Key: agentsync.FSNotifyFolderPollingPrefix + root + ":" + project, Scopes: []agentsync.PollingScope{{Agent: "claude", Root: project}}, ReleaseScopes: []agentsync.PollingScope{{Agent: "claude", Root: root}}, Probe: project})
-				require.NoError(t, coordinator.AddObligation(obligation))
-				if removed == "project" {
+				obligation := agentsync.PollingObligation{Key: agentsync.FSNotifyFolderPollingPrefix + root + ":" + project, Scopes: []agentsync.PollingScope{{Agent: "claude", Root: project}}, ReleaseScopes: []agentsync.PollingScope{{Agent: "claude", Root: root}}, Probe: project}
+				add := func(obligation agentsync.PollingObligation) error {
+					return coordinator.AddObligation(syncObligationToPoller(obligation))
+				}
+				release := coordinator.RemoveObligation
+				if tc.mirrorWatch {
+					options := archivePushWatchWatcherOptions(nil, coordinator)
+					add, release = options.OnPollingRequired, options.OnPollingReleased
+				}
+				require.NoError(t, add(obligation))
+				if tc.removed == "project" {
 					require.NoError(t, os.RemoveAll(project))
 				} else {
 					require.NoError(t, os.Remove(sourcePath))
@@ -145,7 +161,7 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, stored)
 				assert.Nil(t, stored.SourceMissingAt, "degraded polling cannot prove replacement-aware absence")
-				require.NoError(t, coordinator.RemoveObligation(obligation.Key))
+				require.NoError(t, release(obligation.Key))
 				time.Sleep(unwatchedPollInterval)
 				synctest.Wait()
 				assert.Empty(t, coordinator.currentPollObligations())

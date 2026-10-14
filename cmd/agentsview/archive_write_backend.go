@@ -168,18 +168,7 @@ func archivePushWatchWatcherOptions(
 			return loop.NotifyCoverageDegraded(roots)
 		},
 		OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
-			scopes := make([]pollingScope, 0, len(obligation.Scopes))
-			for _, s := range obligation.Scopes {
-				scopes = append(scopes, pollingScope{
-					Agent: parser.AgentType(s.Agent),
-					Root:  s.Root,
-				})
-			}
-			return poller.AddObligation(pollingObligation{
-				Key:    obligation.Key,
-				Scopes: scopes,
-				Probe:  obligation.Probe,
-			})
+			return poller.AddObligation(syncObligationToPoller(obligation))
 		},
 		OnPollingReleased: poller.RemoveObligation,
 	}
