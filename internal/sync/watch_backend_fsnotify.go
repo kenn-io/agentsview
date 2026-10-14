@@ -938,7 +938,7 @@ func (b *fsnotifyBackend) acquireRuntimePolling(roots []string, wholeRoot bool) 
 			if state != nil {
 				entry = state.folders[folder]
 			}
-			if folder != root && entry.polling {
+			if folder != root && entry != nil && entry.polling {
 				continue
 			}
 			scopes := b.rootScopes[root]
