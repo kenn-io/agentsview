@@ -65,14 +65,18 @@ func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []Reconc
 	for _, scope := range scopes {
 		for _, root := range scope.TraversalRoots {
 			for _, proof := range scope.PhysicalProofScopes {
-				paths[root] = append(paths[root], filepath.Clean(proof.Path))
+				if reconciliationScopeWithinOrSame(proof.Path, root) {
+					paths[root] = append(paths[root], filepath.Clean(proof.Path))
+				}
 			}
 		}
 	}
-	var incomplete, yieldErr error
+	var incomplete error
 	emit := func(source SourceRef) error {
-		yieldErr = yield(source)
-		return yieldErr
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
 	}
 	for _, root := range slices.Sorted(maps.Keys(paths)) {
 		slices.Sort(paths[root])
@@ -88,10 +92,10 @@ func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []Reconc
 			if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
 				err = p.sources.discoverEachRoot(ctx, root, emit)
 			} else {
-				err = p.sources.streamLocalSubtree(ctx, root, path, emit)
+				err = p.sources.streamLocalSubtree(ctx, root, path, yield)
 			}
-			if yieldErr != nil {
-				return yieldErr
+			if cause, ok := discoveryYieldCause(err); ok {
+				return cause
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -660,7 +664,10 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 		return nil
 	}
 	if !info.IsDir() {
-		return emit(path, fs.FileInfoToDirEntry(info))
+		if err := emit(path, fs.FileInfoToDirEntry(info)); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
 	}
 	return streamDirectoryTreeRecursive(ctx, path, emit)
 }

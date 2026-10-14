@@ -81,7 +81,7 @@ func TestClaudeProviderScopedDiscoveryBoundsTraversal(t *testing.T) {
 }
 
 func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
-	for _, mode := range []string{"overlap", "unreadable", "symlink", "yield error"} {
+	for _, mode := range []string{"overlap", "unreadable", "symlink", "yield error", "root yield error", "file yield error"} {
 		t.Run(mode, func(t *testing.T) {
 			root := filepath.Clean(t.TempDir())
 			project := filepath.Join(root, "target")
@@ -99,7 +99,13 @@ func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
 			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 			require.True(t, ok)
 			var scopes []ReconciliationScope
-			for _, path := range []string{subagents, project, filepath.Dir(healthy)} {
+			requested := []string{subagents, project, filepath.Dir(healthy)}
+			if mode == "root yield error" {
+				requested = []string{root}
+			} else if mode == "file yield error" {
+				requested = []string{main}
+			}
+			for _, path := range requested {
 				plan, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{path}})
 				require.NoError(t, err)
 				scopes = append(scopes, plan.Scopes...)
@@ -116,7 +122,7 @@ func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
 			stop := errors.New("consumer stopped")
 			err := provider.(ScopedStreamingDiscoverer).DiscoverScopesEach(ctx, scopes, func(source SourceRef) error {
 				paths = append(paths, source.DisplayPath)
-				if mode == "yield error" {
+				if strings.HasSuffix(mode, "yield error") {
 					return stop
 				}
 				return nil
@@ -125,8 +131,8 @@ func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
 			case "unreadable":
 				require.ErrorIs(t, err, os.ErrPermission)
 				assert.ElementsMatch(t, []string{main, healthy}, paths)
-			case "yield error":
-				require.ErrorIs(t, err, stop)
+			case "yield error", "root yield error", "file yield error":
+				require.Equal(t, stop, err)
 				assert.Len(t, paths, 1)
 			default:
 				require.NoError(t, err)
@@ -1157,4 +1163,31 @@ func claudeProviderFixture(firstMessage string) string {
 		testjsonl.ClaudeUserJSON(firstMessage, tsEarly),
 		testjsonl.ClaudeAssistantJSON("Done.", tsEarlyS1),
 	)
+}
+
+func TestClaudeProviderScopedDiscoveryAssignsProofsToConfiguredRoots(t *testing.T) {
+	roots := []string{filepath.Clean(t.TempDir()), filepath.Clean(t.TempDir())}
+	var want []string
+	for _, root := range roots {
+		path := filepath.Join(root, "target", "session.jsonl")
+		writeSourceFile(t, path, claudeProviderFixture("prompt"))
+		want = append(want, path)
+	}
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: roots})
+	require.True(t, ok)
+	plan, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{filepath.Dir(want[0]), filepath.Dir(want[1])}})
+	require.NoError(t, err)
+	reads := make(map[string]int)
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
+		reads[path]++
+		return streamDirectoryEntriesDirect(ctx, path, yield)
+	})
+	var got []string
+	err = provider.(ScopedStreamingDiscoverer).DiscoverScopesEach(ctx, plan.Scopes, func(source SourceRef) error {
+		got = append(got, source.DisplayPath)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, want, got)
+	assert.Equal(t, map[string]int{filepath.Dir(want[0]): 1, filepath.Dir(want[1]): 1}, reads)
 }

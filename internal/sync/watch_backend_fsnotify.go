@@ -25,6 +25,7 @@ type fsnotifyBackend struct {
 	eventInput        <-chan fsnotify.Event
 	errorInput        <-chan error
 	watchOps          fsnotifyWatchOps
+	walkDir           func(string, fs.WalkDirFunc) error
 	queue             *nativeEventQueue
 	events            chan backendEvent
 	errors            chan error
@@ -63,13 +64,14 @@ type fsnotifyBackend struct {
 
 type runtimeWatchRoot struct {
 	folders map[string]*runtimeWatchFolder
-	delay   time.Duration
 	retryAt time.Time
 	timer   *time.Timer
 }
 
 type runtimeWatchFolder struct {
 	polling bool
+	delay   time.Duration
+	retryAt time.Time
 }
 
 // nativeEventQueueLimit bounds events held between the native reader and the
@@ -191,6 +193,7 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 		eventInput:      watcher.Events,
 		errorInput:      watcher.Errors,
 		watchOps:        bufferedFSNotifyWatchOps{Watcher: watcher},
+		walkDir:         filepath.WalkDir,
 		queue:           newNativeEventQueue(),
 		events:          make(chan backendEvent),
 		errors:          make(chan error, 1),
@@ -235,6 +238,10 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 	root = filepath.Clean(root)
 	b.addRecursiveRoot(root)
 	deferFolder := func(path string, err error) {
+		if watchFolderGone(path) {
+			result.Unwatched--
+			return
+		}
 		if path != root && b.onPollingRequired != nil {
 			b.deferRuntimeFolderLocked(root, path, err)
 			failedFolders = append(failedFolders, path)
@@ -242,7 +249,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 	}
 
 	remaining := budget
-	result.Err = filepath.WalkDir(root,
+	result.Err = b.walkDir(root,
 		func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				// Poll only the unreadable subtree while walking the accessible remainder.
@@ -689,7 +696,7 @@ func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) 
 		b.watchMu.Unlock()
 		return backendItemDirectory, false
 	}
-	degraded := b.addRuntimeSubtreeLocked(path, owners)
+	degraded, _ := b.addRuntimeSubtreeLocked(path, owners)
 	b.watchMu.Unlock()
 	for _, root := range degraded {
 		b.acquireRuntimeFolderPolling(root)
@@ -698,14 +705,20 @@ func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) 
 }
 
 func (b *fsnotifyBackend) deferRuntimeFolderLocked(root, folder string, cause error) {
+	now := time.Now()
 	state, ok := b.runtimeRoots[root]
 	if !ok {
-		state = &runtimeWatchRoot{folders: make(map[string]*runtimeWatchFolder), delay: 10 * time.Second, retryAt: time.Now().Add(10 * time.Second)}
-		state.timer = time.AfterFunc(state.delay, func() { b.queue.push(nativeItem{retry: true}) })
+		state = &runtimeWatchRoot{folders: make(map[string]*runtimeWatchFolder), retryAt: now.Add(10 * time.Second)}
+		state.timer = time.AfterFunc(10*time.Second, func() { b.queue.push(nativeItem{retry: true}) })
 		b.runtimeRoots[root] = state
 	}
 	if _, deferred := state.folders[folder]; !deferred {
-		state.folders[folder] = &runtimeWatchFolder{}
+		entry := &runtimeWatchFolder{delay: 10 * time.Second, retryAt: now.Add(10 * time.Second)}
+		state.folders[folder] = entry
+		if entry.retryAt.Before(state.retryAt) {
+			state.retryAt = entry.retryAt
+			state.timer.Reset(time.Until(entry.retryAt))
+		}
 		count := len(state.folders)
 		// Log the first deferral and doubled counts to bound burst logging.
 		if count&(count-1) == 0 {
@@ -720,13 +733,11 @@ func (b *fsnotifyBackend) deferRuntimeFolderLocked(root, folder string, cause er
 func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 	path string,
 	owners []string,
-) []string {
+) ([]string, bool) {
 	degraded := make(map[string]struct{})
-	vanished := func(path string) bool {
-		_, err := os.Lstat(path)
-		return errors.Is(err, os.ErrNotExist)
-	}
+	complete := true
 	deferFolder := func(folder string, currentOwners []string, cause error) {
+		complete = false
 		if b.onPollingRequired == nil {
 			b.reportError(fmt.Errorf("fsnotify coverage degraded for %s without polling callback: %w", folder, cause))
 			return
@@ -741,9 +752,9 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 			}
 		}
 	}
-	_ = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+	_ = b.walkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			if !vanished(current) {
+			if !watchFolderGone(current) {
 				deferFolder(current, owners, walkErr)
 			}
 			return filepath.SkipDir
@@ -769,13 +780,13 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 			}
 			err := b.watchOps.Add(current)
 			if err != nil && runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(303))) {
-				if vanished(current) {
+				if watchFolderGone(current) {
 					return filepath.SkipDir
 				}
 				err = b.watchOps.Add(current)
 			}
 			if err != nil {
-				if !vanished(current) {
+				if !watchFolderGone(current) {
 					if isWatchResourceExhaustion(err) {
 						for _, root := range currentOwners {
 							deferFolder(root, []string{root}, err)
@@ -799,7 +810,12 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 		roots = append(roots, root)
 	}
 	slices.Sort(roots)
-	return roots
+	return roots, complete
+}
+
+func watchFolderGone(path string) bool {
+	info, err := os.Lstat(path)
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 // forgetRemovedSubtree clears native-watch ownership invalidated by a
@@ -976,22 +992,6 @@ func (b *fsnotifyBackend) acquireRuntimePolling(root, folder string) bool {
 		b.reportError(fmt.Errorf("transfer fsnotify coverage for %s to polling: %w", root, err))
 		return false
 	}
-	b.rootsMu.RLock()
-	registered := slices.Contains(b.roots, root)
-	b.rootsMu.RUnlock()
-	if !registered {
-		b.watchMu.Lock()
-		released := b.onPollingReleased
-		b.watchMu.Unlock()
-		b.pollingMu.Unlock()
-		if released == nil {
-			b.reportError(fmt.Errorf("fsnotify root removed for %s without polling release callback", root))
-		} else if err := released(key); err != nil {
-			b.reportError(fmt.Errorf("release fsnotify polling for %s: %w", root, err))
-		}
-		b.pollingMu.Lock()
-		return false
-	}
 	return true
 }
 
@@ -1016,19 +1016,21 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 			b.pollingMu.Unlock()
 			continue
 		}
-		state.delay = watcherRetryDelay(state.delay, 2)
-		state.retryAt = now.Add(state.delay)
-		state.timer.Reset(state.delay)
-		folders := slices.Sorted(maps.Keys(state.folders))
-		for _, folder := range folders {
-			if folder != root {
-				b.addRuntimeSubtreeLocked(folder, []string{root})
-			}
-		}
 		recovered := make(map[string]bool)
-		for folder, entry := range state.folders {
+		for _, folder := range slices.Sorted(maps.Keys(state.folders)) {
+			entry := state.folders[folder]
+			if now.Before(entry.retryAt) {
+				continue
+			}
+			entry.delay = watcherRetryDelay(entry.delay, 2)
+			entry.retryAt = now.Add(entry.delay)
+			gone := watchFolderGone(folder)
+			complete := false
+			if !gone && folder != root {
+				_, complete = b.addRuntimeSubtreeLocked(folder, []string{root})
+			}
 			info, err := os.Lstat(folder)
-			if _, watched := b.watchOwners[folder][root]; err == nil && info.IsDir() && watched || errors.Is(err, os.ErrNotExist) {
+			if gone || complete && err == nil && info.IsDir() {
 				recovered[folder] = entry.polling
 			}
 		}
@@ -1070,14 +1072,19 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 		b.watchMu.Lock()
 		if b.runtimeRoots[root] == state {
 			for _, folder := range completed {
-				info, err := os.Lstat(folder)
-				if _, watched := b.watchOwners[folder][root]; err == nil && info.IsDir() && watched || errors.Is(err, os.ErrNotExist) {
-					delete(state.folders, folder)
-				}
+				delete(state.folders, folder)
 			}
 			if len(state.folders) == 0 {
 				state.timer.Stop()
 				delete(b.runtimeRoots, root)
+			} else {
+				state.retryAt = time.Time{}
+				for _, entry := range state.folders {
+					if state.retryAt.IsZero() || entry.retryAt.Before(state.retryAt) {
+						state.retryAt = entry.retryAt
+					}
+				}
+				state.timer.Reset(state.retryAt.Sub(now))
 			}
 		}
 		b.watchMu.Unlock()

@@ -1718,8 +1718,9 @@ polling covers the affected project folder. Other providers poll the root's
 configured scopes so changes to companion files reach their owning sessions.
 Retries start after 10 seconds and back off to two minutes. Recovery queues
 reconciliation for those scopes before releasing polling. A deferred folder
-keeps polling until its watch is installed or the path disappears, including
-when a symlink or file replaces it. Removing a root from the watch plan releases
+keeps polling until its whole subtree is watched or the directory disappears.
+A regular file replacing the directory or an ancestor releases polling.
+A directory symlink keeps polling. Removing a root from the watch plan releases
 its polling obligations. Budget or native watch resource exhaustion keeps
 root-level polling. Event-buffer overflow puts every recursive root on polling.
 
