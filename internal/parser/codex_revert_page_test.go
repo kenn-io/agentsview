@@ -74,8 +74,6 @@ func TestCodexRevertPageParentFollowsHistoryBase(t *testing.T) {
 		{"base_is_rollout", AgentCodex, revertThread, revertRollout1, "codex:" + pageKey, "codex:" + revertThread + "_" + revertRollout1, RelContinuation},
 		{"no_base", AgentCodex, revertThread, "", "codex:" + pageKey, "codex:" + revertThread, RelContinuation},
 		{"header_disagrees", AgentCodex, revertOther, revertThread, "codex:" + revertOther, "", ""},
-		{"legacy_header_is_rollout", AgentCodex, revertRollout, revertThread, "codex:" + revertRollout, "codex:" + revertThread, RelContinuation},
-		{"legacy_header_is_rollout_no_base", AgentCodex, revertRollout, "", "codex:" + revertRollout, "codex:" + revertThread, RelContinuation},
 		{"traex", AgentTraeX, revertThread, revertThread, "traex:" + pageKey, "traex:" + revertThread, RelContinuation},
 	}
 	for _, tt := range tests {
@@ -89,6 +87,49 @@ func TestCodexRevertPageParentFollowsHistoryBase(t *testing.T) {
 			assert.Equal(t, tt.wantID, sess.ID)
 			assert.Equal(t, tt.wantParent, sess.ParentSessionID)
 			assert.Equal(t, tt.wantRel, sess.RelationshipType)
+			assert.Equal(t, 1, sess.MessageCount)
+		})
+	}
+}
+
+// Codex builds before the thread-id page header stored the page's own rollout
+// id in session_meta.id and the thread id in session_id. Archives already hold
+// those pages under the rollout id, so the page keeps it and only gains its
+// parent link and its thread's index title.
+func TestCodexLegacyRevertPageContinuesItsThread(t *testing.T) {
+	pageKey := revertThread + "_" + revertRollout
+	tests := []struct {
+		name          string
+		metaSessionID string
+		base          string
+		wantParent    string
+		wantRel       RelationshipType
+		wantName      string
+	}{
+		{"base_is_thread", revertThread, revertThread, "codex:" + revertThread, RelContinuation, "Thread title"},
+		{"no_base", revertThread, "", "codex:" + revertThread, RelContinuation, "Thread title"},
+		{"base_is_legacy_rollout", revertThread, revertRollout1, "codex:" + revertRollout1, RelContinuation, "Thread title"},
+		{"session_id_names_other_thread", revertOther, revertThread, "", "", ""},
+		{"session_id_absent", "", revertThread, "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, "sessions")
+			writeIndex(t, home, `{"id":"`+revertThread+`","thread_name":"Thread title"}`+"\n", time.Now())
+			extra := map[string]any{}
+			if tt.metaSessionID != "" {
+				extra["session_id"] = tt.metaSessionID
+			}
+			writeRevertRollout(t, root, pageKey,
+				revertPageMeta(revertRollout, tt.base, extra),
+				testjsonl.CodexMsgJSON("user", "page prompt", "2026-09-01T11:00:01Z"),
+			)
+			sess := parseRevertSource(t, AgentCodex, root, pageKey)
+			assert.Equal(t, "codex:"+revertRollout, sess.ID, "the page keeps its stored identity")
+			assert.Equal(t, tt.wantParent, sess.ParentSessionID)
+			assert.Equal(t, tt.wantRel, sess.RelationshipType)
+			assert.Equal(t, tt.wantName, sess.SessionName)
 			assert.Equal(t, 1, sess.MessageCount)
 		})
 	}
