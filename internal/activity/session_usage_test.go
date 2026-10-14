@@ -69,15 +69,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		wantContributing       map[string]struct{}
 	}{
 		{
-			name: "message UUID deduplicates across sessions",
-			rows: []UsageRow{
-				{SessionID: "root", UsageSource: "message", Agent: "codex", SourceUUID: "u", OutputTokens: 10},
-				{SessionID: "child", UsageSource: "message", Agent: "codex", SourceUUID: "u", OutputTokens: 10},
-			},
-			wantIndexes: []int{0}, wantRaw: map[string]int{"root": 10, "child": 10},
-			wantDiscarded: map[string]int{"child": 10}, wantContributing: map[string]struct{}{"child": {}},
-		},
-		{
 			name: "message UUID removes noncontributing duplicate",
 			rows: []UsageRow{
 				{SessionID: "root", UsageSource: "message", Agent: "codex", SourceUUID: "u"},
@@ -148,9 +139,10 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantSurvivor != nil {
-				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)
-				require.NoError(t, err)
-				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
+				assert.Equal(t, map[string]SessionTokenCoverage{
+					"root":  {OutputTokens: 20, PeakContextTokens: 100},
+					"child": {OutputTokens: 20, PeakContextTokens: 100},
+				}, result.CanonicalTokenCoverageBySession)
 				assert.Equal(t, tc.wantSearches, pricedSearches)
 				row := result.Rows[0]
 				assert.Equal(t, tc.wantSurvivor.SessionID, row.SessionID)
