@@ -46,7 +46,7 @@ runs:
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
       with:
         workspaces: desktop/src-tauri -> target
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        save-if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
     - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'
