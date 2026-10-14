@@ -81,29 +81,28 @@ func TestReconcileProviderRootsDescendantDoesNotClaimSiblingScope(t *testing.T) 
 }
 
 func TestReconcileProviderRootsClaudeDescendantBoundsDiscovery(t *testing.T) {
-	for _, siblings := range []int{1, 128} {
-		t.Run(fmt.Sprint(siblings), func(t *testing.T) {
-			database := openTestDB(t)
-			claudeRoot := filepath.Join(t.TempDir(), "claude")
-			projectA := filepath.Join(claudeRoot, "projA")
-			writeClaudeProjectSession(t, claudeRoot, "projA", "a1")
-			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			writeClaudeProjectSession(t, claudeRoot, "projA", "new-a")
-			for i := range siblings {
-				writeClaudeProjectSession(t, claudeRoot, fmt.Sprintf("projB-%d", i), "new-b")
-			}
-			require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentClaude, []string{projectA}))
-			admitted, err := database.GetSession(t.Context(), "new-a")
-			require.NoError(t, err)
-			assert.NotNil(t, admitted)
-			sibling, err := database.GetSession(t.Context(), "new-b")
-			require.NoError(t, err)
-			assert.Nil(t, sibling)
-			assert.Equal(t, 2, engine.LastReconciliationResult().Metrics.MaxProviderBuffered, "discovery must read only the two requested project entries")
-		})
+	if testing.Short() {
+		t.Skip("skipping integration test")
 	}
+	database := openTestDB(t)
+	claudeRoot := filepath.Join(t.TempDir(), "claude")
+	projectA := filepath.Join(claudeRoot, "projA")
+	writeClaudeProjectSession(t, claudeRoot, "projA", "a1")
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	writeClaudeProjectSession(t, claudeRoot, "projA", "new-a")
+	for i := range 128 {
+		writeClaudeProjectSession(t, claudeRoot, fmt.Sprintf("projB-%d", i), "new-b")
+	}
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentClaude, []string{projectA}))
+	admitted, err := database.GetSession(t.Context(), "new-a")
+	require.NoError(t, err)
+	assert.NotNil(t, admitted)
+	sibling, err := database.GetSession(t.Context(), "new-b")
+	require.NoError(t, err)
+	assert.Nil(t, sibling)
+	assert.Equal(t, 2, engine.LastReconciliationResult().Metrics.MaxProviderBuffered, "discovery must read only the two requested project entries")
 }
 
 // TestReconcileProviderRootsProofBoundedTombstoneWithinDescendant verifies

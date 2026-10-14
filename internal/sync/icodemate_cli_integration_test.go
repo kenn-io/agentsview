@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,7 +217,17 @@ func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
 	)
 	dbtest.WriteTestFile(t, sidecarPath, []byte("full persisted output\n"))
 
-	transcript := testjsonl.ClaudePersistedToolResult(sidecarPath)
+	pathJSON, err := json.Marshal(sidecarPath)
+	require.NoError(t, err)
+	placeholder := "<persisted-output>\nOutput too large. Full output saved to: " +
+		sidecarPath + "\n</persisted-output>"
+	placeholderJSON, err := json.Marshal(placeholder)
+	require.NoError(t, err)
+	transcript := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + string(placeholderJSON) + `}]},"toolUseResult":{"persistedOutputPath":` + string(pathJSON) + `}}`,
+	}, "\n") + "\n"
 	dbtest.WriteTestFile(t, sessionPath, []byte(transcript))
 
 	database := dbtest.OpenTestDB(t)
@@ -251,7 +262,7 @@ func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, "<persisted-output>\nOutput too large. Full output saved to: "+sidecarPath+"\n</persisted-output>", messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, placeholder, messages[1].ToolCalls[0].ResultContent)
 }
 
 func TestIcodemateCLIResyncAllAbortsOnEmptyDiscovery(t *testing.T) {

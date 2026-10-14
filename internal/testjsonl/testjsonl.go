@@ -812,12 +812,3 @@ func mustMarshal(v any) string {
 	}
 	return string(b)
 }
-
-func ClaudePersistedToolResult(sidecarPath string) string {
-	placeholder := "<persisted-output>\nOutput too large. Full output saved to: " + sidecarPath + "\n</persisted-output>"
-	return strings.Join([]string{
-		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
-		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + mustMarshal(placeholder) + `}]},"toolUseResult":{"persistedOutputPath":` + mustMarshal(sidecarPath) + `}}`,
-	}, "\n") + "\n"
-}
