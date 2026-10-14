@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -55,6 +56,61 @@ func (p *claudeProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []ReconciliationScope, yield func(SourceRef) error) error {
+	for _, scope := range scopes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, root := range scope.TraversalRoots {
+			for _, proof := range scope.PhysicalProofScopes {
+				path := filepath.Clean(proof.Path)
+				if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
+					if err := p.sources.discoverEachRoot(ctx, root, yield); err != nil {
+						return err
+					}
+					continue
+				}
+				if !reconciliationScopeWithinOrSame(cleanReconciliationScopeRoot(path), cleanReconciliationScopeRoot(root)) {
+					continue
+				}
+				info, err := os.Stat(path)
+				if errors.Is(err, syscall.ENOTDIR) {
+					continue
+				}
+				if errors.Is(err, os.ErrNotExist) {
+					if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+						continue
+					}
+				}
+				if err != nil {
+					return err
+				}
+				emit := func(path string) error {
+					if source, ok := p.sources.sourceRef(root, path); ok {
+						return yield(source)
+					}
+					return nil
+				}
+				if !info.IsDir() {
+					if err := emit(path); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := streamDirectoryTree(ctx, path, func(path string, entry os.DirEntry) error {
+					if !strings.HasSuffix(entry.Name(), ".jsonl") {
+						return nil
+					}
+					return emit(path)
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (p *claudeProvider) DiscoverRawCaptureSourcesEach(

@@ -16,6 +16,70 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+func TestClaudeProviderScopedDiscoveryBoundsTraversal(t *testing.T) {
+	for _, siblings := range []int{1, 128} {
+		t.Run(strconv.Itoa(siblings), func(t *testing.T) {
+			root := filepath.Clean(t.TempDir())
+			project := filepath.Join(root, "target")
+			main := filepath.Join(project, "session-main.jsonl")
+			subagents := filepath.Join(project, "session-main", "subagents")
+			child := filepath.Join(subagents, "agent-child.jsonl")
+			writeSourceFile(t, main, claudeProviderFixture("main"))
+			writeSourceFile(t, child, claudeProviderFixture("child"))
+			writeSourceFile(t, filepath.Join(project, "blocked"), "file")
+			for i := range siblings {
+				writeSourceFile(t, filepath.Join(root, fmt.Sprintf("sibling-%d", i), "other.jsonl"), claudeProviderFixture("other"))
+			}
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			discoverer := provider.(ScopedStreamingDiscoverer)
+			for _, tc := range []struct {
+				name       string
+				path       string
+				want       []string
+				unreadable bool
+			}{
+				{name: "project", path: project, want: []string{main, child}},
+				{name: "subagents", path: subagents, want: []string{child}},
+				{name: "file", path: main, want: []string{main}},
+				{name: "gone", path: filepath.Join(root, "gone")},
+				{name: "ancestor file", path: filepath.Join(project, "blocked", "subagents")},
+				{name: "unreadable", path: project, unreadable: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					plan, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{tc.path}})
+					require.NoError(t, err)
+					var reads []string
+					ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+						reads = append(reads, dir)
+						if tc.unreadable && dir == project {
+							return os.ErrPermission
+						}
+						return streamDirectoryEntriesDirect(ctx, dir, yield)
+					})
+					var paths []string
+					err = discoverer.DiscoverScopesEach(ctx, plan.Scopes, func(source SourceRef) error {
+						assert.Equal(t, root, source.Opaque.(claudeSource).Root)
+						assert.Equal(t, "target", source.ProjectHint)
+						paths = append(paths, source.DisplayPath)
+						return nil
+					})
+					if tc.unreadable {
+						require.ErrorIs(t, err, os.ErrPermission)
+					} else {
+						require.NoError(t, err)
+					}
+					assert.ElementsMatch(t, tc.want, paths)
+					assert.LessOrEqual(t, len(reads), 3, "discovery work must stay constant as siblings grow")
+					for _, dir := range reads {
+						assert.True(t, reconciliationScopeWithinOrSame(dir, tc.path), "read outside the requested subtree: %s", dir)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestClaudeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"

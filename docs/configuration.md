@@ -1716,16 +1716,17 @@ has no per-directory budget.
 Runtime folder watch failures put only the failed folder's subtree on polling.
 Other folders keep native watching. Each folder stops polling when it becomes
 watchable or disappears. Retries start after 10 seconds and back off to two
-minutes. Recovery triggers a root reconcile before releasing the folder's
-polling obligation. Budget or native watch resource exhaustion and root removal
-keep root-level polling. Event-buffer overflow puts every recursive root on
+minutes. Recovery reconciles only the affected subtree before releasing its
+polling obligation. Claude folder polling also limits discovery to that subtree.
+Budget or native watch resource exhaustion and root removal keep root-level
+polling. Event-buffer overflow puts every recursive root on
 polling.
 
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
 - a new 2-minute fallback sync loop that runs whenever any roots are unwatched
-    (it re-syncs all configured roots, not just the unwatched ones)
+    (it reconciles the affected scopes)
 
 Startup logs make degradation explicit. Per-root and summary lines look like:
 
