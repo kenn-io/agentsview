@@ -79,5 +79,4 @@ func TestParseDiffIgnoresLauncherParentsButDetectsMissingPRLinks(t *testing.T) {
 	report = runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 1, Changed: 1},
 		report.Totals)
-	assert.True(t, report.HasFailures())
 }

@@ -90,7 +90,7 @@ func newSessionParentCommand() *cobra.Command {
 			id := args[0]
 			parentID := ""
 			if len(args) == 2 {
-				parentID = args[1]
+				parentID = strings.TrimSpace(args[1])
 			}
 			if clearAll == (parentID != "") {
 				return errors.New("give either a parent session id or --clear")

@@ -154,6 +154,34 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("keeps session-list label and pull request filters when the URL sets a shared filter", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const saved = sessions.filters;
+    sessions.filters = { ...saved, labels: ["ticket=example"], pr: "acme/widgets" };
+    router.route = "usage";
+    router.params = { project: "proj-a" };
+    usage.summary = usageSummaryWithUnsupported();
+    try {
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+
+      expect(sessions.filters.project).toBe("proj-a");
+      expect(sessions.filters.labels).toEqual(["ticket=example"]);
+      expect(sessions.filters.pr).toBe("acme/widgets");
+    } finally {
+      sessions.filters = saved;
+    }
+  });
+
   it("ignores a legacy model URL and shows all models", async () => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -859,8 +887,8 @@ describe("UsagePage refresh behavior", () => {
     const initBlock = source.slice(initStart, initEnd);
 
     expect(source).toContain("function usageSupportedSessionParams");
-    expect(initBlock).toContain("parseFiltersFromParams(supportedSessionParams)");
-    expect(initBlock).toContain("sessions.initFromParams(supportedSessionParams)");
+    expect(initBlock).toContain("parseFiltersFromParams(hydratedParams)");
+    expect(initBlock).toContain("sessions.initFromParams(hydratedParams)");
     expect(initBlock).not.toContain("parseFiltersFromParams(params)");
     expect(initBlock).not.toContain("sessions.initFromParams(params)");
   });

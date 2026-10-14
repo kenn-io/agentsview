@@ -2245,7 +2245,6 @@ describe("SessionsStore", () => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       });
       expect(sessions.filters.labels).toEqual(["ticket=example", "role=reviewer"]);
-      expect(sessions.isLabelSelected("role=reviewer")).toBe(true);
       expectSidebarIndexCalledWith({ label: ["ticket=example", "role=reviewer"] });
       sessions.removeLabelFilter("role=reviewer");
       await vi.waitFor(() => {

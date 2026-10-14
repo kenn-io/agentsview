@@ -695,6 +695,9 @@ func TestSessionAnnotationsKeepExactIDs(t *testing.T) {
 		sessionSeed{id: worker, project: "proj"},
 		sessionSeed{id: manager, project: "proj"},
 	)
+	// A blank parent is not --clear: it must fail without touching the link.
+	_, err = executeCommand(newRootCommand(), "session", "parent", worker, "  ")
+	require.Error(t, err)
 	out, err = executeCommand(newRootCommand(), "session", "get", worker, "--json")
 	require.NoError(t, err)
 	detail := decodeCLIJSON[service.SessionDetail](t, out)

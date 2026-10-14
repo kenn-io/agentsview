@@ -1298,10 +1298,6 @@ class SessionsStore {
     void this.load();
   }
 
-  isLabelSelected(label: string): boolean {
-    return this.filters.labels.includes(label.trim());
-  }
-
   /** Sets the pull request filter; an empty value clears it. */
   setPRFilter(pr: string) {
     const next = pr.trim();
