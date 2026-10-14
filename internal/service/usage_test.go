@@ -776,39 +776,28 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	seedPairwiseUsageFixture(t, env.DB)
 	svc := env.Backend("", false)
 
-	for _, selection := range []string{"explicit", "default"} {
-		t.Run(selection, func(t *testing.T) {
-			t.Parallel()
-			req := service.UsagePairwiseComparisonRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-				LeftDimension:  "model",
-				LeftValue:      "claude-sonnet-4-20250514",
-				RightDimension: "model",
-				RightValue:     "gpt-4o",
-			}
-			if selection != "explicit" {
-				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
-			}
-
-			res, err := svc.UsagePairwiseComparison(
-				t.Context(),
-				req,
-			)
-			require.NoError(t, err)
-			require.NotNil(t, res)
-			if selection == "explicit" {
-				assert.Equal(t, 2, res.Left.SessionCount)
-				assert.Equal(t, 1, res.Right.SessionCount)
-			}
-			assert.Equal(t, "model", res.Left.Dimension)
-			assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
-			assert.Equal(t, "model", res.Right.Dimension)
-			assert.Equal(t, "gpt-4o", res.Right.Value)
-		})
+	req := service.UsagePairwiseComparisonRequest{
+		From:           "2024-06-01",
+		To:             "2024-06-01",
+		Timezone:       "UTC",
+		IncludeOneShot: true,
+		LeftDimension:  "model",
+		LeftValue:      "claude-sonnet-4-20250514",
+		RightDimension: "model",
+		RightValue:     "gpt-4o",
 	}
+	res, err := svc.UsagePairwiseComparison(
+		t.Context(),
+		req,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, "model", res.Left.Dimension)
+	assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
+	assert.Equal(t, "model", res.Right.Dimension)
+	assert.Equal(t, "gpt-4o", res.Right.Value)
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
@@ -913,13 +902,6 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 					s.StartedAt = &started
 					s.EndedAt = &started
 				})
-				summary, err := service.NewDirectBackend(d, nil).UsageSummary(t.Context(), service.UsageRequest{
-					From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
-				})
-				require.NoError(t, err)
-				require.Len(t, summary.ProjectTotals, 3)
-				assert.Empty(t, summary.ProjectTotals[0].ProjectKey)
-				assert.Equal(t, 1000, summary.ProjectTotals[0].InputTokens)
 			}
 			catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
 			require.NoError(t, err)

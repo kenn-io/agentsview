@@ -7,10 +7,11 @@
   import { formatMoney, formatSignedMoney } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
 
-  const loadingDefault = $derived(
-    usage.loading.pairwise &&
-      !usage.pairwiseSelection.left.value &&
-      !usage.pairwiseSelection.right.value,
+  const loadingPickers = $derived(
+    !usage.summary ||
+      (usage.loading.pairwise &&
+        !usage.pairwiseSelection.left.value &&
+        !usage.pairwiseSelection.right.value),
   );
 
   function fmtCount(value: number): string {
@@ -255,7 +256,7 @@
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
             <Typeahead
-              disabled={loadingDefault}
+              disabled={loadingPickers}
               options={dimensionOptions}
               value={usage.pairwiseSelection.left.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.left.dimension)}
@@ -280,7 +281,7 @@
               placeholder={m.usage_pairwise_left_value()}
               title={m.usage_pairwise_left_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={loadingDefault}
+              disabled={loadingPickers || optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("left", {
                   value,
@@ -298,7 +299,7 @@
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
             <Typeahead
-              disabled={loadingDefault}
+              disabled={loadingPickers}
               options={dimensionOptions}
               value={usage.pairwiseSelection.right.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.right.dimension)}
@@ -323,7 +324,7 @@
               placeholder={m.usage_pairwise_right_value()}
               title={m.usage_pairwise_right_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={loadingDefault}
+              disabled={loadingPickers || optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("right", {
                   value,

@@ -151,41 +151,58 @@ describe("UsagePairwiseComparisonPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows loading before the empty state and disables pickers during the first default request", async () => {
-    usage.summary = null;
-    usage.pairwiseComparison = null;
-    usage.pairwiseSelection = {
-      left: { dimension: "model", value: "" },
-      right: { dimension: "model", value: "" },
-    };
-    usage.loading.pairwise = true;
-    const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
-    await tick();
-    expect(document.body.textContent).toContain("Refresh");
-    expect(document.body.textContent).not.toContain("Not enough data");
-    const pickers = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
-    );
-    expect(pickers).toHaveLength(4);
-    expect(pickers.every((picker) => picker.disabled)).toBe(true);
-    usage.loading.pairwise = false;
-    await tick();
-    expect(pickers.every((picker) => !picker.disabled)).toBe(true);
-    unmount(component);
-  });
-
-  it("keeps pickers enabled during a remembered comparison refresh", async () => {
-    usage.loading.pairwise = true;
-    usage.pairwiseComparison = null;
-    const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
-    await tick();
-    const pickers = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
-    );
-    expect(pickers).toHaveLength(4);
-    expect(pickers.every((picker) => !picker.disabled)).toBe(true);
-    unmount(component);
-  });
+  it.each(["first default", "comparison before totals", "remembered refresh"] as const)(
+    "keeps pickers disabled until totals and the first default pair load, %s",
+    async (scenario) => {
+      if (scenario !== "remembered refresh") usage.summary = null;
+      if (scenario === "first default") {
+        usage.pairwiseSelection = {
+          left: { dimension: "model", value: "" },
+          right: { dimension: "model", value: "" },
+        };
+      }
+      usage.loading.pairwise = scenario !== "comparison before totals";
+      if (usage.loading.pairwise) usage.pairwiseComparison = null;
+      const spy = vi.spyOn(usage, "setPairwiseSide");
+      const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
+      await tick();
+      if (scenario === "first default") {
+        expect(document.body.textContent).toContain("Refresh");
+        expect(document.body.textContent).not.toContain("Not enough data");
+      }
+      const pickers = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
+      );
+      expect(pickers).toHaveLength(4);
+      expect(pickers.every((picker) => picker.disabled)).toBe(scenario !== "remembered refresh");
+      if (scenario === "comparison before totals") {
+        const dimension = document.querySelector<HTMLButtonElement>(
+          'button[aria-label^="Left comparison dimension:"]',
+        );
+        expect(dimension).toBeTruthy();
+        dimension?.click();
+        await tick();
+        expect(document.querySelector('li[role="option"]')).toBeNull();
+        expect(spy).not.toHaveBeenCalled();
+      }
+      usage.summary = usageSummary();
+      await tick();
+      if (scenario === "first default") {
+        expect(pickers.every((picker) => picker.disabled)).toBe(true);
+      }
+      usage.pairwiseSelection = {
+        left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+        right: { dimension: "project", value: "pl1:sha256:beta" },
+      };
+      usage.pairwiseComparison = pairwiseComparison();
+      usage.loading.pairwise = false;
+      await tick();
+      expect(pickers.every((picker) => !picker.disabled)).toBe(true);
+      expect(document.querySelector("tbody tr")).toBeTruthy();
+      expect(document.body.textContent).not.toContain("Not enough data");
+      unmount(component);
+    },
+  );
 
   it("routes selector changes through the usage store", async () => {
     const spy = vi.spyOn(usage, "setPairwiseSide");

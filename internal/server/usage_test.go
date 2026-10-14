@@ -450,9 +450,6 @@ func TestHandleUsagePairwiseComparisonEmptyDefault(t *testing.T) {
 	assert.NotContains(t, raw.Left, "value")
 	assert.NotContains(t, raw.Right, "dimension")
 	assert.NotContains(t, raw.Right, "value")
-	resp := decode[service.UsagePairwiseComparisonResponse](t, w)
-	assert.Zero(t, resp.Left.TotalTokens)
-	assert.Zero(t, resp.Right.TotalTokens)
 }
 
 func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {

@@ -138,29 +138,6 @@ func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, erro
 	return resolved, nil
 }
 
-func ResolveUsagePairwiseProjectKeys(
-	ctx context.Context, store db.Store, req UsagePairwiseComparisonRequest,
-) (UsagePairwiseComparisonRequest, error) {
-	resolvedBase, err := ResolveUsageProjectKeys(ctx, store, req.UsageRequest)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	req.UsageRequest = resolvedBase
-	req.LeftProjectLabels, err = resolvePairwiseProjectLabels(
-		ctx, store, req.LeftDimension, req.LeftValue,
-	)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	req.RightProjectLabels, err = resolvePairwiseProjectLabels(
-		ctx, store, req.RightDimension, req.RightValue,
-	)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	return req, nil
-}
-
 func resolvePairwiseProjectLabels(
 	ctx context.Context, store db.Store, dimension, value string,
 ) ([]string, error) {
