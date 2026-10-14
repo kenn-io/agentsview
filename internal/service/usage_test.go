@@ -429,20 +429,38 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
 
-	for _, defaultPair := range []bool{false, true} {
-		t.Run(fmt.Sprintf("default=%t", defaultPair), func(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		defaultPair   bool
+		fallback      bool
+		leftValue     string
+		rightValue    string
+		wantLeft      string
+		wantRight     string
+		leftSessions  int
+		rightSessions int
+		leftTokens    int
+		rightTokens   int
+	}{
+		{name: "explicit", leftValue: "claude-sonnet-4-20250514", rightValue: "gpt-4o", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+		{name: "default", defaultPair: true, wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+		{name: "fallback kept", fallback: true, leftValue: "gpt-4o", rightValue: "claude-sonnet-4-20250514", wantLeft: "gpt-4o", wantRight: "claude-sonnet-4-20250514", leftSessions: 1, rightSessions: 2, leftTokens: 50, rightTokens: 285},
+		{name: "fallback replaced", fallback: true, leftValue: "missing-model", rightValue: "gpt-4o", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			req := service.UsagePairwiseComparisonRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-				LeftDimension:  "model",
-				LeftValue:      "claude-sonnet-4-20250514",
-				RightDimension: "model",
-				RightValue:     "gpt-4o",
+				From:              "2024-06-01",
+				To:                "2024-06-01",
+				Timezone:          "UTC",
+				IncludeOneShot:    true,
+				LeftDimension:     "model",
+				LeftValue:         tc.leftValue,
+				RightDimension:    "model",
+				RightValue:        tc.rightValue,
+				FallbackToDefault: tc.fallback,
 			}
-			if defaultPair {
+			if tc.defaultPair {
 				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
 			}
 
@@ -452,17 +470,17 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NotNil(t, res)
-			assert.Equal(t, 2, res.Left.SessionCount)
-			assert.Equal(t, 285, res.Left.TotalTokens)
-			assert.Equal(t, 1, res.Right.SessionCount)
-			assert.Equal(t, 50, res.Right.TotalTokens)
-			assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
+			assert.Equal(t, tc.leftSessions, res.Left.SessionCount)
+			assert.Equal(t, tc.leftTokens, res.Left.TotalTokens)
+			assert.Equal(t, tc.rightSessions, res.Right.SessionCount)
+			assert.Equal(t, tc.rightTokens, res.Right.TotalTokens)
+			assert.Equal(t, tc.rightTokens-tc.leftTokens, res.Deltas.TotalTokensDelta)
 			require.NotNil(t, res.Left.CostPerSession)
 			require.NotNil(t, res.Right.CostPerSession)
 			assert.Equal(t, "model", res.Left.Dimension)
-			assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
+			assert.Equal(t, tc.wantLeft, res.Left.Value)
 			assert.Equal(t, "model", res.Right.Dimension)
-			assert.Equal(t, "gpt-4o", res.Right.Value)
+			assert.Equal(t, tc.wantRight, res.Right.Value)
 		})
 	}
 }
@@ -819,6 +837,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 				"left_value":          r.URL.Query().Get("left_value"),
 				"right_dimension":     r.URL.Query().Get("right_dimension"),
 				"right_value":         r.URL.Query().Get("right_value"),
+				"fallback_to_default": r.URL.Query().Get("fallback_to_default"),
 				"git_branch":          r.URL.Query().Get("git_branch"),
 				"project_key":         r.URL.Query().Get("project_key"),
 				"exclude_project_key": r.URL.Query().Get("exclude_project_key"),
@@ -846,6 +865,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 			LeftValue:         "alpha",
 			RightDimension:    "model",
 			RightValue:        "gpt-4o",
+			FallbackToDefault: true,
 		},
 	)
 	require.NoError(t, err)
@@ -862,6 +882,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "alpha", queryValues["left_value"])
 	assert.Equal(t, "model", queryValues["right_dimension"])
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
+	assert.Equal(t, "true", queryValues["fallback_to_default"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
 	assert.Equal(t, "pl1:sha256:alpha", queryValues["project_key"])
 	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])

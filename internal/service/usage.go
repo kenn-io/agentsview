@@ -387,14 +387,33 @@ type UsagePairwiseComparisonResponse struct {
 // extra include filter per side.
 type UsagePairwiseComparisonRequest struct {
 	UsageRequest
-	LeftDimension  string `json:"left_dimension,omitempty"`
-	LeftValue      string `json:"left_value,omitempty"`
-	RightDimension string `json:"right_dimension,omitempty"`
-	RightValue     string `json:"right_value,omitempty"`
+	LeftDimension     string `json:"left_dimension,omitempty"`
+	LeftValue         string `json:"left_value,omitempty"`
+	RightDimension    string `json:"right_dimension,omitempty"`
+	RightValue        string `json:"right_value,omitempty"`
+	FallbackToDefault bool   `json:"fallback_to_default,omitempty"`
 	// Project label slices are populated only after resolving opaque keys and
 	// preserve exact labels that cannot round-trip through CSV strings.
 	LeftProjectLabels  []string `json:"-"`
 	RightProjectLabels []string `json:"-"`
+}
+
+func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
+	switch dimension {
+	case "model":
+		for _, total := range summary.ModelTotals {
+			if total.Model == value {
+				return true
+			}
+		}
+	case "project":
+		for _, total := range summary.ProjectTotals {
+			if total.ProjectKey == value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {

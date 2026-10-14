@@ -23666,6 +23666,13 @@ paths:
           schema:
             description: Right-side comparison value; opaque project key for the project dimension
             type: string
+        - description: Use the default pair if either supplied side is absent from the scope's cost ranking
+          explode: false
+          in: query
+          name: fallback_to_default
+          schema:
+            description: Use the default pair if either supplied side is absent from the scope's cost ranking
+            type: boolean
       responses:
         "200":
           content:

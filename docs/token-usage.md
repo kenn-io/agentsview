@@ -290,6 +290,9 @@ then two projects, then a model and a project. Each response side includes its
 `dimension` and `value`. With too few options, both sides have zero totals and
 omit `dimension` and `value`.
 
+Set `fallback_to_default=true` with a full pair to use the default if either
+side is absent from the scope's cost ranking. The response echoes the pair used.
+
 Branch-scoped comparisons use the shared `git_branch` usage filter with
 an opaque token from `GET /api/v1/branches`.
 

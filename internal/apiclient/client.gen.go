@@ -19523,6 +19523,9 @@ type GetAPIV1UsagePairwiseComparisonQuery struct {
 
 	// RightValue Right-side comparison value; opaque project key for the project dimension
 	RightValue *string `json:"right_value,omitempty"`
+
+	// FallbackToDefault Use the default pair if either supplied side is absent from the scope's cost ranking
+	FallbackToDefault *bool `json:"fallback_to_default,omitempty"`
 }
 
 func (g GetAPIV1UsagePairwiseComparisonQuery) Validate() error {

@@ -104,4 +104,8 @@ export type GetApiV1UsagePairwiseComparisonParams = {
    * Right-side comparison value; opaque project key for the project dimension
    */
   right_value?: string;
+  /**
+   * Use the default pair if either supplied side is absent from the scope's cost ranking
+   */
+  fallback_to_default?: boolean;
 };

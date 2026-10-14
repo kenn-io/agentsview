@@ -83,10 +83,11 @@ type usageComparisonInput struct {
 
 type usagePairwiseComparisonInput struct {
 	UsageFilterInput
-	LeftDimension  string `query:"left_dimension" doc:"Left-side comparison dimension; omit all four sides for the default pair"`
-	LeftValue      string `query:"left_value" doc:"Left-side comparison value; opaque project key for the project dimension"`
-	RightDimension string `query:"right_dimension" doc:"Right-side comparison dimension"`
-	RightValue     string `query:"right_value" doc:"Right-side comparison value; opaque project key for the project dimension"`
+	LeftDimension     string `query:"left_dimension" doc:"Left-side comparison dimension; omit all four sides for the default pair"`
+	LeftValue         string `query:"left_value" doc:"Left-side comparison value; opaque project key for the project dimension"`
+	RightDimension    string `query:"right_dimension" doc:"Right-side comparison dimension"`
+	RightValue        string `query:"right_value" doc:"Right-side comparison value; opaque project key for the project dimension"`
+	FallbackToDefault bool   `query:"fallback_to_default" doc:"Use the default pair if either supplied side is absent from the scope's cost ranking"`
 }
 
 // usageRequestFromInput maps the HTTP query-param struct to the
@@ -134,11 +135,12 @@ func usagePairwiseRequestFromInput(
 		}
 	}
 	return service.UsagePairwiseComparisonRequest{
-		UsageRequest:   usageRequestFromInput(in.UsageFilterInput),
-		LeftDimension:  in.LeftDimension,
-		LeftValue:      in.LeftValue,
-		RightDimension: in.RightDimension,
-		RightValue:     in.RightValue,
+		UsageRequest:      usageRequestFromInput(in.UsageFilterInput),
+		LeftDimension:     in.LeftDimension,
+		LeftValue:         in.LeftValue,
+		RightDimension:    in.RightDimension,
+		RightValue:        in.RightValue,
+		FallbackToDefault: in.FallbackToDefault,
 	}, nil
 }
 

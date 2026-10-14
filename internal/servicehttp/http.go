@@ -1077,6 +1077,9 @@ func (b *httpBackend) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {
 	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
+	if req.FallbackToDefault {
+		q.FallbackToDefault = new(true)
+	}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
 		if err != nil {

@@ -480,6 +480,7 @@ func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {
 		},
 	}
 	for _, q := range cases {
+		q["fallback_to_default"] = "true"
 		w := te.get(t, buildPathURL(
 			"/api/v1/usage/pairwise-comparison",
 			q,

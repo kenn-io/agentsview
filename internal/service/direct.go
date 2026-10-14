@@ -961,7 +961,13 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	if req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == "" {
+	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
+	if req.FallbackToDefault && !useDefault {
+		if _, _, _, _, err := buildUsagePairwiseFilters(req, base); err != nil {
+			return nil, err
+		}
+	}
+	if useDefault || req.FallbackToDefault {
 		rankingFilter := base
 		rankingFilter.Breakdowns = true
 		rankingFilter.SkipSessionCounts = true
@@ -973,7 +979,9 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = defaultUsagePairwiseSelection(summary)
+		if useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, req.LeftValue) || !usagePairwiseSideInRanking(summary, req.RightDimension, req.RightValue) {
+			req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = defaultUsagePairwiseSelection(summary)
+		}
 		if req.LeftDimension == "" {
 			out, err := BuildUsagePairwiseComparisonResult(db.DailyUsageResult{}, db.DailyUsageResult{})
 			return &out, err

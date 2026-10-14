@@ -41,7 +41,6 @@ type LoadedUsageSummary = {
   summary: UsageSummaryResponse;
   params: UsageParams;
   projectScopeRecovered: boolean;
-  pairwiseSelectionInvalidated: boolean;
 };
 export type UsagePairwiseSide = "left" | "right";
 export interface UsagePairwiseSideSelection {
@@ -425,7 +424,6 @@ class UsageStore {
   };
   private fetchAllVersion = 0;
   private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
-  private pairwiseValidation: Promise<LoadedUsageSummary | null> | null = null;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -549,17 +547,6 @@ class UsageStore {
       if (option !== fallback) return option;
     }
     return options[0] ?? "";
-  }
-
-  private ensurePairwiseSelection(): boolean {
-    const invalid = Object.values(this.pairwiseSelection).some(
-      (side) => side.value !== "" && !this.pairwiseOptionsFor(side.dimension).includes(side.value),
-    );
-    if (!invalid) return false;
-    this.invalidatePanel("pairwise");
-    this.pairwiseSelection = emptyPairwiseSelection();
-    this.clearPairwiseComparisonState();
-    return true;
   }
 
   private clearPairwiseComparisonState(): void {
@@ -970,7 +957,6 @@ class UsageStore {
       params,
       contextParams,
     });
-    this.pairwiseValidation = summaryPromise;
     this.clearPairwiseComparisonState();
     void this.fetchPairwise(params);
     const topSessionsPromise = this.fetchTopSessions(params);
@@ -980,12 +966,11 @@ class UsageStore {
       await Promise.all([topSessionsPromise, zoomPromise]);
       return "aborted";
     }
-    if (this.pairwiseValidation === summaryPromise) this.pairwiseValidation = null;
     const recoveredParams = loadedSummary?.params ?? this.baseParams();
     const scopeChanged = Object.keys(params).some(
       (key) => params[key as keyof UsageParams] !== recoveredParams[key as keyof UsageParams],
     );
-    if (scopeChanged || loadedSummary?.pairwiseSelectionInvalidated) {
+    if (scopeChanged) {
       this.clearPairwiseComparisonState();
       void this.fetchPairwise(recoveredParams);
     }
@@ -1149,13 +1134,11 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
-        const pairwiseSelectionInvalidated = this.ensurePairwiseSelection();
         const loaded = {
           version: v,
           summary: data,
           params,
           projectScopeRecovered: false,
-          pairwiseSelectionInvalidated,
         };
         if (loadComparison) {
           void this.fetchComparison(v, data, params);
@@ -1309,6 +1292,7 @@ class UsageStore {
       left_value: selection.left.value,
       right_dimension: selection.right.dimension,
       right_value: selection.right.value,
+      fallback_to_default: true,
     };
   }
 
@@ -1327,7 +1311,6 @@ class UsageStore {
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
     const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
-    const validation = useDefault ? null : this.pairwiseValidation;
     if (!request && !useDefault) {
       this.pairwiseComparison = null;
       this.errors.pairwise = null;
@@ -1346,10 +1329,8 @@ class UsageStore {
       const comparison = await UsageService.getApiV1UsagePairwiseComparison(request ?? params, {
         signal,
       });
-      if (validation) await validation;
       if (this.versions.pairwise === pairwiseVersion) {
         if (
-          useDefault &&
           (comparison.left.dimension === "model" || comparison.left.dimension === "project") &&
           (comparison.right.dimension === "model" || comparison.right.dimension === "project")
         ) {
@@ -1357,6 +1338,8 @@ class UsageStore {
             left: { dimension: comparison.left.dimension, value: comparison.left.value ?? "" },
             right: { dimension: comparison.right.dimension, value: comparison.right.value ?? "" },
           };
+        } else {
+          this.pairwiseSelection = emptyPairwiseSelection();
         }
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
