@@ -55,6 +55,14 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Skip ~/.sqliterc. This script parses query output, and a personal rc file
+# with settings such as `.mode box` or `.headers on` breaks those checks. The
+# CLI finds the rc file through the account's home directory, so overriding
+# HOME does not avoid it.
+sqlite() {
+  sqlite3 -init /dev/null "$@"
+}
+
 if [ ! -f "$SOURCE" ]; then
   echo "Error: source database not found at $SOURCE"
   exit 1
@@ -111,13 +119,13 @@ rm -f "$OUTPUT"
 # reads one snapshot-isolated pass that concurrent writes do not
 # restart, and does not touch the source. The target must not exist
 # (rm -f above guarantees that).
-sqlite3 -readonly "$SOURCE" "VACUUM INTO '$OUTPUT'"
+sqlite -readonly "$SOURCE" "VACUUM INTO '$OUTPUT'"
 
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
 # backticks inside — the embedded markdown contains both, and
 # unquoted expansion would run file paths as commands.
-sqlite3 "$OUTPUT" \
+sqlite "$OUTPUT" \
   -cmd ".parameter init" \
   -cmd ".parameter set @history_days $HISTORY_DAYS" \
   -cmd ".read \"$BLOCKED_PATTERNS_SQL\"" <<'SQL'
@@ -463,22 +471,22 @@ SQL
 
 # The mapping delete above journals tombstones in current archives, so clear
 # that journal last. Older valid archives predate the table and its triggers.
-if [[ $(sqlite3 "$OUTPUT" \
+if [[ $(sqlite "$OUTPUT" \
   "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worktree_project_mapping_changes';") == "1" ]]; then
-  sqlite3 "$OUTPUT" "DELETE FROM worktree_project_mapping_changes;"
+  sqlite "$OUTPUT" "DELETE FROM worktree_project_mapping_changes;"
 fi
 
-sqlite3 "$OUTPUT" "VACUUM;"
+sqlite "$OUTPUT" "VACUUM;"
 
-SESSIONS=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM sessions;")
-MESSAGES=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM messages;")
+SESSIONS=$(sqlite "$OUTPUT" "SELECT COUNT(*) FROM sessions;")
+MESSAGES=$(sqlite "$OUTPUT" "SELECT COUNT(*) FROM messages;")
 SIZE=$(du -h "$OUTPUT" | cut -f1)
-RANGE=$(sqlite3 -separator ' to ' "$OUTPUT" \
+RANGE=$(sqlite -separator ' to ' "$OUTPUT" \
   "SELECT COALESCE(min(datetime(COALESCE(NULLIF(started_at, ''), created_at))), '(none)'),
           COALESCE(max(datetime(COALESCE(NULLIF(started_at, ''), created_at))), '(none)')
    FROM sessions;")
 
 echo "Extracted: $SESSIONS sessions, $MESSAGES messages ($SIZE)"
 echo "Date range: $RANGE"
-sqlite3 "$OUTPUT" \
+sqlite "$OUTPUT" \
   "SELECT '  ' || project || ': ' || COUNT(*) || ' sessions' FROM sessions GROUP BY project ORDER BY project COLLATE NOCASE;"
