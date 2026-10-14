@@ -178,7 +178,8 @@ func TestStatusMessages(t *testing.T) {
 		require.True(t, ok)
 		assert.Contains(t, row.Message, "OpenAI did not accept the ChatGPT login")
 		assert.Contains(t, row.Message, "Either that saved login expired")
-		assert.Contains(t, row.Message, "add `cli_auth_credentials_store = \"file\"`")
+		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"`")
+		assert.Equal(t, 1, strings.Count(row.Message, "codex login"), "the login command is named once")
 		assert.Contains(t, row.Message, "plain file that any program running as you can read")
 	})
 	t.Run("403 does not", func(t *testing.T) {

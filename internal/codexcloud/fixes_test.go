@@ -353,8 +353,8 @@ func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
 	row, ok := env.syncer.Status.Row(string(passKey))
 	require.True(t, ok)
 	assert.Equal(t, StateError, row.State)
-	assert.Contains(t, row.Message, "import state")
-	assert.Contains(t, row.Message, "The daemon log names the file and the error.")
+	assert.Contains(t, row.Message, "the files that track what it imported")
+	assert.Contains(t, row.Message, "The AgentsView log, serve.log in its data directory, names the file and the error.")
 	assert.NotContains(t, row.Message, env.root, "the status is a sentence, not a raw error")
 }
 
@@ -512,8 +512,9 @@ func TestLoginOutsideAuthJSONGivesFileStoreFix(t *testing.T) {
 
 		row, ok := env.syncer.Status.Row("/homes/a")
 		require.True(t, ok)
-		assert.Contains(t, row.Message, "add `cli_auth_credentials_store = \"file\"` near the top of its "+
-			"config.toml, before any [section], and run `codex login`; AgentsView picks up the new login on its next sync.")
+		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"` in this home's config.toml: change the "+
+			"existing line, or add one near the top, before any [section]. Then run `codex login`; AgentsView "+
+			"picks up the new login on its next sync.", "an existing assignment is changed, not repeated")
 		assert.Contains(t, row.Message, "auth.json, a plain file that any program running as you can read",
 			"the fix trades the keyring's protection for access")
 	}
