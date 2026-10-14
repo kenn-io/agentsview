@@ -575,6 +575,21 @@ Full resync drops these indexes in the temporary database during the bulk load
 must rebuild them before the swap; a failed rebuild aborts the swap because
 read-only opens require the indexes.
 
+### Sidebar tree index
+
+The sidebar's recursive child lookup and parent-only lookups share
+`idx_sessions_parent` on `(parent_session_id, is_automated)`, excluding null
+parents. Writable opens widen the parent-only form that `schema.sql` creates,
+after column migrations, and startup `PRAGMA optimize` gathers its statistics.
+Bulk imports retain the index, and widening it needs no parser resync. Read-only
+opens use whichever form the archive has until a writable open widens it.
+
+PostgreSQL keeps `idx_sessions_parent` on `parent_session_id` alone. The wider
+SQLite index exists because, without it, SQLite builds a temporary
+`is_automated` index on every recursive step of the child lookup. PostgreSQL
+never builds temporary indexes, so it filters `is_automated` while it uses the
+parent-only index.
+
 ### Dashboard metadata index
 
 SQLite's summary and tool analytics can read model names and message timestamps

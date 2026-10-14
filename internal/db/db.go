@@ -3777,6 +3777,15 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	if err := ensureUsageIndexesLocked(ctx, w); err != nil {
 		return err
 	}
+	// Widened here, after column migrations, since legacy archives lack is_automated.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_sessions_parent", []string{"parent_session_id", "is_automated"},
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parent
+		 ON sessions(parent_session_id, is_automated)
+		 WHERE parent_session_id IS NOT NULL`,
+	); err != nil {
+		return err
+	}
 	if err := ensureAnalyticsIndexLocked(ctx, w); err != nil {
 		return err
 	}
@@ -3864,7 +3873,7 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `DROP INDEX IF EXISTS idx_messages_usage_covering`); err != nil {
 		return fmt.Errorf("dropping superseded usage covering index: %w", err)
 	}
-	if err := ensureUsageIndexColumnsLocked(ctx,
+	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_messages_usage_timestamp", []string{"timestamp", "session_id"},
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp
 		 ON messages(timestamp, session_id)
@@ -3872,7 +3881,7 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 	); err != nil {
 		return err
 	}
-	if err := ensureUsageIndexColumnsLocked(ctx,
+	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
 		 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
@@ -3881,7 +3890,7 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 	); err != nil {
 		return err
 	}
-	if err := ensureUsageIndexColumnsLocked(ctx,
+	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_messages_activity_timestamp",
 		[]string{"timestamp", "session_id", "ordinal", "model"},
 		`CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
@@ -3893,36 +3902,59 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 	return nil
 }
 
-func ensureUsageIndexColumnsLocked(ctx context.Context,
+func ensureIndexColumnsLocked(ctx context.Context,
 	w *writerHandle, name string, want []string, ddl string,
 ) error {
-	var columns sql.NullString
+	// Read the columns and table together so a concurrent rebuild cannot
+	// drop the index between the two reads.
+	var columns, table sql.NullString
 	if err := w.QueryRow(ctx, fmt.Sprintf(`
-		SELECT group_concat(name, ',')
-		FROM (
-			SELECT name
-			FROM pragma_index_info('%s')
-			ORDER BY seqno
-		)`, name)).Scan(&columns); err != nil {
-		return fmt.Errorf("probing usage index %s: %w", name, err)
+		SELECT
+			(SELECT group_concat(name, ',')
+			 FROM (
+				SELECT name
+				FROM pragma_index_info('%s')
+				ORDER BY seqno
+			 )),
+			(SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?)`,
+		name), name).Scan(&columns, &table); err != nil {
+		return fmt.Errorf("probing index %s: %w", name, err)
 	}
 	if columns.String != strings.Join(want, ",") {
-		if columns.Valid && columns.String != "" {
+		populated := false
+		if columns.Valid && columns.String != "" && table.Valid {
+			var err error
+			if populated, err = tableHasRowsLocked(ctx, w, table.String); err != nil {
+				return fmt.Errorf("checking rows for index %s: %w", name, err)
+			}
+		}
+		// Fresh archives rebuild schema.sql's older form instantly; only populated ones wait.
+		if populated {
 			log.Printf(
-				"rebuilding stale SQLite usage index %s; startup continues after the archive index migration completes",
+				"rebuilding stale SQLite index %s; startup continues after the archive index migration completes",
 				name,
 			)
 		}
 		if _, err := w.Exec(ctx,
 			`DROP INDEX IF EXISTS `+name,
 		); err != nil {
-			return fmt.Errorf("dropping stale usage index %s: %w", name, err)
+			return fmt.Errorf("dropping stale index %s: %w", name, err)
 		}
 		if _, err := w.Exec(ctx, ddl); err != nil {
-			return fmt.Errorf("creating usage index %s: %w", name, err)
+			return fmt.Errorf("creating index %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+func tableHasRowsLocked(ctx context.Context, w *writerHandle, table string) (bool, error) {
+	var populated bool
+	if err := w.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM "`+table+`")`,
+	).Scan(&populated); err != nil {
+		return false, err
+	}
+	return populated, nil
 }
 
 // backfillIsAutomatedLocked verifies is_automated for all
