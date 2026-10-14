@@ -65,9 +65,7 @@ func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []Reconc
 	for _, scope := range scopes {
 		for _, root := range scope.TraversalRoots {
 			for _, proof := range scope.PhysicalProofScopes {
-				if reconciliationScopeWithinOrSame(proof.Path, root) {
-					paths[root] = append(paths[root], filepath.Clean(proof.Path))
-				}
+				paths[root] = append(paths[root], filepath.Clean(proof.Path))
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -874,6 +875,10 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 }
 
 func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing.T) {
+	var logs bytes.Buffer
+	previousLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLog) })
 	synctest.Test(t, func(t *testing.T) {
 		ticks := make(chan time.Time)
 		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
@@ -889,6 +894,8 @@ func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing
 		assert.Empty(t, syncer.snapshot())
 		assert.Empty(t, coordinator.currentPollObligations())
 	})
+	assert.NotContains(t, logs.String(), "polling 0 unwatched root(s)")
+	assert.NotContains(t, logs.String(), "polled 0 unwatched root(s)")
 }
 
 func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {

@@ -135,7 +135,7 @@ func (c *sharedUnwatchedPollCoordinator) AddObligation(
 }
 
 func (c *sharedUnwatchedPollCoordinator) RemoveObligation(key string) error {
-	if strings.HasPrefix(key, "fsnotify-folder:") {
+	if strings.HasPrefix(key, agentsync.FSNotifyFolderPollingPrefix) {
 		if err := c.updateRoots(pollingObligation{Key: key, releasePending: true}, false); err != nil {
 			return err
 		}
@@ -283,7 +283,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if totalRoots == 0 && len(pending) == 0 {
 				continue
 			}
-			log.Printf("polling %d unwatched root(s): %s", totalRoots, formatUnwatchedPollScopes(groups))
+			if totalRoots > 0 {
+				log.Printf("polling %d unwatched root(s): %s", totalRoots, formatUnwatchedPollScopes(groups))
+			}
 			startedAt := c.now()
 			c.doWork(func() {
 				if c.workerCtx.Err() != nil {
@@ -301,7 +303,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 				}
 			})
 			completedAt := c.now()
-			log.Printf("polled %d unwatched root(s) in %s", totalRoots, completedAt.Sub(startedAt).Round(time.Millisecond))
+			if totalRoots > 0 {
+				log.Printf("polled %d unwatched root(s) in %s", totalRoots, completedAt.Sub(startedAt).Round(time.Millisecond))
+			}
 			c.pollMu.Lock()
 			c.lastCompletion = completedAt
 			c.pollMu.Unlock()

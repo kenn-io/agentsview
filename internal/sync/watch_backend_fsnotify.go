@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -94,6 +93,7 @@ type nativeEventQueue struct {
 	mu       sync.Mutex
 	items    []nativeItem
 	overflow bool
+	retry    bool
 	closed   bool
 	signal   chan struct{}
 }
@@ -104,7 +104,9 @@ func newNativeEventQueue() *nativeEventQueue {
 
 func (q *nativeEventQueue) push(item nativeItem) {
 	q.mu.Lock()
-	if len(q.items) >= nativeEventQueueLimit {
+	if item.retry {
+		q.retry = true
+	} else if len(q.items) >= nativeEventQueueLimit {
 		q.items = nil
 		q.overflow = true
 	} else {
@@ -138,6 +140,11 @@ func (q *nativeEventQueue) next(stop <-chan struct{}) (nativeItem, bool) {
 			q.overflow = false
 			q.mu.Unlock()
 			return nativeItem{err: fsnotify.ErrEventOverflow}, true
+		}
+		if q.retry {
+			q.retry = false
+			q.mu.Unlock()
+			return nativeItem{retry: true}, true
 		}
 		if len(q.items) > 0 {
 			item := q.items[0]
@@ -220,6 +227,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 	var failedFolders []string
 	defer func() {
 		b.watchMu.Unlock()
+		b.pollingMu.Unlock()
 		if len(failedFolders) > 0 {
 			b.acquireRuntimeFolderPolling(root)
 			b.watchMu.Lock()
@@ -232,7 +240,6 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 			}
 			b.watchMu.Unlock()
 		}
-		b.pollingMu.Unlock()
 	}()
 
 	root = filepath.Clean(root)
@@ -672,8 +679,6 @@ func translateFSNotifyOp(op fsnotify.Op) backendOp {
 // watchCreatedPath classifies a created path and adds it to the watch list when
 // it is an included directory.
 func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) {
-	b.pollingMu.Lock()
-	defer b.pollingMu.Unlock()
 	info, err := os.Stat(path)
 	if err != nil {
 		return backendItemUnknown, false
@@ -779,12 +784,6 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 				return filepath.SkipDir
 			}
 			err := b.watchOps.Add(current)
-			if err != nil && runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(303))) {
-				if watchFolderGone(current) {
-					return filepath.SkipDir
-				}
-				err = b.watchOps.Add(current)
-			}
 			if err != nil {
 				if !watchFolderGone(current) {
 					if isWatchResourceExhaustion(err) {
@@ -874,77 +873,18 @@ func (b *fsnotifyBackend) reclaimWatchBudgetLocked(path string) {
 }
 
 func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
-	b.pollingMu.Lock()
-	defer b.pollingMu.Unlock()
-	for _, root := range roots {
-		if !b.acquireRuntimePolling(root, root) {
-			continue
-		}
-		b.watchMu.Lock()
-		b.degradedRoots[root] = struct{}{}
-		if state, ok := b.runtimeRoots[root]; ok {
-			state.timer.Stop()
-		}
-		state := b.runtimeRoots[root]
-		released := b.onPollingReleased
-		delete(b.runtimeRoots, root)
-		b.watchMu.Unlock()
-		if state != nil {
-			for folder, entry := range state.folders {
-				if !entry.polling || folder == root {
-					continue
-				}
-				b.pollingMu.Unlock()
-				if released == nil {
-					b.reportError(fmt.Errorf("fsnotify coverage recovered for %s without polling release callback", folder))
-				} else if err := released(runtimeFolderPollingKey(root, folder)); err != nil {
-					b.reportError(fmt.Errorf("release fsnotify polling for %s: %w", folder, err))
-				}
-				b.pollingMu.Lock()
-			}
-		}
-	}
+	b.acquireRuntimePolling(roots, true)
 }
 
-// Caller holds pollingMu while acquiring and recording folder polling ownership.
 func (b *fsnotifyBackend) acquireRuntimeFolderPolling(root string) {
-	b.watchMu.Lock()
-	state, ok := b.runtimeRoots[root]
-	if !ok {
-		b.watchMu.Unlock()
-		return
-	}
-	var folders []string
-	for folder, entry := range state.folders {
-		if !entry.polling {
-			folders = append(folders, folder)
-		}
-	}
-	b.watchMu.Unlock()
-	slices.Sort(folders)
-	for _, folder := range folders {
-		if folder == root {
-			b.pollingMu.Unlock()
-			b.requireRuntimePolling([]string{root})
-			b.pollingMu.Lock()
-			return
-		}
-		if !b.acquireRuntimePolling(root, folder) {
-			continue
-		}
-		b.watchMu.Lock()
-		if b.runtimeRoots[root] == state && state.folders[folder] != nil {
-			state.folders[folder].polling = true
-		}
-		b.watchMu.Unlock()
-	}
+	b.acquireRuntimePolling([]string{root}, false)
 }
 
 func runtimeFolderPollingKey(root, folder string) string {
 	if folder == root {
 		return "fsnotify-runtime:" + root
 	}
-	return "fsnotify-folder:" + root + ":" + folder
+	return FSNotifyFolderPollingPrefix + root + ":" + folder
 }
 
 func runtimeFolderPollingScopes(root, folder string, scopes []PollingScope) []PollingScope {
@@ -965,39 +905,101 @@ func runtimeFolderPollingScopes(root, folder string, scopes []PollingScope) []Po
 	return result
 }
 
-func (b *fsnotifyBackend) acquireRuntimePolling(root, folder string) bool {
+func (b *fsnotifyBackend) acquireRuntimePolling(roots []string, wholeRoot bool) {
+	type acquisition struct {
+		root       string
+		folder     string
+		state      *runtimeWatchRoot
+		entry      *runtimeWatchFolder
+		obligation PollingObligation
+		acquired   bool
+	}
+	b.pollingMu.Lock()
 	b.watchMu.Lock()
-	_, degraded := b.degradedRoots[root]
-	state, ok := b.runtimeRoots[root]
-	already := degraded
-	if ok {
-		if entry := state.folders[folder]; entry != nil {
-			already = already || entry.polling
+	required, released := b.onPollingRequired, b.onPollingReleased
+	var requests []acquisition
+	for _, root := range roots {
+		if _, degraded := b.degradedRoots[root]; degraded {
+			continue
+		}
+		state := b.runtimeRoots[root]
+		folders := []string{root}
+		if !wholeRoot {
+			if state == nil {
+				continue
+			}
+			folders = slices.Sorted(maps.Keys(state.folders))
+			if state.folders[root] != nil {
+				folders = []string{root}
+			}
+		}
+		for _, folder := range folders {
+			var entry *runtimeWatchFolder
+			if state != nil {
+				entry = state.folders[folder]
+			}
+			if folder != root && entry.polling {
+				continue
+			}
+			scopes := b.rootScopes[root]
+			if len(scopes) == 0 {
+				scopes = []PollingScope{{Root: root}}
+			}
+			requests = append(requests, acquisition{root: root, folder: folder, state: state, entry: entry,
+				obligation: PollingObligation{Key: runtimeFolderPollingKey(root, folder), Scopes: runtimeFolderPollingScopes(root, folder, scopes), Probe: folder}})
 		}
 	}
-	required := b.onPollingRequired
-	scopes := append([]PollingScope(nil), b.rootScopes[root]...)
 	b.watchMu.Unlock()
-	if already {
-		return true
-	}
-	if len(scopes) == 0 {
-		scopes = []PollingScope{{Root: root}}
-	}
-	scopes = runtimeFolderPollingScopes(root, folder, scopes)
-	if required == nil {
-		b.reportError(fmt.Errorf("fsnotify coverage degraded for %s without polling callback", root))
-		return false
-	}
 	b.pollingMu.Unlock()
-	key := runtimeFolderPollingKey(root, folder)
-	err := required(PollingObligation{Key: key, Scopes: scopes, Probe: folder})
-	b.pollingMu.Lock()
-	if err != nil {
-		b.reportError(fmt.Errorf("transfer fsnotify coverage for %s to polling: %w", root, err))
-		return false
+	for i := range requests {
+		request := &requests[i]
+		if required == nil {
+			b.reportError(fmt.Errorf("fsnotify coverage degraded for %s without polling callback", request.root))
+		} else if err := required(request.obligation); err != nil {
+			b.reportError(fmt.Errorf("transfer fsnotify coverage for %s to polling: %w", request.root, err))
+		} else {
+			request.acquired = true
+		}
 	}
-	return true
+	b.pollingMu.Lock()
+	b.watchMu.Lock()
+	var releaseKeys []string
+	for _, request := range requests {
+		if !request.acquired {
+			continue
+		}
+		root, folder := request.root, request.folder
+		if !slices.Contains(b.recursiveRootsSnapshot(), root) {
+			releaseKeys = append(releaseKeys, request.obligation.Key)
+			continue
+		}
+		state := b.runtimeRoots[root]
+		if folder == root {
+			b.degradedRoots[root] = struct{}{}
+			if state != nil {
+				state.timer.Stop()
+				for path, entry := range state.folders {
+					if path != root && entry.polling {
+						releaseKeys = append(releaseKeys, runtimeFolderPollingKey(root, path))
+					}
+				}
+				delete(b.runtimeRoots, root)
+			}
+		} else if state == request.state && state != nil && state.folders[folder] == request.entry {
+			request.entry.polling = true
+		} else {
+			releaseKeys = append(releaseKeys, request.obligation.Key)
+		}
+	}
+	b.watchMu.Unlock()
+	b.pollingMu.Unlock()
+	for _, key := range releaseKeys {
+		if released == nil {
+			b.reportError(fmt.Errorf("fsnotify coverage recovered for %s without polling release callback", key))
+		} else if err := released(key); err != nil {
+			b.reportError(fmt.Errorf("release fsnotify polling for %s: %w", key, err))
+		}
+	}
 }
 
 func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
@@ -1022,6 +1024,7 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 			continue
 		}
 		recovered := make(map[string]bool)
+		walked := make(map[string]bool)
 		for _, folder := range slices.Sorted(maps.Keys(state.folders)) {
 			entry, ok := state.folders[folder]
 			if !ok {
@@ -1034,42 +1037,41 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 			entry.retryAt = now.Add(entry.delay)
 			gone := watchFolderGone(folder)
 			complete := false
-			if !gone && folder != root {
+			parent := ""
+			for path := range walked {
+				if pathAtOrBelow(path, folder) {
+					parent = path
+					break
+				}
+			}
+			if parent != "" {
+				complete = walked[parent]
+			} else if !gone && folder != root {
 				_, complete = b.addRuntimeSubtreeLocked(folder, []string{root})
+				walked[folder] = complete
 			}
 			info, err := os.Lstat(folder)
-			if gone || complete && err == nil && info.IsDir() {
+			if watchFolderGone(folder) || complete && err == nil && info.IsDir() {
 				recovered[folder] = entry.polling
 			}
 		}
-		released := b.onPollingReleased
-		scopes := append([]PollingScope(nil), b.rootScopes[root]...)
-		if len(scopes) == 0 {
-			scopes = []PollingScope{{Root: root}}
+		for folder, polling := range recovered {
+			if !polling {
+				delete(state.folders, folder)
+			}
 		}
+		released := b.onPollingReleased
 		b.watchMu.Unlock()
+		b.pollingMu.Unlock()
 		b.acquireRuntimeFolderPolling(root)
 		b.watchMu.Lock()
 		active := b.runtimeRoots[root] == state
 		b.watchMu.Unlock()
-		b.pollingMu.Unlock()
 		if !active {
 			continue
 		}
 		var completed []string
 		for _, folder := range slices.Sorted(maps.Keys(recovered)) {
-			if !recovered[folder] {
-				if b.onPollingRequired != nil {
-					continue
-				}
-				for _, scope := range runtimeFolderPollingScopes(root, folder, scopes) {
-					select {
-					case b.events <- backendEvent{Path: scope.Root, Root: scope.Root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}:
-					case <-b.stop:
-						return false
-					}
-				}
-			}
 			if recovered[folder] {
 				if released == nil {
 					b.reportError(fmt.Errorf("fsnotify coverage recovered for %s without polling release callback", folder))

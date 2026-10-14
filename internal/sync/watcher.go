@@ -80,6 +80,8 @@ type PollingScope struct {
 	Root  string
 }
 
+const FSNotifyFolderPollingPrefix = "fsnotify-folder:"
+
 // PollingObligation identifies one independently releasable reason that a set
 // of configured scopes needs authoritative polling coverage.
 type PollingObligation struct {
