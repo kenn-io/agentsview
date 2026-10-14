@@ -72,7 +72,7 @@ func TestWindowsParentSecurity(t *testing.T) {
 			sddl: "O:" + trustedInstallerSIDString + "D:P(A;;GA;;;" + allowed[0].String() + ")",
 		},
 		{
-			name: "allows inherit-only writes",
+			name: "allows inherit-only full access",
 			sddl: "O:" + allowed[0].String() + "D:P(A;;GA;;;" + allowed[0].String() + ")(A;CIIO;GA;;;WD)",
 		},
 		{
@@ -254,6 +254,16 @@ func setCaptureDACL(path string, sids []*windows.SID) error {
 
 func assertProtectedCaptureDACL(t *testing.T, path string) {
 	t.Helper()
+	descriptor, err := windows.GetNamedSecurityInfo(
+		path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	require.NoError(t, err)
+	control, _, err := descriptor.Control()
+	require.NoError(t, err)
+	assert.NotZero(t, control&windows.SE_DACL_PROTECTED)
+	sddl := descriptor.String()
+	assert.NotContains(t, sddl, ";;;WD)")
+	assert.Contains(t, sddl, ";;;SY)")
+	assert.Contains(t, sddl, ";;;BA)")
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
 	require.NoError(t, verifyCaptureDirectoryDACL(path, allowed))
