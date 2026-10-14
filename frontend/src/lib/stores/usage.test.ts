@@ -850,6 +850,8 @@ describe("UsageStore session filter params", () => {
         }
         expect(usage.pairwiseComparison).toBeNull();
         const comparison = usagePairwiseComparison();
+        if (scenario === "default" || scenario === "rolled dates")
+          comparison.left.value = "new-model";
         if (scenario === "excluded model") {
           comparison.left = { ...comparison.left, dimension: "project", value: "pl1:sha256:alpha" };
           comparison.right = {
@@ -892,10 +894,14 @@ describe("UsageStore session filter params", () => {
     },
   );
 
-  it.each(["success", "failure", "aborted first load"] as const)(
+  it.each(["success", "recently active success", "failure", "aborted first load"] as const)(
     "finishes a comparison when totals fail, comparison %s",
     async (outcome) => {
       const { usage } = await loadStore();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
+      const { sessions } = await import("./sessions.svelte.js");
+      sessions.filters.recentlyActive = outcome === "recently active success";
       if (outcome === "aborted first load") {
         usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
           () => new Promise(() => {}),
@@ -931,10 +937,18 @@ describe("UsageStore session filter params", () => {
         const refresh = usage.fetchAll().then(() => {
           finished = true;
         });
+        if (outcome === "recently active success") {
+          expect(
+            usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0],
+          ).toHaveProperty("active_since");
+          resolvePair(usagePairwiseComparison());
+          await vi.waitFor(() => expect(usage.querying.pairwise).toBe(false));
+          vi.setSystemTime(new Date("2026-06-15T16:01:00Z"));
+        }
+        expect(finished).toBe(false);
         rejectSummary(new Error("totals failed"));
         await vi.waitFor(() => expect(usage.querying.summary).toBe(false));
-        expect(finished).toBe(false);
-        expect(usage.querying.pairwise).toBe(true);
+        expect(usage.querying.pairwise).toBe(outcome !== "recently active success");
         if (outcome === "failure") rejectPair(new Error("comparison failed"));
         else resolvePair(usagePairwiseComparison());
         await refresh;
@@ -947,6 +961,8 @@ describe("UsageStore session filter params", () => {
         if (outcome !== "aborted first load") expect(usage.summary).not.toBeNull();
       } finally {
         warn.mockRestore();
+        sessions.filters.recentlyActive = false;
+        vi.useRealTimers();
       }
     },
   );

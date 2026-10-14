@@ -451,10 +451,10 @@ func TestUsagePairwiseComparisonOpenAPIOptionalSideParams(t *testing.T) {
 		}
 	}
 
-	assert.False(t, required["left_dimension"])
-	assert.False(t, required["left_value"])
-	assert.False(t, required["right_dimension"])
-	assert.False(t, required["right_value"])
+	for _, name := range []string{"left_dimension", "left_value", "right_dimension", "right_value", "fallback_to_default"} {
+		require.Contains(t, required, name)
+		assert.False(t, required[name], "%s must be optional", name)
+	}
 }
 
 func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(

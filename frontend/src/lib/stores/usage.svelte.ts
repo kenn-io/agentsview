@@ -425,6 +425,7 @@ class UsageStore {
   private fetchAllVersion = 0;
   private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
   private pairwiseScope = "";
+  private pairwiseNeedsValidation = false;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -939,7 +940,7 @@ class UsageStore {
   }
 
   private async fetchAllSteps(startedAt: number, options: FetchAllOptions): Promise<FetchResult> {
-    const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
+    const hadSelectedRange = this.selectedTimeRange !== null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
       if (this.timeSeriesContextSummary) {
@@ -956,9 +957,7 @@ class UsageStore {
     saveUsageFilters(this);
     const params = this.baseParams();
     const contextParams =
-      options.preserveTimeRange &&
-      options.refreshTimeSeriesContext !== false &&
-      selectedRangeAtStart !== null
+      options.preserveTimeRange && options.refreshTimeSeriesContext !== false && hadSelectedRange
         ? { ...params, from: this.from, to: this.to }
         : undefined;
     if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
@@ -978,10 +977,14 @@ class UsageStore {
       await Promise.all([topSessionsPromise, zoomPromise]);
       return "aborted";
     }
-    const recoveredParams = loadedSummary?.params ?? this.baseParams();
-    if (JSON.stringify(params) !== JSON.stringify(recoveredParams)) {
-      void this.fetchPairwise(recoveredParams, true);
-    }
+    const rangeRestored = options.preserveTimeRange && hadSelectedRange && !this.selectedTimeRange;
+    const scopeRecovered =
+      loadedSummary?.projectScopeRecovered ||
+      rangeRestored ||
+      (params.project_key && !this.selectedProjectKey) ||
+      (params.exclude_project_key && !this.excludedProjectKeys);
+    const recoveredParams = loadedSummary?.params ?? (scopeRecovered ? this.baseParams() : params);
+    if (scopeRecovered) void this.fetchPairwise(recoveredParams, true);
     if (loadedSummary) {
       const selection = this.pairwiseSelection;
       if (!!selection.left.value !== !!selection.right.value) {
@@ -996,17 +999,13 @@ class UsageStore {
     if (!loadedSummary) {
       await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
-      if (
-        selectedRangeAtStart !== null &&
-        this.selectedTimeRange === null &&
-        fetchVersion === this.fetchAllVersion
-      ) {
+      if (rangeRestored) {
         this.invalidatePanel("topSessions");
         this.topSessions = null;
         this.errors.topSessions = null;
         await Promise.all([
-          this.fetchTopSessions(this.baseParams()),
-          this.fetchZoom(this.baseParams()),
+          this.fetchTopSessions(recoveredParams),
+          this.fetchZoom(recoveredParams),
         ]);
       }
       await this.awaitPairwise();
@@ -1030,7 +1029,11 @@ class UsageStore {
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
     ]);
     let pairwiseResult = await this.awaitPairwise();
-    if (fetchVersion === this.fetchAllVersion && this.pairwiseSelectionUnavailable()) {
+    if (
+      fetchVersion === this.fetchAllVersion &&
+      this.pairwiseNeedsValidation &&
+      this.pairwiseSelectionUnavailable()
+    ) {
       this.clearPairwiseComparisonState();
       void this.fetchPairwise(loadedSummary.params, true);
       pairwiseResult = await this.awaitPairwise();
@@ -1206,10 +1209,7 @@ class UsageStore {
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
       if (this.versions.summary === v) {
-        // A selected-range summary is synthesized from daily data while the
-        // request is in flight. If that request fails, restore the parent
-        // window rather than leaving provisional values under an active brush.
-        // Other cached refetch failures keep their existing values visible.
+        // Restore the parent window when the provisional brushed summary fails.
         if (
           this.isTimeRangeSummaryProvisional &&
           this.selectedTimeRange !== null &&
@@ -1221,7 +1221,6 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
-          // The reference already holds this scope's full-window attribution.
           this.attributionSummary = this.referenceSummary;
           const restoredAttributionParams = this.attributionSummary
             ? undefined
@@ -1339,6 +1338,7 @@ class UsageStore {
   ): Promise<FetchResult> {
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
+    this.pairwiseNeedsValidation = !!request && !fallbackToDefault;
     if (request && fallbackToDefault) request.fallback_to_default = true;
     const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
     if (!request && !useDefault) {

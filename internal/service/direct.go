@@ -14,8 +14,6 @@ import (
 	stdsync "sync"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -23,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/timeutil"
+	"golang.org/x/sync/errgroup"
 )
 
 // directBackend implements SessionService by wrapping a db.Store
