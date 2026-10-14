@@ -2769,7 +2769,7 @@
   "plan_usage_could_not_check": "AgentsView가 플랜 사용량을 확인하지 못했습니다",
   "plan_usage_account_unavailable": "이 계정에서는 사용량을 사용할 수 없습니다",
   "plan_usage_counted_under": "{title} 채팅에 포함되어 집계됨",
-  "plan_usage_stale": "이후 확인 결과: {reason} ({time}). 이 수치는 최신이 아닐 수 있습니다.",
+  "plan_usage_stale": "그 이후: {reason} ({time}). 이 수치는 최신이 아닐 수 있습니다.",
   "plan_usage_left_out_later": "OpenAI 사용량 보고서에서 이 채팅이 빠졌음",
   "plan_usage_weekly_share": "Codex 주간 한도의 {percent}%",
   "plan_usage_five_hour_share": "Codex 5시간 한도의 {percent}%",

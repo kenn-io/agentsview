@@ -1741,7 +1741,7 @@ describe("SessionBreadcrumb", () => {
       const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
       const headline = `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`;
       const stale =
-        `A later check found: AgentsView could not check plan usage (${formatTimestamp("2026-03-03T10:30:00Z")}). ` +
+        `Since then: AgentsView could not check plan usage (${formatTimestamp("2026-03-03T10:30:00Z")}). ` +
         "These figures may be out of date.";
       expect(trigger.title.split("\n")).toEqual([headline, stale]);
       expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(`, ${headline}, ${stale}`);

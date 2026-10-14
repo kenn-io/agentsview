@@ -2852,7 +2852,7 @@
   "plan_usage_could_not_check": "AgentsView plan istifadəsini yoxlaya bilmədi",
   "plan_usage_account_unavailable": "Bu hesab üçün istifadə məlumatı əlçatan deyil",
   "plan_usage_counted_under": "{title} söhbətində hesablanıb",
-  "plan_usage_stale": "Sonrakı yoxlama göstərdi: {reason} ({time}). Bu rəqəmlər köhnəlmiş ola bilər.",
+  "plan_usage_stale": "O vaxtdan bəri: {reason} ({time}). Bu rəqəmlər köhnəlmiş ola bilər.",
   "plan_usage_left_out_later": "OpenAI istifadə hesabatı bu söhbəti daxil etmədi",
   "plan_usage_weekly_share": "Həftəlik Codex limitinin {percent}%-i",
   "plan_usage_five_hour_share": "Beş saatlıq Codex limitinin {percent}%-i",
