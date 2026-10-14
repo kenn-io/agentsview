@@ -85,58 +85,13 @@ const usageServiceMocks = vi.hoisted(() => {
       priorTotalCost: money(1),
       deltaPct: 0.5,
     }),
-    getApiV1UsagePairwiseComparison: vi.fn().mockResolvedValue({
-      left: {
-        dimension: "model",
-        value: "claude-sonnet-4-20250514",
-        totalCost: money(1),
-        inputTokens: 10,
-        outputTokens: 5,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 15,
-        sessionCount: 1,
-        costPerSession: money(1),
-        tokensPerSession: 15,
-      },
-      right: {
-        dimension: "model",
-        value: "gpt-4o",
-        totalCost: money(2),
-        inputTokens: 20,
-        outputTokens: 10,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 30,
-        sessionCount: 2,
-        costPerSession: money(1),
-        tokensPerSession: 15,
-      },
-      deltas: {
-        totalCostDelta: money(1),
-        totalCostDeltaRatio: 1,
-        inputTokensDelta: 10,
-        inputTokensDeltaRatio: 1,
-        outputTokensDelta: 5,
-        outputTokensDeltaRatio: 1,
-        cacheCreationDelta: 0,
-        cacheCreationDeltaRatio: null,
-        cacheReadDelta: 0,
-        cacheReadDeltaRatio: null,
-        totalTokensDelta: 15,
-        totalTokensDeltaRatio: 1,
-        sessionCountDelta: 1,
-        sessionCountDeltaRatio: 1,
-        costPerSessionDelta: money(0),
-        costPerSessionRatio: 0,
-        tokensPerSessionDelta: 0,
-        tokensPerSessionRatio: 0,
-      },
-    }),
+    getApiV1UsagePairwiseComparison: vi.fn(),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
     getUsageZoom: vi.fn().mockResolvedValue([]),
   };
 });
+
+usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValue(emptyUsagePairwiseComparison());
 
 const apiRuntimeMocks = vi.hoisted(() => {
   class ApiError extends Error {
@@ -560,6 +515,7 @@ describe("UsageStore session filter params", () => {
   beforeEach(() => {
     installStorage();
     vi.clearAllMocks();
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValue(usagePairwiseComparison());
   });
 
   it("passes shared session filters to usage endpoints", async () => {
@@ -1726,6 +1682,7 @@ describe("UsageStore time-series range selection", () => {
   beforeEach(() => {
     installStorage();
     vi.clearAllMocks();
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValue(usagePairwiseComparison());
   });
 
   it("filters Usage requests without replacing the parent chart window", async () => {

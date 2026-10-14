@@ -87,6 +87,8 @@ The latest release is
 
 **Bug fixes**
 
+- The Usage page loads faster by starting model comparison alongside totals.
+  The pairwise comparison API accepts both sides omitted and selects a default pair.
 - Codex pages from Desktop builds 0.148.0-alpha.15 through 0.154.0-alpha.6.2
   now join their thread with its title instead of showing as separate untitled
   sessions. The upgrade rebuilds the archive once and keeps names, stars, pins,
