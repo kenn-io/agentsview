@@ -482,9 +482,9 @@ GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
 
 Each read-only role that serves the PostgreSQL UI, such as the reader of a
 legacy schema, needs `SELECT`. Until it has it, `agentsview pg serve` with that
-role fails to start with
-`serve role is missing a privilege the schema check needs` and
-`permission denied for table session_plan_usage`. Grant it:
+role fails to start with `serve role cannot read the schema` and
+`permission denied for table session_plan_usage`. The schema owner or a database
+administrator grants it:
 
 ```sql
 GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
