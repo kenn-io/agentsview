@@ -1030,11 +1030,7 @@ class UsageStore {
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
     ]);
     let pairwiseResult = await this.awaitPairwise();
-    if (
-      fetchVersion === this.fetchAllVersion &&
-      pairwiseResult === "ok" &&
-      this.pairwiseSelectionUnavailable()
-    ) {
+    if (fetchVersion === this.fetchAllVersion && this.pairwiseSelectionUnavailable()) {
       this.clearPairwiseComparisonState();
       void this.fetchPairwise(loadedSummary.params, true);
       pairwiseResult = await this.awaitPairwise();

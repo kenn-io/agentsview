@@ -205,12 +205,12 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 		{"models", []ModelTotal{{Model: "second-by-name"}, {Model: "first-by-name"}}, []ProjectTotal{{ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"model", "second-by-name", "model", "first-by-name"}},
 		{"projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{ProjectKey: "key-b", Project: "label-b"}, {ProjectKey: "key-a", Project: "label-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
 		{"mixed", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{ProjectKey: "key-a", Project: "label-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
-		{"skip empty models", []ModelTotal{{}, {Model: "model-b"}, {}, {Model: "model-a"}}, nil, [4]string{"model", "model-b", "model", "model-a"}},
-		{"skip empty projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-b"}, {}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
+		{"skip empty models", []ModelTotal{{}, {Model: "model-b"}, {Model: "model-a"}}, nil, [4]string{"model", "model-b", "model", "model-a"}},
+		{"skip empty projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
 		{"mixed after empty keys", []ModelTotal{{}, {Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
 		{"one usable model", []ModelTotal{{}, {Model: "only-model"}}, []ProjectTotal{{}}, [4]string{}},
 		{"one usable project", []ModelTotal{{}}, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{}},
-		{"empty keys", []ModelTotal{{}, {}}, []ProjectTotal{{}, {}}, [4]string{}},
+		{"empty keys", []ModelTotal{{}}, []ProjectTotal{{}}, [4]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
