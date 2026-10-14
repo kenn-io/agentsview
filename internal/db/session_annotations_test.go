@@ -233,14 +233,17 @@ func TestPermanentDeletionRemovesOnlyStoredSessionAnnotations(t *testing.T) {
 }
 
 func TestRemovedLauncherRestoresParserRelationship(t *testing.T) {
-	for _, action := range []string{"delete spawner", "delete launcher", "parser exclusion"} {
+	for _, action := range []string{"delete spawner", "delete launcher", "parser exclusion", "clear vanished parent"} {
 		for _, relationship := range []string{"", "subagent"} {
+			if action == "clear vanished parent" && relationship != "" {
+				continue
+			}
 			t.Run(action+"/"+relationship, func(t *testing.T) {
 				d := testDB(t)
 				ctx := t.Context()
 				insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = relationship })
 				insertSession(t, d, "manager", "proj")
-				if action != "delete launcher" {
+				if action != "delete launcher" && action != "clear vanished parent" {
 					insertMessages(t, d, Message{
 						SessionID: "manager", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
 						ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
@@ -249,10 +252,16 @@ func TestRemovedLauncherRestoresParserRelationship(t *testing.T) {
 				}
 				link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 				require.NoError(t, err)
-				assert.Equal(t, action == "delete launcher", link.Applied)
+				assert.Equal(t, action == "delete launcher" || action == "clear vanished parent", link.Applied)
 				_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='worker'")
 				require.NoError(t, err)
-				if action == "parser exclusion" {
+				if action == "clear vanished parent" {
+					_, err = d.getWriter().ExecContext(ctx, "DELETE FROM sessions WHERE id='manager'")
+					require.NoError(t, err)
+					link, err = d.ClearSessionExternalParent(ctx, "worker")
+					require.NoError(t, err)
+					assert.True(t, link.Changed)
+				} else if action == "parser exclusion" {
 					n, err := d.DeleteParserExcludedSessions(ctx, []string{"manager"})
 					require.NoError(t, err)
 					require.Equal(t, 1, n)
@@ -269,10 +278,12 @@ func TestRemovedLauncherRestoresParserRelationship(t *testing.T) {
 				var marker string
 				require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT sync_marker FROM sessions WHERE id='worker'").Scan(&marker))
 				assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
-				link, err = loadSessionExternalParent(ctx, d.getReader(), "worker")
-				require.NoError(t, err)
-				assert.Equal(t, "manager", link.ParentSessionID)
-				assert.False(t, link.Applied)
+				if action != "clear vanished parent" {
+					link, err = d.GetSessionExternalParent(ctx, "worker")
+					require.NoError(t, err)
+					assert.Equal(t, "manager", link.ParentSessionID)
+					assert.False(t, link.Applied)
+				}
 			})
 		}
 	}
@@ -644,63 +655,6 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, defaults))
 }
 
-func TestLauncherParentPreservesParserRelationship(t *testing.T) {
-	for _, tc := range []struct {
-		relationship    string
-		legacy, spawned bool
-	}{
-		{spawned: true},
-		{relationship: "subagent", spawned: true},
-		{legacy: true, spawned: true},
-		{relationship: "subagent", legacy: true},
-	} {
-		t.Run(fmt.Sprintf("%s/legacy=%t/spawned=%t", tc.relationship, tc.legacy, tc.spawned), func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "manager", "proj")
-			insertSession(t, d, "child", "proj", func(s *Session) {
-				s.Agent = "grok"
-				s.RelationshipType = tc.relationship
-			})
-			write := SessionBatchWrite{
-				Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
-				ReplaceMessages: true,
-				Messages: []Message{{
-					SessionID: "spawner", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
-					ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}},
-				}},
-			}
-			if tc.spawned {
-				_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-				require.NoError(t, err)
-			}
-			if tc.legacy {
-				_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parser_relationship_type=NULL WHERE id='child'")
-				require.NoError(t, err)
-			}
-			link, err := d.SetSessionExternalParent(ctx, "child", "manager")
-			require.NoError(t, err)
-			assert.Equal(t, !tc.spawned, link.Applied)
-			write.Messages[0].HasToolUse = false
-			write.Messages[0].ToolCalls = nil
-			if tc.spawned {
-				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-				require.NoError(t, err)
-			}
-			exported, err := d.GetArtifactExportSession(ctx, "child")
-			require.NoError(t, err)
-			assert.Nil(t, exported.ParentSessionID)
-			assert.Equal(t, tc.relationship, exported.RelationshipType)
-			_, err = d.ClearSessionExternalParent(ctx, "child")
-			require.NoError(t, err)
-			child, err := d.GetSession(ctx, "child")
-			require.NoError(t, err)
-			assert.Nil(t, child.ParentSessionID)
-			assert.Equal(t, tc.relationship, child.RelationshipType)
-		})
-	}
-}
-
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -929,67 +883,69 @@ func TestSessionExternalParentWaitsForParentArrival(t *testing.T) {
 	}
 }
 
-func TestClearLauncherParentAfterParentDisappears(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "manager", "proj")
-	insertSession(t, d, "worker", "proj")
-	_, err := d.SetSessionExternalParent(t.Context(), "worker", "manager")
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'manager'")
-	require.NoError(t, err)
-	link, err := d.GetSessionExternalParent(t.Context(), "worker")
-	require.NoError(t, err)
-	assert.False(t, link.Applied)
-	link, err = d.ClearSessionExternalParent(t.Context(), "worker")
-	require.NoError(t, err)
-	assert.True(t, link.Changed)
-	worker, err := d.GetSession(t.Context(), "worker")
-	require.NoError(t, err)
-	assert.Nil(t, worker.ParentSessionID)
-	assert.Empty(t, worker.RelationshipType)
-}
-
-func TestPendingLauncherParentPreservesParserClassification(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
-	for _, parent := range []string{"missing-a", "missing-b"} {
-		link, err := d.SetSessionExternalParent(ctx, "worker", parent)
-		require.NoError(t, err)
-		assert.False(t, link.Applied)
-		assert.False(t, link.Changed)
-		worker, err := d.GetSession(ctx, "worker")
-		require.NoError(t, err)
-		assert.Nil(t, worker.ParentSessionID)
-		assert.Equal(t, "subagent", worker.RelationshipType)
-	}
-}
-
 func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
-	for _, classification := range []struct{ kind, relationship, want string }{
+	for _, classification := range []struct {
+		kind, relationship, want string
+		legacy, spawned          bool
+	}{
 		{relationship: "subagent", want: "subagent"},
 		{kind: "non-interactive", want: "subagent"},
 		{},
+		{spawned: true},
+		{relationship: "subagent", want: "subagent", spawned: true},
+		{legacy: true, spawned: true},
+		{relationship: "subagent", want: "subagent", legacy: true},
 	} {
-		for _, action := range []string{"clear", "replace with pending", "cycle"} {
-			if action == "replace with pending" && classification.relationship == "" {
+		for _, action := range []string{"clear", "replace with pending", "cycle", "pending only"} {
+			if (classification.legacy || classification.spawned) && action != "clear" {
 				continue
 			}
-			t.Run(action+"/"+classification.kind+"/"+classification.relationship, func(t *testing.T) {
+			if (action == "replace with pending" || action == "pending only") && classification.relationship == "" {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/%s/%s/legacy=%t/spawned=%t", action, classification.kind, classification.relationship, classification.legacy, classification.spawned), func(t *testing.T) {
 				d := testDB(t)
 				ctx := t.Context()
 				insertSession(t, d, "manager", "proj")
-				insertSession(t, d, "worker", "proj", func(s *Session) {
+				parserSession := func(s *Session) {
+					if classification.spawned || classification.legacy {
+						s.Agent = "grok"
+					}
 					s.SessionKind = classification.kind
 					s.RelationshipType = classification.relationship
-				})
-				link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+				}
+				insertSession(t, d, "worker", "proj", parserSession)
+				write := SessionBatchWrite{
+					Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+					ReplaceMessages: true,
+					Messages: []Message{{
+						SessionID: "spawner", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+						ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
+					}},
+				}
+				if classification.spawned {
+					_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+					require.NoError(t, err)
+				}
+				if classification.legacy {
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parser_relationship_type=NULL WHERE id='worker'")
+					require.NoError(t, err)
+				}
+				parent := "manager"
+				if action == "pending only" {
+					parent = "missing-a"
+				}
+				link, err := d.SetSessionExternalParent(ctx, "worker", parent)
 				require.NoError(t, err)
-				require.True(t, link.Applied)
-				insertSession(t, d, "worker", "proj", func(s *Session) {
-					s.SessionKind = classification.kind
-					s.RelationshipType = classification.relationship
-				})
+				assert.Equal(t, !classification.spawned && action != "pending only", link.Applied)
+				if classification.spawned {
+					write.Messages[0].HasToolUse = false
+					write.Messages[0].ToolCalls = nil
+					_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+					require.NoError(t, err)
+				} else if !classification.legacy && action != "pending only" {
+					insertSession(t, d, "worker", "proj", parserSession)
+				}
 				exported, err := d.GetArtifactExportSession(ctx, "worker")
 				require.NoError(t, err)
 				assert.Nil(t, exported.ParentSessionID)
@@ -997,8 +953,12 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 				switch action {
 				case "clear":
 					_, err = d.ClearSessionExternalParent(ctx, "worker")
-				case "replace with pending":
-					_, err = d.SetSessionExternalParent(ctx, "worker", "missing")
+				case "replace with pending", "pending only":
+					link, err = d.SetSessionExternalParent(ctx, "worker", "missing-b")
+					assert.False(t, link.Applied)
+					if action == "pending only" {
+						assert.False(t, link.Changed)
+					}
 				case "cycle":
 					insertSession(t, d, "manager", "proj", func(s *Session) { s.ParentSessionID = new("worker"); s.RelationshipType = "continuation" })
 				}

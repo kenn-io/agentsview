@@ -410,16 +410,18 @@ func TestBuildSessionFilterSQLPRHost(t *testing.T) {
 		t.Run(dialect.name, func(t *testing.T) {
 			where, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Number: 12}}, dialect)
 			assert.Equal(t, []any{12}, args)
-			assert.Contains(t, where, "number")
-			assert.NotContains(t, where, "repository")
+			numberPredicate := map[string]string{
+				"sqlite":     "EXISTS (SELECT 1 FROM json_each(NULLIF(pr_links, '')) pl WHERE 1=1 AND json_extract(pl.value, '$.number') = ?)",
+				"postgres":   "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(pr_links, '')::jsonb) pl WHERE TRUE AND (pl->>'number')::bigint = $1)",
+				"duckdb":     "len(list_filter(CAST(json_extract(NULLIF(pr_links, ''), '$[*]') AS JSON[]), pl -> true AND CAST(pl->>'number' AS BIGINT) = ?)) > 0",
+				"clickhouse": "arrayExists(pl -> true AND JSONExtractInt(pl, 'number') = ?, JSONExtractArrayRaw(pr_links))",
+			}
+			assert.Contains(t, where, numberPredicate[dialect.name])
 			for _, host := range []string{"", "GITHUB.COM"} {
-				where, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Repository: "OWNER/REPO", Number: 12, Host: host}}, dialect)
+				_, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Repository: "OWNER/REPO", Number: 12, Host: host}}, dialect)
 				wantArgs := []any{"owner/repo", 12}
 				if host != "" {
 					wantArgs = append(wantArgs, "github.com")
-					assert.Contains(t, where, "host")
-				} else {
-					assert.NotContains(t, where, "host")
 				}
 				assert.Equal(t, wantArgs, args)
 			}

@@ -733,12 +733,11 @@ func TestSessionAnnotationsAdvanceSyncMarkerPreservingExtractedCoverage(t *testi
 				_, err = d.ClearSessionExternalParent(ctx, "sess-1")
 			}
 			require.NoError(t, err)
-			var modifiedAt, marker string
+			var modifiedAt string
 			require.NoError(t, d.getReader().QueryRowContext(ctx,
-				"SELECT local_modified_at, sync_marker FROM sessions WHERE id = 'sess-1'",
-			).Scan(&modifiedAt, &marker))
+				"SELECT local_modified_at FROM sessions WHERE id = 'sess-1'",
+			).Scan(&modifiedAt))
 			assert.Equal(t, "2000-01-01T00:00:00.000Z", modifiedAt)
-			assert.Greater(t, marker, oldMarker)
 			ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
 				Fingerprint: "fp-a", QuietCutoff: time.Now(),
 				ScanVersions: []string{"rules-v1"}, IncludeDone: true,

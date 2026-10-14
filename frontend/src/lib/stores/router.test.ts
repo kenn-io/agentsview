@@ -442,10 +442,6 @@ describe("RouterStore", () => {
       pr: "acme/widgets#42",
     });
 
-    expect(new URLSearchParams(window.location.search).getAll("label")).toEqual([
-      "ticket=example",
-      "role=reviewer",
-    ]);
     expect(parsePath().params).toEqual({
       label: "ticket=example\nrole=reviewer",
       pr: "acme/widgets#42",

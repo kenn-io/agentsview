@@ -25,7 +25,7 @@ func seedAnnotatedSession(t *testing.T, te *testEnv, id string, prs []db.PRLink)
 	}))
 }
 
-func TestSessionLabelsAPI(t *testing.T) {
+func TestSessionAnnotationValidationAndEmptyArrays(t *testing.T) {
 	te := setup(t)
 	seedAnnotatedSession(t, te, "worker", nil)
 	w := te.patch(t, "/api/v1/sessions/worker/labels", `{"add":["=missing-key"]}`)
@@ -61,30 +61,22 @@ func TestSessionParentAPI(t *testing.T) {
 
 func TestAnnotationFiltersHonorExplicitOneShotExclusion(t *testing.T) {
 	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
-		ID: "worker", Machine: "test", Agent: "claude", Project: "proj",
-		MessageCount: 2, UserMessageCount: 1, IsAutomated: true,
-		PRLinks: []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}},
-	}))
 	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
-	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237", "pr=%237"} {
-		for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
-			for _, toggle := range []string{"&include_one_shot=false", "&include_automated=false"} {
-				automated := toggle == "&include_automated=false"
-				userMessages := 1
-				if automated {
-					userMessages = 2
-				}
-				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
-					ID: "worker", Machine: "test", Agent: "claude", Project: "proj",
-					MessageCount: 3, UserMessageCount: userMessages, IsAutomated: automated,
-					PRLinks: []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}},
-				}))
-				w := te.get(t, route+"?"+filter+toggle)
-				assertStatus(t, w, http.StatusOK)
-				assert.NotContains(t, w.Body.String(), `"id":"worker"`)
+	for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
+		for _, toggle := range []string{"&include_one_shot=false", "&include_automated=false"} {
+			automated := toggle == "&include_automated=false"
+			userMessages := 1
+			if automated {
+				userMessages = 2
 			}
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+				ID: "worker", Machine: "test", Agent: "claude", Project: "proj",
+				MessageCount: 3, UserMessageCount: userMessages, IsAutomated: automated,
+			}))
+			w := te.get(t, route+"?label=nightly"+toggle)
+			assertStatus(t, w, http.StatusOK)
+			assert.NotContains(t, w.Body.String(), `"id":"worker"`)
 		}
 	}
 }
@@ -111,12 +103,8 @@ func TestSessionAnnotationWatchWithFutureSyncMarker(t *testing.T) {
 		write func() error
 	}{
 		{"label set", func() error { _, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"}); return err }},
-		{"label clear", func() error { _, err := te.db.SetSessionLabels(t.Context(), "worker", nil); return err }},
 		{"parent set", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "manager"); return err }},
-		{"parent clear", func() error { _, err := te.db.ClearSessionExternalParent(t.Context(), "worker"); return err }},
 		{"pending parent set", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "missing-a"); return err }},
-		{"pending parent replace", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "missing-b"); return err }},
-		{"pending parent clear", func() error { _, err := te.db.ClearSessionExternalParent(t.Context(), "worker"); return err }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

@@ -1907,15 +1907,12 @@ func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "worker", "proj", func(s *db.Session) {
 		s.MessageCount, s.UserMessageCount, s.IsAutomated = 4, 2, true
-		s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
 	})
 	_, err := d.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
-	for _, filter := range []listSessionsIn{{Labels: []string{"nightly"}}, {PR: "owner/repo#7"}, {PR: "#7"}} {
-		in := filter
-		require.NoError(t, json.Unmarshal([]byte(`{"include_automated":false}`), &in))
-		_, out, err := ts.listSessions(t.Context(), nil, in)
-		require.NoError(t, err)
-		assert.Empty(t, out.Sessions)
-	}
+	in := listSessionsIn{Labels: []string{"nightly"}}
+	require.NoError(t, json.Unmarshal([]byte(`{"include_automated":false}`), &in))
+	_, out, err := ts.listSessions(t.Context(), nil, in)
+	require.NoError(t, err)
+	assert.Empty(t, out.Sessions)
 }

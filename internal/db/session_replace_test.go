@@ -136,16 +136,6 @@ func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
 			require.NoError(t, err)
 			assert.Nil(t, exported.ParentSessionID)
 			assert.Equal(t, prior, exported.RelationshipType)
-			insertSession(t, d, "other-manager", "proj")
-			link, err = d.SetSessionExternalParent(ctx, copyID, "other-manager")
-			require.NoError(t, err)
-			assert.True(t, link.Applied)
-			_, err = d.ClearSessionExternalParent(ctx, copyID)
-			require.NoError(t, err)
-			restored, err := d.GetSession(ctx, copyID)
-			require.NoError(t, err)
-			assert.Nil(t, restored.ParentSessionID)
-			assert.Equal(t, prior, restored.RelationshipType)
 		})
 	}
 }

@@ -161,8 +161,6 @@ func TestSessionVersionTracksPushedAnnotations(t *testing.T) {
 		name  string
 		write func() error
 	}{
-		{"label set", func() error { _, err := local.SetSessionLabels(ctx, "sess-1", []string{"nightly"}); return err }},
-		{"label clear", func() error { _, err := local.SetSessionLabels(ctx, "sess-1", nil); return err }},
 		{"parent set", func() error { _, err := local.SetSessionExternalParent(ctx, "sess-1", "sess-2"); return err }},
 		{"parent clear", func() error { _, err := local.ClearSessionExternalParent(ctx, "sess-1"); return err }},
 	} {

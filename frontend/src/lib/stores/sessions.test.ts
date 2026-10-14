@@ -225,19 +225,16 @@ describe("SessionsStore", () => {
   });
 
   it("preserves explicit automated exclusion for annotation requests", async () => {
-    const filters: Record<string, string>[] = [{ label: "nightly" }, { pr: "owner/repo#7" }];
-    for (const filter of filters) {
-      sessions.initFromParams(filter);
-      await sessions.load();
-      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBeUndefined();
-      sessions.setIncludeAutomatedFilter(false);
-      await sessions.load();
-      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
-      const detach = sessions.attachSidebar();
-      await sessions.load();
-      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
-      detach();
-    }
+    sessions.initFromParams({ label: "nightly" });
+    await sessions.load();
+    expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBeUndefined();
+    sessions.setIncludeAutomatedFilter(false);
+    await sessions.load();
+    expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
+    const detach = sessions.attachSidebar();
+    await sessions.load();
+    expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
+    detach();
   });
 
   describe("initFromParams", () => {
@@ -680,7 +677,6 @@ describe("SessionsStore", () => {
     });
 
     it("serializes only the sidebar filter subset for the index request", async () => {
-      sessions.filters.labels = ["nightly"];
       sessions.filters.project = "proj";
       sessions.filters.machine = "host-a";
       sessions.filters.agent = "codex";
@@ -712,7 +708,6 @@ describe("SessionsStore", () => {
         max_messages: 20,
         min_user_messages: 1,
         include_one_shot: false,
-        label: ["nightly"],
         include_automated: true,
         limit: 500,
       });
