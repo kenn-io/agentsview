@@ -425,7 +425,6 @@ class UsageStore {
   private fetchAllVersion = 0;
   private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
   private pairwiseScope = "";
-  private pairwiseShownScope = "";
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -968,7 +967,10 @@ class UsageStore {
       params,
       contextParams,
     });
-    void this.fetchPairwise(params, JSON.stringify(params) !== this.pairwiseShownScope);
+    void this.fetchPairwise(
+      params,
+      JSON.stringify(params) !== this.pairwiseScope || this.pairwiseComparison === null,
+    );
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -977,11 +979,7 @@ class UsageStore {
       return "aborted";
     }
     const recoveredParams = loadedSummary?.params ?? this.baseParams();
-    const scopeChanged = [
-      ...new Set([...Object.keys(params), ...Object.keys(recoveredParams)]),
-    ].some((key) => params[key as keyof UsageParams] !== recoveredParams[key as keyof UsageParams]);
-    if (scopeChanged) {
-      this.clearPairwiseComparisonState();
+    if (JSON.stringify(params) !== JSON.stringify(recoveredParams)) {
       void this.fetchPairwise(recoveredParams, true);
     }
     if (loadedSummary) {
@@ -1378,7 +1376,6 @@ class UsageStore {
           this.pairwiseSelection = emptyPairwiseSelection();
         }
         this.pairwiseComparison = comparison;
-        this.pairwiseShownScope = JSON.stringify(params);
         this.errors.pairwise = null;
         this.noteStep("pairwise", liveStep, started, comparison);
         return "ok";

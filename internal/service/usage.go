@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -401,17 +402,9 @@ type UsagePairwiseComparisonRequest struct {
 func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
 	switch dimension {
 	case "model":
-		for _, total := range summary.ModelTotals {
-			if total.Model == value {
-				return true
-			}
-		}
+		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return total.Model == value })
 	case "project":
-		for _, total := range summary.ProjectTotals {
-			if total.ProjectKey == value {
-				return true
-			}
-		}
+		return slices.ContainsFunc(summary.ProjectTotals, func(total ProjectTotal) bool { return total.ProjectKey == value })
 	}
 	return false
 }
