@@ -383,7 +383,9 @@ func (f *museFold) observe(record museRecord) {
 func (f *museFold) assistant(responseID string, at time.Time) *museAssistant {
 	if responseID != "" {
 		if index, ok := f.byResponse[responseID]; ok {
-			return f.assistants[index]
+			if a := f.assistants[index]; a != nil {
+				return a
+			}
 		}
 	}
 	index := len(f.messages)
@@ -415,7 +417,7 @@ func (f *museFold) bindUsage(usage museUsage) {
 		return
 	}
 	if index, ok := f.byResponse[responseID]; ok {
-		if a := f.assistants[index]; a.usage == nil {
+		if a := f.assistants[index]; a != nil && a.usage == nil {
 			a.usage = &usage
 			return
 		}
