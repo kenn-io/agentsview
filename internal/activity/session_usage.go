@@ -55,7 +55,7 @@ func SelectSessionUsageRows(
 		if attribution[i] != row.SessionID {
 			discard()
 		}
-		if key, ok := SessionUsageDedupTokenForRow(row.UsageIdentity()); ok && !AddUsageDedupToken(seen, key) {
+		if !KeepSessionUsageRow(seen, row.UsageIdentity()) {
 			discard()
 			continue
 		}

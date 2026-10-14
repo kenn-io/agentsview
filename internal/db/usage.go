@@ -2116,7 +2116,7 @@ func (db *DB) getDailyUsageLegacy(
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
 		// a key as seen and suppress the in-range duplicate.
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -2847,7 +2847,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 		// Dedup AFTER the date filter, matching GetDailyUsage,
 		// so out-of-range rows pulled in by the ±14h padding
 		// don't claim a key and suppress the in-range duplicate.
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -3241,7 +3241,7 @@ func (db *DB) getSessionUsageLegacy(
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -3454,7 +3454,7 @@ func (db *DB) getUsageSessionCountsLegacy(
 
 		// Dedup AFTER the date filter, matching the other two
 		// queries so ±14h padding rows don't claim keys.
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(dedup, key) {
+		if !activity.KeepSessionUsageRow(dedup, r.UsageIdentity()) {
 			continue
 		}
 

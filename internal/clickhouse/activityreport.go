@@ -65,6 +65,12 @@ type activityReportBackend struct {
 	pairing       *activityReportPairing
 }
 
+func (b activityReportBackend) BuildProjectIdentityMap(
+	ctx context.Context, labels []string,
+) (map[string]export.ProjectMapEntry, error) {
+	return b.Store.BuildProjectIdentityMap(ctx, labels)
+}
+
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {

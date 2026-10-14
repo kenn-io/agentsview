@@ -622,6 +622,13 @@ func SessionUsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
 	return UsageDedupTokenForRow(row)
 }
 
+// KeepSessionUsageRow records identified rows and keeps only their first occurrence.
+// Rows without an identity are always kept.
+func KeepSessionUsageRow(seen map[UsageDedupToken]struct{}, row UsageIdentity) bool {
+	key, ok := SessionUsageDedupTokenForRow(row)
+	return !ok || AddUsageDedupToken(seen, key)
+}
+
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
 // maximum billed web-search count for each surviving snapshot. Callers use the
 // former for attribution and the latter when pricing the selected token row.

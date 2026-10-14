@@ -1418,7 +1418,7 @@ func (s *Store) GetSessionUsage(
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -1574,7 +1574,7 @@ func (s *Store) GetDailyUsage(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -2151,7 +2151,7 @@ func (s *Store) GetTopSessionsByCost(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
+		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
 			continue
 		}
 
@@ -2284,7 +2284,7 @@ func (s *Store) GetUsageSessionCounts(
 			continue
 		}
 
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(dedup, key) {
+		if !activity.KeepSessionUsageRow(dedup, r.UsageIdentity()) {
 			continue
 		}
 

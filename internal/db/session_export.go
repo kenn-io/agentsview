@@ -977,7 +977,7 @@ func (db *DB) attachSessionExportUsage(
 		if a == nil {
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(a.seen, key) {
+		if !activity.KeepSessionUsageRow(a.seen, r.UsageIdentity()) {
 			continue
 		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sessionExportUsageTokens(r)
