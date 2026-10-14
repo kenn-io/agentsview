@@ -246,12 +246,16 @@ func usageCandidateDiscoverySQL(
 		branches = append(branches, prefix+"\n AND "+where)
 		args = append(args, branchArgs...)
 	}
-	appendBranch(`SELECT m.session_id
-		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
-		JOIN sessions s ON s.id = m.session_id
-		WHERE `+usageMessageSourceEligibility+`
-		  AND s.deleted_at IS NULL
-		  AND m.timestamp IS NOT NULL AND m.timestamp != ''`, "m.timestamp")
+	appendRangeBranch := func(source, eligibility, column string) {
+		where, branchArgs := appendUsageColumnBounds(eligibility+
+			" AND "+column+" IS NOT NULL AND "+column+" != ''", column, bounds, nil)
+		branches = append(branches, `SELECT ranged.session_id
+			FROM (SELECT DISTINCT session_id FROM `+source+` WHERE `+where+`) ranged
+			JOIN sessions s ON s.id = ranged.session_id
+			WHERE s.deleted_at IS NULL`)
+		args = append(args, branchArgs...)
+	}
+	appendRangeBranch("messages AS m INDEXED BY idx_messages_usage_timestamp", usageMessageSourceEligibility, "m.timestamp")
 	appendBranch(`SELECT m.session_id
 		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
@@ -262,12 +266,7 @@ func usageCandidateDiscoverySQL(
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")
-	appendBranch(`SELECT ue.session_id
-		FROM usage_events AS ue INDEXED BY idx_usage_events_occurred
-		JOIN sessions s ON s.id = ue.session_id
-		WHERE `+usageEventSourceEligibility+`
-		  AND s.deleted_at IS NULL
-		  AND ue.occurred_at IS NOT NULL AND ue.occurred_at != ''`, "ue.occurred_at")
+	appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred", usageEventSourceEligibility, "ue.occurred_at")
 	appendBranch(`SELECT ue.session_id
 		FROM usage_events ue
 		JOIN sessions s ON s.id = ue.session_id
@@ -276,12 +275,7 @@ func usageCandidateDiscoverySQL(
 		  AND (ue.occurred_at IS NULL OR ue.occurred_at = '')`, "s.started_at")
 
 	if kind == usageQueryKindActivity {
-		appendBranch(`SELECT m.session_id
-			FROM messages AS m INDEXED BY idx_messages_activity_timestamp
-			JOIN sessions s ON s.id = m.session_id
-			WHERE m.role = 'assistant' AND m.model != '<synthetic>'
-			  AND s.deleted_at IS NULL
-			  AND m.timestamp IS NOT NULL AND m.timestamp != ''`, "m.timestamp")
+		appendRangeBranch("messages AS m INDEXED BY idx_messages_activity_timestamp", "m.role = 'assistant' AND m.model != '<synthetic>'", "m.timestamp")
 		appendBranch(`SELECT m.session_id
 			FROM messages AS m INDEXED BY idx_messages_activity_timestamp
 			JOIN sessions s ON s.id = m.session_id

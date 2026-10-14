@@ -4,7 +4,6 @@ package db
 
 import (
 	"encoding/json"
-	"sort"
 	"strings"
 	"testing"
 
@@ -102,16 +101,22 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	})
 
-	tokenSQL, tokenArgs := usageCandidateDiscoverySQL(bounds, usageQueryKindToken)
-	tokenPlan := explainUsageCandidatePlan(t, database, tokenSQL, tokenArgs)
-	assert.Contains(t, tokenPlan, "idx_messages_usage_timestamp")
-
-	activitySQL, activityArgs := usageCandidateDiscoverySQL(
-		bounds, usageQueryKindActivity,
-	)
-	activityPlan := explainUsageCandidatePlan(t, database, activitySQL, activityArgs)
-	assert.Contains(t, activityPlan,
-		"SEARCH m USING COVERING INDEX idx_messages_activity_timestamp (timestamp>")
+	for _, tc := range []struct {
+		name    string
+		kind    usageQueryKind
+		indexes []string
+	}{
+		{"token", usageQueryKindToken, []string{"idx_messages_usage_timestamp", "idx_usage_events_occurred"}},
+		{"activity", usageQueryKindActivity, []string{"idx_messages_usage_timestamp", "idx_usage_events_occurred", "idx_messages_activity_timestamp"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query, args := usageCandidateDiscoverySQL(bounds, tc.kind)
+			plan := explainUsageCandidatePlan(t, database, query, args)
+			for _, index := range tc.indexes {
+				assert.Regexp(t, `(?s)(?:CO-ROUTINE|MATERIALIZE) ranged\nSEARCH (?:m|ue) USING (?:COVERING )?INDEX `+index+` [^\n]+\nUSE TEMP B-TREE FOR DISTINCT\nSCAN ranged\nSEARCH s USING`, plan)
+			}
+		})
+	}
 }
 
 func TestUsageCandidateDiscoveryCoversOppositeDateLineOffsets(t *testing.T) {
@@ -163,9 +168,17 @@ func usageCandidateFixture(t *testing.T) *DB {
 	seedSession("inside-message", "keep", "2026-08-01T00:00:00Z", 2, "Inside")
 	insertMessages(t, database,
 		tokenMessage("inside-message", "2026-08-10T10:00:00Z", "model-x"))
+	var repeated []Message
+	for ordinal := 1; ordinal <= 20; ordinal++ {
+		message := tokenMessage("inside-message", "2026-08-10T10:00:00Z", "model-x")
+		message.Ordinal = ordinal
+		repeated = append(repeated, message)
+	}
+	insertMessages(t, database, repeated...)
 	seedSession("blank-message", "keep", "2026-08-10T09:00:00Z", 2, "Blank")
 	insertMessages(t, database, tokenMessage("blank-message", "", "model-x"))
 	seedSession("event", "keep", "2026-08-01T00:00:00Z", 2, "Event")
+	insertMessages(t, database, tokenMessage("event", "2026-08-10T12:00:00Z", "model-x"))
 	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "event", []UsageEvent{{
 		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
 		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "e1",
@@ -227,6 +240,5 @@ func explainUsageCandidatePlan(
 		details = append(details, detail)
 	}
 	require.NoError(t, rows.Err())
-	sort.Strings(details)
 	return strings.Join(details, "\n")
 }
