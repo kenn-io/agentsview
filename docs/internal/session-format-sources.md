@@ -736,14 +736,19 @@ fixtures retain this field; missing identities remain source-local.
   `history_base` names, or the fork source when the base is in inherited
   history. The page takes the thread's index title, and its resume command still
   uses the rollout id. Data version 133 reparses Codex-format sources in place.
-  A rename in `session_index.jsonl` refreshes these pages too. The local watcher
-  and the HTTP mirror find them through their continuation links from the thread
-  and the recorded filename, because their ids fall outside the thread's
-  `codex:<thread>_` range. Tests: `TestCodexLegacyRevertPageContinuesItsThread`,
+  A rename in `session_index.jsonl` refreshes these pages too. Their ids fall
+  outside the thread's `codex:<thread>_` range, and their parent can be a fork
+  source or a deleted page, so the local watcher and the HTTP mirror match them
+  to the thread by recorded filename alone. The watcher locates each file under
+  the session roots by its `<thread>_<rollout>` key, which also works for
+  mirrored sessions whose stored paths name the remote host. Tests:
+  `TestCodexLegacyRevertPageContinuesItsThread`,
   `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`,
-  `TestCodexLegacyRevertPageSources`,
+  `TestCodexLegacyRevertPages`,
   `TestSyncPathsCodexIndexEventRefreshesLegacyRevertPageName`,
-  `TestHTTPMirrorCodexIndexRemovalRenamesLegacyRevertPages`.
+  `TestSyncPathsCodexIndexEventRefreshesUnchainedLegacyPages`,
+  `TestHTTPMirrorCodexIndexRemovalRenamesLegacyRevertPages`,
+  `TestHTTPMirrorCodexIndexAddedEntryRenamesLegacyRevertPages`.
 
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
