@@ -96,6 +96,26 @@ func TestPurgeLegacyCodexTrashRetainsThreadExclusion(t *testing.T) {
 			d := upgradedCodexTrash(t)
 			ctx := t.Context()
 			insertSession(t, d, "unrelated", "sample")
+			for _, id := range []string{"launched", "spawned"} {
+				insertSession(t, d, id, "sample")
+				if id == "spawned" {
+					insertMessages(t, d, Message{
+						SessionID: legacyTrashPage, Ordinal: 1, Role: "assistant", Content: "spawn", HasToolUse: true,
+						ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: id}},
+					})
+					require.NoError(t, d.LinkSubagentSessions())
+				}
+				link, err := d.SetSessionExternalParent(ctx, id, legacyTrashPage)
+				require.NoError(t, err)
+				require.Equal(t, id == "launched", link.Applied)
+				worker, err := d.GetSession(ctx, id)
+				require.NoError(t, err)
+				require.NotNil(t, worker.ParentSessionID)
+				require.Equal(t, legacyTrashPage, *worker.ParentSessionID)
+				require.Equal(t, "subagent", worker.RelationshipType)
+				_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id=?", id)
+				require.NoError(t, err)
+			}
 			switch method {
 			case "delete":
 				require.NoError(t, d.DeleteSession(ctx, legacyTrashThread))
@@ -116,6 +136,20 @@ func TestPurgeLegacyCodexTrashRetainsThreadExclusion(t *testing.T) {
 				session, err := d.GetSessionFull(ctx, id)
 				require.NoError(t, err)
 				assert.Nil(t, session, "covered trash cannot remain restorable")
+			}
+			for _, id := range []string{"launched", "spawned"} {
+				session, err := d.GetSession(ctx, id)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.Nil(t, session.ParentSessionID)
+				assert.Empty(t, session.RelationshipType)
+				var marker string
+				require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT sync_marker FROM sessions WHERE id=?", id).Scan(&marker))
+				assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
+				link, err := d.GetSessionExternalParent(ctx, id)
+				require.NoError(t, err)
+				assert.Equal(t, legacyTrashPage, link.ParentSessionID)
+				assert.False(t, link.Applied)
 			}
 			unrelated, err := d.GetSession(ctx, "unrelated")
 			require.NoError(t, err)

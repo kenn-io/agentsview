@@ -1911,7 +1911,7 @@ func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 	})
 	_, err := d.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
-	for _, filter := range []listSessionsIn{{Labels: []string{"nightly"}}, {PR: "owner/repo#7"}} {
+	for _, filter := range []listSessionsIn{{Labels: []string{"nightly"}}, {PR: "owner/repo#7"}, {PR: "#7"}} {
 		in := filter
 		require.NoError(t, json.Unmarshal([]byte(`{"include_automated":false}`), &in))
 		_, out, err := ts.listSessions(t.Context(), nil, in)

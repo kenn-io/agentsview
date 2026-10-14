@@ -546,8 +546,12 @@ func exportLoadedSessionToStore(
 	wireSession := manifestSessionFromDB(*sess)
 	wireSession.Machine = origin
 	normalizeManifestSessionLocalState(&wireSession)
+	version := 5
+	if len(wireSession.PRLinks) > 0 {
+		version = manifestFormatVersion
+	}
 	m := manifest{
-		Version: manifestFormatVersion, Origin: origin, NativeSessionID: sess.ID,
+		Version: version, Origin: origin, NativeSessionID: sess.ID,
 		Session: wireSession, SessionName: sess.SessionName,
 		Segments: segmentHashes, UsageEvents: canonicalUsageEvents(usageEvents),
 		DataVersion: sess.DataVersion, Generation: 1,

@@ -73,8 +73,7 @@ func (c prLinksColumn) Scan(src any) error {
 	return nil
 }
 
-// PRFilter selects sessions linked to a repository, optionally narrowed
-// to one host and pull request number. Matching ignores case.
+// PRFilter selects sessions by repository or pull request number, optionally narrowed to one host.
 type PRFilter struct {
 	Host       string
 	Repository string
@@ -82,12 +81,12 @@ type PRFilter struct {
 }
 
 // IsZero reports whether the filter selects nothing.
-func (f PRFilter) IsZero() bool { return f.Repository == "" }
+func (f PRFilter) IsZero() bool { return f.Repository == "" && f.Number <= 0 }
 
 // ErrInvalidPRFilter identifies a pull request filter ParsePRFilter rejects.
 var ErrInvalidPRFilter = errors.New("invalid pr filter")
 
-// ParsePRFilter accepts owner/repo[#123] or host::owner/repo[#123].
+// ParsePRFilter accepts #123, owner/repo[#123], or host::owner/repo[#123].
 func ParsePRFilter(value string) (PRFilter, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -102,9 +101,9 @@ func ParsePRFilter(value string) (PRFilter, error) {
 			return PRFilter{}, fmt.Errorf("%w %q: invalid host", ErrInvalidPRFilter, value)
 		}
 	}
-	if repo == "" || !strings.Contains(repo, "/") || strings.Contains(repo, "://") {
+	if !(repo == "" && hasNum && !qualified) && (!strings.Contains(repo, "/") || strings.Contains(repo, "://")) {
 		return PRFilter{}, fmt.Errorf(
-			"%w %q: want owner/repo, owner/repo#123, or host::owner/repo#123", ErrInvalidPRFilter, value,
+			"%w %q: want #123, owner/repo, owner/repo#123, or host::owner/repo#123", ErrInvalidPRFilter, value,
 		)
 	}
 	f := PRFilter{Repository: strings.ToLower(repo)}

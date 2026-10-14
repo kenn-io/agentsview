@@ -68,7 +68,7 @@ func TestAnnotationFiltersHonorExplicitOneShotExclusion(t *testing.T) {
 	}))
 	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
-	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237"} {
+	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237", "pr=%237"} {
 		for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
 			for _, toggle := range []string{"&include_one_shot=false", "&include_automated=false"} {
 				automated := toggle == "&include_automated=false"

@@ -47,6 +47,8 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	}{
 		{filter: "owner/repo", want: []string{"other-host", "with-prs"}},
 		{filter: "owner/repo#12", want: []string{"other-host", "with-prs"}},
+		{filter: "#12", want: []string{"other-host", "with-prs"}},
+		{filter: "#3", want: []string{"with-prs"}},
 		{filter: "GITHUB.COM::OWNER/REPO#12", want: []string{"with-prs"}},
 		{filter: "github.com::owner/repo", want: []string{"with-prs"}},
 		{filter: "gitlab.com::owner/repo#12", want: []string{"other-host"}},
@@ -832,6 +834,9 @@ func TestParsePRFilter(t *testing.T) {
 		want    PRFilter
 		invalid bool
 	}{
+		{"#12", PRFilter{Number: 12}, false},
+		{"#0", PRFilter{}, true},
+		{"#", PRFilter{}, true},
 		{"group/subgroup/repo#12", PRFilter{Repository: "group/subgroup/repo", Number: 12}, false},
 		{"owner.name/repo", PRFilter{Repository: "owner.name/repo"}, false},
 		{"my.org/sub/repo#12", PRFilter{Repository: "my.org/sub/repo", Number: 12}, false},

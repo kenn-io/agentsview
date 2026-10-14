@@ -1381,6 +1381,13 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	children, err := sessionIDsTx(ctx, tx, `id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+excluded+`)
+		AND tc.session_id IS NOT tc.subagent_session_id)`)
+	if err != nil {
+		return 0, err
+	}
 	for _, id := range ids {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
@@ -1392,6 +1399,12 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+excluded)
 	if err != nil {
 		return 0, fmt.Errorf("purging excluded sessions: %w", err)
+	}
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, append(ids, children...)); err != nil {
+		return 0, err
 	}
 	return res.RowsAffected()
 }

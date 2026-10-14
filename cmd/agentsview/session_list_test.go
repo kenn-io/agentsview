@@ -124,7 +124,7 @@ func TestSessionListIncludeSource(t *testing.T) {
 }
 
 func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
-	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}} {
+	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}, {"--pr", "#7"}} {
 		for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {

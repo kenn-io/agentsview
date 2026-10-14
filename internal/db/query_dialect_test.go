@@ -408,6 +408,10 @@ func TestNormalizeSQLHelperDoesNotMaskPlaceholders(t *testing.T) {
 func TestBuildSessionFilterSQLPRHost(t *testing.T) {
 	for _, dialect := range []QueryDialect{SQLiteQueryDialect(), PostgresQueryDialect(), DuckDBQueryDialect(), ClickHouseQueryDialect()} {
 		t.Run(dialect.name, func(t *testing.T) {
+			where, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Number: 12}}, dialect)
+			assert.Equal(t, []any{12}, args)
+			assert.Contains(t, where, "number")
+			assert.NotContains(t, where, "repository")
 			for _, host := range []string{"", "GITHUB.COM"} {
 				where, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Repository: "OWNER/REPO", Number: 12, Host: host}}, dialect)
 				wantArgs := []any{"owner/repo", 12}

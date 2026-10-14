@@ -126,8 +126,10 @@ func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh, hostPh string) stri
 	if d.prLinkPredicate != nil {
 		return d.prLinkPredicate(col, repoPh, numPh, hostPh)
 	}
-	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl" +
-		" WHERE lower(json_extract(pl.value, '$.repository')) = " + repoPh
+	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl WHERE 1=1"
+	if repoPh != "" {
+		pred += " AND lower(json_extract(pl.value, '$.repository')) = " + repoPh
+	}
 	if numPh != "" {
 		pred += " AND json_extract(pl.value, '$.number') = " + numPh
 	}
@@ -237,8 +239,10 @@ func PostgresQueryDialect() QueryDialect {
 		},
 		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
 			pred := "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(" +
-				col + ", '')::jsonb) pl WHERE lower(pl->>'repository') = " +
-				repoPh
+				col + ", '')::jsonb) pl WHERE TRUE"
+			if repoPh != "" {
+				pred += " AND lower(pl->>'repository') = " + repoPh
+			}
 			if numPh != "" {
 				pred += " AND (pl->>'number')::bigint = " + numPh
 			}
@@ -298,7 +302,10 @@ func ClickHouseQueryDialect() QueryDialect {
 			return "has(" + q("labels") + ", " + ph + ")"
 		},
 		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
-			cond := "lower(JSONExtractString(pl, 'repository')) = " + repoPh
+			cond := "true"
+			if repoPh != "" {
+				cond += " AND lower(JSONExtractString(pl, 'repository')) = " + repoPh
+			}
 			if numPh != "" {
 				cond += " AND JSONExtractInt(pl, 'number') = " + numPh
 			}
@@ -377,7 +384,10 @@ func DuckDBQueryDialect() QueryDialect {
 			return "list_contains(" + q("labels") + ", " + ph + ")"
 		},
 		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
-			cond := "lower(pl->>'repository') = " + repoPh
+			cond := "true"
+			if repoPh != "" {
+				cond += " AND lower(pl->>'repository') = " + repoPh
+			}
 			if numPh != "" {
 				cond += " AND CAST(pl->>'number' AS BIGINT) = " + numPh
 			}
@@ -968,7 +978,10 @@ func annotationPredicates(
 		preds = append(preds, b.dialect.labelPredicateSQL(q, b.Add(label)))
 	}
 	if !f.PR.IsZero() {
-		repoPh := b.Add(strings.ToLower(f.PR.Repository))
+		repoPh := ""
+		if f.PR.Repository != "" {
+			repoPh = b.Add(strings.ToLower(f.PR.Repository))
+		}
 		numPh := ""
 		if f.PR.Number > 0 {
 			numPh = b.Add(f.PR.Number)
