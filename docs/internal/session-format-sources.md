@@ -736,8 +736,14 @@ fixtures retain this field; missing identities remain source-local.
   `history_base` names, or the fork source when the base is in inherited
   history. The page takes the thread's index title, and its resume command still
   uses the rollout id. Data version 133 reparses Codex-format sources in place.
-  Tests: `TestCodexLegacyRevertPageContinuesItsThread`,
-  `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`.
+  A rename in `session_index.jsonl` refreshes these pages too. The local watcher
+  and the HTTP mirror find them through their continuation links from the thread
+  and the recorded filename, because their ids fall outside the thread's
+  `codex:<thread>_` range. Tests: `TestCodexLegacyRevertPageContinuesItsThread`,
+  `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`,
+  `TestCodexLegacyRevertPageSources`,
+  `TestSyncPathsCodexIndexEventRefreshesLegacyRevertPageName`,
+  `TestHTTPMirrorCodexIndexRemovalRenamesLegacyRevertPages`.
 
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
