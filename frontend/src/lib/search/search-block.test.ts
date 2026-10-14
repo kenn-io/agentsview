@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { controlFrames } from "../test/frames.js";
 import Fixture from "./__fixtures__/SearchBlock.svelte";
 import { reactiveProps } from "./__fixtures__/props.svelte.js";
 import {
@@ -23,19 +24,13 @@ const cleanups: (() => void)[] = [];
 let components: ReturnType<typeof mount>[] = [];
 let highlights: Map<string, TestHighlight>;
 let frames: Map<number, FrameRequestCallback>;
-let frameId = 0;
+let flushFrames: () => void;
 
 beforeEach(() => {
   highlights = new Map();
-  frames = new Map();
+  ({ frames, flushFrames } = controlFrames());
   vi.stubGlobal("CSS", { highlights });
   vi.stubGlobal("Highlight", TestHighlight);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    const id = ++frameId;
-    frames.set(id, callback);
-    return id;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
 });
 
 afterEach(async () => {
@@ -54,12 +49,6 @@ function attach(html: string, state: SearchBlockState) {
   const cleanup = searchBlock("7:text:0", () => state)(element);
   if (cleanup) cleanups.push(cleanup);
   return element;
-}
-
-function flushFrames() {
-  const pending = [...frames.values()];
-  frames.clear();
-  pending.forEach((callback) => callback(0));
 }
 
 describe("search block attachment", () => {

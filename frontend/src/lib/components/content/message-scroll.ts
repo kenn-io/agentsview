@@ -8,10 +8,6 @@ export interface ScrollMetrics {
 
 export type ScrollAlign = "start" | "end";
 
-export function getAlignedOffsetScrollAlign(_align: ScrollAlign): "start" {
-  return "start";
-}
-
 export function getLatestDisplayIndex(displayCount: number, newestFirst: boolean): number {
   if (displayCount <= 0) return -1;
   return newestFirst ? 0 : displayCount - 1;

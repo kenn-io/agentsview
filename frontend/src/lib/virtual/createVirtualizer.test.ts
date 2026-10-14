@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
+import { controlFrames } from "../test/frames.js";
+import { realVirtualizer } from "../test/virtualizer.js";
+import { cancelScrollReconcile } from "./createVirtualizer.svelte.js";
 // @ts-ignore
 import VirtualizerTest from "./VirtualizerTest.svelte";
 
@@ -39,6 +42,31 @@ vi.mock("@tanstack/virtual-core", async () => {
     observeWindowRect: vi.fn(),
     windowScroll: vi.fn(),
   };
+});
+
+it("cancels TanStack index reconciliation before a preceding row is measured", async () => {
+  const { Virtualizer } =
+    await vi.importActual<typeof import("@tanstack/virtual-core")>("@tanstack/virtual-core");
+  const { flushFrames } = controlFrames();
+  const { instance, element, cleanup } = realVirtualizer(Virtualizer, { count: 10, height: 200 });
+  try {
+    instance.scrollToIndex(1, { align: "start" });
+    expect(element.scrollTop).toBe(100);
+    cancelScrollReconcile(instance);
+    // At the top, default size anchoring cannot mask a stale index reconcile.
+    element.scrollTop = 0;
+    instance.resizeItem(0, 300);
+    instance.getVirtualItems();
+    flushFrames();
+    flushFrames();
+
+    expect(instance.getOffsetForIndex(1, "start")?.[0]).toBe(300);
+    expect(element.scrollTop).toBe(0);
+    expect(instance.scrollOffset).toBe(0);
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+  }
 });
 
 describe("initialOffset semantics", () => {

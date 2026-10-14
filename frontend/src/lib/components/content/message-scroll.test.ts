@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  getAlignedOffsetScrollAlign,
-  getLatestDisplayIndex,
-  isAtLatestEdge,
-} from "./message-scroll.js";
+import { getLatestDisplayIndex, isAtLatestEdge } from "./message-scroll.js";
 
 describe("message scroll helpers", () => {
   it("targets the last rendered row when oldest messages are first", () => {
@@ -28,10 +24,5 @@ describe("message scroll helpers", () => {
     expect(isAtLatestEdge({ scrollTop: 20, scrollHeight: 500, clientHeight: 100 }, true)).toBe(
       false,
     );
-  });
-
-  it("uses direct offset semantics for already-aligned offsets", () => {
-    expect(getAlignedOffsetScrollAlign("start")).toBe("start");
-    expect(getAlignedOffsetScrollAlign("end")).toBe("start");
   });
 });
