@@ -121,6 +121,28 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }
 
+func TestParseCodexSession_GitBranchFromSessionMeta(t *testing.T) {
+	content := `{"payload":{"cwd":"/Users/alice/code/my-api","git":{"branch":"feat/123-rate-limit","commit_hash":"1188b85c","repository_url":"git@github.com:alice/my-api.git"},"id":"abc-123","originator":"user"},"timestamp":"2024-01-01T10:00:00Z","type":"session_meta"}
+{"payload":{"content":[{"text":"Add rate limiting","type":"input_text"}],"role":"user"},"timestamp":"2024-01-01T10:00:01Z","type":"response_item"}
+`
+	sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, "feat/123-rate-limit", sess.GitBranch)
+}
+
+func TestParseCodexSession_GitBranchFollowsLatestCwd(t *testing.T) {
+	content := `{"payload":{"cwd":"/Users/alice/code/my-api","git":{"branch":"feat/123-rate-limit"},"id":"abc-123","originator":"user"},"timestamp":"2024-01-01T10:00:00Z","type":"session_meta"}
+{"payload":{"content":[{"text":"Add rate limiting","type":"input_text"}],"role":"user"},"timestamp":"2024-01-01T10:00:01Z","type":"response_item"}
+{"payload":{"cwd":"/Users/alice/scratch","id":"abc-123","originator":"user"},"timestamp":"2024-01-01T11:00:00Z","type":"session_meta"}
+`
+	sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, "/Users/alice/scratch", sess.Cwd)
+	assert.Empty(t, sess.GitBranch)
+}
+
 func TestParseCodexSession_GuardianReviewIssue1644(t *testing.T) {
 	content := loadFixture(t, "codex/guardian_review_session.jsonl")
 	sess, msgs := runCodexParserTest(t, "guardian_review_session.jsonl", content, false)

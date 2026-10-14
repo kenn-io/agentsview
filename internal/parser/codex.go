@@ -81,6 +81,7 @@ type codexSessionBuilder struct {
 	forkBaseInherited           bool
 	sessionKind                 string
 	project                     string
+	gitBranch                   string
 	callNames                   map[string]string
 	agentSpawnCalls             map[string]string
 	agentWaitCalls              map[string]string
@@ -450,6 +451,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	if cwd := payload.Get("cwd").Str; cwd != "" {
 		b.cwd = cwd
 		branch := payload.Get("git.branch").Str
+		b.gitBranch = branch
 		if proj := ExtractProjectFromCwdWithBranchContext(
 			b.projectContext, cwd, branch,
 		); proj != "" {
@@ -2069,6 +2071,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		RelationshipType:   relationshipType,
 		SessionKind:        b.sessionKind,
 		Cwd:                b.cwd,
+		GitBranch:          b.gitBranch,
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,

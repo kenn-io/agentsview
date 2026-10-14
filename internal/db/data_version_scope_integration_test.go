@@ -259,3 +259,70 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 		assert.Equal(t, !pass.done, coldRead, pass.name)
 	}
 }
+
+func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(132, 133)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	codexRoot, claudeRoot := t.TempDir(), t.TempDir()
+	codexID := "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	codexSource := filepath.Join(codexRoot, "rollout-"+codexID+".jsonl")
+	meta := testjsonl.CodexSessionMetaWithFieldsJSON(
+		codexID, codexRoot, "codex_cli_rs", "2026-10-08T12:00:00Z",
+		map[string]any{"git": map[string]any{"branch": "feat/rate-limit"}},
+	)
+	body := meta + "\n" +
+		testjsonl.CodexMsgJSON("user", "add rate limiting", "2026-10-08T12:00:01Z") + "\n"
+	dbtest.WriteTestFile(t, codexSource, []byte(body))
+	dbtest.WriteTestFile(t, filepath.Join(claudeRoot, "project", "unchanged.jsonl"),
+		[]byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-10-08T12:00:00Z", "unaffected").String()))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodex: {codexRoot}, parser.AgentClaude: {claudeRoot},
+	}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 2, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	var claudeID string
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT id FROM sessions WHERE agent='claude'").Scan(&claudeID))
+
+	// Reproduce an archive from the version before the Codex branch upgrade.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE sessions SET git_branch='', data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild, "the Codex branch upgrade must not rebuild the archive")
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, claudeID))
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, "codex:"+codexID))
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	assert.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	needsSync, _, err = db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, needsSync)
+	codex, err := database.GetSessionFull(ctx, "codex:"+codexID)
+	require.NoError(t, err)
+	require.NotNil(t, codex)
+	require.NotNil(t, codex.FilePath)
+	assert.Equal(t, codexSource, *codex.FilePath)
+	assert.Equal(t, "feat/rate-limit", codex.GitBranch)
+	assert.Equal(t, version, codex.DataVersion)
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
+}

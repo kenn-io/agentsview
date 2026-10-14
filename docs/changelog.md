@@ -102,6 +102,12 @@ The latest release is
   every titled Codex thread. Usage-only storage discards session titles, so the
   empty stored title always differed from the thread's title in
   `session_index.jsonl`, and each import parsed those threads again.
+- Codex, TraeX, and Augure Code sessions show the git branch they started on,
+  so branch filters and project identity include them. Before, every such
+  session had an empty branch. Existing sessions gain their branch on the
+  first sync after upgrading. Sessions started outside a repository or on a
+  detached HEAD, and sessions whose source files are gone, keep an empty
+  branch.
 
 - Codex threads rewound with undo keep every message and every day's usage.
   Each extra rollout file Codex writes for the undo now shows as its own linked

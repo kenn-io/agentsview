@@ -573,7 +573,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // file now belongs to a page session.)
 // (132: Claude pr-link records populate sessions.pr_links. Re-parse unchanged
 // Claude sources in place so existing session IDs gain their pull request links.)
-const dataVersion = 132
+// (133: Codex-format sessions store git_branch from session_meta git.branch.
+// Re-parse unchanged Codex-format sources in place so existing sessions gain
+// the branch they started on.)
+const dataVersion = 133
 
 const archiveOnlyVersionBase = 1 << 20
 
