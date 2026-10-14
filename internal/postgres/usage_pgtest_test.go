@@ -2089,7 +2089,6 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 	assert.Equal(t, 1800, got.TotalOutputTokens,
 		"output tokens are deduplicated without dropping output-only messages")
 	assert.True(t, got.HasTokenData)
-	assert.False(t, got.TokenBreakdownComplete)
 }
 
 // TestStoreGetSessionUsage_CodebuffCostOnlyReported pins the

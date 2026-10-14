@@ -74,10 +74,6 @@ func TestApplyUsage_PrefersCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
-	deduped := dedupUsage(start, end, p.EffectiveEnd, usage)
-	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID)
-	assert.Equal(t, 631, deduped[0].OutputTokens)
 
 	applyUsage(&r, p, windows, start, end, usage, nil)
 

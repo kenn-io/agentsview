@@ -59,7 +59,7 @@ func TestGetSessionUsageStopsDuringInMemoryAggregation(t *testing.T) {
 	assert.Nil(t, usage)
 }
 
-func TestGetSessionUsageRowsStopsDuringScan(t *testing.T) {
+func TestGetSessionUsageRowsStopsOnCancellation(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "rows-context", "project", func(session *Session) {
 		session.Agent = "claude"
