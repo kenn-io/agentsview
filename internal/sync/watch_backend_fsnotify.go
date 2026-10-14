@@ -815,7 +815,10 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 
 func watchFolderGone(path string) bool {
 	info, err := os.Lstat(path)
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+	}
+	return !info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 // forgetRemovedSubtree clears native-watch ownership invalidated by a
@@ -906,13 +909,15 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 // Caller holds pollingMu while acquiring and recording folder polling ownership.
 func (b *fsnotifyBackend) acquireRuntimeFolderPolling(root string) {
 	b.watchMu.Lock()
-	state := b.runtimeRoots[root]
+	state, ok := b.runtimeRoots[root]
+	if !ok {
+		b.watchMu.Unlock()
+		return
+	}
 	var folders []string
-	if state != nil {
-		for folder, entry := range state.folders {
-			if !entry.polling {
-				folders = append(folders, folder)
-			}
+	for folder, entry := range state.folders {
+		if !entry.polling {
+			folders = append(folders, folder)
 		}
 	}
 	b.watchMu.Unlock()
@@ -1018,7 +1023,10 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 		}
 		recovered := make(map[string]bool)
 		for _, folder := range slices.Sorted(maps.Keys(state.folders)) {
-			entry := state.folders[folder]
+			entry, ok := state.folders[folder]
+			if !ok {
+				continue
+			}
 			if now.Before(entry.retryAt) {
 				continue
 			}
