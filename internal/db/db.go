@@ -573,7 +573,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // file now belongs to a page session.)
 // (132: Claude pr-link records populate sessions.pr_links. Re-parse unchanged
 // Claude sources in place so existing session IDs gain their pull request links.)
-const dataVersion = 132
+// (133: a revert rollout from Codex builds that wrote the page's rollout id in
+// session_meta.id and the thread id in session_id keeps its stored
+// codex:<rollout> identity and is linked as a continuation of its thread, with
+// the thread's index title. Reparse Codex-format sources in place.)
+const dataVersion = 133
 
 const archiveOnlyVersionBase = 1 << 20
 

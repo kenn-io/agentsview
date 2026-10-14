@@ -259,3 +259,75 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 		assert.Equal(t, !pass.done, coldRead, pass.name)
 	}
 }
+
+// Codex builds before the thread-id page header wrote a revert page's rollout id
+// in session_meta.id, so archives hold the page as a standalone
+// codex:<rollout> session. The declared Codex upgrade reparses it in place: the
+// same session gains its thread link and title and keeps its curation.
+func TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity(t *testing.T) {
+	const (
+		thread  = "11111111-1111-4111-8111-111111111111"
+		rollout = "22222222-2222-4222-8222-222222222222"
+	)
+	version := db.CurrentDataVersion()
+	require.Contains(t, db.ScopedDataVersionProviders(version-1, version), parser.AgentCodex)
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	day := filepath.Join(root, "2026", "08", "25")
+	dbtest.WriteTestFile(t, filepath.Join(home, "session_index.jsonl"),
+		[]byte(`{"id":"`+thread+`","thread_name":"Thread title"}`+"\n"))
+	dbtest.WriteTestFile(t, filepath.Join(day, "rollout-2026-08-25T10-00-00-"+thread+".jsonl"), []byte(
+		testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work/project", "codex_cli_rs", "2026-08-25T10:00:00Z",
+			map[string]any{"session_id": thread, "history_mode": "paginated"})+"\n"+
+			testjsonl.CodexMsgJSON("user", "thread prompt", "2026-08-25T10:00:01Z")+"\n"))
+	page := "codex:" + rollout
+	dbtest.WriteTestFile(t, filepath.Join(day, "rollout-2026-08-25T11-00-00-"+thread+"_"+rollout+".jsonl"), []byte(
+		testjsonl.CodexSessionMetaWithFieldsJSON(rollout, "/work/project", "codex_cli_rs", "2026-08-25T11:00:00Z",
+			map[string]any{
+				"session_id":   thread,
+				"history_mode": "paginated",
+				"history_base": map[string]any{"thread_id": thread, "end_ordinal_exclusive": 2},
+			})+"\n"+
+			testjsonl.CodexMsgJSON("user", "page prompt", "2026-08-25T11:00:01Z")+"\n"))
+
+	database := dbtest.OpenTestDB(t)
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(t.Context(), database, cfg)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	engine.Close()
+	// Reproduce the row the previous parser stored for the page, then curate it.
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf(
+			"UPDATE sessions SET parent_session_id=NULL, relationship_type='', session_name=NULL WHERE id='%s'; "+
+				"UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", page, version-1, version-1))
+		return err
+	}))
+	_, err := database.StarSession(t.Context(), page)
+	require.NoError(t, err)
+	path := database.Path()
+	require.NoError(t, database.Close())
+
+	database, err = db.OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.False(t, database.NeedsResync(), "the Codex upgrade reparses in place")
+	engine = sync.NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+
+	sess, err := database.GetSession(t.Context(), page)
+	require.NoError(t, err)
+	require.NotNil(t, sess, "the page keeps its stored id")
+	require.NotNil(t, sess.ParentSessionID)
+	assert.Equal(t, "codex:"+thread, *sess.ParentSessionID)
+	assert.Equal(t, parser.RelContinuation, parser.RelationshipType(sess.RelationshipType))
+	require.NotNil(t, sess.DisplayName)
+	assert.Equal(t, "Thread title", *sess.DisplayName)
+	assert.Equal(t, version, database.GetSessionDataVersion(t.Context(), page))
+	starred, err := database.ListStarredSessionIDs(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, starred, page)
+	var count int
+	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT COUNT(*) FROM sessions WHERE agent='codex'").Scan(&count))
+	assert.Equal(t, 2, count, "the reparse adds no page row")
+}

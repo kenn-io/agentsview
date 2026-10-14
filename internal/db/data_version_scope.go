@@ -21,6 +21,9 @@ import (
 // Validate the map with validateDataVersionScopes.
 var dataVersionScopes = map[int][]parser.AgentType{
 	132: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate, parser.AgentGrok},
+	// Legacy Codex revert pages gain their thread link; their session ids do
+	// not change. The Codex-format parser is shared by these providers.
+	133: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
