@@ -15,11 +15,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Store wraps a PostgreSQL connection for read-only session
 // queries.
 type Store struct {
+	readbase.ReadOnlyStubs
 	hostedRelations bool
 	pg              *sql.DB
 	cursorMu        sync.RWMutex
@@ -476,7 +478,7 @@ func (s *Store) GetSidebarSessionIndex(
 			user_message_count,
 			transcript_revision,
 			is_automated,
-			position('<teammate-message' in COALESCE(first_message, '')) > 0
+			` + s.sessionDialect().Position("COALESCE(first_message, '')", "'<teammate-message'") + ` > 0
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -702,7 +704,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.user_message_count,
 			s.transcript_revision,
 			s.is_automated,
-			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
+			` + s.sessionDialect().Position("COALESCE(s.first_message, '')", "'<teammate-message'") + ` > 0
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY

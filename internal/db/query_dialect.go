@@ -31,6 +31,7 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
+	position           func(haystack, needle string) string
 	parentRelation     func(childAlias, parentAlias string) string
 	name               string
 	placeholderStyle   placeholderStyle
@@ -79,6 +80,14 @@ type QueryDialect struct {
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
+}
+
+// Position renders substring position syntax and panics for unsupported dialects.
+func (d QueryDialect) Position(haystack, needle string) string {
+	if d.position == nil {
+		panic("SQL position is unsupported for dialect " + d.name)
+	}
+	return d.position(haystack, needle)
 }
 
 // SignedAggregate keeps ClickHouse aggregate counts scannable as Go integers.
@@ -200,6 +209,7 @@ func SQLiteQueryDialect() QueryDialect {
 func PostgresQueryDialect() QueryDialect {
 	return QueryDialect{
 		name:             "postgres",
+		position:         func(haystack, needle string) string { return "position(" + needle + " in " + haystack + ")" },
 		placeholderStyle: placeholderDollar,
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
@@ -265,6 +275,7 @@ func PostgresQueryDialect() QueryDialect {
 func ClickHouseQueryDialect() QueryDialect {
 	return QueryDialect{
 		name:             "clickhouse",
+		position:         func(haystack, needle string) string { return "position(" + haystack + ", " + needle + ")" },
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "true",
 		falseLiteral:     "false",
@@ -347,6 +358,7 @@ func clickhouseCastCursor(ph string, kind valueKind) string {
 func DuckDBQueryDialect() QueryDialect {
 	return QueryDialect{
 		name:             "duckdb",
+		position:         func(haystack, needle string) string { return "position(" + needle + " in " + haystack + ")" },
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",

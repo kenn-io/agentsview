@@ -101,6 +101,11 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Equal(t, "alpha", sess.Project)
 
+		children, err := store.GetChildSessions(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		require.Len(t, children, 1)
+		assert.Equal(t, fixtureChildID, children[0].ID)
+
 		ids, err := store.FindSessionIDsByPartial(ctx, "ch-sync-alpha", 5)
 		require.NoError(t, err)
 		assert.Contains(t, ids, fixtureAlphaID)
@@ -136,6 +141,12 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		timing, err := store.GetSessionTiming(ctx, fixtureAlphaID)
 		require.NoError(t, err)
 		require.NotNil(t, timing)
+
+		activity, err := store.GetSessionActivity(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		require.NotNil(t, activity)
+		assert.Equal(t, 2, activity.TotalMessages)
+		assert.NotEmpty(t, activity.Buckets)
 	})
 
 	t.Run("search_and_secrets", func(t *testing.T) {
@@ -217,6 +228,13 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.Len(t, pins, 1)
 		require.NotNil(t, pins[0].Note)
 		assert.Equal(t, "pin alpha", *pins[0].Note)
+
+		projectPins, err := store.ListPinnedMessages(ctx, "", "alpha")
+		require.NoError(t, err)
+		require.Len(t, projectPins, 1)
+		assert.Equal(t, fixtureAlphaID, projectPins[0].SessionID)
+		require.NotNil(t, projectPins[0].Content)
+		assert.Equal(t, "alpha first", *projectPins[0].Content)
 	})
 
 	t.Run("writes_are_read_only", func(t *testing.T) {
@@ -327,6 +345,11 @@ func TestStoreGetSessionHidesTrash(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.DeletedAt)
 	assert.Equal(t, fixtureBetaID, full.ID)
+
+	trash, err := store.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, trash, 1)
+	assert.Equal(t, fixtureBetaID, trash[0].ID)
 }
 
 func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {

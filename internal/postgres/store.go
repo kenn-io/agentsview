@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -155,10 +154,6 @@ func (s *Store) GetSessionVersion(ctx context.Context,
 	}
 	return count, db.SessionVersionMarker(FormatISO8601(updatedAt)), true
 }
-
-// ------------------------------------------------------------
-// Unsupported write stubs (return db.ErrReadOnly)
-// ------------------------------------------------------------
 
 const maxPGInsights = 500
 
@@ -360,58 +355,6 @@ func (s *Store) GetCachedInsight(
 		return nil, fmt.Errorf("getting cached insight: %w", err)
 	}
 	return &insight, nil
-}
-
-func (s *Store) ListRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) ([]db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) GetRecallEntry(
-	_ context.Context, _ string,
-) (*db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) ReviewRecallEntry(
-	_ context.Context, _ string, _ db.RecallReviewAction,
-) (db.RecallEntry, error) {
-	return db.RecallEntry{}, db.ErrReadOnly
-}
-
-func (s *Store) QueryRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) (db.RecallPage, error) {
-	return db.RecallPage{}, db.ErrReadOnly
-}
-
-func (s *Store) RecordRecallQueryEvent(
-	_ context.Context, _ db.RecallQueryEvent,
-) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) InsertRecallEntry(ctx context.Context, _ db.RecallEntry) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONL(
-	_ context.Context, _ io.Reader,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
-	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) IngestEvalTrajectory(
-	_ context.Context, _ db.EvalTrajectoryIngest,
-) (db.EvalTrajectoryIngestResult, error) {
-	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
 }
 
 // RenameSession updates the visible session name in PG.
@@ -789,24 +732,4 @@ func deletePGTrashedSessionRows(
 		return 0, err
 	}
 	return n, nil
-}
-
-// UpsertSession is not supported in read-only mode.
-func (s *Store) UpsertSession(ctx context.Context, _ db.Session) error {
-	return db.ErrReadOnly
-}
-
-// ReplaceSessionMessages is not supported in read-only mode.
-func (s *Store) ReplaceSessionMessages(ctx context.Context,
-	_ string, _ []db.Message,
-) error {
-	return db.ErrReadOnly
-}
-
-// WriteSessionBatchAtomic is not supported in read-only mode.
-func (s *Store) WriteSessionBatchAtomic(ctx context.Context,
-	_ []db.SessionBatchWrite,
-	_ ...func() error,
-) (db.SessionBatchResult, error) {
-	return db.SessionBatchResult{}, db.ErrReadOnly
 }
