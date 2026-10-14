@@ -11,7 +11,8 @@ The parent log under `2026/09/10/` covers:
 - a task `started` event that is not a user turn
 - a response whose usage is logged before its tool calls
 - a response whose usage is logged after its text
-- a `model_completed` record with no open response
+- a `model_completed` record with no open response; this shape is synthetic and
+  has not appeared in a real Muse log
 - a record mirrored from the subagent's stream
 - automatic and user-chosen session names
 - a partial last line, as a session still being written leaves it

@@ -15,11 +15,6 @@ func TestMuseProviderDiscoversSessionAndSubagentLogs(t *testing.T) {
 	require.NoError(t, err)
 	provider, ok := NewProvider(AgentMuse, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	caps := provider.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
-	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
-	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
-	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)

@@ -17,8 +17,9 @@ import (
 // Muse Code (Meta's terminal coding agent) writes each session as an
 // append-only event log at <root>/YYYY/MM/DD/<session-id>/session.jsonl.
 // Subagent runs log beside their parent at
-// <session-dir>/subagent/<child-id>/session.jsonl, and those children can
-// nest. The log records runtime events rather than chat turns, so this file
+// <session-dir>/subagent/<child-id>/session.jsonl. Only one level of
+// subagent has been observed in real logs; deeper nesting is not handled
+// beyond discovery. The log records runtime events rather than chat turns, so this file
 // folds the events back into the conversation the agent saw: user prompts,
 // assistant replies grouped by model response, tool calls, tool results, and
 // per-response token usage.
@@ -245,6 +246,11 @@ func (u museUsage) applyTo(pm *ParsedMessage) {
 		"cache_read_input_tokens":     u.cacheRead,
 		"cache_creation_input_tokens": u.cacheWrite,
 	}
+	// output_tokens already includes reasoning: every real record seen
+	// has reasoning_tokens <= output_tokens.
+	if u.reasoning > 0 {
+		normalized["reasoning_tokens"] = u.reasoning
+	}
 	encoded, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
@@ -283,9 +289,15 @@ type museFold struct {
 	openResponse string
 	// pending holds usage for responses whose first visible output has not
 	// been logged yet. A response that only calls tools logs its usage
-	// before its tool calls.
+	// before its tool calls, so a live log read between the two leaves the
+	// usage here until a later parse sees the calls.
 	pending map[string]museUsage
 	// unbound holds usage that cannot be tied to one assistant message.
+	// Usage with no open response, or a second usage record for one
+	// response, has never appeared in a real Muse log: every
+	// model_completed seen follows its model_response_created. This is a
+	// fallback that keeps such usage priced, not a supported shape, so do
+	// not add coverage for it.
 	unbound []museUsage
 	model   string
 }
@@ -449,6 +461,7 @@ func (f *museFold) appendToolResults(event gjson.Result, at time.Time) {
 		}
 		results = append(results, ParsedToolResult{
 			ToolUseID:     callID,
+			Source:        "tool_result",
 			Status:        status,
 			ContentLength: len(text),
 			ContentRaw:    string(raw),
@@ -547,7 +560,9 @@ func museToolCategory(name string) string {
 }
 
 // museWorkspaceFromLog reads the workspace a session opened in. Subagent
-// logs omit it, so they inherit their parent's.
+// logs omit it, so they inherit their parent's. Only the immediate parent
+// is read: no real log has shown a subagent nested inside another, so
+// deeper lookups are not supported.
 func museWorkspaceFromLog(ctx context.Context, path string) string {
 	log, err := readMuseLog(ctx, path, museWorkspaceScanLimit)
 	if err != nil {
@@ -635,7 +650,8 @@ func parseMuseSession(
 	)
 	session.FirstMessage, session.UserMessageCount = firstMessageAndUserCount(messages)
 	// Session totals come from the assistant messages. Usage that no
-	// message carries is still priced through its usage event.
+	// message carries is still priced through its usage event; outside a
+	// live tool-only response, real logs have not produced such usage.
 	accumulateMessageTokenUsage(&session, messages)
 	usageEvents := museUsageEvents(fullID, unbound)
 	session.UsageEvents = usageEvents

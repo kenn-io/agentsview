@@ -198,12 +198,19 @@ func TestSeedFallbackPricing_RefreshOverwritesSupplementals(t *testing.T) {
 // resync.
 func TestSeedFallbackPricing_UpgradesExistingDBWithMuseWonderRow(t *testing.T) {
 	database := newTestDB(t)
+	// Recreate a database seeded by the previous supplemental set: current
+	// storage format, no Muse Wonder row, and the old seed version.
+	require.NoError(t, pricingrefresh.SeedFallback(database))
+	require.NoError(t, database.DeleteModelPricing([]string{"muse-wonder-1.0"}))
 	require.NoError(t, database.SetPricingMeta("_fallback_version",
 		pricing.FallbackVersion+"+supplemental-6"))
+	row, err := database.GetModelPricing("muse-wonder-1.0")
+	require.NoError(t, err)
+	require.Nil(t, row)
 
 	require.NoError(t, pricingrefresh.SeedFallback(database))
 
-	row, err := database.GetModelPricing("muse-wonder-1.0")
+	row, err = database.GetModelPricing("muse-wonder-1.0")
 	require.NoError(t, err)
 	require.NotNil(t, row, "muse-wonder-1.0 must be seeded after the version bump")
 	assert.Equal(t, money.MustParseDollars("4.00"), row.InputPerMTok)

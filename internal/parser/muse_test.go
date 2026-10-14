@@ -79,7 +79,7 @@ func TestParseMuseSessionFoldsRunEvents(t *testing.T) {
 	assert.Equal(t, "Bash", calls.ToolCalls[1].Category)
 	assert.Equal(t, "muse-spark-1.3", calls.Model)
 	// Usage logged before the tool calls still lands on their message.
-	assert.JSONEq(t, `{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}`,
+	assert.JSONEq(t, `{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0,"reasoning_tokens":30}`,
 		string(calls.TokenUsage))
 	assert.Equal(t, 80, calls.OutputTokens)
 	assert.Equal(t, 1200, calls.ContextTokens)
@@ -108,6 +108,7 @@ func TestParseMuseSessionFoldsRunEvents(t *testing.T) {
 	}
 
 	// The usage record with no open response stays priced as an event.
+	// That record is synthetic; no real Muse log has shown one.
 	require.Len(t, result.UsageEvents, 1)
 	event := result.UsageEvents[0]
 	assert.Equal(t, session.ID, event.SessionID)
