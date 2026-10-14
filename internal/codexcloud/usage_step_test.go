@@ -714,10 +714,6 @@ func TestChangeClearsLateFailures(t *testing.T) {
 	assert.Zero(t, acct.UsagePending["a"].LateFailures)
 }
 
-// TestSettledLeftOutRootUsesRecoveredRow covers a crash after a row was
-// appended but before the thread state was saved: settling a root the
-// report leaves out stores that newest row as final, not the older one
-// the saved state still names.
 // A row stored again at settling is old: if the chat changed after the
 // report's data, the row may not count the newer turns, and the file must
 // still say the report left the chat out.
@@ -746,6 +742,11 @@ func TestSettledRowOlderThanTheLastChangeStaysLeftOut(t *testing.T) {
 	assert.Equal(t, mirror.OutcomeLeftOut, plan.outcomes[len(plan.outcomes)-1].Kind)
 }
 
+// TestSettledLeftOutRootUsesRecoveredRow covers a crash after a row was
+// appended but before the thread state was saved: settling a root the
+// report leaves out stores that newest row as final, not the older one
+// the saved state still names. That row's data is as new as the chat's
+// last change, so no left-out record follows it.
 func TestSettledLeftOutRootUsesRecoveredRow(t *testing.T) {
 	env := newUsageEnv(t)
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
@@ -774,6 +775,8 @@ func TestSettledLeftOutRootUsesRecoveredRow(t *testing.T) {
 	last := plan.rows[len(plan.rows)-1]
 	assert.True(t, last.Final)
 	assert.InDelta(t, 2, *last.Row.WeeklyPercent, 0, "the recovered row is the newest")
+	assert.Equal(t, mirror.KindPlanUsageRow, plan.kinds[len(plan.kinds)-1],
+		"a row as new as the last change is not marked as left out")
 }
 
 // TestNoUsableHomeNamesTheLoginProblem covers plan usage skipped because
