@@ -973,7 +973,7 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = DefaultUsagePairwiseSelection(summary)
+		req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = defaultUsagePairwiseSelection(summary)
 		if req.LeftDimension == "" {
 			out, err := BuildUsagePairwiseComparisonResult(db.DailyUsageResult{}, db.DailyUsageResult{})
 			return &out, err

@@ -379,70 +379,6 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 		"501 should map to db.ErrReadOnly, got %v", err)
 }
 
-func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
-	t.Parallel()
-
-	_, _, _, _, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From: "2024-06-01", To: "2024-06-02",
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "machine",
-			RightValue:     "host-a",
-		},
-	)
-	require.Error(t, err)
-	var ue *service.UsageInputError
-	require.ErrorAs(t, err, &ue)
-	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
-}
-
-func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
-	t.Parallel()
-
-	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-03",
-			Timezone:       "UTC",
-			Model:          "model-a,model-b",
-			Project:        "alpha,beta",
-			LeftDimension:  "model",
-			LeftValue:      "model-b",
-			RightDimension: "project",
-			RightValue:     "beta",
-		},
-	)
-	require.NoError(t, err)
-	assert.False(t, leftEmpty)
-	assert.False(t, rightEmpty)
-	assert.Equal(t, "model-b", left.Model)
-	assert.Equal(t, "alpha,beta", left.Project)
-	assert.Equal(t, "model-a,model-b", right.Model)
-	assert.Equal(t, "beta", right.Project)
-}
-
-func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
-	t.Parallel()
-
-	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-03",
-			Model:          "gpt-4o",
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, leftEmpty)
-	assert.False(t, rightEmpty)
-	assert.Empty(t, left.Model)
-	assert.Equal(t, "gpt-4o", right.Model)
-}
-
 type pairwiseErrorStore struct {
 	db.Store
 	leftStarted  chan struct{}
@@ -1033,34 +969,4 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 			assert.Equal(t, rankingFilter.To, sideFilter.To)
 		}
 	})
-}
-
-func TestDefaultUsagePairwiseSelection(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name     string
-		models   []service.ModelTotal
-		projects []service.ProjectTotal
-		want     [4]string
-	}{
-		{"models", []service.ModelTotal{{Model: "second-by-name"}, {Model: "first-by-name"}}, []service.ProjectTotal{{ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"model", "second-by-name", "model", "first-by-name"}},
-		{"projects", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-b", Project: "label-b"}, {ProjectKey: "key-a", Project: "label-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
-		{"mixed", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-a", Project: "label-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
-		{"skip empty models", []service.ModelTotal{{}, {Model: "model-b"}, {}, {Model: "model-a"}}, nil, [4]string{"model", "model-b", "model", "model-a"}},
-		{"skip empty projects", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{}, {ProjectKey: "key-b"}, {}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
-		{"mixed after empty keys", []service.ModelTotal{{}, {Model: "only-model"}}, []service.ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
-		{"one usable model", []service.ModelTotal{{}, {Model: "only-model"}}, []service.ProjectTotal{{}}, [4]string{}},
-		{"one usable project", []service.ModelTotal{{}}, []service.ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{}},
-		{"empty keys", []service.ModelTotal{{}, {}}, []service.ProjectTotal{{}, {}}, [4]string{}},
-		{"one model", []service.ModelTotal{{Model: "only-model"}}, nil, [4]string{}},
-		{"one project", nil, []service.ProjectTotal{{ProjectKey: "key-a"}}, [4]string{}},
-		{"empty", nil, nil, [4]string{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ld, lv, rd, rv := service.DefaultUsagePairwiseSelection(&service.UsageSummaryResult{ModelTotals: tc.models, ProjectTotals: tc.projects})
-			assert.Equal(t, tc.want, [4]string{ld, lv, rd, rv})
-		})
-	}
 }

@@ -991,9 +991,6 @@ class UsageStore {
       loadComparison: false,
       params,
       contextParams,
-      onTimeRangeRestored: () => {
-        void this.fetchPairwise(this.baseParams());
-      },
     });
     const pairwisePromise = deferPairwise ? undefined : this.fetchPairwise(params);
     const topSessionsPromise = this.fetchTopSessions(params);
@@ -1090,7 +1087,6 @@ class UsageStore {
       params?: UsageParams;
       contextParams?: UsageParams;
       recoverProjectScope?: boolean;
-      onTimeRangeRestored?: () => void;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
@@ -1230,7 +1226,6 @@ class UsageStore {
               }
             : undefined,
           recoverProjectScope: false,
-          onTimeRangeRestored: options.onTimeRangeRestored,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
@@ -1250,8 +1245,7 @@ class UsageStore {
           this.isTimeRangeSummaryProvisional = false;
           this.invalidatePanel("pairwise");
           this.clearPairwiseComparisonState();
-          if (options.onTimeRangeRestored) options.onTimeRangeRestored();
-          else void this.fetchPairwise(this.baseParams());
+          void this.fetchPairwise(this.baseParams());
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
           // The reference already holds this scope's full-window attribution.
           this.attributionSummary = this.referenceSummary;
@@ -1363,7 +1357,13 @@ class UsageStore {
     this.pairwiseParams = { ...params };
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
-    const useDefault = !request;
+    const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
+    if (!request && !useDefault) {
+      this.clearPairwiseComparisonState();
+      this.loading.pairwise = false;
+      this.abortPanel("pairwise");
+      return "ok";
+    }
     if (useDefault) {
       this.pairwiseSelection = emptyPairwiseSelection();
     }

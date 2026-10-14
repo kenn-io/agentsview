@@ -939,22 +939,39 @@ describe("UsageStore session filter params", () => {
     }
   });
 
-  it.each(["refresh", "selector"])(
-    "repairs a partially empty pair through %s by requesting the default",
+  it.each(["refresh", "selector", "unavailable project"])(
+    "handles a partially empty pair through %s",
     async (source) => {
       const { usage } = await loadStore();
-      if (source === "selector") {
+      if (source !== "refresh") {
         await usage.fetchAll();
         usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
       }
       usage.pairwiseSelection = {
         left: { dimension: "model", value: "gpt-4o" },
-        right: { dimension: "model", value: "" },
+        right: {
+          dimension: "model",
+          value: source === "unavailable project" ? "claude-sonnet-4-20250514" : "",
+        },
       };
       if (source === "refresh") await usage.fetchAll();
       else {
-        usage.setPairwiseSide("right", { value: "" });
-        await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison()));
+        if (source === "unavailable project") {
+          usage.summary!.projectTotals = [];
+          usage.setPairwiseSide("right", { dimension: "project" });
+        } else {
+          usage.setPairwiseSide("right", { value: "" });
+        }
+        await Promise.resolve();
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).not.toHaveBeenCalled();
+        expect(usage.pairwiseSelection).toEqual({
+          left: { dimension: "model", value: "gpt-4o" },
+          right: { dimension: source === "unavailable project" ? "project" : "model", value: "" },
+        });
+        expect(usage.pairwiseComparison).toBeNull();
+        expect(usage.loading.pairwise).toBe(false);
+        expect(usage.errors.pairwise).toBeNull();
+        return;
       }
       expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
       expect(

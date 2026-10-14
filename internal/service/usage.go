@@ -420,7 +420,7 @@ type UsagePairwiseComparisonRequest struct {
 	RightProjectLabels []string `json:"-"`
 }
 
-func DefaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
+func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
 	var models, projects []string
 	for _, total := range summary.ModelTotals {
 		if total.Model != "" {
@@ -637,22 +637,6 @@ func BuildUsagePairwiseComparisonResult(
 		Right:  rightSide,
 		Deltas: deltas,
 	}, nil
-}
-
-func BuildUsagePairwiseFilters(
-	req UsagePairwiseComparisonRequest,
-) (
-	db.UsageFilter,
-	bool,
-	db.UsageFilter,
-	bool,
-	error,
-) {
-	base, err := BuildUsageFilter(req.UsageRequest)
-	if err != nil {
-		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
-	}
-	return buildUsagePairwiseFilters(req, base)
 }
 
 func buildUsagePairwiseFilters(
