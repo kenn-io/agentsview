@@ -329,7 +329,7 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportBenchmark(b)
-	source := d.activityReportCandidateSource(ids, q)
+	source := d.activityReportCandidateSQL(ids, q)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -339,6 +339,19 @@ func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 			return nil
 		})
 		require.NoError(b, err)
+		require.Equal(b, 90_000, count)
+	}
+}
+
+func BenchmarkSQLiteActivityReportCandidateSourceWarm100K(b *testing.B) {
+	d, ids, q := seedSQLiteActivityReportBenchmark(b)
+	source := d.activityReportCandidateSource(ids, q)
+	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { return nil }))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		count := 0
+		require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { count++; return nil }))
 		require.Equal(b, 90_000, count)
 	}
 }
@@ -391,7 +404,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSource([]string{"bench-long"}, benchmark.q)
+			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0

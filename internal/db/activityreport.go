@@ -900,6 +900,13 @@ func (db *DB) activityReportCandidateSQL(
 		if err != nil {
 			return fmt.Errorf("encoding activity report session IDs: %w", err)
 		}
+		return db.activityReportCandidateSQLJSON(string(encodedIDs), q)(ctx, yield)
+	}
+}
+
+func (db *DB) activityReportCandidateSQLJSON(encodedIDs string, q activity.Query) activity.CandidateSource {
+	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
+		var err error
 		gapCap := time.Duration(q.GapCapSeconds) * time.Second
 		lowerTime := q.RangeStart.Add(-gapCap).UTC()
 		upperTime := q.EffectiveEnd.UTC()
@@ -938,7 +945,7 @@ func (db *DB) activityReportCandidateSQL(
 
 		terminalRows, err := db.getReader().QueryContext(
 			ctx, activityReportTerminalCandidatesSQL,
-			string(encodedIDs), lower, upper,
+			encodedIDs, lower, upper,
 		)
 		if err != nil {
 			return fmt.Errorf("querying activity report terminal candidates: %w", err)
@@ -967,7 +974,7 @@ func (db *DB) activityReportCandidateSQL(
 		) error {
 			rows, queryErr := db.getReader().QueryContext(
 				ctx, activityReportCandidatesSQL,
-				string(encodedIDs), paddedLower, paddedUpper, lower, upper,
+				encodedIDs, paddedLower, paddedUpper, lower, upper,
 			)
 			if queryErr != nil {
 				return fmt.Errorf(
