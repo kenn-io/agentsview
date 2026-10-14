@@ -249,7 +249,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {
 		return unavailable("the server's reply could not be read. " +
-			"The server may run a different AgentsView version than this command; "+
+			"The server may run a different AgentsView version than this command; " +
 			"after an upgrade, restart the server so both match.")
 	}
 	var lines []string

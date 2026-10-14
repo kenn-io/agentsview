@@ -397,8 +397,12 @@ func TestDiscoveryKeepsWaitsAListingDoesNotDisprove(t *testing.T) {
 		failure Failure
 		reset   bool
 	}{
-		{FailNetwork, true}, {FailServer, true}, {FailRateLimited, true},
-		{FailTooLarge, false}, {FailProtocol, false}, {FailRefused, false},
+		{FailNetwork, true},
+		{FailServer, true},
+		{FailRateLimited, true},
+		{FailTooLarge, false},
+		{FailProtocol, false},
+		{FailRefused, false},
 	} {
 		t.Run(tt.failure.String(), func(t *testing.T) {
 			env, _ := newDiscoveryEnv(t)

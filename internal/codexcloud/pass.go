@@ -172,8 +172,10 @@ func loginErrorMessage(err error) string {
 }
 
 func (s *Syncer) homeRow(gates Gates, home, message string) {
-	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError,
-		Message: withLoginCommand(gates, home, message)})
+	s.Status.Set(HomeStatus{
+		Key: home, Homes: []string{home}, State: StateError,
+		Message: withLoginCommand(gates, home, message),
+	})
 }
 
 // withLoginCommand points the `codex login` in message at home. A plain
