@@ -168,16 +168,9 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		stop, applyErr := s.applyUsage(key, login, req.groups, resp, err)
+		stop, retrying, applyErr := s.applyUsage(key, login, req.groups, resp, err)
 		if applyErr != nil {
 			return applyErr
-		}
-		retrying := false
-		if err != nil {
-			var loadErr error
-			if retrying, loadErr = s.anyPending(key, req.groups); loadErr != nil {
-				return loadErr
-			}
 		}
 		s.noteUsage(gates, key, resp, err, login, retrying)
 		if stop {
@@ -190,8 +183,7 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 
 // noteUsage keeps the outcome of the latest plan usage request for the
 // status line. Status is in memory, like the rest of the board. retrying
-// says whether a root in the failed request is still pending, so asked
-// again later.
+// says whether AgentsView asks about a root in the failed request again.
 func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err error, login Login, retrying bool) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -216,11 +208,13 @@ func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err 
 		switch f {
 		case FailRateLimited:
 		case FailTooLarge:
-			// Each root's request is retried with its usual backoff, unless
+			// Each root is asked about again on its usual schedule, unless
 			// this failure settled every root in it.
 			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
 			if retrying {
-				s.usageLines[key] += " AgentsView asks again later."
+				s.usageLines[key] += " AgentsView retries automatically."
+			} else {
+				s.usageLines[key] += " AgentsView stopped checking plan usage for the chats it asked about."
 			}
 		default:
 			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
@@ -372,33 +366,34 @@ func (e *noUsageHomeError) Error() string {
 }
 
 // applyUsage records one request's result. It reports stop when no
-// further request should be sent this pass.
+// further request should be sent this pass, and retrying when a failed
+// request leaves a root that AgentsView asks about again.
 func (s *Syncer) applyUsage(
 	key AccountKey, login Login, groups []UsageGroup, resp UsageResponse, reqErr error,
-) (stop bool, err error) {
+) (stop, retrying bool, err error) {
 	unlock := s.Store.Lock(key)
 	defer unlock()
 	acct, err := s.Store.LoadAccount(key)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	now := s.Now()
 	if reqErr != nil {
-		stop, err = s.usageFailure(key, &acct, login, groups, reqErr, now)
+		stop, retrying, err = s.usageFailure(key, &acct, login, groups, reqErr, now)
 	} else {
 		err = s.usageAnswer(key, &acct, groups, resp, now)
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return stop, s.Store.SaveAccount(key, acct)
+	return stop, retrying, s.Store.SaveAccount(key, acct)
 }
 
 func (s *Syncer) usageFailure(
 	key AccountKey, acct *AccountState, login Login, groups []UsageGroup, reqErr error, now time.Time,
-) (stop bool, err error) {
+) (stop, retrying bool, err error) {
 	if _, ok := errors.AsType[*noUsageHomeError](reqErr); ok {
-		return true, nil
+		return true, false, nil
 	}
 	s.Log.Printf("codex-cloud: plan usage: %v", Redact(reqErr, login.Token))
 	if httpErr, ok := errors.AsType[*HTTPError](reqErr); ok {
@@ -410,10 +405,10 @@ func (s *Syncer) usageFailure(
 			for _, g := range groups {
 				if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 					mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeAccountUnavailable, At: now}); err != nil {
-					return false, err
+					return false, false, err
 				}
 			}
-			return true, nil
+			return true, false, nil
 		case http.StatusTooManyRequests:
 			attempts := 1
 			if acct.UsagePause.Reason == pauseRateLimited {
@@ -424,13 +419,16 @@ func (s *Syncer) usageFailure(
 				wait = httpErr.RetryAfter
 			}
 			acct.UsagePause = UsagePauseState{Until: now.Add(wait), Reason: pauseRateLimited, Attempts: attempts}
-			return true, nil
+			return true, false, nil
 		}
 	}
 	for _, g := range groups {
 		if ref, ok := acct.Refresh[g.ThreadID]; ok {
 			ref.LastAttempt = now
 			acct.Refresh[g.ThreadID] = ref
+			// planUsage drops a refresh root once its chat has gone
+			// settleAfter without a change.
+			retrying = retrying || now.Sub(ref.LastChange) < settleAfter
 			continue
 		}
 		entry, ok := acct.UsagePending[g.ThreadID]
@@ -448,15 +446,16 @@ func (s *Syncer) usageFailure(
 			delete(acct.UsagePending, g.ThreadID)
 			if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeCouldNotCheck, At: now}); err != nil {
-				return false, err
+				return false, false, err
 			}
 			continue
 		}
 		entry.Attempts++
 		entry.NextAttempt = now.Add(doubled(usageRetryFirst, usageRetryLimit, entry.Attempts))
 		acct.UsagePending[g.ThreadID] = entry
+		retrying = true
 	}
-	return false, nil
+	return false, retrying, nil
 }
 
 func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageGroup, resp UsageResponse, now time.Time) error {
@@ -630,18 +629,4 @@ func usageTime(t, now time.Time) string {
 		return t.Local().Format("Jan 2 2006 15:04")
 	}
 	return t.Local().Format("Jan 2 15:04")
-}
-
-// anyPending reports whether any root in groups is still pending.
-func (s *Syncer) anyPending(key AccountKey, groups []UsageGroup) (bool, error) {
-	unlock := s.Store.Lock(key)
-	defer unlock()
-	acct, err := s.Store.LoadAccount(key)
-	if err != nil {
-		return false, err
-	}
-	return slices.ContainsFunc(groups, func(g UsageGroup) bool {
-		_, ok := acct.UsagePending[g.ThreadID]
-		return ok
-	}), nil
 }
