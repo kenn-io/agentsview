@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -577,13 +576,17 @@ func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) erro
 	return nil
 }
 
-// compactPending drops each token record that the next token record, of
-// the same join and turn, supersedes. Totals are cumulative, so the parser
-// counts the same tokens from the later record alone; it reads them as one
-// event spanning several model calls instead of one event per call. A
-// record whose total the next one falls below is kept: the counter reset,
-// and the earlier total holds tokens the later one does not. A chat whose
-// saves keep failing then holds about one token record per turn.
+// compactPending drops token records that later ones make redundant,
+// without changing what the parser reads from them. Totals are
+// cumulative, so the parser counts the same tokens from a later record of
+// the same join, turn, and model alone; it reads them as one event
+// spanning several model calls instead of one event per call. Kept are:
+// the batch's first token record and every record whose total falls below
+// the one before it, since each starts a running total the parser adds in
+// full; the last record before the join, turn, or model changes; and, in
+// each run of dropped records, the one with the largest last-call context,
+// which the parser reports as the peak. A chat whose saves keep failing
+// then holds about two token records per turn.
 func compactPending(records []mirror.Record) []mirror.Record {
 	tokens := make([]*mirror.TokenUsageData, len(records))
 	for i, rec := range records {
@@ -595,21 +598,49 @@ func compactPending(records []mirror.Record) []mirror.Record {
 			tokens[i] = &data
 		}
 	}
-	kept := records[:0:0]
-	var next *mirror.TokenUsageData
-	for i := len(records) - 1; i >= 0; i-- {
-		cur := tokens[i]
-		superseded := cur != nil && next != nil && next.JoinID == cur.JoinID &&
-			next.TurnID == cur.TurnID && next.Total.AtLeast(cur.Total)
-		if !superseded {
-			kept = append(kept, records[i])
+	drop := make([]bool, len(records))
+	prev, prevStarts := -1, false
+	for i, rec := range records {
+		if rec.Kind != mirror.KindTokenUsage {
+			continue
 		}
-		if records[i].Kind == mirror.KindTokenUsage {
-			next = cur
+		cur := tokens[i]
+		var p *mirror.TokenUsageData
+		if prev >= 0 {
+			p = tokens[prev]
+		}
+		if p != nil && cur != nil && !prevStarts {
+			drop[prev] = p.JoinID == cur.JoinID && p.TurnID == cur.TurnID &&
+				p.Model == cur.Model && cur.Total.AtLeast(p.Total)
+		}
+		prev, prevStarts = i, p == nil || cur == nil || !cur.Total.AtLeast(p.Total)
+	}
+	peak := -1
+	for i, data := range tokens {
+		if data == nil {
+			continue
+		}
+		if peak < 0 || lastContext(data) > lastContext(tokens[peak]) {
+			peak = i
+		}
+		if !drop[i] {
+			drop[peak] = false
+			peak = -1
 		}
 	}
-	slices.Reverse(kept)
+	kept := records[:0:0]
+	for i, rec := range records {
+		if !drop[i] {
+			kept = append(kept, rec)
+		}
+	}
 	return kept
+}
+
+// lastContext is the context of a record's last model call as the parser
+// measures it: input, including cached input.
+func lastContext(data *mirror.TokenUsageData) int64 {
+	return max(data.Last.Input, data.Last.CachedInput)
 }
 
 // flushPending retries every chat's pending batch. flush logs failures.
