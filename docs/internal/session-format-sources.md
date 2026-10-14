@@ -735,7 +735,7 @@ fixtures retain this field; missing identities remain source-local.
   thread. The parent is the thread's session, the earlier legacy rollout that
   `history_base` names, or the fork source when the base is in inherited
   history. The page takes the thread's index title, and its resume command still
-  uses the rollout id. Data version 132 reparses Codex-format sources in place.
+  uses the rollout id. Data version 133 reparses Codex-format sources in place.
   Tests: `TestCodexLegacyRevertPageContinuesItsThread`,
   `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`.
 
