@@ -82,7 +82,7 @@ func (w *Waits) ResetAccount(st *AccountState) {
 	st.Wait = WaitState{}
 }
 
-// RecordHome makes a Codex home wait until its auth.json changes from
+// RecordHome makes a Codex home wait until its auth.json is newer than
 // authMTime, or an hour passes.
 func (w *Waits) RecordHome(home string, f Failure, authMTime time.Time) {
 	w.mu.Lock()
@@ -116,7 +116,7 @@ func (w *Waits) HomeWait(home string, authMTime time.Time) (Failure, bool) {
 }
 
 // RecordUsageHome remembers a plan usage 401 for home until its auth.json
-// changes from authMTime or an hour passes.
+// is newer than authMTime, or an hour passes.
 func (w *Waits) RecordUsageHome(home string, authMTime time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -124,7 +124,8 @@ func (w *Waits) RecordUsageHome(home string, authMTime time.Time) {
 }
 
 // UsageHomeReady reports whether plan usage may use home, given its
-// auth.json's current modification time.
+// auth.json's current modification time. Only a newer auth.json or the
+// end of the hour ends the wait.
 func (w *Waits) UsageHomeReady(home string, authMTime time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

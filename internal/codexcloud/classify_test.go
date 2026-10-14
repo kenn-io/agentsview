@@ -196,6 +196,11 @@ func TestHomeWaitSurvivesAnOlderLogin(t *testing.T) {
 
 	assert.False(t, waits.HomeReady("/homes/a", older))
 	assert.False(t, waits.HomeReady("/homes/a", newer), "the newer login's wait is kept")
+
+	waits.RecordUsageHome("/homes/a", newer)
+	assert.False(t, waits.UsageHomeReady("/homes/a", older), "an older login keeps the plan usage wait")
+	assert.False(t, waits.UsageHomeReady("/homes/a", newer))
+	assert.True(t, waits.UsageHomeReady("/homes/a", newer.Add(time.Second)), "a newer login ends it")
 }
 
 func TestAccountsIndependent(t *testing.T) {
