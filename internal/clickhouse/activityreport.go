@@ -58,7 +58,7 @@ func (s *Store) GetActivityReport(
 }
 
 type activityReportBackend struct {
-	*Store
+	store         *Store
 	candidates    chSessionSet
 	rangeStartUTC string
 	rangeEndUTC   string
@@ -68,13 +68,13 @@ type activityReportBackend struct {
 func (b activityReportBackend) BuildProjectIdentityMap(
 	ctx context.Context, labels []string,
 ) (map[string]export.ProjectMapEntry, error) {
-	return b.Store.BuildProjectIdentityMap(ctx, labels)
+	return b.store.BuildProjectIdentityMap(ctx, labels)
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
+	return b.store.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
 }
 
 func (b activityReportBackend) ActivityReportCandidateSource([]string, activity.Query) activity.CandidateSource {
@@ -181,7 +181,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
 	backend := activityReportBackend{
-		Store: s, candidates: candidates,
+		store: s, candidates: candidates,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
