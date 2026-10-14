@@ -1214,12 +1214,12 @@ ChatGPT account share one import.
   save it at all. AgentsView does not read the keyring. To let AgentsView use
   such a home, set `cli_auth_credentials_store = "file"` in that home's
   `config.toml`: change the existing line, or add one near the top, before any
-  `[section]`. Codex cannot load a `config.toml` with a second line for the same
-  key. Then run `codex login`. Codex then keeps the ChatGPT login in
-  `auth.json`, a plain file that any program running as you can read. With the
-  default `auto` store, a refused login can mean either an expired login in
-  `auth.json` or a current login in the keyring; the status names both and
-  suggests `codex login` first.
+  `[section]`. Keep only one line for that key: Codex cannot load a
+  `config.toml` that sets it twice. Then run `codex login`. Codex then keeps the
+  ChatGPT login in `auth.json`, a plain file that any program running as you can
+  read. With the default `auto` store, a refused login can mean either an
+  expired login in `auth.json` or a current login in the keyring; the status
+  names both and suggests `codex login` first.
 
 #### Private endpoints
 
@@ -1282,12 +1282,11 @@ Each token update carries the chat's running total, so an update also covers
 every turn that finished before it, back to the last time OpenAI restarted that
 total. A finished turn counts as captured when AgentsView received a token
 update for it and saw it end on the same connection, or when a token update
-from a later turn covers it. For any other finished turn, such as a chat's last
-turn that ran while AgentsView was not connected, AgentsView cannot confirm that
-it has all of the turn's tokens, and some or all of them may be missing. A
-session with such turns and with recorded token counts stays in the token and
-cost totals, which then say "N sessions partly captured; their token counts are
-low."
+from a later turn covers it. Any other finished turn, such as a chat's last
+turn that ran while AgentsView was not connected, may be missing some or all of
+its tokens from the chat's counts. A session with such turns and with recorded
+token counts stays in the token and cost totals, which then say "N sessions
+partly captured; their token counts are low."
 
 A chat that AgentsView never listened in on, or listened in on without receiving
 a token update, has no token counts. For those, AgentsView asks OpenAI's usage
@@ -1298,18 +1297,22 @@ how many were left out ("N sessions billed as plan usage, not priced").
 
 AgentsView asks for plan usage again after a failed request or an incomplete
 report, waiting longer each time, up to 6 hours between requests. It refreshes
-complete figures once a day until 7 days after the chat's last change, then
-keeps the last ones. For a chat still waiting on figures, it stops asking when
-an answer arrives 7 days or more after the chat's last change, and keeps what
-that answer has: full figures, partial ones, or none. It also stops after 3
-failed requests in a row past that point; the session details then say
-AgentsView could not check plan usage.
+complete figures once a day. Refreshes stop 7 days after the chat's last change,
+and the session keeps the last complete figures.
+
+For a chat still waiting for complete figures, the first answer that arrives 7
+days or more after the chat's last change is the last one AgentsView takes.
+If that answer includes the chat, AgentsView keeps what it reports, even partial
+figures or none. If it leaves the chat out, AgentsView keeps the figures it
+stored before, or shows none if it never got any. If 3 requests in a row fail
+after those 7 days, AgentsView stops asking, and the session details say it
+could not check plan usage.
 
 Some problems pause plan usage for the whole account instead: OpenAI limiting
 requests, OpenAI saying the account has no usage report, or no Codex home with
 a usable login. While paused, no request is sent, so a chat can wait more than 7
-days after its last change. The first answer after the pause ends then settles
-it, with whatever figures that answer has.
+days after its last change. The first answer after the pause ends is then its
+last one, under the same rules.
 
 #### Limits
 
