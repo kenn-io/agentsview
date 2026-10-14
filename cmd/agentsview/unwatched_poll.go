@@ -133,6 +133,21 @@ func (c *sharedUnwatchedPollCoordinator) AddObligation(
 }
 
 func (c *sharedUnwatchedPollCoordinator) RemoveObligation(key string) error {
+	if strings.HasPrefix(key, "fsnotify-folder:") {
+		groups := make(map[parser.AgentType][]string)
+		for _, obligation := range c.currentPollObligations() {
+			if obligation.Key == key {
+				for _, scope := range obligation.Scopes {
+					groups[scope.Agent] = append(groups[scope.Agent], scope.Root)
+				}
+			}
+		}
+		var err error
+		c.doWork(func() { err = pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups) })
+		if err != nil {
+			return err
+		}
+	}
 	return c.updateRoots(pollingObligation{Key: key}, true)
 }
 

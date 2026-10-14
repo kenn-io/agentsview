@@ -150,6 +150,36 @@ func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
 // reproduction test: one provider's degraded coverage must not cause an
 // authoritative pass for any other provider.
 func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("folder recovery/fail=%t", fail), func(t *testing.T) {
+			root := t.TempDir()
+			folder := requireExistingPollRoot(t, root, "project")
+			syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4), errs: map[parser.AgentType]error{parser.AgentOpenHands: os.ErrPermission}}
+			if fail {
+				syncer.errs[parser.AgentClaude] = os.ErrPermission
+			}
+			coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
+			t.Cleanup(coordinator.Stop)
+			key := "fsnotify-folder:" + root + ":" + folder
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}, {Agent: parser.AgentCodex, Root: root}}, Probe: folder}))
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "unrelated", Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: root}}}))
+			err := coordinator.RemoveObligation(key)
+			if fail {
+				require.ErrorIs(t, err, os.ErrPermission)
+				assert.Len(t, coordinator.currentPollObligations(), 2)
+				delete(syncer.errs, parser.AgentClaude)
+				require.NoError(t, coordinator.RemoveObligation(key))
+			} else {
+				require.NoError(t, err)
+			}
+			want := []providerPollCall{{Agent: parser.AgentClaude, Roots: []string{folder}}, {Agent: parser.AgentCodex, Roots: []string{root}}}
+			if fail {
+				want = append(want, want...)
+			}
+			assert.Equal(t, want, syncer.snapshot())
+			assert.Equal(t, []pollingObligation{{Key: "unrelated", Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: root}}}}, coordinator.currentPollObligations())
+		})
+	}
 	t.Run("main", func(t *testing.T) {
 		parent := t.TempDir()
 		rootA := requireExistingPollRoot(t, parent, "root-a")

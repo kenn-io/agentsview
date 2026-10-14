@@ -57,6 +57,7 @@ func TestFSNotifyBackendVanishedRuntimeFolderSkipsPolling(t *testing.T) {
 		err  error
 	}{
 		{name: "startup", err: os.ErrPermission},
+		{name: "startup/root", err: os.ErrNotExist},
 		{name: "runtime/walk"},
 		{name: "runtime/add", err: os.ErrNotExist},
 	} {
@@ -64,20 +65,31 @@ func TestFSNotifyBackendVanishedRuntimeFolderSkipsPolling(t *testing.T) {
 			backend := testFSNotifyBackend(t)
 			root := t.TempDir()
 			added, _ := bindRuntimePollingRecorder(t, backend)
-			if tc.name != "startup" {
+			if !strings.HasPrefix(tc.name, "startup") {
 				require.NoError(t, backend.AddRecursive(root, 8).Err)
 			}
 			folder := filepath.Join(root, "vanished")
+			if tc.name == "startup/root" {
+				folder = root
+			}
 			if tc.err != nil {
-				require.NoError(t, os.Mkdir(folder, 0o755))
+				if folder != root {
+					require.NoError(t, os.Mkdir(folder, 0o755))
+				}
 				backend.watchOps = &failPathWatchOps{watchOps: backend.watchOps, failPath: folder, err: tc.err, beforeFail: func() {
 					require.NoError(t, os.Remove(folder))
 				}}
 			}
-			if tc.name == "startup" {
+			if strings.HasPrefix(tc.name, "startup") {
 				result := backend.AddRecursive(root, 8)
 				require.NoError(t, result.Err)
-				assert.Zero(t, result.Unwatched)
+				if folder == root {
+					assert.Positive(t, result.Unwatched)
+					assert.Zero(t, result.Watched)
+					require.NoError(t, os.Mkdir(root, 0o755))
+				} else {
+					assert.Zero(t, result.Unwatched)
+				}
 			} else {
 				backend.watchMu.Lock()
 				degraded, complete := backend.addRuntimeSubtreeLocked(folder, []string{filepath.Clean(root)})
@@ -135,13 +147,14 @@ func TestFSNotifyBackendDeferredReplacementRecovery(t *testing.T) {
 			backend.watchCreatedPath(folder)
 			require.Len(t, *added, 1)
 			require.NoError(t, os.Remove(folder))
-			if replacement == "ancestor file" {
+			switch replacement {
+			case "ancestor file":
 				ancestor := filepath.Dir(folder)
 				require.NoError(t, os.Remove(ancestor))
 				require.NoError(t, os.WriteFile(ancestor, nil, 0o600))
-			} else if replacement == "file" {
+			case "file":
 				require.NoError(t, os.WriteFile(folder, nil, 0o600))
-			} else {
+			default:
 				require.NoError(t, os.Symlink(t.TempDir(), folder))
 			}
 			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
@@ -153,10 +166,10 @@ func TestFSNotifyBackendDeferredReplacementRecovery(t *testing.T) {
 				assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
 			} else {
 				assert.Equal(t, []string{runtimeFolderPollingKey(root, folder)}, *released)
-				assert.Len(t, backend.events, 1)
+				assert.Empty(t, backend.events)
 				assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
 				assert.Len(t, *released, 1)
-				assert.Len(t, backend.events, 1)
+				assert.Empty(t, backend.events)
 			}
 		})
 	}
@@ -170,7 +183,7 @@ func TestFSNotifyBackendRuntimeFailureWithoutPollingCallback(t *testing.T) {
 	require.NoError(t, os.Mkdir(folder, 0o755))
 	backend.watchOps = &failPathWatchOps{watchOps: backend.watchOps, failPath: folder, err: os.ErrPermission}
 	backend.watchCreatedPath(folder)
-	assert.ErrorIs(t, <-backend.Errors(), os.ErrPermission)
+	require.ErrorIs(t, <-backend.Errors(), os.ErrPermission)
 	assert.Empty(t, backend.errors)
 }
 
@@ -186,13 +199,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			releaseErr := errors.New("poll coordinator stopped")
 			recordRelease := backend.onPollingReleased
 			backend.onPollingReleased = func(key string) error {
-				folder := strings.TrimPrefix(key, "fsnotify-folder:"+root+":")
-				select {
-				case event := <-backend.Events():
-					assert.Equal(t, backendEvent{Path: folder, Root: folder, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}, event)
-				default:
-					return errors.New("polling released before folder reconcile")
-				}
+				assert.Empty(t, backend.events)
 				if failRelease {
 					return releaseErr
 				}
@@ -1318,9 +1325,18 @@ func (o *scriptedWatchOps) Add(path string) error {
 
 func (o *scriptedWatchOps) Remove(string) error { return nil }
 
-func (o *scriptedWatchOps) attemptCount() int {
+func (o *scriptedWatchOps) attemptCount(paths ...string) int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if len(paths) > 0 {
+		count := 0
+		for _, path := range o.attempts {
+			if path == paths[0] {
+				count++
+			}
+		}
+		return count
+	}
 	return len(o.attempts)
 }
 
@@ -1513,7 +1529,7 @@ func TestFSNotifyBackendNewFolderStartsOwnRetryDelay(t *testing.T) {
 			assert.True(t, item.retry)
 			assert.True(t, backend.retryRuntimeFolders(time.Now()))
 		}
-		oldAttempts := ops.addCount(old)
+		oldAttempts := ops.attemptCount(old)
 		fresh := filepath.Join(root, "fresh")
 		require.NoError(t, os.Mkdir(fresh, 0o755))
 		ops.setFail(fresh, os.ErrPermission)
@@ -1530,6 +1546,6 @@ func TestFSNotifyBackendNewFolderStartsOwnRetryDelay(t *testing.T) {
 		assert.True(t, backend.retryRuntimeFolders(time.Now()))
 		assert.Equal(t, []string{runtimeFolderPollingKey(root, fresh)}, *released)
 		assert.Equal(t, 1, ops.addCount(fresh))
-		assert.Equal(t, oldAttempts, ops.addCount(old))
+		assert.Equal(t, oldAttempts, ops.attemptCount(old))
 	})
 }

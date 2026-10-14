@@ -103,9 +103,10 @@ func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
 			require.True(t, ok)
 			var scopes []ReconciliationScope
 			requested := []string{subagents, project, filepath.Dir(healthy)}
-			if mode == "root yield error" {
+			switch mode {
+			case "root yield error":
 				requested = []string{root}
-			} else if mode == "file yield error" {
+			case "file yield error":
 				requested = []string{main}
 			}
 			for _, path := range requested {

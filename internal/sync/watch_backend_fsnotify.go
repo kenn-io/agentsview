@@ -238,7 +238,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 	root = filepath.Clean(root)
 	b.addRecursiveRoot(root)
 	deferFolder := func(path string, err error) {
-		if watchFolderGone(path) {
+		if path != root && watchFolderGone(path) {
 			result.Unwatched--
 			return
 		}
@@ -255,7 +255,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) (result Recursiv
 				// Poll only the unreadable subtree while walking the accessible remainder.
 				result.Unwatched++
 				deferFolder(path, err)
-				return nil //nolint:nilerr // Unwatched subtrees are counted above so polling covers degraded native discovery.
+				return nil
 			}
 			if !d.IsDir() {
 				return nil
@@ -1058,11 +1058,16 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 		}
 		var completed []string
 		for _, folder := range slices.Sorted(maps.Keys(recovered)) {
-			for _, scope := range runtimeFolderPollingScopes(root, folder, scopes) {
-				select {
-				case b.events <- backendEvent{Path: scope.Root, Root: scope.Root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}:
-				case <-b.stop:
-					return false
+			if !recovered[folder] {
+				if b.onPollingRequired != nil {
+					continue
+				}
+				for _, scope := range runtimeFolderPollingScopes(root, folder, scopes) {
+					select {
+					case b.events <- backendEvent{Path: scope.Root, Root: scope.Root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}:
+					case <-b.stop:
+						return false
+					}
 				}
 			}
 			if recovered[folder] {
