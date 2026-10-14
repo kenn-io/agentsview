@@ -1771,22 +1771,49 @@ func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
 	}
 }
 
+// TestProviderFingerprintCacheRequiresExistingRoot proves that the context
+// withProviderFingerprintCache returns actually bounds Hermes database
+// opens, not merely that it differs in identity from the input context (a
+// context carrying a cache that does nothing would also differ in identity
+// and pass a bare != check). It reuses the db-open counting mechanism
+// TestHermesIncrementalSyncBoundsSiblingWrites relies on: with the cache
+// present, fingerprinting two sibling members of the same state.db opens it
+// once; without a cache (a missing configured root attaches none), the same
+// two members each pay their own open.
 func TestProviderFingerprintCacheRequiresExistingRoot(t *testing.T) {
+	// archiveRoot holds the real Hermes archive (state.db with two member
+	// sessions) that every sub-case fingerprints through. Only the engine's
+	// *configured* root varies, since that's what withProviderFingerprintCache
+	// decides on.
+	archiveRoot := t.TempDir()
+	writeHermesArchiveStateDB(t, archiveRoot)
+	execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+	execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{Roots: []string{archiveRoot}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2, "both sibling members must be discovered")
+
 	for _, test := range []struct {
-		name      string
-		rootExist bool
-		wantCache bool
+		name                 string
+		configuredRootExists bool
+		wantBoundedOpens     bool
 	}{
-		{name: "existing Hermes root", rootExist: true, wantCache: true},
-		{name: "missing Hermes root", rootExist: false, wantCache: false},
+		{name: "existing Hermes root", configuredRootExists: true, wantBoundedOpens: true},
+		{name: "missing Hermes root", configuredRootExists: false, wantBoundedOpens: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "hermes")
-			if test.rootExist {
-				require.NoError(t, os.MkdirAll(root, 0o755))
+			configuredRoot := archiveRoot
+			if !test.configuredRootExists {
+				configuredRoot = filepath.Join(t.TempDir(), "missing")
 			}
 			engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {configuredRoot}}, Machine: "local",
 			})
 			t.Cleanup(engine.Close)
 
@@ -1794,7 +1821,20 @@ func TestProviderFingerprintCacheRequiresExistingRoot(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, closeCache()) })
 
-			assert.Equal(t, test.wantCache, ctx != t.Context())
+			var scans atomic.Int64
+			scanCtx := parser.WithSharedContainerScanObserver(ctx, func() { scans.Add(1) })
+			for _, source := range sources {
+				_, err := provider.Fingerprint(scanCtx, source)
+				require.NoError(t, err)
+			}
+
+			if test.wantBoundedOpens {
+				assert.LessOrEqual(t, scans.Load(), int64(1),
+					"a present cache must bound the two siblings to one database open")
+			} else {
+				assert.Equal(t, int64(2), scans.Load(),
+					"without a cache each sibling must open the database on its own")
+			}
 		})
 	}
 }
