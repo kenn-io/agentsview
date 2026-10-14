@@ -295,7 +295,7 @@ func TestDiscoveryProtocolChangeStopsCaptureOnly(t *testing.T) {
 	broken.Store(false)
 	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = false })
 	env.discover(t)
-	assert.Contains(t, env.live(t), "Live tokens: off")
+	assert.Equal(t, "Live tokens: off, because live_tokens = false under [agents.codex-cloud].", env.live(t))
 	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = true })
 	env.discover(t)
 	assert.Equal(t, "Live tokens: listening in on 1 running chat.", env.live(t))

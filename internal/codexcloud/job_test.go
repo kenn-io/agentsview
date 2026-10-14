@@ -35,7 +35,8 @@ func TestCodexCloudJobOffStates(t *testing.T) {
 			name: "no sync", noSync: true, gates: func(g Gates) Gates { return g },
 			state: StateOffNoSync, message: "Off: this daemon does not sync sources. Either a command started it with --no-sync, " +
 				"or its archive is archive-only. For a --no-sync daemon, run `agentsview daemon stop`, then " +
-				"`agentsview serve`; replacing it with `serve --replace` keeps --no-sync.",
+				"`agentsview serve`; replacing it with `serve --replace` keeps --no-sync. An archive made by seed import or restore is archive-only for good: " +
+				"it never syncs sources, and no flag or setting changes that.",
 		},
 		{
 			name: "disabled_agents wins over enabled",
