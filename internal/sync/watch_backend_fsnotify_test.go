@@ -21,6 +21,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func testFSNotifyBackend(t *testing.T) *fsnotifyBackend {
@@ -43,6 +44,16 @@ func bindRuntimePollingRecorder(t *testing.T, backend *fsnotifyBackend) (*[]Poll
 		return nil
 	}, func(key string) error {
 		root := strings.TrimPrefix(key, "fsnotify-runtime:")
+		for _, candidate := range backend.roots {
+			if strings.HasPrefix(key, "fsnotify-folder:"+candidate+":") {
+				root = candidate
+				break
+			}
+		}
+		if _, degraded := backend.degradedRoots[root]; degraded {
+			released = append(released, key)
+			return nil
+		}
 		select {
 		case event := <-backend.Events():
 			assert.Equal(t, backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}, event)
@@ -121,7 +132,10 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 				ops.setFail(folder, os.ErrPermission)
 				backend.watchCreatedPath(folder)
 			}
-			require.Equal(t, []PollingObligation{{Key: "fsnotify-runtime:" + root, Scopes: []PollingScope{{Agent: "claude", Root: root}}, Probe: root}}, *added)
+			require.Equal(t, []PollingObligation{
+				{Key: "fsnotify-folder:" + root + ":" + a, Scopes: []PollingScope{{Agent: "claude", Root: a}}, Probe: a},
+				{Key: "fsnotify-folder:" + root + ":" + b, Scopes: []PollingScope{{Agent: "claude", Root: b}}, Probe: b},
+			}, *added)
 			attempts := ops.attemptCount()
 			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(9*time.Second)))
 			assert.Equal(t, attempts, ops.attemptCount(), "no Add may run before the retry deadline")
@@ -129,7 +143,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			now := time.Now().Add(11 * time.Second)
 			assert.True(t, backend.retryRuntimeFolders(now))
 			assert.Equal(t, 1, ops.addCount(a))
-			assert.Empty(t, *released)
+			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + a}, *released)
 			assert.Empty(t, backend.events)
 			switch recovery {
 			case "watchable", "create", "release error":
@@ -157,7 +171,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			} else {
 				assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
 			}
-			assert.Equal(t, []string{"fsnotify-runtime:" + root}, *released)
+			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + a, "fsnotify-folder:" + root + ":" + b}, *released)
 			if recovery == "release error" {
 				require.ErrorIs(t, <-backend.Errors(), releaseErr)
 			}
@@ -166,7 +180,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 				assert.Equal(t, 1, ops.addCount(filepath.Join(b, "nested")))
 			}
 			assert.True(t, backend.retryRuntimeFolders(now.Add(3*time.Minute)))
-			assert.Len(t, *released, 1)
+			assert.Len(t, *released, 2)
 			assert.Empty(t, backend.events)
 		})
 	}
@@ -187,7 +201,7 @@ func TestFSNotifyBackendRuntimeFailureKeepsSiblingWatches(t *testing.T) {
 	assert.Contains(t, backend.watcher.WatchList(), sibling)
 	assert.Contains(t, backend.watcher.WatchList(), root)
 	require.Len(t, *added, 1)
-	assert.Equal(t, root, (*added)[0].Probe)
+	assert.Equal(t, PollingObligation{Key: "fsnotify-folder:" + root + ":" + folder, Scopes: []PollingScope{{Root: folder}}, Probe: folder}, (*added)[0])
 	now := time.Now().Add(11 * time.Second)
 	for _, delay := range []time.Duration{20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute} {
 		assert.True(t, backend.retryRuntimeFolders(now))
@@ -200,6 +214,66 @@ func TestFSNotifyBackendRuntimeFailureKeepsSiblingWatches(t *testing.T) {
 		now = now.Add(delay)
 	}
 	assert.Empty(t, *released)
+}
+
+func TestFSNotifyBackendFolderPollingReconcilesOnlyFailedSubtree(t *testing.T) {
+	for _, phase := range []string{"startup", "runtime"} {
+		t.Run(phase, func(t *testing.T) {
+			backend := testFSNotifyBackend(t)
+			root := t.TempDir()
+			folder := filepath.Join(root, "failed")
+			sibling := filepath.Join(root, "sibling")
+			siblingSession := writeClaudeProjectSession(t, root, "sibling", "sibling-session")
+			backend.setWatchRootPlan([]WatchRoot{{Path: root, Scopes: []WatchScope{
+				{Agent: "claude", SyncDir: root},
+				{Agent: "cursor", SyncDir: sibling},
+			}}})
+			added, released := bindRuntimePollingRecorder(t, backend)
+			ops := backend.watchOps
+			backend.watchOps = &failPathWatchOps{watchOps: ops, failPath: folder, err: os.ErrPermission}
+			if phase == "runtime" {
+				require.NoError(t, backend.AddRecursive(root, 8).Err)
+			}
+			writeClaudeProjectSession(t, root, "failed", "failed-session")
+			if phase == "startup" {
+				result := backend.AddRecursive(root, 8)
+				require.NoError(t, result.Err)
+				assert.Zero(t, result.Unwatched, "folder polling already owns the failed watch")
+			} else {
+				backend.watchCreatedPath(folder)
+			}
+			require.Equal(t, []PollingObligation{{Key: "fsnotify-folder:" + root + ":" + folder, Scopes: []PollingScope{{Agent: "claude", Root: folder}}, Probe: folder}}, *added)
+			assert.Contains(t, backend.watcher.WatchList(), root)
+			assert.Contains(t, backend.watcher.WatchList(), sibling)
+			assert.NotContains(t, backend.watcher.WatchList(), folder)
+
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+			writeClaudeProjectSession(t, root, "failed", "new-session")
+			require.NoError(t, os.Remove(siblingSession))
+			rec := &lstatRecorder{}
+			engine.lstat = rec.stat
+			scope := (*added)[0].Scopes[0]
+			require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(), []ProviderRootsGroup{{Agent: parser.AgentType(scope.Agent), Roots: []string{scope.Root}}}))
+			admitted, err := database.GetSession(t.Context(), "new-session")
+			require.NoError(t, err)
+			assert.NotNil(t, admitted, "folder polling must discover new sessions in its subtree")
+			outside, err := database.GetSessionFull(t.Context(), "sibling-session")
+			require.NoError(t, err)
+			require.NotNil(t, outside)
+			assert.Nil(t, outside.SourceMissingAt, "folder polling must preserve sessions outside its scope")
+			assert.Zero(t, rec.countUnder(sibling), "folder polling must not stat sibling sources")
+
+			backend.watchOps = ops
+			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
+			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
+			assert.Contains(t, backend.watcher.WatchList(), folder)
+			assert.Contains(t, backend.watcher.WatchList(), sibling)
+			assert.Contains(t, backend.watcher.WatchList(), root)
+		})
+	}
 }
 
 func TestFSNotifyBackendRuntimeStoppedWalkCoversSiblings(t *testing.T) {
@@ -225,7 +299,11 @@ func TestFSNotifyBackendRuntimeStoppedWalkCoversSiblings(t *testing.T) {
 			backend.watchCreatedPath(moved)
 			assert.Contains(t, backend.watcher.WatchList(), moved)
 			require.Len(t, *added, 1)
-			assert.Equal(t, root, (*added)[0].Probe)
+			probe := root
+			if errors.Is(cause, os.ErrPermission) {
+				probe = a
+			}
+			assert.Equal(t, probe, (*added)[0].Probe)
 			if cause != nil {
 				assert.Contains(t, backend.watcher.WatchList(), b)
 			}
@@ -253,8 +331,8 @@ func TestFSNotifyBackendRuntimeFolderRecoveryPreservesRootDegradation(t *testing
 			}
 			backend.watchOps = ops
 			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
-			assert.Len(t, *added, 1)
-			assert.Empty(t, *released)
+			assert.Len(t, *added, 2)
+			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
 			assert.Empty(t, backend.events)
 		})
 	}
@@ -284,11 +362,12 @@ func TestFSNotifyBackendRuntimeBudgetBoundsPollingAndLogging(t *testing.T) {
 	}
 	assert.Len(t, *added, 1)
 	assert.Len(t, backend.runtimeRoots, 1)
-	assert.Equal(t, 13, strings.Count(output.String(), "fsnotify watch deferred under"))
-	assert.Contains(t, output.String(), "deferred folders=4096")
+	assert.Equal(t, 1, strings.Count(output.String(), "fsnotify watch deferred under"))
+	assert.Contains(t, output.String(), "deferred folders=1")
+	assert.Len(t, backend.runtimeRoots[root].folders, 1)
 	assert.True(t, backend.retryRuntimeFolders(time.Now().Add(11*time.Second)))
 	assert.Len(t, *added, 1)
-	assert.Equal(t, 13, strings.Count(output.String(), "fsnotify watch deferred under"))
+	assert.Equal(t, 1, strings.Count(output.String(), "fsnotify watch deferred under"))
 }
 
 func TestFSNotifyBackendRuntimeRetryTimerReleasesPolling(t *testing.T) {
@@ -323,7 +402,7 @@ func TestFSNotifyBackendRuntimeRetryTimerReleasesPolling(t *testing.T) {
 		input <- fsnotify.Event{Name: folder, Op: fsnotify.Create}
 		assert.Equal(t, backendOpCreate, requireReceiveWithin(t, backend.Events(), time.Second).Op)
 		synctest.Wait()
-		assert.Equal(t, "fsnotify-runtime:"+root, (<-added).Key)
+		assert.Equal(t, "fsnotify-folder:"+root+":"+folder, (<-added).Key)
 		backend.watchMu.Lock()
 		backend.watchOps = alwaysAddWatchOps{}
 		backend.watchMu.Unlock()
@@ -341,7 +420,7 @@ func TestFSNotifyBackendRuntimeRetryTimerReleasesPolling(t *testing.T) {
 		backend.pollingMu.Unlock()
 		assert.Equal(t, backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}, requireReceiveWithin(t, backend.Events(), time.Second))
 		synctest.Wait()
-		assert.Equal(t, "fsnotify-runtime:"+root, <-released)
+		assert.Equal(t, "fsnotify-folder:"+root+":"+folder, <-released)
 	})
 }
 
@@ -505,7 +584,11 @@ func TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches(t *testing.T
 			if coverage == "native" || coverage == "missing release" {
 				assert.Empty(t, releaseKeys)
 			} else {
-				assert.Equal(t, []string{"fsnotify-runtime:" + root}, releaseKeys)
+				expected := []string{"fsnotify-folder:" + root + ":" + filepath.Join(root, "failed")}
+				if strings.HasPrefix(coverage, "overflow") {
+					expected = append(expected, "fsnotify-runtime:"+root)
+				}
+				assert.Equal(t, expected, releaseKeys)
 			}
 			assert.Empty(t, backend.events)
 		})

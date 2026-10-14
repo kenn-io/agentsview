@@ -1713,10 +1713,13 @@ against the budget. The Antigravity IDE watcher also watches
 This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
 has no per-directory budget.
 
-Runtime folder watch failures put the root on polling until every failed
-folder is watchable or gone. Retries start after 10 seconds and back off to
-two minutes. A recovered root gets one reconcile before polling stops.
-Event-buffer overflow still puts every recursive root on polling.
+Runtime folder watch failures put only the failed folder's subtree on polling.
+Other folders keep native watching. Each folder stops polling when it becomes
+watchable or disappears. Retries start after 10 seconds and back off to two
+minutes. Recovery triggers a root reconcile before releasing the folder's
+polling obligation. Budget or native watch resource exhaustion and root removal
+keep root-level polling. Event-buffer overflow puts every recursive root on
+polling.
 
 Roots that fall back to polling are picked up by:
 
