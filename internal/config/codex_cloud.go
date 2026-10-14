@@ -53,7 +53,7 @@ func (e *CodexCloudConfigError) Error() string {
 		return fmt.Sprintf("%s sets agents.codex-cloud to a single value, not a table of settings. "+
 			"Write the settings under an [agents.codex-cloud] section."+off, e.Path)
 	default:
-		return fmt.Sprintf("%s has an invalid value for %s under [agents.codex-cloud]: %s."+off,
+		return fmt.Sprintf("%s has an invalid value for %q under [agents.codex-cloud]: %s."+off,
 			e.Path, e.Key, e.Reason)
 	}
 }
