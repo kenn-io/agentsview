@@ -427,8 +427,9 @@ func (s *Syncer) usageFailure(
 			ref.LastAttempt = now
 			acct.Refresh[g.ThreadID] = ref
 			// planUsage drops a refresh root once its chat has gone
-			// settleAfter without a change.
-			retrying = retrying || now.Sub(ref.LastChange) < settleAfter
+			// settleAfter without a change, so a refresh that falls due
+			// after that is never sent.
+			retrying = retrying || refreshDue(ref).Before(ref.LastChange.Add(settleAfter))
 			continue
 		}
 		entry, ok := acct.UsagePending[g.ThreadID]
