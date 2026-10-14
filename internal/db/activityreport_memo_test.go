@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got, wantCount)
 			if wantCount > 0 {
-				assert.Equal(t, wantMinutes, got[0].End.Sub(got[0].Start).Minutes())
+				assert.InDelta(t, wantMinutes, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
 			}
 		})
 	}
@@ -152,19 +153,19 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	assert.Positive(t, reads["2026-06-16T11:00:00Z"])
 }
 
-func activityMemoPairingReads(t *testing.T, d *DB) map[string]int {
-	t.Helper()
+func activityMemoPairingReads(tb testing.TB, d *DB) map[string]int {
+	tb.Helper()
 	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
+	conn, err := d.getReader().Conn(tb.Context())
+	require.NoError(tb, err)
 	reads := make(map[string]int)
-	require.NoError(t, conn.Raw(func(driverConn any) error {
+	require.NoError(tb, conn.Raw(func(driverConn any) error {
 		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("agentsview_timestamp_unix_micro", func(raw string) any {
 			reads[raw]++
 			return sqliteTimestampUnixMicro(raw)
 		}, false)
 	}))
-	require.NoError(t, conn.Close())
+	require.NoError(tb, conn.Close())
 	return reads
 }
 
@@ -183,7 +184,7 @@ func TestActivityMemoProductionWrites(t *testing.T) {
 	got, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, 2.0, got[0].End.Sub(got[0].Start).Minutes())
+	assert.InDelta(t, 2.0, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
 	assert.Empty(t, reads)
 }
 
@@ -212,12 +213,12 @@ func TestActivityMemoReportReuse(t *testing.T) {
 func TestActivityMemoEmptyIDsWithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.NoError(t, testDB(t).activityReportCandidateSource(nil, activity.Query{})(ctx, func(activity.IntervalCandidate) error { t.Fatal("unexpected candidate"); return nil }))
+	require.NoError(t, testDB(t).activityReportCandidateSource(nil, activity.Query{})(ctx, func(activity.IntervalCandidate) error { require.FailNow(t, "unexpected candidate"); return nil }))
 }
 
 func TestActivityMemoRefreshPreservesTies(t *testing.T) {
 	for _, terminal := range []bool{false, true} {
-		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+		t.Run(strconv.FormatBool(terminal), func(t *testing.T) {
 			d := testDB(t)
 			ids := []string{"b", "a"}
 			if terminal {
@@ -256,6 +257,37 @@ func TestActivityMemoRefreshPreservesTies(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestActivityMemoPartialInvalidationPreservesSubmicrosecondReport(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "p", func(s *Session) {
+			s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-16T10:03:00Z")
+		})
+		seedMessage(t, d, id, 0, "user", "2026-06-16T10:00:00.0000005Z", "")
+		seedMessage(t, d, id, 1, "assistant", "2026-06-16T10:01:00Z", "A")
+		seedMessage(t, d, id, 2, "user", "2026-06-16T10:00:00.0000001Z", "")
+		seedMessage(t, d, id, 3, "assistant", "2026-06-16T10:02:00Z", "B")
+		terminalTimestamp := "2026-06-16T10:00:00.0000009Z"
+		if id == "b" {
+			terminalTimestamp = "2026-06-16T10:00:00.0000000Z"
+		}
+		timingInsertToolResultEvent(t, d, id, 2, 0, "call", "completed", terminalTimestamp, 0)
+	}
+	q := dayQuery(t, "2026-06-16", "UTC")
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, err := d.GetActivityReport(t.Context(), f, q)
+	require.NoError(t, err)
+	seedMessage(t, d, "b", 4, "assistant", "2026-06-16T10:03:00Z", "C")
+	partial, err := d.GetActivityReport(t.Context(), f, q)
+	require.NoError(t, err)
+	d.activityMemo.swap(func() {})
+	cold, err := d.GetActivityReport(t.Context(), f, q)
+	require.NoError(t, err)
+	require.NotEmpty(t, cold.ByModel)
+	assert.Equal(t, cold, partial)
 }
 
 func TestActivityMemoLRUAndBudgets(t *testing.T) {

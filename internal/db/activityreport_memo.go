@@ -20,10 +20,10 @@ var activityMemoMaxEntries = 4_096
 
 type activityMemoHits [][]activity.IntervalCandidate
 
-func (h activityMemoHits) Len() int           { return len(h) }
-func (h activityMemoHits) Less(i, j int) bool { return activityMemoLess(h[i][0], h[j][0]) }
-func (h activityMemoHits) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *activityMemoHits) Push(v any)        { *h = append(*h, v.([]activity.IntervalCandidate)) }
+func (h *activityMemoHits) Len() int           { return len(*h) }
+func (h *activityMemoHits) Less(i, j int) bool { return activityMemoLess((*h)[i][0], (*h)[j][0]) }
+func (h *activityMemoHits) Swap(i, j int)      { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
+func (h *activityMemoHits) Push(v any)         { *h = append(*h, v.([]activity.IntervalCandidate)) }
 func (h *activityMemoHits) Pop() any {
 	old := *h
 	last := old[len(old)-1]
@@ -35,7 +35,10 @@ func activityMemoLess(a, b activity.IntervalCandidate) bool {
 	if a.Start.UnixMicro() != b.Start.UnixMicro() {
 		return a.Start.UnixMicro() < b.Start.UnixMicro()
 	}
-	return a.SessionID < b.SessionID
+	if a.SessionID != b.SessionID {
+		return a.SessionID < b.SessionID
+	}
+	return a.StartOrdinal < b.StartOrdinal
 }
 
 type activityMemoKey struct {
@@ -118,11 +121,11 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		if err != nil {
 			return fmt.Errorf("querying activity report session versions: %w", err)
 		}
+		defer rows.Close()
 		versions := make(map[string]string, len(ids))
 		for rows.Next() {
 			var id, version string
 			if err := rows.Scan(&id, &version); err != nil {
-				rows.Close()
 				return fmt.Errorf("scanning activity report session version: %w", err)
 			}
 			versions[id] = version

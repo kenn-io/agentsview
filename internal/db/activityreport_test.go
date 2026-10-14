@@ -327,15 +327,15 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
 }
 
-func activityReportCandidateSQL(t testing.TB, d *DB, ids []string, q activity.Query) activity.CandidateSource {
-	t.Helper()
+func activityReportCandidateSQL(tb testing.TB, d *DB, ids []string, q activity.Query) activity.CandidateSource {
+	tb.Helper()
 	encodedIDs, err := json.Marshal(ids)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return d.activityReportCandidateSQLJSON(string(encodedIDs), q)
 }
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
-	d, ids, q := seedSQLiteActivityReportBenchmark(b)
+	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
 	source := activityReportCandidateSQL(b, d, ids, q)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -346,21 +346,63 @@ func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 			return nil
 		})
 		require.NoError(b, err)
-		require.Equal(b, 90_000, count)
+		require.Equal(b, 100_000, count)
 	}
 }
 
 func BenchmarkSQLiteActivityReportCandidateSourceWarm100K(b *testing.B) {
-	d, ids, q := seedSQLiteActivityReportBenchmark(b)
+	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
 	source := d.activityReportCandidateSource(ids, q)
+	reads := activityMemoPairingReads(b, d)
+	count := 0
+	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { count++; return nil }))
+	require.Equal(b, 100_000, count)
+	require.Len(b, d.activityMemo.entries, len(ids))
+	require.Equal(b, 100_000, d.activityMemo.rows)
+	require.NotEmpty(b, reads)
+	clear(reads)
 	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { return nil }))
+	require.Empty(b, reads)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		count := 0
 		require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { count++; return nil }))
-		require.Equal(b, 90_000, count)
+		require.Equal(b, 100_000, count)
 	}
+}
+
+func seedSQLiteActivityReportCandidateBenchmark(b *testing.B) (*DB, []string, activity.Query) {
+	b.Helper()
+	d := testDB(b)
+	const sessionCount = 1_000
+	_, err := d.getWriter().Exec(b.Context(), `
+		WITH RECURSIVE n(i) AS (
+			VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO sessions(id, project, started_at, ended_at, message_count)
+		SELECT printf('bench-%06d', i), 'bench',
+			'2026-07-01T10:00:00Z', '2026-07-01T11:40:00Z', 101
+		FROM n`, sessionCount)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(b.Context(), `
+		WITH RECURSIVE n(i) AS (
+			VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 100
+		)
+		INSERT INTO messages(session_id, ordinal, role, content, timestamp, model)
+		SELECT s.id, n.i, 'assistant', 'x',
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-01T10:00:00Z', printf('+%d minutes', n.i)), 'model'
+		FROM sessions s CROSS JOIN n`)
+	require.NoError(b, err)
+	ids := make([]string, sessionCount)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("bench-%06d", i+1)
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	return d, ids, q
 }
 
 // BenchmarkSQLiteActivityReportCandidateSourceLongSession covers the opposite

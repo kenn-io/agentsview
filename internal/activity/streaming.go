@@ -118,8 +118,8 @@ func MergeCandidateSlice(
 }
 
 func candidateLess(a, b IntervalCandidate) bool {
-	if !a.Start.Equal(b.Start) {
-		return a.Start.Before(b.Start)
+	if a.Start.UnixMicro() != b.Start.UnixMicro() {
+		return a.Start.UnixMicro() < b.Start.UnixMicro()
 	}
 	if a.SessionID != b.SessionID {
 		return a.SessionID < b.SessionID
