@@ -44,7 +44,9 @@ func reportingProjectEvidence(contributors map[string]bool, sessions map[string]
 		incomplete, ambiguous bool
 	}
 	states := make(map[string]*evidence)
-	for id := range contributors {
+	// The first contributor fixes the label and root key, which feed the
+	// digests, so visit sessions in a stable order.
+	for _, id := range SortedKeys(contributors) {
 		session := sessions[id]
 		key := export.ProjectKeyForEntry(projects[session.Project])
 		if key == "" {

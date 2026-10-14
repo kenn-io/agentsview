@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -78,5 +79,40 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 				assert.InDelta(t, 2.0, hour.Activity.Totals.AgentMinutes, 0)
 			}
 		})
+	}
+}
+
+func TestReportingProjectEvidenceIsIndependentOfMapOrder(t *testing.T) {
+	// Two checkouts of one machine-local repository resolve to the same
+	// project key but carry different root keys and display labels.
+	identity := func(rootKey string) *export.ProjectIdentity {
+		return &export.ProjectIdentity{
+			Key: "p1:project", Kind: export.ProjectKindMachineRoot,
+			RootKey: rootKey, RepositoryKey: "repo1:repository",
+		}
+	}
+	contributors := map[string]bool{"session-b": true, "session-a": true}
+	sessions := map[string]activity.SessionMeta{
+		"session-a": {SessionID: "session-a", Project: "api"},
+		"session-b": {SessionID: "session-b", Project: "api-worktree"},
+	}
+	projects := map[string]export.ProjectMapEntry{
+		"api":          {ProjectKey: "pl1:project"},
+		"api-worktree": {ProjectKey: "pl1:project"},
+	}
+	references := map[string]export.ProjectReference{
+		"session-a": {ProjectKey: "pl1:project", Resolution: export.ProjectResolutionResolved, Identity: identity("r1:first")},
+		"session-b": {ProjectKey: "pl1:project", Resolution: export.ProjectResolutionResolved, Identity: identity("r1:second")},
+	}
+	// Go randomizes map iteration, so repeat enough that an order-dependent
+	// choice would surface.
+	for range 64 {
+		evidence := reportingProjectEvidence(contributors, sessions, projects, references)
+		require.Contains(t, evidence, "pl1:project")
+		entry := evidence["pl1:project"]
+		require.NotNil(t, entry.Identity)
+		assert.Equal(t, export.ProjectResolutionResolved, entry.Resolution)
+		assert.Equal(t, "r1:first", entry.Identity.RootKey)
+		assert.Equal(t, "api", entry.DisplayLabel)
 	}
 }
