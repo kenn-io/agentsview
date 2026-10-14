@@ -191,12 +191,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Set cache paths before setup-go restores its cache.
       - &windows-go-paths
         name: Prepare Windows Go paths
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'TMP', 'TEMP', 'SystemTemp')) {
+          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'TMP', 'TEMP')) {
             $path = Join-Path $env:RUNNER_TEMP $name
             New-Item -ItemType Directory -Force -Path $path | Out-Null
             "$name=$path" >> $env:GITHUB_ENV
@@ -382,7 +383,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "TMP=$testTemp" >> $env:GITHUB_ENV
           "TEMP=$testTemp" >> $env:GITHUB_ENV
-          "SystemTemp=$testTemp" >> $env:GITHUB_ENV
           "AGENTSVIEW_CI_TEMP=$testTemp" >> $env:GITHUB_ENV
 
       - name: Run ${{ matrix.name }} tests

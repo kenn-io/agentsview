@@ -29,8 +29,10 @@ jobs:
           - name: CLI remaining
             package: ./cmd/agentsview
             skip: '^Test[A-P]'
-          - name: Capture, Database, Parser
-            package: ./internal/capture ./internal/db ./internal/parser
+          - name: Capture
+            package: ./internal/capture
+          - name: Database, Parser
+            package: ./internal/db ./internal/parser
           - name: DuckDB
             package: ./internal/duckdb
           # Match normal Windows CI; complementary filters cover every sync test.
@@ -46,6 +48,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # Set cache paths before setup-go restores its cache.
+      - name: Prepare Windows Go paths
+        shell: pwsh
+        run: |
+          foreach ($name in @('GOCACHE', 'GOMODCACHE', 'TMP', 'TEMP')) {
+            $path = Join-Path $env:RUNNER_TEMP $name
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+            "$name=$path" >> $env:GITHUB_ENV
+          }
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
@@ -68,7 +80,7 @@ jobs:
           New-Item -ItemType Directory -Force internal/web/dist | Out-Null
           Set-Content -Path internal/web/dist/stub.html -Value ok
 
-      # Capture tests reject the parent permissions of the SYSTEM temp path.
+      # Capture tests reject the parent permissions of runner storage.
       # Keep their fixtures in a private directory on the system drive.
       - name: Prepare capture test temporary directory
         if: contains(matrix.package, './internal/capture')
@@ -78,7 +90,8 @@ jobs:
           New-Item -ItemType Directory -Path $testTemp | Out-Null
           icacls $testTemp /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "SystemTemp=$testTemp" >> $env:GITHUB_ENV
+          "TMP=$testTemp" >> $env:GITHUB_ENV
+          "TEMP=$testTemp" >> $env:GITHUB_ENV
           "AGENTSVIEW_CI_TEMP=$testTemp" >> $env:GITHUB_ENV
 
       - name: Run ${{ matrix.name }} tests

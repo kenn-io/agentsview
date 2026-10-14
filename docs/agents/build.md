@@ -15,9 +15,10 @@ Use the built-in Go cache in `actions/setup-go` and npm caching in
 packages the job installs. Desktop jobs cache Rust dependencies through
 `Swatinem/rust-cache` with the GitHub cache backend. Playwright jobs install
 browsers and system dependencies on each run.
-Windows Go tests in `ci.yml` put Go caches and temporary files under
-`RUNNER_TEMP`; Windows lint uses it for its cache. Capture tests use a private
-system-drive temporary directory so ancestor permissions satisfy their checks.
+Windows Go tests in `ci.yml` and `msys2-update-check.yml` put caches and temp
+files under `RUNNER_TEMP`; Windows lint uses it for its cache. Capture tests use
+a private system-drive temporary directory so ancestor permissions satisfy their
+checks.
 
 ## Go and SQLite
 
