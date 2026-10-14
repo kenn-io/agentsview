@@ -113,7 +113,7 @@ func TestCodexCloudErrorMessages(t *testing.T) {
 		unknown.Error())
 	bad := &CodexCloudConfigError{Path: path, Key: "enabled", Reason: "expected true or false"}
 	assert.Equal(t,
-		path+" has an invalid value for enabled under [agents.codex-cloud]: expected true or false."+off,
+		path+` has an invalid value for "enabled" under [agents.codex-cloud]: expected true or false.`+off,
 		bad.Error())
 	table := &CodexCloudConfigError{Path: path}
 	assert.Equal(t,
