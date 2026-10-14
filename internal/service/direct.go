@@ -14,6 +14,8 @@ import (
 	stdsync "sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -965,18 +967,24 @@ func (b *directBackend) UsagePairwiseComparison(
 	rightFilter.SkipSessionCounts = false
 
 	var leftResult db.DailyUsageResult
-	if !leftEmpty {
-		leftResult, err = b.db.GetDailyUsage(ctx, leftFilter)
-		if err != nil {
-			return nil, err
-		}
-	}
 	var rightResult db.DailyUsageResult
+	group, groupCtx := errgroup.WithContext(ctx)
+	if !leftEmpty {
+		group.Go(func() error {
+			var readErr error
+			leftResult, readErr = b.db.GetDailyUsage(groupCtx, leftFilter)
+			return readErr
+		})
+	}
 	if !rightEmpty {
-		rightResult, err = b.db.GetDailyUsage(ctx, rightFilter)
-		if err != nil {
-			return nil, err
-		}
+		group.Go(func() error {
+			var readErr error
+			rightResult, readErr = b.db.GetDailyUsage(groupCtx, rightFilter)
+			return readErr
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 
 	out, err := BuildUsagePairwiseComparisonResult(leftResult, rightResult)

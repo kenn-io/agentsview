@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,7 @@ func TestUsageInputAPIErrorMapsToBadRequest(t *testing.T) {
 
 type usageSummaryCountsSpy struct {
 	db.Store
+	mu                   sync.Mutex
 	dailyCalls           int
 	countsCalls          int
 	matchingSessionCalls int
@@ -88,6 +90,8 @@ func assertUsageQueryCalls(
 func (s *usageSummaryCountsSpy) GetDailyUsage(
 	_ context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.dailyCalls++
 	s.filters = append(s.filters, f)
 	if len(s.result.Daily) == 0 && s.result.Totals == (db.UsageTotals{}) &&
@@ -428,6 +432,9 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 
 	assert.Equal(t, 2, spy.dailyCalls)
 	require.Len(t, spy.filters, 2)
+	if spy.filters[0].Model == "" {
+		spy.filters[0], spy.filters[1] = spy.filters[1], spy.filters[0]
+	}
 	assert.Equal(t, "claude-sonnet-4-20250514", spy.filters[0].Model)
 	assert.Empty(t, spy.filters[0].Project)
 	assert.Empty(t, spy.filters[1].Model)

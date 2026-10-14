@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -439,6 +440,38 @@ func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testin
 	assert.False(t, rightEmpty)
 	assert.Empty(t, left.Model)
 	assert.Equal(t, "gpt-4o", right.Model)
+}
+
+type pairwiseErrorStore struct {
+	db.Store
+	model string
+	err   error
+}
+
+func (s *pairwiseErrorStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	if f.Model == s.model {
+		return db.DailyUsageResult{}, s.err
+	}
+	return s.Store.GetDailyUsage(ctx, f)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ReadError(t *testing.T) {
+	t.Parallel()
+	for _, model := range []string{"claude-sonnet-4-20250514", "gpt-4o"} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			d := dbtest.OpenTestDB(t)
+			readErr := errors.New("daily usage read failed")
+			be := service.NewReadOnlyBackend(&pairwiseErrorStore{Store: d, model: model, err: readErr})
+			res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+				LeftDimension: "model", LeftValue: "claude-sonnet-4-20250514",
+				RightDimension: "model", RightValue: "gpt-4o",
+			})
+			require.ErrorIs(t, err, readErr)
+			assert.Nil(t, res)
+		})
+	}
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
