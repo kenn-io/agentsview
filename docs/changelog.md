@@ -129,6 +129,15 @@ The latest release is
   Saved names, stars, pinned messages, project identities, and already archived
   undo files survive this upgrade, even when their source files are gone. Live
   updates follow the newest undo file even if the original file is gone.
+- A write to one Hermes or Augure Desktop session no longer makes AgentsView
+  reparse and rewrite every session in the same `state.db`. Full sync and
+  file/WAL events now resolve to that one session's source, so an archive
+  with many sessions in one database stops reprocessing all of them on
+  every unrelated write.
+
+**Acknowledgements**
+
+- [@iainlane](https://github.com/iainlane) for the Hermes per-session sync fix.
 
 ## 0.45.0
 
