@@ -60,18 +60,23 @@ recall extraction still own their timing; migrating them is separate work.
   process-local timezone plus up to eight retained recently requested explicit
   timezones. Installed source and aggregate fingerprints, not a progress
   cursor, are the authoritative coverage records.
+- Served usage requests own timezone recency in
+  `usage_rollup_timezones.last_requested_at`, rewriting it at most once a
+  minute per zone. Rollup installs stamp only a zone's first row, so
+  background rebuilds never reorder which eight explicit zones stay warm.
 - A pass runs once and is never restarted because the archive was written while
   it ran. Each session's facts and source version come from one archive read
   transaction, so they are always paired correctly, and a session written
   during the pass is refilled by its own mutation notification. Do not
   reintroduce a restart loop over a moving source fingerprint.
 - After each notification batch, the daemon rebuilds filled sessions' daily
-  rollups and requeues invalidated dedup peers for the same timezones, in chunks
-  of 256. A failed rebuild is retried by the next write or usage request.
-  Cursor rollups stay with the request.
+  rollups and requeues invalidated dedup peers for the same timezones, in
+  chunks of 256. A failed rebuild is retried by the next write or usage
+  request. Cursor rollups stay with the request.
 - Session notifications that exceed the channel capacity retain their IDs in a
-  deduplicated overflow map capped at 1,024 IDs, including dedup peers. Pending
-  batches hold at most 2,048 IDs; backfill or requests cover dropped IDs.
+  deduplicated overflow map capped at 1,024 IDs, including dedup peers.
+  Pending batches hold at most 2,048 IDs; backfill or requests cover dropped
+  IDs.
 - Notifications hold a daemon work lease through queueing and rebuilding until
   the pending set, overflow and in-flight batch are empty.
 - A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when the

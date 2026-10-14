@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -21,6 +22,9 @@ const usageCacheBackfillBatchSize = usageFillInstallBatchSize
 const (
 	usageCacheVacuumFreelistThreshold = 4096
 	usageCacheVacuumPages             = 256
+	// Recency only ranks retained zones, so a served request rewrites its
+	// stamp at most this often instead of taking the cache write lock per read.
+	usageTimezoneRequestResolution = time.Minute
 )
 
 // StartUsageCacheBackfill starts one newest-first cache population pass.
@@ -313,6 +317,32 @@ func (db *DB) runUsageCacheBackfillPass(
 		covered, deleted, dailyRows, exceptionRows, exceptionGroups,
 		time.Since(started).Round(time.Millisecond))
 	return nil
+}
+
+// recordUsageTimezoneRequest stamps a served zone so background rebuilds keep
+// covering the zones requests actually read. A failure only affects which zones
+// stay warm, so it is logged rather than failing the served request.
+func (cache *usageCache) recordUsageTimezoneRequest(
+	ctx context.Context, identity usageTimezoneIdentity,
+) {
+	var stamp string
+	err := cache.db.QueryRowContext(ctx, `SELECT last_requested_at
+		FROM usage_rollup_timezones WHERE timezone_key = ?`, identity.Key).Scan(&stamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	if err == nil {
+		requested, parseErr := time.Parse(time.RFC3339Nano, stamp)
+		if parseErr == nil && time.Since(requested) < usageTimezoneRequestResolution {
+			return
+		}
+		_, err = cache.db.ExecContext(ctx, `UPDATE usage_rollup_timezones
+			SET last_requested_at = ? WHERE timezone_key = ?`,
+			time.Now().UTC().Format(time.RFC3339Nano), identity.Key)
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("recording usage timezone request %s: %v", identity.Name, err)
+	}
 }
 
 func usageBackfillLocations(

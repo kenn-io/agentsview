@@ -374,3 +374,54 @@ func TestUsageNotificationLargeBurstBoundsOverflow(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "session", "project", "2026-08-10T09:00:00Z", 0, 10)
+	for _, zone := range []string{"Asia/Tokyo", "Europe/Paris", "Pacific/Auckland"} {
+		_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: zone})
+		require.NoError(t, err)
+	}
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	recentZones := func() []string {
+		locations, err := usageBackfillLocations(t.Context(), cache, snapshot.location)
+		require.NoError(t, err)
+		names := make([]string, 0, len(locations))
+		for _, location := range locations[1:] {
+			names = append(names, location.String())
+		}
+		return names
+	}
+	database.usageBackfillMu.Lock()
+	database.usageBackfillEnabled = true
+	database.usageBackfillMu.Unlock()
+	var installs atomic.Int32
+	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) { installs.Add(1) }
+	appendLiveWriteMessage(t, database, "session", "2026-08-10T10:00:00Z", 1, 7)
+	written, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), written.Versions, 0)
+	require.NoError(t, err)
+	database.refreshUsageRollups(t.Context(), cache, fills)
+	require.Positive(t, installs.Load())
+	assert.Equal(t, []string{"Pacific/Auckland", "Europe/Paris", "Asia/Tokyo"}, recentZones(),
+		"background rebuilds reordered request recency")
+
+	for zone, stamp := range map[string]string{
+		"Asia/Tokyo": "2026-01-01T01:00:00Z", "Europe/Paris": "2026-01-01T02:00:00Z",
+		"Pacific/Auckland": "2026-01-01T03:00:00Z",
+	} {
+		_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones
+			SET last_requested_at = ? WHERE timezone_name = ?`, stamp, zone)
+		require.NoError(t, err)
+	}
+	built := installs.Load()
+	_, err = database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "Asia/Tokyo"})
+	require.NoError(t, err)
+	require.Equal(t, built, installs.Load(), "request rebuilt totals the background had warmed")
+	assert.Equal(t, []string{"Asia/Tokyo", "Pacific/Auckland", "Europe/Paris"}, recentZones(),
+		"a warm request did not record its timezone")
+}

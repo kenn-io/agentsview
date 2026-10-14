@@ -127,6 +127,8 @@ func (db *DB) queryUsageRollups(
 		}
 		timings.read = time.Since(readStarted)
 		if queryErr == nil {
+			cache.recordUsageTimezoneRequest(
+				ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
 			timings.logIfSlow(started)
 			return snapshot, facts, resolver, nil
