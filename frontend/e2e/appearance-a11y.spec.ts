@@ -552,9 +552,13 @@ test("the codex-cloud status tooltip follows its trigger and wraps long paths at
     return {
       trigger: (await trigger.boundingBox())!,
       tooltip: (await tooltip.boundingBox())!,
-      overflow: await tooltip
-        .locator(".codex-cloud-detail")
-        .evaluate((el) => el.scrollWidth - el.clientWidth),
+      // How far the detail text paints past the bubble's right edge. The
+      // detail is an inline span, so its line boxes, not its scroll size,
+      // show where the text runs.
+      overflow: await tooltip.locator(".codex-cloud-detail").evaluate((el) => {
+        const bubble = el.closest('[role="tooltip"]')!.getBoundingClientRect();
+        return Math.max(...Array.from(el.getClientRects(), (line) => line.right - bubble.right));
+      }),
       lineHeight: await tooltip
         .locator(".codex-cloud-detail")
         .evaluate((el) => el.getClientRects()[0]!.height),
@@ -579,5 +583,5 @@ test("the codex-cloud status tooltip follows its trigger and wraps long paths at
   expect(trigger.y - (tooltip.y + tooltip.height)).toBeGreaterThanOrEqual(0);
   expect(trigger.y - (tooltip.y + tooltip.height)).toBeLessThanOrEqual(16);
   // A long path wraps inside the bubble instead of running past its edge.
-  expect(overflow).toBe(0);
+  expect(overflow).toBeLessThanOrEqual(0);
 });
