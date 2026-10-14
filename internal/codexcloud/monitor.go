@@ -685,7 +685,7 @@ func (m *Monitor) trigger() {
 	}
 	go func() {
 		if err := m.Trigger(); err != nil && !errors.Is(err, context.Canceled) {
-			m.Log.Printf("codex-cloud: queue a sync after a turn completed: %v", err)
+			m.Log.Printf("codex-cloud: queue a sync: %v", err)
 		}
 	}()
 }
