@@ -421,13 +421,24 @@ type UsagePairwiseComparisonRequest struct {
 }
 
 func DefaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
+	var models, projects []string
+	for _, total := range summary.ModelTotals {
+		if total.Model != "" {
+			models = append(models, total.Model)
+		}
+	}
+	for _, total := range summary.ProjectTotals {
+		if total.ProjectKey != "" {
+			projects = append(projects, total.ProjectKey)
+		}
+	}
 	switch {
-	case len(summary.ModelTotals) >= 2:
-		return "model", summary.ModelTotals[0].Model, "model", summary.ModelTotals[1].Model
-	case len(summary.ProjectTotals) >= 2:
-		return "project", summary.ProjectTotals[0].ProjectKey, "project", summary.ProjectTotals[1].ProjectKey
-	case len(summary.ModelTotals) > 0 && len(summary.ProjectTotals) > 0:
-		return "model", summary.ModelTotals[0].Model, "project", summary.ProjectTotals[0].ProjectKey
+	case len(models) >= 2:
+		return "model", models[0], "model", models[1]
+	case len(projects) >= 2:
+		return "project", projects[0], "project", projects[1]
+	case len(models) > 0 && len(projects) > 0:
+		return "model", models[0], "project", projects[0]
 	default:
 		return "", "", "", ""
 	}

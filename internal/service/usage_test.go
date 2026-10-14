@@ -957,25 +957,51 @@ func (s *pairwiseRankingStore) GetDailyUsage(ctx context.Context, f db.UsageFilt
 
 func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 	t.Parallel()
-	d := dbtest.OpenTestDB(t)
-	seedCommaProjectUsageFixture(t, d)
-	catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
-	require.NoError(t, err)
-	be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
-	res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
-		IncludeOneShot: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "project", res.Left.Dimension)
-	assert.Equal(t, "project", res.Right.Dimension)
-	assert.NotEqual(t, res.Left.Value, res.Right.Value)
-	assert.Equal(t, map[string]int{
-		catalog["team,core"].ProjectKey: 100,
-		catalog["other"].ProjectKey:     25,
-	}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
-	assert.Equal(t, 1, res.Left.SessionCount)
-	assert.Equal(t, 1, res.Right.SessionCount)
+	for _, emptyProject := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty project %t", emptyProject), func(t *testing.T) {
+			t.Parallel()
+			d := dbtest.OpenTestDB(t)
+			seedCommaProjectUsageFixture(t, d)
+			if emptyProject {
+				started := "2024-06-01T09:00:00Z"
+				msg := dbtest.AsstMsg("usage-empty-project", 1, "done")
+				msg.Timestamp = started
+				msg.Model = "test-model"
+				msg.TokenUsage = []byte(`{"input_tokens":1000}`)
+				dbtest.SeedSessionWithMessages(t, d, "usage-empty-project", "", []db.Message{
+					dbtest.UserMsg("usage-empty-project", 0, "compare usage"), msg,
+				}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
+					s.Agent = "claude"
+					s.StartedAt = &started
+					s.EndedAt = &started
+				})
+				summary, err := service.NewDirectBackend(d, nil).UsageSummary(t.Context(), service.UsageRequest{
+					From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+				})
+				require.NoError(t, err)
+				require.Len(t, summary.ProjectTotals, 3)
+				assert.Empty(t, summary.ProjectTotals[0].ProjectKey)
+				assert.Equal(t, 1000, summary.ProjectTotals[0].InputTokens)
+			}
+			catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
+			require.NoError(t, err)
+			be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
+			res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
+				IncludeOneShot: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "project", res.Left.Dimension)
+			assert.Equal(t, "project", res.Right.Dimension)
+			assert.NotEqual(t, res.Left.Value, res.Right.Value)
+			assert.Equal(t, map[string]int{
+				catalog["team,core"].ProjectKey: 100,
+				catalog["other"].ProjectKey:     25,
+			}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
+			assert.Equal(t, 1, res.Left.SessionCount)
+			assert.Equal(t, 1, res.Right.SessionCount)
+		})
+	}
 }
 
 func TestDefaultUsagePairwiseSelection(t *testing.T) {
@@ -989,6 +1015,12 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 		{"models", []service.ModelTotal{{Model: "second-by-name"}, {Model: "first-by-name"}}, []service.ProjectTotal{{ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"model", "second-by-name", "model", "first-by-name"}},
 		{"projects", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-b", Project: "label-b"}, {ProjectKey: "key-a", Project: "label-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
 		{"mixed", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{ProjectKey: "key-a", Project: "label-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
+		{"skip empty models", []service.ModelTotal{{}, {Model: "model-b"}, {}, {Model: "model-a"}}, nil, [4]string{"model", "model-b", "model", "model-a"}},
+		{"skip empty projects", []service.ModelTotal{{Model: "only-model"}}, []service.ProjectTotal{{}, {ProjectKey: "key-b"}, {}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
+		{"mixed after empty keys", []service.ModelTotal{{}, {Model: "only-model"}}, []service.ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
+		{"one usable model", []service.ModelTotal{{}, {Model: "only-model"}}, []service.ProjectTotal{{}}, [4]string{}},
+		{"one usable project", []service.ModelTotal{{}}, []service.ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{}},
+		{"empty keys", []service.ModelTotal{{}, {}}, []service.ProjectTotal{{}, {}}, [4]string{}},
 		{"one model", []service.ModelTotal{{Model: "only-model"}}, nil, [4]string{}},
 		{"one project", nil, []service.ProjectTotal{{ProjectKey: "key-a"}}, [4]string{}},
 		{"empty", nil, nil, [4]string{}},
