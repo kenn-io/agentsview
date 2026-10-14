@@ -2874,7 +2874,7 @@
   "plan_usage_could_not_check": "AgentsView n'a pas pu vérifier l'utilisation du forfait",
   "plan_usage_account_unavailable": "L'utilisation n'est pas disponible pour ce compte",
   "plan_usage_counted_under": "Comptée dans la conversation {title}",
-  "plan_usage_stale": "Depuis : {reason} ({time}). Ces chiffres ne sont peut-être plus à jour.",
+  "plan_usage_stale": "Depuis lors\u202f: {reason} ({time}). Ces chiffres ne sont peut-être plus à jour.",
   "plan_usage_left_out_later": "Le rapport d'utilisation d'OpenAI a omis cette conversation",
   "plan_usage_weekly_share": "{percent} % de la limite hebdomadaire de Codex",
   "plan_usage_five_hour_share": "{percent} % de la limite de cinq heures de Codex",
