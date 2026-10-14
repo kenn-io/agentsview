@@ -445,12 +445,17 @@ func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
 	}
 	env.threads.Set(finishedThread("slow", ago(time.Hour), message("m", "one")))
 	env.threads.Set(finishedThread("b", ago(2*time.Hour), message("n", "two")))
+	timedOut := fetchNow.Add(10 * time.Minute)
 	hang, mu := true, &sync.Mutex{}
 	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
 		mu.Lock()
 		hanging := hang && strings.Contains(string(params), `"slow"`)
 		mu.Unlock()
 		if hanging {
+			// The first call runs for minutes before it times out.
+			if env.clock.Now().Before(timedOut) {
+				env.clock.Set(timedOut)
+			}
 			<-env.host.Context().Done()
 		}
 		return env.threads.TurnsList(params)
@@ -460,6 +465,7 @@ func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
 	acct := env.account(t)
 	require.Equal(t, FailNetwork.String(), acct.Wait.Failure, "the timeout still ends the pass")
 	require.Contains(t, acct.Retry, "slow")
+	assert.Equal(t, timedOut.Add(retryFirst), acct.Retry["slow"].NextAttempt, "the wait counts from the timeout")
 
 	// The next pass may come after the retry is due, and OpenAI still
 	// does not answer: the other thread imports first all the same.

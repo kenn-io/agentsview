@@ -11,9 +11,9 @@ import (
 // the 24-hour stall rule has not stopped, except retired ones listed
 // active, then check-again threads and due retries. A retry entry not yet
 // due removes its thread however it was selected, so a failing thread at
-// the top of a listing still waits. A due retry is fetched after every
-// thread without one, so a thread OpenAI keeps not answering, which ends
-// the pass, cannot hold back the others however often passes run.
+// the top of a listing still waits. Due retries come last, after every
+// thread without a retry entry. A thread OpenAI never answers ends the
+// pass, so it must not run before the others.
 func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, active []string) []string {
 	var selected []string
 	seen := map[string]bool{}
