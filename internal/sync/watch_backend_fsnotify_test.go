@@ -392,8 +392,10 @@ func TestFSNotifyBackendRuntimeFolderRecoveryPreservesRootDegradation(t *testing
 				backend.translateEvent(fsnotify.Event{Name: root, Op: fsnotify.Remove})
 			}
 			backend.watchOps = ops
+			require.NoError(t, os.Remove(folder))
 			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
 			assert.Len(t, *added, 2)
+			assert.Equal(t, PollingObligation{Key: "fsnotify-runtime:" + root, Scopes: []PollingScope{{Root: root}}, Probe: root}, (*added)[1])
 			assert.Equal(t, []string{"fsnotify-folder:" + root + ":" + folder}, *released)
 			assert.Empty(t, backend.events)
 		})

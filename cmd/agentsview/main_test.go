@@ -3766,7 +3766,7 @@ func TestOpenCodeSQLiteOnlyRootKeepsItsPollingFallback(t *testing.T) {
 	for _, obligation := range obligations {
 		local = append(local, syncObligationToPoller(obligation))
 	}
-	scopes := availableUnwatchedPollScopes(local)
+	scopes, _ := availableUnwatchedPollScopes(local)
 	assert.Equal(t, []string{root}, scopes[parser.AgentOpenCode],
 		"degraded coverage on a SQLite-only root must still reach polling")
 }
@@ -3797,7 +3797,7 @@ func TestOpenCodeAbsentRootPollsTheConfiguredDir(t *testing.T) {
 	for _, obligation := range obligations {
 		local = append(local, syncObligationToPoller(obligation))
 	}
-	scopes := availableUnwatchedPollScopes(local)
+	scopes, _ := availableUnwatchedPollScopes(local)
 	assert.Equal(t, []string{root}, scopes[parser.AgentOpenCode],
 		"the dir must become pollable as soon as it appears")
 }

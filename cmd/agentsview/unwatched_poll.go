@@ -48,7 +48,9 @@ type pollingObligation struct {
 	// vanish while its configured scope <root> still exists, and reconciling
 	// the scope then would tombstone every session under the missing
 	// subtree. Empty means the Scopes' roots themselves are probed.
-	Probe string
+	Probe          string
+	releasePending bool
+	releaseVersion uint64 // A completed pass must preserve newer polling ownership.
 }
 
 type sharedUnwatchedPollCoordinator struct {
@@ -134,19 +136,11 @@ func (c *sharedUnwatchedPollCoordinator) AddObligation(
 
 func (c *sharedUnwatchedPollCoordinator) RemoveObligation(key string) error {
 	if strings.HasPrefix(key, "fsnotify-folder:") {
-		groups := make(map[parser.AgentType][]string)
-		for _, obligation := range c.currentPollObligations() {
-			if obligation.Key == key {
-				for _, scope := range obligation.Scopes {
-					groups[scope.Agent] = append(groups[scope.Agent], scope.Root)
-				}
-			}
-		}
-		var err error
-		c.doWork(func() { err = pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups) })
-		if err != nil {
+		if err := c.updateRoots(pollingObligation{Key: key, releasePending: true}, false); err != nil {
 			return err
 		}
+		c.requestPoll()
+		return nil
 	}
 	return c.updateRoots(pollingObligation{Key: key}, true)
 }
@@ -156,14 +150,18 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 ) error {
 	request := unwatchedPollAdd{
 		obligation: pollingObligation{
-			Key:    obligation.Key,
-			Scopes: append([]pollingScope(nil), obligation.Scopes...),
-			Probe:  obligation.Probe,
+			Key:            obligation.Key,
+			Scopes:         append([]pollingScope(nil), obligation.Scopes...),
+			Probe:          obligation.Probe,
+			releasePending: obligation.releasePending,
+			releaseVersion: obligation.releaseVersion,
 		},
 		remove: remove,
 		done:   make(chan struct{}),
 	}
 	select {
+	case <-c.workerCtx.Done():
+		return errUnwatchedPollStopped
 	case <-c.done:
 		return errUnwatchedPollStopped
 	case c.add <- request:
@@ -186,6 +184,7 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 	go c.runPollWorker()
 	defer func() { <-c.pollDone }()
 	obligations := make(map[string]pollingObligation)
+	var releaseVersion uint64
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -194,7 +193,16 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 			return
 		case request := <-c.add:
 			if request.remove {
-				delete(obligations, request.obligation.Key)
+				if request.obligation.releaseVersion == 0 || obligations[request.obligation.Key].releaseVersion == request.obligation.releaseVersion {
+					delete(obligations, request.obligation.Key)
+				}
+			} else if request.obligation.releasePending {
+				if obligation, ok := obligations[request.obligation.Key]; ok {
+					releaseVersion++
+					obligation.releasePending = true
+					obligation.releaseVersion = releaseVersion
+					obligations[obligation.Key] = obligation
+				}
 			} else {
 				obligations[request.obligation.Key] = request.obligation
 			}
@@ -270,9 +278,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 					}
 				}
 			}
-			groups := availableUnwatchedPollScopes(c.currentPollObligations())
+			groups, pending := availableUnwatchedPollScopes(c.currentPollObligations())
 			totalRoots := countUniqueRoots(groups)
-			if totalRoots == 0 {
+			if totalRoots == 0 && len(pending) == 0 {
 				continue
 			}
 			log.Printf("polling %d unwatched root(s): %s", totalRoots, formatUnwatchedPollScopes(groups))
@@ -284,6 +292,12 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 				if err := pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups); err != nil {
 					log.Printf("polling unwatched roots failed after %s: %v",
 						c.now().Sub(startedAt).Round(time.Millisecond), err)
+					return
+				}
+				for key, version := range pending {
+					if err := c.updateRoots(pollingObligation{Key: key, releaseVersion: version}, true); err != nil {
+						return
+					}
 				}
 			})
 			completedAt := c.now()
@@ -297,8 +311,7 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 
 // availableUnwatchedPollScopes selects the reconciliation scopes whose
 // obligations are currently pollable, grouped by agent. An obligation with a
-// probe path is gated on that physical path: while it is missing, its scopes
-// are deferred entirely rather than authoritatively reconciled.
+// missing probe defers its scopes until recovery queues their final pass.
 //
 // Blocking is conservative in both directions between the empty agent and named
 // agents. The empty agent means "every provider" for deferral (an unscoped
@@ -314,7 +327,7 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 // root is also deferred for that agent.
 func availableUnwatchedPollScopes(
 	obligations []pollingObligation,
-) map[parser.AgentType][]string {
+) (map[parser.AgentType][]string, map[string]uint64) {
 	// blocked[agent][cleanRoot] = true when agent's probe is missing.
 	blocked := make(map[parser.AgentType]map[string]struct{})
 	// candidates[agent][root] = true when the root exists and probe is present.
@@ -322,7 +335,7 @@ func availableUnwatchedPollScopes(
 
 	for _, obligation := range obligations {
 		probeMissing := false
-		if obligation.Probe != "" {
+		if obligation.Probe != "" && !obligation.releasePending {
 			if _, err := os.Stat(obligation.Probe); err != nil {
 				probeMissing = true
 			}
@@ -387,7 +400,25 @@ func availableUnwatchedPollScopes(
 			delete(result, agent)
 		}
 	}
-	return result
+	pending := make(map[string]uint64)
+	for _, obligation := range obligations {
+		if !obligation.releasePending {
+			continue
+		}
+		covered := true
+		for _, scope := range obligation.Scopes {
+			if scope.Root == "" || slices.Contains(result[scope.Agent], scope.Root) {
+				continue
+			}
+			if _, err := os.Stat(scope.Root); !errors.Is(err, os.ErrNotExist) {
+				covered = false
+			}
+		}
+		if covered {
+			pending[obligation.Key] = obligation.releaseVersion
+		}
+	}
+	return result, pending
 }
 
 // countUniqueRoots returns the number of unique root paths across all agent groups.

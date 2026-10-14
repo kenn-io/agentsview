@@ -112,6 +112,34 @@ func (s *groupedCountingPollSyncer) snapshot() [][]agentsync.ProviderRootsGroup 
 // per-pass work (skip-cache persistence, global subagent linking) stays
 // constant as the number of providers holding obligations grows.
 func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
+	for _, folderCount := range []int{2, 8} {
+		t.Run(fmt.Sprintf("recovered folders=%d", folderCount), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				root := t.TempDir()
+				syncer := &groupedCountingPollSyncer{wake: make(chan struct{}, 4)}
+				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
+				t.Cleanup(coordinator.Stop)
+				coordinator.pollMu.Lock()
+				coordinator.lastCompletion = time.Now()
+				coordinator.pollMu.Unlock()
+				var folders []string
+				for i := range folderCount {
+					folder := requireExistingPollRoot(t, root, fmt.Sprintf("project-%d", i))
+					folders = append(folders, folder)
+					key := "fsnotify-folder:" + root + ":" + folder
+					require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}, {Agent: parser.AgentCodex, Root: root}}, Probe: folder}))
+					require.NoError(t, coordinator.RemoveObligation(key))
+				}
+				synctest.Wait()
+				assert.Empty(t, syncer.snapshot())
+				time.Sleep(unwatchedPollInterval)
+				synctest.Wait()
+				assert.Equal(t, [][]agentsync.ProviderRootsGroup{{{Agent: parser.AgentClaude, Roots: folders}, {Agent: parser.AgentCodex, Roots: []string{root}}}}, syncer.snapshot())
+				assert.Empty(t, coordinator.currentPollObligations())
+			})
+		})
+	}
+
 	for _, providerCount := range []int{2, 8} {
 		t.Run(fmt.Sprintf("providers=%d", providerCount), func(t *testing.T) {
 			parent := t.TempDir()
@@ -150,36 +178,30 @@ func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
 // reproduction test: one provider's degraded coverage must not cause an
 // authoritative pass for any other provider.
 func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(fmt.Sprintf("folder recovery/fail=%t", fail), func(t *testing.T) {
+	t.Run("folder recovery respects another provider's missing probe", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
 			root := t.TempDir()
 			folder := requireExistingPollRoot(t, root, "project")
-			syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4), errs: map[parser.AgentType]error{parser.AgentOpenHands: os.ErrPermission}}
-			if fail {
-				syncer.errs[parser.AgentClaude] = os.ErrPermission
-			}
+			probe := filepath.Join(root, "tmp")
+			syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4)}
 			coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
 			t.Cleanup(coordinator.Stop)
 			key := "fsnotify-folder:" + root + ":" + folder
-			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}, {Agent: parser.AgentCodex, Root: root}}, Probe: folder}))
-			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "unrelated", Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: root}}}))
-			err := coordinator.RemoveObligation(key)
-			if fail {
-				require.ErrorIs(t, err, os.ErrPermission)
-				assert.Len(t, coordinator.currentPollObligations(), 2)
-				delete(syncer.errs, parser.AgentClaude)
-				require.NoError(t, coordinator.RemoveObligation(key))
-			} else {
-				require.NoError(t, err)
-			}
-			want := []providerPollCall{{Agent: parser.AgentClaude, Roots: []string{folder}}, {Agent: parser.AgentCodex, Roots: []string{root}}}
-			if fail {
-				want = append(want, want...)
-			}
-			assert.Equal(t, want, syncer.snapshot())
-			assert.Equal(t, []pollingObligation{{Key: "unrelated", Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: root}}}}, coordinator.currentPollObligations())
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}, {Agent: parser.AgentGemini, Root: root}}, Probe: folder}))
+			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "gemini", Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: root}}, Probe: probe}))
+			require.NoError(t, coordinator.RemoveObligation(key))
+			synctest.Wait()
+			assert.Equal(t, []providerPollCall{{Agent: parser.AgentClaude, Roots: []string{folder}}}, syncer.snapshot())
+			assert.Len(t, coordinator.currentPollObligations(), 2)
+			require.NoError(t, os.Mkdir(probe, 0o755))
+			coordinator.requestPoll()
+			time.Sleep(unwatchedPollInterval)
+			synctest.Wait()
+			assert.Equal(t, []providerPollCall{{Agent: parser.AgentClaude, Roots: []string{folder}}, {Agent: parser.AgentClaude, Roots: []string{folder}}, {Agent: parser.AgentGemini, Roots: []string{root}}}, syncer.snapshot())
+			require.Len(t, coordinator.currentPollObligations(), 1)
+			assert.Equal(t, "gemini", coordinator.currentPollObligations()[0].Key)
 		})
-	}
+	})
 	t.Run("main", func(t *testing.T) {
 		parent := t.TempDir()
 		rootA := requireExistingPollRoot(t, parent, "root-a")
