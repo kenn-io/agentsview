@@ -463,9 +463,9 @@ func TestFSNotifyBackendRuntimeRetryTimerReleasesPolling(t *testing.T) {
 		assert.Empty(t, released)
 		time.Sleep(time.Second)
 		synctest.Wait()
-		assert.Equal(t, backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}, requireReceiveWithin(t, backend.Events(), time.Second))
-		synctest.Wait()
-		assert.Equal(t, "fsnotify-folder:"+root+":"+folder, <-released)
+		// The release callback owns provider-scoped reconciliation before dropping polling.
+		assert.Equal(t, "fsnotify-folder:"+root+":"+folder, requireReceiveWithin(t, released, time.Second))
+		assert.Empty(t, backend.events)
 	})
 }
 
