@@ -741,12 +741,15 @@ fixtures retain this field; missing identities remain source-local.
   source or a deleted page, so the local watcher and the HTTP mirror match them
   to the thread by recorded filename alone. The watcher locates each file under
   the session roots by its `<thread>_<rollout>` key, which also works for
-  mirrored sessions whose stored paths name the remote host. Tests:
-  `TestCodexLegacyRevertPageContinuesItsThread`,
+  mirrored sessions whose stored paths name the remote host. It prefers the copy
+  the page's row records over a duplicate with the same key, and reads the
+  filename from a stored path with either separator, so pages mirrored from a
+  Windows host match too. Tests: `TestCodexLegacyRevertPageContinuesItsThread`,
   `TestCodexLegacyRevertPageUpgradeKeepsSessionIdentity`,
-  `TestCodexLegacyRevertPages`,
+  `TestCodexLegacyRevertPages`, `TestCodexSessionKeyFromStoredPath`,
   `TestSyncPathsCodexIndexEventRefreshesLegacyRevertPageName`,
   `TestSyncPathsCodexIndexEventRefreshesUnchainedLegacyPages`,
+  `TestSyncPathsCodexIndexEventRefreshesStoredLegacyPageDuplicate`,
   `TestHTTPMirrorCodexIndexRemovalRenamesLegacyRevertPages`,
   `TestHTTPMirrorCodexIndexAddedEntryRenamesLegacyRevertPages`.
 
