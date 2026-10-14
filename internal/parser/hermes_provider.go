@@ -318,11 +318,23 @@ func (p *hermesProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
-	// Beside state.db, a session's stored messages can come from the database
-	// or from this transcript, so the transcript must replace them. Homes
-	// without state.db keep append-only transcript writes.
-	_, sessionsDir, besideStateDB := hermesStatePaths(src.Root)
+	// Beside state.db, a session state.db owns (has, or had, a row for) can
+	// have its stored messages come from either the database or this
+	// transcript, so the transcript must replace them. A transcript whose
+	// session was never a state.db row, just sitting in a mixed home, keeps
+	// append-only writes like any other transcript-only home. An
+	// unreadable or schema-incompatible db can't prove the session was
+	// never a member, so it keeps the prior force-replace behavior rather
+	// than risk silently leaving stale rows from a real member in place.
+	stateDB, sessionsDir, besideStateDB := hermesStatePaths(src.Root)
 	forceReplace := besideStateDB && hermesPathInTranscriptDir(sessionsDir, path)
+	if forceReplace {
+		if rawID := HermesSessionID(filepath.Base(path)); isValidHermesSessionID(rawID) {
+			if found, lookupErr := hermesStateDBHasSession(ctx, stateDB, rawID); lookupErr == nil && !found {
+				forceReplace = false
+			}
+		}
+	}
 	result := ParseResult{Session: *sess, Messages: msgs}
 	if p.spec.relabel != nil {
 		p.spec.relabel(&result)
