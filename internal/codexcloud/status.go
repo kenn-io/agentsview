@@ -68,9 +68,9 @@ func NewStatusBoard() *StatusBoard {
 // SetLive sets the live token line shown with the row for key, and
 // whether it needs the user. It shows once sync has set that row.
 func (b *StatusBoard) SetLive(key, text string, warn bool) {
-	b.setLine(b.live, key, text)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	setLineLocked(b.live, key, text)
 	if warn && text != "" {
 		b.liveWarn[key] = true
 	} else {
@@ -84,6 +84,10 @@ func (b *StatusBoard) SetPlanUsage(key, text string) { b.setLine(b.plan, key, te
 func (b *StatusBoard) setLine(lines map[string]string, key, text string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	setLineLocked(lines, key, text)
+}
+
+func setLineLocked(lines map[string]string, key, text string) {
 	if text == "" {
 		delete(lines, key)
 		return
