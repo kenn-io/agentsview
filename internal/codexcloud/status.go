@@ -164,8 +164,7 @@ const keyringHomeMessage = "This Codex home keeps its ChatGPT login in the syste
 const keyringRefusedMessage = "OpenAI did not accept the ChatGPT login in this Codex home's auth.json. " +
 	"Either that saved login expired, or, with `cli_auth_credentials_store = \"auto\"`, Codex keeps the " +
 	"current login in the system keyring, which AgentsView does not read. Run `codex login` first. If " +
-	"AgentsView still cannot use the login after that, " + fileStoreSetting + ", and sign in again the same " +
-	"way. " + fileStoreCost
+	"AgentsView still cannot use the login after that, " + fileStoreSetting + ", and run that login command again. " + fileStoreCost
 
 // Message is the user-facing text for a failure. retryAt is used only for
 // a rate limit.

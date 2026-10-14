@@ -189,12 +189,13 @@ func withLoginCommand(gates Gates, home, message string) string {
 
 // homeLoginCommand says how to run `codex login` for a home other than
 // the default one: a VAR=value prefix in a POSIX shell, and on Windows a
-// PowerShell line that puts back any CODEX_HOME the session had; setting
-// it to $null removes it again when there was none.
+// PowerShell line that puts back any CODEX_HOME the session had, even when
+// the login is cancelled with Ctrl+C; setting it to $null removes it again
+// when there was none.
 func homeLoginCommand(home, goos string) string {
 	if goos == "windows" {
-		return "`$savedCodexHome = $env:CODEX_HOME; $env:CODEX_HOME = " + shellquote.PowerShell(home) +
-			"; codex login; $env:CODEX_HOME = $savedCodexHome` in PowerShell"
+		return "`$savedCodexHome = $env:CODEX_HOME; try { $env:CODEX_HOME = " + shellquote.PowerShell(home) +
+			"; codex login } finally { $env:CODEX_HOME = $savedCodexHome }` in PowerShell"
 	}
 	return "`CODEX_HOME=" + shellquote.POSIX(home) + " codex login`"
 }
