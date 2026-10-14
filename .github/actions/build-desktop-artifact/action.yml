@@ -112,6 +112,7 @@ runs:
         fi
 
     - name: Desktop smoke tests (Rust unit tests)
+      # desktop-windows-unit owns Windows Rust tests.
       if: runner.os != 'Windows'
       shell: bash
       env:
