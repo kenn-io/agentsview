@@ -445,11 +445,15 @@ func TestCodexLegacyRevertPages(t *testing.T) {
 	)
 	d := testDB(t)
 	ctx := t.Context()
-	for _, prefix := range []string{"", "devbox~"} {
+	for _, prefix := range []string{"", "devbox~", "winbox~"} {
 		t.Run("prefix="+prefix, func(t *testing.T) {
 			dir := "/codex/sessions/2026/09/05/"
-			if prefix != "" {
+			switch prefix {
+			case "devbox~":
 				dir = "devbox:" + dir
+			case "winbox~":
+				// A Windows host's stored paths keep backslashes.
+				dir = `winbox:C:\Users\user\.codex\sessions\2026\09\05\`
 			}
 			add := func(id, parent, file string) {
 				t.Helper()

@@ -16898,11 +16898,17 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 	}
 	var out []parser.DiscoveredFile
 	for uuid, title := range titles {
-		rawIDs := e.codexIndexRenamedRawIDs(ctx, uuid, title)
-		rawIDs = append(rawIDs, e.codexIndexRenamedLegacyPageKeys(legacyPages[uuid], title)...)
-		for _, rawID := range rawIDs {
+		for _, rawID := range e.codexIndexRenamedRawIDs(ctx, uuid, title) {
 			if chosen, ok := e.codexIndexSourceForRawID(
-				ctx, sessionRoots, rawID,
+				ctx, sessionRoots, rawID, "",
+			); ok {
+				out = append(out, chosen)
+			}
+		}
+		for _, page := range e.codexIndexRenamedLegacyPages(legacyPages[uuid], title) {
+			if chosen, ok := e.codexIndexSourceForRawID(
+				ctx, sessionRoots,
+				parser.CodexSessionKeyFromStoredPath(page.FilePath), page.FilePath,
 			); ok {
 				out = append(out, chosen)
 			}
@@ -16911,27 +16917,23 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 	return out
 }
 
-// codexIndexRenamedLegacyPageKeys returns the file keys
-// (<thread>_<rollout>) of a thread's legacy revert pages whose stored title
-// differs from the index. Older Codex builds stored such a page as
-// codex:<rollout>, so codexIndexRenamedRawIDs does not list it, and its
+// codexIndexRenamedLegacyPages returns a thread's legacy revert pages whose
+// stored title differs from the index. Older Codex builds stored such a page
+// as codex:<rollout>, so codexIndexRenamedRawIDs does not list it, and its
 // rollout id alone does not locate its file, which is named for the thread.
-// The key locates the file under the index's session roots the same way a
-// current page's id does, including for mirrored sessions whose stored paths
-// name the remote host.
-func (e *Engine) codexIndexRenamedLegacyPageKeys(
+// The caller locates the file by its <thread>_<rollout> key under the index's
+// session roots, the same way a current page's id does, and prefers the copy
+// the page's row records.
+func (e *Engine) codexIndexRenamedLegacyPages(
 	pages []db.CodexPageSource, title string,
-) []string {
-	var keys []string
+) []db.CodexPageSource {
+	var renamed []db.CodexPageSource
 	for _, page := range pages {
-		if !e.codexStoredNameDiffersBySessionID(page.ID, title, false) {
-			continue
+		if e.codexStoredNameDiffersBySessionID(page.ID, title, false) {
+			renamed = append(renamed, page)
 		}
-		keys = append(keys, parser.CodexSessionUUIDFromFilename(
-			pathpkg.Base(filepath.ToSlash(page.FilePath)),
-		))
 	}
-	return keys
+	return renamed
 }
 
 // codexIndexRenamedRawIDs lists the raw session ids of one index entry whose
@@ -16964,8 +16966,11 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 
 // codexIndexSourceForRawID resolves a Codex session key to its source file
 // under the index's roots and pins the provider source to the chosen copy.
+// storedPath, when set, is the source the session's row records; a legacy
+// revert page's row is not keyed by its file key, so the caller supplies it
+// and the copy at that path wins over other duplicates.
 func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
-	sessionRoots []string, rawID string,
+	sessionRoots []string, rawID, storedPath string,
 ) (parser.DiscoveredFile, bool) {
 	var candidates []parser.DiscoveredFile
 	for _, root := range sessionRoots {
@@ -16983,7 +16988,18 @@ func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
 	// A UUID can exist in both sessions/ and archived_sessions/.
 	// Prefer the path the DB already tracks so a title rename does
 	// not reparse a stale duplicate over the stored copy.
-	chosen := e.pickPreferredCodexIndexDiscoveredFile(ctx, candidates)
+	chosen, tracked := parser.DiscoveredFile{}, false
+	if storedPath != "" {
+		for _, candidate := range candidates {
+			if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == filepath.Clean(storedPath) {
+				chosen, tracked = candidate, true
+				break
+			}
+		}
+	}
+	if !tracked {
+		chosen = e.pickPreferredCodexIndexDiscoveredFile(ctx, candidates)
+	}
 	// Pin the provider source to the chosen path and route it through the
 	// provider so processProviderFile parses exactly this copy instead of
 	// re-canonicalizing the UUID to the preferred dated layout, which would

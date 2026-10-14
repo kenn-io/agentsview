@@ -2841,7 +2841,7 @@ func (db *DB) CodexLegacyRevertPages(
 			return nil, fmt.Errorf("scanning legacy codex revert page: %w", err)
 		}
 		raw := strings.TrimPrefix(page.ID, idPrefix)
-		key := parser.CodexSessionUUIDFromFilename(pathpkg.Base(filepath.ToSlash(page.FilePath)))
+		key := parser.CodexSessionKeyFromStoredPath(page.FilePath)
 		thread := parser.CodexThreadIDFromSessionKey(key)
 		if thread != key && key == thread+"_"+raw {
 			pages[thread] = append(pages[thread], page)

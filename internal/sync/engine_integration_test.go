@@ -7374,6 +7374,74 @@ func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
+// A legacy revert page is stored as codex:<rollout>, not under its file key,
+// so an index rename must still refresh the copy its row tracks instead of a
+// stale live duplicate with the same filename key.
+func TestSyncPathsCodexIndexEventRefreshesStoredLegacyPageDuplicate(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	const (
+		thread  = "f7a8b9ca-7890-1234-ef01-456789012350"
+		rollout = "f7a8b9ca-7890-1234-ef01-456789012351"
+	)
+	pageID := "codex:" + rollout
+	pageName := "rollout-2026-05-04T14-31-58-" + thread + "_" + rollout + ".jsonl"
+	page := func(messages ...string) string {
+		lines := []string{testjsonl.CodexSessionMetaWithFieldsJSON(rollout, "/home/user/code/api", "user", tsEarly,
+			map[string]any{
+				"session_id":   thread,
+				"history_mode": "paginated",
+				"history_base": map[string]any{"thread_id": thread, "end_ordinal_exclusive": 2},
+			})}
+		return testjsonl.JoinJSONL(append(lines, messages...)...)
+	}
+
+	// Only the archived copy exists at first sync, so the DB tracks it.
+	archivedPath := env.writeSession(t, archivedDir, pageName, page(
+		testjsonl.CodexMsgJSON("user", "Archived copy", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "Archived reply", tsEarlyS5),
+	))
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-05-04T15:00:00Z"}`+"\n",
+		thread,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
+
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), pageID),
+		"DB must track the archived copy before the rename")
+	assertSessionMessageCount(t, env.db, pageID, 2)
+
+	// A shorter stale live duplicate now exists, and the index records a rename.
+	livePath := env.writeCodexSession(t, filepath.Join("2026", "05", "04"), pageName,
+		page(testjsonl.CodexMsgJSON("user", "Stale live copy", tsEarlyS1)))
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+	newIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-05-04T16:00:00Z"}`+"\n",
+		thread,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index rename")
+
+	env.engine.SyncPaths([]string{indexPath})
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), pageID),
+		"index rename must refresh the stored archived copy, not the stale live duplicate")
+	name, found, err := env.db.GetSessionName(t.Context(), pageID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "Renamed title", name)
+	assertSessionMessageCount(t, env.db, pageID, 2)
+}
+
 func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

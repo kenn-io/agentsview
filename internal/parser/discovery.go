@@ -794,6 +794,13 @@ func CodexSessionUUIDFromFilename(name string) string {
 	return extractUUIDFromRollout(name)
 }
 
+// CodexSessionKeyFromStoredPath returns the session key of a stored Codex
+// source path. It splits on both separators because stored paths keep the
+// separators of the host that recorded them, including a remote Windows host.
+func CodexSessionKeyFromStoredPath(path string) string {
+	return CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
+}
+
 // CodexThreadIDFromSessionKey returns the thread UUID of a revert page key
 // (<thread>_<rollout>) and returns any other key unchanged.
 func CodexThreadIDFromSessionKey(key string) string {

@@ -423,3 +423,20 @@ func TestCodexForkWithOnlyParentPageNeedsRetry(t *testing.T) {
 	require.Len(t, outcome.Results[0].Result.Messages, 1)
 	assert.Equal(t, "child question", outcome.Results[0].Result.Messages[0].Content)
 }
+
+// Stored paths keep the separators of the host that recorded them, so a page
+// mirrored from Windows still yields its key on any platform.
+func TestCodexSessionKeyFromStoredPath(t *testing.T) {
+	pageKey := revertThread + "_" + revertRollout
+	name := "rollout-2026-09-01T10-00-00-" + pageKey + ".jsonl"
+	for _, path := range []string{
+		"/home/user/.codex/sessions/2026/09/01/" + name,
+		"devbox:/home/user/.codex/sessions/2026/09/01/" + name,
+		`winbox:C:\Users\user\.codex\sessions\2026\09\01\` + name,
+		`C:\Users\user\.codex\archived_sessions\` + name,
+		name,
+	} {
+		assert.Equal(t, pageKey, CodexSessionKeyFromStoredPath(path), path)
+	}
+	assert.Empty(t, CodexSessionKeyFromStoredPath(`winbox:C:\Users\user\notes.txt`))
+}
