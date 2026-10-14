@@ -1324,7 +1324,8 @@ class UsageStore {
     if (
       !this.pairwiseParams ||
       Object.keys({ ...this.pairwiseParams, ...params }).some(
-        (key) => this.pairwiseParams?.[key as keyof UsageParams] !== params[key as keyof UsageParams],
+        (key) =>
+          this.pairwiseParams?.[key as keyof UsageParams] !== params[key as keyof UsageParams],
       )
     ) {
       this.clearPairwiseComparisonState();
