@@ -172,7 +172,14 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 		if applyErr != nil {
 			return applyErr
 		}
-		s.noteUsage(gates, key, resp, err, login)
+		retrying := false
+		if err != nil {
+			var loadErr error
+			if retrying, loadErr = s.anyPending(key, req.groups); loadErr != nil {
+				return loadErr
+			}
+		}
+		s.noteUsage(gates, key, resp, err, login, retrying)
 		if stop {
 			break
 		}
@@ -182,8 +189,10 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 }
 
 // noteUsage keeps the outcome of the latest plan usage request for the
-// status line. Status is in memory, like the rest of the board.
-func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err error, login Login) {
+// status line. Status is in memory, like the rest of the board. retrying
+// says whether a root in the failed request is still pending, so asked
+// again later.
+func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err error, login Login, retrying bool) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	if s.usageLines == nil {
@@ -207,8 +216,12 @@ func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err 
 		switch f {
 		case FailRateLimited:
 		case FailTooLarge:
-			// Each root's request is retried with its usual backoff.
-			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{}) + " AgentsView asks again later."
+			// Each root's request is retried with its usual backoff, unless
+			// this failure settled every root in it.
+			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
+			if retrying {
+				s.usageLines[key] += " AgentsView asks again later."
+			}
 		default:
 			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
 		}
@@ -617,4 +630,18 @@ func usageTime(t, now time.Time) string {
 		return t.Local().Format("Jan 2 2006 15:04")
 	}
 	return t.Local().Format("Jan 2 15:04")
+}
+
+// anyPending reports whether any root in groups is still pending.
+func (s *Syncer) anyPending(key AccountKey, groups []UsageGroup) (bool, error) {
+	unlock := s.Store.Lock(key)
+	defer unlock()
+	acct, err := s.Store.LoadAccount(key)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(groups, func(g UsageGroup) bool {
+		_, ok := acct.UsagePending[g.ThreadID]
+		return ok
+	}), nil
 }

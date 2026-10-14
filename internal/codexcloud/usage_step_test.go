@@ -702,6 +702,29 @@ func TestLateFailureStillLetsTheNextAnswerSettle(t *testing.T) {
 	}
 }
 
+// An oversized reply that settles the last pending root must not promise
+// another request.
+func TestOversizedReplyThatSettlesPromisesNoRetry(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(1), nil))
+	env.run(t)
+	lastChange := env.account(t).UsagePending["a"].LastChange
+	env.usage.Refuse(http.StatusOK, nil, strings.Repeat(" ", 16<<20+1))
+	env.clock.Set(lastChange.Add(settleAfter))
+	for range settleFailures {
+		entry, ok := env.account(t).UsagePending["a"]
+		require.True(t, ok)
+		if entry.NextAttempt.After(env.clock.Now()) {
+			env.clock.Set(entry.NextAttempt)
+		}
+		env.run(t)
+	}
+
+	require.NotContains(t, env.account(t).UsagePending, "a", "the root settled")
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{}), env.planLine(t))
+}
+
 // A change restarts the 7 days, so failures from before it do not count
 // toward giving up after the new settle point.
 func TestChangeClearsLateFailures(t *testing.T) {
