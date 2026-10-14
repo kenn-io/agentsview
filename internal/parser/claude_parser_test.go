@@ -3149,3 +3149,29 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 		assert.Equal(t, "follow-up", sess.FirstMessage)
 	})
 }
+
+func TestIsPersistedToolResultPlaceholder(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"tagged", "<persisted-output>\nOutput too large (32B). Full output saved to: /x/tool-results/a.txt\n\nPreview (first 2KB):\npreview\n</persisted-output>", true},
+		{"tagged with a trailing line", "<persisted-output>\nOutput too large (32B). Full output saved to: /x/tool-results/a.txt\n\nPreview (first 2KB):\npreview\n</persisted-output>\nShell cwd was reset to /tmp/project", true},
+		{"bare path line", "Full output saved to: /x/tool-results/a.txt", true},
+		{"bare path line with a space in the path", "Full output saved to: /x/my project/tool-results/a.txt", true},
+		{"tag without path", "<persisted-output>\nsomething\n</persisted-output>", true},
+		{"full output", "full output line 1\nfull output line 2\n", false},
+		{"mentions the field name only", "grep persistedOutputPath internal/parser/claude.go", false},
+		{"output quoting the tag", "line 1\nfound <persisted-output> in transcript\nline 3", false},
+		{"output quoting the path line", "line 1\nline 2\nFull output saved to: /x/y.txt", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsPersistedToolResultPlaceholder(tc.content))
+		})
+	}
+}

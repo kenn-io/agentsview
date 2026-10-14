@@ -32,6 +32,10 @@ var (
 	xmlCmdArgsRe              = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
 	xmlCmdStripRe             = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
 	persistedToolResultPathRe = regexp.MustCompile(`(?m)Full output saved to:\s*(.+)$`)
+	// persistedToolResultBareRe is the whole of the bare placeholder: one
+	// line naming the side file, whose path may contain spaces. Callers check
+	// that the content is a single line.
+	persistedToolResultBareRe = regexp.MustCompile(`^Full output saved to:\s*.+$`)
 )
 
 const (
@@ -2411,7 +2415,7 @@ func resolveClaudePersistedToolResultsContext(
 		}
 		path := persistedOutputPathFromContent(content)
 		if path == "" && (toolResultCount == 1 ||
-			isPersistedToolResultPlaceholder(content)) {
+			containsPersistedOutputTag(content)) {
 			path = persistedPath
 		}
 		if path == "" {
@@ -2476,7 +2480,7 @@ func countClaudeToolResultBlocks(blocks []jsontext.Value) int {
 	return count
 }
 
-func isPersistedToolResultPlaceholder(content string) bool {
+func containsPersistedOutputTag(content string) bool {
 	return strings.Contains(content, "<persisted-output>")
 }
 
@@ -2486,6 +2490,22 @@ func persistedOutputPathFromContent(content string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
+}
+
+// IsPersistedToolResultPlaceholder reports whether content is the
+// placeholder Claude Code leaves in place of a large tool result it
+// wrote to a side file: after trimming surrounding whitespace, the
+// content opens with the <persisted-output> tag (a line may follow the
+// closing tag, such as a shell cwd reset notice), or is exactly one
+// "Full output saved to: <path>" line. It matches that whole shape, not
+// the markers alone, because a real output may quote either marker.
+func IsPersistedToolResultPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "<persisted-output>") {
+		return true
+	}
+	return !strings.ContainsAny(trimmed, "\r\n") &&
+		persistedToolResultBareRe.MatchString(trimmed)
 }
 
 func readClaudePersistedToolResult(
