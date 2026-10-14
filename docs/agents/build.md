@@ -13,9 +13,8 @@ Keep the explicit architecture labels for Linux ARM64 and macOS desktop builds.
 Use the built-in Go cache in `actions/setup-go` and npm caching in
 `actions/setup-node`. Set `cache-dependency-path` to the lockfiles for the
 packages the job installs. Desktop jobs cache Rust dependencies through
-`Swatinem/rust-cache` with the GitHub cache backend. Pull requests and `main`
-save Rust caches after a miss or a partial match; exact cache hits skip saving.
-Playwright jobs install browsers and system dependencies on each run.
+`Swatinem/rust-cache` with the GitHub cache backend. Playwright jobs install
+browsers and system dependencies on each run.
 
 ## Go and SQLite
 
