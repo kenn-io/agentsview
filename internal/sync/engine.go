@@ -2267,7 +2267,15 @@ func (e *Engine) classifyProviderChangedPath(
 						),
 					)
 				}
-				if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+				// Only Hermes and Augure Desktop's per-session discovery
+				// returns a usable partial source set alongside
+				// DiscoveryIncompleteError; every other provider keeps the
+				// prior behavior of discarding on any classification error,
+				// including an incomplete one.
+				_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
+				usesPartialSources := def.Type == parser.AgentHermes ||
+					def.Type == parser.AgentAugureDesktop
+				if !incomplete || ctx.Err() != nil || !usesPartialSources {
 					continue
 				}
 			}
@@ -8540,7 +8548,15 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
-			if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+			// Only Hermes and Augure Desktop's per-session discovery returns
+			// a usable partial source set alongside
+			// DiscoveryIncompleteError; every other provider keeps the prior
+			// behavior of discarding on any discovery error, including an
+			// incomplete one.
+			_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
+			usesPartialSources := agentType == parser.AgentHermes ||
+				agentType == parser.AgentAugureDesktop
+			if !incomplete || ctx.Err() != nil || !usesPartialSources {
 				continue
 			}
 		}
