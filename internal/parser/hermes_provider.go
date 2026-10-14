@@ -1232,6 +1232,9 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 	}
 	defer conn.Close()
 	observeSharedContainerScan(ctx)
+	if err := checkHermesStateSchema(ctx, conn); err != nil {
+		return false, err
+	}
 
 	var found int
 	err = conn.QueryRowContext(

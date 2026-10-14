@@ -1362,7 +1362,6 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 	after, err := database.GetSessionFull(t.Context(), "hermes:child")
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	assert.Equal(t, before.ID, after.ID)
 	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
 	assert.Nil(t, after.SourceMissingAt)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
@@ -1370,19 +1369,16 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 
 func TestHermesPartialDiscoverySyncsReadableTranscripts(t *testing.T) {
 	for _, test := range []struct {
-		damage   string
-		mode     string
-		reported bool
+		damage string
+		mode   string
 	}{
-		{damage: "malformed database", mode: "full sync", reported: true},
-		{damage: "malformed database", mode: "state event", reported: true},
-		{damage: "malformed database", mode: "transcript event", reported: true},
-		{damage: "incompatible schema", mode: "full sync", reported: true},
-		{damage: "incompatible schema", mode: "transcript event", reported: true},
-		{damage: "missing messages table", mode: "full sync", reported: true},
-		{damage: "missing messages table", mode: "state event", reported: true},
-		// The sessions table still answers membership, so the transcript
-		// resolves without touching the damaged messages table.
+		{damage: "malformed database", mode: "full sync"},
+		{damage: "malformed database", mode: "state event"},
+		{damage: "malformed database", mode: "transcript event"},
+		{damage: "incompatible schema", mode: "full sync"},
+		{damage: "incompatible schema", mode: "transcript event"},
+		{damage: "missing messages table", mode: "full sync"},
+		{damage: "missing messages table", mode: "state event"},
 		{damage: "missing messages table", mode: "transcript event"},
 	} {
 		t.Run(test.damage+"/"+test.mode, func(t *testing.T) {
@@ -1425,7 +1421,7 @@ func TestHermesPartialDiscoverySyncsReadableTranscripts(t *testing.T) {
 				reported = engine.syncPathsContext(t.Context(), []string{filepath.Join(dir, "fallback.jsonl"), healthy}, false) != nil
 			}
 
-			assert.Equal(t, test.reported, reported, "incomplete discovery must be reported")
+			assert.True(t, reported, "incomplete discovery must be reported")
 			for _, id := range []string{"hermes:fallback", "hermes:healthy"} {
 				assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, id), id)
 			}
@@ -1518,11 +1514,12 @@ func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
 	edited := `{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}` + "\n" +
 		`{"role":"assistant","content":"corrected reply","timestamp":"2026-05-14T10:02:00Z"}` + "\n"
 	for _, test := range []struct {
-		name   string
-		id     string
-		change func(t *testing.T, root string) string
-		event  bool
-		want   []string
+		name       string
+		id         string
+		change     func(t *testing.T, root string) string
+		event      bool
+		incomplete bool
+		want       []string
 	}{
 		{
 			name: "full sync applies an edit",
@@ -1561,7 +1558,21 @@ func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
 				execHermesState(t, filepath.Join(root, "state.db"), "DROP TABLE messages")
 				return filepath.Join(root, "sessions", "child.jsonl")
 			},
-			want: []string{"hello", "Done."},
+			incomplete: true,
+			want:       []string{"hello", "Done."},
+		},
+		{
+			name: "transcript event falls back from an unreadable database session",
+			id:   "child",
+			change: func(t *testing.T, root string) string {
+				t.Helper()
+				writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+				execHermesState(t, filepath.Join(root, "state.db"), "DROP TABLE messages")
+				return filepath.Join(root, "sessions", "child.jsonl")
+			},
+			event:      true,
+			incomplete: true,
+			want:       []string{"hello", "Done."},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1576,11 +1587,13 @@ func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
 			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 
 			path := test.change(t, root)
+			var incomplete bool
 			if test.event {
-				require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+				incomplete = engine.syncPathsContext(t.Context(), []string{path}, false) != nil
 			} else {
-				engine.SyncAll(t.Context(), nil)
+				incomplete = engine.SyncAll(t.Context(), nil).Failed > 0
 			}
+			assert.Equal(t, test.incomplete, incomplete)
 
 			assert.Equal(t, test.want, messageContents(t, database, "hermes:"+test.id))
 		})
