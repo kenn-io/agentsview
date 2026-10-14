@@ -941,14 +941,14 @@ describe("UsageStore session filter params", () => {
           expect(
             usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0],
           ).toHaveProperty("active_since");
-          resolvePair(usagePairwiseComparison());
-          await vi.waitFor(() => expect(usage.querying.pairwise).toBe(false));
           vi.setSystemTime(new Date("2026-06-15T16:01:00Z"));
         }
         expect(finished).toBe(false);
         rejectSummary(new Error("totals failed"));
         await vi.waitFor(() => expect(usage.querying.summary).toBe(false));
-        expect(usage.querying.pairwise).toBe(outcome !== "recently active success");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(finished).toBe(false);
+        expect(usage.querying.pairwise).toBe(true);
         if (outcome === "failure") rejectPair(new Error("comparison failed"));
         else resolvePair(usagePairwiseComparison());
         await refresh;
@@ -1015,7 +1015,7 @@ describe("UsageStore session filter params", () => {
         usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0],
       ).not.toHaveProperty("fallback_to_default");
       resolveOld(usagePairwiseComparison());
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(finished).toBe(false);
       const replacement = usagePairwiseComparison();
       replacement.left.value = "gpt-4o";
@@ -1033,8 +1033,20 @@ describe("UsageStore session filter params", () => {
         fallback.left.value = "model-b";
         fallback.right.value = "model-c";
         fallback.left.totalTokens = 700;
-        usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(fallback);
+        let resolveFallback!: (value: ServiceUsagePairwiseComparisonResponse) => void;
+        usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveFallback = resolve;
+            }),
+        );
         resolveSummary(usageSummaryWithOptions({ projects: [], models: ["model-b", "model-c"] }));
+        await vi.waitFor(() =>
+          expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(4),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(finished).toBe(false);
+        resolveFallback(fallback);
         expect(await refresh).toBe(700);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(4);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({
