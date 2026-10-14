@@ -1214,7 +1214,7 @@ ChatGPT account share one import.
   save it at all. AgentsView does not read the keyring. To let AgentsView use
   such a home, set `cli_auth_credentials_store = "file"` in that home's
   `config.toml`: change the existing line, or add one near the top, before any
-  `[section]`. Keep only one line for that key: Codex cannot load a
+  `[section]`. Keep only one line for that key, because Codex cannot load a
   `config.toml` that sets it twice. Then run `codex login`. Codex then keeps the
   ChatGPT login in `auth.json`, a plain file that any program running as you can
   read. With the default `auto` store, a refused login can mean either an
@@ -1300,8 +1300,8 @@ report, waiting longer each time, up to 6 hours between requests. It refreshes
 complete figures once a day. Refreshes stop 7 days after the chat's last change,
 and the session keeps the last complete figures.
 
-For a chat still waiting for complete figures, the first answer that arrives 7
-days or more after the chat's last change is the last one AgentsView takes.
+For a chat still waiting for complete figures, AgentsView stops after the first
+answer that arrives 7 days or more after the chat's last change.
 If that answer includes the chat, AgentsView keeps what it reports, even partial
 figures or none. If it leaves the chat out, AgentsView keeps the figures it
 stored before, or shows none if it never got any. If 3 requests in a row fail
@@ -1311,8 +1311,8 @@ could not check plan usage.
 Some problems pause plan usage for the whole account instead: OpenAI limiting
 requests, OpenAI saying the account has no usage report, or no Codex home with
 a usable login. While paused, no request is sent, so a chat can wait more than 7
-days after its last change. The first answer after the pause ends is then its
-last one, under the same rules.
+days after its last change. The first answer after the pause ends is
+the last one AgentsView takes for that chat, under the same rules.
 
 #### Limits
 
