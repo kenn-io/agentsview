@@ -4,6 +4,7 @@ package db
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
-		"model-filtered",
+		"model-filtered", "overlap",
 	}, usageQuerySessionIDs(snapshot.Sessions))
 	byID := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
@@ -81,7 +82,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
-		"model-filtered", "relaxed",
+		"model-filtered", "overlap", "relaxed",
 	}, usageQuerySessionIDs(relaxed.Sessions))
 
 	allHistory, err := database.captureUsageQuery(
@@ -90,7 +91,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"all-empty", "blank-message", "event", "filtered-competitor",
-		"inside-message", "model-filtered", "outside", "relaxed", "user-only",
+		"inside-message", "model-filtered", "outside", "overlap", "relaxed", "user-only",
 	}, usageQuerySessionIDs(allHistory.Sessions))
 	assert.Empty(t, allHistory.Intervals)
 }
@@ -102,18 +103,25 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name    string
-		kind    usageQueryKind
-		indexes []string
+		name     string
+		kind     usageQueryKind
+		searches []string
 	}{
-		{"token", usageQueryKindToken, []string{"idx_messages_usage_timestamp", "idx_usage_events_occurred"}},
-		{"activity", usageQueryKindActivity, []string{"idx_messages_usage_timestamp", "idx_usage_events_occurred", "idx_messages_activity_timestamp"}},
+		{"token", usageQueryKindToken, []string{
+			"SEARCH m USING INDEX idx_messages_usage_timestamp (timestamp>? AND timestamp<?)",
+			"SEARCH ue USING INDEX idx_usage_events_occurred (occurred_at>? AND occurred_at<?)",
+		}},
+		{"activity", usageQueryKindActivity, []string{
+			"SEARCH m USING INDEX idx_messages_usage_timestamp (timestamp>? AND timestamp<?)",
+			"SEARCH ue USING INDEX idx_usage_events_occurred (occurred_at>? AND occurred_at<?)",
+			"SEARCH m USING COVERING INDEX idx_messages_activity_timestamp (timestamp>? AND timestamp<?)",
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query, args := usageCandidateDiscoverySQL(bounds, tc.kind)
 			plan := explainUsageCandidatePlan(t, database, query, args)
-			for _, index := range tc.indexes {
-				assert.Regexp(t, `(?s)(?:CO-ROUTINE|MATERIALIZE) ranged\nSEARCH (?:m|ue) USING (?:COVERING )?INDEX `+index+` [^\n]+\nUSE TEMP B-TREE FOR DISTINCT\nSCAN ranged\nSEARCH s USING`, plan)
+			for _, search := range tc.searches {
+				assert.Contains(t, plan, search)
 			}
 		})
 	}
@@ -168,20 +176,18 @@ func usageCandidateFixture(t *testing.T) *DB {
 	seedSession("inside-message", "keep", "2026-08-01T00:00:00Z", 2, "Inside")
 	insertMessages(t, database,
 		tokenMessage("inside-message", "2026-08-10T10:00:00Z", "model-x"))
-	var repeated []Message
-	for ordinal := 1; ordinal <= 20; ordinal++ {
-		message := tokenMessage("inside-message", "2026-08-10T10:00:00Z", "model-x")
-		message.Ordinal = ordinal
-		repeated = append(repeated, message)
-	}
-	insertMessages(t, database, repeated...)
 	seedSession("blank-message", "keep", "2026-08-10T09:00:00Z", 2, "Blank")
 	insertMessages(t, database, tokenMessage("blank-message", "", "model-x"))
 	seedSession("event", "keep", "2026-08-01T00:00:00Z", 2, "Event")
-	insertMessages(t, database, tokenMessage("event", "2026-08-10T12:00:00Z", "model-x"))
 	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "event", []UsageEvent{{
 		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
 		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "e1",
+	}}))
+	seedSession("overlap", "keep", "2026-08-01T00:00:00Z", 2, "Overlap")
+	insertMessages(t, database, tokenMessage("overlap", "2026-08-10T12:00:00Z", "model-x"))
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "overlap", []UsageEvent{{
+		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
+		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "overlap-event",
 	}}))
 	seedSession("filtered-competitor", "drop", "2026-08-01T00:00:00Z", 2, "Drop")
 	insertMessages(t, database,
@@ -233,12 +239,27 @@ func explainUsageCandidatePlan(
 	require.NoError(t, err)
 	defer rows.Close()
 	var details []string
+	parents := make(map[int]int)
+	children := make(map[int][]string)
 	for rows.Next() {
 		var id, parent, unused int
 		var detail string
 		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
 		details = append(details, detail)
+		parents[id] = parent
+		children[parent] = append(children[parent], detail)
 	}
 	require.NoError(t, rows.Err())
+	for id, parent := range parents {
+		for _, detail := range children[id] {
+			if strings.HasPrefix(detail, "SEARCH ") && strings.Contains(detail, ">?") {
+				// Deduplicate within the range subtree before its parent looks up sessions.
+				assert.Contains(t, children[id], "USE TEMP B-TREE FOR DISTINCT")
+				assert.Contains(t, children[parent], "SCAN ranged")
+				assert.Contains(t, children[parent], "SEARCH s USING INDEX sqlite_autoindex_sessions_1 (id=?)")
+			}
+		}
+	}
+	slices.Sort(details)
 	return strings.Join(details, "\n")
 }

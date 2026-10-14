@@ -584,7 +584,9 @@ usage-cache candidate discovery, not the Activity report; that report continues
 to avoid a global timestamp scan. Keep these indexes narrow except for the
 single session-keyed covering index that carries `token_usage`.
 
-Discovery collects distinct session IDs per index range before checking `sessions`.
+Discovery collects distinct session IDs per index range before checking
+`sessions`, so sessions are looked up once per session instead of once per
+message.
 
 Changing any of these index column lists rebuilds the affected archive index on
 the next writable open, before HTTP readiness, and must log that startup is
