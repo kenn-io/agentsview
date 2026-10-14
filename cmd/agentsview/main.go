@@ -1051,7 +1051,11 @@ func syncObligationToPoller(o sync.PollingObligation) pollingObligation {
 	for _, s := range o.Scopes {
 		scopes = append(scopes, pollingScope{Agent: parser.AgentType(s.Agent), Root: s.Root})
 	}
-	return pollingObligation{Key: o.Key, Scopes: scopes, Probe: o.Probe}
+	releaseScopes := make([]pollingScope, 0, len(o.ReleaseScopes))
+	for _, s := range o.ReleaseScopes {
+		releaseScopes = append(releaseScopes, pollingScope{Agent: parser.AgentType(s.Agent), Root: s.Root})
+	}
+	return pollingObligation{Key: o.Key, Scopes: scopes, ReleaseScopes: releaseScopes, Probe: o.Probe}
 }
 
 // absRootPath mirrors the engine's cleanRootPath so daemon-side scope-overlap

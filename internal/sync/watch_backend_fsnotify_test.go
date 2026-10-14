@@ -287,8 +287,8 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 				backend.watchCreatedPath(folder)
 			}
 			require.Equal(t, []PollingObligation{
-				{Key: "fsnotify-folder:" + root + ":" + a, Scopes: []PollingScope{{Agent: "claude", Root: a}}, Probe: a},
-				{Key: "fsnotify-folder:" + root + ":" + b, Scopes: []PollingScope{{Agent: "claude", Root: b}}, Probe: b},
+				{Key: "fsnotify-folder:" + root + ":" + a, Scopes: []PollingScope{{Agent: "claude", Root: a}}, ReleaseScopes: []PollingScope{{Agent: "claude", Root: root}}, Probe: a},
+				{Key: "fsnotify-folder:" + root + ":" + b, Scopes: []PollingScope{{Agent: "claude", Root: b}}, ReleaseScopes: []PollingScope{{Agent: "claude", Root: root}}, Probe: b},
 			}, *added)
 			ops.setFail(a, nil)
 			now := time.Now().Add(11 * time.Second)
@@ -383,7 +383,7 @@ func TestFSNotifyBackendFolderPollingReconcilesOnlyFailedSubtree(t *testing.T) {
 			} else {
 				backend.watchCreatedPath(folder)
 			}
-			require.Equal(t, []PollingObligation{{Key: "fsnotify-folder:" + root + ":" + folder, Scopes: []PollingScope{{Agent: "claude", Root: folder}, {Agent: "cursor", Root: sibling}}, Probe: folder}}, *added)
+			require.Equal(t, []PollingObligation{{Key: "fsnotify-folder:" + root + ":" + folder, Scopes: []PollingScope{{Agent: "claude", Root: folder}, {Agent: "cursor", Root: sibling}}, ReleaseScopes: []PollingScope{{Agent: "claude", Root: root}, {Agent: "cursor", Root: sibling}}, Probe: folder}}, *added)
 			assert.Contains(t, backend.watcher.WatchList(), root)
 			assert.Contains(t, backend.watcher.WatchList(), sibling)
 			assert.NotContains(t, backend.watcher.WatchList(), folder)
@@ -1447,10 +1447,14 @@ func TestFSNotifyBackendOverflowReinstallsShallowWatches(t *testing.T) {
 	require.NoError(t, backend.AddShallow(lost))
 	ops.setFail(lost, errors.New("directory removed"))
 	obligations := make(chan PollingObligation, 2)
+	released := make(chan string, 2)
 	backend.bindPollingOwnership(func(obligation PollingObligation) error {
 		obligations <- obligation
 		return nil
-	}, func(string) error { return nil })
+	}, func(key string) error {
+		released <- key
+		return nil
+	})
 	require.NoError(t, backend.Start())
 
 	errorInput <- fsnotify.ErrEventOverflow
@@ -1459,6 +1463,7 @@ func TestFSNotifyBackendOverflowReinstallsShallowWatches(t *testing.T) {
 	assert.Equal(t, backendOpFullSync, event.Op)
 	obligation := requireReceiveWithin(t, obligations, 2*time.Second)
 	assert.Equal(t, "fsnotify-runtime:"+lost, obligation.Key)
+	assert.Empty(t, released, "a registered shallow root must retain fallback polling")
 	assert.Equal(t, 2, ops.addCount(kept),
 		"a reachable shallow root must have its native watch re-added")
 	select {

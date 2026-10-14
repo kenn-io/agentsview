@@ -85,8 +85,9 @@ const FSNotifyFolderPollingPrefix = "fsnotify-folder:"
 // PollingObligation identifies one independently releasable reason that a set
 // of configured scopes needs authoritative polling coverage.
 type PollingObligation struct {
-	Key    string
-	Scopes []PollingScope
+	Key           string
+	Scopes        []PollingScope
+	ReleaseScopes []PollingScope // Original scopes reconciled once before folder polling ends.
 	// Probe is the physical watcher path whose availability gates this
 	// obligation's reconciliation Scopes. For nested provider roots (e.g.
 	// Gemini's <root>/tmp) the physical path differs from the configured
@@ -1133,6 +1134,7 @@ func (w *Watcher) loop() {
 	var timerC <-chan time.Time
 	callbackBusy := false
 	immediatePending := false
+	nativePending := false
 
 	stopTimer := func() {
 		if timer != nil {
@@ -1180,6 +1182,7 @@ func (w *Watcher) loop() {
 		firstPendingAt = time.Time{}
 		pendingDelay = w.batchDelay
 		immediatePending = false
+		nativePending = false
 		callbackBusy = true
 		batches <- batch
 		return true
@@ -1205,10 +1208,13 @@ func (w *Watcher) loop() {
 				(event.Path == "" && event.Op&backendOpFullSync == 0) {
 				continue
 			}
-			if w.eventSink.Empty() {
+			// Fresh native events keep their normal latency while discovery retries back off.
+			if w.eventSink.Empty() || !nativePending && consecutiveFailures > 0 {
 				firstPendingAt = time.Now()
 				pendingDelay = w.batchDelay
+				stopTimer()
 			}
+			nativePending = true
 			w.accumulateBackendEvent(event)
 			schedule()
 
@@ -1299,8 +1305,9 @@ func (w *Watcher) loop() {
 					firstPendingAt = time.Now()
 					if immediatePending {
 						pendingDelay = 0
+					} else if nativePending {
+						pendingDelay = w.batchDelay
 					} else {
-						// Concurrent events must not bypass the retained retry's backoff.
 						pendingDelay = watcherRetryDelay(
 							max(w.batchDelay, w.minInterval), consecutiveFailures,
 						)

@@ -1734,10 +1734,11 @@ Runtime folder watch failures keep healthy folders on native watches. Claude
 polling covers the affected project folder. Other providers poll the root's
 configured scopes so changes to companion files reach their owning sessions.
 Retries start after 10 seconds and back off to two minutes. The next shared poll
-pass batches recovered folders and reconciles their provider scopes before
-releasing polling. A failed reconciliation keeps polling active for the next
-retry. A deferred folder keeps polling until its whole subtree is watched or
-the directory disappears.
+pass batches recovered folders and reconciles their original provider root
+scopes before releasing polling. A failed reconciliation keeps polling active
+for the next retry. A deferred folder keeps polling until its whole subtree is
+watched or the directory disappears.
+New native events use the normal sync interval while discovery retries back off.
 A regular file replacing the directory or an ancestor releases polling.
 A directory symlink keeps polling. Removing a root from the watch plan releases
 its polling obligations. Budget or native watch resource exhaustion keeps

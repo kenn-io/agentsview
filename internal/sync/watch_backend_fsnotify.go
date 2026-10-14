@@ -945,9 +945,13 @@ func (b *fsnotifyBackend) acquireRuntimePolling(roots []string, wholeRoot bool) 
 			if len(scopes) == 0 {
 				scopes = []PollingScope{{Root: root}}
 			}
+			obligation := PollingObligation{Key: runtimeFolderPollingKey(root, folder), Scopes: runtimeFolderPollingScopes(root, folder, scopes), Probe: folder}
+			if folder != root {
+				obligation.ReleaseScopes = scopes
+			}
 			requests = append(requests, acquisition{
 				root: root, folder: folder, state: state, entry: entry,
-				obligation: PollingObligation{Key: runtimeFolderPollingKey(root, folder), Scopes: runtimeFolderPollingScopes(root, folder, scopes), Probe: folder},
+				obligation: obligation,
 			})
 		}
 	}
@@ -971,7 +975,7 @@ func (b *fsnotifyBackend) acquireRuntimePolling(roots []string, wholeRoot bool) 
 			continue
 		}
 		root, folder := request.root, request.folder
-		if !slices.Contains(b.recursiveRootsSnapshot(), root) {
+		if !b.registeredRootSnapshot(root) {
 			releaseKeys = append(releaseKeys, request.obligation.Key)
 			continue
 		}
@@ -1151,6 +1155,12 @@ func (b *fsnotifyBackend) reinstallShallowWatches() {
 		}
 	}
 	b.requireRuntimePolling(lost)
+}
+
+func (b *fsnotifyBackend) registeredRootSnapshot(root string) bool {
+	b.rootsMu.RLock()
+	defer b.rootsMu.RUnlock()
+	return slices.Contains(b.recursive, root) || slices.Contains(b.shallow, root)
 }
 
 func (b *fsnotifyBackend) recursiveRootsSnapshot() []string {

@@ -24,7 +24,7 @@ func TestClaudeProviderScopedDiscoveryBoundsTraversal(t *testing.T) {
 	for _, mode := range []string{"project", "subagents", "file", "gone", "ancestor file", "unreadable scope", "overlap", "multi-root", "unreadable nested", "symlink", "yield error", "root yield error", "file yield error"} {
 		t.Run(mode, func(t *testing.T) {
 			root := base
-			if mode == "symlink" {
+			if mode == "symlink" || mode == "root yield error" {
 				root = filepath.Clean(t.TempDir())
 			}
 			project := filepath.Join(root, "target")

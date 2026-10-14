@@ -39,8 +39,9 @@ type pollingScope struct {
 }
 
 type pollingObligation struct {
-	Key    string
-	Scopes []pollingScope
+	Key           string
+	Scopes        []pollingScope
+	ReleaseScopes []pollingScope
 	// Probe mirrors sync.PollingObligation.Probe: the physical watcher path
 	// whose availability gates this obligation's reconciliation scopes. When
 	// it is missing, the scopes are deferred rather than reconciled
@@ -152,6 +153,7 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 		obligation: pollingObligation{
 			Key:            obligation.Key,
 			Scopes:         append([]pollingScope(nil), obligation.Scopes...),
+			ReleaseScopes:  append([]pollingScope(nil), obligation.ReleaseScopes...),
 			Probe:          obligation.Probe,
 			releasePending: obligation.releasePending,
 			releaseVersion: obligation.releaseVersion,
@@ -200,6 +202,9 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 				if obligation, ok := obligations[request.obligation.Key]; ok {
 					releaseVersion++
 					obligation.releasePending = true
+					if len(obligation.ReleaseScopes) > 0 {
+						obligation.Scopes = obligation.ReleaseScopes
+					}
 					obligation.releaseVersion = releaseVersion
 					obligations[obligation.Key] = obligation
 				}
