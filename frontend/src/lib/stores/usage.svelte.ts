@@ -434,7 +434,6 @@ class UsageStore {
   };
   private fetchAllVersion = 0;
   private pairwiseParams: UsageParams | null = null;
-  private pairwiseSelectionParams: UsageParams | null = null;
   private pairwiseRequest: Promise<FetchResult> = Promise.resolve("ok");
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
@@ -566,8 +565,8 @@ class UsageStore {
     const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
     const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
     if (!current.left.value && !current.right.value) return false;
-    const leftValid = currentLeftOptions.includes(current.left.value);
-    const rightValid = currentRightOptions.includes(current.right.value);
+    const leftValid = !current.left.value || currentLeftOptions.includes(current.left.value);
+    const rightValid = !current.right.value || currentRightOptions.includes(current.right.value);
     if (leftValid && rightValid) return false;
 
     this.invalidatePanel("pairwise");
@@ -973,13 +972,6 @@ class UsageStore {
     this.rollDates();
     saveUsageFilters(this);
     const params = this.baseParams();
-    const deferPairwise =
-      this.currentPairwiseParams(params) !== null &&
-      !sameUsageParams(this.pairwiseSelectionParams, params);
-    if (deferPairwise) {
-      this.clearPairwiseComparisonState();
-      this.loading.pairwise = true;
-    }
     const contextParams =
       options.preserveTimeRange &&
       options.refreshTimeSeriesContext !== false &&
@@ -992,7 +984,12 @@ class UsageStore {
       params,
       contextParams,
     });
-    const pairwisePromise = deferPairwise ? undefined : this.fetchPairwise(params);
+    const pairwisePromise = this.fetchPairwise(
+      params,
+      this.currentPairwiseParams(params) && !sameUsageParams(this.pairwiseParams, params)
+        ? summaryPromise
+        : undefined,
+    );
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -1039,7 +1036,6 @@ class UsageStore {
         })
       : zoomPromise;
     const currentPairwisePromise =
-      (!pairwisePromise && this.versions.pairwise === pairwiseVersion) ||
       loadedSummary.pairwiseSelectionInvalidated ||
       (loadedSummary.projectScopeRecovered &&
         !sameUsageParams(this.pairwiseParams, loadedSummary.params))
@@ -1345,27 +1341,34 @@ class UsageStore {
     };
   }
 
-  private fetchPairwise(params: UsageParams): Promise<FetchResult> {
-    this.pairwiseRequest = this.loadPairwise(params);
+  private fetchPairwise(
+    params: UsageParams,
+    summaryPromise?: Promise<LoadedUsageSummary | null>,
+  ): Promise<FetchResult> {
+    this.pairwiseRequest = this.loadPairwise(params, summaryPromise);
     return this.pairwiseRequest;
   }
 
-  private async loadPairwise(params: UsageParams): Promise<FetchResult> {
+  private async loadPairwise(
+    params: UsageParams,
+    summaryPromise?: Promise<LoadedUsageSummary | null>,
+  ): Promise<FetchResult> {
     if (!sameUsageParams(this.pairwiseParams, params)) {
       this.clearPairwiseComparisonState();
     }
     this.pairwiseParams = { ...params };
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
-    const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
+    const useDefault =
+      !this.pairwiseSelection.left.value &&
+      !this.pairwiseSelection.right.value &&
+      this.pairwiseSelection.left.dimension === "model" &&
+      this.pairwiseSelection.right.dimension === "model";
     if (!request && !useDefault) {
       this.clearPairwiseComparisonState();
       this.loading.pairwise = false;
       this.abortPanel("pairwise");
       return "ok";
-    }
-    if (useDefault) {
-      this.pairwiseSelection = emptyPairwiseSelection();
     }
     const signal = this.nextAbortSignal("pairwise");
     const isFirstLoad = this.pairwiseComparison === null;
@@ -1378,6 +1381,8 @@ class UsageStore {
       const comparison = await UsageService.getApiV1UsagePairwiseComparison(request ?? params, {
         signal,
       });
+      // Refreshed totals must still offer a remembered pair before it is shown.
+      if (summaryPromise) await summaryPromise;
       if (this.versions.pairwise === pairwiseVersion) {
         if (
           useDefault &&
@@ -1398,7 +1403,6 @@ class UsageStore {
           };
         }
         this.pairwiseComparison = comparison;
-        this.pairwiseSelectionParams = { ...params };
         this.errors.pairwise = null;
         this.noteStep("pairwise", liveStep, started, comparison);
         return "ok";
