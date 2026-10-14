@@ -128,10 +128,13 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			result, err := SelectSessionUsageRows(t.Context(), tc.rows, func(i, searches int) (UsagePrice, error) {
 				pricedIndexes = append(pricedIndexes, i)
 				pricedSearches = append(pricedSearches, searches)
+				cost := money.Money{}
+				if tc.rows[i].Contributes {
+					cost.Microdollars = int64(searches + 7)
+				}
 				return UsagePrice{
-					Cost:        money.Money{Microdollars: int64(searches + 7)},
-					SessionCost: &money.Money{Microdollars: 42},
-					CostSource:  export.CostSourceReported, Priced: true, Contributes: true,
+					Cost: cost, CostSource: export.CostSourceComputed,
+					Priced: true, Contributes: tc.rows[i].Contributes,
 				}, nil
 			})
 			require.NoError(t, err)
@@ -152,11 +155,10 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				assert.Equal(t, tc.wantSurvivor.WebSearchRequests, row.WebSearchRequests)
 				assert.Equal(t, tc.wantSurvivor.Cost, row.Cost)
 			}
-			for _, row := range result.Rows {
-				assert.Equal(t, export.CostSourceReported, row.CostSource)
-				assert.Equal(t, &money.Money{Microdollars: 42}, row.SessionCost)
+			for i, row := range result.Rows {
+				assert.Equal(t, export.CostSourceComputed, row.CostSource)
 				assert.True(t, row.Priced)
-				assert.True(t, row.Contributes)
+				assert.Equal(t, tc.rows[tc.wantIndexes[i]].Contributes, row.Contributes)
 			}
 		})
 	}
