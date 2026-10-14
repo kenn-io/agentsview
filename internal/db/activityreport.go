@@ -58,30 +58,20 @@ func (db *DB) GetActivityReport(
 }
 
 type activityReportBackend struct {
-	store                  *DB
+	*DB
 	lowerBound, upperBound string
-}
-
-func (b activityReportBackend) BuildProjectIdentityMap(
-	ctx context.Context, labels []string,
-) (map[string]export.ProjectMapEntry, error) {
-	return b.store.BuildProjectIdentityMap(ctx, labels)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
-	return b.store.ActivityReportCandidateSource(ids, q)
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.store.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.store.activityReportMessageCounts(ctx, ids, q, artifacts)
+	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }
 
 func (db *DB) BuildActivityReportArtifacts(
@@ -112,7 +102,7 @@ func (db *DB) BuildActivityReportArtifacts(
 	})
 
 	backend := activityReportBackend{
-		store:      db,
+		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
 	artifacts, _, err := activity.BuildReportArtifacts(

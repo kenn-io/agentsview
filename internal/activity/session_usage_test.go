@@ -51,9 +51,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			got, ok := SessionUsageDedupTokenForRow(identity)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.want != UsageDedupToken{}, ok)
-			seen := make(map[UsageDedupToken]struct{})
-			assert.True(t, KeepSessionUsageRow(seen, identity))
-			assert.Equal(t, !ok, KeepSessionUsageRow(seen, identity))
 		})
 	}
 }

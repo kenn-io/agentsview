@@ -3,7 +3,8 @@ package activity
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -101,10 +102,8 @@ func ProjectLabels(sessions []SessionMeta) []string {
 	for _, session := range sessions {
 		set[session.Project] = struct{}{}
 	}
-	labels := make([]string, 0, len(set))
-	for label := range set {
-		labels = append(labels, label)
+	if len(set) == 0 {
+		return []string{}
 	}
-	sort.Strings(labels)
-	return labels
+	return slices.Sorted(maps.Keys(set))
 }

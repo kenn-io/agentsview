@@ -63,16 +63,30 @@ func SelectSessionUsageRows(
 		if err != nil {
 			return nil, err
 		}
-		priced := row
-		priced.Cost = pricing.Cost
-		priced.CostSource = pricing.CostSource
-		priced.SessionCost = pricing.SessionCost
-		priced.Priced = pricing.Priced
-		priced.Contributes = pricing.Contributes
-		priced.SourceSessionID = row.SessionID
-		priced.SessionID = attribution[i]
-		priced.WebSearchRequests = searches[i]
-		result.Rows = append(result.Rows, priced)
+		result.Rows = append(result.Rows, UsageRow{
+			SessionID:           attribution[i],
+			SourceSessionID:     row.SessionID,
+			Model:               row.Model,
+			ProviderID:          row.ProviderID,
+			Timestamp:           row.Timestamp,
+			MessageOrdinal:      row.MessageOrdinal,
+			UsageSource:         row.UsageSource,
+			InputTokens:         row.InputTokens,
+			OutputTokens:        row.OutputTokens,
+			CacheCreationTokens: row.CacheCreationTokens,
+			CacheReadTokens:     row.CacheReadTokens,
+			WebSearchRequests:   searches[i],
+			Cost:                pricing.Cost,
+			CostSource:          pricing.CostSource,
+			SessionCost:         pricing.SessionCost,
+			Priced:              pricing.Priced,
+			Contributes:         pricing.Contributes,
+			Agent:               row.Agent,
+			ClaudeMessageID:     row.ClaudeMessageID,
+			ClaudeRequestID:     row.ClaudeRequestID,
+			SourceUUID:          row.SourceUUID,
+			UsageDedupKey:       row.UsageDedupKey,
+		})
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

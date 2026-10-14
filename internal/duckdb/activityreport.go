@@ -39,27 +39,17 @@ func (s *Store) GetActivityReport(
 }
 
 type activityReportBackend struct {
-	store                  *Store
+	*Store
 	filter                 db.AnalyticsFilter
 	rangeStartUTC          string
 	rangeEndUTC            string
 	lowerBound, upperBound string
 }
 
-func (b activityReportBackend) BuildProjectIdentityMap(
-	ctx context.Context, labels []string,
-) (map[string]export.ProjectMapEntry, error) {
-	return b.store.BuildProjectIdentityMap(ctx, labels)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
-	return b.store.ActivityReportCandidateSource(ids, q)
-}
-
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.store.activityReportUsage(
+	return b.activityReportUsage(
 		ctx, ids, b.filter, b.rangeStartUTC, b.rangeEndUTC,
 		b.lowerBound, b.upperBound, q,
 	)
@@ -68,7 +58,7 @@ func (b activityReportBackend) ActivityReportUsage(
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.store.activityReportMessageCounts(ctx, ids, q, artifacts)
+	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -94,7 +84,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	})
 
 	backend := activityReportBackend{
-		store: s, filter: f,
+		Store: s, filter: f,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}

@@ -598,10 +598,10 @@ func (row UsageRow) UsageIdentity() UsageIdentity {
 	}
 }
 
-// UsageDedupTokenForRow picks the Claude pair, source UUID, or stored usage key,
+// usageDedupTokenWithoutSourceGate picks the Claude pair, source UUID, or stored usage key,
 // accepting source UUIDs regardless of UsageSource. SessionUsageDedupTokenForRow
 // restricts source UUIDs to message rows.
-func UsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
+func usageDedupTokenWithoutSourceGate(row UsageIdentity) (UsageDedupToken, bool) {
 	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
 		return UsageDedupToken{
 			Kind: "claude", Value: row.ClaudeMessageID + ":" + row.ClaudeRequestID,
@@ -621,7 +621,7 @@ func SessionUsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
 	if row.UsageSource != "message" {
 		row.SourceUUID = ""
 	}
-	return UsageDedupTokenForRow(row)
+	return usageDedupTokenWithoutSourceGate(row)
 }
 
 // KeepSessionUsageRow records identified rows and keeps only their first occurrence.
@@ -891,7 +891,7 @@ func usageSurvivorSelection(
 				continue
 			}
 		}
-		if k, ok := UsageDedupTokenForRow(u.UsageIdentity()); ok && !AddUsageDedupToken(seen, k) {
+		if k, ok := usageDedupTokenWithoutSourceGate(u.UsageIdentity()); ok && !AddUsageDedupToken(seen, k) {
 			continue
 		}
 		mask[i] = true
