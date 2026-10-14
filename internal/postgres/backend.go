@@ -134,15 +134,23 @@ func (Backend) OpenServeStore(
 }
 
 // serveSchemaError explains a failed schema check to the serve operator.
-// A role without read access to a table needs a grant; recreating the
-// schema would not help and would discard the pushed data.
-func serveSchemaError(err error) error {
+// A role without access to the schema or a table needs grants; recreating
+// the schema would not help and would discard the pushed data. A denial
+// can name the schema itself, which SELECT on its tables does not fix, so
+// the advice names both grants.
+func serveSchemaError(err error, schema string) error {
 	if isInsufficientPrivilege(err) {
+		ident, identErr := quoteIdentifier(schema)
+		if identErr != nil {
+			ident = "<schema>"
+		}
 		return fmt.Errorf(
-			"serve role cannot read a required table: %w\n"+
-				"Grant the serve role SELECT on every table in the schema, "+
+			"serve role is missing a privilege the schema check needs: %w\n"+
+				"Grant the serve role USAGE on the schema and SELECT on its tables, for example:\n"+
+				"  GRANT USAGE ON SCHEMA %s TO <serve role>;\n"+
+				"  GRANT SELECT ON ALL TABLES IN SCHEMA %s TO <serve role>;\n"+
 				"then start serve again",
-			err,
+			err, ident, ident,
 		)
 	}
 	return fmt.Errorf(
@@ -160,7 +168,7 @@ func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 		}
 	}
 	if err := CheckSchemaCompat(ctx, store.DB()); err != nil {
-		return serveSchemaError(err)
+		return serveSchemaError(err, schema)
 	}
 	if err := CheckDataVersionCompat(ctx, store.DB()); err != nil {
 		return err
