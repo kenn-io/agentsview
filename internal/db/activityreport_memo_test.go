@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -17,19 +18,14 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s", "p")
-			if action == "recreate" {
-				_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET created_at = '2026-06-01T00:00:00Z' WHERE id = 's'`)
-				require.NoError(t, err)
-			}
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET created_at = '2026-06-01T00:00:00Z' WHERE id = 's'`)
+			require.NoError(t, err)
 			seedMessage(t, d, "s", 0, "user", "2026-06-16T10:00:00Z", "")
 			seedMessage(t, d, "s", 1, "assistant", "2026-06-16T10:02:00Z", "m")
 			q := dayQuery(t, "2026-06-16", "UTC")
 			before, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 			require.NoError(t, err)
 			require.Len(t, before, 1)
-			key := activityMemoKey{"s", q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
-			generation := d.activityMemo.generation
-			entry := d.activityMemo.entries[key].Value.(activityMemoEntry)
 			wantMinutes := 2.0
 			wantCount := 1
 			switch action {
@@ -49,10 +45,26 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 				seedMessage(t, d, "s", 1, "assistant", "2026-06-16T10:04:00Z", "m")
 				wantMinutes = 4
 			case "reopen", "stale store":
+				key := activityMemoKey{"s", q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
+				generation := d.activityMemo.generation
+				entry := d.activityMemo.entries[key].Value.(activityMemoEntry)
+				replacement := testDB(t)
+				insertSession(t, replacement, "s", "p")
+				seedMessage(t, replacement, "s", 0, "user", "2026-06-16T10:00:00Z", "")
+				seedMessage(t, replacement, "s", 1, "assistant", "2026-06-16T10:04:00Z", "m")
+				_, err := replacement.getWriter().ExecContext(t.Context(), `UPDATE sessions SET created_at = '2026-06-01T00:00:00Z' WHERE id = 's'`)
+				require.NoError(t, err)
+				var version string
+				require.NoError(t, replacement.getReader().QueryRowContext(t.Context(), `SELECT transcript_revision || '|' || created_at FROM sessions WHERE id = 's'`).Scan(&version))
+				require.Equal(t, entry.version, version)
+				require.NoError(t, replacement.Close())
+				require.NoError(t, d.CloseConnections(t.Context()))
+				require.NoError(t, os.Rename(replacement.Path(), d.Path()))
 				require.NoError(t, d.Reopen())
 				if action == "stale store" {
 					d.activityMemo.store(generation, entry)
 				}
+				wantMinutes = 4
 			case "compact":
 				_, err := d.Compact(t.Context(), CompactOptions{StagingDir: t.TempDir()})
 				require.NoError(t, err)
@@ -76,16 +88,16 @@ func TestActivityMemoWindowAndAppend(t *testing.T) {
 	q := dayQuery(t, "2026-06-16", "UTC")
 	q.RangeEnd = q.RangeStart.Add(10*time.Hour + 3*time.Minute)
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
+	reads := activityMemoPairingReads(t, d)
 	got, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	for _, e := range d.activityMemo.entries {
-		assert.Len(t, e.Value.(activityMemoEntry).candidates, 2)
-	}
+	clear(reads)
 	q.EffectiveEnd = q.EffectiveEnd.Add(2 * time.Minute)
 	got, err = d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
+	assert.Empty(t, reads)
 	assert.Equal(t, "2026-06-16T10:02:00Z", got[1].Start.Format(time.RFC3339))
 	_, err = d.WriteSessionIncremental(t.Context(), "s", []Message{
 		{SessionID: "s", Ordinal: 5, Role: "assistant", Content: "x", Timestamp: "2026-06-16T10:02:30Z", Model: "m"},
@@ -109,21 +121,32 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	for _, id := range []string{"large", "small"} {
 		insertSession(t, d, id, "p")
 		count := 2
+		hour := 11
 		if id == "large" {
 			count = 5
+			hour = 10
 		}
 		for i := range count {
-			seedMessage(t, d, id, i, "assistant", time.Date(2026, 6, 16, 10, i, 0, 0, time.UTC).Format(time.RFC3339), "m")
+			seedMessage(t, d, id, i, "assistant", time.Date(2026, 6, 16, hour, i, 0, 0, time.UTC).Format(time.RFC3339), "m")
 		}
 	}
 	q := dayQuery(t, "2026-06-16", "UTC")
 	got, err := d.activityReportCandidates(t.Context(), []string{"large", "small"}, q)
 	require.NoError(t, err)
 	assert.Len(t, got, 5)
-	assert.Empty(t, d.activityMemo.entries)
+	reads := activityMemoPairingReads(t, d)
+	got, err = d.activityReportCandidates(t.Context(), []string{"large", "small"}, q)
+	require.NoError(t, err)
+	assert.Len(t, got, 5)
+	assert.Positive(t, reads["2026-06-16T10:00:00Z"])
+	assert.Positive(t, reads["2026-06-16T11:00:00Z"])
 	for _, id := range []string{"large", "small"} {
+		timestamp := "2026-06-16T11:04:00Z"
+		if id == "large" {
+			timestamp = "2026-06-16T10:04:00Z"
+		}
 		_, err = d.WriteSessionIncremental(t.Context(), id, []Message{
-			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "x", Timestamp: "2026-06-16T10:04:00Z", Model: "m"},
+			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "x", Timestamp: timestamp, Model: "m"},
 		}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(1)})
 		require.NoError(t, err)
 	}
@@ -328,58 +351,64 @@ func TestActivityMemoLRUAndBudgets(t *testing.T) {
 	oldCandidates, oldEntries := activityMemoMaxCandidates, activityMemoMaxEntries
 	activityMemoMaxCandidates, activityMemoMaxEntries = 3, 5
 	t.Cleanup(func() { activityMemoMaxCandidates, activityMemoMaxEntries = oldCandidates, oldEntries })
-	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	for _, id := range []string{"a", "b", "c", "empty-1", "empty-2", "empty-3", "empty-4"} {
-		insertSession(t, d, id, "p")
-		if len(id) == 1 {
-			seedMessage(t, d, id, 0, "user", "2026-06-16T10:00:00Z", "")
-			seedMessage(t, d, id, 1, "assistant", "2026-06-16T10:01:00Z", "m")
-		}
-	}
-	read := func(ids ...string) {
-		t.Helper()
-		_, err := d.activityReportCandidates(t.Context(), ids, q)
-		require.NoError(t, err)
-	}
-	key := func(id string) activityMemoKey {
-		return activityMemoKey{id, q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
-	}
-	read("a", "b")
-	read("a")
-	seedMessage(t, d, "c", 2, "assistant", "2026-06-16T10:02:00Z", "m")
-	read("c")
-	assert.Contains(t, d.activityMemo.entries, key("a"))
-	assert.NotContains(t, d.activityMemo.entries, key("b"))
-	assert.Equal(t, 3, d.activityMemo.rows)
-	_, err := d.WriteSessionIncremental(t.Context(), "c", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(2)})
-	require.NoError(t, err)
-	read("c", "b")
-	assert.Contains(t, d.activityMemo.entries, key("a"))
-	assert.Equal(t, 3, d.activityMemo.rows)
-	read("empty-1", "empty-2")
-	assert.Len(t, d.activityMemo.entries, 5)
-	assert.Equal(t, 3, d.activityMemo.rows)
-	read("empty-3", "empty-4")
-	assert.Len(t, d.activityMemo.entries, 5)
-	assert.NotContains(t, d.activityMemo.entries, key("a"))
-	assert.Equal(t, 1, d.activityMemo.rows)
-	d.activityMemo.swap(func() {})
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "sessions" && column == "transcript_revision" {
-				return sqlite3.SQLITE_DENY
+	for _, order := range [][]string{{"c", "b"}, {"b", "c"}} {
+		t.Run(fmt.Sprint(order), func(t *testing.T) {
+			d := testDB(t)
+			q := dayQuery(t, "2026-06-16", "UTC")
+			for i, id := range []string{"a", "b", "c", "empty-1", "empty-2", "empty-3", "empty-4"} {
+				insertSession(t, d, id, "p")
+				if len(id) == 1 {
+					seedMessage(t, d, id, 0, "user", fmt.Sprintf("2026-06-16T10:%02d:00Z", i*10), "")
+					seedMessage(t, d, id, 1, "assistant", fmt.Sprintf("2026-06-16T10:%02d:00Z", i*10+1), "m")
+				}
 			}
-			return sqlite3.SQLITE_OK
+			reads := activityMemoPairingReads(t, d)
+			read := func(ids ...string) {
+				t.Helper()
+				_, err := d.activityReportCandidates(t.Context(), ids, q)
+				require.NoError(t, err)
+			}
+			read("a", "b")
+			clear(reads)
+			read("a")
+			assert.Empty(t, reads)
+			seedMessage(t, d, "c", 2, "assistant", "2026-06-16T10:22:00Z", "m")
+			read("c")
+			assert.Equal(t, 3, d.activityMemo.rows)
+			_, err := d.WriteSessionIncremental(t.Context(), "c", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: new(2)})
+			require.NoError(t, err)
+			clear(reads)
+			read(order...)
+			assert.Positive(t, reads["2026-06-16T10:10:00Z"])
+			assert.Positive(t, reads["2026-06-16T10:20:00Z"])
+			clear(reads)
+			read("a", "b", "c")
+			assert.Empty(t, reads)
+			assert.Equal(t, 3, d.activityMemo.rows)
+			read("empty-1", "empty-2")
+			assert.Len(t, d.activityMemo.entries, 5)
+			assert.Equal(t, 3, d.activityMemo.rows)
+			read("empty-3", "empty-4")
+			assert.Len(t, d.activityMemo.entries, 5)
+			assert.Equal(t, 1, d.activityMemo.rows)
+			d.activityMemo.swap(func() {})
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, conn.Raw(func(raw any) error {
+				raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "sessions" && column == "transcript_revision" {
+						return sqlite3.SQLITE_DENY
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			got, err := d.activityReportCandidates(t.Context(), []string{"a", "b", "empty-1", "empty-2", "empty-3", "empty-4"}, q)
+			require.NoError(t, err)
+			assert.Len(t, got, 2)
+			assert.Empty(t, d.activityMemo.entries)
 		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	got, err := d.activityReportCandidates(t.Context(), []string{"a", "b", "empty-1", "empty-2", "empty-3", "empty-4"}, q)
-	require.NoError(t, err)
-	assert.Len(t, got, 2)
-	assert.Empty(t, d.activityMemo.entries)
+	}
 }

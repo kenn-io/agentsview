@@ -14,7 +14,9 @@ import (
 )
 
 var activityMemoMaxCandidates = 200_000
-var activityMemoMaxEntries = 1_000_000
+
+// Keep entry bookkeeping near 1 MiB, excluding strings and candidate slices.
+var activityMemoMaxEntries = 4_096
 
 type activityMemoHits [][]activity.IntervalCandidate
 
@@ -66,7 +68,7 @@ func (m *activityCandidateMemo) swap(swap func()) {
 	m.rows = 0
 }
 
-func (m *activityCandidateMemo) store(generation uint64, entry activityMemoEntry) {
+func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemoEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if generation != m.generation {
@@ -75,12 +77,17 @@ func (m *activityCandidateMemo) store(generation uint64, entry activityMemoEntry
 	if m.entries == nil {
 		m.entries = make(map[activityMemoKey]*list.Element)
 	}
-	if old := m.entries[entry.key]; old != nil {
-		m.rows -= len(old.Value.(activityMemoEntry).candidates)
-		m.order.Remove(old)
+	for _, entry := range entries {
+		if old := m.entries[entry.key]; old != nil {
+			m.rows -= len(old.Value.(activityMemoEntry).candidates)
+			m.order.Remove(old)
+			delete(m.entries, entry.key)
+		}
 	}
-	m.entries[entry.key] = m.order.PushBack(entry)
-	m.rows += len(entry.candidates)
+	for _, entry := range entries {
+		m.entries[entry.key] = m.order.PushBack(entry)
+		m.rows += len(entry.candidates)
+	}
 	for m.rows > activityMemoMaxCandidates || len(m.entries) > activityMemoMaxEntries {
 		old := m.order.Front()
 		e := old.Value.(activityMemoEntry)
@@ -90,6 +97,7 @@ func (m *activityCandidateMemo) store(generation uint64, entry activityMemoEntry
 	}
 }
 
+// activityReportCandidateSource reuses pairing for unchanged session windows.
 func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 		if len(ids) == 0 {
@@ -171,12 +179,13 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			}
 			return db.activityReportCandidateSQLJSON(string(encoded), wide)(ctx, func(c activity.IntervalCandidate) error {
 				if buffer, ok := buffers[c.SessionID]; ok {
-					buffers[c.SessionID] = append(buffer, c)
-					buffered++
-				}
-				if buffered > activityMemoMaxCandidates {
-					// Skip storing reports that cannot fit to avoid cache churn.
-					buffers = nil
+					if buffered == activityMemoMaxCandidates {
+						// Skip storing reports that cannot fit to avoid cache churn.
+						buffers = nil
+					} else {
+						buffers[c.SessionID] = append(buffer, c)
+						buffered++
+					}
 				}
 				if c.Start.UnixMicro() < upper {
 					return emit(c)
@@ -215,10 +224,14 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		for id, buffer := range buffers {
-			if version, exists := versions[id]; exists {
-				m.store(generation, activityMemoEntry{activityMemoKey{id, lower}, version, wide.EffectiveEnd, buffer})
+		if buffers != nil {
+			entries := make([]activityMemoEntry, 0, len(misses))
+			for _, id := range misses {
+				if version, exists := versions[id]; exists {
+					entries = append(entries, activityMemoEntry{activityMemoKey{id, lower}, version, wide.EffectiveEnd, buffers[id]})
+				}
 			}
+			m.store(generation, entries...)
 		}
 		return nil
 	}
