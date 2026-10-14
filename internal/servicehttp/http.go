@@ -93,8 +93,9 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly   bool `json:"read_only"`
-	APIVersion int  `json:"api_version"`
+	ReadOnly           bool `json:"read_only"`
+	APIVersion         int  `json:"api_version"`
+	NonRecordingRecall bool
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -121,7 +122,7 @@ func NewHTTPBackendForServer(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
-		!capabilities.ReadOnly &&
+		(!capabilities.ReadOnly || capabilities.NonRecordingRecall) &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
 	b.apiVersion = capabilities.APIVersion
@@ -152,6 +153,10 @@ func ProbeHTTPServerCapabilities(
 	if err != nil {
 		return HTTPServerCapabilities{}, err
 	}
+	return probeHTTPServerCapabilities(ctx, api)
+}
+
+func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HTTPServerCapabilities, error) {
 	response, err := api.GetAPIV1VersionWithResponse(ctx)
 	if response == nil {
 		return HTTPServerCapabilities{}, err
@@ -161,7 +166,7 @@ func ProbeHTTPServerCapabilities(
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion)}, nil
+	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }

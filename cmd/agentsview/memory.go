@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -406,7 +407,10 @@ func postMemoryRefresh(ctx context.Context, baseURL, token string) error {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := &http.Client{Timeout: memorySessionStartTimeout}
+	client, err := requestsign.ClientFromEnvironment(baseURL, &http.Client{Timeout: memorySessionStartTimeout})
+	if err != nil {
+		return err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("memory session-start: request refresh: %w", err)
