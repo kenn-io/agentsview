@@ -22,6 +22,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/codexcloud/codexcloudtest"
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type monitorEnv struct {
@@ -582,6 +583,58 @@ func TestPendingTokenRecordsStayBounded(t *testing.T) {
 	assert.Contains(t, totals, int64(2*pendingCompactAt*100), "the total before the reset is kept")
 	assert.Equal(t, []int64{50, 150}, totals[len(totals)-2:])
 	assert.True(t, slices.IsSorted(totals[:len(totals)-2]), "kept totals stay in order")
+}
+
+// TestCompactedRecordsParseToTheSameUsage parses a chat's token records
+// with and without compaction: the per-model token counts and the peak
+// context must not change.
+func TestCompactedRecordsParseToTheSameUsage(t *testing.T) {
+	env := newPassEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour)))
+	env.run(t)
+	synced, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "a"))
+	require.NoError(t, err)
+
+	at := fetchNow
+	var tokens []mirror.Record
+	add := func(model string, total, last int64) {
+		at = at.Add(time.Second)
+		data := mirror.TokenUsageData{
+			JoinID: "join-1", TurnID: "a-turn-1", Model: model, ObservedAt: at,
+			Total: mirror.TokenCounts{Input: total, Total: total},
+			Last:  mirror.TokenCounts{Input: last, Total: last},
+		}
+		require.NoError(t, appendRecord(&tokens, mirror.KindTokenUsage, data, at))
+	}
+	add("gpt-a", 100, 100)
+	add("gpt-a", 200, 900) // the chat's largest context
+	add("gpt-a", 300, 100)
+	add("gpt-a", 50, 50) // the counter went back down
+	add("gpt-a", 400, 100)
+	add("gpt-b", 500, 100)
+	add("gpt-b", 600, 100)
+
+	parse := func(records []mirror.Record) (map[string]int, int) {
+		path := filepath.Join(t.TempDir(), "a.jsonl")
+		_, err := mirror.Append(path, 0, slices.Concat(synced, records))
+		require.NoError(t, err)
+		result, ok, err := parser.ParseCodexCloudFile(t.Context(), path, "m")
+		require.NoError(t, err)
+		require.True(t, ok)
+		byModel := map[string]int{}
+		for _, ev := range result.UsageEvents {
+			byModel[ev.Model] += ev.InputTokens
+		}
+		return byModel, result.Session.PeakContextTokens
+	}
+	wantTokens, wantPeak := parse(tokens)
+	require.Equal(t, map[string]int{"gpt-a": 700, "gpt-b": 200}, wantTokens)
+	require.Equal(t, 900, wantPeak)
+
+	gotTokens, gotPeak := parse(compactPending(slices.Clone(tokens)))
+
+	assert.Equal(t, wantTokens, gotTokens)
+	assert.Equal(t, wantPeak, gotPeak)
 }
 
 func TestRepeatedSaveFailureIsLoggedOnce(t *testing.T) {
