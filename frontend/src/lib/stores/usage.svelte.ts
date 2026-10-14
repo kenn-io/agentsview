@@ -1368,7 +1368,7 @@ class UsageStore {
             left: { dimension: comparison.left.dimension, value: comparison.left.value ?? "" },
             right: { dimension: comparison.right.dimension, value: comparison.right.value ?? "" },
           };
-        } else {
+        } else if (!request) {
           this.pairwiseSelection = emptyPairwiseSelection();
         }
         this.pairwiseComparison = comparison;

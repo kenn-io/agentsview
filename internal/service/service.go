@@ -396,6 +396,10 @@ type SessionList struct {
 // and pull request filters; older daemons ignore them.
 const SessionAnnotationsAPIVersion = 11
 
+// UsagePairwiseDefaultsAPIVersion is the first daemon API that accepts omitted
+// comparison sides and fallback_to_default.
+const UsagePairwiseDefaultsAPIVersion = 12
+
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {

@@ -934,9 +934,10 @@ describe("UsageStore session filter params", () => {
     },
   );
 
-  it.each([false, true])(
-    "waits for a selector replacement before completing the refresh, pending totals %s",
-    async (pendingTotals) => {
+  it.each(["ready totals", "pending totals", "older server"])(
+    "waits for a selector replacement before completing the refresh, %s",
+    async (scenario) => {
+      const pendingTotals = scenario === "pending totals";
       const { usage } = await loadStore();
       await usage.fetchAll();
       let resolveOld!: (value: ServiceUsagePairwiseComparisonResponse) => void;
@@ -986,6 +987,12 @@ describe("UsageStore session filter params", () => {
       const replacement = usagePairwiseComparison();
       replacement.left.value = "gpt-4o";
       replacement.left.totalTokens = 900;
+      if (scenario === "older server") {
+        delete replacement.left.dimension;
+        delete replacement.left.value;
+        delete replacement.right.dimension;
+        delete replacement.right.value;
+      }
       resolveNew(replacement);
       if (pendingTotals) {
         await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(replacement));

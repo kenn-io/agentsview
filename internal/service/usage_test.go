@@ -818,7 +818,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		},
 	))
 	t.Cleanup(srv.Close)
-	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
+	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: service.UsagePairwiseDefaultsAPIVersion})
 
 	res, err := svc.UsagePairwiseComparison(
 		t.Context(),
