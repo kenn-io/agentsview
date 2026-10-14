@@ -389,6 +389,15 @@ type pgUsageScanRow struct {
 	startedAt                sql.NullTime
 }
 
+func (r pgUsageScanRow) UsageIdentity() activity.UsageIdentity {
+	return activity.UsageIdentity{
+		UsageSource: r.usageSource, Agent: r.agent,
+		ClaudeMessageID: r.claudeMessageID,
+		ClaudeRequestID: r.claudeRequestID,
+		SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+	}
+}
+
 type pgDailyUsageScanRow struct {
 	sessionID                string
 	messageOrdinal           sql.NullInt64
@@ -413,6 +422,15 @@ type pgDailyUsageScanRow struct {
 	project                  string
 	agent                    string
 	machine                  string
+}
+
+func (r pgDailyUsageScanRow) UsageIdentity() activity.UsageIdentity {
+	return activity.UsageIdentity{
+		UsageSource: r.usageSource, Agent: r.agent,
+		ClaudeMessageID: r.claudeMessageID,
+		ClaudeRequestID: r.claudeRequestID,
+		SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+	}
 }
 
 type pgTopSessionMetadata struct {
@@ -1400,12 +1418,7 @@ func (s *Store) GetSessionUsage(
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -1561,12 +1574,7 @@ func (s *Store) GetDailyUsage(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2143,12 +2151,7 @@ func (s *Store) GetTopSessionsByCost(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2281,12 +2284,7 @@ func (s *Store) GetUsageSessionCounts(
 			continue
 		}
 
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(dedup, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(dedup, key) {
 			continue
 		}
 

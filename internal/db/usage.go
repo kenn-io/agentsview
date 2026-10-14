@@ -627,6 +627,15 @@ type usageScanRow struct {
 	startedAt                string
 }
 
+func (r usageScanRow) UsageIdentity() activity.UsageIdentity {
+	return activity.UsageIdentity{
+		UsageSource: r.usageSource, Agent: r.agent,
+		ClaudeMessageID: r.claudeMessageID,
+		ClaudeRequestID: r.claudeRequestID,
+		SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+	}
+}
+
 type dailyUsageScanRow struct {
 	sessionID                string
 	messageOrdinal           sql.NullInt64
@@ -651,6 +660,15 @@ type dailyUsageScanRow struct {
 	project                  string
 	agent                    string
 	machine                  string
+}
+
+func (r dailyUsageScanRow) UsageIdentity() activity.UsageIdentity {
+	return activity.UsageIdentity{
+		UsageSource: r.usageSource, Agent: r.agent,
+		ClaudeMessageID: r.claudeMessageID,
+		ClaudeRequestID: r.claudeRequestID,
+		SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+	}
 }
 
 type topSessionMetadata struct {
@@ -2098,12 +2116,7 @@ func (db *DB) getDailyUsageLegacy(
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
 		// a key as seen and suppress the in-range duplicate.
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2834,12 +2847,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 		// Dedup AFTER the date filter, matching GetDailyUsage,
 		// so out-of-range rows pulled in by the ±14h padding
 		// don't claim a key and suppress the in-range duplicate.
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -3233,12 +3241,7 @@ func (db *DB) getSessionUsageLegacy(
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(seen, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -3451,12 +3454,7 @@ func (db *DB) getUsageSessionCountsLegacy(
 
 		// Dedup AFTER the date filter, matching the other two
 		// queries so ±14h padding rows don't claim keys.
-		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
-			UsageSource: r.usageSource, Agent: r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
-		}); ok && !activity.AddUsageDedupToken(dedup, key) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok && !activity.AddUsageDedupToken(dedup, key) {
 			continue
 		}
 
