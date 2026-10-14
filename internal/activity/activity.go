@@ -598,7 +598,9 @@ func (row UsageRow) UsageIdentity() UsageIdentity {
 	}
 }
 
-// UsageDedupTokenForRow picks the Claude pair, source UUID, or stored usage key.
+// UsageDedupTokenForRow picks the Claude pair, source UUID, or stored usage key,
+// accepting source UUIDs regardless of UsageSource. SessionUsageDedupTokenForRow
+// restricts source UUIDs to message rows.
 func UsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
 	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
 		return UsageDedupToken{

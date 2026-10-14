@@ -102,7 +102,7 @@ func (db *DB) BuildActivityReportArtifacts(
 	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
-	sessions, _, err := db.activityReportSessions(
+	sessions, ids, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -116,7 +116,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
 	artifacts, _, err := activity.BuildReportArtifacts(
-		ctx, backend, sessions, q, onProgress, "aggregating activity report")
+		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
 	return artifacts, err
 }
 

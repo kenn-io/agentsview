@@ -185,7 +185,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
-		ctx, backend, sessions, q, onProgress, "aggregating clickhouse activity report")
+		ctx, backend, sessions, ids, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}

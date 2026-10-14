@@ -19,12 +19,8 @@ type ReportBackend interface {
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
 func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
-	q Query, onProgress ProgressFunc, aggregationLabel string,
+	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
-	ids := make([]string, len(sessions))
-	for i, session := range sessions {
-		ids[i] = session.SessionID
-	}
 	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
 	if err != nil {
 		return CandidateArtifacts{}, Progress{}, err

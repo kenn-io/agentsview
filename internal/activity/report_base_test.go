@@ -15,6 +15,7 @@ import (
 type reportBackendFixture struct {
 	t       *testing.T
 	q       Query
+	ids     []string
 	pricing *export.PricingBlock
 	stage   string
 	err     error
@@ -23,7 +24,7 @@ type reportBackendFixture struct {
 
 func (b *reportBackendFixture) check(stage string, ids []string, q Query) error {
 	b.t.Helper()
-	assert.Equal(b.t, []string{"s"}, ids)
+	assert.Equal(b.t, b.ids, ids)
 	assert.Equal(b.t, b.q, q)
 	b.calls = append(b.calls, stage)
 	if b.stage == stage {
@@ -41,7 +42,9 @@ func (b *reportBackendFixture) ActivityReportUsage(_ context.Context, ids []stri
 	}}, b.pricing, err
 }
 
-func (b *reportBackendFixture) ActivityReportCandidateSource(_ []string, _ Query) CandidateSource {
+func (b *reportBackendFixture) ActivityReportCandidateSource(ids []string, q Query) CandidateSource {
+	assert.Equal(b.t, b.ids, ids)
+	assert.Equal(b.t, b.q, q)
 	var err error
 	if b.stage == "candidates" {
 		err = b.err
@@ -87,7 +90,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 			name = "progress callback"
 		}
 		t.Run(name, func(t *testing.T) {
-			backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
+			backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}}
 			progress := []Progress{}
 			var onProgress ProgressFunc
 			if withProgress {
@@ -95,7 +98,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 			}
 			artifacts, done, err := BuildReportArtifacts(
 				t.Context(), backend,
-				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
 				onProgress,
 				"aggregating example activity report",
 			)
@@ -131,11 +134,11 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 	failure := errors.New("read failed")
 	for _, stage := range []string{"usage", "candidates", "counts", "projects"} {
 		t.Run(stage, func(t *testing.T) {
-			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
+			backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, stage: stage, err: failure}
 			var done bool
 			_, completion, err := BuildReportArtifacts(
 				t.Context(), backend,
-				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
 				func(p Progress) { done = done || p.Phase == ProgressDone },
 				"aggregating example activity report",
 			)
