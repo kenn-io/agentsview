@@ -16968,36 +16968,28 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 // under the index's roots and pins the provider source to the chosen copy.
 // storedPath, when set, is the source the session's row records; a legacy
 // revert page's row is not keyed by its file key, so the caller supplies it
-// and the copy at that path wins over other duplicates.
+// and that copy wins over any duplicate.
 func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
 	sessionRoots []string, rawID, storedPath string,
 ) (parser.DiscoveredFile, bool) {
-	var candidates []parser.DiscoveredFile
-	for _, root := range sessionRoots {
-		if src := e.codexSourceFileForUUID(root, rawID); src != "" {
-			candidates = append(candidates, parser.DiscoveredFile{
-				Path:    src,
-				Agent:   parser.AgentCodex,
-				Machine: e.machineForPath(parser.AgentCodex, src),
-			})
-		}
-	}
-	if len(candidates) == 0 {
-		return parser.DiscoveredFile{}, false
-	}
-	// A UUID can exist in both sessions/ and archived_sessions/.
-	// Prefer the path the DB already tracks so a title rename does
-	// not reparse a stale duplicate over the stored copy.
-	chosen, tracked := parser.DiscoveredFile{}, false
-	if storedPath != "" {
-		for _, candidate := range candidates {
-			if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == filepath.Clean(storedPath) {
-				chosen, tracked = candidate, true
-				break
+	chosen, tracked := e.codexIndexTrackedSource(sessionRoots, storedPath)
+	if !tracked {
+		var candidates []parser.DiscoveredFile
+		for _, root := range sessionRoots {
+			if src := e.codexSourceFileForUUID(root, rawID); src != "" {
+				candidates = append(candidates, parser.DiscoveredFile{
+					Path:    src,
+					Agent:   parser.AgentCodex,
+					Machine: e.machineForPath(parser.AgentCodex, src),
+				})
 			}
 		}
-	}
-	if !tracked {
+		if len(candidates) == 0 {
+			return parser.DiscoveredFile{}, false
+		}
+		// A UUID can exist in both sessions/ and archived_sessions/.
+		// Prefer the path the DB already tracks so a title rename does
+		// not reparse a stale duplicate over the stored copy.
 		chosen = e.pickPreferredCodexIndexDiscoveredFile(ctx, candidates)
 	}
 	// Pin the provider source to the chosen path and route it through the
@@ -17009,6 +17001,41 @@ func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
 		parser.AgentCodex, chosen.Path,
 	)
 	return chosen, true
+}
+
+// codexIndexTrackedSource returns the recorded source of a session when that
+// file still exists under one of the index's session roots. The per-root
+// lookup keeps one path per root and prefers the dated layout, so a tracked
+// flat copy would otherwise lose to a dated duplicate in the same root. A
+// mirrored session records host:/remote/path, which the stored-path resolver
+// maps back to its local copy.
+func (e *Engine) codexIndexTrackedSource(
+	sessionRoots []string, storedPath string,
+) (parser.DiscoveredFile, bool) {
+	if storedPath == "" {
+		return parser.DiscoveredFile{}, false
+	}
+	local := storedPath
+	if e.storedPathResolver != nil {
+		resolved, ok := e.storedPathResolver(storedPath)
+		if !ok {
+			return parser.DiscoveredFile{}, false
+		}
+		local = resolved
+	}
+	if info, err := os.Stat(local); err != nil || !info.Mode().IsRegular() {
+		return parser.DiscoveredFile{}, false
+	}
+	if !slices.ContainsFunc(sessionRoots, func(root string) bool {
+		return pathWithinRoot(local, root)
+	}) {
+		return parser.DiscoveredFile{}, false
+	}
+	return parser.DiscoveredFile{
+		Path:    local,
+		Agent:   parser.AgentCodex,
+		Machine: e.machineForPath(parser.AgentCodex, local),
+	}, true
 }
 
 func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
