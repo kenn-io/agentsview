@@ -1627,6 +1627,76 @@ func TestHermesSingleSessionSyncAfterStateDBRemoval(t *testing.T) {
 	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
 }
 
+// TestHermesSingleSessionSyncAfterRowRemoved pins FindSource's stored
+// member-path hint against current state.db membership, not just the
+// database file's existence: when a synced session's row is deleted from
+// state.db but its transcript remains, refreshing that single session must
+// fall back to the transcript instead of erroring or returning nothing.
+func TestHermesSingleSessionSyncAfterRowRemoved(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"))
+
+	execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
+
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
+	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"))
+	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
+}
+
+// TestHermesSingleSessionSyncSwitchesToNewStateDBRow pins the opposite
+// direction: a session first synced from its transcript because state.db had
+// no row for it yet, then later gets a real row added. Refreshing that
+// single session must prefer the new state.db row so the database's
+// messages, title, and usage/cost get picked back up instead of being stuck
+// on the stale transcript hint.
+func TestHermesSingleSessionSyncSwitchesToNewStateDBRow(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "late")
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, filepath.Join(root, "sessions", "late.jsonl"),
+		database.GetSessionFilePath(t.Context(), "hermes:late"),
+		"a session never rowed in state.db must sync from its transcript")
+
+	execHermesState(t, stateDB, `INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('late', 'cli', 'model', 1778767200, 1778767800, 2)`)
+	// Hermes picks whichever source has the richer content when both the
+	// database row and the transcript exist for a session, so these two
+	// database messages must out-score the transcript's "hello"/"Done." pair
+	// for this assertion to prove the database row, not just its presence,
+	// won the content selection.
+	execHermesState(t, stateDB, `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('late', 'user', 'a considerably longer state db message one', 1778767210)`)
+	execHermesState(t, stateDB, `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('late', 'assistant', 'a considerably longer state db message two', 1778767220)`)
+
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:late"))
+	assert.Equal(t, parser.VirtualSourcePath(stateDB, "late"),
+		database.GetSessionFilePath(t.Context(), "hermes:late"))
+	assert.Equal(t, []string{
+		"a considerably longer state db message one",
+		"a considerably longer state db message two",
+	}, messageContents(t, database, "hermes:late"))
+}
+
 func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
 	for _, test := range []struct {
 		name   string

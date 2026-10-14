@@ -1175,16 +1175,71 @@ func (s hermesSourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db")
-		if member && !IsRegularFile(stateDB) {
+		stateDB, sessionID, member := ParseVirtualSourcePathForBase(path, "state.db")
+		if member {
+			if !IsRegularFile(stateDB) {
+				continue
+			}
+			// A stored member path is only live while state.db still owns
+			// that session. If the row is gone, or the db can't be read,
+			// resolve the transcript by session ID instead of returning a
+			// dead member result.
+			if isValidHermesSessionID(sessionID) {
+				found, lookupErr := hermesStateDBHasSession(ctx, stateDB, sessionID)
+				if ctx.Err() != nil {
+					return SourceRef{}, false, ctx.Err()
+				}
+				if lookupErr != nil {
+					log.Printf(
+						"hermes: state db lookup failed for %s: %v; "+
+							"falling back to transcripts", stateDB, lookupErr,
+					)
+				}
+				if lookupErr != nil || !found {
+					if source, ok := s.transcriptSourceByRawID(roots, sessionID); ok {
+						return source, true, nil
+					}
+					continue
+				}
+			}
+			for _, root := range roots {
+				source, ok := s.sourceRef(root, path)
+				if !ok {
+					source, ok = s.sourceForPath(root, path)
+				}
+				if ok {
+					return source, true, nil
+				}
+			}
 			continue
 		}
-		for _, root := range roots {
-			source, ok := s.sourceRef(root, path)
-			if !ok && member {
-				source, ok = s.sourceForPath(root, path)
+		// A stored transcript path may be stale if state.db now owns the
+		// session; prefer the state member so refresh picks up the
+		// database's content again.
+		if sessionID := HermesSessionID(filepath.Base(path)); isValidHermesSessionID(sessionID) {
+			for _, root := range roots {
+				stateDB, sessionsDir, ok := hermesStatePaths(root)
+				if !ok || !hermesPathInTranscriptDir(sessionsDir, path) {
+					continue
+				}
+				found, lookupErr := hermesStateDBHasSession(ctx, stateDB, sessionID)
+				if ctx.Err() != nil {
+					return SourceRef{}, false, ctx.Err()
+				}
+				if lookupErr != nil {
+					log.Printf(
+						"hermes: state db lookup failed for %s: %v; "+
+							"keeping transcript", stateDB, lookupErr,
+					)
+					continue
+				}
+				if found {
+					return s.stateMemberSourceRef(root, stateDB, sessionID), true, nil
+				}
 			}
-			if ok {
+		}
+		for _, root := range roots {
+			if source, ok := s.sourceRef(root, path); ok {
 				return source, true, nil
 			}
 		}
@@ -1324,6 +1379,24 @@ func (s hermesSourceSet) sourceFromRef(source SourceRef) (hermesSource, bool) {
 		}
 	}
 	return hermesSource{}, false
+}
+
+// transcriptSourceByRawID resolves a session's transcript file by its raw
+// session ID across the configured roots, without consulting state.db.
+func (s hermesSourceSet) transcriptSourceByRawID(
+	roots []string, sessionID string,
+) (SourceRef, bool) {
+	for _, root := range roots {
+		transcriptRoot := hermesTranscriptRoot(root)
+		path := findHermesSourceFile(transcriptRoot, sessionID)
+		if path == "" {
+			continue
+		}
+		if source, ok := s.sourceRef(root, path); ok {
+			return source, true
+		}
+	}
+	return SourceRef{}, false
 }
 
 func (s hermesSourceSet) sourceForPath(root, path string) (SourceRef, bool) {
