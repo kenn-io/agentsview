@@ -432,13 +432,9 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 
 	assert.Equal(t, 2, spy.dailyCalls)
 	require.Len(t, spy.filters, 2)
-	if spy.filters[0].Model == "" {
-		spy.filters[0], spy.filters[1] = spy.filters[1], spy.filters[0]
-	}
-	assert.Equal(t, "claude-sonnet-4-20250514", spy.filters[0].Model)
-	assert.Empty(t, spy.filters[0].Project)
-	assert.Empty(t, spy.filters[1].Model)
-	assert.Equal(t, "beta", spy.filters[1].Project)
+	assert.ElementsMatch(t,
+		[][2]string{{"claude-sonnet-4-20250514", ""}, {"", "beta"}},
+		[][2]string{{spy.filters[0].Model, spy.filters[0].Project}, {spy.filters[1].Model, spy.filters[1].Project}})
 	assert.False(t, spy.filters[0].SkipSessionCounts)
 	assert.False(t, spy.filters[1].SkipSessionCounts)
 }

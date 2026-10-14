@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -444,34 +445,44 @@ func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testin
 
 type pairwiseErrorStore struct {
 	db.Store
-	model string
-	err   error
+	started  chan string
+	canceled chan error
+	err      error
 }
 
 func (s *pairwiseErrorStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	if f.Model == s.model {
+	s.started <- f.Model
+	if f.Model == "claude-sonnet-4-20250514" {
+		for range 2 {
+			select {
+			case <-s.started:
+			case <-ctx.Done():
+				return db.DailyUsageResult{}, ctx.Err()
+			}
+		}
 		return db.DailyUsageResult{}, s.err
 	}
-	return s.Store.GetDailyUsage(ctx, f)
+	<-ctx.Done()
+	s.canceled <- ctx.Err()
+	return db.DailyUsageResult{}, ctx.Err()
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ReadError(t *testing.T) {
 	t.Parallel()
-	for _, model := range []string{"claude-sonnet-4-20250514", "gpt-4o"} {
-		t.Run(model, func(t *testing.T) {
-			t.Parallel()
-			d := dbtest.OpenTestDB(t)
-			readErr := errors.New("daily usage read failed")
-			be := service.NewReadOnlyBackend(&pairwiseErrorStore{Store: d, model: model, err: readErr})
-			res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-				LeftDimension: "model", LeftValue: "claude-sonnet-4-20250514",
-				RightDimension: "model", RightValue: "gpt-4o",
-			})
-			require.ErrorIs(t, err, readErr)
-			assert.Nil(t, res)
-		})
-	}
+	d := dbtest.OpenTestDB(t)
+	readErr := errors.New("daily usage read failed")
+	store := &pairwiseErrorStore{Store: d, started: make(chan string, 2), canceled: make(chan error, 1), err: readErr}
+	be := service.NewReadOnlyBackend(store)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := be.UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		LeftDimension: "model", LeftValue: "claude-sonnet-4-20250514",
+		RightDimension: "model", RightValue: "gpt-4o",
+	})
+	require.ErrorIs(t, err, readErr)
+	assert.Nil(t, res)
+	assert.ErrorIs(t, <-store.canceled, context.Canceled)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {

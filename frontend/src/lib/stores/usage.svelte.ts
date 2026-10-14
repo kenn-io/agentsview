@@ -68,6 +68,33 @@ interface Toggles {
 }
 
 const TOGGLES_KEY = "usage-toggles";
+const DEFAULT_PAIR_KEY = "usage-default-pair";
+
+function loadDefaultPair(): UsagePairwiseSelection | null {
+  try {
+    const pair = JSON.parse(localStorage.getItem(DEFAULT_PAIR_KEY) ?? "null");
+    if (
+      [pair?.left, pair?.right].every(
+        (side) =>
+          side &&
+          (side.dimension === "model" || side.dimension === "project") &&
+          typeof side.value === "string",
+      )
+    )
+      return pair;
+  } catch {
+    // Storage may be unavailable or contain invalid JSON.
+  }
+  return null;
+}
+
+function saveDefaultPair(pair: UsagePairwiseSelection): void {
+  try {
+    localStorage.setItem(DEFAULT_PAIR_KEY, JSON.stringify(pair));
+  } catch {
+    // Storage may be full or unavailable.
+  }
+}
 
 function defaultToggles(): Toggles {
   return {
@@ -360,6 +387,11 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
+    const pair = loadDefaultPair();
+    if (pair) {
+      this.pairwiseSelection = pair;
+      this.pairwiseSelectionSeeded = true;
+    }
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
@@ -376,6 +408,7 @@ class UsageStore {
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
+  private pairwiseSelectionSeeded = false;
   private zoomed = $state(false);
 
   get zoomedProject(): { key: string; label: string } | null {
@@ -567,7 +600,8 @@ class UsageStore {
     const leftValid = current.left.value !== "" && currentLeftOptions.includes(current.left.value);
     const rightValid =
       current.right.value !== "" && currentRightOptions.includes(current.right.value);
-    if (leftValid && rightValid) return false;
+    if (leftValid && rightValid && !this.pairwiseSelectionSeeded) return false;
+    this.pairwiseSelectionSeeded = false;
 
     const modelOptions = this.pairwiseModelOptions;
     const projectOptions = this.pairwiseProjectOptions;
@@ -590,6 +624,7 @@ class UsageStore {
     } else {
       next = emptyPairwiseSelection();
     }
+    saveDefaultPair(next);
     if (samePairwiseSelection(current, next)) {
       return false;
     }
@@ -692,8 +727,10 @@ class UsageStore {
 
     next[side] = { dimension, value };
     this.pairwiseSelection = next;
+    this.pairwiseSelectionSeeded = false;
+    this.invalidatePanel("pairwise");
+    this.clearPairwiseComparisonState();
     if (this.summary) {
-      this.clearPairwiseComparisonState();
       void this.fetchPairwise(this.versions.summary, this.baseParams());
     }
   }
@@ -1005,6 +1042,11 @@ class UsageStore {
       params,
       contextParams,
     });
+    const summaryVersion = this.versions.summary;
+    const earlyPairwise = this.currentPairwiseParams(params)
+      ? this.fetchPairwise(summaryVersion, params, summaryPromise)
+      : null;
+    const pairwiseVersion = this.versions.pairwise;
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -1013,6 +1055,8 @@ class UsageStore {
       return "aborted";
     }
     if (!loadedSummary) {
+      this.invalidatePanel("pairwise");
+      if (this.summary === null) this.clearPairwiseComparisonState();
       await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
@@ -1047,7 +1091,11 @@ class UsageStore {
         currentTopSessionsPromise,
         currentZoomPromise,
         this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
-        this.fetchPairwise(loadedSummary.version, loadedSummary.params),
+        earlyPairwise &&
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+          ? earlyPairwise
+          : this.fetchPairwise(loadedSummary.version, loadedSummary.params),
       ]);
     const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
@@ -1085,7 +1133,6 @@ class UsageStore {
     const attributionParams = this.attributionParams();
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
-    this.abortPanel("pairwise");
     const signal = this.nextAbortSignal("summary");
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
@@ -1173,8 +1220,10 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
-        this.ensurePairwiseSelection();
-        this.clearPairwiseComparisonState();
+        if (this.ensurePairwiseSelection()) {
+          this.invalidatePanel("pairwise");
+          this.clearPairwiseComparisonState();
+        }
         const loaded = {
           version: v,
           summary: data,
@@ -1334,7 +1383,11 @@ class UsageStore {
     };
   }
 
-  private async fetchPairwise(summaryVersion: number, params: UsageParams): Promise<FetchResult> {
+  private async fetchPairwise(
+    summaryVersion: number,
+    params: UsageParams,
+    pendingSummary?: Promise<LoadedUsageSummary | null>,
+  ): Promise<FetchResult> {
     if (this.versions.summary !== summaryVersion) return "aborted";
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
@@ -1354,6 +1407,7 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const comparison = await UsageService.getApiV1UsagePairwiseComparison(request, { signal });
+      if (pendingSummary && !(await pendingSummary)) return "aborted";
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
