@@ -241,6 +241,7 @@ jobs:
             exit $LASTEXITCODE
           }
           $isolatedPackages = @(
+            'go.kenn.io/agentsview/cmd/agentsview'
             'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
             'go.kenn.io/agentsview/internal/duckdb'
@@ -297,7 +298,7 @@ jobs:
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
-  # Share setup for the shorter SQLite suites; keep Sync on its own runner.
+  # Share setup for the shorter SQLite suites; keep CLI and Sync on their own runners.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
@@ -305,6 +306,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: CLI
+            package: ./cmd/agentsview
           - name: Capture, Database, Parser
             package: ./internal/capture ./internal/db ./internal/parser
           # Complementary filters keep every sync test in exactly one job.

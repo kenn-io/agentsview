@@ -22,6 +22,8 @@ jobs:
         include:
           - name: Other packages
             package: ./...
+          - name: CLI
+            package: ./cmd/agentsview
           - name: Capture, Database, Parser
             package: ./internal/capture ./internal/db ./internal/parser
           - name: DuckDB
@@ -83,6 +85,7 @@ jobs:
             $packages = @(go list ./...)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $isolatedPackages = @(
+              'go.kenn.io/agentsview/cmd/agentsview'
               'go.kenn.io/agentsview/internal/capture'
               'go.kenn.io/agentsview/internal/db'
               'go.kenn.io/agentsview/internal/duckdb'
