@@ -222,10 +222,11 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
 	if resp == nil {
 		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
-			return unavailable(fmt.Sprintf("the server did not answer within %d seconds.",
-				int(codexCloudStatusTimeout.Seconds())))
+			return unavailable(fmt.Sprintf("the server did not answer within %d seconds. It may be busy; "+
+				"run `agentsview serve status` again in a moment.", int(codexCloudStatusTimeout.Seconds())))
 		}
-		return unavailable("the server could not be reached. It may have just stopped; run this command again to check.")
+		return unavailable("the server could not be reached. It may have just stopped; " +
+			"run `agentsview serve status` again to check.")
 	}
 	if resp.HTTPResponse != nil {
 		defer resp.HTTPResponse.Body.Close()
@@ -242,12 +243,14 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 		return unavailable("the server did not accept this command's auth token. " +
 			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
 	default:
-		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The server log may say why.", resp.StatusCode))
+		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The server log, "+
+			"serve.log in the AgentsView data directory, may say why.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {
 		return unavailable("the server's reply could not be read. " +
-			"The server may run a different AgentsView version than this command.")
+			"The server may run a different AgentsView version than this command; "+
+			"after an upgrade, restart the server so both match.")
 	}
 	var lines []string
 	for _, row := range rows {
