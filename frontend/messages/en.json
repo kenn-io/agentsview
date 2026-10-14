@@ -2850,7 +2850,7 @@
   "plan_usage_could_not_check": "AgentsView could not check plan usage",
   "plan_usage_account_unavailable": "Usage isn't available for this account",
   "plan_usage_counted_under": "Counted under chat {title}",
-  "plan_usage_stale": "A later check found: {reason} ({time}). These figures may be out of date.",
+  "plan_usage_stale": "Since then: {reason} ({time}). These figures may be out of date.",
   "plan_usage_left_out_later": "OpenAI's usage report left this chat out",
   "plan_usage_weekly_share": "{percent}% of the weekly Codex limit",
   "plan_usage_five_hour_share": "{percent}% of the five-hour Codex limit",
