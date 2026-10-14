@@ -1911,11 +1911,21 @@ func codexForkBaseInherited(payload gjson.Result, base, forkedFromID string) boo
 // forked thread's base can lie in history it inherited, which may belong to a
 // thread further up the fork chain; the page then continues the thread it was
 // forked from.
+//
+// Older Codex builds wrote the page's own rollout id, not the thread id, into
+// session_meta. Such a page keeps that id as its session and continues the
+// thread its filename names.
 func codexRevertPage(
 	path, threadID, baseRollout, forkedFromID string, inherited bool,
 ) (id, parentID string, ok bool) {
 	key := CodexSessionUUIDFromFilename(filepath.Base(path))
-	if threadID == "" || key == threadID || CodexThreadIDFromSessionKey(key) != threadID {
+	if threadID == "" || key == threadID {
+		return "", "", false
+	}
+	if keyThread := CodexThreadIDFromSessionKey(key); keyThread != threadID {
+		if keyThread != key && key == keyThread+"_"+threadID {
+			return threadID, "codex:" + keyThread, true
+		}
 		return "", "", false
 	}
 	parent := threadID

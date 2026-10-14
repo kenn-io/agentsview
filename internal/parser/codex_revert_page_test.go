@@ -74,6 +74,8 @@ func TestCodexRevertPageParentFollowsHistoryBase(t *testing.T) {
 		{"base_is_rollout", AgentCodex, revertThread, revertRollout1, "codex:" + pageKey, "codex:" + revertThread + "_" + revertRollout1, RelContinuation},
 		{"no_base", AgentCodex, revertThread, "", "codex:" + pageKey, "codex:" + revertThread, RelContinuation},
 		{"header_disagrees", AgentCodex, revertOther, revertThread, "codex:" + revertOther, "", ""},
+		{"legacy_header_is_rollout", AgentCodex, revertRollout, revertThread, "codex:" + revertRollout, "codex:" + revertThread, RelContinuation},
+		{"legacy_header_is_rollout_no_base", AgentCodex, revertRollout, "", "codex:" + revertRollout, "codex:" + revertThread, RelContinuation},
 		{"traex", AgentTraeX, revertThread, revertThread, "traex:" + pageKey, "traex:" + revertThread, RelContinuation},
 	}
 	for _, tt := range tests {
