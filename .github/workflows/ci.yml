@@ -265,14 +265,20 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      - name: Install Go linter (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version: *//p' .custom-gcl.yml)
+          bash scripts/retry.sh 3 5 go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$version"
+        env:
+          CGO_ENABLED: "1"
+
       - name: Run Go linters (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           # Windows-only files never reach the Linux lint job.
-          $version = (Select-String -Path .custom-gcl.yml -Pattern '^version:\s*(\S+)').Matches[0].Groups[1].Value
-          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$version"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$(go env GOPATH)\bin\golangci-lint.exe" custom --name custom-gcl
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./custom-gcl run ./...
