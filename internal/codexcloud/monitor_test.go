@@ -632,7 +632,10 @@ func TestCompactedRecordsParseToTheSameUsage(t *testing.T) {
 	require.Equal(t, map[string]int{"gpt-a": 700, "gpt-b": 200}, wantTokens)
 	require.Equal(t, 900, wantPeak)
 
-	gotTokens, gotPeak := parse(compactPending(slices.Clone(tokens)))
+	compacted := compactPending(slices.Clone(tokens))
+	// gpt-b 500 is dropped: 600 has the same context and covers its tokens.
+	assert.Len(t, compacted, len(tokens)-1)
+	gotTokens, gotPeak := parse(compacted)
 
 	assert.Equal(t, wantTokens, gotTokens)
 	assert.Equal(t, wantPeak, gotPeak)
