@@ -963,7 +963,10 @@ func (b *directBackend) UsagePairwiseComparison(
 	}
 	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
 	if req.FallbackToDefault && !useDefault {
-		if _, _, _, _, err := buildUsagePairwiseFilters(req, base); err != nil {
+		if err := validatePairwiseDimension(req.LeftDimension, req.LeftValue, "left"); err != nil {
+			return nil, err
+		}
+		if err := validatePairwiseDimension(req.RightDimension, req.RightValue, "right"); err != nil {
 			return nil, err
 		}
 	}

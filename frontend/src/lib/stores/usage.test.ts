@@ -901,8 +901,9 @@ describe("UsageStore session filter params", () => {
         expect(usage.loading.pairwise).toBe(false);
         expect(usage.querying.pairwise).toBe(false);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
-        if (outcome === "failure") expect(usage.errors.pairwise).toBe("comparison failed");
-        else expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+        expect(usage.errors.pairwise).toBeNull();
+        expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+        if (outcome !== "aborted first load") expect(usage.summary).not.toBeNull();
       } finally {
         warn.mockRestore();
       }
@@ -974,6 +975,15 @@ describe("UsageStore session filter params", () => {
     });
     await vi.waitFor(() => expect(usage.loading.summary).toBe(false));
     usage.setPairwiseSide("left", { value: "gpt-4o" });
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({
+      left_dimension: "model",
+      left_value: "gpt-4o",
+      right_dimension: "model",
+      right_value: "gpt-4o",
+    });
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).not.toHaveProperty(
+      "fallback_to_default",
+    );
     resolveOld(usagePairwiseComparison());
     await Promise.resolve();
     expect(finished).toBe(false);
@@ -985,19 +995,43 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison?.left.totalTokens).toBe(900);
   });
 
-  it("preserves a half-picked side across refreshes without requesting a comparison", async () => {
+  it("preserves a half-picked dimension until a refresh offers values", async () => {
     const { usage } = await loadStore();
+    const noProjects = usageSummaryWithOptions({
+      projects: [],
+      models: ["claude-sonnet-4-20250514", "gpt-4o"],
+    });
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(noProjects);
     await usage.fetchAll();
     usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
-    usage.setPairwiseSide("right", { value: "" });
+    usage.setPairwiseSide("right", { dimension: "project" });
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(noProjects);
     await usage.fetchAll();
     expect(usage.lastUpdatedAt).not.toBeNull();
     expect(usage.pairwiseSelection).toEqual({
       left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-      right: { dimension: "model", value: "" },
+      right: { dimension: "project", value: "" },
     });
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).not.toHaveBeenCalled();
     expect(usage.pairwiseComparison).toBeNull();
+    const comparison = usagePairwiseComparison();
+    comparison.right = { ...comparison.right, dimension: "project", value: "pl1:sha256:alpha" };
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(comparison);
+    usage.applyDateRange("2024-01-01", "2024-03-31");
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toMatchObject({
+      from: "2024-01-01",
+      to: "2024-03-31",
+      left_value: "claude-sonnet-4-20250514",
+      right_dimension: "project",
+      right_value: "pl1:sha256:alpha",
+    });
+    expect(usage.pairwiseSelection.right).toEqual({
+      dimension: "project",
+      value: "pl1:sha256:alpha",
+    });
+    expect(usage.pairwiseComparison).toEqual(comparison);
   });
 
   it("clears stale pairwise results when filters change without selector changes", async () => {

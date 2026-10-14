@@ -716,38 +716,41 @@ type pairwiseFilterResult struct {
 	empty  bool
 }
 
+func validatePairwiseDimension(dimension, value, label string) error {
+	if value == "" {
+		return &UsageInputError{Msg: label + "_value is required"}
+	}
+	switch dimension {
+	case "model", "project":
+		return nil
+	case "":
+		return &UsageInputError{Msg: label + "_dimension is required"}
+	default:
+		return &UsageInputError{Msg: label + "_dimension must be model or project"}
+	}
+}
+
 func applyPairwiseDimension(
 	base db.UsageFilter, dimension, value string, projectLabels []string,
 	label string,
 ) (pairwiseFilterResult, error) {
-	filter := base
-	if value == "" {
-		return pairwiseFilterResult{},
-			&UsageInputError{Msg: label + "_value is required"}
+	if err := validatePairwiseDimension(dimension, value, label); err != nil {
+		return pairwiseFilterResult{}, err
 	}
+	filter := base
 	var ok bool
-	switch dimension {
-	case "model":
+	if dimension == "model" {
 		filter.Model, ok = intersectCSV(filter.Model, value)
 		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
-	case "project":
-		if projectLabels == nil {
-			projectLabels = splitCSVTokens(value)
-		}
-		filter.ProjectLabels, ok = intersectValues(
-			filter.ProjectFilterLabels(), projectLabels,
-		)
-		filter.Project = joinCSVTokens(filter.ProjectLabels)
-		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
-	case "":
-		return pairwiseFilterResult{},
-			&UsageInputError{Msg: label + "_dimension is required"}
-	default:
-		return pairwiseFilterResult{},
-			&UsageInputError{
-				Msg: label + "_dimension must be model or project",
-			}
 	}
+	if projectLabels == nil {
+		projectLabels = splitCSVTokens(value)
+	}
+	filter.ProjectLabels, ok = intersectValues(
+		filter.ProjectFilterLabels(), projectLabels,
+	)
+	filter.Project = joinCSVTokens(filter.ProjectLabels)
+	return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 }
 
 func safePerTurnDenominator(count int) bool {

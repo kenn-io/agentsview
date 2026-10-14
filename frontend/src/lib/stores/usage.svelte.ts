@@ -424,6 +424,7 @@ class UsageStore {
   };
   private fetchAllVersion = 0;
   private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
+  private pairwiseScope = "";
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -957,8 +958,7 @@ class UsageStore {
       params,
       contextParams,
     });
-    this.clearPairwiseComparisonState();
-    void this.fetchPairwise(params);
+    void this.fetchPairwise(params, true);
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -972,7 +972,18 @@ class UsageStore {
     );
     if (scopeChanged) {
       this.clearPairwiseComparisonState();
-      void this.fetchPairwise(recoveredParams);
+      void this.fetchPairwise(recoveredParams, true);
+    }
+    if (loadedSummary) {
+      const selection = this.pairwiseSelection;
+      if (!!selection.left.value !== !!selection.right.value) {
+        const side = selection.left.value ? "right" : "left";
+        const value = this.preferredPairwiseValue(
+          selection[side].dimension,
+          selection[side === "left" ? "right" : "left"].value,
+        );
+        if (value) this.setPairwiseSide(side, { value });
+      }
     }
     if (!loadedSummary) {
       await Promise.all([topSessionsPromise, zoomPromise]);
@@ -1292,7 +1303,6 @@ class UsageStore {
       left_value: selection.left.value,
       right_dimension: selection.right.dimension,
       right_value: selection.right.value,
-      fallback_to_default: true,
     };
   }
 
@@ -1302,14 +1312,21 @@ class UsageStore {
     return current === this.currentPairwisePromise ? result : this.awaitPairwise();
   }
 
-  private fetchPairwise(params: UsageParams): Promise<FetchResult> {
-    this.currentPairwisePromise = this.loadPairwise(params);
+  private fetchPairwise(params: UsageParams, fallbackToDefault = false): Promise<FetchResult> {
+    const scope = JSON.stringify(params);
+    if (scope !== this.pairwiseScope) this.clearPairwiseComparisonState();
+    this.pairwiseScope = scope;
+    this.currentPairwisePromise = this.loadPairwise(params, fallbackToDefault);
     return this.currentPairwisePromise;
   }
 
-  private async loadPairwise(params: UsageParams): Promise<FetchResult> {
+  private async loadPairwise(
+    params: UsageParams,
+    fallbackToDefault: boolean,
+  ): Promise<FetchResult> {
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
+    if (request && fallbackToDefault) request.fallback_to_default = true;
     const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
     if (!request && !useDefault) {
       this.pairwiseComparison = null;
