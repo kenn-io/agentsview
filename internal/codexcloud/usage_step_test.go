@@ -885,3 +885,25 @@ func TestOversizedRefreshReplySaysItIsAskedAgain(t *testing.T) {
 	require.Len(t, env.usage.Requests(), from+1, "the refresh was sent")
 	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+" AgentsView retries automatically.", env.planLine(t))
 }
+
+// A refresh that fails late in the 7 days is not sent again: the next one
+// would fall due after the chat stops being refreshed.
+func TestOversizedLateRefreshReplySaysCheckingStopped(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	lastChange := env.account(t).Refresh["a"].LastChange
+	env.usage.Refuse(http.StatusOK, nil, strings.Repeat(" ", 16<<20+1))
+	env.clock.Set(lastChange.Add(settleAfter - 12*time.Hour))
+	from := len(env.usage.Requests())
+
+	env.run(t)
+
+	require.Len(t, env.usage.Requests(), from+1, "the refresh was sent")
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+
+		" AgentsView stopped checking plan usage for the chats it asked about.", env.planLine(t))
+	env.clock.Set(lastChange.Add(settleAfter + refreshEvery))
+	env.run(t)
+	assert.Len(t, env.usage.Requests(), from+1, "no refresh after the 7 days")
+}
