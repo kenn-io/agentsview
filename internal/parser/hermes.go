@@ -742,24 +742,57 @@ func readHermesStateMessages(ctx context.Context,
 	return out, rows.Err()
 }
 
+const hermesStateSessionQuery = `
+	SELECT id, source, COALESCE(model, ''),
+		COALESCE(parent_session_id, ''), started_at,
+		COALESCE(ended_at, 0), COALESCE(message_count, 0),
+		COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
+		COALESCE(cache_read_tokens, 0),
+		COALESCE(cache_write_tokens, 0),
+		COALESCE(reasoning_tokens, 0),
+		estimated_cost_usd, actual_cost_usd,
+		COALESCE(cost_status, ''), COALESCE(cost_source, ''),
+		COALESCE(title, ''), COALESCE(api_call_count, 0)
+	FROM sessions
+	WHERE id = ?`
+
+const hermesStateMessagesQuery = `
+	SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
+		COALESCE(tool_calls, ''), timestamp,
+		COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
+		COALESCE(reasoning_content, ''),
+		COALESCE(reasoning_details, ''),
+		COALESCE(codex_reasoning_items, ''),
+		COALESCE(codex_message_items, '')
+	FROM messages
+	WHERE session_id = ?
+	ORDER BY timestamp ASC, id ASC`
+
+// checkHermesStateSchema prepares the per-session read queries, so a
+// database whose tables or columns cannot satisfy them fails before any of
+// its sessions are treated as readable.
+func checkHermesStateSchema(ctx context.Context, conn *sql.DB) error {
+	for _, query := range []string{hermesStateSessionQuery, hermesStateMessagesQuery} {
+		if err := prepareHermesStateQuery(ctx, conn, query); err != nil {
+			return fmt.Errorf("check hermes state schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func prepareHermesStateQuery(ctx context.Context, conn *sql.DB, query string) error {
+	stmt, err := conn.PrepareContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	return nil
+}
+
 func readHermesStateSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) (hermesStateSession, bool, error) {
-	row := conn.QueryRowContext(ctx, `
-		SELECT id, source, COALESCE(model, ''),
-			COALESCE(parent_session_id, ''), started_at,
-			COALESCE(ended_at, 0), COALESCE(message_count, 0),
-			COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
-			COALESCE(cache_read_tokens, 0),
-			COALESCE(cache_write_tokens, 0),
-			COALESCE(reasoning_tokens, 0),
-			estimated_cost_usd, actual_cost_usd,
-			COALESCE(cost_status, ''), COALESCE(cost_source, ''),
-			COALESCE(title, ''), COALESCE(api_call_count, 0)
-		FROM sessions
-		WHERE id = ?`,
-		rawSessionID,
-	)
+	row := conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID)
 	var ss hermesStateSession
 	var started, ended float64
 	err := row.Scan(
@@ -786,19 +819,7 @@ func readHermesStateSession(ctx context.Context,
 func readHermesStateMessagesForSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) ([]hermesStateMessage, error) {
-	rows, err := conn.QueryContext(ctx, `
-		SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
-			COALESCE(tool_calls, ''), timestamp,
-			COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
-			COALESCE(reasoning_content, ''),
-			COALESCE(reasoning_details, ''),
-			COALESCE(codex_reasoning_items, ''),
-			COALESCE(codex_message_items, '')
-		FROM messages
-		WHERE session_id = ?
-		ORDER BY timestamp ASC, id ASC`,
-		rawSessionID,
-	)
+	rows, err := conn.QueryContext(ctx, hermesStateMessagesQuery, rawSessionID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"query hermes messages for %s: %w", rawSessionID, err,

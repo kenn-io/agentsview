@@ -1369,57 +1369,70 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 }
 
 func TestHermesPartialDiscoverySyncsReadableTranscripts(t *testing.T) {
-	for _, damage := range []string{"malformed database", "incompatible schema"} {
-		for _, mode := range []string{"full sync", "transcript event"} {
-			t.Run(damage+"/"+mode, func(t *testing.T) {
-				root := t.TempDir()
-				stateDB := writeHermesArchiveStateDB(t, root)
-				healthyRoot := t.TempDir()
-				database := dbtest.OpenTestDB(t)
-				engine := NewEngine(t.Context(), database, EngineConfig{
-					AgentDirs: map[parser.AgentType][]string{
-						parser.AgentHermes: {root, healthyRoot},
-					},
-					Machine: "local",
-				})
-				t.Cleanup(engine.Close)
-				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-				before, err := database.GetSessionFull(t.Context(), "hermes:child")
-				require.NoError(t, err)
-				require.NotNil(t, before)
-
-				require.NoError(t, os.Remove(stateDB))
-				if damage == "malformed database" {
-					require.NoError(t, os.WriteFile(stateDB, []byte("not a sqlite database"), 0o600))
-				} else {
-					conn, openErr := sql.Open("sqlite3", stateDB)
-					require.NoError(t, openErr)
-					_, execErr := conn.ExecContext(t.Context(), "CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
-					require.NoError(t, execErr)
-					require.NoError(t, conn.Close())
-				}
-				dir := filepath.Join(root, "sessions")
-				writeHermesTranscriptFile(t, dir, "fallback")
-				writeHermesTranscriptFile(t, healthyRoot, "healthy")
-				if mode == "full sync" {
-					stats := engine.SyncAll(t.Context(), nil)
-					assert.Equal(t, 1, stats.Failed, "partial discovery must report the database error")
-				} else {
-					err = engine.syncPathsContext(t.Context(), []string{
-						filepath.Join(dir, "fallback.jsonl"),
-						filepath.Join(healthyRoot, "healthy.jsonl"),
-					}, false)
-					require.Error(t, err, "partial classification must report the database error")
-				}
-
-				for _, id := range []string{"hermes:fallback", "hermes:healthy"} {
-					assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, id), id)
-				}
-				after, err := database.GetSessionFull(t.Context(), "hermes:child")
-				require.NoError(t, err)
-				assert.Equal(t, before, after, "incomplete discovery must preserve state-only history")
+	for _, test := range []struct {
+		damage   string
+		mode     string
+		reported bool
+	}{
+		{damage: "malformed database", mode: "full sync", reported: true},
+		{damage: "malformed database", mode: "state event", reported: true},
+		{damage: "malformed database", mode: "transcript event", reported: true},
+		{damage: "incompatible schema", mode: "full sync", reported: true},
+		{damage: "incompatible schema", mode: "transcript event", reported: true},
+		{damage: "missing messages table", mode: "full sync", reported: true},
+		{damage: "missing messages table", mode: "state event", reported: true},
+		// The sessions table still answers membership, so the transcript
+		// resolves without touching the damaged messages table.
+		{damage: "missing messages table", mode: "transcript event"},
+	} {
+		t.Run(test.damage+"/"+test.mode, func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			healthyRoot := t.TempDir()
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentHermes: {root, healthyRoot},
+				},
+				Machine: "local",
 			})
-		}
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			before, err := database.GetSessionFull(t.Context(), "hermes:child")
+			require.NoError(t, err)
+			require.NotNil(t, before)
+
+			switch test.damage {
+			case "malformed database":
+				require.NoError(t, os.WriteFile(stateDB, []byte("not a sqlite database"), 0o600))
+			case "incompatible schema":
+				require.NoError(t, os.Remove(stateDB))
+				execHermesState(t, stateDB, "CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
+			case "missing messages table":
+				execHermesState(t, stateDB, "DROP TABLE messages")
+			}
+			dir := filepath.Join(root, "sessions")
+			writeHermesTranscriptFile(t, dir, "fallback")
+			writeHermesTranscriptFile(t, healthyRoot, "healthy")
+			healthy := filepath.Join(healthyRoot, "healthy.jsonl")
+			var reported bool
+			switch test.mode {
+			case "full sync":
+				reported = engine.SyncAll(t.Context(), nil).Failed > 0
+			case "state event":
+				reported = engine.syncPathsContext(t.Context(), []string{stateDB, healthy}, false) != nil
+			case "transcript event":
+				reported = engine.syncPathsContext(t.Context(), []string{filepath.Join(dir, "fallback.jsonl"), healthy}, false) != nil
+			}
+
+			assert.Equal(t, test.reported, reported, "incomplete discovery must be reported")
+			for _, id := range []string{"hermes:fallback", "hermes:healthy"} {
+				assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, id), id)
+			}
+			after, err := database.GetSessionFull(t.Context(), "hermes:child")
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "incomplete discovery must preserve state-only history")
+		})
 	}
 }
 
@@ -1499,4 +1512,114 @@ func TestHermesDottedCronIDsSyncAndResolve(t *testing.T) {
 				"single-session sync must resolve the dotted cron ID")
 		})
 	}
+}
+
+func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
+	edited := `{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}` + "\n" +
+		`{"role":"assistant","content":"corrected reply","timestamp":"2026-05-14T10:02:00Z"}` + "\n"
+	for _, test := range []struct {
+		name   string
+		id     string
+		change func(t *testing.T, root string) string
+		event  bool
+		want   []string
+	}{
+		{
+			name: "full sync applies an edit",
+			id:   "standalone",
+			change: func(t *testing.T, root string) string {
+				t.Helper()
+				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
+			},
+			want: []string{"edited prompt", "corrected reply"},
+		},
+		{
+			name: "transcript event applies an edit",
+			id:   "standalone",
+			change: func(t *testing.T, root string) string {
+				t.Helper()
+				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
+			},
+			event: true,
+			want:  []string{"edited prompt", "corrected reply"},
+		},
+		{
+			name: "emptied transcript keeps history",
+			id:   "standalone",
+			change: func(t *testing.T, root string) string {
+				t.Helper()
+				return writeHermesSessionsFile(t, root, "standalone.jsonl", "")
+			},
+			want: []string{"hello", "Done."},
+		},
+		{
+			name: "database session falls back to its transcript",
+			id:   "child",
+			change: func(t *testing.T, root string) string {
+				t.Helper()
+				writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+				execHermesState(t, filepath.Join(root, "state.db"), "DROP TABLE messages")
+				return filepath.Join(root, "sessions", "child.jsonl")
+			},
+			want: []string{"hello", "Done."},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeHermesArchiveStateDB(t, root)
+			writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "standalone")
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+			path := test.change(t, root)
+			if test.event {
+				require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+			} else {
+				engine.SyncAll(t.Context(), nil)
+			}
+
+			assert.Equal(t, test.want, messageContents(t, database, "hermes:"+test.id))
+		})
+	}
+}
+
+func TestHermesSingleSessionSyncAfterStateDBRemoval(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"))
+
+	require.NoError(t, os.Remove(stateDB))
+
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
+	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"))
+	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
+}
+
+func writeHermesSessionsFile(t *testing.T, root, name, content string) string {
+	t.Helper()
+	path := filepath.Join(root, "sessions", name)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func execHermesState(t *testing.T, stateDB, statement string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(t.Context(), statement)
+	require.NoError(t, err)
 }

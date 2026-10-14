@@ -318,26 +318,22 @@ func (p *hermesProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	// Beside state.db, a session's stored messages can come from the database
+	// or from this transcript, so the transcript must replace them. Homes
+	// without state.db keep append-only transcript writes.
+	_, sessionsDir, besideStateDB := hermesStatePaths(src.Root)
+	forceReplace := besideStateDB && hermesPathInTranscriptDir(sessionsDir, path)
+	result := ParseResult{Session: *sess, Messages: msgs}
 	if p.spec.relabel != nil {
-		result := ParseResult{Session: *sess, Messages: msgs}
 		p.spec.relabel(&result)
-		return ParseOutcome{
-			Results: []ParseResultOutcome{{
-				Result:      result,
-				DataVersion: DataVersionCurrent,
-			}},
-			ResultSetComplete: true,
-		}, nil
 	}
 	return ParseOutcome{
 		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			},
+			Result:      result,
 			DataVersion: DataVersionCurrent,
 		}},
 		ResultSetComplete: true,
+		ForceReplace:      forceReplace,
 	}, nil
 }
 
@@ -619,6 +615,9 @@ func (s hermesSourceSet) discoverStateEach(
 	}
 	defer conn.Close()
 	observeSharedContainerScan(ctx)
+	if err := checkHermesStateSchema(ctx, conn); err != nil {
+		return false, err
+	}
 	rows, err := conn.QueryContext(ctx, "SELECT id FROM sessions ORDER BY id")
 	if err != nil {
 		return false, fmt.Errorf("query hermes sessions: %w", err)
@@ -1107,7 +1106,7 @@ func (s hermesSourceSet) changedPathSources(
 				return nil, nil
 			}
 			var sources []SourceRef
-			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
+			err := newHermesSourceSet(s.agent, []string{root}).DiscoverEach(ctx, func(source SourceRef) error {
 				sources = append(sources, source)
 				return nil
 			})
@@ -1169,6 +1168,9 @@ func (s hermesSourceSet) FindSource(
 	}
 	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
 		if path == "" {
+			continue
+		}
+		if stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db"); member && !IsRegularFile(stateDB) {
 			continue
 		}
 		for _, root := range roots {

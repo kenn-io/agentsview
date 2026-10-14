@@ -361,7 +361,7 @@ func TestHermesStreamingFallbackErrorPrecedence(t *testing.T) {
 		err := discoverer.DiscoverEach(ctx, func(SourceRef) error { return nil })
 
 		require.ErrorIs(t, err, fallbackErr)
-		assert.Contains(t, err.Error(), "query hermes sessions",
+		assert.Contains(t, err.Error(), "check hermes state schema",
 			"joined error must retain the original state failure")
 	})
 }
