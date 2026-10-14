@@ -457,13 +457,14 @@ func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {
 
 	cases := []map[string]string{
 		{
-			"from":            "2024-06-01",
-			"to":              "2024-06-01",
-			"timezone":        "UTC",
-			"left_dimension":  "model",
-			"left_value":      "claude-sonnet-4-20250514",
-			"right_dimension": "machine",
-			"right_value":     "beta",
+			"from":                "2024-06-01",
+			"to":                  "2024-06-01",
+			"timezone":            "UTC",
+			"left_dimension":      "model",
+			"left_value":          "claude-sonnet-4-20250514",
+			"right_dimension":     "machine",
+			"right_value":         "beta",
+			"fallback_to_default": "true",
 		},
 		{
 			"from":            "2024-06-01",
@@ -480,7 +481,6 @@ func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {
 		},
 	}
 	for _, q := range cases {
-		q["fallback_to_default"] = "true"
 		w := te.get(t, buildPathURL(
 			"/api/v1/usage/pairwise-comparison",
 			q,

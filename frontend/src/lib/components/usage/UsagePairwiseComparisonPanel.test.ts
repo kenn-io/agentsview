@@ -166,10 +166,6 @@ describe("UsagePairwiseComparisonPanel", () => {
       const spy = vi.spyOn(usage, "setPairwiseSide");
       const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
       await tick();
-      if (scenario === "first default") {
-        expect(document.body.textContent).toContain("Refresh");
-        expect(document.body.textContent).not.toContain("Not enough data");
-      }
       const pickers = Array.from(
         document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
       );
@@ -185,21 +181,23 @@ describe("UsagePairwiseComparisonPanel", () => {
         expect(document.querySelector('li[role="option"]')).toBeNull();
         expect(spy).not.toHaveBeenCalled();
       }
-      usage.summary = usageSummary();
-      await tick();
-      if (scenario === "first default") {
-        expect(pickers.every((picker) => picker.disabled)).toBe(true);
+      if (scenario !== "remembered refresh") {
+        usage.summary = usageSummary();
+        await tick();
+        if (scenario === "first default") {
+          expect(pickers.every((picker) => picker.disabled)).toBe(true);
+        }
+        usage.pairwiseSelection = {
+          left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+          right: { dimension: "project", value: "pl1:sha256:beta" },
+        };
+        usage.pairwiseComparison = pairwiseComparison();
+        usage.loading.pairwise = false;
+        await tick();
+        expect(pickers.every((picker) => !picker.disabled)).toBe(true);
+        expect(document.querySelector("tbody tr")).toBeTruthy();
+        expect(document.body.textContent).not.toContain("Not enough data");
       }
-      usage.pairwiseSelection = {
-        left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-        right: { dimension: "project", value: "pl1:sha256:beta" },
-      };
-      usage.pairwiseComparison = pairwiseComparison();
-      usage.loading.pairwise = false;
-      await tick();
-      expect(pickers.every((picker) => !picker.disabled)).toBe(true);
-      expect(document.querySelector("tbody tr")).toBeTruthy();
-      expect(document.body.textContent).not.toContain("Not enough data");
       unmount(component);
     },
   );

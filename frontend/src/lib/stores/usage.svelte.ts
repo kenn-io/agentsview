@@ -425,6 +425,7 @@ class UsageStore {
   private fetchAllVersion = 0;
   private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
   private pairwiseScope = "";
+  private pairwiseShownScope = "";
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -548,6 +549,15 @@ class UsageStore {
       if (option !== fallback) return option;
     }
     return options[0] ?? "";
+  }
+
+  private pairwiseSelectionUnavailable(): boolean {
+    const { left, right } = this.pairwiseSelection;
+    return (
+      !!left.value &&
+      !!right.value &&
+      [left, right].some((side) => !this.pairwiseOptionsFor(side.dimension).includes(side.value))
+    );
   }
 
   private clearPairwiseComparisonState(): void {
@@ -958,7 +968,7 @@ class UsageStore {
       params,
       contextParams,
     });
-    void this.fetchPairwise(params, true);
+    void this.fetchPairwise(params, JSON.stringify(params) !== this.pairwiseShownScope);
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -967,9 +977,9 @@ class UsageStore {
       return "aborted";
     }
     const recoveredParams = loadedSummary?.params ?? this.baseParams();
-    const scopeChanged = Object.keys(params).some(
-      (key) => params[key as keyof UsageParams] !== recoveredParams[key as keyof UsageParams],
-    );
+    const scopeChanged = [
+      ...new Set([...Object.keys(params), ...Object.keys(recoveredParams)]),
+    ].some((key) => params[key as keyof UsageParams] !== recoveredParams[key as keyof UsageParams]);
     if (scopeChanged) {
       this.clearPairwiseComparisonState();
       void this.fetchPairwise(recoveredParams, true);
@@ -1021,7 +1031,16 @@ class UsageStore {
       currentZoomPromise,
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
     ]);
-    const pairwiseResult = await this.awaitPairwise();
+    let pairwiseResult = await this.awaitPairwise();
+    if (
+      fetchVersion === this.fetchAllVersion &&
+      pairwiseResult === "ok" &&
+      this.pairwiseSelectionUnavailable()
+    ) {
+      this.clearPairwiseComparisonState();
+      void this.fetchPairwise(loadedSummary.params, true);
+      pairwiseResult = await this.awaitPairwise();
+    }
     const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
@@ -1153,7 +1172,7 @@ class UsageStore {
         };
         if (loadComparison) {
           void this.fetchComparison(v, data, params);
-          void this.fetchPairwise(params);
+          void this.fetchPairwise(params, this.pairwiseSelectionUnavailable());
         }
         return loaded;
       }
@@ -1359,6 +1378,7 @@ class UsageStore {
           this.pairwiseSelection = emptyPairwiseSelection();
         }
         this.pairwiseComparison = comparison;
+        this.pairwiseShownScope = JSON.stringify(params);
         this.errors.pairwise = null;
         this.noteStep("pairwise", liveStep, started, comparison);
         return "ok";

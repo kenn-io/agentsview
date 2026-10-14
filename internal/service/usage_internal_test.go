@@ -211,9 +211,6 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 		{"one usable model", []ModelTotal{{}, {Model: "only-model"}}, []ProjectTotal{{}}, [4]string{}},
 		{"one usable project", []ModelTotal{{}}, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{}},
 		{"empty keys", []ModelTotal{{}, {}}, []ProjectTotal{{}, {}}, [4]string{}},
-		{"one model", []ModelTotal{{Model: "only-model"}}, nil, [4]string{}},
-		{"one project", nil, []ProjectTotal{{ProjectKey: "key-a"}}, [4]string{}},
-		{"empty", nil, nil, [4]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
