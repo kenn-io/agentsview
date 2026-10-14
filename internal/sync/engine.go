@@ -16892,54 +16892,46 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		return nil
 	}
 
+	legacyPages, err := e.db.CodexLegacyRevertPages(ctx, e.idPrefix)
+	if err != nil {
+		log.Printf("codex index rename: listing legacy revert pages: %v", err)
+	}
 	var out []parser.DiscoveredFile
 	for uuid, title := range titles {
-		for _, rawID := range e.codexIndexRenamedRawIDs(ctx, uuid, title) {
+		rawIDs := e.codexIndexRenamedRawIDs(ctx, uuid, title)
+		rawIDs = append(rawIDs, e.codexIndexRenamedLegacyPageKeys(legacyPages[uuid], title)...)
+		for _, rawID := range rawIDs {
 			if chosen, ok := e.codexIndexSourceForRawID(
 				ctx, sessionRoots, rawID,
 			); ok {
 				out = append(out, chosen)
 			}
 		}
-		out = append(out, e.codexIndexRenamedLegacyPages(ctx, sessionRoots, uuid, title)...)
 	}
 	return out
 }
 
-// codexIndexRenamedLegacyPages lists the stored legacy revert pages of one
-// index entry whose stored title differs from it. Older Codex builds stored
-// such a page as codex:<rollout>, so codexIndexRenamedRawIDs does not see it
-// and its rollout id does not locate its file, which is named for the thread.
-// The page is refreshed through its recorded path when that path lies under
-// one of the index's session roots.
-func (e *Engine) codexIndexRenamedLegacyPages(ctx context.Context,
-	sessionRoots []string, uuid, title string,
-) []parser.DiscoveredFile {
-	threadSessionID := e.idPrefix + "codex:" + uuid
-	pages, err := e.db.CodexLegacyRevertPageSources(ctx, threadSessionID, uuid)
-	if err != nil {
-		log.Printf("codex index rename: listing legacy revert pages of %s: %v", threadSessionID, err)
-		return nil
-	}
-	var out []parser.DiscoveredFile
+// codexIndexRenamedLegacyPageKeys returns the file keys
+// (<thread>_<rollout>) of a thread's legacy revert pages whose stored title
+// differs from the index. Older Codex builds stored such a page as
+// codex:<rollout>, so codexIndexRenamedRawIDs does not list it, and its
+// rollout id alone does not locate its file, which is named for the thread.
+// The key locates the file under the index's session roots the same way a
+// current page's id does, including for mirrored sessions whose stored paths
+// name the remote host.
+func (e *Engine) codexIndexRenamedLegacyPageKeys(
+	pages []db.CodexPageSource, title string,
+) []string {
+	var keys []string
 	for _, page := range pages {
 		if !e.codexStoredNameDiffersBySessionID(page.ID, title, false) {
 			continue
 		}
-		if !slices.ContainsFunc(sessionRoots, func(root string) bool {
-			return pathWithinRoot(page.FilePath, root)
-		}) {
-			continue
-		}
-		out = append(out, parser.DiscoveredFile{
-			Path:            page.FilePath,
-			Agent:           parser.AgentCodex,
-			Machine:         e.machineForPath(parser.AgentCodex, page.FilePath),
-			ProviderProcess: true,
-			ProviderSource:  e.codexPinnedProviderSource(parser.AgentCodex, page.FilePath),
-		})
+		keys = append(keys, parser.CodexSessionUUIDFromFilename(
+			pathpkg.Base(filepath.ToSlash(page.FilePath)),
+		))
 	}
-	return out
+	return keys
 }
 
 // codexIndexRenamedRawIDs lists the raw session ids of one index entry whose

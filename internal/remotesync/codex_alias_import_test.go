@@ -317,3 +317,64 @@ func TestHTTPMirrorCodexIndexRemovalRenamesLegacyRevertPages(t *testing.T) {
 	assert.Equal(t, 2, stats.SessionsSynced, "removing an index entry reparses the thread and its legacy revert page")
 	assertNames("Primary title")
 }
+
+// Mirrored sessions record host:/remote paths, which never lie under a local
+// root, so a legacy page must be located by its file key. When an existing
+// mirrored index gains an entry for the thread, its legacy page takes the
+// title along with the thread.
+func TestHTTPMirrorCodexIndexAddedEntryRenamesLegacyRevertPages(t *testing.T) {
+	const (
+		thread = "019f0000-0000-7000-8000-00000000000b"
+		page   = "019f0000-0000-7000-8000-00000000000c"
+		other  = "019f0000-0000-7000-8000-00000000000d"
+	)
+	remote := newMirrorTestRemote(t)
+	home := filepath.Join(t.TempDir(), "home")
+	root := filepath.Join(home, "sessions")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	transcript := func(id, extra string) []byte {
+		return []byte(`{"timestamp":"2026-09-03T10:00:00Z","type":"session_meta","payload":{"id":"` + id + `","session_id":"` + thread + `","cwd":"/work"` + extra + `}}` + "\n" +
+			`{"timestamp":"2026-09-03T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Prompt"}]}}` + "\n")
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-2026-09-03T10-00-00-"+thread+".jsonl"), transcript(thread, ""), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-2026-09-03T11-00-00-"+thread+"_"+page+".jsonl"),
+		transcript(page, `,"history_mode":"paginated","history_base":{"thread_id":"`+thread+`"}`), 0o600))
+	index := filepath.Join(home, parser.CodexSessionIndexFilename)
+	writeIndex := func(lines string, stamp time.Time) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(index, []byte(lines), 0o600))
+		require.NoError(t, os.Chtimes(index, stamp, stamp))
+	}
+	stamp := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	writeIndex(`{"id":"`+other+`","thread_name":"Other title"}`+"\n", stamp)
+	var err error
+	remote.targets, err = ResolveTargets(config.Config{
+		AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {root: {home}}},
+	})
+	require.NoError(t, err)
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	_, err = hs.Run(t.Context())
+	require.NoError(t, err)
+	ids := []string{"devbox~codex:" + thread, "devbox~codex:" + page}
+	assertNames := func(want string) {
+		t.Helper()
+		for _, id := range ids {
+			session, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session, "session %s", id)
+			name := ""
+			if session.SessionName != nil {
+				name = *session.SessionName
+			}
+			assert.Equal(t, want, name, "name of %s", id)
+		}
+	}
+	assertNames("")
+
+	writeIndex(`{"id":"`+other+`","thread_name":"Other title"}`+"\n"+
+		`{"id":"`+thread+`","thread_name":"Thread title"}`+"\n", stamp.Add(time.Hour))
+	_, err = hs.Run(t.Context())
+	require.NoError(t, err)
+	assertNames("Thread title")
+}

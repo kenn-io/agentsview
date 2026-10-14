@@ -427,23 +427,26 @@ func TestCopyExcludedCodexThreadFromArchiveOnly(t *testing.T) {
 	}
 }
 
-// Legacy revert pages are stored as codex:<rollout> and found through their
-// continuation links; the recorded filename must name the thread and the
-// page's own id, and deleted rows are skipped.
-func TestCodexLegacyRevertPageSources(t *testing.T) {
+// Legacy revert pages are stored as codex:<rollout>; their thread comes from
+// the recorded filename alone, whatever their parent link points at, so a page
+// parented to a fork source or to a deleted page still belongs to its thread.
+// Deleted rows and current-format pages are skipped.
+func TestCodexLegacyRevertPages(t *testing.T) {
 	const (
-		thread  = "11111111-1111-4111-8111-111111111111"
-		page1   = "22222222-2222-4222-8222-222222222222"
-		page2   = "33333333-3333-4333-8333-333333333333"
-		other   = "44444444-4444-4444-8444-444444444444"
-		deleted = "55555555-5555-4555-8555-555555555555"
-		current = "66666666-6666-4666-8666-666666666666"
+		thread    = "11111111-1111-4111-8111-111111111111"
+		page1     = "22222222-2222-4222-8222-222222222222"
+		page2     = "33333333-3333-4333-8333-333333333333"
+		forkSrc   = "44444444-4444-4444-8444-444444444444"
+		inherited = "55555555-5555-4555-8555-555555555555"
+		other     = "66666666-6666-4666-8666-666666666666"
+		otherPage = "77777777-7777-4777-8777-777777777777"
+		current   = "88888888-8888-4888-8888-888888888888"
+		plain     = "99999999-9999-4999-8999-999999999999"
 	)
 	d := testDB(t)
 	ctx := t.Context()
 	for _, prefix := range []string{"", "devbox~"} {
 		t.Run("prefix="+prefix, func(t *testing.T) {
-			threadID := prefix + "codex:" + thread
 			dir := "/codex/sessions/2026/09/05/"
 			if prefix != "" {
 				dir = "devbox:" + dir
@@ -454,32 +457,38 @@ func TestCodexLegacyRevertPageSources(t *testing.T) {
 					s.Agent = "codex"
 					s.FilePath = &file
 					if parent != "" {
-						s.ParentSessionID = &parent
+						parentID := prefix + "codex:" + parent
+						s.ParentSessionID = &parentID
 						s.RelationshipType = string(parser.RelContinuation)
 					}
 				})
 			}
 			add(thread, "", dir+"rollout-2026-09-05T10-00-00-"+thread+".jsonl")
-			add(page1, threadID, dir+"rollout-2026-09-05T11-00-00-"+thread+"_"+page1+".jsonl")
-			add(page2, prefix+"codex:"+page1, dir+"rollout-2026-09-05T12-00-00-"+thread+"_"+page2+".jsonl")
-			// A continuation whose file is not a page of this thread.
-			add(other, threadID, dir+"rollout-2026-09-05T13-00-00-"+other+".jsonl")
-			add(deleted, threadID, dir+"rollout-2026-09-05T14-00-00-"+thread+"_"+deleted+".jsonl")
-			require.NoError(t, d.SoftDeleteSession(ctx, prefix+"codex:"+deleted))
+			add(page1, thread, dir+"rollout-2026-09-05T11-00-00-"+thread+"_"+page1+".jsonl")
+			add(page2, page1, dir+"rollout-2026-09-05T12-00-00-"+thread+"_"+page2+".jsonl")
+			// The page's ancestor is deleted; the page itself stays listed.
+			require.NoError(t, d.SoftDeleteSession(ctx, prefix+"codex:"+page1))
+			// A page whose base lies in inherited history continues the fork source.
+			add(inherited, forkSrc, dir+"rollout-2026-09-05T13-00-00-"+thread+"_"+inherited+".jsonl")
+			add(other, "", dir+"rollout-2026-09-05T14-00-00-"+other+".jsonl")
+			add(otherPage, other, dir+"rollout-2026-09-05T15-00-00-"+other+"_"+otherPage+".jsonl")
 			// A current-format page is listed by CodexRevertPageSessionIDs instead.
-			add(thread+"_"+current, threadID, dir+"rollout-2026-09-05T15-00-00-"+thread+"_"+current+".jsonl")
+			add(thread+"_"+current, thread, dir+"rollout-2026-09-05T16-00-00-"+thread+"_"+current+".jsonl")
+			// A continuation whose file is not a page of the thread.
+			add(plain, thread, dir+"rollout-2026-09-05T17-00-00-"+plain+".jsonl")
 
-			pages, err := d.CodexLegacyRevertPageSources(ctx, threadID, thread)
+			pages, err := d.CodexLegacyRevertPages(ctx, prefix)
 			require.NoError(t, err)
-			var ids []string
-			for _, page := range pages {
-				ids = append(ids, page.ID)
+			ids := map[string][]string{}
+			for threadID, list := range pages {
+				for _, page := range list {
+					ids[threadID] = append(ids[threadID], page.ID)
+				}
 			}
-			assert.Equal(t, []string{prefix + "codex:" + page1, prefix + "codex:" + page2}, ids)
-
-			pages, err = d.CodexLegacyRevertPageSources(ctx, threadID, other)
-			require.NoError(t, err)
-			assert.Empty(t, pages, "the thread id must match the session id")
+			assert.Equal(t, map[string][]string{
+				thread: {prefix + "codex:" + page2, prefix + "codex:" + inherited},
+				other:  {prefix + "codex:" + otherPage},
+			}, ids)
 		})
 	}
 }

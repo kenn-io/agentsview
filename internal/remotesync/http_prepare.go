@@ -883,11 +883,17 @@ func (hs HTTPSync) prepareMirror(
 		}
 		indexChanges = append(indexChanges, localPath)
 	}
+	var legacyPages map[string][]db.CodexPageSource
 	for _, indexPath := range indexChanges {
 		if filepath.Base(indexPath) != parser.CodexSessionIndexFilename {
 			continue
 		}
 		parser.EvictCodexSessionIndex(indexPath)
+		if legacyPages == nil {
+			if legacyPages, err = hs.DB.CodexLegacyRevertPages(ctx, hs.Host+"~"); err != nil {
+				return nil, err
+			}
+		}
 		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
 			threadID := hs.Host + "~codex:" + uuid
 			// Revert pages (codex:<thread>_<rollout>) carry the thread's title.
@@ -897,11 +903,7 @@ func (hs HTTPSync) prepareMirror(
 			}
 			// Legacy pages keep their rollout id (codex:<rollout>) and carry
 			// the thread's title too.
-			legacyPages, err := hs.DB.CodexLegacyRevertPageSources(ctx, threadID, uuid)
-			if err != nil {
-				return nil, err
-			}
-			for _, page := range legacyPages {
+			for _, page := range legacyPages[uuid] {
 				pageIDs = append(pageIDs, page.ID)
 			}
 			for _, id := range append([]string{threadID}, pageIDs...) {

@@ -2809,53 +2809,42 @@ type CodexPageSource struct {
 	FilePath string
 }
 
-// CodexLegacyRevertPageSources returns stored, non-deleted legacy revert pages
-// of a Codex thread. Older Codex builds wrote a page's own rollout id as its
-// session id, so the page is codex:<rollout>, outside the thread's id range
-// that CodexRevertPageSessionIDs reads. The page is reached through its
-// continuation links from the thread, and its recorded filename
-// (rollout-<ts>-<thread>_<rollout>.jsonl) must name the thread and the page's
-// own id. threadSessionID must end with "codex:" + threadID.
-func (db *DB) CodexLegacyRevertPageSources(
-	ctx context.Context, threadSessionID, threadID string,
-) ([]CodexPageSource, error) {
-	prefix, ok := strings.CutSuffix(threadSessionID, threadID)
-	if threadID == "" || !ok || !strings.HasSuffix(prefix, "codex:") {
-		return nil, nil
-	}
+// CodexLegacyRevertPages returns the stored, non-deleted legacy Codex revert
+// pages under one session id prefix ("" for local sessions, "<host>~" for a
+// remote host), keyed by thread id. Older Codex builds wrote a page's own
+// rollout id as its session id, so the page is codex:<rollout>, outside the
+// thread's id range that CodexRevertPageSessionIDs reads, and its parent link
+// can point at a fork source or at a deleted page. Membership therefore comes
+// from the recorded filename alone: rollout-<ts>-<thread>_<rollout>.jsonl
+// whose <rollout> is the page's own id. The scan reads only this prefix's
+// Codex ids through the primary key, once per call.
+func (db *DB) CodexLegacyRevertPages(
+	ctx context.Context, sessionPrefix string,
+) (map[string][]CodexPageSource, error) {
+	idPrefix := sessionPrefix + "codex:"
+	// ';' is the byte after ':', so the range holds exactly this prefix's ids.
 	rows, err := db.getReader().QueryContext(ctx,
-		`WITH RECURSIVE pages(id, file_path) AS (
-			SELECT id, COALESCE(file_path, '') FROM sessions
-			 WHERE parent_session_id = ?1
-			   AND relationship_type = ?2 AND deleted_at IS NULL
-			UNION
-			SELECT s.id, COALESCE(s.file_path, '') FROM sessions s
-			 JOIN pages p ON s.parent_session_id = p.id
-			 WHERE s.relationship_type = ?2 AND s.deleted_at IS NULL
-		 )
-		 SELECT id, file_path FROM pages ORDER BY id`,
-		threadSessionID, string(parser.RelContinuation),
+		`SELECT id, file_path FROM sessions
+		 WHERE id > ?1 AND id < ?2 AND deleted_at IS NULL
+		   AND file_path IS NOT NULL AND instr(file_path, '_') > 0
+		 ORDER BY id`,
+		idPrefix, sessionPrefix+"codex;",
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"finding legacy codex revert pages of %q: %w",
-			threadSessionID, err,
-		)
+		return nil, fmt.Errorf("finding legacy codex revert pages: %w", err)
 	}
 	defer rows.Close()
-	var pages []CodexPageSource
+	pages := map[string][]CodexPageSource{}
 	for rows.Next() {
 		var page CodexPageSource
 		if err := rows.Scan(&page.ID, &page.FilePath); err != nil {
 			return nil, fmt.Errorf("scanning legacy codex revert page: %w", err)
 		}
-		raw, ok := strings.CutPrefix(page.ID, prefix)
-		if !ok || page.FilePath == "" {
-			continue
-		}
+		raw := strings.TrimPrefix(page.ID, idPrefix)
 		key := parser.CodexSessionUUIDFromFilename(pathpkg.Base(filepath.ToSlash(page.FilePath)))
-		if key == threadID+"_"+raw {
-			pages = append(pages, page)
+		thread := parser.CodexThreadIDFromSessionKey(key)
+		if thread != key && key == thread+"_"+raw {
+			pages[thread] = append(pages[thread], page)
 		}
 	}
 	return pages, rows.Err()

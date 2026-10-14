@@ -3,6 +3,7 @@ package sync
 import (
 	"database/sql"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -862,4 +863,110 @@ func TestSyncPathsCodexIndexEventRefreshesLegacyRevertPageName(t *testing.T) {
 	for _, id := range otherIDs {
 		assert.Equal(t, "Other title", sessionName(id))
 	}
+}
+
+// A legacy revert page can sit outside its thread's continuation chain: a page
+// whose base lies in a forked thread's inherited history continues the fork
+// source, and a page whose ancestor page was deleted has no live path to the
+// thread. A rename of the thread still reaches both, and never the deleted page.
+func TestSyncPathsCodexIndexEventRefreshesUnchainedLegacyPages(t *testing.T) {
+	const (
+		source    = "11111111-1111-4111-8111-111111111111"
+		thread    = "22222222-2222-4222-8222-222222222222"
+		inherited = "33333333-3333-4333-8333-333333333333"
+		page1     = "44444444-4444-4444-8444-444444444444"
+		page2     = "55555555-5555-4555-8555-555555555555"
+	)
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	meta := func(id, ts string, extra map[string]any) string {
+		fields := map[string]any{"session_id": thread, "history_mode": "paginated"}
+		maps.Copy(fields, extra)
+		return testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work/project", "codex_cli_rs", ts, fields)
+	}
+	writeCodexRollout(t, root, "05", "rollout-2026-09-05T09-00-00-"+source+".jsonl",
+		testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(source, "/work/project", "codex_cli_rs", "2026-09-05T09:00:00Z",
+				map[string]any{"session_id": source, "history_mode": "paginated"}),
+			codexUserEntryJSON("2026-09-05T09:00:01Z", "source prompt"),
+		))
+	headPath := writeCodexRollout(t, root, "05", "rollout-2026-09-05T10-00-00-"+thread+".jsonl",
+		testjsonl.JoinJSONL(
+			meta(thread, "2026-09-05T10:00:00Z", map[string]any{"forked_from_id": source}),
+			codexUserEntryJSON("2026-09-05T10:00:01Z", "thread prompt"),
+		))
+	inheritedPath := writeCodexRollout(t, root, "05", "rollout-2026-09-05T11-00-00-"+thread+"_"+inherited+".jsonl",
+		testjsonl.JoinJSONL(
+			meta(inherited, "2026-09-05T11:00:00Z", map[string]any{
+				"forked_from_id": source,
+				"history_base":   map[string]any{"thread_id": source, "end_ordinal_exclusive": 2},
+			}),
+			codexUserEntryJSON("2026-09-05T11:00:01Z", "inherited page prompt"),
+		))
+	writeCodexRollout(t, root, "05", "rollout-2026-09-05T12-00-00-"+thread+"_"+page1+".jsonl",
+		testjsonl.JoinJSONL(
+			meta(page1, "2026-09-05T12:00:00Z", map[string]any{
+				"history_base": map[string]any{"thread_id": thread, "end_ordinal_exclusive": 2},
+			}),
+			codexUserEntryJSON("2026-09-05T12:00:01Z", "page one prompt"),
+		))
+	page2Path := writeCodexRollout(t, root, "05", "rollout-2026-09-05T13-00-00-"+thread+"_"+page2+".jsonl",
+		testjsonl.JoinJSONL(
+			meta(page2, "2026-09-05T13:00:00Z", map[string]any{
+				"history_base": map[string]any{"thread_id": page1, "end_ordinal_exclusive": 2},
+			}),
+			codexUserEntryJSON("2026-09-05T13:00:01Z", "page two prompt"),
+		))
+	indexPath := filepath.Join(home, parser.CodexSessionIndexFilename)
+	writeIndex := func(title string, mtime time.Time) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+			`{"id":"%s","thread_name":"%s"}`+"\n"+`{"id":"%s","thread_name":"Source title"}`+"\n",
+			thread, title, source), 0o644))
+		require.NoError(t, os.Chtimes(indexPath, mtime, mtime))
+		parser.EvictCodexSessionIndex(indexPath)
+	}
+	writeIndex("Original title", time.Now().Add(-2*time.Hour))
+
+	database := openTestDB(t)
+	engine := newCodexRevertEngine(t, database, root)
+	engine.SyncAll(t.Context(), nil)
+
+	session := func(id string) *db.Session {
+		t.Helper()
+		sess, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, sess, "session %s", id)
+		return sess
+	}
+	inheritedSess := session("codex:" + inherited)
+	require.NotNil(t, inheritedSess.ParentSessionID)
+	require.Equal(t, "codex:"+source, *inheritedSess.ParentSessionID,
+		"a page based in inherited history continues the fork source")
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "codex:"+page1))
+	refreshed := []string{"codex:" + thread, "codex:" + inherited, "codex:" + page2}
+	name := func(id string) string {
+		t.Helper()
+		got, found, err := database.GetSessionName(t.Context(), id)
+		require.NoError(t, err)
+		require.True(t, found, "session %s", id)
+		return got
+	}
+	for _, id := range refreshed {
+		assert.Equal(t, "Original title", name(id), "name of %s", id)
+	}
+
+	writeIndex("Renamed title", time.Now().Add(-30*time.Minute))
+	var classified []string
+	for _, f := range engine.classifyCodexIndexPath(t.Context(), indexPath) {
+		classified = append(classified, f.Path)
+	}
+	assert.ElementsMatch(t, []string{headPath, inheritedPath, page2Path}, classified,
+		"the rename reaches pages outside the chain and skips the deleted page")
+
+	engine.SyncPaths([]string{indexPath})
+	for _, id := range refreshed {
+		assert.Equal(t, "Renamed title", name(id), "name of %s", id)
+	}
+	assert.Equal(t, "Source title", name("codex:"+source))
 }
