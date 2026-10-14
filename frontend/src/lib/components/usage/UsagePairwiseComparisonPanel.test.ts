@@ -1,4 +1,3 @@
-import { m } from "../../i18n/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
@@ -81,8 +80,6 @@ function usageSummary(): UsageSummaryResponse {
 function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   return {
     left: {
-      dimension: "model",
-      value: "claude-sonnet-4-20250514",
       totalCost: testMoney(4),
       inputTokens: 200,
       outputTokens: 100,
@@ -94,8 +91,6 @@ function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
       tokensPerSession: 150,
     },
     right: {
-      dimension: "project",
-      value: "pl1:sha256:beta",
       totalCost: testMoney(5.5),
       inputTokens: 100,
       outputTokens: 50,
@@ -156,40 +151,40 @@ describe("UsagePairwiseComparisonPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows loading while the server chooses the first pair", async () => {
+  it("shows loading before the empty state and disables pickers during the first default request", async () => {
+    usage.summary = null;
+    usage.pairwiseComparison = null;
     usage.pairwiseSelection = {
       left: { dimension: "model", value: "" },
       right: { dimension: "model", value: "" },
     };
-    usage.pairwiseComparison = null;
     usage.loading.pairwise = true;
     const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
     await tick();
-    expect(document.querySelector(".pairwise-note")?.textContent?.trim()).toBe(
-      m.session_breadcrumb_usage_breakdown_loading(),
+    expect(document.body.textContent).toContain("Refresh");
+    expect(document.body.textContent).not.toContain("Not enough data");
+    const pickers = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
     );
-    const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
     expect(pickers).toHaveLength(4);
-    expect([...pickers].every((picker) => picker.disabled)).toBe(true);
-    usage.pairwiseSelection = {
-      left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-      right: { dimension: "model", value: "gpt-4o" },
-    };
-    usage.pairwiseComparison = pairwiseComparison();
+    expect(pickers.every((picker) => picker.disabled)).toBe(true);
     usage.loading.pairwise = false;
     await tick();
-    expect([...pickers].every((picker) => !picker.disabled)).toBe(true);
-    await unmount(component);
+    expect(pickers.every((picker) => !picker.disabled)).toBe(true);
+    unmount(component);
   });
 
-  it("keeps every picker disabled when the default pair arrives before totals", async () => {
-    usage.summary = null;
+  it("keeps pickers enabled during a remembered comparison refresh", async () => {
+    usage.loading.pairwise = true;
+    usage.pairwiseComparison = null;
     const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
     await tick();
-    const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
+    const pickers = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".pairwise-typeahead button"),
+    );
     expect(pickers).toHaveLength(4);
-    expect([...pickers].every((picker) => picker.disabled)).toBe(true);
-    await unmount(component);
+    expect(pickers.every((picker) => !picker.disabled)).toBe(true);
+    unmount(component);
   });
 
   it("routes selector changes through the usage store", async () => {

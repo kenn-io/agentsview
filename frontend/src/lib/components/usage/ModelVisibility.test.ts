@@ -1,19 +1,53 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { UsageSummaryResponse } from "../../api/generated/index";
-import { emptyUsagePairwiseComparison } from "../../test/usage.js";
 import { testMoney } from "../../test/money.js";
 
 const api = vi.hoisted(() => {
+  const zero = { microdollars: 0 };
+  const metrics = {
+    totalCost: zero,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    totalTokens: 0,
+    sessionCount: 0,
+    costPerSession: null,
+    tokensPerSession: null,
+  };
   return {
     getApiV1UsageSummary: vi.fn(),
     getApiV1UsageComparison: vi.fn().mockResolvedValue({
       priorFrom: "2023-12-01",
       priorTo: "2023-12-31",
-      priorTotalCost: { microdollars: 0 },
+      priorTotalCost: zero,
       deltaPct: null,
     }),
-    getApiV1UsagePairwiseComparison: vi.fn(),
+    getApiV1UsagePairwiseComparison: vi.fn().mockResolvedValue({
+      left: metrics,
+      right: metrics,
+      deltas: {
+        totalCostDelta: zero,
+        totalCostDeltaRatio: null,
+        inputTokensDelta: 0,
+        inputTokensDeltaRatio: null,
+        outputTokensDelta: 0,
+        outputTokensDeltaRatio: null,
+        cacheCreationDelta: 0,
+        cacheCreationDeltaRatio: null,
+        cacheReadDelta: 0,
+        cacheReadDeltaRatio: null,
+        totalTokensDelta: 0,
+        totalTokensDeltaRatio: null,
+        sessionCountDelta: 0,
+        sessionCountDeltaRatio: null,
+        costPerSessionDelta: null,
+        costPerSessionRatio: null,
+        tokensPerSessionDelta: null,
+        tokensPerSessionRatio: null,
+      },
+    }),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
   };
 });
@@ -85,7 +119,6 @@ function modelOption(name: string) {
 let component: ReturnType<typeof mount>;
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getApiV1UsagePairwiseComparison.mockResolvedValue(emptyUsagePairwiseComparison());
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   api.getApiV1UsageSummary.mockImplementation(async (params) => summary(params.exclude_model));
   usage.selectedProjectKey = "";
