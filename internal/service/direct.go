@@ -961,7 +961,15 @@ func (b *directBackend) UsagePairwiseComparison(
 		rankingRequest := req.UsageRequest
 		rankingRequest.Breakdowns = new(true)
 		rankingRequest.SessionCounts = new(false)
-		summary, err := b.UsageSummary(ctx, rankingRequest)
+		rankingFilter, err := BuildUsageFilter(rankingRequest)
+		if err != nil {
+			return nil, err
+		}
+		rankingResult, err := b.db.GetDailyUsage(ctx, rankingFilter)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := buildUsageSummary(rankingFilter, rankingResult)
 		if err != nil {
 			return nil, err
 		}

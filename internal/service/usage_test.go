@@ -495,6 +495,7 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 
 	for _, defaultPair := range []bool{false, true} {
 		t.Run(fmt.Sprintf("default=%t", defaultPair), func(t *testing.T) {
+			t.Parallel()
 			req := service.UsagePairwiseComparisonRequest{
 				From:           "2024-06-01",
 				To:             "2024-06-01",
@@ -841,6 +842,7 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 
 	for _, selection := range []string{"explicit", "default"} {
 		t.Run(selection, func(t *testing.T) {
+			t.Parallel()
 			req := service.UsagePairwiseComparisonRequest{
 				From:           "2024-06-01",
 				To:             "2024-06-01",
@@ -961,10 +963,8 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 	require.NoError(t, err)
 	be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
 	res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-		UsageRequest: service.UsageRequest{
-			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
-			IncludeOneShot: true,
-		},
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
+		IncludeOneShot: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "project", res.Left.Dimension)
@@ -995,6 +995,7 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ld, lv, rd, rv := service.DefaultUsagePairwiseSelection(&service.UsageSummaryResult{ModelTotals: tc.models, ProjectTotals: tc.projects})
 			assert.Equal(t, tc.want, [4]string{ld, lv, rd, rv})
 		})
