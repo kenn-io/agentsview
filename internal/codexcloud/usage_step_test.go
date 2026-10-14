@@ -795,9 +795,6 @@ func TestNoUsableHomeNamesTheLoginProblem(t *testing.T) {
 	assert.Equal(t, "Plan usage: "+Message(FailRefreshRequested, time.Time{}), env.planLine(t))
 }
 
-// A plan usage 401 in auto mode can mean an expired login in auth.json as
-// well as a login kept in the keyring; the line must not claim only the
-// keyring.
 // A new login in the refused home resumes plan usage, so the line names
 // that home, not the default one a plain `codex login` signs in.
 func TestUsage401NamesTheRefusedHome(t *testing.T) {
@@ -812,6 +809,22 @@ func TestUsage401NamesTheRefusedHome(t *testing.T) {
 		homeLoginCommand("/homes/b", runtime.GOOS)+".", env.planLine(t))
 }
 
+// When every home refuses, the line names the first one, the default
+// home: a later refusal must not replace it.
+func TestUsage401OnEveryHomeNamesTheFirst(t *testing.T) {
+	env := newUsageEnv(t, "/homes/a", "/homes/b")
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.RefuseBearer("token-0", http.StatusUnauthorized)
+	env.usage.RefuseBearer("token-1", http.StatusUnauthorized)
+
+	env.run(t)
+
+	assert.Equal(t, "Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.", env.planLine(t))
+}
+
+// A plan usage 401 in auto mode can mean an expired login in auth.json as
+// well as a login kept in the keyring; the line must not claim only the
+// keyring.
 func TestUsage401InAutoModeNamesBothCauses(t *testing.T) {
 	env := newUsageEnv(t)
 	login := env.logins["/homes/a"]
