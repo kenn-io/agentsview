@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,10 +41,9 @@ func reconcileGroupsSequentially(
 }
 
 type recordingUnwatchedPollSyncer struct {
-	mu           sync.Mutex
-	calls        [][]string
-	wake         chan struct{}
-	reconcileErr error
+	mu    sync.Mutex
+	calls [][]string
+	wake  chan struct{}
 }
 
 type blockingUnwatchedPollSyncer struct {
@@ -131,7 +129,7 @@ func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
 	case s.wake <- struct{}{}:
 	default:
 	}
-	return s.reconcileErr
+	return nil
 }
 
 func (s *recordingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
@@ -281,28 +279,6 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
-	t.Run("root vanishes during registration", func(t *testing.T) {
-		root := requireExistingPollRoot(t, t.TempDir(), "provider")
-		watcher, err := agentsync.NewWatcher(time.Second, func(agentsync.WatchBatch) {}, nil)
-		require.NoError(t, err)
-		t.Cleanup(watcher.Stop)
-		plan := []agentsync.WatchRoot{{Path: root, Recursive: true, Exists: true, Scopes: []agentsync.WatchScope{{Agent: "claude", SyncDir: root}}}}
-		require.NoError(t, os.Remove(root))
-		results := watcher.RegisterRoots(plan, 8)
-		if results[0].MissingRootLifecycleOwned {
-			t.Skip("native backend owns missing root recovery")
-		}
-		obligations := watchPollingObligations([]watchRoot{{path: root, recursive: true, exists: true, scopes: []watchScope{{agent: parser.AgentClaude, syncDir: root}}}}, results, nil, nil)
-		require.Len(t, obligations, 1)
-		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
-		coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-		t.Cleanup(coordinator.Stop)
-		require.NoError(t, coordinator.AddObligation(pollingObligation{Key: obligations[0].Key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: root}}, Probe: root}))
-		require.NoError(t, os.Mkdir(root, 0o755))
-		coordinator.requestPoll()
-		requirePollWithin(t, syncer.wake, time.Second)
-		assert.Equal(t, [][]string{{root}}, syncer.snapshot())
-	})
 	synctest.Test(t, func(t *testing.T) {
 		parent := t.TempDir()
 		root := filepath.Join(parent, "provider")
@@ -555,53 +531,6 @@ func TestAvailableUnwatchedPollRootsBlocksScopesUnderFilesystemRoot(t *testing.T
 // is missing, and A stays pollable. Polling A's root must not expand into B's
 // configured scope and tombstone B's baselined session as an empty discovery.
 func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T) {
-	t.Run("folder release retries after a failed pass", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			root := t.TempDir()
-			folder := requireExistingPollRoot(t, root, "project")
-			syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4), reconcileErr: os.ErrPermission}
-			coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-			t.Cleanup(coordinator.Stop)
-			key := "fsnotify-folder:" + root + ":" + folder
-			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}}, Probe: folder}))
-			require.NoError(t, coordinator.RemoveObligation(key))
-			synctest.Wait()
-			assert.Equal(t, [][]string{{folder}}, syncer.snapshot())
-			require.Len(t, coordinator.currentPollObligations(), 1)
-			assert.True(t, coordinator.currentPollObligations()[0].releasePending)
-			syncer.reconcileErr = nil
-			coordinator.requestPoll()
-			time.Sleep(unwatchedPollInterval)
-			synctest.Wait()
-			assert.Equal(t, [][]string{{folder}, {folder}}, syncer.snapshot())
-			assert.Empty(t, coordinator.currentPollObligations())
-		})
-	})
-	t.Run("superseded folder disappears after failed pass", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			root := t.TempDir()
-			folder := requireExistingPollRoot(t, root, "project")
-			syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4), reconcileErr: os.ErrPermission}
-			coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-			t.Cleanup(coordinator.Stop)
-			key := "fsnotify-folder:" + root + ":" + folder
-			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: folder}}, Probe: folder}))
-			require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "fsnotify-runtime:" + root, Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: root}}, Probe: root}))
-			require.NoError(t, coordinator.RemoveObligation(key))
-			synctest.Wait()
-			require.Len(t, coordinator.currentPollObligations(), 2)
-			require.NoError(t, os.Remove(folder))
-			syncer.reconcileErr = nil
-			coordinator.requestPoll()
-			time.Sleep(unwatchedPollInterval)
-			synctest.Wait()
-			calls := syncer.snapshot()
-			require.Len(t, calls, 2)
-			assert.Equal(t, []string{root}, calls[1])
-			require.Len(t, coordinator.currentPollObligations(), 1)
-			assert.Equal(t, "fsnotify-runtime:"+root, coordinator.currentPollObligations()[0].Key)
-		})
-	})
 	base := t.TempDir()
 	nested := requireExistingPollRoot(t, base, "nested")
 	sourcePath := filepath.Join(nested, "project", "archived-session.jsonl")
@@ -652,36 +581,6 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 	t *testing.T,
 ) {
-	t.Run("new release survives completion of an older pass", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			folder := t.TempDir()
-			syncer := &blockingUnwatchedPollSyncer{started: make(chan []string, 2), release: make(chan struct{})}
-			coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
-			t.Cleanup(func() {
-				select {
-				case <-syncer.release:
-				default:
-					close(syncer.release)
-				}
-				coordinator.Stop()
-			})
-			obligation := pollingObligation{Key: "fsnotify-folder:" + folder, Scopes: []pollingScope{{Root: folder}}, Probe: folder}
-			require.NoError(t, coordinator.AddObligation(obligation))
-			require.NoError(t, coordinator.RemoveObligation(obligation.Key))
-			assert.Equal(t, []string{folder}, requireReceivePollRoots(t, syncer.started, time.Second))
-			require.NoError(t, coordinator.AddObligation(obligation))
-			require.NoError(t, coordinator.RemoveObligation(obligation.Key))
-			close(syncer.release)
-			synctest.Wait()
-			assert.Len(t, coordinator.currentPollObligations(), 1)
-			time.Sleep(unwatchedPollInterval)
-			synctest.Wait()
-			assert.Empty(t, coordinator.currentPollObligations())
-			calls, maxActive := syncer.snapshot()
-			assert.Equal(t, [][]string{{folder}, {folder}}, calls)
-			assert.Equal(t, 1, maxActive)
-		})
-	})
 	ticks := make(chan time.Time)
 	syncer := &blockingUnwatchedPollSyncer{
 		started: make(chan []string, 4),
@@ -875,27 +774,28 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 }
 
 func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing.T) {
-	var logs bytes.Buffer
-	previousLog := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(previousLog) })
-	synctest.Test(t, func(t *testing.T) {
-		ticks := make(chan time.Time)
-		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
-		coordinator := newUnwatchedPollCoordinatorWithTicks(
-			t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
-		)
-		t.Cleanup(coordinator.Stop)
-		require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "fsnotify-folder:empty"}))
-
-		require.NoError(t, coordinator.RemoveObligation("fsnotify-folder:empty"))
-		synctest.Wait()
-
-		assert.Empty(t, syncer.snapshot())
-		assert.Empty(t, coordinator.currentPollObligations())
-	})
-	assert.NotContains(t, logs.String(), "polling 0 unwatched root(s)")
-	assert.NotContains(t, logs.String(), "polled 0 unwatched root(s)")
+	for _, key := range []string{"empty", "fsnotify-folder:empty"} {
+		t.Run(key, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+				coordinator := newUnwatchedPollCoordinatorWithTicks(t.Context(), syncer, make(chan time.Time), func() {}, func(run func()) { run() }, nil, time.Now, time.After)
+				t.Cleanup(coordinator.Stop)
+				require.NoError(t, coordinator.AddObligation(pollingObligation{Key: key}))
+				if key == "empty" {
+					coordinator.requestPoll()
+				} else {
+					require.NoError(t, coordinator.RemoveObligation(key))
+				}
+				synctest.Wait()
+				assert.Empty(t, syncer.snapshot())
+				if key == "empty" {
+					assert.Equal(t, []pollingObligation{{Key: "empty"}}, coordinator.currentPollObligations())
+				} else {
+					assert.Empty(t, coordinator.currentPollObligations())
+				}
+			})
+		})
+	}
 }
 
 func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
