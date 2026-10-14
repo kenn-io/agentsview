@@ -1285,6 +1285,7 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 								(session_id, role, content, timestamp) VALUES (?, 'user', 'hello', 1778767210)`, id)
 							require.NoError(t, err)
 						}
+						writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "standalone")
 						database := dbtest.OpenTestDB(t)
 						engine := NewEngine(t.Context(), database, EngineConfig{
 							AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
@@ -1292,10 +1293,13 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 						t.Cleanup(engine.Close)
 						seed := engine.SyncAll(t.Context(), nil)
 						require.Zero(t, seed.Failed)
-						siblingID := string(agent) + ":member-000"
-						before, err := database.GetSessionFull(t.Context(), siblingID)
-						require.NoError(t, err)
-						require.NotNil(t, before)
+						siblingIDs := []string{string(agent) + ":member-000", string(agent) + ":standalone"}
+						before := make([]*db.Session, len(siblingIDs))
+						for i, id := range siblingIDs {
+							before[i], err = database.GetSessionFull(t.Context(), id)
+							require.NoError(t, err)
+							require.NotNil(t, before[i], id)
+						}
 						var scans atomic.Int64
 						ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
 						if mode == "transcript event" {
@@ -1318,9 +1322,11 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 								require.NoError(t, engine.syncPathsContext(ctx, []string{eventPath}, false))
 							}
 						}
-						after, err := database.GetSessionFull(t.Context(), siblingID)
-						require.NoError(t, err)
-						assert.Equal(t, before, after, "unchanged siblings must receive no archive writes")
+						for i, id := range siblingIDs {
+							after, err := database.GetSessionFull(t.Context(), id)
+							require.NoError(t, err)
+							assert.Equal(t, before[i], after, "unchanged sibling %s must receive no archive writes", id)
+						}
 						child, err := database.GetSessionFull(t.Context(), string(agent)+":child")
 						require.NoError(t, err)
 						require.NotNil(t, child)

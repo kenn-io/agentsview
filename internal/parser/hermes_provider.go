@@ -1106,11 +1106,16 @@ func (s hermesSourceSet) changedPathSources(
 				return nil, nil
 			}
 			var sources []SourceRef
-			err := newHermesSourceSet(s.agent, []string{root}).DiscoverEach(ctx, func(source SourceRef) error {
+			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
 				sources = append(sources, source)
 				return nil
 			})
-			return sources, err
+			if err == nil || ctx.Err() != nil {
+				return sources, err
+			}
+			// Root discovery falls back to the transcripts and reports the
+			// database failure as incomplete discovery.
+			return newHermesSourceSet(s.agent, []string{root}).Discover(ctx)
 		}
 		if hermesPathInTranscriptDir(sessionsDir, path) {
 			id := HermesSessionID(filepath.Base(path))
