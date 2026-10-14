@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -136,34 +137,42 @@ func TestCodexCloudJobsKeepTheDaemonAwakeWhileRunning(t *testing.T) {
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			running, release := make(chan struct{}), make(chan struct{})
-			// The job blocks in its first step, reading the gates, until
-			// the test lets it finish.
-			gates := func() codexcloud.Gates {
-				close(running)
-				<-release
-				return codexcloud.Gates{}
-			}
-			idled := make(chan struct{})
-			tracker := server.NewIdleTracker(10*time.Millisecond, func() { close(idled) })
-			job := tt.job(gates, tracker)
-			finished := make(chan error, 1)
-			go func() { finished <- job.Run(t.Context()) }()
-			<-running
-			go tracker.Run(t.Context())
+			synctest.Test(t, func(t *testing.T) {
+				running, release := make(chan struct{}), make(chan struct{})
+				// The job blocks in its first step, reading the gates, until
+				// the test lets it finish.
+				gates := func() codexcloud.Gates {
+					close(running)
+					<-release
+					return codexcloud.Gates{}
+				}
+				idled := make(chan struct{})
+				tracker := server.NewIdleTracker(10*time.Millisecond, func() { close(idled) })
+				job := tt.job(gates, tracker)
+				finished := make(chan error, 1)
+				go func() { finished <- job.Run(t.Context()) }()
+				<-running
+				go tracker.Run(t.Context())
 
-			select {
-			case <-idled:
-				require.FailNow(t, "the daemon idled out while the job ran")
-			case <-time.After(100 * time.Millisecond):
-			}
-			close(release)
-			require.NoError(t, <-finished)
-			select {
-			case <-idled:
-			case <-time.After(2 * time.Second):
-				require.FailNow(t, "the daemon never idled after the job finished")
-			}
+				// Fake time runs well past the idle timeout while the job holds
+				// its lease.
+				time.Sleep(time.Second)
+				synctest.Wait()
+				select {
+				case <-idled:
+					require.FailNow(t, "the daemon idled out while the job ran")
+				default:
+				}
+				close(release)
+				require.NoError(t, <-finished)
+				time.Sleep(time.Second)
+				synctest.Wait()
+				select {
+				case <-idled:
+				default:
+					require.FailNow(t, "the daemon never idled after the job finished")
+				}
+			})
 		})
 	}
 }
