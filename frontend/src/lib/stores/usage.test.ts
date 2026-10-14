@@ -767,6 +767,50 @@ describe("UsageStore session filter params", () => {
     },
   );
 
+  it("refetches the current model selection after project-scope recovery during a selector change", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    usage.excludedProjectKeys = "pl1:sha256:stale";
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+    let rejectSummary!: (error: Error) => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectSummary = reject;
+        }),
+    );
+    const recovered = emptyUsagePairwiseComparison();
+    recovered.left = { ...recovered.left, dimension: "model", value: "gpt-4o" };
+    recovered.right = { ...recovered.right, dimension: "model", value: "gpt-4o" };
+    usageServiceMocks.getApiV1UsagePairwiseComparison
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockResolvedValueOnce(recovered);
+
+    const refresh = usage.fetchAll();
+    usage.setPairwiseSide("left", { value: "gpt-4o" });
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[0]).toMatchObject({
+      exclude_project_key: "pl1:sha256:stale",
+      left_value: "gpt-4o",
+      right_value: "gpt-4o",
+    });
+    await vi.waitFor(() => expect(usage.errors.pairwise).toBe("unknown project key"));
+    rejectSummary(new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"));
+    await refresh;
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(3);
+    const params = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0];
+    expect(params).not.toHaveProperty("exclude_project_key");
+    expect(params).toMatchObject({ left_value: "gpt-4o", right_value: "gpt-4o" });
+    expect(usage.pairwiseComparison).toEqual(recovered);
+    expect(usage.errors.pairwise).toBeNull();
+  });
+
   it("stores pairwise comparison data from the generated API", async () => {
     const { usage } = await loadStore();
 

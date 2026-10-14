@@ -978,7 +978,6 @@ class UsageStore {
       },
     });
     const pairwisePromise = this.fetchPairwise(params);
-    const pairwiseVersion = this.versions.pairwise;
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -1020,7 +1019,12 @@ class UsageStore {
       : zoomPromise;
     const currentPairwisePromise =
       loadedSummary.pairwiseSelectionInvalidated ||
-      (loadedSummary.projectScopeRecovered && pairwiseVersion === this.versions.pairwise)
+      (loadedSummary.projectScopeRecovered &&
+        Object.keys({ ...this.pairwiseParams, ...loadedSummary.params }).some(
+          (key) =>
+            this.pairwiseParams?.[key as keyof UsageParams] !==
+            loadedSummary.params[key as keyof UsageParams],
+        ))
         ? this.fetchPairwise(loadedSummary.params)
         : pairwisePromise;
     const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =

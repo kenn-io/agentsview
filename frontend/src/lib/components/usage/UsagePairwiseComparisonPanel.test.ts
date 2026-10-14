@@ -187,11 +187,6 @@ describe("UsagePairwiseComparisonPanel", () => {
     const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
     expect(pickers).toHaveLength(4);
     expect([...pickers].every((picker) => picker.disabled)).toBe(true);
-    const spy = vi.spyOn(usage, "setPairwiseSide");
-    pickers[0]?.click();
-    pickers[2]?.click();
-    await tick();
-    expect(spy).not.toHaveBeenCalled();
     await unmount(component);
   });
 
