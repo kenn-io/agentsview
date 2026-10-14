@@ -20840,7 +20840,7 @@ func applyProviderFingerprintFileInfo(
 	results []parser.ParseResultOutcome,
 ) {
 	if agent != parser.AgentDevin && agent != parser.AgentHermes &&
-		agent != parser.AgentAugureDesktop {
+		agent != parser.AgentAugureDesktop && agent != parser.AgentFx {
 		return
 	}
 	for i := range results {

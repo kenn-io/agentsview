@@ -87,6 +87,37 @@ func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
 		"companion content must be mixed into the fingerprint hash")
 }
 
+func TestJSONLSourceSetOptionalCompanionUnreadable(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, "session.jsonl")
+	usage := filepath.Join(root, "usage-v2.json")
+	writeFile(t, transcript, `{"line":1}`)
+	set := NewJSONLSourceSet(AgentFx, []string{root}, WithContentHashing(),
+		WithCompanionFiles(func(string) []string { return []string{usage} }),
+		WithOptionalCompanion(func(path string) bool { return path == usage }),
+	)
+	sources, err := set.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	missing, err := set.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(usage, 0o755))
+	unreadable, err := set.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, missing.Hash, unreadable.Hash)
+	entry := filepath.Join(usage, "entry")
+	writeFile(t, entry, "ignored")
+	repeated, err := set.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, unreadable.Hash, repeated.Hash)
+	require.NoError(t, os.Remove(entry))
+	require.NoError(t, os.Remove(usage))
+	writeFile(t, usage, `{"snapshot":{"models":[]}}`)
+	readable, err := set.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, unreadable.Hash, readable.Hash)
+}
+
 func symlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {

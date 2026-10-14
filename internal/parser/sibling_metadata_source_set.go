@@ -63,3 +63,19 @@ func addSiblingMetadataFingerprintPart(
 	)
 	return nil
 }
+
+func addSiblingMetadataDirectoryFingerprintPart(h interface{ Write([]byte) (int, error) }, label, path string) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(h, "%s:%s:directory\n", label, filepath.Base(path))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(h, "%s:%s:%d:%d:%d\n", label, entry.Name(), info.Size(), info.ModTime().UnixNano(), info.Mode())
+	}
+	return nil
+}

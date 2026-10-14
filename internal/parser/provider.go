@@ -1309,6 +1309,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newPoolsideProviderFactory(def)
 	case AgentPi:
 		return newPiProviderFactory(def)
+	case AgentFx:
+		return newFxProviderFactory(def)
 	case AgentTau:
 		return newTauProviderFactory(def)
 	case AgentPrimeAgent:

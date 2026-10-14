@@ -521,9 +521,7 @@ func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T)
 		URL:  ts.URL,
 		Progress: func(p syncpkg.Progress) {
 			if p.BytesDone == int64(len(archive)) {
-				for _, name := range []string{"TMPDIR", "TMP", "TEMP", "SystemTemp"} {
-					t.Setenv(name, invalidTemp)
-				}
+				setPortableTempDir(t, invalidTemp)
 			}
 		},
 		removeArchiveSpool: func(string) error {

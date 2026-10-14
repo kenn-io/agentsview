@@ -4411,6 +4411,80 @@ schemas keep their existing ordering behavior.
   minutes) or transcript write. Direct session lookups refresh metadata
   without consuming the watcher baseline.
 
+## fx (`fx`)
+
+- **Format:** Schema 4 `session.json` holds the title, workspace, model, and
+  timestamps. `events.jsonl` stores version 3 frames. The
+  [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
+  defines prompts, replies, steering, tool calls and results, interruptions,
+  and context checkpoints. Larger results use plain `.txt` filenames in
+  `tool-results/`, capped at 16 MiB with a truncation notice. AgentsView uses
+  regular UTF-8 files in a real directory whose length matches `stored_bytes`
+  or reaches the cap. Symlinked directories and Windows reparse points keep
+  the preview.
+  Other artifacts keep the stored preview, up to 4 KB.
+  Only assistant replay records supply historical model and provider identities.
+  Tool calls share them when attached to that assistant row; separate tool-call
+  rows and interrupted text leave those identities unknown.
+  [Provider IDs](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/config/model_provider.zig)
+  are strings for built-in providers or objects with `name` and `binding` for
+  configured providers. Model names retain publisher prefixes for pricing.
+  Skill names percent-decode the location leaf.
+  [Built-in tools](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/builtins/tools.zig)
+  define the native names mapped to shared tool categories, including
+  `grep_files` as Grep and `glob_files` as Glob.
+  [Context compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_log.zig)
+  appends a `context_checkpoint` frame and preserves earlier messages.
+  [Log-size compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_compaction.zig)
+  copies unchanged frames verbatim and moves oversized inline file snapshots to
+  artifacts before atomically replacing the log. Every change reparses the
+  complete transcript.
+  [Child state](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/subagent/child_state.zig)
+  records `subagent/owner.json` with `parent_id`. AgentsView imports that link
+  as a child session.
+  [Session layout](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_layout.zig)
+  allows 1 to 255 ASCII letters, digits, dots, underscores, or hyphens in session
+  and parent IDs, excluding `.` and `..` and the reserved `v2` name in any case.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
+  `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-13.
+  Fixtures were captured with fx v0.0.13.
+- **Usage and cost:**
+  [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
+  stores cumulative per-model totals in `usage-v2.json` under `snapshot.models`.
+  fx removed the file at
+  [bc968ad](https://github.com/vercel-labs/fx/commit/bc968ad),
+  [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226), so only
+  older sessions have it.
+  Input includes cache reads and writes. AgentsView subtracts those tokens from
+  fresh input and prices the separate token counts from its catalog. It omits
+  fx's reported cost, which can be zero for subscription runs. Cumulative totals
+  leave peak context unknown. Usage dates use the earlier of the latest
+  transcript event and the usage file's modification time, falling back to the
+  latest event or session start when the modification time is unavailable.
+  Optional counts can be null, which AgentsView treats as unknown with zero tokens.
+- **Agentsview:** Sessions require schema 4. Event frames support schemas 1 to 3,
+  usage envelopes and owner markers schema 1, and usage snapshots schema 3.
+  Unsupported session, event, or owner versions skip the source. Encrypted
+  reasoning is excluded. Changes to `session.json`,
+  `usage-v2.json`, `subagent/owner.json`, or `tool-results/` refresh their owning
+  transcript. Tool-result entry names, sizes, modes, and modification times
+  contribute to freshness, including files restored after import. This suffices
+  because fx names result files by content hash, as defined by the
+  [result store](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/result_store.zig).
+  Retention sizing charges each tool-result artifact reference up to the read cap.
+  Companion content hashes detect equal-length rewrites.
+  A torn final line without a newline is ignored. Empty events and null known event
+  types fail parsing; unknown event types and sibling fields are skipped.
+  Two known event types in one object fail parsing.
+  JSON fields match case-sensitively; unknown object fields are ignored.
+  Other invalid frames fail parsing, preserving the stored session for retry.
+  Malformed, mismatched, duplicate-model, unsupported-version, or unreadable
+  usage is skipped with a log while the transcript imports. Unreadable usage
+  contributes a stable fingerprint marker so restoring access triggers a
+  reparse. Tool results and
+  status attach to calls without separate transcript rows.
+
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go

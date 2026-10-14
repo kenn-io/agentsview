@@ -11,6 +11,8 @@ The latest release is
 
 **New features**
 
+- Browse and search fx sessions, including tool results and child runs. Schema
+  4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which
   sessions edited a file, list a session's sub-agents, read the Activity report,
   see tool usage and where agents struggled, compare usage between two models or

@@ -27,6 +27,17 @@ INTENTIONALLY_UNLISTED = {
     "antigravity-cli": "same brand as antigravity",
 }
 
+# Provider keys whose chip uses a display name the matcher cannot derive.
+CHIP_NAMES = {
+    "codebuddy": "CodeBuddy CN",
+}
+
+# Chips that keep a two-letter text tag because a sourcing pass found no
+# usable mark. Record what was searched so the next run knows where to start.
+TEXT_TAG_ACCEPTED = {
+    "IcodeMate": "2026-10: no product site, extension, npm package, repo, or lobehub icon",
+}
+
 
 SUFFIXES = ("cli", "ide", "agent", "code", "tui")
 
@@ -74,6 +85,8 @@ def matches(display: str, key: str, names) -> bool:
     stripping product-type suffixes, the chip equals the provider key, or the
     chip ends with the provider name (Claude Cowork covers Cowork)."""
     want = {norm(display), stem(display), norm(key)}
+    if key in CHIP_NAMES:
+        want.add(norm(CHIP_NAMES[key]))
     for n in names:
         c, cs = norm(n), stem(n)
         if c in want or cs in want:
@@ -91,8 +104,13 @@ def main() -> int:
     provs = providers()
     names, symbols, text_glyphs = chips()
     print(f"providers: {len(provs)}  chips: {len(names)}  sprite symbols: {len(symbols)}")
-    if text_glyphs:
-        print("chips still using a text tag: " + ", ".join(text_glyphs))
+    pending_tags = [n for n in text_glyphs if n not in TEXT_TAG_ACCEPTED]
+    print("\nchips still using a text tag (source a mark for each):")
+    for n in pending_tags or ["none"]:
+        print(f"  {n}")
+    for n in text_glyphs:
+        if n in TEXT_TAG_ACCEPTED:
+            print(f"  {n}: accepted, {TEXT_TAG_ACCEPTED[n]}")
 
     missing = [(d, k) for d, k in provs if k not in INTENTIONALLY_UNLISTED and not matches(d, k, names)]
     print("\nproviders with no landing-grid chip (review each):")

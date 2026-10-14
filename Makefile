@@ -556,6 +556,7 @@ nilaway-golangci-build:
 # this whole arrangement depends on.
 NILAWAY_JOBS ?= 4
 
+# Compile exports once before the workers apply their CPU and memory limits.
 nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	@set -e; \
 	case "$(NILAWAY_JOBS)" in \
@@ -569,7 +570,7 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 		exit 1; \
 	fi; \
 	root=$$(pwd); \
-	dirs=$$(go list -f '{{.Dir}}' ./...); \
+	dirs=$$(go list -export -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \

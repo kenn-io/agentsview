@@ -329,7 +329,8 @@ func TestSearchContentUnknownSource(t *testing.T) {
 	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "x", Mode: "substring", Sources: []string{"messages", "bogus"},
 	})
-	require.Error(t, err, "expected error for unknown source name")
+	var inputErr *SearchInputError
+	require.ErrorAs(t, err, &inputErr, "expected validation error for unknown source name")
 }
 
 func TestSearchContentRegexInvalid(t *testing.T) {
@@ -337,7 +338,8 @@ func TestSearchContentRegexInvalid(t *testing.T) {
 	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `(unclosed`, Mode: "regex", Sources: []string{"messages"},
 	})
-	require.Error(t, err, "expected error for invalid regex")
+	var inputErr *SearchInputError
+	require.ErrorAs(t, err, &inputErr, "expected validation error for invalid regex")
 }
 
 func TestSearchContentFTS(t *testing.T) {

@@ -114,6 +114,10 @@ type JSONLSourceSetOptions struct {
 	// providers describe companions once as transcript->companions and the base
 	// drives watch, freshness, and changed-path mapping from that single hook.
 	CompanionFiles func(transcriptPath string) []string
+	// OptionalCompanion lets unreadable companions contribute a marker.
+	OptionalCompanion func(companionPath string) bool
+	// OptionalCompanionDirectories names companions whose directory entries contribute metadata.
+	OptionalCompanionDirectories []string
 	// RejectSymlinkCompanions makes companion freshness use Lstat and ignore
 	// symlinked companions. The default preserves legacy followed-symlink
 	// behavior for existing JSONL providers.
@@ -507,7 +511,27 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 		companionInfo = siblingMetadataFileInfoStrict
 	}
 	for _, companion := range companions {
-		info, err := companionInfo(companion)
+		optional := s.options.OptionalCompanion != nil && s.options.OptionalCompanion(companion)
+		var info os.FileInfo
+		var err error
+		if optional && !s.options.RejectSymlinkCompanions {
+			info, err = os.Stat(companion)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err == nil && !info.Mode().IsRegular() && !info.IsDir() {
+				err = fmt.Errorf("companion is not a regular file: %s", companion)
+			}
+		} else {
+			info, err = companionInfo(companion)
+		}
+		if err != nil && optional {
+			if hasher != nil {
+				_, _ = fmt.Fprintf(hasher, "companion:%s:unreadable\n", filepath.Base(companion))
+				folded = true
+			}
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -519,10 +543,17 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 			fingerprint.MTimeNS = mtime
 		}
 		if hasher != nil {
-			if err := addSiblingMetadataFingerprintPart(
-				hasher, "companion", companion, info,
-			); err != nil {
-				return err
+			var err error
+			if optional && info.IsDir() && slices.Contains(s.options.OptionalCompanionDirectories, filepath.Base(companion)) {
+				err = addSiblingMetadataDirectoryFingerprintPart(hasher, "companion", companion)
+			} else {
+				err = addSiblingMetadataFingerprintPart(hasher, "companion", companion, info)
+			}
+			if err != nil {
+				if !optional {
+					return err
+				}
+				_, _ = fmt.Fprintf(hasher, "companion:%s:unreadable\n", filepath.Base(companion))
 			}
 		}
 		folded = true
@@ -768,7 +799,9 @@ func (s JSONLSourceSet) sourceForCompanionPath(
 		// not claim as a companion must not remap to it.
 		if !slices.ContainsFunc(
 			s.options.CompanionFiles(transcript),
-			func(companion string) bool { return samePath(companion, path) },
+			func(companion string) bool {
+				return samePath(companion, path) || (s.options.OptionalCompanion != nil && s.options.OptionalCompanion(companion) && pathWithinDir(path, companion))
+			},
 		) {
 			return SourceRef{}, false, nil
 		}

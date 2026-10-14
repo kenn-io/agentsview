@@ -15,6 +15,9 @@ Use the built-in Go cache in `actions/setup-go` and npm caching in
 packages the job installs. Desktop jobs cache Rust dependencies through
 `Swatinem/rust-cache` with the GitHub cache backend. Playwright jobs install
 browsers and system dependencies on each run.
+Windows Go test and lint jobs in `ci.yml` put caches and temp files under
+`RUNNER_TEMP`. Capture tests use a private system-drive temporary directory so
+ancestor permissions satisfy their checks.
 
 ## Go and SQLite
 

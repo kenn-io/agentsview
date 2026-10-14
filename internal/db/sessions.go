@@ -914,11 +914,14 @@ func (db *DB) GetSidebarSessionIndex(
 	return index, nil
 }
 
-func (db *DB) getSidebarSessionIndexPage(
-	ctx context.Context, f SessionFilter,
-) (SidebarSessionIndex, error) {
-	f.Limit = NormalizeSessionLimit(f.Limit)
+type sidebarPredicates struct {
+	rootWhere          string
+	rootArgs           []any
+	canonicalRootWhere string
+	treeMemberWhere    string
+}
 
+func buildSidebarPredicates(f SessionFilter) sidebarPredicates {
 	rootFilter := f
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
@@ -926,6 +929,61 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
 	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
 	treeMemberWhere := SessionTreeMemberPredicate(f, SQLiteQueryDialect(), "s")
+	return sidebarPredicates{
+		rootWhere:          rootWhere,
+		rootArgs:           rootArgs,
+		canonicalRootWhere: canonicalRootWhere,
+		treeMemberWhere:    treeMemberWhere,
+	}
+}
+
+func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebarPredicates) (string, []any) {
+	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(predicates.rootArgs))
+	cursorWhere := ""
+	if f.Cursor != "" {
+		cursorWhere = "WHERE (activity, id) < (" +
+			pageBuilder.Add(cur.EndedAt) + ", " +
+			pageBuilder.Add(cur.ID) + ")"
+	}
+	query := `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + predicates.rootWhere + `
+			  AND ` + predicates.canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		)
+		` + sidebarStarredRootCTE(f.Starred) + `,
+		root_activity(id, activity) AS (
+			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
+			FROM tree t
+			` + sidebarStarredRootJoin(f.Starred) + `
+			JOIN sessions s ON s.id = t.id
+			GROUP BY t.root_id
+		)
+		SELECT id, activity
+		FROM root_activity
+		` + cursorWhere + `
+		ORDER BY activity DESC, id DESC
+		` + pageBuilder.Limit(f.Limit+1)
+	args := append([]any{}, predicates.rootArgs...)
+	args = append(args, pageBuilder.Args()...)
+	return query, args
+}
+
+func (db *DB) getSidebarSessionIndexPage(
+	ctx context.Context, f SessionFilter,
+) (SidebarSessionIndex, error) {
+	f.Limit = NormalizeSessionLimit(f.Limit)
+
+	predicates := buildSidebarPredicates(f)
 
 	var total int
 	var cur SessionCursor
@@ -943,8 +1001,8 @@ func (db *DB) getSidebarSessionIndexPage(
 				WITH RECURSIVE root_candidates(id) AS (
 					SELECT id
 					FROM sessions
-					WHERE ` + rootWhere + `
-					  AND ` + canonicalRootWhere + `
+					WHERE ` + predicates.rootWhere + `
+					  AND ` + predicates.canonicalRootWhere + `
 				),
 				tree(root_id, id) AS (
 					SELECT id, id FROM root_candidates
@@ -952,7 +1010,7 @@ func (db *DB) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON s.parent_session_id = t.id
-					WHERE ` + treeMemberWhere + `
+					WHERE ` + predicates.treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -961,16 +1019,16 @@ func (db *DB) getSidebarSessionIndexPage(
 				)
 				SELECT COUNT(*) FROM eligible_roots`
 			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
+				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
 				return SidebarSessionIndex{},
 					fmt.Errorf("counting sidebar roots: %w", err)
 			}
 		} else {
 			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-				rootWhere + " AND " + canonicalRootWhere
+				predicates.rootWhere + " AND " + predicates.canonicalRootWhere
 			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
+				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
 				return SidebarSessionIndex{},
 					fmt.Errorf("counting sidebar roots: %w", err)
@@ -978,43 +1036,7 @@ func (db *DB) getSidebarSessionIndexPage(
 		}
 	}
 
-	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(rootArgs))
-	cursorWhere := ""
-	if f.Cursor != "" {
-		cursorWhere = "WHERE (activity, id) < (" +
-			pageBuilder.Add(cur.EndedAt) + ", " +
-			pageBuilder.Add(cur.ID) + ")"
-	}
-	rootQuery := `
-		WITH RECURSIVE root_candidates(id) AS (
-			SELECT id
-			FROM sessions
-			WHERE ` + rootWhere + `
-			  AND ` + canonicalRootWhere + `
-		),
-		tree(root_id, id) AS (
-			SELECT id, id FROM root_candidates
-			UNION
-			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE ` + treeMemberWhere + `
-		)
-		` + sidebarStarredRootCTE(f.Starred) + `,
-		root_activity(id, activity) AS (
-			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
-			FROM tree t
-			` + sidebarStarredRootJoin(f.Starred) + `
-			JOIN sessions s ON s.id = t.id
-			GROUP BY t.root_id
-		)
-		SELECT id, activity
-		FROM root_activity
-		` + cursorWhere + `
-		ORDER BY activity DESC, id DESC
-		` + pageBuilder.Limit(f.Limit+1)
-	rootQueryArgs := append([]any{}, rootArgs...)
-	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
+	rootQuery, rootQueryArgs := sidebarRootPageQuery(f, cur, predicates)
 
 	rows, err := db.getReader().QueryContext(ctx, rootQuery, rootQueryArgs...)
 	if err != nil {
@@ -1078,7 +1100,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON s.parent_session_id = t.id
-			WHERE ` + treeMemberWhere + `
+			WHERE ` + predicates.treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord

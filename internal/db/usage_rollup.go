@@ -250,9 +250,9 @@ func (c *usageRollupCoordinator) Ensure(
 			}
 			call.installs, call.metrics, call.err = c.ensureNow(
 				c.ctx, snapshot, fills, resolver)
-			close(call.done)
 			c.mu.Lock()
 			delete(c.calls, key)
+			close(call.done)
 			c.mu.Unlock()
 		}) {
 			delete(c.calls, key)
