@@ -87,6 +87,8 @@ The latest release is
 
 **Bug fixes**
 
+- Hidden tabs release their live connections so new tabs load, and catch up when
+  shown again.
 - DeepSeek Harness v4 sessions now appear after sync, with tool results and
   recorded token usage.
 - ClickHouse usage reports read prepared usage again for a machine whose

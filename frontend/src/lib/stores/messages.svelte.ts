@@ -71,11 +71,12 @@ export class MessagesStore {
   // from the current load for the same session, so failures check
   // this before reporting a missing session.
   private loadGeneration: number = 0;
+  private loadSessionPromise: Promise<void> | null = null;
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
-  // Passes a moving transcript refused since the last outside reload request; bounded so a busy session can't reload forever.
-  private revisionConflicts: number = 0;
+  // Failed passes since the last outside reload request, bounded for busy or unavailable sessions.
+  private reloadFailures: number = 0;
   // Each window load takes a ticket when it starts; a replacement lands only if no later-started load already replaced the window.
   private loadTicket: number = 0;
   private windowTicket: number = 0;
@@ -105,6 +106,14 @@ export class MessagesStore {
     ) {
       return;
     }
+    const promise = this.doLoadSession(id, resumesCancelledLoad).finally(() => {
+      if (this.loadSessionPromise === promise) this.loadSessionPromise = null;
+    });
+    this.loadSessionPromise = promise;
+    return promise;
+  }
+
+  private async doLoadSession(id: string, resumesCancelledLoad: boolean) {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
@@ -170,8 +179,16 @@ export class MessagesStore {
 
   reload(): Promise<void> {
     if (!this.sessionId) return Promise.resolve();
-    // Each outside request gets a fresh budget of passes a moving transcript may refuse.
-    this.revisionConflicts = 0;
+    this.reloadFailures = 0;
+    if (this.loadSessionPromise) {
+      const id = this.sessionId;
+      const generation = this.loadGeneration;
+      return this.loadSessionPromise.then(() => {
+        if (this.sessionId === id && this.loadGeneration === generation) {
+          return this.queueReload();
+        }
+      });
+    }
     return this.queueReload();
   }
 
@@ -224,7 +241,7 @@ export class MessagesStore {
     this.reloadPromise = null;
     this.reloadSessionId = null;
     this.pendingReload = false;
-    this.revisionConflicts = 0;
+    this.reloadFailures = 0;
     this.loadOlderPromise = null;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
@@ -247,6 +264,7 @@ export class MessagesStore {
     }
     this.loading = false;
     this.loadingOlder = false;
+    this.loadSessionPromise = null;
     this.reloadPromise = null;
     this.reloadSessionId = null;
     this.pendingReload = false;
@@ -814,10 +832,19 @@ export class MessagesStore {
       }
     } catch (err) {
       if (isAbortError(err)) return;
-      // A sync landed between pages; loadedRevision still names only rows that arrived, and another pass catches up.
-      if (this.sessionId === id && isRevisionChange(err)) {
-        if (++this.revisionConflicts < MAX_LOAD_ATTEMPTS) this.pendingReload = true;
-        return;
+      const transient =
+        (err instanceof TypeError &&
+          /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
+            err.message,
+          )) ||
+        (err instanceof ApiError && err.status >= 500 && err.status < 600);
+      if (this.sessionId === id && (isRevisionChange(err) || transient)) {
+        if (++this.reloadFailures < MAX_LOAD_ATTEMPTS) {
+          if (transient) await new Promise((resolve) => setTimeout(resolve, 300));
+          if (this.sessionId === id && !signal.aborted) this.pendingReload = true;
+          return;
+        }
+        if (isRevisionChange(err)) return;
       }
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Reload failed:", err);

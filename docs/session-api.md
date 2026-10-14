@@ -109,6 +109,9 @@ known.
 
 ## Shared metadata endpoints
 
+The HTTP `/api/v1/events` stream sends `events_ready` on every connection
+after subscribing to changes.
+
 The web UI and generated API clients use shared metadata endpoints for filter
 options:
 
@@ -747,6 +750,9 @@ Recognized `event` values today: `session_updated`, `heartbeat`. New events may
 be added; consumers should ignore unknown events. The command runs until
 interrupted (Ctrl+C) or the context is cancelled. Like `session export`, it
 streams a fixed format and rejects `--format`/`--json`.
+
+On every connection, the HTTP session watch sends `session_ready` after
+taking its baseline; the CLI filters it out.
 
 Watch validates the session id before opening the stream. An unknown id fails
 fast with a `watch: session not found: <id>` error and non-zero exit instead of

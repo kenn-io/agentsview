@@ -1,9 +1,12 @@
 package sessionwatch
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +16,38 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+type baselineStore struct {
+	db.Store
+	count atomic.Int64
+}
+
+func (s *baselineStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
+	return db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id}, nil
+}
+
+func (s *baselineStore) GetSessionVersion(context.Context, string) (int, int64, bool) {
+	return int(s.count.Load()), 1, true
+}
+
+func TestEventsBaselineTakenBeforeReturn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		store := &baselineStore{}
+		store.count.Store(1)
+		updates := New(store, nil).Events(ctx, "session-a")
+		store.count.Store(2)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case _, ok := <-updates:
+			assert.True(t, ok)
+		default:
+			require.FailNow(t, "reply after watch creation was lost")
+		}
+	})
+}
 
 // testWatcher creates a Watcher backed by a fresh SQLite database
 // and a minimal sync engine for tests that need checkDBForChanges

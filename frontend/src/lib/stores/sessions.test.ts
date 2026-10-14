@@ -3570,48 +3570,51 @@ describe("SessionsStore live refresh", () => {
     mockGetProjects();
   });
 
-  it("messages events invalidate hydrated detail without reloading the index", async () => {
-    const { events } = await import("./events.svelte.js");
-    let registered: ((e: { scope: string }) => void) | null = null;
-    const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
-      registered = fn as (e: { scope: string }) => void;
-      return () => {};
-    });
+  it.each(["messages", "sync"])(
+    "%s events invalidate hydrated detail before the index reload",
+    async (scope) => {
+      const { events } = await import("./events.svelte.js");
+      let registered: ((e: { scope: string }) => void) | null = null;
+      const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+        registered = fn as (e: { scope: string }) => void;
+        return () => {};
+      });
 
-    mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
-    const sessions = createSessionsStore();
-    const detach = sessions.attachSidebar();
-    await sessions.load();
-    vi.mocked(api.getSession)
-      .mockResolvedValueOnce(
-        makeSession({
-          id: "row",
-          first_message: "first hydrate",
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeSession({
-          id: "row",
-          first_message: "second hydrate",
-        }),
-      );
-    await sessions.hydrateVisibleSessions(["row"]);
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      const sessions = createSessionsStore();
+      const detach = sessions.attachSidebar();
+      await sessions.load();
+      vi.mocked(api.getSession)
+        .mockResolvedValueOnce(
+          makeSession({
+            id: "row",
+            first_message: "first hydrate",
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeSession({
+            id: "row",
+            first_message: "second hydrate",
+          }),
+        );
+      await sessions.hydrateVisibleSessions(["row"]);
 
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-    expect(api.getSession).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalled();
-    expect(registered).not.toBeNull();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalled();
+      expect(registered).not.toBeNull();
 
-    registered!({ scope: "messages" });
-    await sessions.hydrateVisibleSessions(["row"]);
+      registered!({ scope });
+      await sessions.hydrateVisibleSessions(["row"]);
 
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-    expect(api.getSession).toHaveBeenCalledTimes(2);
-    expect(sessions.sessions[0]!.first_message).toBe("second hydrate");
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+      expect(sessions.sessions[0]!.first_message).toBe("second hydrate");
 
-    detach();
-    spy.mockRestore();
-  });
+      detach();
+      spy.mockRestore();
+    },
+  );
 
   it("messages events refresh active child sessions", async () => {
     const { events } = await import("./events.svelte.js");
@@ -3659,28 +3662,40 @@ describe("SessionsStore live refresh", () => {
   it("sessions and sync events coalesce to one debounced index reload", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
-    let registered: ((e: { scope: string }) => void) | null = null;
+    let registered!: (e: { scope: string }) => void;
     const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
       registered = fn as (e: { scope: string }) => void;
       return () => {};
     });
-
     const sessions = createSessionsStore();
     const detach = sessions.attachSidebar();
-    await sessions.load();
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-
-    registered!({ scope: "sessions" });
-    registered!({ scope: "sync" });
-    await vi.advanceTimersByTimeAsync(299);
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
-
-    detach();
-    spy.mockRestore();
-    vi.useRealTimers();
+    try {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      vi.mocked(api.getSidebarSessionIndex).mockImplementation(async () => {
+        const fresh = api.getSidebarSessionIndex.mock.calls.length === 3;
+        await new Promise((resolve) => setTimeout(resolve, fresh ? 400 : 1200));
+        return { sessions: [makeSkinnyRow({ id: "row", message_count: fresh ? 5 : 2 })], total: 1 };
+      });
+      registered({ scope: "sessions" });
+      registered({ scope: "sync" });
+      await vi.advanceTimersByTimeAsync(299);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      for (let i = 0; i < 3; i++) {
+        registered({ scope: "sessions" });
+        await vi.advanceTimersByTimeAsync(400);
+      }
+      expect(sessions.sessions[0]!.message_count).toBe(2);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(3);
+      expect(sessions.sessions[0]!.message_count).toBe(5);
+    } finally {
+      detach();
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("sessions events refresh active session labels", async () => {

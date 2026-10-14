@@ -663,6 +663,9 @@ func (b *httpBackend) Watch(
 		// Closing out signals a dropped watch stream to the consumer.
 		for stream.Next() {
 			frame := stream.Event()
+			if frame.Type == "session_ready" {
+				continue
+			}
 			select {
 			case out <- service.Event{Event: frame.Type, Data: string(frame.Data)}:
 			case <-ctx.Done():
