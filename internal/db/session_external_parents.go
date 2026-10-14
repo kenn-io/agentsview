@@ -81,6 +81,13 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions SET parser_relationship_type = CASE
+			WHEN COALESCE(parser_parent_session_id, '') = '' AND `+spawnEdgeExistsSQL("sessions")+`
+			THEN `+parentlessRelationshipSQL+` ELSE relationship_type END
+		WHERE id = ? AND parser_relationship_type IS NULL`, sessionID); err != nil {
+		return SessionExternalParent{}, fmt.Errorf("initializing parser relationship: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_external_parents (session_id, parent_session_id)
 		VALUES (?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
@@ -144,7 +151,7 @@ func (db *DB) ClearSessionExternalParent(
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = NULL,
-			relationship_type = `+parentlessRelationshipSQL+`,
+			relationship_type = `+parserRelationshipSQL+`,
 			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ? AND parent_session_id = ? AND relationship_type = 'subagent'
 		AND COALESCE(parser_parent_session_id, '') = ''
@@ -267,7 +274,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.blocked, NULL, l.parent_session_id),
-		relationship_type = IIF(l.blocked, ` + parentlessRelationshipSQL + `, 'subagent'),
+		relationship_type = IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent'),
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	FROM (
 		SELECT ep.session_id, ep.parent_session_id,
@@ -281,7 +288,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
-		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, ` + parentlessRelationshipSQL + `, 'subagent')
+		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent')
 	)`
 }
 

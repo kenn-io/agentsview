@@ -644,15 +644,23 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, defaults))
 }
 
-func TestLauncherParentAfterSpawnPreservesParserRelationship(t *testing.T) {
-	for _, relationship := range []string{"", "subagent"} {
-		t.Run(relationship, func(t *testing.T) {
+func TestLauncherParentPreservesParserRelationship(t *testing.T) {
+	for _, tc := range []struct {
+		relationship    string
+		legacy, spawned bool
+	}{
+		{spawned: true},
+		{relationship: "subagent", spawned: true},
+		{legacy: true, spawned: true},
+		{relationship: "subagent", legacy: true},
+	} {
+		t.Run(fmt.Sprintf("%s/legacy=%t/spawned=%t", tc.relationship, tc.legacy, tc.spawned), func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "manager", "proj")
 			insertSession(t, d, "child", "proj", func(s *Session) {
 				s.Agent = "grok"
-				s.RelationshipType = relationship
+				s.RelationshipType = tc.relationship
 			})
 			write := SessionBatchWrite{
 				Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
@@ -662,25 +670,33 @@ func TestLauncherParentAfterSpawnPreservesParserRelationship(t *testing.T) {
 					ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}},
 				}},
 			}
-			_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-			require.NoError(t, err)
+			if tc.spawned {
+				_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+				require.NoError(t, err)
+			}
+			if tc.legacy {
+				_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parser_relationship_type=NULL WHERE id='child'")
+				require.NoError(t, err)
+			}
 			link, err := d.SetSessionExternalParent(ctx, "child", "manager")
 			require.NoError(t, err)
-			assert.False(t, link.Applied)
+			assert.Equal(t, !tc.spawned, link.Applied)
 			write.Messages[0].HasToolUse = false
 			write.Messages[0].ToolCalls = nil
-			_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-			require.NoError(t, err)
+			if tc.spawned {
+				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+				require.NoError(t, err)
+			}
 			exported, err := d.GetArtifactExportSession(ctx, "child")
 			require.NoError(t, err)
 			assert.Nil(t, exported.ParentSessionID)
-			assert.Equal(t, relationship, exported.RelationshipType)
+			assert.Equal(t, tc.relationship, exported.RelationshipType)
 			_, err = d.ClearSessionExternalParent(ctx, "child")
 			require.NoError(t, err)
 			child, err := d.GetSession(ctx, "child")
 			require.NoError(t, err)
 			assert.Nil(t, child.ParentSessionID)
-			assert.Equal(t, relationship, child.RelationshipType)
+			assert.Equal(t, tc.relationship, child.RelationshipType)
 		})
 	}
 }

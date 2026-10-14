@@ -61,7 +61,7 @@ func TestNewPRLink(t *testing.T) {
 		{name: "missing number", url: "https://github.com/owner/repo/pull/1", repository: "owner/repo"},
 		{name: "missing url", repository: "owner/repo", number: 1},
 		{name: "non-web scheme", url: "file:///owner/repo/pull/1", repository: "owner/repo", number: 1},
-		{name: "credentials in url", url: "https://user:secret@github.com/owner/repo/pull/1", repository: "owner/repo", number: 1},
+		{name: "credentials in url", url: "https://user:secret@example.org/owner/repo/pull/1", repository: "owner/repo", number: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
