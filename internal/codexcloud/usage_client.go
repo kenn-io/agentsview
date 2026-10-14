@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"time"
 
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
@@ -121,7 +122,9 @@ func decodeUsageReply(raw []byte) (UsageResponse, error) {
 	}
 	asOf, err := time.Parse(time.RFC3339, reply.DataAsOf)
 	if err != nil {
-		return UsageResponse{}, fmt.Errorf("%w: plan usage data_as_of %q: %w", ErrProtocolChange, reply.DataAsOf, err)
+		// The parse error quotes the whole value, so it is not wrapped.
+		return UsageResponse{}, fmt.Errorf("%w: plan usage data_as_of %s is not an RFC 3339 time",
+			ErrProtocolChange, serverValue(reply.DataAsOf))
 	}
 	for _, row := range reply.Threads {
 		if row.ThreadID == "" {
@@ -138,12 +141,21 @@ func decodeUsageReply(raw []byte) (UsageResponse, error) {
 			// Credits stay strings; this only checks they are decimal
 			// numbers, which may use exponent form such as 0E-10.
 			if !decimalCredits.MatchString(*c) {
-				// The value comes from the server and can be up to the
-				// reply's size, so the log gets only its start.
-				return UsageResponse{}, fmt.Errorf("%w: plan usage credits %q are not a decimal number",
-					ErrProtocolChange, stringutil.SafeTruncate(*c, 64))
+				return UsageResponse{}, fmt.Errorf("%w: plan usage credits %s are not a decimal number",
+					ErrProtocolChange, serverValue(*c))
 			}
 		}
 	}
 	return UsageResponse{DataAsOf: asOf.UTC(), Threads: reply.Threads}, nil
+}
+
+// serverValue quotes a value from a plan usage reply for an error. The
+// value can be as long as the reply, so only its first 64 bytes are
+// kept, and "..." after the quote marks a cut value.
+func serverValue(s string) string {
+	const limit, marker = 64, "..."
+	if len(s) <= limit {
+		return strconv.Quote(s)
+	}
+	return strconv.Quote(stringutil.SafeTruncate(s, limit-len(marker))) + marker
 }

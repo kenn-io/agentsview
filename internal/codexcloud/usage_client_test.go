@@ -114,8 +114,30 @@ func TestQueryUsageBadCreditsErrorIsBounded(t *testing.T) {
 	_, err := QueryUsage(t.Context(), nil, usage.URL(), usageLogin(""), "1", []UsageGroup{{ThreadID: "a"}})
 
 	require.ErrorIs(t, err, ErrProtocolChange)
-	assert.Contains(t, err.Error(), "are not a decimal number")
+	assert.Contains(t, err.Error(), `xxx"... are not a decimal number`, "a cut value is marked")
 	assert.Less(t, len(err.Error()), 200, "the log line quotes only the start of the value")
+}
+
+func TestUsageReplyErrorsMarkOnlyCutValues(t *testing.T) {
+	long := strings.Repeat("x", 10_000)
+	for _, tt := range []struct {
+		name, reply, want string
+		cut               bool
+	}{
+		{"short credits", `{"data_as_of":"2026-10-01T00:00:00Z","threads":[{"thread_id":"a","balance_usage_credits":"NaN"}]}`,
+			`credits "NaN" are not`, false},
+		{"long data_as_of", `{"data_as_of":"` + long + `","threads":[]}`, `data_as_of "xxx`, true},
+		{"short data_as_of", `{"data_as_of":"soon","threads":[]}`, `data_as_of "soon" is not an RFC 3339 time`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := decodeUsageReply([]byte(tt.reply))
+
+			require.ErrorIs(t, err, ErrProtocolChange)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.Equal(t, tt.cut, strings.Contains(err.Error(), `"...`))
+			assert.Less(t, len(err.Error()), 200, "the error quotes only the start of the value")
+		})
+	}
 }
 
 func TestQueryUsageErrorsHideToken(t *testing.T) {
