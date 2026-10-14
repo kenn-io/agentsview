@@ -643,6 +643,8 @@ type Engine struct {
 	// archive audit sets it to catch same-stat in-place rewrites that
 	// append-trust would otherwise keep stale.
 	checkpointAudit atomic.Bool
+	// archiveReparse copies EngineConfig.ArchiveReparse for the Claude result splice.
+	archiveReparse bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -1017,6 +1019,7 @@ func NewEngine(ctx context.Context,
 		skipHashKeys:            skipHashKeys,
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
+		archiveReparse:          cfg.ArchiveReparse,
 		discardWritesOnCancel:   cfg.DiscardPendingWritesOnCancel,
 		disableSignalRecompute: cfg.DisableSignalRecomputation ||
 			database.ArchiveContent().UsageOnly(),
@@ -18449,6 +18452,11 @@ func (e *Engine) prepareSessionNormalizedContext(
 	resolveWorktreeProject worktreeProjectResolver,
 	derive bool,
 ) (ingest.PreparedSession, sessionWriteVerdict, error) {
+	claudeSplice, err := e.spliceArchivedClaudeToolResults(ctx, pw)
+	if err != nil {
+		return ingest.PreparedSession{}, sessionWritePreserved, err
+	}
+	pw.msgs = claudeSplice.msgs
 	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
 		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
 	}, ingest.ContentOptions{
@@ -18459,6 +18467,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
+	e.keepArchivedClaudeResultLengths(claudeSplice, candidate.Messages)
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	s, msgs := candidate.Session, candidate.Messages
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
