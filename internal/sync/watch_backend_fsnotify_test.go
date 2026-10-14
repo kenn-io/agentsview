@@ -86,6 +86,7 @@ func TestFSNotifyBackendVanishedFoldersSkipStartupAndRuntimePolling(t *testing.T
 				} else {
 					assert.Zero(t, result.Unwatched)
 				}
+				assert.Empty(t, *added)
 			} else {
 				backend.watchMu.Lock()
 				degraded, complete := backend.addRuntimeSubtreeLocked(folder, []string{filepath.Clean(root)})
@@ -93,7 +94,6 @@ func TestFSNotifyBackendVanishedFoldersSkipStartupAndRuntimePolling(t *testing.T
 				assert.True(t, complete)
 				backend.watchMu.Unlock()
 			}
-			assert.Empty(t, *added)
 			assert.Empty(t, backend.runtimeRoots)
 		})
 	}

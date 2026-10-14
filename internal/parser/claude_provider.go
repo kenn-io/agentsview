@@ -90,7 +90,7 @@ func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []Reconc
 			if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
 				err = p.sources.discoverEachRoot(ctx, root, emit)
 			} else {
-				err = p.sources.streamLocalSubtree(ctx, root, path, yield)
+				err = p.sources.streamLocalSubtree(ctx, root, path, true, yield)
 			}
 			if cause, ok := discoveryYieldCause(err); ok {
 				return cause
@@ -621,7 +621,7 @@ func (s claudeSourceSet) streamLocalRoot(
 			return nil
 		}
 		projectRoot := filepath.Join(root, project.Name())
-		err := s.streamLocalSubtree(ctx, root, projectRoot, yield)
+		err := s.streamLocalSubtree(ctx, root, projectRoot, false, yield)
 		if err == nil {
 			return nil
 		}
@@ -640,12 +640,12 @@ func (s claudeSourceSet) streamLocalRoot(
 	return errors.Join(incomplete, err)
 }
 
-func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path string, yield func(SourceRef) error) error {
+func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path string, allowMissing bool, yield func(SourceRef) error) error {
 	info, err := os.Stat(path)
-	if errors.Is(err, syscall.ENOTDIR) {
+	if allowMissing && errors.Is(err, syscall.ENOTDIR) {
 		return nil
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	if allowMissing && errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return nil
 		}

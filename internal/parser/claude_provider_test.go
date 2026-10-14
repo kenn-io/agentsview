@@ -382,6 +382,34 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 }
 
 func TestClaudeRawCaptureRootReplacementIsIncomplete(t *testing.T) {
+	t.Run("project temporarily vanishes after enumeration", func(t *testing.T) {
+		base := t.TempDir()
+		root := filepath.Join(base, "sessions")
+		project := filepath.Join(root, "project")
+		writeSourceFile(t, filepath.Join(project, "session-main.jsonl"), claudeProviderFixture("hello claude"))
+		provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
+			return streamDirectoryEntriesDirect(ctx, path, func(entry os.DirEntry) error {
+				if path != root || entry.Name() != "project" {
+					return yield(entry)
+				}
+				moved := filepath.Join(base, "moved-project")
+				require.NoError(t, os.Rename(project, moved))
+				err := yield(entry)
+				require.NoError(t, os.Rename(moved, project))
+				return err
+			})
+		})
+
+		discovery, err := DiscoverRawCaptureSources(ctx, provider)
+
+		require.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		require.ErrorAs(t, err, &incomplete)
+		assert.False(t, discovery.Complete)
+	})
+
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
 	require.NoError(t, os.Mkdir(root, 0o700))
