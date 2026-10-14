@@ -298,7 +298,7 @@ jobs:
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
-  # Share setup for the shorter SQLite suites; keep CLI and Sync on their own runners.
+  # Share setup for isolated Windows Go suites; keep CLI and Sync on their own runners.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
