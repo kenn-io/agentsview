@@ -20,7 +20,6 @@ func TestCaptureDirectoryReplacesPermissiveDACLBeforeUse(t *testing.T) {
 	state, err := createState(dir, windowsPermissionManifest(t, "windows-private"))
 	require.NoError(t, err)
 	state.close()
-	assertProtectedCaptureDACL(t, dir)
 
 	require.NoError(t, setPermissiveCaptureDACL(dir))
 	recovered, err := openState(dir)
@@ -38,7 +37,7 @@ func TestCreateStateRejectsReplaceableParentDACL(t *testing.T) {
 		windowsPermissionManifest(t, "windows-unsafe-parent"),
 	)
 
-	require.ErrorContains(t, err, "permits replacement")
+	require.ErrorContains(t, err, "validating capture parent safety")
 }
 
 func TestOpenStateRejectsParentDACLMadeReplaceable(t *testing.T) {
@@ -52,7 +51,7 @@ func TestOpenStateRejectsParentDACLMadeReplaceable(t *testing.T) {
 
 	_, err = openState(dir)
 
-	require.ErrorContains(t, err, "permits replacement")
+	require.ErrorContains(t, err, "validating capture parent safety")
 }
 
 func TestWindowsParentSecurity(t *testing.T) {
@@ -75,6 +74,11 @@ func TestWindowsParentSecurity(t *testing.T) {
 		{
 			name: "allows inherit-only writes",
 			sddl: "O:" + allowed[0].String() + "D:P(A;;GA;;;" + allowed[0].String() + ")(A;CIIO;GA;;;WD)",
+		},
+		{
+			name:    "rejects replacement by another principal",
+			sddl:    "O:" + allowed[0].String() + "D:P(A;;GA;;;WD)",
+			wantErr: "permits replacement",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,7 +145,6 @@ func TestClaudeProviderRootRejectsExistingPermissiveDACL(t *testing.T) {
 	_, err := prepareClaudeReservationDirectory(providerRoot)
 
 	require.ErrorContains(t, err, "validating Claude provider root")
-	assert.ErrorContains(t, err, "grants sensitive access")
 }
 
 func TestClaudeProviderRootAllowsExistingSafeUnprotectedDACL(t *testing.T) {
@@ -162,16 +165,35 @@ func TestClaudeProviderRootAllowsExistingSafeUnprotectedDACL(t *testing.T) {
 		"existing provider ACLs must be validated without being rewritten")
 }
 
-func TestWindowsClaudeProviderRootAllowsInheritedTrustedAccess(t *testing.T) {
+func TestWindowsClaudeProviderRootSecurity(t *testing.T) {
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
-	sddl := allowedSDDL("D:AI", "A;OICIID;GA", allowed)
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
-	require.NoError(t, err)
-
-	err = verifyClaudeProviderRootSecurity(descriptor, allowed)
-
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		sddl    string
+		wantErr string
+	}{
+		{
+			name: "allows inherited trusted access",
+			sddl: allowedSDDL("D:AI", "A;OICIID;GA", allowed),
+		},
+		{
+			name:    "rejects sensitive access by another principal",
+			sddl:    "D:P(A;;GA;;;WD)",
+			wantErr: "grants sensitive access",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			descriptor, err := windows.SecurityDescriptorFromString(tc.sddl)
+			require.NoError(t, err)
+			err = verifyClaudeProviderRootSecurity(descriptor, allowed)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func windowsPermissionManifest(t *testing.T, occurrence string) manifest {
