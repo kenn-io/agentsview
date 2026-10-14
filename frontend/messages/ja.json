@@ -2838,7 +2838,7 @@
   "plan_usage_could_not_check": "AgentsView はプラン使用量を確認できませんでした",
   "plan_usage_account_unavailable": "このアカウントでは使用量を利用できません",
   "plan_usage_counted_under": "チャット {title} に含めて集計",
-  "plan_usage_stale": "その後: {reason} ({time})。これらの数値は古い可能性があります。",
+  "plan_usage_stale": "その後の確認の結果: {reason} ({time})。これらの数値は古い可能性があります。",
   "plan_usage_left_out_later": "OpenAI の使用量レポートにこのチャットが含まれていません",
   "plan_usage_weekly_share": "Codex の週間上限の {percent}%",
   "plan_usage_five_hour_share": "Codex の 5 時間上限の {percent}%",

@@ -2766,7 +2766,7 @@
   "plan_usage_could_not_check": "AgentsView 無法檢查方案用量",
   "plan_usage_account_unavailable": "此帳戶無法取得用量",
   "plan_usage_counted_under": "計入聊天 {title}",
-  "plan_usage_stale": "之後：{reason}（{time}）。這些數字可能已過時。",
+  "plan_usage_stale": "之後的檢查發現：{reason}（{time}）。這些數字可能已過時。",
   "plan_usage_left_out_later": "OpenAI 用量報告未納入此聊天",
   "plan_usage_weekly_share": "Codex 每週上限的 {percent}%",
   "plan_usage_five_hour_share": "Codex 五小時上限的 {percent}%",

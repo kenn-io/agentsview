@@ -2763,7 +2763,7 @@
   "plan_usage_could_not_check": "AgentsView 无法检查套餐用量",
   "plan_usage_account_unavailable": "此账户无法获取用量",
   "plan_usage_counted_under": "计入聊天 {title}",
-  "plan_usage_stale": "之后：{reason}（{time}）。这些数字可能已过时。",
+  "plan_usage_stale": "之后的检查发现：{reason}（{time}）。这些数字可能已过时。",
   "plan_usage_left_out_later": "OpenAI 用量报告未包含此聊天",
   "plan_usage_weekly_share": "Codex 每周上限的 {percent}%",
   "plan_usage_five_hour_share": "Codex 五小时上限的 {percent}%",

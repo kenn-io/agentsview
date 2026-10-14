@@ -394,15 +394,20 @@
         })
       : null;
   });
+  // Warnings the closed trigger explains with its icon: figures a later
+  // check made stale, and turns live capture missed.
+  let planUsageWarnings = $derived(
+    [planUsageDisplay?.staleNote, missedTurnsLine].filter((line): line is string => !!line),
+  );
   let planUsageTitle = $derived.by(() => {
     if (!planUsageDisplay) return undefined;
     const state = countedUnderLabel ?? planUsageDisplay.headline;
-    return [state, missedTurnsLine].filter(Boolean).join("\n") || undefined;
+    return [state, ...planUsageWarnings].filter(Boolean).join("\n") || undefined;
   });
   // Screen readers hear the closed trigger's state and warnings as part of
   // its name; the title alone may not be read.
   let planUsageSrText = $derived(
-    [countedUnderLabel ?? planUsageDisplay?.headline, missedTurnsLine].filter(Boolean).join(", "),
+    [countedUnderLabel ?? planUsageDisplay?.headline, ...planUsageWarnings].filter(Boolean).join(", "),
   );
 
   onDestroy(() => {
@@ -1268,7 +1273,7 @@
             class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
             title={planUsageTitle}
           >
-            {#if missedTurnsLine}
+            {#if planUsageWarnings.length > 0}
               <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
             {/if}
             {planUsageDisplay.trigger}
