@@ -1687,7 +1687,7 @@ func hermesStateMemberFingerprintFinish(
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return SourceFingerprint{}, err
 	}
-	if err == nil && sqliteWALInfoHasFrames(walInfo) {
+	if err == nil && SQLiteWALInfoHasFrames(walInfo) {
 		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
 	if selectedPath != src.StateDB {

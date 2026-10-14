@@ -1823,7 +1823,7 @@ func (e *Engine) syncChangedPathsLocked(
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
 	e.invalidateAntigravityTitleCache(paths)
-	stats, tombstoned, err := e.applyChangedPathSyncLocked(
+	stats, tombstoned, err = e.applyChangedPathSyncLocked(
 		ctx, e.prepareChangedPathSync(ctx, paths),
 	)
 	// Title store events carry no session files, so this also handles them.
