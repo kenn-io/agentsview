@@ -568,6 +568,6 @@ func TestUnreadableConfigWithABadKeptValueSaysImportIsOff(t *testing.T) {
 
 	row, ok := env.syncer.Status.Row(SourceRowKey)
 	require.True(t, ok)
-	assert.Contains(t, row.Message, "keeps its last good settings. Under those settings: /data/config.toml has an invalid value for enabled")
+	assert.Contains(t, row.Message, "keeps its last good settings. Under those settings: /data/config.toml has an invalid value for \"enabled\"")
 	assert.Contains(t, row.Message, "Codex cloud import stays off until this is fixed.")
 }
