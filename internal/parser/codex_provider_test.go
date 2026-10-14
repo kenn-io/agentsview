@@ -39,7 +39,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"*.jsonl", "*.jsonl.zst"}, plan.Roots[0].IncludeGlobs)
 	assert.Equal(t, base, plan.Roots[1].Path)
 	assert.False(t, plan.Roots[1].Recursive)
 	assert.Equal(t, []string{CodexSessionIndexFilename}, plan.Roots[1].IncludeGlobs)

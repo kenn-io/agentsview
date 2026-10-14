@@ -1644,7 +1644,7 @@ func preprocessCodexUserTextBlocks(texts []string, initial bool) string {
 // originator. Scan all session_meta lines to match the old
 // skip condition exactly.
 func IsCodexExecSessionFile(path string) bool {
-	f, err := os.Open(path)
+	f, err := openCodexRolloutLines(path)
 	if err != nil {
 		return false
 	}
@@ -1684,18 +1684,15 @@ func (p *codexProvider) parseSession(
 func (p *codexProvider) parseSessionContext(
 	ctx context.Context, path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
-	}
-	return p.parseSessionSnapshotContext(
-		ctx, path, machine, includeExec, f, info,
+	defer snapshot.Close()
+	sess, msgs, _, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
+		ctx, path, machine, includeExec, *snapshot,
 	)
+	return sess, msgs, err
 }
 
 // parseSessionWithCursor is parseSession plus the end-of-snapshot
@@ -1706,19 +1703,13 @@ func (p *codexProvider) parseSessionWithCursor(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "", "",
-			fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "", "",
-			fmt.Errorf("stat %s: %w", path, err)
-	}
+	defer snapshot.Close()
 	return p.parseSessionSnapshotWithCursor(
-		ctx, path, machine, includeExec, f, info,
+		ctx, path, machine, includeExec, *snapshot,
 	)
 }
 
@@ -1807,7 +1798,7 @@ func codexReplayParentIDContext(
 	if ctx.Err() != nil {
 		return "", false
 	}
-	f, err := os.Open(childPath)
+	f, err := openCodexRolloutLines(childPath)
 	if err != nil {
 		return "", false
 	}
@@ -1867,7 +1858,7 @@ func (p *codexProvider) parseSessionSnapshotContext(
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
 	sess, msgs, _, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
-		ctx, path, machine, includeExec, f, info,
+		ctx, path, machine, includeExec, plainCodexRolloutSnapshot(f, info),
 	)
 	return sess, msgs, err
 }
@@ -1881,11 +1872,10 @@ func (p *codexProvider) parseSessionSnapshotContext(
 func (p *codexProvider) parseSessionSnapshotWithCursor(
 	ctx context.Context, path, machine string,
 	includeExec bool,
-	f *os.File,
-	info os.FileInfo,
+	snapshot codexRolloutSnapshot,
 ) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	return p.parseCodexSessionSnapshotStreaming(
-		ctx, path, machine, includeExec, f, info, NewCodexCollectingSink(0),
+		ctx, path, machine, includeExec, snapshot, NewCodexCollectingSink(0),
 	)
 }
 
@@ -1938,13 +1928,14 @@ func codexRevertPage(
 func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	ctx context.Context, path, machine string,
 	includeExec bool,
-	f *os.File,
-	info os.FileInfo,
+	snapshot codexRolloutSnapshot,
 	sink CodexSessionSink,
 ) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
+	// The tee hashes the plain bytes: a compressed rollout's unpacked copy.
+	f, info := snapshot.File, snapshot.Info
 	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
 	lr := newLineReaderContext(ctx, tee, maxLineSize)
 	defer releaseLineReader(lr)
@@ -1997,8 +1988,8 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	b.refreshPendingCallPositions()
 	msgs := b.sink.Messages()
 	seed := b.codexCursorState
-	inode, device := sourceFileIdentityForFile(f, info)
-	changeTime, _ := codexIndexChangeTimeForFile(f, info)
+	inode, device := snapshot.identity(path)
+	changeTime, _ := snapshot.changeTime(path)
 	safe := false
 	// A snapshot that ends while the fork replay gate is still active
 	// contains only replayed parent history so far. Persisting a cursor
@@ -2006,7 +1997,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	// remaining replayed parent records would be imported as child
 	// content. Refuse the checkpoint until a genuine child turn opens the
 	// gate; the file then reparses authoritatively and earns its cursor.
-	if !b.forkGate.active && !b.pendingCallsOverflow && !b.checkpointUnsafe {
+	// A compressed rollout never earns one: its stored size is the
+	// compressed file's, which is no offset into the plain bytes.
+	if !snapshot.Compressed && !b.forkGate.active && !b.pendingCallsOverflow && !b.checkpointUnsafe {
 		if safeCheck, safeErr := codexSafeResumeOffsetFile(
 			f, info.Size(),
 		); safeErr == nil && safeCheck {
@@ -2030,9 +2023,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		parentSessionID, relationshipType = pageParent, RelContinuation
 	}
 	if sessionID == "" {
-		sessionID = strings.TrimSuffix(
-			filepath.Base(path), ".jsonl",
-		)
+		sessionID = codexRolloutStem(filepath.Base(path))
 	}
 	sessionID = "codex:" + sessionID
 
@@ -2046,7 +2037,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		}
 	}
 
-	mtime := info.ModTime().UnixNano()
+	// The session records the rollout as it is on disk, so a later pass that
+	// stats an unchanged compressed file finds it fresh.
+	mtime := snapshot.Source.ModTime().UnixNano()
 	if p.spec.agent == AgentCodex {
 		// Include session_index.jsonl mtime so Codex renames trigger a re-parse.
 		mtime = p.sources.metadata.EffectiveMtime(path, mtime)
@@ -2083,7 +2076,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		TerminationStatus:  classifyCodexTermination(b.lastTaskEvent),
 		File: FileInfo{
 			Path:       path,
-			Size:       info.Size(),
+			Size:       snapshot.Source.Size(),
 			Mtime:      mtime,
 			Inode:      int64(inode),
 			Device:     int64(device),
@@ -2101,6 +2094,11 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
 	sess.File.Hash = fullHash
+	if snapshot.Compressed {
+		// The session records the compressed file's own hash, which is what
+		// Fingerprint computes for the path on every later pass.
+		sess.File.Hash = snapshot.Hash
+	}
 
 	var hashState []byte
 	var anchorDigest string
@@ -2435,16 +2433,15 @@ func readCodexJSONLFromContext(
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", path, err)
+		return 0, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("stat %s: %w", path, err)
+	defer snapshot.Close()
+	if snapshot.Compressed && offset != 0 {
+		return 0, fmt.Errorf("read %s: a compressed rollout has no byte offset %d", path, offset)
 	}
-	return readCodexJSONLSectionContext(ctx, f, offset, info.Size(), fn)
+	return readCodexJSONLSectionContext(ctx, snapshot.File, offset, snapshot.Info.Size(), fn)
 }
 
 // readCodexJSONLSection applies the conservative Codex JSONL rules to the

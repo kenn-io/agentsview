@@ -308,7 +308,9 @@ func (p *codexProvider) FindSource(
 // provider's roots whose filename carries the given session UUID, without the
 // live-over-archived deduplication Discover applies. A UUID can exist as both a
 // live dated copy and a flat archived copy under the same root; the sync engine
-// uses the full set so an mtime cutoff can judge each copy independently.
+// uses the full set so an mtime cutoff can judge each copy independently. A
+// compressed copy beside its plain file is left out: the plain file is the one
+// Codex appends to, so no cutoff may choose the compressed one over it.
 func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
 	if uuid == "" {
 		return nil
@@ -322,6 +324,10 @@ func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
 			}
 			clean := filepath.Clean(path)
 			if _, ok := seen[clean]; ok {
+				continue
+			}
+			if isCompressedCodexRolloutPath(clean) &&
+				IsRegularFile(codexPlainRolloutPath(clean)) {
 				continue
 			}
 			seen[clean] = struct{}{}
@@ -509,6 +515,24 @@ func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	return fileStatTupleDigest(0xC2, paths...)
 }
 
+// ParseSourceSize reports the bytes a full parse reads: a compressed
+// rollout's unpacked size, so the engine's memory lease and its choice of
+// the staged parse see the plain bytes the parser will read.
+func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	path, ok := p.sources.pathFromSource(source)
+	if !ok {
+		return 0, errors.New("codex source path unavailable")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return codexRolloutPlainSize(path, info), nil
+}
+
 func (p *codexProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
@@ -611,19 +635,15 @@ func ParseCodexSessionStreaming(
 		return nil, nil, nil, nil, "", "",
 			errors.New("codex source path unavailable")
 	}
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return nil, nil, nil, nil, "", "", fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, nil, nil, "", "", err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, nil, nil, "", "", fmt.Errorf("stat %s: %w", path, err)
-	}
+	defer snapshot.Close()
 	sess, msgs, cursor, safe, hashState, anchorDigest, retryReason, err := cp.parseCodexSessionSnapshotStreaming(
 		ctx, path,
 		firstNonEmptyJSONLString("", cfg.Machine),
-		false, f, info, sink,
+		false, *snapshot, sink,
 	)
 	if err != nil {
 		return nil, nil, nil, nil, "", "", err
@@ -659,6 +679,12 @@ func (p *codexProvider) ParseIncremental(
 			errors.New("codex source path unavailable")
 	}
 	if req.Offset < 0 || req.Fingerprint.Size < req.Offset {
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	if isCompressedCodexRolloutPath(path) {
+		// A compressed rollout has no byte offsets the stored session could
+		// resume from: it is parsed in full and replaces the stored rows.
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
@@ -848,7 +874,7 @@ func (s codexSourceSet) discoverEachRoot(
 		if !s.ownsCodexSidecars() {
 			return nil
 		}
-		for _, file := range s3PrefixScan(root, codexS3Scanner()) {
+		for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
 			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 				return err
 			}
@@ -895,11 +921,12 @@ func (s codexSourceSet) discover(
 			// directly and carry each one's durable metadata in the Opaque
 			// payload. Each object is its own session keyed by URI, so the
 			// live-over-archived preference (which inspects a local codexSource
-			// layout) does not apply here.
+			// layout) does not apply here; only a compressed object beside its
+			// plain one is folded into it.
 			if !s.ownsCodexSidecars() {
 				continue
 			}
-			for _, file := range s3PrefixScan(root, codexS3Scanner()) {
+			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
 				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
@@ -992,18 +1019,18 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
-				archived = filepath.Join(sessionsDir, name)
-				break
+			if extractUUIDFromRollout(name) != sessionID {
+				continue
+			}
+			candidate := filepath.Join(sessionsDir, name)
+			if archived == "" || preferCodexRolloutPath(candidate, archived) {
+				archived = candidate
 			}
 		}
 	}
 
 	var live string
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
 		dayEntries, err := os.ReadDir(dayPath)
 		if err != nil {
 			return true
@@ -1016,12 +1043,16 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
-				live = filepath.Join(dayPath, name)
-				return false
+			if extractUUIDFromRollout(name) != sessionID {
+				continue
+			}
+			candidate := filepath.Join(dayPath, name)
+			if live == "" || preferCodexRolloutPath(candidate, live) {
+				live = candidate
 			}
 		}
-		return true
+		// The first day directory holding the session has both its forms.
+		return live == ""
 	})
 	if live != "" {
 		return live
@@ -1048,7 +1079,7 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
-			IncludeGlobs: []string{"*.jsonl"},
+			IncludeGlobs: []string{"*" + codexRolloutSuffix, "*" + codexCompressedRolloutSuffix},
 			DebounceKey:  string(s.agent) + ":sessions:" + root,
 		})
 		if !s.ownsCodexSidecars() {
@@ -1261,7 +1292,7 @@ func (s codexSourceSet) directPathSource(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	if !strings.HasSuffix(path, ".jsonl") || !pathUnderRoot(root, path) {
+	if !hasCodexRolloutSuffix(path) || !pathUnderRoot(root, path) {
 		return SourceRef{}, false
 	}
 	if requireRegular && !IsRegularFile(path) {
@@ -1326,13 +1357,30 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 	return codexSourceKey(agent, uuid)
 }
 
+// preferCodexSource reports whether candidate should replace current as the
+// copy of one session: the live dated layout before the archived flat one,
+// then the plain rollout before its compressed form, then the lexically
+// smaller path.
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated
 	}
-	return candidate.DisplayPath < current.DisplayPath
+	return preferCodexRolloutPath(candidate.DisplayPath, current.DisplayPath)
+}
+
+// preferCodexRolloutPath orders two files of one session within a layout:
+// the plain rollout before the compressed one, because Codex appends to the
+// plain file and unpacks a resumed thread back to it, then the lexically
+// smaller path.
+func preferCodexRolloutPath(candidate, current string) bool {
+	candCompressed := isCompressedCodexRolloutPath(candidate)
+	currCompressed := isCompressedCodexRolloutPath(current)
+	if candCompressed != currCompressed {
+		return !candCompressed
+	}
+	return candidate < current
 }
 
 func codexProviderUserMessageCount(messages []ParsedMessage) int {

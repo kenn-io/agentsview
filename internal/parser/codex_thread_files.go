@@ -218,6 +218,10 @@ func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string)
 		}
 		children := make(map[string]*codexThreadDirectory)
 		threads := make(map[string][]string)
+		names := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			names[entry.Name()] = struct{}{}
+		}
 		for _, entry := range entries {
 			name := entry.Name()
 			if entry.IsDir() {
@@ -231,6 +235,9 @@ func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string)
 				continue
 			}
 			if depth != 0 && depth != 3 {
+				continue
+			}
+			if codexCompressedSiblingHidden(name, names) {
 				continue
 			}
 			key := CodexSessionUUIDFromFilename(name)
@@ -316,4 +323,15 @@ func statCodexThreadDirectory(path string) (os.FileInfo, int64, error) {
 	}
 	changeTime, _ := codexIndexChangeTimeForFile(dir, info)
 	return info, changeTime, nil
+}
+
+// codexCompressedSiblingHidden reports whether name is a compressed rollout
+// whose plain file is also listed. Codex appends to the plain file, so it is
+// the one read while it exists.
+func codexCompressedSiblingHidden(name string, names map[string]struct{}) bool {
+	if !isCompressedCodexRolloutPath(name) {
+		return false
+	}
+	_, plain := names[codexPlainRolloutPath(name)]
+	return plain
 }

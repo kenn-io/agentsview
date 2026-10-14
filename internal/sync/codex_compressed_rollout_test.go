@@ -1,0 +1,302 @@
+package sync
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
+)
+
+const (
+	compressedRolloutThread  = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	compressedRolloutSession = "codex:" + compressedRolloutThread
+	compressedRolloutPlain   = "rollout-2026-09-01T10-00-00-" + compressedRolloutThread + ".jsonl"
+)
+
+func compressedRolloutContent(entries ...string) string {
+	lines := []string{
+		testjsonl.CodexSessionMetaJSON(
+			compressedRolloutThread, "/work/project", "codex_cli_rs",
+			"2026-09-01T10:00:00Z",
+		),
+	}
+	return testjsonl.JoinJSONL(append(lines, entries...)...)
+}
+
+func newCompressedRolloutEngine(t *testing.T, database *db.DB, root string, cfg EngineConfig) *Engine {
+	t.Helper()
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {root}}
+	cfg.Machine = "local"
+	e := NewEngine(t.Context(), database, cfg)
+	t.Cleanup(e.Close)
+	return e
+}
+
+func compressedRolloutTexts(t *testing.T, database *db.DB, id string) []string {
+	t.Helper()
+	messages, err := database.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	texts := make([]string, 0, len(messages))
+	for _, m := range messages {
+		texts = append(texts, m.Content)
+	}
+	return texts
+}
+
+type compressedRolloutLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *compressedRolloutLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *compressedRolloutLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// captureCompressedRolloutLog sends the standard logger to a buffer until the test ends.
+func captureCompressedRolloutLog(t *testing.T) *compressedRolloutLog {
+	t.Helper()
+	buf := &compressedRolloutLog{}
+	prev := log.Writer()
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf
+}
+
+// Codex compresses a rollout that has not changed for a week to
+// rollout-<ts>-<uuid>.jsonl.zst and removes the plain file, keeping the
+// file's modification time. A resumed thread is unpacked back to the plain
+// file in place. These tests pin that the archive follows the file through
+// compression without losing, duplicating or re-parsing the session.
+
+const codexCompressedName = compressedRolloutPlain + ".zst"
+
+func zstdCompressString(t *testing.T, content string) []byte {
+	t.Helper()
+	enc, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	out := enc.EncodeAll([]byte(content), nil)
+	require.NoError(t, enc.Close())
+	return out
+}
+
+func writeCompressedCodexRollout(t *testing.T, root, day, name, content string) string {
+	t.Helper()
+	dir := filepath.Join(root, "2026", "09", day)
+	require.NoError(t, os.MkdirAll(dir, 0o755), "mkdir codex day dir")
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, zstdCompressString(t, content), 0o600), "write compressed rollout")
+	return path
+}
+
+func countCodexSessions(t *testing.T, database *db.DB) int {
+	t.Helper()
+	var count int
+	err := database.Reader().QueryRow(t.Context(),
+		"SELECT COUNT(*) FROM sessions WHERE agent = ?", "codex",
+	).Scan(&count)
+	require.NoError(t, err)
+	return count
+}
+
+func codexSessionFilePath(t *testing.T, database *db.DB, id string) string {
+	t.Helper()
+	stored, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, stored, "session %s must exist", id)
+	require.NotNil(t, stored.FilePath)
+	return *stored.FilePath
+}
+
+var codexCompressedRuns = []struct {
+	name string
+	run  func(t *testing.T, e *Engine)
+}{
+	{"sync", func(t *testing.T, e *Engine) {
+		t.Helper()
+		e.SyncAll(t.Context(), nil)
+	}},
+	{"rebuild", func(t *testing.T, e *Engine) {
+		t.Helper()
+		_, err := e.ResyncAllWithOptions(t.Context(), nil, RebuildOptions{})
+		require.NoError(t, err)
+	}},
+}
+
+// TestCodexCompressedRolloutStoresSameMessagesAsPlain: a rollout that only
+// ever existed compressed is archived exactly as the plain file would be,
+// through an ordinary sync and through a rebuild.
+func TestCodexCompressedRolloutStoresSameMessagesAsPlain(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
+	content := compressedRolloutContent(one, two, three)
+
+	plainRoot := t.TempDir()
+	writeCodexRollout(t, plainRoot, "01", compressedRolloutPlain, content)
+	plainDB := openTestDB(t)
+	newCompressedRolloutEngine(t, plainDB, plainRoot, EngineConfig{}).SyncAll(t.Context(), nil)
+	want := compressedRolloutTexts(t, plainDB, compressedRolloutSession)
+	require.Equal(t, []string{"one", "two", "three"}, want)
+
+	for _, run := range codexCompressedRuns {
+		t.Run(run.name, func(t *testing.T) {
+			root := t.TempDir()
+			compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, content)
+			database := openTestDB(t)
+			e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+			run.run(t, e)
+			assert.Equal(t, want, compressedRolloutTexts(t, database, compressedRolloutSession))
+			assert.Equal(t, compressed, codexSessionFilePath(t, database, compressedRolloutSession))
+
+			// A cold sync has no stored fingerprint, so the engine keeps the
+			// hash the parse reports. It must be the compressed file's own,
+			// the one Fingerprint computes for the path on later passes.
+			raw, err := os.ReadFile(compressed)
+			require.NoError(t, err)
+			sum := sha256.Sum256(raw)
+			stored, ok := database.GetFileHashByAgentPath(t.Context(), compressed, "codex")
+			require.True(t, ok)
+			assert.Equal(t, hex.EncodeToString(sum[:]), stored,
+				"the stored hash must be of the compressed bytes, not the unpacked ones")
+		})
+	}
+}
+
+// TestCodexPlainRolloutWinsUntilCompressed: with both files present the
+// plain one is the session's source; after Codex removes it, the session
+// keeps its id and messages and its path moves to the compressed file.
+func TestCodexPlainRolloutWinsUntilCompressed(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	content := compressedRolloutContent(one, two)
+	root := t.TempDir()
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, content)
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, content)
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+
+	e.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "two"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+	assert.Equal(t, 1, countCodexSessions(t, database), "one rollout in two forms is one session")
+
+	require.NoError(t, os.Remove(plain))
+	e.SyncAll(t.Context(), nil)
+	assert.Equal(t, []string{"one", "two"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, compressed, codexSessionFilePath(t, database, compressedRolloutSession))
+	assert.Equal(t, 1, countCodexSessions(t, database))
+}
+
+// TestCodexCompressionAfterSyncKeepsArchiveAndSkipsUnchangedFile: a rollout
+// synced while plain and then compressed by Codex keeps its archived rows,
+// follows the path change, and is not parsed again while it stays unchanged.
+func TestCodexCompressionAfterSyncKeepsArchiveAndSkipsUnchangedFile(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
+	content := compressedRolloutContent(one, two, three)
+	root := t.TempDir()
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, content)
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+
+	e.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+	info, err := os.Stat(plain)
+	require.NoError(t, err)
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, content)
+	require.NoError(t, os.Chtimes(compressed, info.ModTime(), info.ModTime()), "Codex keeps the mtime")
+	require.NoError(t, os.Remove(plain))
+
+	stats := e.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, stats.Synced, "the compressed file is parsed once")
+	assert.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, compressed, codexSessionFilePath(t, database, compressedRolloutSession))
+
+	stats = e.SyncAll(t.Context(), nil)
+	assert.Equal(t, 0, stats.Synced, "an unchanged compressed file is not parsed again")
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+}
+
+// TestCodexCompressedRolloutThatGrewAddsMessages: the compressed file holds
+// turns the last sync of the plain file never saw; the archive gains them.
+func TestCodexCompressedRolloutThatGrewAddsMessages(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
+	four := codexAssistantEntryJSON("2026-09-01T10:00:04Z", "four")
+	root := t.TempDir()
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+
+	e.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "two"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+	writeCompressedCodexRollout(t, root, "01", codexCompressedName, compressedRolloutContent(one, two, three, four))
+	require.NoError(t, os.Remove(plain))
+	e.SyncAll(t.Context(), nil)
+	assert.Equal(t, []string{"one", "two", "three", "four"},
+		compressedRolloutTexts(t, database, compressedRolloutSession))
+}
+
+// TestCodexTruncatedCompressedRolloutKeepsArchive: a compressed file that
+// cannot be unpacked fails as a read of that source, leaves the archived
+// session as it was, and is logged once.
+func TestCodexTruncatedCompressedRolloutKeepsArchive(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
+	content := compressedRolloutContent(one, two, three)
+	for _, run := range codexCompressedRuns {
+		t.Run(run.name, func(t *testing.T) {
+			root := t.TempDir()
+			plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, content)
+			database := openTestDB(t)
+			e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+			e.SyncAll(t.Context(), nil)
+			require.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+			whole := zstdCompressString(t, content)
+			compressed := filepath.Join(filepath.Dir(plain), codexCompressedName)
+			require.NoError(t, os.WriteFile(compressed, whole[:len(whole)/2], 0o600))
+			require.NoError(t, os.Remove(plain))
+
+			logs := captureCompressedRolloutLog(t)
+			run.run(t, e)
+			assert.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession),
+				"a file that cannot be read must not touch the archive")
+			assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession),
+				"the path moves only when the compressed file was read")
+			mentions := 0
+			for line := range strings.SplitSeq(logs.String(), "\n") {
+				if strings.Contains(line, codexCompressedName) {
+					mentions++
+				}
+			}
+			assert.Equal(t, 1, mentions, "the failure is logged once:\n%s", logs.String())
+		})
+	}
+}
