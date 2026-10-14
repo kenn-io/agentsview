@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -264,14 +265,16 @@ func TestDiscovery5xxDelaysSync(t *testing.T) {
 }
 
 func TestDiscoveryProtocolChangeStopsCaptureOnly(t *testing.T) {
-	env, _ := newDiscoveryEnv(t)
+	env, gates := newDiscoveryEnv(t)
 	env.threads.Set(runningThread("a", "warm"))
+	var broken atomic.Bool
+	broken.Store(true)
 	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
 		var p struct {
 			Limit int `json:"limit"`
 		}
 		_ = json.Unmarshal(params, &p)
-		if p.Limit == 1 {
+		if broken.Load() && p.Limit == 1 {
 			return nil, &codexcloudtest.Error{Code: -32601, Message: "unsupported app-server method: thread/turns/list"}
 		}
 		return env.threads.TurnsList(params)
@@ -286,6 +289,16 @@ func TestDiscoveryProtocolChangeStopsCaptureOnly(t *testing.T) {
 	assert.Equal(t, from, env.calls("thread/list"), "capture stays off for the account")
 	env.run(t)
 	assert.Greater(t, env.calls("thread/list"), from, "sync carries on")
+
+	// The stopped line's recovery: live_tokens off for one discovery run,
+	// then on again, listens in again once the server is fixed.
+	broken.Store(false)
+	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = false })
+	env.discover(t)
+	assert.Contains(t, env.live(t), "Live tokens: off")
+	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = true })
+	env.discover(t)
+	assert.Equal(t, "Live tokens: listening in on 1 running chat.", env.live(t))
 }
 
 func TestDiscoveryThreadErrorSkipsThread(t *testing.T) {
