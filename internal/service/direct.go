@@ -957,14 +957,14 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
+	base, err := BuildUsageFilter(req.UsageRequest)
+	if err != nil {
+		return nil, err
+	}
 	if req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == "" {
-		rankingRequest := req.UsageRequest
-		rankingRequest.Breakdowns = new(true)
-		rankingRequest.SessionCounts = new(false)
-		rankingFilter, err := BuildUsageFilter(rankingRequest)
-		if err != nil {
-			return nil, err
-		}
+		rankingFilter := base
+		rankingFilter.Breakdowns = true
+		rankingFilter.SkipSessionCounts = true
 		rankingResult, err := b.db.GetDailyUsage(ctx, rankingFilter)
 		if err != nil {
 			return nil, err
@@ -987,7 +987,7 @@ func (b *directBackend) UsagePairwiseComparison(
 			return nil, err
 		}
 	}
-	leftFilter, leftEmpty, rightFilter, rightEmpty, err := BuildUsagePairwiseFilters(req)
+	leftFilter, leftEmpty, rightFilter, rightEmpty, err := buildUsagePairwiseFilters(req, base)
 	if err != nil {
 		return nil, err
 	}

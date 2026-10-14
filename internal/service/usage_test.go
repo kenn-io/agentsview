@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -945,12 +946,18 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 
 type pairwiseRankingStore struct {
 	db.Store
-	t *testing.T
+	t        *testing.T
+	from, to string
 }
 
 func (s *pairwiseRankingStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	if f.Breakdowns {
 		assert.True(s.t, f.SkipSessionCounts)
+		s.from, s.to = f.From, f.To
+		time.Sleep(2 * time.Minute)
+	} else {
+		assert.Equal(s.t, s.from, f.From)
+		assert.Equal(s.t, s.to, f.To)
 	}
 	return s.Store.GetDailyUsage(ctx, f)
 }
@@ -960,46 +967,48 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 	for _, emptyProject := range []bool{false, true} {
 		t.Run(fmt.Sprintf("empty project %t", emptyProject), func(t *testing.T) {
 			t.Parallel()
-			d := dbtest.OpenTestDB(t)
-			seedCommaProjectUsageFixture(t, d)
-			if emptyProject {
-				started := "2024-06-01T09:00:00Z"
-				msg := dbtest.AsstMsg("usage-empty-project", 1, "done")
-				msg.Timestamp = started
-				msg.Model = "test-model"
-				msg.TokenUsage = []byte(`{"input_tokens":1000}`)
-				dbtest.SeedSessionWithMessages(t, d, "usage-empty-project", "", []db.Message{
-					dbtest.UserMsg("usage-empty-project", 0, "compare usage"), msg,
-				}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
-					s.Agent = "claude"
-					s.StartedAt = &started
-					s.EndedAt = &started
-				})
-				summary, err := service.NewDirectBackend(d, nil).UsageSummary(t.Context(), service.UsageRequest{
-					From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+			synctest.Test(t, func(t *testing.T) {
+				time.Sleep(time.Date(2024, time.June, 1, 23, 59, 0, 0, time.UTC).Sub(time.Now()))
+				d := dbtest.OpenTestDB(t)
+				seedCommaProjectUsageFixture(t, d)
+				if emptyProject {
+					started := "2024-06-01T09:00:00Z"
+					msg := dbtest.AsstMsg("usage-empty-project", 1, "done")
+					msg.Timestamp = started
+					msg.Model = "test-model"
+					msg.TokenUsage = []byte(`{"input_tokens":1000}`)
+					dbtest.SeedSessionWithMessages(t, d, "usage-empty-project", "", []db.Message{
+						dbtest.UserMsg("usage-empty-project", 0, "compare usage"), msg,
+					}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
+						s.Agent = "claude"
+						s.StartedAt = &started
+						s.EndedAt = &started
+					})
+					summary, err := service.NewDirectBackend(d, nil).UsageSummary(t.Context(), service.UsageRequest{
+						From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+					})
+					require.NoError(t, err)
+					require.Len(t, summary.ProjectTotals, 3)
+					assert.Empty(t, summary.ProjectTotals[0].ProjectKey)
+					assert.Equal(t, 1000, summary.ProjectTotals[0].InputTokens)
+				}
+				catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
+				require.NoError(t, err)
+				be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
+				res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+					Timezone: "UTC", Breakdowns: new(false), IncludeOneShot: true,
 				})
 				require.NoError(t, err)
-				require.Len(t, summary.ProjectTotals, 3)
-				assert.Empty(t, summary.ProjectTotals[0].ProjectKey)
-				assert.Equal(t, 1000, summary.ProjectTotals[0].InputTokens)
-			}
-			catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
-			require.NoError(t, err)
-			be := service.NewReadOnlyBackend(&pairwiseRankingStore{Store: d, t: t})
-			res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false),
-				IncludeOneShot: true,
+				assert.Equal(t, "project", res.Left.Dimension)
+				assert.Equal(t, "project", res.Right.Dimension)
+				assert.NotEqual(t, res.Left.Value, res.Right.Value)
+				assert.Equal(t, map[string]int{
+					catalog["team,core"].ProjectKey: 100,
+					catalog["other"].ProjectKey:     25,
+				}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
+				assert.Equal(t, 1, res.Left.SessionCount)
+				assert.Equal(t, 1, res.Right.SessionCount)
 			})
-			require.NoError(t, err)
-			assert.Equal(t, "project", res.Left.Dimension)
-			assert.Equal(t, "project", res.Right.Dimension)
-			assert.NotEqual(t, res.Left.Value, res.Right.Value)
-			assert.Equal(t, map[string]int{
-				catalog["team,core"].ProjectKey: 100,
-				catalog["other"].ProjectKey:     25,
-			}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
-			assert.Equal(t, 1, res.Left.SessionCount)
-			assert.Equal(t, 1, res.Right.SessionCount)
 		})
 	}
 }

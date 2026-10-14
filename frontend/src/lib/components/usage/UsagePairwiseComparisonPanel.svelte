@@ -341,7 +341,7 @@
       </button>
     </Card>
   {:else if usage.loading.pairwise && rows.length === 0}
-    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
+    <Card level="default" padding="none" class="pairwise-note">{m.session_breadcrumb_usage_breakdown_loading()}</Card>
   {:else if !hasSelection}
     <Card level="default" padding="none" class="pairwise-note">
       {m.usage_pairwise_not_enough_data()}

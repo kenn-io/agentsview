@@ -165,7 +165,9 @@ describe("UsagePairwiseComparisonPanel", () => {
     usage.loading.pairwise = true;
     const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
     await tick();
-    expect(document.querySelector(".pairwise-note")?.textContent?.trim()).toBe(m.shared_refresh());
+    expect(document.querySelector(".pairwise-note")?.textContent?.trim()).toBe(
+      m.session_breadcrumb_usage_breakdown_loading(),
+    );
     const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
     expect(pickers).toHaveLength(4);
     expect([...pickers].every((picker) => picker.disabled)).toBe(true);

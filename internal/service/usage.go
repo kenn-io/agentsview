@@ -652,7 +652,12 @@ func BuildUsagePairwiseFilters(
 	if err != nil {
 		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
 	}
+	return buildUsagePairwiseFilters(req, base)
+}
 
+func buildUsagePairwiseFilters(
+	req UsagePairwiseComparisonRequest, base db.UsageFilter,
+) (db.UsageFilter, bool, db.UsageFilter, bool, error) {
 	left, err := applyPairwiseDimension(
 		base,
 		req.LeftDimension,
