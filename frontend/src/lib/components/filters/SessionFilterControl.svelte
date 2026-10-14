@@ -150,9 +150,9 @@
     );
     if (sessions.hasActiveFilters && starred.filterOnly) {
       if (showStarred) starred.filterOnly = false;
-      sessions.clearSessionFilters({ clearDateYoke });
+      sessions.clearSessionFilters({ clearDateYoke, preserveLabelsAndPR: !showLabelFilters });
     } else if (sessions.hasActiveFilters) {
-      sessions.clearSessionFilters({ clearDateYoke });
+      sessions.clearSessionFilters({ clearDateYoke, preserveLabelsAndPR: !showLabelFilters });
     } else if (showStarred && starred.filterOnly) {
       starred.filterOnly = false;
       sessions.load();

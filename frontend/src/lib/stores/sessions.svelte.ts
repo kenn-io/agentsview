@@ -29,6 +29,7 @@ type SidebarIndexParams = NonNullable<
 type MetadataParams = NonNullable<Parameters<typeof MetadataService.getApiV1Projects>[0]>;
 type ClearSessionFiltersOptions = {
   clearDateYoke?: boolean;
+  preserveLabelsAndPR?: boolean;
 };
 type LoadOptions = {
   force?: boolean;
@@ -1343,7 +1344,12 @@ class SessionsStore {
     if (options.clearDateYoke || hasDateFilters(this.filters)) {
       yokedDates.clear();
     }
-    this.filters = { ...defaultFilters(), project };
+    const filters = { ...defaultFilters(), project };
+    if (options.preserveLabelsAndPR) {
+      filters.labels = this.filters.labels;
+      filters.pr = this.filters.pr;
+    }
+    this.filters = filters;
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {

@@ -151,12 +151,20 @@ describe("SessionFilterControl label and pull request filters", () => {
     expect(sessions.filters.pr).toBe("");
   });
 
-  it("hides label and pull request filters when the page ignores them", async () => {
+  it("preserves hidden label and pull request filters when shared filters clear", async () => {
     sessions.filters.labels = ["ticket=example"];
+    sessions.filters.pr = "acme/widgets#42";
     await openControl({ showLabelFilters: false });
 
     expect(screen.queryByRole("textbox", { name: "Filter by label" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: "Filter by pull request" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+
+    sessions.filters.agent = "claude";
+    flushSync();
+    await fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(sessions.filters.agent).toBe("");
+    expect(sessions.filters.labels).toEqual(["ticket=example"]);
+    expect(sessions.filters.pr).toBe("acme/widgets#42");
   });
 });

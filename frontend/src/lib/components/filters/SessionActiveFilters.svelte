@@ -82,6 +82,7 @@
   function clearAll() {
     sessions.filters.project = "";
     sessions.clearSessionFilters({
+      preserveLabelsAndPR: true,
       clearDateYoke: hasSessionRouteDateIntent(
         router.route,
         router.params,

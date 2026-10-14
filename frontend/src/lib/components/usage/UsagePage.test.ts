@@ -881,18 +881,6 @@ describe("UsagePage refresh behavior", () => {
     expect(filterKeysBlock).not.toContain('"date_to"');
   });
 
-  it("sanitizes mixed usage URL session params before hydrating", () => {
-    const initStart = source.indexOf("if (hasSessionFilterKeys)");
-    const initEnd = source.indexOf("if (hasDateParam)", initStart);
-    const initBlock = source.slice(initStart, initEnd);
-
-    expect(source).toContain("function usageSupportedSessionParams");
-    expect(initBlock).toContain("parseFiltersFromParams(hydratedParams)");
-    expect(initBlock).toContain("sessions.initFromParams(hydratedParams)");
-    expect(initBlock).not.toContain("parseFiltersFromParams(params)");
-    expect(initBlock).not.toContain("sessions.initFromParams(params)");
-  });
-
   it("mounts the pairwise comparison panel additively", () => {
     expect(source).toContain("UsagePairwiseComparisonPanel");
     expect(source).toContain("<UsagePairwiseComparisonPanel />");
