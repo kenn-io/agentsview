@@ -1469,11 +1469,14 @@ Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan
 usage as of T", "Usage isn't available for this account", or "Plan usage: "
 followed by a usage error from the table below. After "A reply from OpenAI was
-larger than AgentsView accepts.", the line adds " AgentsView asks again later."
-only while a chat from the failed request is still pending. After a restart, T
-is the stored `data_as_of` of the newest answered report, shown with the year
-when it is not the current year. A home skipped for another login problem shows
-that problem's message instead of the signed-out one.
+larger than AgentsView accepts.", the line adds " AgentsView retries
+automatically." when AgentsView will ask about a chat from the failed request
+again: a pending chat, or a refreshed one that changed in the last 7 days.
+Otherwise it adds " AgentsView stopped checking plan usage for the chats it
+asked about." After a restart, T is the stored `data_as_of` of the newest
+answered report, shown with the year when it is not the current year. A home
+skipped for another login problem shows that problem's message instead of the
+signed-out one.
 
 | Cause                                               | Message                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

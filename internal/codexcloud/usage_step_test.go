@@ -723,7 +723,8 @@ func TestOversizedReplyThatSettlesPromisesNoRetry(t *testing.T) {
 	}
 
 	require.NotContains(t, env.account(t).UsagePending, "a", "the root settled")
-	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{}), env.planLine(t))
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+
+		" AgentsView stopped checking plan usage for the chats it asked about.", env.planLine(t))
 }
 
 // A change restarts the 7 days, so failures from before it do not count
@@ -862,6 +863,25 @@ func TestOversizedUsageReplySaysItIsAskedAgain(t *testing.T) {
 
 	env.run(t)
 
-	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+" AgentsView asks again later.", env.planLine(t))
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+" AgentsView retries automatically.", env.planLine(t))
 	assert.Contains(t, env.account(t).UsagePending, "a", "the root stays pending for a later request")
+}
+
+// A failed refresh keeps the root queued for a later refresh, so the line
+// must say AgentsView asks again even though nothing is pending.
+func TestOversizedRefreshReplySaysItIsAskedAgain(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	require.Contains(t, env.account(t).Refresh, "a")
+	require.NotContains(t, env.account(t).UsagePending, "a")
+	env.usage.Refuse(http.StatusOK, nil, strings.Repeat(" ", 16<<20+1))
+	env.clock.Set(fetchNow.Add(refreshEvery))
+	from := len(env.usage.Requests())
+
+	env.run(t)
+
+	require.Len(t, env.usage.Requests(), from+1, "the refresh was sent")
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+" AgentsView retries automatically.", env.planLine(t))
 }
