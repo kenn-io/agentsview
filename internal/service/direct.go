@@ -953,7 +953,7 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	req.UsageRequest, err = ResolveUsageProjectKeys(ctx, b.db, req.UsageRequest)
+	req, err = ResolveUsagePairwiseProjectKeys(ctx, b.db, req)
 	if err != nil {
 		return nil, err
 	}
@@ -978,10 +978,14 @@ func (b *directBackend) UsagePairwiseComparison(
 			out, err := BuildUsagePairwiseComparisonResult(db.DailyUsageResult{}, db.DailyUsageResult{})
 			return &out, err
 		}
-	}
-	req, err = ResolveUsagePairwiseProjectKeys(ctx, b.db, req)
-	if err != nil {
-		return nil, err
+		req.LeftProjectLabels, err = resolvePairwiseProjectLabels(ctx, b.db, req.LeftDimension, req.LeftValue)
+		if err != nil {
+			return nil, err
+		}
+		req.RightProjectLabels, err = resolvePairwiseProjectLabels(ctx, b.db, req.RightDimension, req.RightValue)
+		if err != nil {
+			return nil, err
+		}
 	}
 	leftFilter, leftEmpty, rightFilter, rightEmpty, err := BuildUsagePairwiseFilters(req)
 	if err != nil {

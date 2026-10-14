@@ -559,6 +559,7 @@ class UsageStore {
     const rightValid = currentRightOptions.includes(current.right.value);
     if (leftValid && rightValid) return false;
 
+    this.invalidatePanel("pairwise");
     this.pairwiseSelection = emptyPairwiseSelection();
     this.clearPairwiseComparisonState();
     return true;
@@ -1015,8 +1016,8 @@ class UsageStore {
         })
       : zoomPromise;
     const currentPairwisePromise =
-      (loadedSummary.pairwiseSelectionInvalidated || loadedSummary.projectScopeRecovered) &&
-      pairwiseVersion === this.versions.pairwise
+      loadedSummary.pairwiseSelectionInvalidated ||
+      (loadedSummary.projectScopeRecovered && pairwiseVersion === this.versions.pairwise)
         ? this.fetchPairwise(loadedSummary.params)
         : pairwisePromise;
     const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
@@ -1340,18 +1341,18 @@ class UsageStore {
       if (this.versions.pairwise === pairwiseVersion) {
         if (
           useDefault &&
-          comparison.left.dimension &&
+          (comparison.left.dimension === "model" || comparison.left.dimension === "project") &&
           comparison.left.value &&
-          comparison.right.dimension &&
+          (comparison.right.dimension === "model" || comparison.right.dimension === "project") &&
           comparison.right.value
         ) {
           this.pairwiseSelection = {
             left: {
-              dimension: comparison.left.dimension as UsagePairwiseDimension,
+              dimension: comparison.left.dimension,
               value: comparison.left.value,
             },
             right: {
-              dimension: comparison.right.dimension as UsagePairwiseDimension,
+              dimension: comparison.right.dimension,
               value: comparison.right.value,
             },
           };

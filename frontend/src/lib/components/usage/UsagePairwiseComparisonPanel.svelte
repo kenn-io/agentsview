@@ -107,6 +107,7 @@
     !!usage.pairwiseSelection.left.value &&
       !!usage.pairwiseSelection.right.value,
   );
+  const controlsDisabled = $derived(!usage.summary || (!hasSelection && usage.loading.pairwise));
 
   const rows = $derived.by((): MetricRow[] => {
     const comparison = usage.pairwiseComparison;
@@ -250,7 +251,7 @@
           <div class="pairwise-typeahead">
             <Typeahead
               options={dimensionOptions}
-              disabled={!hasSelection && usage.loading.pairwise}
+              disabled={controlsDisabled}
               value={usage.pairwiseSelection.left.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.left.dimension)}
               placeholder={m.usage_pairwise_left_dimension()}
@@ -274,7 +275,7 @@
               placeholder={m.usage_pairwise_left_value()}
               title={m.usage_pairwise_left_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={(!hasSelection && usage.loading.pairwise) || optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
+              disabled={controlsDisabled || optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("left", {
                   value,
@@ -293,7 +294,7 @@
           <div class="pairwise-typeahead">
             <Typeahead
               options={dimensionOptions}
-              disabled={!hasSelection && usage.loading.pairwise}
+              disabled={controlsDisabled}
               value={usage.pairwiseSelection.right.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.right.dimension)}
               placeholder={m.usage_pairwise_right_dimension()}
@@ -317,7 +318,7 @@
               placeholder={m.usage_pairwise_right_value()}
               title={m.usage_pairwise_right_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={(!hasSelection && usage.loading.pairwise) || optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
+              disabled={controlsDisabled || optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("right", {
                   value,

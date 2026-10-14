@@ -832,6 +832,61 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toEqual(replacement);
   });
 
+  it.each(["before totals", "after totals"])("replaces an invalidated selector response arriving %s", async (order) => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+    let resolveSummary!: (summary: UsageSummaryResponse) => void;
+    let resolveEarly!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    let resolveSelected!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    let resolveDefault!: (comparison: ServiceUsagePairwiseComparisonResponse) => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((resolve) => { resolveSummary = resolve; }));
+    usageServiceMocks.getApiV1UsagePairwiseComparison
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveEarly = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelected = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveDefault = resolve; }));
+
+    usage.applyDateRange("2024-02-01", "2024-02-29");
+    const refresh = usage.fetchAll();
+    usage.setPairwiseSide("left", { dimension: "project", value: "pl1:sha256:alpha" });
+    const selected = usagePairwiseComparison();
+    selected.left = { ...selected.left, dimension: "project", value: "pl1:sha256:alpha" };
+    if (order === "before totals") {
+      resolveSelected(selected);
+      await vi.waitFor(() => expect(usage.pairwiseComparison).toEqual(selected));
+    }
+    resolveSummary(usageSummaryWithOptions({ projects: ["beta"] }));
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(3));
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    if (order === "after totals") {
+      expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+      resolveSelected(selected);
+    }
+    resolveEarly(usagePairwiseComparison());
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+    expect(usage.loading.pairwise).toBe(true);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[2]?.[0]).not.toHaveProperty("left_value");
+    resolveDefault(usagePairwiseComparison());
+    await refresh;
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "model", value: "claude-sonnet-4-20250514" },
+      right: { dimension: "model", value: "gpt-4o" },
+    });
+  });
+
+  it.each(["left", "right"] as const)("ignores an unsupported echoed %s dimension", async (side) => {
+    const { usage } = await loadStore();
+    const comparison = usagePairwiseComparison();
+    comparison[side].dimension = "agent";
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(comparison);
+    await usage.fetchAll();
+    expect(usage.pairwiseSelection.left.value).toBe("");
+    expect(usage.pairwiseSelection.right.value).toBe("");
+    expect(usage.pairwiseComparison).toEqual(comparison);
+  });
+
   it("clears stale pairwise results when filters change without selector changes", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -1287,8 +1342,6 @@ describe("UsageStore session filter params", () => {
           }),
       );
     const refresh = usage.fetchAll();
-    resolveSummary(usageSummary());
-    await Promise.resolve();
     usage.setPairwiseSide("left", { value: "gpt-4o" });
     const selectedSignal =
       usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[1]?.[1]?.signal;
@@ -1299,6 +1352,7 @@ describe("UsageStore session filter params", () => {
       left_value: "gpt-4o",
       right_value: "gpt-4o",
     });
+    resolveSummary(usageSummary());
     resolveEarly(usagePairwiseComparison());
     await refresh;
     expect(selectedSignal?.aborted).toBe(false);

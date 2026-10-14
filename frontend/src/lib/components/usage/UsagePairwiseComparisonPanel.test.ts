@@ -180,6 +180,33 @@ describe("UsagePairwiseComparisonPanel", () => {
     await unmount(component);
   });
 
+  it("keeps every picker disabled when the default pair arrives before totals", async () => {
+    usage.summary = null;
+    const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
+    await tick();
+    const pickers = document.querySelectorAll<HTMLButtonElement>(".selectors button");
+    expect(pickers).toHaveLength(4);
+    expect([...pickers].every((picker) => picker.disabled)).toBe(true);
+    const spy = vi.spyOn(usage, "setPairwiseSide");
+    pickers[0]?.click();
+    pickers[2]?.click();
+    await tick();
+    expect(spy).not.toHaveBeenCalled();
+    expect(document.querySelector(".pairwise-note")).toBeNull();
+
+    usage.summary = usageSummary();
+    await tick();
+    expect([...pickers].every((picker) => !picker.disabled)).toBe(true);
+    pickers[0]?.click();
+    await tick();
+    const project = Array.from(document.querySelectorAll<HTMLLIElement>('li[role="option"]')).find((option) => option.textContent?.includes("Project"));
+    expect(project).toBeTruthy();
+    project?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+    expect(spy).toHaveBeenCalledWith("left", { dimension: "project" });
+    await unmount(component);
+  });
+
   it("routes selector changes through the usage store", async () => {
     const spy = vi.spyOn(usage, "setPairwiseSide");
     const component = mount(UsagePairwiseComparisonPanel, {

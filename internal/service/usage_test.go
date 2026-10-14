@@ -838,8 +838,8 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	seedPairwiseUsageFixture(t, env.DB)
 	svc := env.Backend("", false)
 
-	for _, defaultPair := range []bool{false, true} {
-		t.Run(fmt.Sprintf("default=%t", defaultPair), func(t *testing.T) {
+	for _, selection := range []string{"explicit", "default", "default without breakdowns"} {
+		t.Run(selection, func(t *testing.T) {
 			req := service.UsagePairwiseComparisonRequest{
 				From:           "2024-06-01",
 				To:             "2024-06-01",
@@ -850,8 +850,11 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 				RightDimension: "model",
 				RightValue:     "gpt-4o",
 			}
-			if defaultPair {
+			if selection != "explicit" {
 				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
+			}
+			if selection == "default without breakdowns" {
+				req.Breakdowns = new(false)
 			}
 
 			res, err := svc.UsagePairwiseComparison(
