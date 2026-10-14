@@ -1,14 +1,94 @@
 package db
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBulkReadWaitDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cancel    bool
+		wait      time.Duration
+		wantLog   bool
+		crossTick bool
+	}{
+		{"admitted wait", false, 2 * time.Second, true, false},
+		{"canceled wait", true, 2 * time.Second, true, false},
+		{"below threshold", true, 500 * time.Millisecond, false, false},
+		{"admitted wait crosses tick", false, 2 * time.Second, true, true},
+		{"canceled wait crosses tick", true, 2 * time.Second, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
+			var diag walDiagnostics
+			synctest.Test(t, func(t *testing.T) {
+				var releases []func()
+				for range bulkReadSlots {
+					release, err := d.acquireBulkRead(t.Context())
+					require.NoError(t, err)
+					releases = append(releases, release)
+				}
+				defer func() {
+					for _, release := range releases {
+						release()
+					}
+				}()
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					release, err := d.acquireBulkRead(ctx)
+					if release != nil {
+						release()
+					}
+					done <- err
+				}()
+				synctest.Wait()
+				time.Sleep(tc.wait)
+				if tc.crossTick {
+					d.walMaintenanceTick(t.Context(), &diag)
+					assert.Zero(t, diag.bulkStats.WaitCount)
+					assert.Zero(t, diag.bulkStats.WaitDuration)
+					assert.NotContains(t, output.String(), "bulk read slots")
+					output.Reset()
+				}
+				if tc.cancel {
+					cancel()
+					require.ErrorIs(t, <-done, context.Canceled)
+				} else {
+					releases[0]()
+					releases = releases[1:]
+					require.NoError(t, <-done)
+				}
+				assert.EqualValues(t, 1, d.bulkReads.waitCount)
+				assert.Equal(t, tc.wait, d.bulkReads.waitDuration)
+			})
+			d.walMaintenanceTick(t.Context(), &diag)
+			if tc.wantLog {
+				assert.Contains(t, output.String(), fmt.Sprintf("sqlite reader pool: 1 requests waited 2s in total for one of %d bulk read slots", bulkReadSlots))
+			} else {
+				assert.NotContains(t, output.String(), "bulk read slots")
+			}
+			output.Reset()
+			d.walMaintenanceTick(t.Context(), &diag)
+			assert.NotContains(t, output.String(), "bulk read slots")
+		})
+	}
+}
 
 func TestWALStallReportedWhileReaderHoldsSnapshot(t *testing.T) {
 	d := testDB(t)

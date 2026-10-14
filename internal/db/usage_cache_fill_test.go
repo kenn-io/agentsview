@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,8 +16,282 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
+
+func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
+	t.Run("saturated lane", func(t *testing.T) { testBulkReadEntryPoints(t, true) })
+	t.Run("one reader connection", func(t *testing.T) { testBulkReadEntryPoints(t, false) })
+}
+
+func testBulkReadEntryPoints(t *testing.T, blocked bool) {
+	t.Helper()
+	database := usageCandidateFixture(t)
+	message := asstMsgAt("inside-message", 1, "skill call", "2026-08-10T10:01:00Z")
+	message.HasToolUse = true
+	message.ToolCalls = []ToolCall{
+		{SessionID: "inside-message", ToolName: "Skill", Category: "Skill", SkillName: "review-code"},
+		{SessionID: "inside-message", ToolName: "Edit", Category: "Edit", FilePath: "example.go", CallIndex: 1},
+	}
+	insertMessages(t, database, message)
+	database.rawReader().SetMaxOpenConns(1)
+	filter := AnalyticsFilter{From: "2026-08-01", To: "2026-08-20", Timezone: "UTC"}
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-08-10", Timezone: "UTC",
+	}, time.Now())
+	require.NoError(t, err)
+	if blocked {
+		for range bulkReadSlots {
+			release, err := database.acquireBulkRead(t.Context())
+			require.NoError(t, err)
+			defer release()
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		read        func(context.Context) error
+		wantError   error
+		blockedOnly bool
+	}{
+		{"summary", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSummary(ctx, filter)
+			return err
+		}, nil, false},
+		{"activity", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsActivity(ctx, filter, "day")
+			return err
+		}, nil, false},
+		{"heatmap", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsHeatmap(ctx, filter, "messages")
+			return err
+		}, nil, false},
+		{"projects", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsProjects(ctx, filter)
+			return err
+		}, nil, false},
+		{"project inventory", func(ctx context.Context) error {
+			_, err := database.GetProjectInventory(ctx, ProjectDateFilter{})
+			return err
+		}, nil, false},
+		{"hour of week", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsHourOfWeek(ctx, filter)
+			return err
+		}, nil, false},
+		{"session shape", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSessionShape(ctx, filter)
+			return err
+		}, nil, false},
+		{"tools", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsTools(ctx, filter)
+			return err
+		}, nil, false},
+		{"skills", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSkills(ctx, filter, "week")
+			return err
+		}, nil, false},
+		{"velocity", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsVelocity(ctx, filter)
+			return err
+		}, nil, false},
+		{"signals", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignals(ctx, filter)
+			return err
+		}, nil, false},
+		{"signal sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "outcome_completed", 10)
+			return err
+		}, nil, false},
+		{"tool signal sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "tool_empty_rate", 10)
+			return err
+		}, nil, false},
+		{"top sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsTopSessions(ctx, filter, "messages")
+			return err
+		}, nil, false},
+		{"session stats", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-01", Until: "2026-08-21", Timezone: "UTC"})
+			return err
+		}, nil, false},
+		{"archive regex search", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: `[a-z]+ call`, Mode: "regex"})
+			return err
+		}, nil, false},
+		{"prefixed regex search", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "regex"})
+			return err
+		}, nil, false},
+		{"substring search", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring"})
+			return err
+		}, nil, false},
+		{"terms search", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", IncludeOneShot: true})
+			return err
+		}, nil, false},
+		{"embeddable units", func(ctx context.Context) error {
+			var units []EmbeddableUnit
+			_, err := database.ScanEmbeddableUnits(ctx, "", false, func(unit EmbeddableUnit) error {
+				units = append(units, unit)
+				return nil
+			})
+			if blocked {
+				assert.Empty(t, units)
+			}
+			return err
+		}, nil, false},
+		{"recall embedding units", func(ctx context.Context) error {
+			var units []EmbeddableUnit
+			_, err := database.ScanRecallEmbeddingUnits(ctx, "", func(unit EmbeddableUnit) error {
+				units = append(units, unit)
+				return nil
+			})
+			if blocked {
+				assert.Empty(t, units)
+			}
+			return err
+		}, nil, false},
+		{"recent edits", func(ctx context.Context) error {
+			_, err := database.RecentEdits(ctx, RecentEditsParams{})
+			return err
+		}, nil, false},
+		{"trends", func(ctx context.Context) error {
+			_, err := database.GetTrendsTerms(ctx, filter, []TrendTermInput{{Term: "test"}}, "week")
+			return err
+		}, nil, false},
+		{"activity artifacts", func(ctx context.Context) error {
+			_, err := database.BuildActivityReportArtifacts(ctx, filter, q, nil)
+			return err
+		}, nil, true},
+		{"usage capture", func(ctx context.Context) error {
+			captured, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
+			if err != nil {
+				return err
+			}
+			defer captured.Close()
+			return nil
+		}, nil, true},
+		{"usage source recheck", func(ctx context.Context) error {
+			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
+			return err
+		}, nil, true},
+		{"usage backfill activity", func(ctx context.Context) error {
+			_, err := database.usageBackfillActivity(ctx)
+			return err
+		}, nil, false},
+		{"usage extraction", func(ctx context.Context) error {
+			spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
+			if spool != nil {
+				defer spool.Close()
+			}
+			if blocked {
+				assert.Nil(t, spool)
+				assert.Nil(t, versions)
+			}
+			return err
+		}, nil, false},
+		{"Cursor batch", func(ctx context.Context) error {
+			_, _, err := cache.fill.readCursorBatch(ctx, 0, snapshot.CursorHighWater)
+			return err
+		}, nil, false},
+		{"unsupported signal", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "unsupported", 10)
+			return err
+		}, ErrUnsupportedAnalyticsSignal, false},
+		{"invalid stats timezone", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{Timezone: "invalid"})
+			return err
+		}, &StatsInputError{}, false},
+		{"invalid stats window", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-11", Until: "2026-08-10"})
+			return err
+		}, &StatsInputError{}, false},
+		{"invalid regex", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "[", Mode: "regex"})
+			return err
+		}, &SearchInputError{}, false},
+		{"invalid terms scope", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", Scope: "invalid"})
+			return err
+		}, &SearchInputError{}, false},
+		{"invalid substring source", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring", Sources: []string{"invalid"}})
+			return err
+		}, &SearchInputError{}, false},
+	} {
+		if !blocked && tc.wantError != nil {
+			continue
+		}
+		if !blocked && tc.blockedOnly {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			budget := 30 * time.Second
+			if blocked {
+				budget = 100 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
+			defer cancel()
+			require.NoError(t, ctx.Err())
+			err := tc.read(ctx)
+			if tc.wantError != nil {
+				if statsError, ok := errors.AsType[*StatsInputError](tc.wantError); ok {
+					require.ErrorAs(t, err, &statsError)
+				} else if searchError, ok := errors.AsType[*SearchInputError](tc.wantError); ok {
+					require.ErrorAs(t, err, &searchError)
+				} else {
+					require.ErrorIs(t, err, tc.wantError)
+				}
+				require.NoError(t, ctx.Err())
+			} else if blocked {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.NoError(t, err, "bulk holder must complete with one reader connection")
+			}
+			if blocked {
+				assert.Zero(t, database.rawReader().Stats().InUse)
+			}
+		})
+	}
+	if !blocked {
+		return
+	}
+	for _, tc := range []struct {
+		mode, sessionID, pattern, snippet string
+	}{
+		{"substring", "inside-message", "skill", "skill call"},
+		{"terms", "user-only", "question", "question"},
+		{"regex", "inside-message", "skill", "skill call"},
+	} {
+		t.Run("session-scoped "+tc.mode+" search bypasses lane", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, SessionID: tc.sessionID, Sources: []string{"messages"}, IncludeOneShot: true})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, tc.sessionID, page.Matches[0].SessionID)
+			assert.Equal(t, tc.snippet, page.Matches[0].Snippet)
+			require.NoError(t, ctx.Err())
+			assert.Zero(t, database.rawReader().Stats().InUse)
+		})
+	}
+	t.Run("fts search bypasses lane", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "fts", Sources: []string{"messages"}})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+		require.NoError(t, ctx.Err())
+		assert.Zero(t, database.rawReader().Stats().InUse)
+	})
+}
 
 func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
 	database := testDB(t)

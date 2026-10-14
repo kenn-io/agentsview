@@ -13,6 +13,12 @@ The latest release is
 
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
+- Assistants connected over MCP can see which tools a session ran, find which
+  sessions edited a file, list a session's sub-agents, read the Activity report,
+  see tool usage and where agents struggled, compare usage between two models or
+  projects, and search the AgentsView guides. The eight new tools are read-only
+  and stay out of the `memory` profile. The server now speaks MCP 2026-07-28
+  over stdio, and clients on older protocol versions keep working.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.
@@ -58,6 +64,11 @@ The latest release is
 
 - DeepSeek Harness v4 sessions now appear after sync, with tool results and
   recorded token usage.
+- ClickHouse usage reports read prepared usage again for a machine whose
+  mirror held a session with no archive id that the machine's archive no
+  longer has. No push removed such a session, and it kept every session of
+  that machine on the slower raw usage reads. The first push from each
+  machine after upgrading removes them.
 - Fill MCP content-search pages with older matches by excluding recent sessions
   before the limit. Cutoffs preserve their UTC instant across time zones. Older
   daemons keep the previous guard after pagination and can return short pages.
@@ -70,6 +81,10 @@ The latest release is
   daemon keeps serving the existing archive, retries after an hour, and backs
   off to once a day. Before, the rebuild waited for a restart or a manual
   resync.
+- Re-importing an unchanged archive with usage-only storage no longer re-reads
+  every titled Codex thread. Usage-only storage discards session titles, so the
+  empty stored title always differed from the thread's title in
+  `session_index.jsonl`, and each import parsed those threads again.
 
 - Codex threads rewound with undo keep every message and every day's usage.
   Each extra rollout file Codex writes for the undo now shows as its own linked

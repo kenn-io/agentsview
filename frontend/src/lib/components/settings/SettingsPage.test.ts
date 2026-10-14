@@ -59,8 +59,13 @@ afterEach(() => {
 describe("SettingsPage", () => {
   it("hides full resync for an archive-only database", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
-      agent_dirs: {}, chart_palette: "agentsview", github_configured: false,
-      host: "127.0.0.1", port: 8080, read_only: false, require_auth: false,
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
       terminal: { mode: "auto" },
     });
     sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;

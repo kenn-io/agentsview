@@ -260,7 +260,9 @@ describe("GeneratedInsightsPanel", () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
     expect(document.querySelector(".tool-effectiveness-report")).not.toBeNull();
-    const chips = [...document.querySelectorAll(".generated-meta-chip")].map((c) => c.textContent?.trim());
+    const chips = [...document.querySelectorAll(".generated-meta-chip")].map((c) =>
+      c.textContent?.trim(),
+    );
     expect(chips).toContain("1,234 calls judged");
   });
 

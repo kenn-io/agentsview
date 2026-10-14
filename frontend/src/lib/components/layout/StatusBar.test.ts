@@ -44,9 +44,19 @@ describe("StatusBar", () => {
     expect(document.body.textContent).toContain("Archive results may be stale.");
     expect(document.body.textContent).not.toContain("Changes are paused");
     sync.syncing = true;
-    sync.progress = { phase: "preparing_resync", resync: true, projects_total: 0, projects_done: 0, sessions_total: 0, sessions_done: 0, messages_indexed: 0 };
+    sync.progress = {
+      phase: "preparing_resync",
+      resync: true,
+      projects_total: 0,
+      projects_done: 0,
+      sessions_total: 0,
+      sessions_done: 0,
+      messages_indexed: 0,
+    };
     await tick();
-    expect(document.body.textContent).toContain("Archive results may be stale. Changes are paused until the rebuild finishes.");
+    expect(document.body.textContent).toContain(
+      "Archive results may be stale. Changes are paused until the rebuild finishes.",
+    );
     sync.syncing = false;
     sync.progress = null;
     await tick();

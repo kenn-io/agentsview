@@ -16759,6 +16759,11 @@ func (e *Engine) codexIndexSessionNameState(
 		// rewrite preserves the title, so the loop could never converge.
 		return false, true
 	}
+	if e.db.ArchiveContent().UsageOnly() {
+		// Usage-only archives store no titles, so a rename has nothing to
+		// refresh and the empty stored title must not read as stale.
+		return false, true
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
@@ -16984,6 +16989,9 @@ func (e *Engine) codexStoredNameDiffersBySessionID(
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
+	if e.db.ArchiveContent().UsageOnly() {
+		return false
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), sessionID,
 	)

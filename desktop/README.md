@@ -58,17 +58,29 @@ If a link appears to do nothing, deep link handling is recorded in
 the scheme is registered through the bundled app's `Info.plist`, so dev builds
 (`tauri:dev`) do not receive deep links; use a bundled build.
 
-## Window Behavior (macOS)
+## Window Behavior (macOS and Windows)
 
-Closing the main window hides AgentsView to the menu bar instead of quitting;
-the tray item keeps the backend running. The window comes back through the tray
-menu, a deep link, or standard macOS reopen gestures: clicking the Dock icon or
-activating the app with no visible windows.
+Closing the main window hides AgentsView instead of quitting; the tray item
+keeps the backend running. The window comes back through the tray menu, a deep
+link, or (on macOS) standard reopen gestures: clicking the Dock icon or
+activating the app with no visible windows. The tray menu provides Show
+AgentsView, Open Logs Folder, Check for Updates, and Quit; Quit is the only
+explicit way to exit. Both platforms share one status-item setup path and one
+close-handler path, with a platform-specific icon: the monochrome template
+asset on macOS and Tauri's packaged default window icon on Windows.
 
-AgentsView appears in the Dock and Cmd-Tab while running, even with the window
-hidden. To make it behave like a menu-bar app whenever the window is closed,
-check "Hide from Dock and Cmd-Tab when window closed" in the tray menu. The
-choice persists across relaunches, takes effect immediately, and applies to
+Tray and close-to-tray setup failures are logged and do not abort the desktop
+wrapper; close interception is registered only after tray creation succeeds, so
+a tray setup failure preserves normal close behavior instead of hiding the
+window without a way to restore it.
+
+Linux keeps normal close behavior and does not build in Tauri's `tray-icon`
+feature, which avoids adding Linux AppIndicator packaging requirements.
+
+AgentsView appears in the Dock and Cmd-Tab on macOS while running, even with the
+window hidden. To make it behave like a menu-bar app whenever the window is
+closed, check "Hide from Dock and Cmd-Tab when window closed" in the tray menu.
+The choice persists across relaunches, takes effect immediately, and applies to
 every restore path (tray menu, dock click, deep links, and second launches). It
 is off by default.
 

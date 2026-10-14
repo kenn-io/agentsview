@@ -206,6 +206,37 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	assert.Equal(t, 2, chtest.Count(t, conn, "sessions", ""))
 }
 
+func TestPushRemovesUnownedSessionsMissingLocally(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	_, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	conn := chtest.Open(t, target.URL, target.Database)
+	// Model mirror rows without an archive id: one for a session this
+	// machine's archive no longer has, one for a session it still has, and
+	// one under another machine's name.
+	for _, unowned := range []struct{ id, machine string }{
+		{"ch-sync-unowned-gone", fixtureMachine},
+		{fixtureAlphaID, fixtureMachine},
+		{"ch-sync-unowned-other", "other-machine"},
+	} {
+		_, err := conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+				? AS id, ? AS machine, '' AS source_archive_id, push_version + 1 AS push_version)
+			FROM (SELECT * FROM sessions WHERE id = ?)`, unowned.id, unowned.machine, fixtureAlphaID)
+		require.NoError(t, err)
+	}
+
+	// The cleanup runs once per process, so the next process's first push
+	// picks the rows up.
+	res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.DeletedStale)
+	assert.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", "ch-sync-unowned-gone"))
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", fixtureAlphaID))
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", "ch-sync-unowned-other"))
+}
+
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)

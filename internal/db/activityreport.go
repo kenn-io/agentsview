@@ -65,6 +65,11 @@ func (db *DB) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	defer release()
 	ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true

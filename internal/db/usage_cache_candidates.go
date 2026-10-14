@@ -90,6 +90,11 @@ func (db *DB) captureUsageQuery(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
+	defer release()
 	conn, err := db.getReader().Conn(ctx)
 	if err != nil {
 		return usageQuerySnapshot{}, fmt.Errorf("pinning usage archive connection: %w", err)

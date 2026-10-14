@@ -601,9 +601,9 @@ class SessionsStore {
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
+    const uncached = uniqueIds.filter((id) => !cache.has(id));
     await Promise.all(
-      uniqueIds.map((id) => {
-        if (cache.has(id)) return;
+      uncached.map((id) => {
         const existing = inflight.get(id);
         if (existing) return existing;
 
@@ -1106,13 +1106,13 @@ class SessionsStore {
     ) {
       this.invalidateFilterCaches();
     }
-    this.load();
+    void this.load();
   }
 
   setMachineFilter(machine: string) {
     this.filters.machine = this.filters.machine === machine ? "" : machine;
     this.activeSessionId = null;
-    this.load();
+    void this.load();
   }
 
   toggleMachineFilter(machine: string) {
@@ -1125,7 +1125,7 @@ class SessionsStore {
     }
     this.filters.machine = current.join(",");
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   isMachineSelected(machine: string): boolean {
@@ -1145,7 +1145,7 @@ class SessionsStore {
       this.filters.agent = agent;
     }
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   toggleAgentFilter(agent: string) {
@@ -1158,7 +1158,7 @@ class SessionsStore {
     }
     this.filters.agent = current.join(",");
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   isAgentSelected(agent: string): boolean {
@@ -1174,13 +1174,13 @@ class SessionsStore {
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setMinUserMessagesFilter(n: number) {
     this.filters.minUserMessages = n;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setHideUnknownProjectFilter(hide: boolean) {
@@ -1189,27 +1189,27 @@ class SessionsStore {
       this.filters.project = "";
     }
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   setIncludeOneShotFilter(include: boolean) {
     this.filters.includeOneShot = include;
     this.setActiveSession(null);
     this.invalidateFilterCaches();
-    this.load();
+    void this.load();
   }
 
   setIncludeAutomatedFilter(include: boolean) {
     this.filters.includeAutomated = include;
     this.setActiveSession(null);
     this.invalidateFilterCaches();
-    this.load();
+    void this.load();
   }
 
   setTerminationFilter(termination: string) {
     this.filters.termination = termination;
     this.setActiveSession(null);
-    this.load();
+    void this.load();
   }
 
   /** Add or remove a status from the comma-separated termination
@@ -1258,7 +1258,7 @@ class SessionsStore {
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {
       this.invalidateFilterCaches();
     }
-    this.load();
+    void this.load();
   }
 
   /** Recently deleted session batches for undo toast. */
@@ -1374,16 +1374,16 @@ class SessionsStore {
     this.machinesVersion++;
     this.machinesLoaded = false;
     this.machinesPromise = null;
-    this.loadAgents();
-    this.loadMachines();
-    sync.loadStats(this.metadataParams);
+    void this.loadAgents();
+    void this.loadMachines();
+    void sync.loadStats(this.metadataParams);
   }
 
   invalidateProjectCache() {
     this.projectsVersion++;
     this.projectsLoaded = false;
     this.projectsPromise = null;
-    this.loadProjects();
+    void this.loadProjects();
   }
 
   /** Remove one or all entries from the undo toast list. */
@@ -1484,7 +1484,7 @@ class SessionsStore {
       this.handleLiveRefreshEvent(event);
     });
     this.safetyNetTimer = setInterval(() => {
-      this.load();
+      void this.load();
       this.refreshActiveChildSessions();
       this.bumpActiveSessionUsageVersion();
     }, SAFETY_NET_REFRESH_MS);
@@ -1512,7 +1512,7 @@ class SessionsStore {
     }
     this.liveRefreshTimer = setTimeout(() => {
       this.liveRefreshTimer = null;
-      this.load();
+      void this.load();
     }, LIVE_REFRESH_DEBOUNCE_MS);
   }
 

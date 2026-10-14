@@ -101,6 +101,12 @@ func (db *DB) ScanRecallEmbeddingUnits(
 	since string,
 	fn func(EmbeddableUnit) error,
 ) (maxUpdated string, err error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	hasChanges, err := db.recallTableExists(ctx, "recall_embedding_changes")
 	if err != nil {
 		return "", err

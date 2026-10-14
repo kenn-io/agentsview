@@ -1040,17 +1040,15 @@ describe("go to session shortcut", () => {
     },
   );
 
-  it.each([
-    { shiftKey: true },
-    { altKey: true },
-    { isComposing: true },
-    { keyCode: 229 },
-  ])("leaves the browser default for a guarded event %j", (options) => {
-    const event = fireCancelableKey("g", { ctrlKey: true, ...options });
+  it.each([{ shiftKey: true }, { altKey: true }, { isComposing: true }, { keyCode: 229 }])(
+    "leaves the browser default for a guarded event %j",
+    (options) => {
+      const event = fireCancelableKey("g", { ctrlKey: true, ...options });
 
-    expect(event.defaultPrevented).toBe(false);
-    expect(ui.activeModal).toBeNull();
-  });
+      expect(event.defaultPrevented).toBe(false);
+      expect(ui.activeModal).toBeNull();
+    },
+  );
 
   it("leaves an already-consumed event alone", () => {
     const event = new KeyboardEvent("keydown", {
@@ -1075,19 +1073,16 @@ describe("go to session shortcut", () => {
     expect(ui.activeModal).toBe("shortcuts");
   });
 
-  it.each(["input", "textarea", "select"])(
-    "leaves Ctrl+G available to a focused %s",
-    (tag) => {
-      const input = document.createElement(tag);
-      document.body.appendChild(input);
-      input.focus();
+  it.each(["input", "textarea", "select"])("leaves Ctrl+G available to a focused %s", (tag) => {
+    const input = document.createElement(tag);
+    document.body.appendChild(input);
+    input.focus();
 
-      const event = fireCancelableKey("g", { ctrlKey: true });
+    const event = fireCancelableKey("g", { ctrlKey: true });
 
-      expect(event.defaultPrevented).toBe(false);
-      expect(ui.activeModal).toBeNull();
-    },
-  );
+    expect(event.defaultPrevented).toBe(false);
+    expect(ui.activeModal).toBeNull();
+  });
 
   it("leaves Ctrl+G available to a focused contenteditable", () => {
     const editor = document.createElement("div");

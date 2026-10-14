@@ -2334,7 +2334,16 @@
   "tool_sequences_unavailable": "此存档不记录对话记录的版本，因此无法显示工具序列。",
   "tool_sequences_none_recorded": "本会话未记录工具调用。",
   "tool_sequences_no_sequences": "没有工具调用返回错误或空结果。",
-  "tool_sequences_sequence_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 个序列","countPlural=other":"{countLabel} 个序列"}}],
+  "tool_sequences_sequence_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个序列",
+        "countPlural=other": "{countLabel} 个序列"
+      }
+    }
+  ],
   "tool_sequences_ending_recovered": "已恢复",
   "tool_sequences_ending_abandoned": "已结束",
   "tool_sequences_ending_open": "未结束",
@@ -2353,10 +2362,25 @@
   "tool_sequences_missing_identity": "没有工具调用 ID",
   "tool_sequences_input": "输入",
   "tool_sequences_no_input": "未记录输入。",
-  "tool_sequences_byte_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 字节","countPlural=other":"{countLabel} 字节"}}],
+  "tool_sequences_byte_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{countLabel} 字节", "countPlural=other": "{countLabel} 字节" }
+    }
+  ],
   "tool_sequences_result": "结果",
   "tool_sequences_result_unknown": "此结果不是文本，因此结果未知。",
-  "tool_sequences_result_unavailable": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此处无法显示保留的 {countLabel} 字节结果文本。","countPlural=other":"此处无法显示保留的 {countLabel} 字节结果文本。"}}],
+  "tool_sequences_result_unavailable": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此处无法显示保留的 {countLabel} 字节结果文本。",
+        "countPlural=other": "此处无法显示保留的 {countLabel} 字节结果文本。"
+      }
+    }
+  ],
   "tool_sequences_result_empty": "工具未返回任何内容。",
   "tool_sequences_result_size_unknown": "结果大小未知。",
   "tool_sequences_not_measured": "未测量",
@@ -2365,18 +2389,103 @@
   "tool_sequences_flag_identical": "重复相同输入",
   "tool_sequences_flag_near_identical": "格式不同的重复",
   "tool_sequences_flag_tool_switch": "切换了工具",
-  "tool_sequences_sequence_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"序列中 {countLabel} 次调用","countPlural=other":"序列中 {countLabel} 次调用"}}],
-  "tool_sequences_session_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"会话中 {countLabel} 次工具调用","countPlural=other":"会话中 {countLabel} 次工具调用"}}],
+  "tool_sequences_sequence_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "序列中 {countLabel} 次调用",
+        "countPlural=other": "序列中 {countLabel} 次调用"
+      }
+    }
+  ],
+  "tool_sequences_session_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "会话中 {countLabel} 次工具调用",
+        "countPlural=other": "会话中 {countLabel} 次工具调用"
+      }
+    }
+  ],
   "tool_sequences_legend": "结果颜色",
   "tool_sequences_message": "消息 {ordinal}",
   "tool_sequences_messages_range": "消息 {first}–{last}",
   "tool_sequences_jump_label": "消息 {ordinal}：在对话中打开 {tool} 调用",
-  "tool_sequences_more_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"+{countLabel} 次","countPlural=other":"+{countLabel} 次"}}],
-  "tool_sequences_calls_hidden_between": [{"declarations":["input count","input countLabel","input from","input to","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"消息 {from} 和消息 {to} 之间还有 {countLabel} 次调用未显示。","countPlural=other":"消息 {from} 和消息 {to} 之间还有 {countLabel} 次调用未显示。"}}],
-  "tool_sequences_calls_in_row": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"连续 {countLabel} 次调用。","countPlural=other":"连续 {countLabel} 次调用。"}}],
-  "tool_sequences_showing_sequences": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"显示 {countLabel} 个序列中的 {shownLabel} 个。其余序列在会话后面。","countPlural=other":"显示 {countLabel} 个序列中的 {shownLabel} 个。其余序列在会话后面。"}}],
-  "tool_sequences_calls_not_shown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此视图未显示序列中的 {countLabel} 次调用。","countPlural=other":"此视图未显示序列中的 {countLabel} 次调用。"}}],
-  "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。","countPlural=other":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。"}}],
+  "tool_sequences_more_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "+{countLabel} 次", "countPlural=other": "+{countLabel} 次" }
+    }
+  ],
+  "tool_sequences_calls_hidden_between": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input from",
+        "input to",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "消息 {from} 和消息 {to} 之间还有 {countLabel} 次调用未显示。",
+        "countPlural=other": "消息 {from} 和消息 {to} 之间还有 {countLabel} 次调用未显示。"
+      }
+    }
+  ],
+  "tool_sequences_calls_in_row": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "连续 {countLabel} 次调用。",
+        "countPlural=other": "连续 {countLabel} 次调用。"
+      }
+    }
+  ],
+  "tool_sequences_showing_sequences": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "显示 {countLabel} 个序列中的 {shownLabel} 个。其余序列在会话后面。",
+        "countPlural=other": "显示 {countLabel} 个序列中的 {shownLabel} 个。其余序列在会话后面。"
+      }
+    }
+  ],
+  "tool_sequences_calls_not_shown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此视图未显示序列中的 {countLabel} 次调用。",
+        "countPlural=other": "此视图未显示序列中的 {countLabel} 次调用。"
+      }
+    }
+  ],
+  "tool_sequences_preview_shows": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "预览显示 {countLabel} 字节中的 {shownLabel} 字节。",
+        "countPlural=other": "预览显示 {countLabel} 字节中的 {shownLabel} 字节。"
+      }
+    }
+  ],
   "tool_sequences_full_input_in_message": "完整输入在消息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
   "tool_sequences_retry": "重试",
@@ -2413,30 +2522,190 @@
   "tool_effectiveness_assessment_helped": "有帮助",
   "tool_effectiveness_assessment_did_not_help": "没有帮助",
   "tool_effectiveness_assessment_unknown": "不明确",
-  "tool_effectiveness_omission_budget_input": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 个调用输入被截断为最多 {keptLabel} 字节","countPlural=other":"{countLabel} 个调用输入被截断为最多 {keptLabel} 字节"}}],
-  "tool_effectiveness_omission_budget_result": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 个调用结果被截断为最多 {keptLabel} 字节","countPlural=other":"{countLabel} 个调用结果被截断为最多 {keptLabel} 字节"}}],
-  "tool_effectiveness_omission_unretained": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 个调用结果未保留","countPlural=other":"{countLabel} 个调用结果未保留"}}],
-  "tool_effectiveness_omission_no_result": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 个调用没有记录到结果","countPlural=other":"{countLabel} 个调用没有记录到结果"}}],
-  "tool_effectiveness_omission_previews": [{"declarations":["input count","input countLabel","input charsLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 条消息以 {charsLabel} 字符预览显示","countPlural=other":"{countLabel} 条消息以 {charsLabel} 字符预览显示"}}],
+  "tool_effectiveness_omission_budget_input": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个调用输入被截断为最多 {keptLabel} 字节",
+        "countPlural=other": "{countLabel} 个调用输入被截断为最多 {keptLabel} 字节"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_budget_result": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个调用结果被截断为最多 {keptLabel} 字节",
+        "countPlural=other": "{countLabel} 个调用结果被截断为最多 {keptLabel} 字节"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_unretained": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个调用结果未保留",
+        "countPlural=other": "{countLabel} 个调用结果未保留"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_no_result": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个调用没有记录到结果",
+        "countPlural=other": "{countLabel} 个调用没有记录到结果"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_previews": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input charsLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 条消息以 {charsLabel} 字符预览显示",
+        "countPlural=other": "{countLabel} 条消息以 {charsLabel} 字符预览显示"
+      }
+    }
+  ],
   "tool_effectiveness_details_unavailable": "报告详情不可用，因此显示已保存的文本。",
-  "tool_effectiveness_session_changed": [{"declarations":["input count","input countLabel","input currentLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此报告生成后会话已更改：模型评估了 {countLabel} 次调用，会话现在有 {currentLabel} 次。","countPlural=other":"此报告生成后会话已更改：模型评估了 {countLabel} 次调用，会话现在有 {currentLabel} 次。"}}],
+  "tool_effectiveness_session_changed": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input currentLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此报告生成后会话已更改：模型评估了 {countLabel} 次调用，会话现在有 {currentLabel} 次。",
+        "countPlural=other": "此报告生成后会话已更改：模型评估了 {countLabel} 次调用，会话现在有 {currentLabel} 次。"
+      }
+    }
+  ],
   "tool_effectiveness_session_revised": "此报告生成后会话已更改，因此下方事实可能与模型评估的内容不同。",
   "tool_sequences_message_call": "消息 {ordinal}，调用 {callNumber}",
   "tool_sequences_jump_call_label": "消息 {ordinal}，调用 {callNumber}：在对话中打开 {tool} 调用",
-  "tool_effectiveness_calls_judged": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"已评估 {countLabel} 次调用","countPlural=other":"已评估 {countLabel} 次调用"}}],
-  "tool_effectiveness_conclusion_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 条结论","countPlural=other":"{countLabel} 条结论"}}],
-  "tool_effectiveness_count_helped": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"有帮助 {countLabel}","countPlural=other":"有帮助 {countLabel}"}}],
-  "tool_effectiveness_count_did_not_help": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"无帮助 {countLabel}","countPlural=other":"无帮助 {countLabel}"}}],
-  "tool_effectiveness_count_unknown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"不明确 {countLabel}","countPlural=other":"不明确 {countLabel}"}}],
-  "tool_effectiveness_calls_cited": [{"declarations":["input count","input countLabel","input citedLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"引用了 {countLabel} 次调用中的 {citedLabel} 次","countPlural=other":"引用了 {countLabel} 次调用中的 {citedLabel} 次"}}],
+  "tool_effectiveness_calls_judged": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已评估 {countLabel} 次调用",
+        "countPlural=other": "已评估 {countLabel} 次调用"
+      }
+    }
+  ],
+  "tool_effectiveness_conclusion_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 条结论",
+        "countPlural=other": "{countLabel} 条结论"
+      }
+    }
+  ],
+  "tool_effectiveness_count_helped": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "有帮助 {countLabel}",
+        "countPlural=other": "有帮助 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_did_not_help": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "无帮助 {countLabel}",
+        "countPlural=other": "无帮助 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_unknown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "不明确 {countLabel}",
+        "countPlural=other": "不明确 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_calls_cited": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input citedLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "引用了 {countLabel} 次调用中的 {citedLabel} 次",
+        "countPlural=other": "引用了 {countLabel} 次调用中的 {citedLabel} 次"
+      }
+    }
+  ],
   "tool_effectiveness_select_citation": "选择引用以查看调用",
-  "tool_effectiveness_citation_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 条引用","countPlural=other":"{countLabel} 条引用"}}],
+  "tool_effectiveness_citation_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 条引用",
+        "countPlural=other": "{countLabel} 条引用"
+      }
+    }
+  ],
   "tool_effectiveness_message_label": "消息",
   "tool_effectiveness_message_no_call": "消息文本，无工具调用",
   "tool_effectiveness_left_out": "未包含在模型输入中",
-  "tool_effectiveness_model_saw": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"模型看到 {countLabel} 字节","countPlural=other":"模型看到 {countLabel} 字节"}}],
+  "tool_effectiveness_model_saw": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "模型看到 {countLabel} 字节",
+        "countPlural=other": "模型看到 {countLabel} 字节"
+      }
+    }
+  ],
   "tool_effectiveness_open_session": "打开会话",
-  "tool_effectiveness_message_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 条消息","countPlural=other":"{countLabel} 条消息"}}],
+  "tool_effectiveness_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 条消息",
+        "countPlural=other": "{countLabel} 条消息"
+      }
+    }
+  ],
   "analytics_tool_empty_rate": "空结果率",
   "analytics_tool_repeat_rate": "重复率",
   "analytics_tool_recovery_rate": "恢复率",
@@ -2455,14 +2724,8 @@
   "analytics_tool_recovery_note": "恢复表示后续调用返回了内容。恢复率归属于开始该序列的工具。",
   "analytics_tool_evidence_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }

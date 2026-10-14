@@ -276,7 +276,8 @@ describe("previewMessage", () => {
   });
 
   it("preserves the original preview when stripped shell output is empty", () => {
-    const raw = '<system-reminder data-role="user-context">ctx</system-reminder><bash-stdout></bash-stdout>';
+    const raw =
+      '<system-reminder data-role="user-context">ctx</system-reminder><bash-stdout></bash-stdout>';
     expect(previewMessage(raw)).toEqual({
       text: '<system-reminder data-role="user-context">ctx</system-reminder>',
       isShell: true,
@@ -284,7 +285,7 @@ describe("previewMessage", () => {
   });
 
   it("preserves the original preview when stripped shell output is whitespace", () => {
-    const raw = '<system-reminder>ctx</system-reminder><bash-stderr>   </bash-stderr>';
+    const raw = "<system-reminder>ctx</system-reminder><bash-stderr>   </bash-stderr>";
     expect(previewMessage(raw)).toEqual({
       text: "<system-reminder>ctx</system-reminder>",
       isShell: true,

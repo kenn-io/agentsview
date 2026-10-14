@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import ArchiveContentSettings from "./ArchiveContentSettings.svelte";
 import { SettingsService } from "../../api/generated/index";

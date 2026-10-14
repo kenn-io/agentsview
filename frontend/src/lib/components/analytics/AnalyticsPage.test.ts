@@ -16,6 +16,7 @@ import sourceRaw from "./AnalyticsPage.svelte?raw";
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
+import { requestUrl } from "../../test-support/request-url.js";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
 
@@ -204,7 +205,7 @@ describe("AnalyticsPage outcome window", () => {
       const load = vi.spyOn(outcomeTotals, "load");
       const lookup = vi.spyOn(outcomeTotals, "loadWithPullRequests");
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        if (String(url).includes("include_github_outcomes=true")) {
+        if (requestUrl(url).includes("include_github_outcomes=true")) {
           if (failure === "transport error") throw new Error("Pull request lookup failed");
           return Response.json({
             outcome_stats: {
@@ -253,7 +254,7 @@ describe("AnalyticsPage outcome window", () => {
       await load.mock.results[0]!.value;
       await flushEffects();
       expect(fetch).toHaveBeenCalledTimes(2);
-      expect(String(fetch.mock.calls[1]![0])).toContain("include_github_outcomes=false");
+      expect(requestUrl(fetch.mock.calls[1]![0])).toContain("include_github_outcomes=false");
       expect(outcomeTotals.stats?.commits).toBe(2);
       expect(outcomeTotals.error).toBeNull();
       expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
@@ -929,10 +930,10 @@ describe("AnalyticsPage refresh behavior", () => {
     });
     const statsRequests: { url: string; signal: AbortSignal | null | undefined }[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
-      if (!String(url).includes("/api/v1/session-stats"))
+      if (!requestUrl(url).includes("/api/v1/session-stats"))
         return Response.json({ models: [], agents: [] });
-      statsRequests.push({ url: String(url), signal: options?.signal });
-      if (String(url).includes("include_github_outcomes=true")) return pending;
+      statsRequests.push({ url: requestUrl(url), signal: options?.signal });
+      if (requestUrl(url).includes("include_github_outcomes=true")) return pending;
       return Response.json({
         outcome_stats: {
           repos_active: 1,

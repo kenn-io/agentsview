@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import SidebarToggleButton from "./SidebarToggleButton.svelte";
 import { setLocale } from "../../i18n/index.js";

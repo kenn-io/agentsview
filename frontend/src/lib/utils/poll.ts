@@ -41,6 +41,6 @@ export async function waitForStableValue<T>(
   throw new Error(
     `Value did not stabilize within ` +
       `${maxWaitMs ?? stableDurationMs * 3}ms.` +
-      ` Last value: ${lastValue}`,
+      ` Last value: ${typeof lastValue === "number" ? String(lastValue) : (JSON.stringify(lastValue) ?? "undefined")}`,
   );
 }

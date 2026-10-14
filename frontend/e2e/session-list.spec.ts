@@ -72,10 +72,7 @@ test("session previews hide a leading system-reminder envelope", async ({ page }
     await expect(name).toHaveText("refactor the auth guard");
     await expect(name).toHaveAttribute("title", "refactor the auth guard");
     if (renderLint) {
-      const violations = await page.evaluate(
-        (snippet) => (0, eval)(snippet),
-        renderLint.renderLintSnippet("#session-sidebar"),
-      );
+      const violations = await page.evaluate(renderLint.renderLintSnippet("#session-sidebar"));
       console.log(`render-lint width=${width}px violations=${JSON.stringify(violations)}`);
       expect(violations).toEqual([]);
     }

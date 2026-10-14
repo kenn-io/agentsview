@@ -86,7 +86,7 @@
   });
 
   $effect(() => {
-    displayedActive;
+    void displayedActive;
     const scroller = pageElement?.querySelector<HTMLElement>(
       ".kit-settings__scroll",
     );

@@ -379,10 +379,15 @@ class UsageStore {
   private zoomed = $state(false);
 
   get zoomedProject(): { key: string; label: string } | null {
-    return this.zoomed && this.selectedProjectKey ? { key: this.selectedProjectKey, label: this.focusLabel } : null;
+    return this.zoomed && this.selectedProjectKey
+      ? { key: this.selectedProjectKey, label: this.focusLabel }
+      : null;
   }
   get focusLabel(): string {
-    return this.knownProjects.find((project) => project.id === this.selectedProjectKey)?.name ?? this.selectedProjectKey;
+    return (
+      this.knownProjects.find((project) => project.id === this.selectedProjectKey)?.name ??
+      this.selectedProjectKey
+    );
   }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
@@ -498,7 +503,10 @@ class UsageStore {
 
   // Chart colors and legend rank from this, so selecting never recolors or reorders series.
   get colorSummary(): UsageSummaryResponse | null {
-    return (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) || this.timeSeriesSummary;
+    return (
+      (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) ||
+      this.timeSeriesSummary
+    );
   }
 
   get pairwiseModelOptions(): string[] {
@@ -623,12 +631,12 @@ class UsageStore {
 
   setDateRange(from: string, to: string) {
     this.applyDateRange(from, to);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   setRollingWindow(days: number) {
     this.applyRollingWindow(days);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   setTimeRange(from: string, to: string) {
@@ -646,10 +654,14 @@ class UsageStore {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
       this.isTimeRangeSummaryProvisional = true;
     }
-    if (this.referenceSummary) this.attributionSummary = summaryForDateRange(this.referenceSummary, from, to);
+    if (this.referenceSummary)
+      this.attributionSummary = summaryForDateRange(this.referenceSummary, from, to);
     this.topSessions = null;
     this.errors.topSessions = null;
-    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: this.fullWindowPending });
+    void this.fetchAll({
+      preserveTimeRange: true,
+      refreshTimeSeriesContext: this.fullWindowPending,
+    });
   }
 
   clearTimeRange(refresh = true) {
@@ -693,7 +705,13 @@ class UsageStore {
   }
 
   hasSelection(by: GroupBy): boolean {
-    return (by === "agent" ? sessions.filters.agent : by === "project" ? this.selectedProjectKey : this.selectedModel) !== "";
+    return (
+      (by === "agent"
+        ? sessions.filters.agent
+        : by === "project"
+          ? this.selectedProjectKey
+          : this.selectedModel) !== ""
+    );
   }
 
   clearSelection(by: GroupBy): void {
@@ -711,7 +729,12 @@ class UsageStore {
   toggleSelection(by: GroupBy, id: string): void {
     const clear = this.isSelected(by, id);
     if (by === "agent") {
-      sessions.filters.agent = clear ? sessions.filters.agent.split(",").filter((agent) => agent !== id).join(",") : id;
+      sessions.filters.agent = clear
+        ? sessions.filters.agent
+            .split(",")
+            .filter((agent) => agent !== id)
+            .join(",")
+        : id;
       return;
     }
     if (by === "project") {
@@ -722,7 +745,10 @@ class UsageStore {
   }
 
   private dropExcludedSelection(): void {
-    sessions.filters.agent = sessions.filters.agent.split(",").filter((agent) => !this.isAgentExcluded(agent)).join(",");
+    sessions.filters.agent = sessions.filters.agent
+      .split(",")
+      .filter((agent) => !this.isAgentExcluded(agent))
+      .join(",");
     if (this.selectedProjectKey && this.isProjectKeyExcluded(this.selectedProjectKey)) {
       this.selectedProjectKey = "";
       this.backToProjects();
@@ -734,7 +760,7 @@ class UsageStore {
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
     this.excludedProjects = this.toggleCsv(this.excludedProjects, name);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
@@ -810,7 +836,7 @@ class UsageStore {
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllProjectKeys(all: string[]): void {
@@ -819,27 +845,27 @@ class UsageStore {
     );
     for (const key of all) excluded.add(key);
     this.excludedProjectKeys = [...excluded].join(",");
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   selectAllAgents(): void {
     this.excludedAgents = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllAgents(all: string[]): void {
     this.excludedAgents = all.join(",");
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   selectAllModels(): void {
     this.excludedModels = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllModels(all: string[]): void {
     this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   clearFilters(refresh = true): void {
@@ -850,7 +876,7 @@ class UsageStore {
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    if (refresh) this.fetchAll();
+    if (refresh) void this.fetchAll();
   }
 
   get hasActiveFilters(): boolean {
@@ -1074,10 +1100,17 @@ class UsageStore {
     const liveContextStep = options.contextParams
       ? this.liveQuery.start("contextSummary", started)
       : 0;
-    const liveAttributionStep = attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
+    const liveAttributionStep = attributionParams
+      ? this.liveQuery.start("attributionSummary", started)
+      : 0;
     // Unbrushed, the attribution request already covers the full window.
-    const referenceParams = attributionParams && options.contextParams ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to } : undefined;
-    const liveReferenceStep = referenceParams ? this.liveQuery.start("referenceSummary", started) : 0;
+    const referenceParams =
+      attributionParams && options.contextParams
+        ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to }
+        : undefined;
+    const liveReferenceStep = referenceParams
+      ? this.liveQuery.start("referenceSummary", started)
+      : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     const params = options.params ?? this.baseParams();
     try {
@@ -1092,7 +1125,9 @@ class UsageStore {
         [data, contextData, attributionData, referenceData] = await Promise.all([
           UsageService.getApiV1UsageSummary(params, { signal }),
           contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
-          attributionParams ? UsageService.getApiV1UsageSummary(attributionParams, { signal }) : null,
+          attributionParams
+            ? UsageService.getApiV1UsageSummary(attributionParams, { signal })
+            : null,
           referenceParams ? UsageService.getApiV1UsageSummary(referenceParams, { signal }) : null,
         ]);
       }
@@ -1102,7 +1137,8 @@ class UsageStore {
         if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
-        else if (referenceData || !this.selectedTimeRange) this.referenceSummary = referenceData ?? attributionData;
+        else if (referenceData || !this.selectedTimeRange)
+          this.referenceSummary = referenceData ?? attributionData;
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1122,7 +1158,14 @@ class UsageStore {
             attributionData,
             applyStartedAt,
           );
-        if (referenceData) this.noteStep("referenceSummary", liveReferenceStep, started, referenceData, applyStartedAt);
+        if (referenceData)
+          this.noteStep(
+            "referenceSummary",
+            liveReferenceStep,
+            started,
+            referenceData,
+            applyStartedAt,
+          );
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1195,19 +1238,28 @@ class UsageStore {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
           // The reference already holds this scope's full-window attribution.
           this.attributionSummary = this.referenceSummary;
-          const restoredAttributionParams = this.attributionSummary ? undefined : this.attributionParams();
+          const restoredAttributionParams = this.attributionSummary
+            ? undefined
+            : this.attributionParams();
           if (restoredAttributionParams) {
             try {
-              const restoredAttribution = await UsageService.getApiV1UsageSummary(restoredAttributionParams, { signal });
+              const restoredAttribution = await UsageService.getApiV1UsageSummary(
+                restoredAttributionParams,
+                { signal },
+              );
               if (this.versions.summary === v) {
                 this.attributionSummary = restoredAttribution;
                 this.referenceSummary = restoredAttribution;
               }
             } catch (attributionError) {
-              if (!isAbortError(attributionError)) console.warn("usage attribution restore failed:", attributionError);
+              if (!isAbortError(attributionError))
+                console.warn("usage attribution restore failed:", attributionError);
             }
           }
-        } else if (this.summary === null || (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)) {
+        } else if (
+          this.summary === null ||
+          (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)
+        ) {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);

@@ -286,14 +286,14 @@ class SyncStore {
     handle.done
       .then((s: SyncStats) => {
         this.lastSyncStats = s;
-        this.loadStats();
+        void this.loadStats();
         finalizeSync();
         this.notifySyncComplete();
         // Hydrate the authoritative server timestamp.
         // pendingHydration suppresses the notification so
         // the poll path won't double-fire.
         this.pendingHydration = true;
-        this.loadStatus();
+        void this.loadStatus();
         onComplete?.();
       })
       .catch((err: unknown) => {

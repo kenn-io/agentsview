@@ -305,6 +305,14 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
+	}
+
 	scope, scopeArgs := sessionScopeSubquery(f)
 	like := "%" + escapeLike(f.Pattern) + "%"
 
@@ -479,6 +487,14 @@ func (db *DB) searchContentTerms(
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
+	}
+
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return ContentSearchPage{}, fmt.Errorf("terms search: %w", err)
@@ -498,6 +514,13 @@ func (db *DB) searchContentRegex(
 	re, err := regexp.Compile(f.Pattern)
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
+	}
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
 	}
 	lit := LiteralPrefix(f.Pattern)
 

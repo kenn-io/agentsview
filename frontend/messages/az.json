@@ -2419,7 +2419,16 @@
   "tool_sequences_unavailable": "Bu arxiv transkript versiyalarını qeyd etmir, ona görə alət ardıcıllıqları əlçatan deyil.",
   "tool_sequences_none_recorded": "Bu sessiyada alət çağırışı qeydə alınmayıb.",
   "tool_sequences_no_sequences": "Heç bir alət çağırışı xəta və ya boş nəticə qaytarmayıb.",
-  "tool_sequences_sequence_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} ardıcıllıq","countPlural=other":"{countLabel} ardıcıllıq"}}],
+  "tool_sequences_sequence_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} ardıcıllıq",
+        "countPlural=other": "{countLabel} ardıcıllıq"
+      }
+    }
+  ],
   "tool_sequences_ending_recovered": "Bərpa olundu",
   "tool_sequences_ending_abandoned": "Dayandırıldı",
   "tool_sequences_ending_open": "Açıq",
@@ -2438,10 +2447,25 @@
   "tool_sequences_missing_identity": "Alət çağırışı ID-si yoxdur",
   "tool_sequences_input": "Giriş",
   "tool_sequences_no_input": "Giriş qeydə alınmayıb.",
-  "tool_sequences_byte_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} bayt","countPlural=other":"{countLabel} bayt"}}],
+  "tool_sequences_byte_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{countLabel} bayt", "countPlural=other": "{countLabel} bayt" }
+    }
+  ],
   "tool_sequences_result": "Nəticə",
   "tool_sequences_result_unknown": "Bu nəticə mətn deyil, ona görə nəticə naməlumdur.",
-  "tool_sequences_result_unavailable": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Saxlanmış {countLabel} bayt nəticə mətni burada əlçatan deyil.","countPlural=other":"Saxlanmış {countLabel} bayt nəticə mətni burada əlçatan deyil."}}],
+  "tool_sequences_result_unavailable": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Saxlanmış {countLabel} bayt nəticə mətni burada əlçatan deyil.",
+        "countPlural=other": "Saxlanmış {countLabel} bayt nəticə mətni burada əlçatan deyil."
+      }
+    }
+  ],
   "tool_sequences_result_empty": "Alət heç nə qaytarmadı.",
   "tool_sequences_result_size_unknown": "Nəticə ölçüsü məlum deyil.",
   "tool_sequences_not_measured": "Ölçülməyib",
@@ -2450,18 +2474,106 @@
   "tool_sequences_flag_identical": "Eyni giriş təkrarlandı",
   "tool_sequences_flag_near_identical": "Fərqli formatla təkrar",
   "tool_sequences_flag_tool_switch": "Alət dəyişdi",
-  "tool_sequences_sequence_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Ardıcıllıqlarda {countLabel} çağırış","countPlural=other":"Ardıcıllıqlarda {countLabel} çağırış"}}],
-  "tool_sequences_session_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Sessiyada {countLabel} alət çağırışı","countPlural=other":"Sessiyada {countLabel} alət çağırışı"}}],
+  "tool_sequences_sequence_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Ardıcıllıqlarda {countLabel} çağırış",
+        "countPlural=other": "Ardıcıllıqlarda {countLabel} çağırış"
+      }
+    }
+  ],
+  "tool_sequences_session_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Sessiyada {countLabel} alət çağırışı",
+        "countPlural=other": "Sessiyada {countLabel} alət çağırışı"
+      }
+    }
+  ],
   "tool_sequences_legend": "Nəticə rəngləri",
   "tool_sequences_message": "Mesaj {ordinal}",
   "tool_sequences_messages_range": "Mesajlar {first}–{last}",
   "tool_sequences_jump_label": "Mesaj {ordinal}: transkriptdə {tool} çağırışını aç",
-  "tool_sequences_more_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"+{countLabel} daha","countPlural=other":"+{countLabel} daha"}}],
-  "tool_sequences_calls_hidden_between": [{"declarations":["input count","input countLabel","input from","input to","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{from} və {to} nömrəli mesajlar arasında daha {countLabel} çağırış göstərilmir.","countPlural=other":"{from} və {to} nömrəli mesajlar arasında daha {countLabel} çağırış göstərilmir."}}],
-  "tool_sequences_calls_in_row": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Ardıcıl {countLabel} çağırış.","countPlural=other":"Ardıcıl {countLabel} çağırış."}}],
-  "tool_sequences_showing_sequences": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} ardıcıllıqdan {shownLabel} göstərilir. Qalanları sessiyada daha sonra gəlir.","countPlural=other":"{countLabel} ardıcıllıqdan {shownLabel} göstərilir. Qalanları sessiyada daha sonra gəlir."}}],
-  "tool_sequences_calls_not_shown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Ardıcıllıqlardakı {countLabel} çağırış bu görünüşdə göstərilmir.","countPlural=other":"Ardıcıllıqlardakı {countLabel} çağırış bu görünüşdə göstərilmir."}}],
-  "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir.","countPlural=other":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir."}}],
+  "tool_sequences_more_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "+{countLabel} daha",
+        "countPlural=other": "+{countLabel} daha"
+      }
+    }
+  ],
+  "tool_sequences_calls_hidden_between": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input from",
+        "input to",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{from} və {to} nömrəli mesajlar arasında daha {countLabel} çağırış göstərilmir.",
+        "countPlural=other": "{from} və {to} nömrəli mesajlar arasında daha {countLabel} çağırış göstərilmir."
+      }
+    }
+  ],
+  "tool_sequences_calls_in_row": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Ardıcıl {countLabel} çağırış.",
+        "countPlural=other": "Ardıcıl {countLabel} çağırış."
+      }
+    }
+  ],
+  "tool_sequences_showing_sequences": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} ardıcıllıqdan {shownLabel} göstərilir. Qalanları sessiyada daha sonra gəlir.",
+        "countPlural=other": "{countLabel} ardıcıllıqdan {shownLabel} göstərilir. Qalanları sessiyada daha sonra gəlir."
+      }
+    }
+  ],
+  "tool_sequences_calls_not_shown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Ardıcıllıqlardakı {countLabel} çağırış bu görünüşdə göstərilmir.",
+        "countPlural=other": "Ardıcıllıqlardakı {countLabel} çağırış bu görünüşdə göstərilmir."
+      }
+    }
+  ],
+  "tool_sequences_preview_shows": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir.",
+        "countPlural=other": "Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir."
+      }
+    }
+  ],
   "tool_sequences_full_input_in_message": "Tam giriş {ordinal} nömrəli mesajdadır.",
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
   "tool_sequences_retry": "Yenidən cəhd et",
@@ -2498,30 +2610,190 @@
   "tool_effectiveness_assessment_helped": "Kömək etdi",
   "tool_effectiveness_assessment_did_not_help": "Kömək etmədi",
   "tool_effectiveness_assessment_unknown": "Aydın deyil",
-  "tool_effectiveness_omission_budget_input": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} çağırış girişi ən çox {keptLabel} bayta qısaldıldı","countPlural=other":"{countLabel} çağırış girişi ən çox {keptLabel} bayta qısaldıldı"}}],
-  "tool_effectiveness_omission_budget_result": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} çağırış nəticəsi ən çox {keptLabel} bayta qısaldıldı","countPlural=other":"{countLabel} çağırış nəticəsi ən çox {keptLabel} bayta qısaldıldı"}}],
-  "tool_effectiveness_omission_unretained": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} çağırış nəticəsi saxlanmayıb","countPlural=other":"{countLabel} çağırış nəticəsi saxlanmayıb"}}],
-  "tool_effectiveness_omission_no_result": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Nəticəsi qeydə alınmamış {countLabel} çağırış","countPlural=other":"Nəticəsi qeydə alınmamış {countLabel} çağırış"}}],
-  "tool_effectiveness_omission_previews": [{"declarations":["input count","input countLabel","input charsLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} mesaj {charsLabel} simvolluq önizləmə kimi göstərilib","countPlural=other":"{countLabel} mesaj {charsLabel} simvolluq önizləmə kimi göstərilib"}}],
+  "tool_effectiveness_omission_budget_input": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} çağırış girişi ən çox {keptLabel} bayta qısaldıldı",
+        "countPlural=other": "{countLabel} çağırış girişi ən çox {keptLabel} bayta qısaldıldı"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_budget_result": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} çağırış nəticəsi ən çox {keptLabel} bayta qısaldıldı",
+        "countPlural=other": "{countLabel} çağırış nəticəsi ən çox {keptLabel} bayta qısaldıldı"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_unretained": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} çağırış nəticəsi saxlanmayıb",
+        "countPlural=other": "{countLabel} çağırış nəticəsi saxlanmayıb"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_no_result": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Nəticəsi qeydə alınmamış {countLabel} çağırış",
+        "countPlural=other": "Nəticəsi qeydə alınmamış {countLabel} çağırış"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_previews": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input charsLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} mesaj {charsLabel} simvolluq önizləmə kimi göstərilib",
+        "countPlural=other": "{countLabel} mesaj {charsLabel} simvolluq önizləmə kimi göstərilib"
+      }
+    }
+  ],
   "tool_effectiveness_details_unavailable": "Hesabat təfərrüatları əlçatan deyil, ona görə saxlanmış mətn göstərilir.",
-  "tool_effectiveness_session_changed": [{"declarations":["input count","input countLabel","input currentLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Bu hesabatdan sonra sessiya dəyişib: model {countLabel} çağırışı qiymətləndirib, sessiyada indi {currentLabel} var.","countPlural=other":"Bu hesabatdan sonra sessiya dəyişib: model {countLabel} çağırışı qiymətləndirib, sessiyada indi {currentLabel} var."}}],
+  "tool_effectiveness_session_changed": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input currentLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Bu hesabatdan sonra sessiya dəyişib: model {countLabel} çağırışı qiymətləndirib, sessiyada indi {currentLabel} var.",
+        "countPlural=other": "Bu hesabatdan sonra sessiya dəyişib: model {countLabel} çağırışı qiymətləndirib, sessiyada indi {currentLabel} var."
+      }
+    }
+  ],
   "tool_effectiveness_session_revised": "Bu hesabat yaradıldıqdan sonra sessiya dəyişib, ona görə aşağıdakı faktlar modelin qiymətləndirdiyindən fərqli ola bilər.",
   "tool_sequences_message_call": "Mesaj {ordinal}, çağırış {callNumber}",
   "tool_sequences_jump_call_label": "Mesaj {ordinal}, çağırış {callNumber}: transkriptdə {tool} çağırışını aç",
-  "tool_effectiveness_calls_judged": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} çağırış qiymətləndirilib","countPlural=other":"{countLabel} çağırış qiymətləndirilib"}}],
-  "tool_effectiveness_conclusion_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} nəticə","countPlural=other":"{countLabel} nəticə"}}],
-  "tool_effectiveness_count_helped": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} kömək etdi","countPlural=other":"{countLabel} kömək etdi"}}],
-  "tool_effectiveness_count_did_not_help": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} kömək etmədi","countPlural=other":"{countLabel} kömək etmədi"}}],
-  "tool_effectiveness_count_unknown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} aydın deyil","countPlural=other":"{countLabel} aydın deyil"}}],
-  "tool_effectiveness_calls_cited": [{"declarations":["input count","input countLabel","input citedLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} çağırışdan {citedLabel} istinad edilib","countPlural=other":"{countLabel} çağırışdan {citedLabel} istinad edilib"}}],
+  "tool_effectiveness_calls_judged": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} çağırış qiymətləndirilib",
+        "countPlural=other": "{countLabel} çağırış qiymətləndirilib"
+      }
+    }
+  ],
+  "tool_effectiveness_conclusion_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} nəticə",
+        "countPlural=other": "{countLabel} nəticə"
+      }
+    }
+  ],
+  "tool_effectiveness_count_helped": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} kömək etdi",
+        "countPlural=other": "{countLabel} kömək etdi"
+      }
+    }
+  ],
+  "tool_effectiveness_count_did_not_help": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} kömək etmədi",
+        "countPlural=other": "{countLabel} kömək etmədi"
+      }
+    }
+  ],
+  "tool_effectiveness_count_unknown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} aydın deyil",
+        "countPlural=other": "{countLabel} aydın deyil"
+      }
+    }
+  ],
+  "tool_effectiveness_calls_cited": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input citedLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} çağırışdan {citedLabel} istinad edilib",
+        "countPlural=other": "{countLabel} çağırışdan {citedLabel} istinad edilib"
+      }
+    }
+  ],
   "tool_effectiveness_select_citation": "Çağırışları görmək üçün istinad seçin",
-  "tool_effectiveness_citation_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} istinad","countPlural=other":"{countLabel} istinad"}}],
+  "tool_effectiveness_citation_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} istinad",
+        "countPlural=other": "{countLabel} istinad"
+      }
+    }
+  ],
   "tool_effectiveness_message_label": "Mesaj",
   "tool_effectiveness_message_no_call": "Mesaj mətni, alət çağırışı yoxdur",
   "tool_effectiveness_left_out": "Modelin girişindən kənarda qalanlar",
-  "tool_effectiveness_model_saw": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"model {countLabel} bayt gördü","countPlural=other":"model {countLabel} bayt gördü"}}],
+  "tool_effectiveness_model_saw": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "model {countLabel} bayt gördü",
+        "countPlural=other": "model {countLabel} bayt gördü"
+      }
+    }
+  ],
   "tool_effectiveness_open_session": "Sessiyanı aç",
-  "tool_effectiveness_message_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} mesaj","countPlural=other":"{countLabel} mesaj"}}],
+  "tool_effectiveness_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} mesaj",
+        "countPlural=other": "{countLabel} mesaj"
+      }
+    }
+  ],
   "analytics_tool_empty_rate": "Boş nəticə faizi",
   "analytics_tool_repeat_rate": "Təkrar faizi",
   "analytics_tool_recovery_rate": "Bərpa faizi",
@@ -2540,14 +2812,8 @@
   "analytics_tool_recovery_note": "Bərpa sonrakı çağırışın məzmun qaytarmasıdır. Bərpa faizi ardıcıllığı başlayan alətə aiddir.",
   "analytics_tool_evidence_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countLabel} sessiya",
         "countPlural=other": "{countLabel} sessiya"

@@ -861,6 +861,12 @@ type AnalyticsSummary struct {
 func (db *DB) GetAnalyticsSummary(
 	ctx context.Context, f AnalyticsFilter,
 ) (AnalyticsSummary, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return AnalyticsSummary{}, err
+	}
+	defer release()
+
 	// The summary is a token/session aggregate, so subagent sessions
 	// (including workflow subagents) are counted here.
 	f.IncludeSubagents = true
@@ -1398,6 +1404,12 @@ func (db *DB) GetAnalyticsActivity(
 	ctx context.Context, f AnalyticsFilter,
 	granularity string,
 ) (ActivityResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return ActivityResponse{}, err
+	}
+	defer release()
+
 	if granularity == "" {
 		granularity = "day"
 	}
@@ -1616,6 +1628,11 @@ func (db *DB) GetAnalyticsHeatmap(
 	if metric == "" {
 		metric = "messages"
 	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return HeatmapResponse{}, err
+	}
+	defer release()
 
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
@@ -1853,6 +1870,12 @@ type ProjectsAnalyticsResponse struct {
 func (db *DB) GetAnalyticsProjects(
 	ctx context.Context, f AnalyticsFilter,
 ) (ProjectsAnalyticsResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return ProjectsAnalyticsResponse{}, err
+	}
+	defer release()
+
 	// Per-project session/token breakdown is an aggregate, so subagent
 	// sessions (including workflow subagents) are counted here.
 	f.IncludeSubagents = true
@@ -2036,6 +2059,12 @@ type HourOfWeekResponse struct {
 func (db *DB) GetAnalyticsHourOfWeek(
 	ctx context.Context, f AnalyticsFilter,
 ) (HourOfWeekResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return HourOfWeekResponse{}, err
+	}
+	defer release()
+
 	if strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsHourOfWeekFilteredByModel(ctx, f)
 	}
@@ -2308,6 +2337,12 @@ func AutonomyDistributionBuckets(counts map[string]int) []DistributionBucket {
 func (db *DB) GetAnalyticsSessionShape(
 	ctx context.Context, f AnalyticsFilter,
 ) (SessionShapeResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return SessionShapeResponse{}, err
+	}
+	defer release()
+
 	loc := f.location()
 	modelFilter := strings.TrimSpace(f.Model) != ""
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
@@ -2968,6 +3003,12 @@ func analyticsSkillsQuery(
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
 func (db *DB) GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return ToolsAnalyticsResponse{}, err
+	}
+	defer release()
+
 	rows, err := db.analyticsToolRows(ctx, f)
 	return BuildToolsAnalytics(rows), err
 }
@@ -3131,6 +3172,12 @@ func (f AnalyticsFilter) ResolveSkillRowTime(
 func (db *DB) GetAnalyticsSkills(
 	ctx context.Context, f AnalyticsFilter, granularity string,
 ) (SkillsAnalyticsResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return SkillsAnalyticsResponse{}, err
+	}
+	defer release()
+
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
 	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
@@ -3600,6 +3647,12 @@ func (a *velocityAccumulator) computeOverview() VelocityOverview {
 func (db *DB) GetAnalyticsVelocity(
 	ctx context.Context, f AnalyticsFilter,
 ) (VelocityResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return VelocityResponse{}, err
+	}
+	defer release()
+
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
@@ -4003,6 +4056,12 @@ type SignalRow struct {
 func (db *DB) GetAnalyticsSignals(
 	ctx context.Context, f AnalyticsFilter,
 ) (SignalsAnalyticsResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return SignalsAnalyticsResponse{}, err
+	}
+	defer release()
+
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
@@ -4099,6 +4158,15 @@ func (db *DB) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (SignalSessionsResponse, error) {
+	if !IsToolMetric(signal) && !IsSupportedAnalyticsSignal(signal) {
+		return SignalSessionsResponse{}, ErrUnsupportedAnalyticsSignal
+	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return SignalSessionsResponse{}, err
+	}
+	defer release()
+
 	if IsToolMetric(signal) {
 		f.ToolMetric = signal
 		rows, err := db.analyticsToolRows(ctx, f)
@@ -4106,9 +4174,6 @@ func (db *DB) GetAnalyticsSignalSessions(
 			return SignalSessionsResponse{}, err
 		}
 		return BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
-	}
-	if !IsSupportedAnalyticsSignal(signal) {
-		return SignalSessionsResponse{}, ErrUnsupportedAnalyticsSignal
 	}
 	if limit <= 0 || limit > 20 {
 		limit = 10
@@ -5356,6 +5421,12 @@ func (db *DB) GetAnalyticsTopSessions(
 	if metric == "" {
 		metric = "messages"
 	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return TopSessionsResponse{}, err
+	}
+	defer release()
+
 	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
 	}

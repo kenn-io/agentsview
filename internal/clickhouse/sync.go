@@ -41,6 +41,11 @@ type Sync struct {
 	// snapshot syncUsagePrices loaded.
 	pricer *usagePricer
 
+	// unownedPruned records that this Sync already removed this machine's
+	// mirror sessions without an archive id that the archive no longer
+	// holds. Pushes always record their archive, so no new ones appear.
+	unownedPruned bool
+
 	// hooks is nil in production; tests inject failures at push boundaries.
 	hooks *pushHooks
 

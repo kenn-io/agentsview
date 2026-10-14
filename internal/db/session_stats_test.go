@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -2738,6 +2739,48 @@ func statsOutcomeRepo(t *testing.T) string {
 	})
 
 	return statsOutcomeRepoPath
+}
+
+func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
+	skipIfNoGit(t)
+	statsIsolateGit(t)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "outcome-lane", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
+	})
+	writer := d.rawWriter()
+	conn, err := writer.Conn(t.Context())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	result := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		_ = conn.Close()
+		<-done
+	})
+	waits := writer.Stats().WaitCount
+	go func() {
+		defer close(done)
+		stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", IncludeGitOutcomes: true})
+		if err == nil {
+			assert.NotNil(t, stats.OutcomeStats)
+		}
+		result <- err
+	}()
+	// WaitCount signals outcome lookup only while the git cache uses the writer.
+	require.Eventually(t, func() bool {
+		return writer.Stats().WaitCount > waits
+	}, 10*time.Second, 10*time.Millisecond)
+	assert.Zero(t, d.rawReader().Stats().InUse)
+	for range bulkReadSlots {
+		release, err := d.acquireBulkRead(ctx)
+		require.NoError(t, err)
+		defer release()
+	}
+	require.NoError(t, conn.Close())
+	require.NoError(t, <-result)
 }
 
 func TestGetSessionStats_OutcomeStats_ExclusiveEnd(t *testing.T) {

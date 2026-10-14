@@ -587,6 +587,7 @@ const (
 	walCheckpointRetryDelay  = 250 * time.Millisecond
 	sqliteCacheSizeKiB       = -8 * 1024
 	readerMaxOpenConns       = 4
+	bulkReadSlots            = readerMaxOpenConns - 1 // Keep one reader connection for quick reads.
 	readerConnMaxIdleTime    = 5 * time.Minute
 )
 
@@ -844,6 +845,14 @@ type DB struct {
 	messagesLoadCount atomic.Int64
 
 	cjkFTSUnavailableLog sync.Once
+
+	bulkReads struct {
+		once         sync.Once
+		slots        chan struct{}
+		waitMu       sync.Mutex
+		waitCount    int64
+		waitDuration time.Duration
+	}
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -1173,6 +1182,34 @@ func configureReaderPool(reader *sql.DB) {
 	// the full schema.
 	reader.SetMaxIdleConns(readerMaxOpenConns)
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
+}
+
+func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db.bulkReads.once.Do(func() {
+		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
+	})
+	select {
+	case db.bulkReads.slots <- struct{}{}:
+		return func() { <-db.bulkReads.slots }, nil
+	default:
+	}
+	started := time.Now()
+	defer func() {
+		waited := time.Since(started)
+		db.bulkReads.waitMu.Lock()
+		db.bulkReads.waitCount++
+		db.bulkReads.waitDuration += waited
+		db.bulkReads.waitMu.Unlock()
+	}()
+	select {
+	case db.bulkReads.slots <- struct{}{}:
+		return func() { <-db.bulkReads.slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Open creates or opens a SQLite database at the given path.

@@ -2334,7 +2334,16 @@
   "tool_sequences_unavailable": "이 아카이브는 대화 기록 버전을 기록하지 않아 도구 시퀀스를 사용할 수 없습니다.",
   "tool_sequences_none_recorded": "이 세션에 기록된 도구 호출이 없습니다.",
   "tool_sequences_no_sequences": "오류나 빈 결과를 반환한 도구 호출이 없습니다.",
-  "tool_sequences_sequence_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"시퀀스 {countLabel}개","countPlural=other":"시퀀스 {countLabel}개"}}],
+  "tool_sequences_sequence_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "시퀀스 {countLabel}개",
+        "countPlural=other": "시퀀스 {countLabel}개"
+      }
+    }
+  ],
   "tool_sequences_ending_recovered": "복구됨",
   "tool_sequences_ending_abandoned": "종료됨",
   "tool_sequences_ending_open": "미완료",
@@ -2353,10 +2362,28 @@
   "tool_sequences_missing_identity": "도구 호출 ID 없음",
   "tool_sequences_input": "입력",
   "tool_sequences_no_input": "기록된 입력이 없습니다.",
-  "tool_sequences_byte_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel}바이트","countPlural=other":"{countLabel}바이트"}}],
+  "tool_sequences_byte_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel}바이트",
+        "countPlural=other": "{countLabel}바이트"
+      }
+    }
+  ],
   "tool_sequences_result": "결과",
   "tool_sequences_result_unknown": "이 결과는 텍스트가 아니어서 결과를 알 수 없습니다.",
-  "tool_sequences_result_unavailable": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"보관된 결과 텍스트 {countLabel}바이트를 여기서 사용할 수 없습니다.","countPlural=other":"보관된 결과 텍스트 {countLabel}바이트를 여기서 사용할 수 없습니다."}}],
+  "tool_sequences_result_unavailable": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "보관된 결과 텍스트 {countLabel}바이트를 여기서 사용할 수 없습니다.",
+        "countPlural=other": "보관된 결과 텍스트 {countLabel}바이트를 여기서 사용할 수 없습니다."
+      }
+    }
+  ],
   "tool_sequences_result_empty": "도구가 아무것도 반환하지 않았습니다.",
   "tool_sequences_result_size_unknown": "결과 크기를 알 수 없습니다.",
   "tool_sequences_not_measured": "측정되지 않음",
@@ -2365,18 +2392,106 @@
   "tool_sequences_flag_identical": "같은 입력 반복",
   "tool_sequences_flag_near_identical": "형식만 다른 반복",
   "tool_sequences_flag_tool_switch": "도구 전환",
-  "tool_sequences_sequence_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"시퀀스 내 호출 {countLabel}회","countPlural=other":"시퀀스 내 호출 {countLabel}회"}}],
-  "tool_sequences_session_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"세션 내 도구 호출 {countLabel}회","countPlural=other":"세션 내 도구 호출 {countLabel}회"}}],
+  "tool_sequences_sequence_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "시퀀스 내 호출 {countLabel}회",
+        "countPlural=other": "시퀀스 내 호출 {countLabel}회"
+      }
+    }
+  ],
+  "tool_sequences_session_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "세션 내 도구 호출 {countLabel}회",
+        "countPlural=other": "세션 내 도구 호출 {countLabel}회"
+      }
+    }
+  ],
   "tool_sequences_legend": "결과 색상",
   "tool_sequences_message": "메시지 {ordinal}",
   "tool_sequences_messages_range": "메시지 {first}–{last}",
   "tool_sequences_jump_label": "메시지 {ordinal}: 대화에서 {tool} 호출 열기",
-  "tool_sequences_more_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"+{countLabel}개 더","countPlural=other":"+{countLabel}개 더"}}],
-  "tool_sequences_calls_hidden_between": [{"declarations":["input count","input countLabel","input from","input to","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"메시지 {from}과 {to} 사이의 호출 {countLabel}회는 표시되지 않습니다.","countPlural=other":"메시지 {from}과 {to} 사이의 호출 {countLabel}회는 표시되지 않습니다."}}],
-  "tool_sequences_calls_in_row": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"연속 호출 {countLabel}회.","countPlural=other":"연속 호출 {countLabel}회."}}],
-  "tool_sequences_showing_sequences": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"시퀀스 {countLabel}개 중 {shownLabel}개를 표시합니다. 나머지는 세션 후반에 있습니다.","countPlural=other":"시퀀스 {countLabel}개 중 {shownLabel}개를 표시합니다. 나머지는 세션 후반에 있습니다."}}],
-  "tool_sequences_calls_not_shown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"이 보기에는 시퀀스 내 호출 {countLabel}회가 표시되지 않습니다.","countPlural=other":"이 보기에는 시퀀스 내 호출 {countLabel}회가 표시되지 않습니다."}}],
-  "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다.","countPlural=other":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다."}}],
+  "tool_sequences_more_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "+{countLabel}개 더",
+        "countPlural=other": "+{countLabel}개 더"
+      }
+    }
+  ],
+  "tool_sequences_calls_hidden_between": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input from",
+        "input to",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "메시지 {from}과 {to} 사이의 호출 {countLabel}회는 표시되지 않습니다.",
+        "countPlural=other": "메시지 {from}과 {to} 사이의 호출 {countLabel}회는 표시되지 않습니다."
+      }
+    }
+  ],
+  "tool_sequences_calls_in_row": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "연속 호출 {countLabel}회.",
+        "countPlural=other": "연속 호출 {countLabel}회."
+      }
+    }
+  ],
+  "tool_sequences_showing_sequences": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "시퀀스 {countLabel}개 중 {shownLabel}개를 표시합니다. 나머지는 세션 후반에 있습니다.",
+        "countPlural=other": "시퀀스 {countLabel}개 중 {shownLabel}개를 표시합니다. 나머지는 세션 후반에 있습니다."
+      }
+    }
+  ],
+  "tool_sequences_calls_not_shown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "이 보기에는 시퀀스 내 호출 {countLabel}회가 표시되지 않습니다.",
+        "countPlural=other": "이 보기에는 시퀀스 내 호출 {countLabel}회가 표시되지 않습니다."
+      }
+    }
+  ],
+  "tool_sequences_preview_shows": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다.",
+        "countPlural=other": "미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다."
+      }
+    }
+  ],
   "tool_sequences_full_input_in_message": "전체 입력은 메시지 {ordinal}에 있습니다.",
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
   "tool_sequences_retry": "다시 시도",
@@ -2413,30 +2528,190 @@
   "tool_effectiveness_assessment_helped": "도움이 됨",
   "tool_effectiveness_assessment_did_not_help": "도움이 안 됨",
   "tool_effectiveness_assessment_unknown": "불분명",
-  "tool_effectiveness_omission_budget_input": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"호출 입력 {countLabel}개가 최대 {keptLabel}바이트로 잘림","countPlural=other":"호출 입력 {countLabel}개가 최대 {keptLabel}바이트로 잘림"}}],
-  "tool_effectiveness_omission_budget_result": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"호출 결과 {countLabel}개가 최대 {keptLabel}바이트로 잘림","countPlural=other":"호출 결과 {countLabel}개가 최대 {keptLabel}바이트로 잘림"}}],
-  "tool_effectiveness_omission_unretained": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"호출 결과 {countLabel}개가 보존되지 않음","countPlural=other":"호출 결과 {countLabel}개가 보존되지 않음"}}],
-  "tool_effectiveness_omission_no_result": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"결과가 기록되지 않은 호출 {countLabel}개","countPlural=other":"결과가 기록되지 않은 호출 {countLabel}개"}}],
-  "tool_effectiveness_omission_previews": [{"declarations":["input count","input countLabel","input charsLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"메시지 {countLabel}개가 {charsLabel}자 미리보기로 표시됨","countPlural=other":"메시지 {countLabel}개가 {charsLabel}자 미리보기로 표시됨"}}],
+  "tool_effectiveness_omission_budget_input": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "호출 입력 {countLabel}개가 최대 {keptLabel}바이트로 잘림",
+        "countPlural=other": "호출 입력 {countLabel}개가 최대 {keptLabel}바이트로 잘림"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_budget_result": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "호출 결과 {countLabel}개가 최대 {keptLabel}바이트로 잘림",
+        "countPlural=other": "호출 결과 {countLabel}개가 최대 {keptLabel}바이트로 잘림"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_unretained": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "호출 결과 {countLabel}개가 보존되지 않음",
+        "countPlural=other": "호출 결과 {countLabel}개가 보존되지 않음"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_no_result": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "결과가 기록되지 않은 호출 {countLabel}개",
+        "countPlural=other": "결과가 기록되지 않은 호출 {countLabel}개"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_previews": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input charsLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "메시지 {countLabel}개가 {charsLabel}자 미리보기로 표시됨",
+        "countPlural=other": "메시지 {countLabel}개가 {charsLabel}자 미리보기로 표시됨"
+      }
+    }
+  ],
   "tool_effectiveness_details_unavailable": "보고서 세부 정보를 사용할 수 없어 저장된 텍스트를 표시합니다.",
-  "tool_effectiveness_session_changed": [{"declarations":["input count","input countLabel","input currentLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"이 보고서 이후 세션이 변경되었습니다: 모델은 {countLabel}개 호출을 평가했고 현재 세션에는 {currentLabel}개가 있습니다.","countPlural=other":"이 보고서 이후 세션이 변경되었습니다: 모델은 {countLabel}개 호출을 평가했고 현재 세션에는 {currentLabel}개가 있습니다."}}],
+  "tool_effectiveness_session_changed": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input currentLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "이 보고서 이후 세션이 변경되었습니다: 모델은 {countLabel}개 호출을 평가했고 현재 세션에는 {currentLabel}개가 있습니다.",
+        "countPlural=other": "이 보고서 이후 세션이 변경되었습니다: 모델은 {countLabel}개 호출을 평가했고 현재 세션에는 {currentLabel}개가 있습니다."
+      }
+    }
+  ],
   "tool_effectiveness_session_revised": "이 보고서가 생성된 후 세션이 변경되어 아래 사실이 모델이 평가한 내용과 다를 수 있습니다.",
   "tool_sequences_message_call": "메시지 {ordinal}, 호출 {callNumber}",
   "tool_sequences_jump_call_label": "메시지 {ordinal}, 호출 {callNumber}: 대화에서 {tool} 호출 열기",
-  "tool_effectiveness_calls_judged": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"호출 {countLabel}개 평가","countPlural=other":"호출 {countLabel}개 평가"}}],
-  "tool_effectiveness_conclusion_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"결론 {countLabel}개","countPlural=other":"결론 {countLabel}개"}}],
-  "tool_effectiveness_count_helped": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"도움됨 {countLabel}","countPlural=other":"도움됨 {countLabel}"}}],
-  "tool_effectiveness_count_did_not_help": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"도움 안 됨 {countLabel}","countPlural=other":"도움 안 됨 {countLabel}"}}],
-  "tool_effectiveness_count_unknown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"불분명 {countLabel}","countPlural=other":"불분명 {countLabel}"}}],
-  "tool_effectiveness_calls_cited": [{"declarations":["input count","input countLabel","input citedLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"호출 {countLabel}개 중 {citedLabel}개 인용","countPlural=other":"호출 {countLabel}개 중 {citedLabel}개 인용"}}],
+  "tool_effectiveness_calls_judged": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "호출 {countLabel}개 평가",
+        "countPlural=other": "호출 {countLabel}개 평가"
+      }
+    }
+  ],
+  "tool_effectiveness_conclusion_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "결론 {countLabel}개",
+        "countPlural=other": "결론 {countLabel}개"
+      }
+    }
+  ],
+  "tool_effectiveness_count_helped": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "도움됨 {countLabel}",
+        "countPlural=other": "도움됨 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_did_not_help": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "도움 안 됨 {countLabel}",
+        "countPlural=other": "도움 안 됨 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_unknown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "불분명 {countLabel}",
+        "countPlural=other": "불분명 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_calls_cited": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input citedLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "호출 {countLabel}개 중 {citedLabel}개 인용",
+        "countPlural=other": "호출 {countLabel}개 중 {citedLabel}개 인용"
+      }
+    }
+  ],
   "tool_effectiveness_select_citation": "인용을 선택하면 호출이 표시됩니다",
-  "tool_effectiveness_citation_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"인용 {countLabel}개","countPlural=other":"인용 {countLabel}개"}}],
+  "tool_effectiveness_citation_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "인용 {countLabel}개",
+        "countPlural=other": "인용 {countLabel}개"
+      }
+    }
+  ],
   "tool_effectiveness_message_label": "메시지",
   "tool_effectiveness_message_no_call": "메시지 본문, 도구 호출 없음",
   "tool_effectiveness_left_out": "모델 입력에서 생략됨",
-  "tool_effectiveness_model_saw": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"모델이 본 양 {countLabel}바이트","countPlural=other":"모델이 본 양 {countLabel}바이트"}}],
+  "tool_effectiveness_model_saw": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "모델이 본 양 {countLabel}바이트",
+        "countPlural=other": "모델이 본 양 {countLabel}바이트"
+      }
+    }
+  ],
   "tool_effectiveness_open_session": "세션 열기",
-  "tool_effectiveness_message_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"메시지 {countLabel}개","countPlural=other":"메시지 {countLabel}개"}}],
+  "tool_effectiveness_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "메시지 {countLabel}개",
+        "countPlural=other": "메시지 {countLabel}개"
+      }
+    }
+  ],
   "analytics_tool_empty_rate": "빈 결과 비율",
   "analytics_tool_repeat_rate": "반복 비율",
   "analytics_tool_recovery_rate": "복구 비율",
@@ -2455,14 +2730,8 @@
   "analytics_tool_recovery_note": "복구는 이후 호출이 내용을 반환했다는 뜻입니다. 복구율은 시퀀스를 시작한 도구에 귀속됩니다.",
   "analytics_tool_evidence_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }

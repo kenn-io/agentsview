@@ -3,18 +3,20 @@ import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
 import { usageChartColorMaps } from "./usageChartColors.js";
 
-function tenModelSummary(models = [
-  "model-alpha",
-  "model-bravo",
-  "model-charlie",
-  "model-delta",
-  "model-echo",
-  "model-foxtrot",
-  "model-golf",
-  "model-hotel",
-  "model-india",
-  "model-zulu",
-]): UsageSummaryResponse {
+function tenModelSummary(
+  models = [
+    "model-alpha",
+    "model-bravo",
+    "model-charlie",
+    "model-delta",
+    "model-echo",
+    "model-foxtrot",
+    "model-golf",
+    "model-hotel",
+    "model-india",
+    "model-zulu",
+  ],
+): UsageSummaryResponse {
   const modelTotals = models.map((model, index) => ({
     model,
     inputTokens: 10,

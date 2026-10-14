@@ -2538,7 +2538,7 @@ describe("SessionsStore", () => {
         });
 
       // Start first load (will hang on stalePromise).
-      sessions.loadProjects();
+      void sessions.loadProjects();
 
       // Invalidate before stale resolves — bumps version,
       // clears promise, and starts a fresh load.
@@ -2568,7 +2568,7 @@ describe("SessionsStore", () => {
           agents: [{ name: "fresh-agent", session_count: 3 }],
         });
 
-      sessions.loadAgents();
+      void sessions.loadAgents();
       sessions.invalidateFilterCaches();
 
       resolveStale({

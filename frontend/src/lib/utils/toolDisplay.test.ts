@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import {
-  displayFormattedToolResult,
-  displayToolName,
-  displayToolResult,
-} from "./toolDisplay.js";
+import { displayFormattedToolResult, displayToolName, displayToolResult } from "./toolDisplay.js";
 import retainedFixtureSource from "./__fixtures__/retained-tool-image-1735.json?raw";
 
 const SMALL_PNG_DATA_URI =
@@ -100,15 +96,14 @@ describe("displayFormattedToolResult", () => {
   it("preserves labels, block order, and mixed placeholder content", () => {
     const firstImage = "data:image/png;base64,AAAA";
     const secondImage = "data:image/gif;base64,BBBB";
-    const content =
-      `agent-b:\n${JSON.stringify([
-        { type: "input_image", image_url: firstImage },
-        { type: "input_text", text: "B" },
-      ])}\n\nagent-a:\n${JSON.stringify([
-        { type: "input_text", text: "A" },
-        { type: "agentsview_image", version: 1, text: "[Image: image/jpeg, 6 bytes]" },
-        { type: "input_image", image_url: secondImage },
-      ])}\n\nagent-c:\n[{"type":"custom","value":42}]`;
+    const content = `agent-b:\n${JSON.stringify([
+      { type: "input_image", image_url: firstImage },
+      { type: "input_text", text: "B" },
+    ])}\n\nagent-a:\n${JSON.stringify([
+      { type: "input_text", text: "A" },
+      { type: "agentsview_image", version: 1, text: "[Image: image/jpeg, 6 bytes]" },
+      { type: "input_image", image_url: secondImage },
+    ])}\n\nagent-c:\n[{"type":"custom","value":42}]`;
 
     expect(displayFormattedToolResult(content)).toBe(
       `agent-b:\n![image/png](${firstImage})\n\nB\n\nagent-a:\nA\n\n[Image: image/jpeg, 6 bytes]\n\n![image/gif](${secondImage})\n\nagent-c:\n[{"type":"custom","value":42}]`,
@@ -144,8 +139,8 @@ describe("displayFormattedToolResult", () => {
       { type: "input_image", image_url: SMALL_PNG_DATA_URI },
       { type: "custom", text: "unsupported" },
     ]),
-    "not JSON [\"input_image\"]",
-    "{\"type\":\"input_image\"}",
+    'not JSON ["input_image"]',
+    '{"type":"input_image"}',
     "ordinary prose mentioning input_image",
     JSON.stringify([{ type: "input_text", text: "input_image" }]),
   ])("preserves unsupported or malformed content exactly: %s", (content) => {
@@ -153,10 +148,9 @@ describe("displayFormattedToolResult", () => {
   });
 
   it("keeps unsupported non-array results and preserves anonymous summary order", () => {
-    const content =
-      `${JSON.stringify({ type: "input_image", image_url: SMALL_PNG_DATA_URI })}\n\n${JSON.stringify([
-        { type: "input_image", image_url: SMALL_PNG_DATA_URI },
-      ])}\n\nTrailing prose`;
+    const content = `${JSON.stringify({ type: "input_image", image_url: SMALL_PNG_DATA_URI })}\n\n${JSON.stringify(
+      [{ type: "input_image", image_url: SMALL_PNG_DATA_URI }],
+    )}\n\nTrailing prose`;
 
     expect(displayFormattedToolResult(content)).toBe(
       `${JSON.stringify({ type: "input_image", image_url: SMALL_PNG_DATA_URI })}\n\n![image/png](${SMALL_PNG_DATA_URI})\n\nTrailing prose`,
