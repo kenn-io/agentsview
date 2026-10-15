@@ -404,6 +404,8 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		FROM old_db.sessions old_s
 		JOIN _trashed_ids copied ON copied.source_id = old_s.id
 		WHERE copied.id != copied.source_id
+		  -- Only a pre-131 page keeps its thread's ID as the source. A page
+		  -- whose source ID was retired has no thread row under that ID.
 		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'`); err != nil {
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
@@ -1381,7 +1383,7 @@ func (d *DB) CopySessionMetadataFrom(
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.session_labels
 				(session_id, label, created_at)
-			SELECT session_id, label, created_at
+			SELECT COALESCE(`+retiredCodexTargetSQL("session_id")+`, session_id), label, created_at
 			FROM old_db.session_labels`); err != nil {
 			return fmt.Errorf("copying session labels: %w", err)
 		}
@@ -1391,7 +1393,9 @@ func (d *DB) CopySessionMetadataFrom(
 			INSERT INTO main.session_external_parents (
 				session_id, parent_session_id, created_at, updated_at
 			)
-			SELECT ep.session_id, ep.parent_session_id, ep.created_at, ep.updated_at
+			SELECT COALESCE(`+retiredCodexTargetSQL("ep.session_id")+`, ep.session_id),
+				COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id),
+				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
 			WHERE true
 			ON CONFLICT(session_id) DO UPDATE SET
@@ -1624,7 +1628,8 @@ func (d *DB) CopySessionMetadataFrom(
 
 	// database_id identifies the new physical generation and is never
 	// copied: every mirror push keys its incremental cursors to it, so the
-	// first push after a resync always full-rebuilds. That rebuild also
+	// first push after a resync (DuckDB, PostgreSQL and ClickHouse alike)
+	// republishes everything and drops rows missing locally. That also
 	// makes journal continuity across the swap worthless, which is why the
 	// publication-revision counters are not copied either — the fresh
 	// database's own trigger-maintained counters stand, and the fresh
@@ -2205,7 +2210,8 @@ func copySessionDataForIDs(
 			INSERT OR IGNORE INTO main.session_external_parents (
 				session_id, parent_session_id, created_at, updated_at
 			)
-			SELECT copied.id, ep.parent_session_id, ep.created_at, ep.updated_at
+			SELECT copied.id, COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id),
+				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
 			JOIN `+tempIDsTable+` copied ON copied.source_id = ep.session_id`); err != nil {
 			return fmt.Errorf("copying retained session parents: %w", err)
@@ -2224,6 +2230,8 @@ func copySessionDataForIDs(
 
 	// A retained page has no file to supply its base link. Its filename still
 	// identifies the thread. User renames stay on a surviving original head.
+	// A page that retired its source ID has no head under that ID; it is
+	// linked below.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
 		SET parent_session_id = copied.source_id,
 			parser_parent_session_id = copied.source_id,
@@ -2232,8 +2240,36 @@ func copySessionDataForIDs(
 				SELECT 1 FROM main.sessions head WHERE head.id = copied.source_id
 			) THEN NULL ELSE display_name END
 		FROM `+tempIDsTable+` copied
-		WHERE sessions.id = copied.id AND copied.id != copied.source_id`); err != nil {
+		WHERE sessions.id = copied.id AND copied.id != copied.source_id
+		  AND NOT EXISTS (
+			SELECT 1 FROM _codex_session_ids r
+			WHERE r.retired = 1 AND r.source_id = copied.source_id
+		  )`); err != nil {
 		return fmt.Errorf("linking archived Codex pages: %w", err)
+	}
+	// Copied rows keep the parents they had. Any that named a retired source
+	// ID now name its canonical page.
+	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
+		SET parent_session_id = COALESCE(`+retiredCodexTargetSQL("sessions.parent_session_id")+`, parent_session_id),
+			parser_parent_session_id = COALESCE(`+retiredCodexTargetSQL("sessions.parser_parent_session_id")+`, parser_parent_session_id)
+		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND (`+retiredCodexTargetSQL("sessions.parent_session_id")+` IS NOT NULL
+		    OR `+retiredCodexTargetSQL("sessions.parser_parent_session_id")+` IS NOT NULL)`); err != nil {
+		return fmt.Errorf("remapping retired Codex parents: %w", err)
+	}
+	// A retired page the old archive left unlinked continues its thread. The
+	// thread ID is the page ID without its trailing _<rollout>.
+	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
+		SET parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
+			parser_parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
+			relationship_type = 'continuation'
+		FROM `+tempIDsTable+` copied
+		JOIN _codex_session_ids r ON r.retired = 1 AND r.source_id = copied.source_id
+		WHERE sessions.id = copied.id AND copied.id != copied.source_id
+		  AND COALESCE(sessions.parent_session_id, '') = ''
+		  AND EXISTS (SELECT 1 FROM main.sessions head
+			WHERE head.id = substr(sessions.id, 1, length(sessions.id) - 37))`); err != nil {
+		return fmt.Errorf("linking retired Codex pages: %w", err)
 	}
 
 	// Copy messages. Omit id to let auto-increment assign
@@ -2822,11 +2858,21 @@ func oldDBHasColumn(ctx context.Context, tx *sql.Tx, table, column string) bool 
 	return err == nil && exists
 }
 
+// retiredCodexTargetSQL yields the canonical page ID that replaced the Codex
+// session ID in column, or NULL when the ID was not retired.
+func retiredCodexTargetSQL(column string) string {
+	return "(SELECT r.target_id FROM _codex_session_ids r WHERE r.retired = 1 AND r.source_id = " + column + ")"
+}
+
 const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP TABLE IF EXISTS _codex_session_ids`
 
 // prepareCodexSessionIDMap resolves old rollout filenames once per copy.
-// The complete map also handles pre-version-40 fork identities; only pre-131
-// thread-to-page mappings and pre-134 rollout-to-page mappings move curation, Recall, and conversation identities.
+// The complete map also handles pre-version-40 fork identities. Pre-131
+// thread-to-page mappings and pre-134 rollout-to-page mappings move curation,
+// Recall, and conversation identities. Only the pre-134 mappings retire the
+// source ID, so only they also remap relationships, labels, and launcher
+// parents (retired = 1). A pre-134 candidate whose source ID the fresh parse
+// already produced is no page: the parser rejected it and kept its own ID.
 // Populate in batches, then check destination IDs with joins instead of one
 // query per candidate. The view includes pages as they are copied or parsed.
 func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacyForks bool) (version int, err error) {
@@ -2837,7 +2883,8 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	}()
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _codex_session_ids (
-			source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, is_page INTEGER NOT NULL
+			source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, is_page INTEGER NOT NULL,
+			retired INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TEMP VIEW _codex_page_metadata AS
 		SELECT source_id, target_id FROM _codex_session_ids
@@ -2869,8 +2916,8 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		if len(args) == 0 {
 			return nil
 		}
-		_, err := conn.ExecContext(ctx, `INSERT INTO _codex_session_ids (source_id,target_id,is_page) VALUES `+
-			strings.TrimSuffix(strings.Repeat("(?,?,?),", len(args)/3), ","), args...)
+		_, err := conn.ExecContext(ctx, `INSERT INTO _codex_session_ids (source_id,target_id,is_page,retired) VALUES `+
+			strings.TrimSuffix(strings.Repeat("(?,?,?,?),", len(args)/4), ","), args...)
 		args = args[:0]
 		return err
 	}
@@ -2878,10 +2925,10 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		prefixEnd := strings.LastIndex(sourceID, ":") + 1
 		sourceKey, targetKey := sourceID[prefixEnd:], targetID[prefixEnd:]
 		thread := parser.CodexThreadIDFromSessionKey(targetKey)
-		isPage := version < codexRevertPageDataVersion && thread == sourceKey ||
-			version < codexLegacyPageHeaderDataVersion && thread != targetKey &&
-				targetKey == thread+"_"+sourceKey
-		args = append(args, sourceID, targetID, isPage)
+		headPage := version < codexRevertPageDataVersion && thread == sourceKey
+		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
+			thread != targetKey && targetKey == thread+"_"+sourceKey
+		args = append(args, sourceID, targetID, headPage || retired, retired)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
 				return 0, fmt.Errorf("mapping Codex session IDs: %w", err)
@@ -2890,6 +2937,14 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	}
 	if err := flush(); err != nil {
 		return 0, fmt.Errorf("mapping Codex session IDs: %w", err)
+	}
+	// The parse is the authority. When it already holds the old ID, it kept
+	// that file under its own ID (a header whose session_id disagrees with
+	// the file name is not a page), so migrating would duplicate it.
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE _codex_session_ids SET is_page = 0, retired = 0
+		WHERE retired = 1 AND source_id IN (SELECT id FROM main.sessions)`); err != nil {
+		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
 }

@@ -37,6 +37,10 @@ func (s *Sync) migrateCodexPages(
 					continue
 				}
 				threads[id] = sess
+				// Also key by the id a legacy page held before data version 134
+				// (the filename without its thread). The old data version is
+				// only known after the query below, so this stays unrestricted;
+				// the query and the per-page checks filter it.
 				if thread := parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:]); thread != sess.ID[prefixEnd:] {
 					threads[sess.ID[:prefixEnd]+sess.ID[prefixEnd+len(thread)+1:]] = sess
 				}
@@ -81,9 +85,20 @@ func (s *Sync) migrateCodexPages(
 		key := parser.CodexSessionUUIDFromFilename(old.path[strings.LastIndexAny(old.path, `/\`)+1:])
 		oldKey := old.id[prefixEnd:]
 		keyThread := parser.CodexThreadIDFromSessionKey(key)
-		migratePage := old.path != "" && key != "" && key != oldKey &&
-			(old.dataVersion < 131 && keyThread == oldKey ||
-				old.dataVersion < 134 && keyThread != key && key == keyThread+"_"+oldKey)
+		threadShape := old.dataVersion < 131 && keyThread == oldKey
+		rolloutShape := old.dataVersion < 134 && keyThread != key && key == keyThread+"_"+oldKey
+		migratePage := old.path != "" && key != "" && key != oldKey && (threadShape || rolloutShape)
+		if migratePage && rolloutShape && !threadShape {
+			// The filename alone cannot tell a legacy page from one the parser
+			// rejected (header session_id differs from the filename thread). The
+			// local archive agrees with the fresh parse: only a legacy page has
+			// a canonical row here. Otherwise the remote row is a plain session.
+			canonical, err := s.local.GetArtifactExportSession(ctx, old.id[:prefixEnd]+key)
+			if err != nil {
+				return fmt.Errorf("reading retained Codex page: %w", err)
+			}
+			migratePage = canonical != nil && canonical.Agent == old.agent
+		}
 		if !syncScope && !migratePage {
 			continue
 		}

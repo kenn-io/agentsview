@@ -2799,6 +2799,12 @@ func (db *DB) FindSessionIDsByRawSuffix(
 	return ids, rows.Err()
 }
 
+// codexRevertPageSessionIDsSQL bounds the lookup by an id range so its cost
+// follows the number of pages rather than the size of the archive.
+const codexRevertPageSessionIDsSQL = `SELECT id FROM sessions
+	 WHERE id > ?1 AND id < ?2 AND deleted_at IS NULL
+	 ORDER BY id`
+
 // CodexRevertPageSessionIDs returns the ids of stored, non-deleted sessions
 // whose id starts with threadSessionID + "_" (Codex revert pages of that
 // thread, codex:<thread>_<rollout>). It compares an id range, not LIKE,
@@ -2811,9 +2817,7 @@ func (db *DB) CodexRevertPageSessionIDs(
 	}
 	// '`' is the byte after '_', so the range holds exactly the ids with the "_" prefix.
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE id > ?1 AND id < ?2 AND deleted_at IS NULL
-		 ORDER BY id`,
+		codexRevertPageSessionIDsSQL,
 		threadSessionID+"_", threadSessionID+"`",
 	)
 	if err != nil {

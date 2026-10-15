@@ -67,6 +67,7 @@ func (s *Sync) PushWithOptions(
 		s.archiveKey(mappingRevisionKeyBase),
 		s.archiveKey(usageSnapshotReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
+		s.archiveKey(databaseIDKeyBase),
 	)
 	if err != nil {
 		return result, err
@@ -77,7 +78,17 @@ func (s *Sync) PushWithOptions(
 	storedIdentity, _ := strconv.ParseInt(meta[s.archiveKey(identityRevisionKeyBase)], 10, 64)
 	storedMapping, _ := strconv.ParseInt(meta[s.archiveKey(mappingRevisionKeyBase)], 10, 64)
 
+	// A rebuilt archive gets a new database ID. Ids the rebuild retired or
+	// renamed are absent locally, and only a full push removes mirror rows
+	// missing locally, so a changed ID forces one.
+	databaseID, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return result, fmt.Errorf("loading source database generation: %w", err)
+	}
 	full, reason := s.decideFull(opts, storedCutoff, storedScope)
+	if !full && meta[s.archiveKey(databaseIDKeyBase)] != databaseID {
+		full, reason = true, "archive was rebuilt"
+	}
 	if !full && meta[s.archiveKey(usageSnapshotReadyKeyBase)] == "" {
 		full, reason = true, "preparing complete usage snapshots"
 	}
@@ -219,6 +230,7 @@ func (s *Sync) PushWithOptions(
 			s.archiveKey(deletionRevisionKeyBase): strconv.FormatInt(localDeletion, 10),
 			s.archiveKey(identityRevisionKeyBase): strconv.FormatInt(identityRevision, 10),
 			s.archiveKey(mappingRevisionKeyBase):  strconv.FormatInt(mappingRevision, 10),
+			s.archiveKey(databaseIDKeyBase):       databaseID,
 			schemaVersionKey:                      strconv.Itoa(SchemaVersion),
 			sourceDataVersionKey:                  strconv.Itoa(db.CurrentDataVersion()),
 		}

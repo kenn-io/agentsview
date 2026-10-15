@@ -237,6 +237,39 @@ func TestPushRemovesUnownedSessionsMissingLocally(t *testing.T) {
 	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", "ch-sync-unowned-other"))
 }
 
+// A rebuilt archive gets a new database ID and may have retired session IDs
+// without journaling a deletion. The next push, even an incremental one, must
+// take the full path that removes mirror rows missing locally.
+func TestPushAfterArchiveRebuildRemovesRetiredSessions(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	conn := chtest.Open(t, target.URL, target.Database)
+	const retired = "ch-sync-retired-by-rebuild"
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+			? AS id, push_version + 1 AS push_version)
+		FROM (SELECT * FROM sessions WHERE id = ?)`, retired, fixtureAlphaID)
+	require.NoError(t, err)
+
+	// Same archive generation: an incremental push leaves the row alone.
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, res.DeletedStale)
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", retired))
+
+	// The mirror was last pushed from another archive generation.
+	require.NoError(t, writeMetadata(ctx, conn, map[string]string{
+		s.archiveKey(databaseIDKeyBase): "previous-generation",
+	}))
+	res, err = s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.DeletedStale)
+	assert.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", retired))
+}
+
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)

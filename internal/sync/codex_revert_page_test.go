@@ -871,8 +871,14 @@ func TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing(t *testing.T) {
 	assert.Zero(t, second.Synced, "unchanged older-header pages are skipped")
 }
 
+// TestCodexOlderHeaderRevertPageIndexRenameWorkIgnoresArchiveSize measures the
+// work one index rename does with 100 and then 10,000 unrelated sessions
+// stored. Allocations stand in for rows visited: reading or scanning unrelated
+// rows allocates per row, so a lookup that grows with the archive fails the
+// bound. The page-id lookup the HTTP mirror shares is measured the same way.
 func TestCodexOlderHeaderRevertPageIndexRenameWorkIgnoresArchiveSize(t *testing.T) {
 	var classified [][]string
+	var renameAllocs, lookupAllocs []float64
 	for _, unrelated := range []int{100, 10000} {
 		home := t.TempDir()
 		root := filepath.Join(home, "sessions")
@@ -901,8 +907,12 @@ func TestCodexOlderHeaderRevertPageIndexRenameWorkIgnoresArchiveSize(t *testing.
 		}))
 
 		writeIndex("Renamed title")
+		var files []parser.DiscoveredFile
+		renameAllocs = append(renameAllocs, testing.AllocsPerRun(3, func() {
+			files = engine.classifyCodexIndexPath(t.Context(), indexPath)
+		}))
 		var paths []string
-		for _, f := range engine.classifyCodexIndexPath(t.Context(), indexPath) {
+		for _, f := range files {
 			paths = append(paths, filepath.Base(f.Path))
 		}
 		slices.Sort(paths)
@@ -910,11 +920,17 @@ func TestCodexOlderHeaderRevertPageIndexRenameWorkIgnoresArchiveSize(t *testing.
 		classified = append(classified, paths)
 
 		// The HTTP mirror resolves the same event through the stored page ids.
-		pageIDs, err := database.CodexRevertPageSessionIDs(t.Context(), paginationSessionID(0))
+		var pageIDs []string
+		var err error
+		lookupAllocs = append(lookupAllocs, testing.AllocsPerRun(3, func() {
+			pageIDs, err = database.CodexRevertPageSessionIDs(t.Context(), paginationSessionID(0))
+		}))
 		require.NoError(t, err)
 		assert.Equal(t, []string{paginationSessionID(1), paginationSessionID(2)}, pageIDs)
 	}
 	assert.Equal(t, classified[0], classified[1])
+	assert.Less(t, renameAllocs[1], renameAllocs[0]*1.5+50, "rename work must not grow with the archive")
+	assert.Less(t, lookupAllocs[1], lookupAllocs[0]*1.5+50, "page lookup must not grow with the archive")
 }
 
 // TestCodexOlderHeaderRevertPageUpgradeMovesCuration rebuilds a version-133
@@ -1002,13 +1018,22 @@ func TestCodexOlderHeaderRevertPageUpgradeMovesCuration(t *testing.T) {
 				require.NoError(t, reopened.EnableArchiveOnly(t.Context()))
 			}
 			require.True(t, reopened.NeedsResync())
+			// Archive-only archives take the real source-restricted rebuild:
+			// the engine has no ArchiveReparse, so its sources are cleared and
+			// ResyncAll preserves the archive rows instead of reparsing files.
 			upgraded := NewEngine(t.Context(), reopened, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "local", IDPrefix: tc.prefix, ArchiveReparse: tc.archiveOnly,
+				Machine:   "local", IDPrefix: tc.prefix,
 			})
 			t.Cleanup(upgraded.Close)
-			stats, err := upgraded.SyncThenRun(t.Context(), false, nil, func(bool) error { return nil })
-			require.NoError(t, err)
+			var stats SyncStats
+			if tc.archiveOnly {
+				stats = upgraded.ResyncAll(t.Context(), nil)
+			} else {
+				var err error
+				stats, err = upgraded.SyncThenRun(t.Context(), false, nil, func(bool) error { return nil })
+				require.NoError(t, err)
+			}
 			require.Zero(t, stats.Failed)
 			require.False(t, stats.Aborted)
 
