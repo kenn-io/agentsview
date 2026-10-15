@@ -346,3 +346,56 @@ func TestCodexReconciliationPrefersRestoredPlain(t *testing.T) {
 	require.NotNil(t, files[0].ProviderSource)
 	assert.Equal(t, plain, files[0].ProviderSource.DisplayPath)
 }
+
+func TestCodexReconciliationDuplicatePreferenceAcrossRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		plainFlat      bool
+		compressedFlat bool
+		wantPlain      bool
+	}{
+		{name: "dated plain before compressed", wantPlain: true},
+		{name: "flat plain before compressed", plainFlat: true, compressedFlat: true, wantPlain: true},
+		{name: "dated compressed before flat plain", plainFlat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			compressedRoot := filepath.Join(base, "a-compressed")
+			plainRoot := filepath.Join(base, "z-plain")
+			one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+			two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "plain answer")
+			compressed := writeCompressedCodexRollout(t, compressedRoot, "01", codexCompressedName, compressedRolloutContent(one))
+			plain := writeCodexRollout(t, plainRoot, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+			if tc.compressedFlat {
+				flat := filepath.Join(compressedRoot, codexCompressedName)
+				require.NoError(t, os.Rename(compressed, flat))
+				compressed = flat
+			}
+			if tc.plainFlat {
+				flat := filepath.Join(plainRoot, compressedRolloutPlain)
+				require.NoError(t, os.Rename(plain, flat))
+				plain = flat
+			}
+			wantPath := compressed
+			wantTexts := []string{"one"}
+			if tc.wantPlain {
+				wantPath = plain
+				wantTexts = []string{"one", "plain answer"}
+			}
+			database := openTestDB(t)
+			roots := []string{compressedRoot, plainRoot}
+			e := NewEngine(t.Context(), database, EngineConfig{
+				Machine:   "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots},
+			})
+			t.Cleanup(e.Close)
+			require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+			require.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
+			require.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+
+			require.NoError(t, e.ReconcileWatchRoots(t.Context(), roots, false))
+			assert.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
+			assert.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+		})
+	}
+}

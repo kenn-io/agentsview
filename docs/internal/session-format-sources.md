@@ -570,14 +570,16 @@ fixtures retain this field; missing identities remain source-local.
   Codex still reads older frames without it
   ([prefix reader](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
   AgentsView treats both names as one session and prefers the plain file,
-  including raw-capture audits and watcher events. Full parses and
-  replay-parent reads stream decoded bytes through an `io.Reader` without a
-  temporary decompressed copy. Compressed rollouts are parsed in full, without
-  resumable checkpoints or decoded-byte offsets. Scheduling uses five times
-  the compressed file size as a heuristic of convenience, without a separate
-  decode or sizing pass. Stored fingerprints retain the original compressed
-  file's size, modification time, identity and hash. A decoding error prevents
-  partial results from replacing the archive.
+  including raw-capture audits, watcher events and streaming reconciliation
+  across configured roots. Duplicate ranking keeps dated layouts ahead of flat
+  archives, then prefers plain files, then the lexically smaller path. Full
+  parses and replay-parent reads stream decoded bytes through an `io.Reader`
+  without a temporary decompressed copy. Compressed rollouts are parsed in
+  full, without resumable checkpoints or decoded-byte offsets. Scheduling uses
+  five times the compressed file size as a heuristic of convenience, without a
+  separate decode or sizing pass. Stored fingerprints retain the original
+  compressed file's size, modification time, identity and hash. A decoding
+  error prevents partial results from replacing the archive.
 
 - **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
   `thread/revert` writes a rollout named
