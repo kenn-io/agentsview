@@ -95,8 +95,7 @@ The latest release is
   [Artifact folder sync](/docs/artifact-sync/) now carries each Codex cloud
   chat's plan usage, so the receiving archive shows the same plan shares and the
   same count of chats left out of usage totals. Upgrade the receiving AgentsView
-  too: an older version keeps these chats waiting and imports them once
-  upgraded.
+  as well. An older version does not import these chats until it is upgraded.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
