@@ -99,30 +99,49 @@ func (s *rollupStore) GetChildSessions(
 }
 
 func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
-	store := &rollupStore{
-		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
-			"a":    {SessionID: "a", HasCost: true, Cost: money.MustParseDollars("2"), BreakdownCount: 1},
-			"b":    {SessionID: "b", HasCost: true, Cost: money.MustParseDollars("4"), BreakdownCount: 1},
-			"u":    {SessionID: "u", HasCost: false, BreakdownCount: 1},
-		},
-		children: map[string][]db.Session{
-			"root": {
-				{ID: "a", RelationshipType: "subagent"},
-				{ID: "fork", RelationshipType: "fork"},
-				{ID: "continuation", RelationshipType: "continuation"},
-				{ID: "a", RelationshipType: "subagent"},
+	for _, tc := range []struct {
+		name string
+		rows []activity.UsageRow
+	}{
+		{name: "fallback"},
+		{
+			name: "row provider",
+			rows: []activity.UsageRow{
+				{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true},
+				{SessionID: "a", Cost: money.MustParseDollars("2"), Priced: true, Contributes: true},
+				{SessionID: "b", Cost: money.MustParseDollars("4"), Priced: true, Contributes: true},
+				{SessionID: "u", Contributes: true},
 			},
-			"a": {{ID: "b", RelationshipType: "subagent"}, {ID: "root", RelationshipType: "subagent"}},
-			"b": {{ID: "u", RelationshipType: "subagent"}},
 		},
-	}
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &rollupStore{
+				rows: tc.rows,
+				usages: map[string]*db.SessionUsage{
+					"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
+					"a":    {SessionID: "a", HasCost: true, Cost: money.MustParseDollars("2"), BreakdownCount: 1},
+					"b":    {SessionID: "b", HasCost: true, Cost: money.MustParseDollars("4"), BreakdownCount: 1},
+					"u":    {SessionID: "u", HasCost: false, BreakdownCount: 1},
+				},
+				children: map[string][]db.Session{
+					"root": {
+						{ID: "a", RelationshipType: "subagent"},
+						{ID: "fork", RelationshipType: "fork"},
+						{ID: "continuation", RelationshipType: "continuation"},
+						{ID: "a", RelationshipType: "subagent"},
+					},
+					"a": {{ID: "b", RelationshipType: "subagent"}, {ID: "root", RelationshipType: "subagent"}},
+					"b": {{ID: "u", RelationshipType: "subagent"}},
+				},
+			}
 
-	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 3, got.SubagentCount)
-	require.Zero(t, got.Cost)
-	require.False(t, got.HasCost, "unpriced contributing row must make the aggregate incomplete")
+			got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+			require.NoError(t, err)
+			require.Equal(t, 3, got.SubagentCount)
+			require.Zero(t, got.Cost)
+			require.False(t, got.HasCost, "unpriced contributing row must make the aggregate incomplete")
+		})
+	}
 }
 
 func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
