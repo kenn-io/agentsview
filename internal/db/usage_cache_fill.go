@@ -113,11 +113,16 @@ func (c *usageFillCoordinator) Ensure(
 	results := make(map[string]usageFillResult, len(versions))
 	waiting := make(map[string]*usageFillCall)
 	owned := make([]usageSourceVersion, 0, len(versions))
+	sessionIDs := make([]string, len(versions))
+	for i, version := range versions {
+		sessionIDs[i] = version.SessionID
+	}
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		if ok && cached.source.Equal(version) {
 			results[version.SessionID] = cached
 			continue
@@ -172,26 +177,35 @@ func usageFillCallKey(version usageSourceVersion) string {
 	}, "\x00")
 }
 
-func (c *usageFillCoordinator) cachedSession(ctx context.Context,
-	sessionID string,
-) (usageFillResult, bool, error) {
-	var result usageFillResult
-	err := c.cache.db.QueryRowContext(ctx, `
-		SELECT source_sync_marker, source_transcript_rev,
-		       usage_event_fingerprint, install_revision
-		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(
-		&result.source.SyncMarker, &result.source.TranscriptRevision,
-		&result.source.UsageEventFingerprint, &result.InstallRevision,
-	)
-	result.source.SessionID = sessionID
-	if errors.Is(err, sql.ErrNoRows) {
-		return usageFillResult{}, false, nil
-	}
+func readUsageCachedSessions(
+	ctx context.Context, runner usageCacheStatementRunner, sessionIDs []string,
+) (map[string]usageFillResult, error) {
+	results := make(map[string]usageFillResult, len(sessionIDs))
+	err := queryChunked(sessionIDs, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := runner.QueryContext(ctx, `SELECT session_id,
+			source_sync_marker, source_transcript_rev,
+			usage_event_fingerprint, install_revision
+			FROM usage_cached_sessions WHERE session_id IN `+placeholders, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var result usageFillResult
+			if err := rows.Scan(&result.source.SessionID,
+				&result.source.SyncMarker, &result.source.TranscriptRevision,
+				&result.source.UsageEventFingerprint, &result.InstallRevision); err != nil {
+				return err
+			}
+			results[result.source.SessionID] = result
+		}
+		return rows.Err()
+	})
 	if err != nil {
-		return usageFillResult{}, false,
-			fmt.Errorf("reading cached usage session %s: %w", sessionID, err)
+		return nil, fmt.Errorf("reading cached usage sessions: %w", err)
 	}
-	return result, true, nil
+	return results, nil
 }
 
 func (c *usageFillCoordinator) fillSessions(versions []usageSourceVersion) {
@@ -300,11 +314,16 @@ func (c *usageFillCoordinator) captureFillInstallExpectations(ctx context.Contex
 	versions []usageSourceVersion,
 ) (map[string]usageFillInstallExpectation, error) {
 	expected := make(map[string]usageFillInstallExpectation, len(versions))
+	sessionIDs := make([]string, len(versions))
+	for i, version := range versions {
+		sessionIDs[i] = version.SessionID
+	}
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		expected[version.SessionID] = usageFillInstallExpectation{
 			InstallRevision: cached.InstallRevision,
 			Exists:          ok,
@@ -322,11 +341,16 @@ func (c *usageFillCoordinator) FillBackground(
 ) (map[string]usageFillResult, error) {
 	results := make(map[string]usageFillResult, len(versions))
 	pending := make([]usageSourceVersion, 0, len(versions))
+	sessionIDs := make([]string, len(versions))
+	for i, version := range versions {
+		sessionIDs[i] = version.SessionID
+	}
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		if ok && cached.source.Equal(version) {
 			results[version.SessionID] = cached
 			continue
