@@ -197,7 +197,8 @@ Lost state is recoverable. A state file that does not decode is moved to
 leaves offset zero, so the next append treats every complete frame as kept and
 rebuilds the digests from it. A mirror file that is missing or shorter than its
 stored offset resets the thread's resume point, so the thread is fetched in full
-again.
+again. A descendants file that does not decode is rebuilt from the thread files
+that name the root as the one they count under.
 
 A missing or corrupt `account.json` with thread files still present makes
 AgentsView rebuild the plan usage queue from the thread files. The queue is the

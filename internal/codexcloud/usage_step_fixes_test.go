@@ -298,6 +298,41 @@ func TestLostAccountStateRestoresFollowUpFetches(t *testing.T) {
 		"both waiting chats are fetched again; the settled one is not")
 }
 
+// TestDamagedDescendantsListIsRebuilt covers a root whose descendants
+// file does not decode: its next plan usage request still sends the
+// sub-agent chats, taken from the chats that count under it.
+func TestDamagedDescendantsListIsRebuilt(t *testing.T) {
+	env := newUsageEnv(t)
+	root := finishedThread("p", ago(3*time.Hour), message("m", "root"))
+	child := finishedThread("c", ago(2*time.Hour), message("n", "child"))
+	child.ParentThreadID = "p"
+	grand := finishedThread("gc", ago(time.Hour), message("o", "grandchild"))
+	grand.ParentThreadID = "c"
+	for _, th := range []codexcloudtest.Thread{root, child, grand} {
+		env.threads.Set(th)
+	}
+	env.usage.SetRow("p", codexcloudtest.Row("p", "available", pct(4), nil))
+	env.run(t)
+	refresh := env.account(t).Refresh["p"]
+	require.False(t, refresh.DataAsOf.IsZero())
+
+	path, err := env.syncer.Store.path(passKey, "p", ".descendants.json")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("{garbage"), 0o600))
+	env.clock.Set(refreshDue(refresh))
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	requests := env.usage.Requests()[from:]
+	require.Len(t, requests, 1)
+	require.Len(t, requests[0].Threads, 1)
+	assert.Equal(t, "p", requests[0].Threads[0].ThreadID)
+	assert.Equal(t, []string{"c", "gc"}, requests[0].Threads[0].Descendants, "the sub-agent chats are still sent")
+	ids, err := env.syncer.Store.LoadDescendants(passKey, "p")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c", "gc"}, ids, "the rebuilt list is saved")
+}
+
 // TestLostAccountStateRestoresRefreshRoots covers a root whose newest
 // plan usage record is a complete row: after account.json is lost it
 // goes back on the refresh schedule, not the pending queue, so it is not
