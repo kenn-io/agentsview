@@ -2348,7 +2348,7 @@
   "analytics_outcome_configure_github": "请在设置中配置 GitHub，以加载拉取请求总数。",
   "analytics_outcome_loading": "正在读取 git 历史...",
   "analytics_outcome_empty": "此时间范围内没有 git 活动。",
-  "analytics_outcome_filters_unsupported": "清除机器、模型、终止状态、最少消息数、近期活动和时段筛选条件，以查看成果总计。",
+  "analytics_outcome_filters_unsupported": "清除分支、机器、模型、终止状态、最少消息数、近期活动和时段筛选条件，以查看成果总计。",
   "analytics_outcome_partial": "未计入：",
   "analytics_outcome_partial_entry": "{repo}（{op}）：{reason}",
   "session_breadcrumb_session_health_and_tool_sequences": "会话健康与工具序列",

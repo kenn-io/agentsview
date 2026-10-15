@@ -2431,7 +2431,7 @@
   "analytics_outcome_configure_github": "Configure GitHub in Settings to load pull-request totals.",
   "analytics_outcome_loading": "Reading git history...",
   "analytics_outcome_empty": "No git activity in this window.",
-  "analytics_outcome_filters_unsupported": "Clear machine, model, termination, minimum-message, recent-activity, and time-of-day filters to view outcome totals.",
+  "analytics_outcome_filters_unsupported": "Clear branch, machine, model, termination, minimum-message, recent-activity, and time-of-day filters to view outcome totals.",
   "analytics_outcome_partial": "Not counted:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}",
   "session_breadcrumb_session_health_and_tool_sequences": "Session health and tool sequences",

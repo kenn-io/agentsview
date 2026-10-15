@@ -2441,7 +2441,7 @@
   "analytics_outcome_configure_github": "Configurez GitHub dans les paramètres pour charger les totaux des pull requests.",
   "analytics_outcome_loading": "Lecture de l'historique git...",
   "analytics_outcome_empty": "Aucune activité git sur cette période.",
-  "analytics_outcome_filters_unsupported": "Supprimez les filtres de machine, modèle, fin de session, nombre minimal de messages, activité récente et heure pour afficher les totaux des résultats.",
+  "analytics_outcome_filters_unsupported": "Supprimez les filtres de branche, machine, modèle, fin de session, nombre minimal de messages, activité récente et heure pour afficher les totaux des résultats.",
   "analytics_outcome_partial": "Non comptabilisé :",
   "analytics_outcome_partial_entry": "{repo} ({op}) : {reason}",
   "session_breadcrumb_session_health_and_tool_sequences": "État de la session et séquences d’outils",

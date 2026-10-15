@@ -11,6 +11,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
+import { branchFilterToken } from "../../branchFilters.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
@@ -303,6 +304,7 @@ describe("AnalyticsPage outcome window", () => {
   });
 
   it.each([
+    ["branch", branchFilterToken("pl1:sha256:alpha", "main"), ""],
     ["machine", "demo-machine", ""],
     ["model", "demo-model", ""],
     ["termination", "completed", ""],
@@ -318,7 +320,7 @@ describe("AnalyticsPage outcome window", () => {
       Object.assign(analytics, { [key]: value });
       await flushEffects();
       expect(document.querySelector(".outcome-empty")?.textContent).toContain(
-        "Clear machine, model",
+        "Clear branch, machine, model",
       );
       expect(load).not.toHaveBeenCalled();
 

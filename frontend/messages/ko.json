@@ -2348,7 +2348,7 @@
   "analytics_outcome_configure_github": "풀 리퀘스트 합계를 불러오려면 설정에서 GitHub를 구성하세요.",
   "analytics_outcome_loading": "git 기록을 읽는 중...",
   "analytics_outcome_empty": "이 기간에 git 활동이 없습니다.",
-  "analytics_outcome_filters_unsupported": "결과 합계를 보려면 머신, 모델, 종료 상태, 최소 메시지 수, 최근 활동, 시간대 필터를 해제하세요.",
+  "analytics_outcome_filters_unsupported": "결과 합계를 보려면 브랜치, 머신, 모델, 종료 상태, 최소 메시지 수, 최근 활동, 시간대 필터를 해제하세요.",
   "analytics_outcome_partial": "집계되지 않음:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}",
   "session_breadcrumb_session_health_and_tool_sequences": "세션 상태 및 도구 시퀀스",

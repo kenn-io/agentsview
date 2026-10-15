@@ -362,7 +362,7 @@
   // because the GitHub half of the aggregation shells out once per repository
   // and must never be pulled into the page's normal refresh.
   const outcomeFiltersUnsupported = $derived(Boolean(
-    analytics.machine || analytics.model || analytics.termination ||
+    analytics.branch || analytics.machine || analytics.model || analytics.termination ||
     analytics.minUserMessages > 0 || analytics.recentlyActive ||
     analytics.selectedDow !== null || analytics.selectedHour !== null,
   ));

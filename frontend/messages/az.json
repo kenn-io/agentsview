@@ -2421,7 +2421,7 @@
   "analytics_outcome_configure_github": "Pull request cəmlərini yükləmək üçün Ayarlarda GitHub-u konfiqurasiya edin.",
   "analytics_outcome_loading": "git tarixçəsi oxunur...",
   "analytics_outcome_empty": "Bu dövrdə git fəaliyyəti yoxdur.",
-  "analytics_outcome_filters_unsupported": "Nəticə cəmlərini görmək üçün maşın, model, bitmə, minimum mesaj sayı, son fəaliyyət və günün vaxtı filtrlərini təmizləyin.",
+  "analytics_outcome_filters_unsupported": "Nəticə cəmlərini görmək üçün budaq, maşın, model, bitmə, minimum mesaj sayı, son fəaliyyət və günün vaxtı filtrlərini təmizləyin.",
   "analytics_outcome_partial": "Hesaba alınmayan:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}",
   "session_breadcrumb_session_health_and_tool_sequences": "Sessiyanın vəziyyəti və alət ardıcıllıqları",
