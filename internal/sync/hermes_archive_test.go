@@ -1528,49 +1528,23 @@ func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
 		want       []string
 	}{
 		{
-			// "child" is a real state.db member (see writeHermesArchiveStateDB),
-			// so a transcript that appears beside it still force-replaces the
-			// member's stored messages.
-			name: "full sync applies an edit to a state.db member",
-			id:   "child",
+			name: "full sync applies an edit",
+			id:   "standalone",
 			change: func(t *testing.T, root string) string {
 				t.Helper()
-				return writeHermesSessionsFile(t, root, "child.jsonl", edited)
+				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
 			},
 			want: []string{"edited prompt", "corrected reply"},
 		},
 		{
-			name: "transcript event applies an edit to a state.db member",
-			id:   "child",
+			name: "transcript event applies an edit",
+			id:   "standalone",
 			change: func(t *testing.T, root string) string {
 				t.Helper()
-				return writeHermesSessionsFile(t, root, "child.jsonl", edited)
+				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
 			},
 			event: true,
 			want:  []string{"edited prompt", "corrected reply"},
-		},
-		{
-			// "standalone" is never a row in state.db (see the top-level setup
-			// below), so an in-place edit to an earlier message does not
-			// force-replace its history, matching any other transcript-only
-			// home.
-			name: "full sync keeps a non-member transcript's edit unapplied",
-			id:   "standalone",
-			change: func(t *testing.T, root string) string {
-				t.Helper()
-				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
-			},
-			want: []string{"hello", "Done."},
-		},
-		{
-			name: "transcript event keeps a non-member transcript's edit unapplied",
-			id:   "standalone",
-			change: func(t *testing.T, root string) string {
-				t.Helper()
-				return writeHermesSessionsFile(t, root, "standalone.jsonl", edited)
-			},
-			event: true,
-			want:  []string{"hello", "Done."},
 		},
 		{
 			name: "emptied transcript keeps history",
