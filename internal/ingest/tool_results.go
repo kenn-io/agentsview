@@ -157,7 +157,8 @@ func SummarizeToolResultEventsContext(
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
 	}
-	if last := events[len(events)-1]; strings.TrimSpace(last.Content) == "" {
+	if last := events[len(events)-1]; strings.TrimSpace(last.Content) == "" &&
+		last.ContentLength > 0 {
 		return "", last.ContentLength, ctx.Err()
 	}
 	var summary string

@@ -54,10 +54,21 @@ func DedupToolCallResultSummary(
 
 // RestoreToolCallResultContent refills the summary that the write path
 // dropped, so every consumer of a loaded tool call sees the same
-// ResultContent it saw when the summary was stored twice.
+// ResultContent it saw when the summary was stored twice. A blank content
+// with a positive ContentLength on an event is not an empty timing event
+// (those keep ContentLength zero); it is the signal a later fix uses for a
+// deliberately withheld correction. SoleToolResultContent alone can't tell
+// that apart from genuine dedup, so skip the refill whenever any event
+// carries that signal — refilling would silently undo the withholding by
+// reading back an earlier, unrelated event's content instead.
 func RestoreToolCallResultContent(tc *ToolCall) {
 	if tc.ResultContent != "" || tc.ResultContentLength == 0 {
 		return
+	}
+	for _, event := range tc.ResultEvents {
+		if event.Content == "" && event.ContentLength > 0 {
+			return
+		}
 	}
 	if sole, ok := SoleToolResultContent(tc.ResultEvents); ok {
 		tc.ResultContent = sole.Content
@@ -79,11 +90,24 @@ func RestoreMessageResultContent(msgs []Message) {
 // call's display result content for readers that select the column directly
 // instead of loading tool calls with their events. callAlias is the
 // tool_calls alias and ordinalExpr resolves to the owning message's ordinal.
+// Matching RestoreToolCallResultContent's own guard, the dedup refill never
+// applies when any of the call's events is blank with a positive length —
+// that pairing is a deliberately withheld correction, not an empty timing
+// event, and this expression must not undo it by refilling from an earlier,
+// unrelated event.
 func ToolCallResultContentSQL(callAlias, ordinalExpr string) string {
 	return fmt.Sprintf(`CASE
 		WHEN COALESCE(%[1]s.result_content, '') <> ''
 			THEN %[1]s.result_content
 		WHEN COALESCE(%[1]s.result_content_length, 0) = 0 THEN ''
+		WHEN EXISTS (
+			SELECT 1 FROM tool_result_events tre_withheld
+			WHERE tre_withheld.session_id = %[1]s.session_id
+			  AND tre_withheld.tool_call_message_ordinal = %[2]s
+			  AND tre_withheld.call_index = COALESCE(%[1]s.call_index, 0)
+			  AND COALESCE(tre_withheld.content, '') = ''
+			  AND COALESCE(tre_withheld.content_length, 0) > 0
+		) THEN ''
 		ELSE COALESCE((
 			SELECT CASE WHEN COUNT(*) = 1 THEN MIN(sole_rc.content) END
 			FROM (

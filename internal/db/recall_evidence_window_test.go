@@ -45,6 +45,44 @@ func TestRecallEvidenceWindowBuildsCanonicalHostAuthorization(t *testing.T) {
 	assert.Equal(t, "tool-a", window.Messages[1].ToolCalls[1].ToolUseID)
 }
 
+// TestRecallEvidenceWindowNeverRefillsAWithheldSummary covers the SQL read
+// path's ToolCallResultContentSQL, which shares the same dedup-refill
+// instinct as RestoreToolCallResultContent (see TestRestoreToolCallResultContent's
+// "withheld later event never refills from an earlier one"): a call with an
+// earlier real-content event and a later event deliberately left blank with
+// a kept length must read back blank, not the earlier event's stale content.
+func TestRecallEvidenceWindowNeverRefillsAWithheldSummary(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "withheld-session", "agentsview")
+	insertMessages(t, d,
+		recallEvidenceMessage(
+			"withheld-session", 10, "user", "run it", "src-10",
+		),
+		Message{
+			SessionID: "withheld-session", Ordinal: 11, Role: "assistant",
+			Content: "ok", ContentLength: 2, Timestamp: "2026-07-09T12:00:00Z",
+			SourceUUID: "src-11",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Shell", ToolUseID: "tool-w",
+				ResultContentLength: 22,
+				ResultEvents: []ToolResultEvent{
+					{Content: "earlier real content", ContentLength: len("earlier real content")},
+					{Content: "", ContentLength: 22},
+				},
+			}},
+		},
+	)
+
+	window, err := d.BuildRecallEvidenceWindow(
+		t.Context(), "withheld-session", 10, 11,
+	)
+	require.NoError(t, err)
+	require.Len(t, window.Messages, 2)
+	require.Len(t, window.Messages[1].ToolCalls, 1)
+	assert.Empty(t, window.Messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, 22, window.Messages[1].ToolCalls[0].ResultContentLength)
+}
+
 func TestRecallEvidenceWindowRejectsIncompleteAndReversedRanges(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "gapped", "agentsview")

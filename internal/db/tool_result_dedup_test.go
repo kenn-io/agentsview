@@ -272,6 +272,21 @@ func TestRestoreToolCallResultContent(t *testing.T) {
 			want: "",
 		},
 		{
+			// A later event deliberately withheld (blank content, a kept
+			// length) is not an empty timing event; refilling from the
+			// earlier real-content event would silently undo the
+			// withholding.
+			name: "withheld later event never refills from an earlier one",
+			call: ToolCall{
+				ResultContentLength: 22,
+				ResultEvents: []ToolResultEvent{
+					{Content: "earlier real content"},
+					{Content: "", ContentLength: 22},
+				},
+			},
+			want: "",
+		},
+		{
 			name: "multiple events never refill",
 			call: ToolCall{
 				ResultContentLength: 5,

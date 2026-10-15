@@ -41,6 +41,17 @@ func TestSummarizeToolResultEventsContextLatestEventAlwaysDecides(t *testing.T) 
 			},
 			wantText: "", wantLength: 22,
 		},
+		{
+			// A genuinely empty, non-participating trailing event (zero
+			// length, not a withheld correction) must not discard a good
+			// earlier summary.
+			name: "real then a genuinely empty trailing event: the earlier text survives",
+			events: []db.ToolResultEvent{
+				{Content: realText, ContentLength: len(realText)},
+				{Content: "", ContentLength: 0},
+			},
+			wantText: realText, wantLength: len(realText),
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

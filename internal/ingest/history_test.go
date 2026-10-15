@@ -476,16 +476,34 @@ func TestReconcileProviderHistoryClaudeRestoresOnlyFlaggedOccurrence(t *testing.
 	placeholder := "Full output saved to: /x/tool-results/a.txt"
 
 	prior := &ingest.PriorSession{
-		Messages: []db.Message{{
-			Ordinal: 0, Role: "user", Timestamp: t1Str,
-			ToolCalls: []db.ToolCall{{
-				ToolUseID: "toolu_1", Category: "bash",
-				ResultEvents: []db.ToolResultEvent{{
-					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t1Str,
-					Content: "archived first occurrence", ContentLength: len("archived first occurrence"),
+		Messages: []db.Message{
+			{
+				Ordinal: 0, Role: "user", Timestamp: t1Str,
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "toolu_1", Category: "bash",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t1Str,
+						Content: "archived first occurrence", ContentLength: len("archived first occurrence"),
+					}},
 				}},
-			}},
-		}},
+			},
+			{
+				// A real archived counterpart at t2 with stale content. The
+				// candidate's own t2 occurrence is unflagged (already
+				// resolved with a correction), so this must never surface:
+				// restoring it would silently undo a correction the current
+				// parse already made.
+				Ordinal: 1, Role: "user", Timestamp: t2Str,
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "toolu_1", Category: "bash",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t2Str,
+						Content:       "stale archived second occurrence",
+						ContentLength: len("stale archived second occurrence"),
+					}},
+				}},
+			},
+		},
 	}
 	candidate := ingest.Candidate{
 		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
