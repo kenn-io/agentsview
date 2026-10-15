@@ -152,3 +152,51 @@ func TestLegacyCodexTrashedPageLinksToThreadParsedAfterCopy(t *testing.T) {
 	assert.Equal(t, "codex:"+legacyThread, parent)
 	assert.Equal(t, "continuation", relationship)
 }
+
+func TestLegacyCodexTrashedPageDropsStaleSubagentParentKeepsLauncher(t *testing.T) {
+	// The old parser read a reverted subagent thread's page header as a
+	// subagent of its launcher. The page continues its thread instead, but a
+	// launcher override with no parser parent behind it stays.
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	src := testDBAtPath(t, srcPath, "src")
+	launcher := "codex:44444444-4444-4444-8444-444444444444"
+	ctx := t.Context()
+	for _, rollout := range []string{legacyRoll1, legacyRoll2} {
+		insertSession(t, src, "codex:"+rollout, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.FilePath = legacyPageFile(rollout)
+		})
+		require.NoError(t, src.SoftDeleteSession(ctx, "codex:"+rollout))
+	}
+	for _, q := range []string{
+		`UPDATE sessions SET parent_session_id = '` + launcher + `', parser_parent_session_id = '` + launcher +
+			`', relationship_type = 'subagent' WHERE id = 'codex:` + legacyRoll1 + `'`,
+		`UPDATE sessions SET parent_session_id = '` + launcher + `', parser_parent_session_id = NULL ` +
+			`WHERE id = 'codex:` + legacyRoll2 + `'`,
+		`PRAGMA user_version = 133`,
+	} {
+		_, err := src.getWriter().Exec(ctx, q)
+		require.NoError(t, err)
+	}
+	require.NoError(t, src.Close())
+
+	dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	t.Cleanup(func() { dst.Close() })
+	_, err := dst.CopyTrashedDataFrom(srcPath)
+	require.NoError(t, err)
+
+	read := func(rollout string) (parent, parserParent, relationship string) {
+		require.NoError(t, dst.getReader().QueryRow(ctx,
+			`SELECT COALESCE(parent_session_id, ''), COALESCE(parser_parent_session_id, ''), relationship_type
+			 FROM sessions WHERE id = ?`, "codex:"+legacyThread+"_"+rollout).Scan(&parent, &parserParent, &relationship))
+		return
+	}
+	parent, parserParent, relationship := read(legacyRoll1)
+	assert.Equal(t, "codex:"+legacyThread, parent)
+	assert.Equal(t, "codex:"+legacyThread, parserParent)
+	assert.Equal(t, "continuation", relationship)
+	parent, parserParent, _ = read(legacyRoll2)
+	assert.Equal(t, launcher, parent, "launcher override stays")
+	assert.Empty(t, parserParent)
+}

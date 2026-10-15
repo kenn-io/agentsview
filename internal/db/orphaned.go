@@ -2271,8 +2271,10 @@ func copySessionDataForIDs(
 		    OR `+retiredCodexTargetSQL("sessions.parser_parent_session_id")+` IS NOT NULL)`); err != nil {
 		return fmt.Errorf("remapping retired Codex parents: %w", err)
 	}
-	// A retired page the old archive left unlinked continues its thread. The
-	// thread ID is the page ID without its trailing _<rollout>. The link does
+	// A retired page continues its thread, whatever parent the old parser
+	// derived from its header (a reverted subagent thread named its launcher).
+	// A parent with no parser parent behind it is a launcher override and
+	// stays. The thread ID is the page ID without its trailing _<rollout>. The link does
 	// not wait for the thread row: trashed pages copy before the parse, and a
 	// page whose source file is gone is never parsed again to set it.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
@@ -2282,7 +2284,8 @@ func copySessionDataForIDs(
 		FROM `+tempIDsTable+` copied
 		JOIN _codex_session_ids r ON r.retired = 1 AND r.source_id = copied.source_id
 		WHERE sessions.id = copied.id AND copied.id != copied.source_id
-		  AND COALESCE(sessions.parent_session_id, '') = ''`); err != nil {
+		  AND (COALESCE(sessions.parser_parent_session_id, '') != ''
+		    OR COALESCE(sessions.parent_session_id, '') = '')`); err != nil {
 		return fmt.Errorf("linking retired Codex pages: %w", err)
 	}
 
