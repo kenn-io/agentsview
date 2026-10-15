@@ -16,9 +16,7 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 		Origin      string         `json:"origin"`
 		Segments    jsontext.Value `json:"segments"`
 		UsageEvents jsontext.Value `json:"usage_events"`
-		PlanUsage   struct {
-			Groups jsontext.Value `json:"groups"`
-		} `json:"plan_usage"`
+		PlanUsage   jsontext.Value `json:"plan_usage"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return manifest{}, err
@@ -36,8 +34,16 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 			"manifest has unsupported artifact version %d", envelope.Version,
 		)
 	}
+	var planUsage struct {
+		Groups jsontext.Value `json:"groups"`
+	}
+	if len(envelope.PlanUsage) > 0 {
+		if err := json.Unmarshal(envelope.PlanUsage, &planUsage); err != nil {
+			return manifest{}, err
+		}
+	}
 	if err := preflightManifestCollections(
-		envelope.Segments, envelope.UsageEvents, envelope.PlanUsage.Groups, limits,
+		envelope.Segments, envelope.UsageEvents, planUsage.Groups, limits,
 	); err != nil {
 		return manifest{}, err
 	}
