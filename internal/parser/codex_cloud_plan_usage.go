@@ -10,8 +10,14 @@ import (
 // newest outcome record. Order is the records' position in the file, never
 // their times. An outcome counts only when it was written after the row;
 // a newer "counted under" outcome clears the row's values, since the
-// thread's usage belongs to its root. It returns nil for a file with no
-// plan usage records.
+// thread's usage belongs to its root.
+//
+// A file with no plan usage records and no token records gets an empty
+// entry, which session details show as "not checked yet". Without it the
+// session would have no session_plan_usage row, so usage reports would
+// leave it out of the "billed as plan usage" count as well as the totals.
+// A file with token records but no plan usage records returns nil; its
+// capture coverage gives it a row.
 func (t *codexCloudThread) planUsage() *ParsedPlanUsage {
 	var usage ParsedPlanUsage
 	if t.planRow != nil {
@@ -22,7 +28,10 @@ func (t *codexCloudThread) planUsage() *ParsedPlanUsage {
 		outcome = nil
 	}
 	if t.planRow == nil && outcome == nil {
-		return nil
+		if len(t.tokens) > 0 {
+			return nil
+		}
+		return &ParsedPlanUsage{}
 	}
 	if outcome != nil {
 		if outcome.Kind == mirror.OutcomeCountedUnder {

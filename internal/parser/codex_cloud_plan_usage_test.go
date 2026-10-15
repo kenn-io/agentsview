@@ -172,7 +172,58 @@ func TestOutcomesSurviveReparse(t *testing.T) {
 	}
 }
 
-func TestNoPlanUsageRecords(t *testing.T) {
-	path := writeCodexCloudMirror(t, "thread-a", ccRecord(mirror.KindThread, ccListing))
-	assert.Nil(t, parseCodexCloud(t, path).Session.PlanUsage)
+// A chat with neither token records nor plan usage records gets an empty
+// plan usage entry, so it has a row that usage reports count as billed as
+// plan usage. Any record that gives the chat a row of its own replaces it.
+func TestNotCheckedYetPlaceholder(t *testing.T) {
+	tokens := ccTokens("join-a", "turn-1", ccCounts(1000, 0, 100), ccCounts(1000, 0, 100), 0)
+	tests := []struct {
+		name    string
+		records []mirror.Record
+		want    *ParsedPlanUsage
+	}{
+		{
+			name: "no token and no plan usage records",
+			records: []mirror.Record{
+				ccRecord(mirror.KindThread, ccListing),
+				ccDataRecord(t, mirror.KindTurn, ccTurn("turn-1", "completed", 1759320000)),
+			},
+			want: &ParsedPlanUsage{},
+		},
+		{
+			name: "token records give the row its coverage",
+			records: []mirror.Record{
+				ccRecord(mirror.KindThread, ccListing),
+				ccDataRecord(t, mirror.KindTurn, ccTurn("turn-1", "completed", 1759320000)),
+				ccDataRecord(t, mirror.KindTokenUsage, tokens),
+			},
+			want: nil,
+		},
+		{
+			name: "a plan usage row",
+			records: []mirror.Record{
+				ccRecord(mirror.KindThread, ccListing),
+				ccRecord(mirror.KindPlanUsageRow, ccRowNewer),
+			},
+			want: new(ccNewerUsage()),
+		},
+		{
+			name: "counted under another root",
+			records: []mirror.Record{
+				ccRecord(mirror.KindThread, ccListing),
+				ccOutcome(mirror.OutcomeCountedUnder, "2026-10-03T08:00:00Z", "thread-root"),
+			},
+			want: &ParsedPlanUsage{
+				OutcomeKind:  mirror.OutcomeCountedUnder,
+				OutcomeAt:    new(time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)),
+				CountedUnder: "codex-cloud:thread-root",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeCodexCloudMirror(t, "thread-a", tt.records...)
+			assert.Equal(t, tt.want, parseCodexCloud(t, path).Session.PlanUsage)
+		})
+	}
 }

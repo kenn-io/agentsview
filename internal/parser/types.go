@@ -1556,7 +1556,9 @@ type ParsedSession struct {
 	CaptureCoverage *ParsedCaptureCoverage
 
 	// PlanUsage is the session's latest plan usage report and outcome.
-	// Only Codex cloud sessions with plan usage records set it.
+	// Only Codex cloud sessions set it. It is empty, meaning plan usage is
+	// not checked yet, for a session with neither plan usage records nor
+	// token records.
 	PlanUsage *ParsedPlanUsage
 
 	// CountsAuthoritative marks parsers that own MessageCount and

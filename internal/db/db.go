@@ -586,7 +586,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // gain the corrected Edit category without changing session identities.)
 // (137: rebuild Codex rollouts under their first session_meta identity.
 // Version 136 was used by unreleased builds of this fix and is skipped.)
-const dataVersion = 137
+// (138: a Codex cloud session with no token records and no plan usage
+// records gets an empty plan usage row, so usage reports count it as
+// billed as plan usage. Re-parse unchanged Codex cloud sources in place.)
+const dataVersion = 138
 
 const archiveOnlyVersionBase = 1 << 20
 
