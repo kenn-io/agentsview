@@ -1340,6 +1340,68 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 	}
 }
 
+// TestHermesFingerprintCacheActivatesForSessionsRootLayout covers a root
+// layout withProviderFingerprintCache's eligibility check used to miss: the
+// configured root is the "sessions" directory, no transcript has ever been
+// written so that directory does not exist on disk yet, but its sibling
+// state.db does. A flat os.Stat on the configured root alone cannot see
+// that the database exists, so the batch fingerprint cache never turned on
+// for this entirely normal layout, and every member reopened state.db on
+// its own. This proves the cache activates and bounds the opens the same
+// way TestHermesIncrementalSyncBoundsSiblingWrites proves for the layouts
+// it covers.
+func TestHermesFingerprintCacheActivatesForSessionsRootLayout(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			const members = 11
+			for i := range members {
+				id := fmt.Sprintf("member-%03d", i)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
+					(id, source, model, started_at, ended_at, message_count)
+					VALUES (?, 'cli', 'model', 1778767200, 1778767800, 1)`, id)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages
+					(session_id, role, content, timestamp) VALUES (?, 'user', 'hello', 1778767210)`, id)
+				require.NoError(t, err)
+			}
+			sessionsRoot := filepath.Join(root, "sessions")
+			_, statErr := os.Stat(sessionsRoot)
+			require.True(t, os.IsNotExist(statErr),
+				"the sessions dir must not exist on disk yet")
+
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {sessionsRoot}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			seed := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, seed.Failed)
+			// writeHermesArchiveStateDB seeds one more member ("child")
+			// beyond the ones added here.
+			require.Equal(t, members+1, seed.Synced)
+
+			_, err = conn.ExecContext(t.Context(),
+				"UPDATE messages SET content = 'changed member-000 content' WHERE session_id = 'member-000'")
+			require.NoError(t, err)
+
+			var scans atomic.Int64
+			ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
+			stats := engine.SyncAll(ctx, nil)
+			assert.Equal(t, 1, stats.Synced)
+			assert.Zero(t, stats.Failed)
+
+			assert.Positive(t, scans.Load())
+			assert.LessOrEqual(t, scans.Load(), int64(4),
+				"a sessions-dir root whose sibling state.db exists must still activate the batch fingerprint cache")
+		})
+	}
+}
+
 func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesArchiveStateDB(t, root)

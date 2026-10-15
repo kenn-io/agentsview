@@ -1837,6 +1837,23 @@ func (e *Engine) syncChangedPathsLocked(
 	return stats, tombstoned, err
 }
 
+// providerFingerprintCacheRootEligible reports whether at least one of a
+// provider's configured roots is eligible to receive the batch fingerprint
+// cache. A flat statExists works for most BatchFingerprintCache providers,
+// but Hermes and Augure Desktop can be configured with a "sessions"
+// directory that has no reason to exist on disk yet (no transcript has ever
+// been written) while its sibling state.db, the thing that actually makes
+// the cache useful, already does. Use the same resolution discovery does
+// for those two agents instead of asking whether the bare root path exists.
+func providerFingerprintCacheRootEligible(
+	agent parser.AgentType, roots []string,
+) bool {
+	if agent == parser.AgentHermes || agent == parser.AgentAugureDesktop {
+		return slices.ContainsFunc(roots, parser.HermesRootResolvesToStateDB)
+	}
+	return slices.ContainsFunc(roots, statExists)
+}
+
 func (e *Engine) withProviderFingerprintCache(
 	ctx context.Context, paths []string,
 ) (context.Context, func() error, error) {
@@ -1844,7 +1861,7 @@ func (e *Engine) withProviderFingerprintCache(
 	for agent, roots := range sources.agentDirs {
 		factory := sources.providerFactories[agent]
 		if factory == nil || !factory.Capabilities().Sync.BatchFingerprintCache ||
-			!slices.ContainsFunc(roots, statExists) {
+			!providerFingerprintCacheRootEligible(agent, roots) {
 			continue
 		}
 		if len(paths) == 0 {
