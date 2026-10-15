@@ -770,123 +770,72 @@ func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 }
 
 func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "fixture-dedup", "project dedup", func(s *Session) {
-		s.Agent = "agent dedup"
-		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
-		s.EndedAt = Ptr("2026-07-28T09:01:00Z")
-	})
-	sessionCost := money.MustParseDollars("0.002")
-	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
-		"fixture-dedup",
-		[]UsageEvent{{
-			Source:       "merged-source",
-			Model:        "model merged-dedup",
-			InputTokens:  41,
-			OutputTokens: 7,
-			Cost:         &sessionCost,
-			CostStatus:   "exact",
-			CostSource:   "reported",
-			OccurredAt:   "2026-07-28T09:05:00Z",
-			DedupKey:     "shared",
-		}},
-	))
-	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
-		OccurredAt:   "2026-07-28T09:05:00Z",
-		Model:        "model standalone winner",
-		Kind:         "usage",
-		InputTokens:  17,
-		OutputTokens: 3,
-		Charged:      money.MustParseDollars("0.007"),
-		DedupKey:     "fixture-dedup:merged-source:shared",
-	}}))
+	for _, tc := range []struct{ name, sessionTimestamp, cursorTimestamp string }{
+		{"equal precision", "2026-07-28T09:05:00Z", "2026-07-28T09:05:00Z"},
+		{"mixed precision", "2026-07-28T09:00:00Z", "2026-07-28T09:00:00.123Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "fixture-dedup", "project dedup", func(s *Session) {
+				s.Agent = "agent dedup"
+				s.StartedAt = Ptr("2026-07-28T09:00:00Z")
+				s.EndedAt = Ptr("2026-07-28T09:01:00Z")
+			})
+			sessionCost := money.MustParseDollars("0.002")
+			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
+				"fixture-dedup",
+				[]UsageEvent{{
+					Source:       "merged-source",
+					Model:        "model merged-dedup",
+					InputTokens:  41,
+					OutputTokens: 7,
+					Cost:         &sessionCost,
+					CostStatus:   "exact",
+					CostSource:   "reported",
+					OccurredAt:   tc.sessionTimestamp,
+					DedupKey:     "shared",
+				}},
+			))
+			require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
+				OccurredAt:   tc.cursorTimestamp,
+				Model:        "model standalone winner",
+				Kind:         "usage",
+				InputTokens:  17,
+				OutputTokens: 3,
+				Charged:      money.MustParseDollars("0.007"),
+				DedupKey:     "fixture-dedup:merged-source:shared",
+			}}))
 
-	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
-		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-	})
-	require.NoError(t, err)
+			day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+				Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+				Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+			})
+			require.NoError(t, err)
 
-	hour := day.Hours[9]
-	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
-	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
-	require.Len(t, hour.Usage.ByModel, 1)
-	assert.Equal(t, "model standalone winner", hour.Usage.ByModel[0].Key)
-	assert.Empty(t, hour.Usage.ByProject)
+			hour := day.Hours[9]
+			assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
+			assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+			assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
+			require.Len(t, hour.Usage.ByModel, 1)
+			assert.Equal(t, "model standalone winner", hour.Usage.ByModel[0].Key)
+			assert.Empty(t, hour.Usage.ByProject)
 
-	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
-		From:       "2026-07-28",
-		To:         "2026-07-28",
-		Timezone:   "UTC",
-		Breakdowns: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
-	assert.Zero(t, hour.Activity.Totals.AgentMinutes)
-	assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
-	assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
-	assert.Zero(t, hour.Activity.Totals.NewModels)
-}
-
-func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
-	t *testing.T,
-) {
-	d := testDB(t)
-	insertSession(t, d, "fixture-mixed-precision", "project precision", func(s *Session) {
-		s.Agent = "agent precision"
-		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
-		s.EndedAt = Ptr("2026-07-28T09:01:00Z")
-	})
-	sessionCost := money.MustParseDollars("0.002")
-	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
-		"fixture-mixed-precision",
-		[]UsageEvent{{
-			Source:       "fixture-source",
-			Model:        "model earlier instant",
-			InputTokens:  41,
-			OutputTokens: 7,
-			Cost:         &sessionCost,
-			CostStatus:   "exact",
-			CostSource:   "reported",
-			OccurredAt:   "2026-07-28T09:00:00Z",
-			DedupKey:     "shared",
-		}},
-	))
-	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
-		OccurredAt:   "2026-07-28T09:00:00.123Z",
-		Model:        "model text-order winner",
-		Kind:         "usage",
-		InputTokens:  17,
-		OutputTokens: 3,
-		Charged:      money.MustParseDollars("0.007"),
-		DedupKey:     "fixture-mixed-precision:fixture-source:shared",
-	}}))
-
-	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
-		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-	})
-	require.NoError(t, err)
-	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
-		From:       "2026-07-28",
-		To:         "2026-07-28",
-		Timezone:   "UTC",
-		Breakdowns: true,
-	})
-	require.NoError(t, err)
-
-	hour := day.Hours[9]
-	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
-	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
-	require.Len(t, hour.Usage.ByModel, 1)
-	assert.Equal(t, "model text-order winner", hour.Usage.ByModel[0].Key)
-	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
+			daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
+				From:       "2026-07-28",
+				To:         "2026-07-28",
+				Timezone:   "UTC",
+				Breakdowns: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+			assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+			assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
+			assert.Zero(t, hour.Activity.Totals.AgentMinutes)
+			assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
+			assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
+			assert.Zero(t, hour.Activity.Totals.NewModels)
+		})
+	}
 }
 
 func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {

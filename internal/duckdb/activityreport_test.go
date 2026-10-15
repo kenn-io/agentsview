@@ -1043,14 +1043,14 @@ func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T
 	assert.Equal(t, 1, r.Totals.Sessions)
 }
 
-// TestDuckGetActivityReportUsageDedupSubSecondOrder confirms DuckDB orders the
+// TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder confirms DuckDB orders the
 // usage stream by the parsed instant so first-seen-wins fallback dedup keeps
 // the chronologically earlier row when two rows share a source UUID in the same
 // second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
 // already sorts on the parsed time (not the formatted text), so this locks in
 // that cross-backend behavior, matching the SQLite
 // TestGetActivityReport_UsageDedupSubSecondOrder.
-func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
+func TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder(t *testing.T) {
 	ctx := t.Context()
 	pricing := []db.ModelPricing{{
 		ModelPattern:  "claude-sonnet-4-20250514",
