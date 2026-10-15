@@ -87,3 +87,96 @@ func TestLostAccountStateRebuildsPlanUsageQueue(t *testing.T) {
 	assert.NotContains(t, requested, "partial")
 	assert.NotContains(t, requested, "leftout")
 }
+
+// TestFinishedChatListedActiveKeepsItsSchedule covers a finished chat the
+// listing still shows as active: it is fetched every pass, yet fetches
+// that find nothing new leave its plan usage schedule alone.
+func TestFinishedChatListedActiveKeepsItsSchedule(t *testing.T) {
+	for _, status := range []string{"available", "partial"} {
+		t.Run(status, func(t *testing.T) {
+			env := newUsageEnv(t)
+			thread := finishedThread("a", ago(time.Hour), message("m", "hi"))
+			thread.Status = "active"
+			env.threads.Set(thread)
+			env.usage.SetRow("a", codexcloudtest.Row("a", status, pct(1), nil))
+
+			// Past the settle point by more than the longest retry wait.
+			for env.clock.Now().Before(fetchNow.Add(settleAfter + usageRetryLimit + 2*time.Hour)) {
+				env.run(t)
+				env.clock.Advance(4 * time.Hour)
+			}
+
+			assert.Greater(t, len(env.fetchedThreads(0)), 40, "the chat is fetched every pass")
+			requests := len(env.usage.Requests())
+			if status == "available" {
+				// The first answer, then one refresh a day until 7 days
+				// after the import.
+				assert.Equal(t, 7, requests, "asked on the refresh schedule")
+			} else {
+				assert.Less(t, requests, 40, "unresolved answers back off, up to 6 hours apart")
+				plan := env.plan(t, "a")
+				assert.True(t, plan.rows[len(plan.rows)-1].Final, "the partial row settles 7 days after the import")
+			}
+			acct := env.account(t)
+			assert.NotContains(t, acct.UsagePending, "a")
+			assert.NotContains(t, acct.Refresh, "a")
+			from := len(env.usage.Requests())
+			env.run(t)
+			assert.Empty(t, env.requestedRoots(from), "a settled chat is not asked about again")
+
+			env.threads.Update("a", func(th *codexcloudtest.Thread) {
+				th.UpdatedAt = env.clock.Now().Unix() - 60
+				th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+			})
+			from = len(env.usage.Requests())
+			env.run(t)
+			assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "a real change asks about the chat again")
+			acct = env.account(t)
+			lastChange := acct.Refresh["a"].LastChange
+			if status == "partial" {
+				lastChange = acct.UsagePending["a"].LastChange
+			}
+			assert.Equal(t, env.clock.Now(), lastChange, "the 7 days start again from the change")
+		})
+	}
+}
+
+// TestChangeLostWithTheAccountSaveIsMarkedAgain covers a crash after a
+// fetch committed a chat's change but before the account state that marks
+// its root pending was saved: the next fetch, which finds nothing new,
+// still marks the root.
+func TestChangeLostWithTheAccountSaveIsMarkedAgain(t *testing.T) {
+	env := newUsageEnv(t)
+	thread := finishedThread("a", ago(time.Hour), message("m", "hi"))
+	thread.Status = "active"
+	env.threads.Set(thread)
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	require.Equal(t, fetchNow, env.account(t).Refresh["a"].LastChange)
+	before := env.account(t)
+	st, err := env.syncer.Store.LoadThread(passKey, "a")
+	require.NoError(t, err)
+	usageChange := st.UsageChange
+
+	env.clock.Advance(time.Hour)
+	changed := env.clock.Now()
+	env.threads.Update("a", func(th *codexcloudtest.Thread) {
+		th.UpdatedAt = changed.Unix() - 60
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+	})
+	env.run(t)
+	// The crash: the account save and the mark saved after it are lost;
+	// the chat's committed state stays.
+	require.NoError(t, env.syncer.Store.SaveAccount(passKey, before))
+	st, err = env.syncer.Store.LoadThread(passKey, "a")
+	require.NoError(t, err)
+	st.UsageChange = usageChange
+	require.NoError(t, env.syncer.Store.SaveThread(passKey, "a", st))
+
+	env.clock.Advance(5 * time.Minute)
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "the root is asked about again")
+	assert.Equal(t, changed, env.account(t).Refresh["a"].LastChange, "with the committed change time")
+}

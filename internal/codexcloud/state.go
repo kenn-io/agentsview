@@ -67,8 +67,13 @@ type ThreadState struct {
 	// root that settles after being left out can store it again as final.
 	LastPlanRow       jsontext.Value `json:"last_plan_row,omitzero"`
 	LastHandledTurnID string         `json:"last_handled_turn_id,omitzero"`
-	IsSubAgent        bool           `json:"is_sub_agent,omitzero"`
-	ArchivedFirstSeen time.Time      `json:"archived_first_seen,omitzero"`
+	// UsageChange, on a usage root, is the newest change that marked it
+	// pending in a saved account state. Once the root has no pending or
+	// refresh entry, a fetch whose change is not later than this does not
+	// mark it again.
+	UsageChange       time.Time `json:"usage_change,omitzero"`
+	IsSubAgent        bool      `json:"is_sub_agent,omitzero"`
+	ArchivedFirstSeen time.Time `json:"archived_first_seen,omitzero"`
 	// Listing is the newest listing record, so a mirror file rebuilt for a
 	// thread outside this pass's listing pages still gets its metadata.
 	Listing jsontext.Value `json:"listing,omitzero"`
