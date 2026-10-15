@@ -31,7 +31,7 @@ func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
 		},
 	}
-	sessions := []SessionMeta{{SessionID: "root"}, {SessionID: "child"}}
+	sessions := []SessionMeta{{SessionID: "root"}, {SessionID: "child", IsAutomated: true}}
 	r, err := Aggregate(p, sessions, nil, usage)
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
@@ -40,6 +40,8 @@ func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
 	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.InteractiveCost)
+	assert.Zero(t, r.Totals.AutomatedCost.Microdollars)
 	bySession := make(map[string]SessionRow, len(r.BySession))
 	for _, row := range r.BySession {
 		bySession[row.SessionID] = row
@@ -52,49 +54,51 @@ func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	assert.Zero(t, bySession["child"].Cost.Microdollars)
 }
 
-func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
-	usage := []UsageRow{
+func TestCanonicalSessionTokenCoverageCreditsDuplicateCategories(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage []UsageRow
+		want  SessionTokenCoverage
+	}{
 		{
-			SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 100, OutputTokens: 5,
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+			name: "claude snapshot",
+			usage: []UsageRow{
+				{
+					SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
+					InputTokens: 100, OutputTokens: 5,
+					ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+				},
+				{
+					SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
+					InputTokens: 900, OutputTokens: 100,
+					CacheCreationTokens: 200, CacheReadTokens: 300,
+					ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+				},
+			},
+			want: SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400},
 		},
 		{
-			SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
-			InputTokens: 900, OutputTokens: 100,
-			CacheCreationTokens: 200, CacheReadTokens: 300,
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+			name: "generic duplicate",
+			usage: []UsageRow{
+				{
+					SessionID: "root", InputTokens: 700, OutputTokens: 80,
+					CacheReadTokens: 100, UsageDedupKey: "shared-usage",
+				},
+				{
+					SessionID: "child", OutputTokens: 80,
+					UsageDedupKey: "shared-usage",
+				},
+			},
+			want: SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800},
 		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.usage)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, coverage["root"])
+			assert.Equal(t, tc.want, coverage["child"])
+		})
 	}
-
-	coverage, err := CanonicalSessionTokenCoverageContext(
-		t.Context(), usage)
-	require.NoError(t, err)
-
-	want := SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400}
-	assert.Equal(t, want, coverage["root"])
-	assert.Equal(t, want, coverage["child"])
-}
-
-func TestCanonicalSessionTokenCoverageCreditsGenericDuplicateCategories(t *testing.T) {
-	usage := []UsageRow{
-		{
-			SessionID: "root", InputTokens: 700, OutputTokens: 80,
-			CacheReadTokens: 100, UsageDedupKey: "shared-usage",
-		},
-		{
-			SessionID: "child", OutputTokens: 80,
-			UsageDedupKey: "shared-usage",
-		},
-	}
-
-	coverage, err := CanonicalSessionTokenCoverageContext(
-		t.Context(), usage)
-	require.NoError(t, err)
-
-	want := SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800}
-	assert.Equal(t, want, coverage["root"])
-	assert.Equal(t, want, coverage["child"])
 }
 
 func TestClaudeSnapshotPrefersLaterTimestampThenSemanticTieBreakers(t *testing.T) {

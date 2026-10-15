@@ -96,14 +96,16 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
 
-func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
+func TestHandleSessionUsage_SubagentResponseModes(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		untimed   bool
-		breakdown bool
+		name    string
+		query   string
+		untimed bool
 	}{
-		{name: "untimed", untimed: true},
-		{name: "breakdown", breakdown: true},
+		{name: "untimed rollup", query: "rollup=true", untimed: true},
+		{name: "breakdown rollup", query: "rollup=true&breakdown=true"},
+		{name: "root only", query: "breakdown=true"},
+		{name: "combined subagents", query: "breakdown=true&subagents=true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			te := setup(t)
@@ -127,20 +129,39 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 				})
 			}
 
-			url := "/api/v1/sessions/root-rollup/usage?rollup=true"
-			if tc.breakdown {
-				url += "&breakdown=true"
-			}
-			w := te.get(t, url)
+			w := te.get(t, "/api/v1/sessions/root-rollup/usage?"+tc.query)
 			assertStatus(t, w, http.StatusOK)
 			var got map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-			assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-			assert.Equal(t, true, got["has_rollup_cost"])
-			assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
-			if tc.breakdown {
+			switch tc.name {
+			case "untimed rollup", "breakdown rollup":
+				assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
+				assert.Equal(t, true, got["has_rollup_cost"])
+				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
+				if !tc.untimed {
+					assert.InDelta(t, float64(1), got["breakdown_count"], 0)
+					assert.Len(t, got["breakdown"], 1)
+				}
+			case "root only":
+				assert.Equal(t, map[string]any{"microdollars": float64(10500)}, got["cost"])
 				assert.InDelta(t, float64(1), got["breakdown_count"], 0)
-				assert.Len(t, got["breakdown"], 1)
+				assert.NotContains(t, got, "subagent_count", "a request without the param must not gain the new field")
+			case "combined subagents":
+				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["cost"], "cost covers the root and its subagent")
+				assert.InDelta(t, 0.021, got["cost_usd"], 0, "cost_usd must reflect the combined subagent-inclusive cost")
+				assert.InDelta(t, float64(1), got["subagent_count"], 0)
+				assert.InDelta(t, float64(2), got["breakdown_count"], 0)
+				assert.NotContains(t, got, "rollup_cost", "subagents=true must not emit the rollup fields the SPA reads")
+				rows, ok := got["breakdown"].([]any)
+				require.True(t, ok)
+				require.Len(t, rows, 2)
+				rootRow, ok := rows[0].(map[string]any)
+				require.True(t, ok)
+				assert.NotContains(t, rootRow, "subagent_session_id")
+				childRow, ok := rows[1].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "child-rollup", childRow["subagent_session_id"])
+				assert.Equal(t, "message", childRow["source"])
 			}
 		})
 	}
@@ -312,69 +333,6 @@ func assertSessionUsageError(
 			"message": message,
 		},
 	}, got)
-}
-
-// TestHandleSessionUsage_SubagentsParamCombinesInPlace covers the additive
-// `subagents=true` param the CLI uses: it folds descendant usage into the
-// primary totals and breakdown rather than adding parallel rollup_* fields.
-func TestHandleSessionUsage_SubagentsParamCombinesInPlace(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "subagents-root", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "subagents-child", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "subagents-root"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "subagents-root", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(
-			`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "subagents-child", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(
-			`{"input_tokens":1000,"output_tokens":500}`)
-	})
-
-	// Without the param the endpoint stays own-session.
-	w := te.get(t, "/api/v1/sessions/subagents-root/usage?breakdown=true")
-	assertStatus(t, w, http.StatusOK)
-	var own map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &own))
-	assert.Equal(t, map[string]any{"microdollars": float64(10500)},
-		own["cost"])
-	assert.InDelta(t, float64(1), own["breakdown_count"], 0)
-	assert.NotContains(t, own, "subagent_count",
-		"a request without the param must not gain the new field")
-
-	w = te.get(t,
-		"/api/v1/sessions/subagents-root/usage?breakdown=true&subagents=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["cost"], "cost covers the root and its subagent")
-	assert.InDelta(t, 0.021, got["cost_usd"], 0,
-		"cost_usd must reflect the combined subagent-inclusive cost")
-	assert.InDelta(t, float64(1), got["subagent_count"], 0)
-	assert.InDelta(t, float64(2), got["breakdown_count"], 0)
-	assert.NotContains(t, got, "rollup_cost",
-		"subagents=true must not emit the rollup fields the SPA reads")
-
-	rows, ok := got["breakdown"].([]any)
-	require.True(t, ok)
-	require.Len(t, rows, 2)
-	rootRow, ok := rows[0].(map[string]any)
-	require.True(t, ok)
-	assert.NotContains(t, rootRow, "subagent_session_id")
-	childRow, ok := rows[1].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "subagents-child", childRow["subagent_session_id"])
-	assert.Equal(t, "message", childRow["source"])
 }
 
 func TestHandleSessionUsage_SubagentsRefreshesNewLocalTranscript(t *testing.T) {
