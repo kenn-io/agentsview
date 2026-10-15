@@ -31,6 +31,10 @@ type fullPushRun struct {
 	DataVersion   int    `json:"data_version"`
 	// Reason is why the run was a full push.
 	Reason string `json:"reason"`
+	// Errored reports that the run reached the end with session errors.
+	// Such a run resumes only while something else still forces a full
+	// push; otherwise the incremental push handles the failed sessions.
+	Errored bool `json:"errored,omitempty"`
 }
 
 func (r fullPushRun) encode() (string, error) {
@@ -72,11 +76,13 @@ func (s *Sync) pendingFullPushRun(stored, databaseID string) (run fullPushRun, p
 	}
 	run, err := parseFullPushRun(stored)
 	if err != nil {
-		log.Printf("clickhouse push: restarting an interrupted full push whose record is unreadable: %v", err)
-		return fullPushRun{Reason: "interrupted full push"}, true, false
+		log.Printf("clickhouse push: starting over instead of resuming an unfinished full push whose record is unreadable: %v", err)
+		return fullPushRun{Reason: "unfinished full push"}, true, false
 	}
-	if run.Version == 0 || run != s.newFullPushRun(run.Version, databaseID, run.Reason) {
-		log.Printf("clickhouse push: restarting an interrupted full push (%s) because the archive, scope, or format changed since it began",
+	current := s.newFullPushRun(run.Version, databaseID, run.Reason)
+	current.Errored = run.Errored
+	if run.Version == 0 || run != current {
+		log.Printf("clickhouse push: starting over instead of resuming the unfinished full push (%s) because the archive, scope, or format changed since it began",
 			run.Reason)
 		return run, true, false
 	}

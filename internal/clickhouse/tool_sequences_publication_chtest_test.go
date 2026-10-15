@@ -269,7 +269,7 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Full)
-	assert.Equal(t, "resuming interrupted full push (requested)", result.FullReason)
+	assert.Equal(t, "resuming an unfinished full push, started because: requested", result.FullReason)
 	res = get()
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)

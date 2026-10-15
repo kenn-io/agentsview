@@ -68,6 +68,9 @@ type PushResult struct {
 	// SkippedUnchanged counts in-scope sessions whose fingerprint already
 	// matched the replica. Backends that skip silently leave it zero.
 	SkippedUnchanged int
+	// SkippedResumed counts sessions a resumed full push left alone because
+	// the unfinished run it continues already pushed them as they are now.
+	SkippedResumed int
 	// DeletedStale counts replica sessions removed because they no longer
 	// exist locally or left the push scope.
 	DeletedStale int

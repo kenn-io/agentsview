@@ -3246,7 +3246,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	second, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.Zero(t, second.SessionsPushed)
-	assert.Equal(t, 1, second.SkippedUnchanged)
+	assert.Equal(t, 1, second.SkippedResumed)
 	var gotArchiveID string
 	require.NoError(t, pg.QueryRowContext(ctx, `
 		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,

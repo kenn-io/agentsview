@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/atomicfile"
@@ -88,6 +89,14 @@ func ensureMirrorWorkDir(path string) (string, error) {
 // continues it instead of starting over.
 const rebuildFileSuffix = ".rebuild"
 
+// rebuildLockSuffix names the lock file in the work directory that a push
+// holds from reading the rebuild file until the rebuilt file replaces the
+// mirror, so two pushes never build, validate, or swap the same file.
+const rebuildLockSuffix = ".rebuild.lock"
+
+// errRebuildLocked reports that another push holds the mirror's rebuild lock.
+var errRebuildLocked = errors.New("another push is rebuilding the mirror")
+
 // rebuildRunMetadataKey holds, inside a rebuild file, the rebuildRun the
 // file is being built for. The record stays in the file when it replaces the
 // mirror, so a rebuild whose final swap fails resumes too. Only rebuild files
@@ -111,6 +120,10 @@ type rebuildRun struct {
 	Machine          string `json:"machine"`
 	SourceDatabaseID string `json:"source_database_id"`
 	SourceArchiveID  string `json:"source_archive_id"`
+	// Errored reports that the rebuild reached the end with session errors.
+	// Such a rebuild resumes only while something else still requires a
+	// rebuild; otherwise the incremental push handles the failed sessions.
+	Errored bool `json:"errored,omitempty"`
 }
 
 // newRebuildRun describes a rebuild this process would run now.
@@ -140,22 +153,81 @@ func newRebuildRun(
 // resumableAs reports whether a file built for r can continue as a rebuild
 // for current.
 func (r rebuildRun) resumableAs(current rebuildRun) bool {
-	r.Reason = current.Reason
+	r.Reason, r.Errored = current.Reason, current.Errored
 	return r == current
 }
 
-// pendingRebuild returns the run of a rebuild file left by an interrupted
-// rebuild that current can continue, or nil when there is none. It removes a
-// file that cannot continue: the mirror itself was never touched, so nothing
-// else depends on it. A file another process holds open means a rebuild is
-// running there, and pendingRebuild fails instead of competing with it.
-func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebuildRun, error) {
+// claimRebuild takes path's rebuild lock and returns the run of an unfinished
+// rebuild to continue, or nil to start fresh. The caller holds the lock until
+// the rebuild swaps in or fails, then unlocks it.
+//
+// fresh discards an unfinished rebuild: --full asks for every session to be
+// rewritten, and the file's fingerprints cannot see in-place edits. A rebuild
+// that ended with session errors is discarded too unless required, so when
+// the mirror needs no rebuild the incremental push handles those sessions.
+func claimRebuild(
+	ctx context.Context, path string, current rebuildRun, fresh, required bool,
+) (*flock.Flock, *rebuildRun, error) {
+	workDir, err := ensureMirrorWorkDir(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	lock := flock.New(filepath.Join(workDir, filepath.Base(path)+rebuildLockSuffix))
+	locked, err := lock.TryLock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("locking duckdb mirror %s for rebuild: %w", path, err)
+	}
+	if !locked {
+		return nil, nil, errRebuildLocked
+	}
+	pending, err := pendingRebuild(ctx, path, current)
+	if err == nil && pending != nil {
+		switch {
+		case fresh:
+			log.Printf("duckdbsync: --full requested; discarding the unfinished rebuild (%s)", pending.Reason)
+			pending, err = nil, removeRebuildFile(rebuildFilePath(path))
+		case pending.Errored && !required:
+			log.Printf("duckdbsync: discarding the unfinished rebuild (%s); it ended with session errors and the mirror needs no rebuild",
+				pending.Reason)
+			pending, err = nil, removeRebuildFile(rebuildFilePath(path))
+		}
+	}
+	if err != nil {
+		return nil, nil, errors.Join(err, unlockRebuild(lock))
+	}
+	return lock, pending, nil
+}
+
+func unlockRebuild(lock *flock.Flock) error {
+	if err := lock.Unlock(); err != nil {
+		return fmt.Errorf("unlocking duckdb mirror rebuild: %w", err)
+	}
+	return nil
+}
+
+// rebuildFileExists reports whether an unfinished rebuild left its file.
+func rebuildFileExists(path string) (bool, error) {
 	file := rebuildFilePath(path)
 	if _, err := os.Lstat(file); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return false, nil
 		}
-		return nil, fmt.Errorf("checking duckdb rebuild file %s: %w", file, err)
+		return false, fmt.Errorf("checking duckdb rebuild file %s: %w", file, err)
+	}
+	return true, nil
+}
+
+// pendingRebuild returns the run of a rebuild file left by an unfinished
+// rebuild that current can continue, or nil when there is none. It removes a
+// file that cannot continue: the mirror itself was never touched, so nothing
+// else depends on it. A file another process holds open means a rebuild from
+// an older build is running there, and pendingRebuild fails instead of
+// competing with it. Cancellation keeps the file for the next push.
+func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebuildRun, error) {
+	file := rebuildFilePath(path)
+	exists, err := rebuildFileExists(path)
+	if err != nil || !exists {
+		return nil, err
 	}
 	// The work directory exists because the file does; this only verifies
 	// it is still private before opening anything inside it.
@@ -167,12 +239,18 @@ func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebu
 		if isMirrorHeldError(err) {
 			return nil, rebuildInProgressError(path, err)
 		}
-		log.Printf("duckdbsync: discarding unreadable interrupted rebuild %s: %v", file, err)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("opening duckdb rebuild file %s: %w", file, err)
+		}
+		log.Printf("duckdbsync: discarding unreadable unfinished rebuild %s: %v", file, err)
 		return nil, removeRebuildFile(file)
 	}
 	value, readErr := readMetadataKey(ctx, conn, rebuildRunMetadataKey)
 	if err := conn.Close(); err != nil {
 		return nil, fmt.Errorf("closing duckdb rebuild file %s: %w", file, err)
+	}
+	if readErr != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("reading duckdb rebuild file %s: %w", file, readErr)
 	}
 	var run rebuildRun
 	if readErr == nil && value != "" {
@@ -180,10 +258,10 @@ func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebu
 	}
 	switch {
 	case readErr != nil || value == "":
-		log.Printf("duckdbsync: discarding interrupted rebuild %s with no readable run record: %v", file, readErr)
+		log.Printf("duckdbsync: discarding unfinished rebuild %s with no readable run record: %v", file, readErr)
 		return nil, removeRebuildFile(file)
 	case !run.resumableAs(current):
-		log.Printf("duckdbsync: discarding interrupted rebuild (%s) because the archive, scope, machine, or format changed since it began",
+		log.Printf("duckdbsync: discarding unfinished rebuild (%s) because the archive, scope, machine, or format changed since it began",
 			run.Reason)
 		return nil, removeRebuildFile(file)
 	}
@@ -207,36 +285,23 @@ func removeRebuildFile(file string) error {
 	return nil
 }
 
-// rebuildMirror builds a complete DuckDB mirror in the rebuild file inside
+// buildMirror builds a complete DuckDB mirror in the rebuild file inside
 // the mirror's work directory, then atomically swaps it over path. It is
 // the only way a schema v9 mirror is created or repaired: unlike Sync.Push,
 // it never touches an existing mirror file in place, so a rebuild that
-// fails at any point leaves the previous mirror (if any) fully intact.
+// fails at any point leaves the previous mirror (if any) fully intact. The
+// caller holds the rebuild lock from claimRebuild.
 //
 // A rebuild that fails or is killed keeps its file. The next rebuild for
 // the same archive, scope, machine, and formats reopens it and pushes only
 // the sessions it is missing or holds stale, so repeated interruptions
-// still converge. reason is recorded in the file and reported again when
-// a later push resumes it.
-func rebuildMirror(
+// still converge. run is recorded in the file, so a later push can tell
+// whether the file can continue and report why the rebuild started.
+func buildMirror(
 	ctx context.Context, path string, local *db.DB, machine string,
-	opts storage.MirrorPushOptions, reason string,
+	opts storage.MirrorPushOptions, run rebuildRun,
 	onProgress func(storage.MirrorPushProgress),
 ) (storage.MirrorPushResult, error) {
-	run, err := newRebuildRun(ctx, local, machine, opts, reason)
-	if err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	pending, err := pendingRebuild(ctx, path, run)
-	if err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	if pending != nil {
-		run.Reason = pending.Reason
-	}
-	if _, err := ensureMirrorWorkDir(path); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
 	file := rebuildFilePath(path)
 
 	s, err := New(ctx, file, local, machine, opts)
@@ -256,6 +321,9 @@ func rebuildMirror(
 
 	wantSessions := result.SessionsPushed + result.Diagnostics.SkippedUnchangedSessions.Total
 	if err := validateBuiltMirror(ctx, file, wantSessions); err != nil {
+		if ctx.Err() != nil {
+			return result, err
+		}
 		return result, errors.Join(err, removeRebuildFile(file))
 	}
 	if err := swapMirrorFile(file, path); err != nil {
@@ -279,7 +347,7 @@ func rebuildMirror(
 // The worst case if it does happen is bounded and self-healing: the
 // in-progress rebuild's own rename fails with an actionable "temp file
 // missing" error, that one push attempt fails, and the caller retries — the
-// existing mirror file is never touched (rebuildMirror never writes to it
+// existing mirror file is never touched (buildMirror never writes to it
 // in place), so there is no risk of corruption, only a failed push.
 const staleTempFileAge = 24 * time.Hour
 
@@ -386,7 +454,7 @@ type rebuildSnapshot struct {
 	sourceArchiveID string
 }
 
-// captureRebuildSnapshot reads the state tokens rebuildMirror needs to seed
+// captureRebuildSnapshot reads the state tokens buildMirror needs to seed
 // post-rebuild mirror metadata. It must be called before the rebuild lists
 // sessions to push; see rebuildSnapshot for why.
 func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot, error) {
@@ -447,6 +515,14 @@ func buildMirrorInto(
 		return result, err
 	}
 	if result.Errors > 0 {
+		run.Errored = true
+		encodedRun, err := json.Marshal(run)
+		if err != nil {
+			return result, fmt.Errorf("encoding duckdb rebuild run: %w", err)
+		}
+		if err := recordMetadataKey(ctx, s.duck, rebuildRunMetadataKey, string(encodedRun)); err != nil {
+			return result, err
+		}
 		return result, fmt.Errorf(
 			"rebuild failed with %d session push errors", result.Errors,
 		)
@@ -474,7 +550,7 @@ func buildMirrorInto(
 
 // pushEverything brings a rebuild file to every session in scope plus the
 // mirror's global tables (pricing, cursor usage, curation rows). It reads no
-// push watermarks: rebuildMirror is the only caller. The file is empty on a
+// push watermarks: buildMirror is the only caller. The file is empty on a
 // fresh rebuild. A resumed rebuild's file already holds the sessions the
 // interrupted one committed: those whose fingerprints still match are kept,
 // and those no longer in the listing are removed. Project identity

@@ -119,9 +119,9 @@ func TestFullPushResumesAcrossRestarts(t *testing.T) {
 	res, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Full)
-	assert.Equal(t, "resuming interrupted full push (backfilling session aliases)", res.FullReason)
+	assert.Equal(t, "resuming an unfinished full push, started because: backfilling session aliases", res.FullReason)
 	assert.Equal(t, 1, res.SessionsPushed)
-	assert.Equal(t, 2, res.SkippedUnchanged)
+	assert.Equal(t, 2, res.SkippedResumed)
 	assert.Zero(t, res.Errors)
 	assert.Equal(t, []string{"mid", "new", "old"}, f.sessionIDs(t))
 	assert.Equal(t, newCTID, f.messageCTID(t, "new"), "committed sessions are not rewritten")
@@ -168,7 +168,7 @@ func TestFullPushResumeRepushesSessionsMissingFromPG(t *testing.T) {
 	res, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, res.SessionsPushed)
-	assert.Zero(t, res.SkippedUnchanged)
+	assert.Zero(t, res.SkippedResumed)
 	assert.Equal(t, []string{"mid", "new", "old"}, f.sessionIDs(t))
 }
 
@@ -245,11 +245,55 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 	s.vectorSource = source
 	res, err := s.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "resuming interrupted full push (backfilling session aliases)", res.FullReason)
+	assert.Equal(t, "resuming an unfinished full push, started because: backfilling session aliases", res.FullReason)
 	assert.Zero(t, res.SessionsPushed)
-	assert.Equal(t, 2, res.SkippedUnchanged)
+	assert.Equal(t, 2, res.SkippedResumed)
 	assert.Equal(t, 1, res.Vectors.SessionsPushed)
 	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
 	assert.Len(t, exported, 1)
 	assert.NotContains(t, exported, interrupted)
+}
+
+// An explicit full push starts over instead of resuming an unfinished one.
+func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
+	f := newResumeFixture(t, "agentsview_push_resume_requested_test")
+	f.killedPush(t)
+
+	res, err := f.sync().Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Full)
+	assert.Equal(t, 3, res.SessionsPushed)
+	assert.Zero(t, res.SkippedResumed)
+}
+
+// A full push that ended with session errors does not keep later pushes
+// full once nothing else requires one; they go back to incremental.
+func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
+	f := newResumeFixture(t, "agentsview_push_resume_errored_test")
+	first, err := f.sync().Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+
+	// NOT VALID leaves the existing row alone and rejects only the full
+	// push's rewrite of it.
+	_, err = f.pg.ExecContext(t.Context(),
+		`ALTER TABLE sessions ADD CONSTRAINT reject_old CHECK (id <> 'old') NOT VALID`)
+	require.NoError(t, err)
+	errored, err := f.sync().Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	require.NotZero(t, errored.Errors)
+	state := f.sync().effectiveSyncState()
+	stored, err := state.GetSyncState(t.Context(), fullPushRunStateKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, stored, "the errored run stays recorded")
+
+	_, err = f.pg.ExecContext(t.Context(), `ALTER TABLE sessions DROP CONSTRAINT reject_old`)
+	require.NoError(t, err)
+	next, err := f.sync().Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	assert.False(t, next.Full)
+	assert.Empty(t, next.FullReason)
+	stored, err = state.GetSyncState(t.Context(), fullPushRunStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, stored, "the errored run record is cleared")
 }

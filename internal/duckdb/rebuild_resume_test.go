@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -88,7 +89,7 @@ func TestRebuildResumesAfterInterruption(t *testing.T) {
 
 	res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "resuming interrupted rebuild (missing file)", res.Diagnostics.RebuildReason)
+	assert.Equal(t, "resuming an unfinished rebuild, started because: missing file", res.Diagnostics.RebuildReason)
 	assert.Equal(t, 1, res.SessionsPushed)
 	assert.Equal(t, duckSessionPushBatchSize, res.Diagnostics.SkippedUnchangedSessions.Total)
 	assert.Len(t, mirrorSessionIDs(t, path), resumeSessionCount)
@@ -151,4 +152,113 @@ func TestPushFailsWhileRebuildFileIsHeld(t *testing.T) {
 	_, err = Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.ErrorContains(t, err, "another push is already rebuilding")
 	assert.FileExists(t, rebuildFilePath(path), "the running rebuild's file survives")
+}
+
+// While another push holds the rebuild lock, a manual push fails and an
+// automatic one defers, and neither touches the running rebuild's file.
+func TestPushWaitsForRebuildLock(t *testing.T) {
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+
+	holder := flock.New(rebuildFilePath(path) + ".lock")
+	locked, err := holder.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	defer func() { require.NoError(t, holder.Unlock()) }()
+
+	_, err = Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "another push is already rebuilding")
+
+	res, err := Push(t.Context(), path, local, "test-machine",
+		storage.MirrorPushOptions{Automatic: true}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Deferred)
+	assert.Len(t, mirrorSessionIDs(t, rebuildFilePath(path)), duckSessionPushBatchSize)
+}
+
+// Cancelling a push while it reads the rebuild file keeps the file, so the
+// next push still resumes it.
+func TestPendingRebuildKeepsFileWhenCancelled(t *testing.T) {
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+	run, err := newRebuildRun(t.Context(), local, "test-machine", storage.MirrorPushOptions{}, "missing file")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = pendingRebuild(ctx, path, run)
+	require.Error(t, err)
+	assert.FileExists(t, rebuildFilePath(path))
+}
+
+// --full starts a rebuild over instead of resuming an unfinished one, since
+// the unfinished file's fingerprints cannot see sessions edited in place.
+func TestFullPushDiscardsUnfinishedRebuild(t *testing.T) {
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+
+	res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "--full requested", res.Diagnostics.RebuildReason)
+	assert.Equal(t, resumeSessionCount, res.SessionsPushed)
+	assert.Zero(t, res.Diagnostics.SkippedUnchangedSessions.Total)
+}
+
+// writeFailingSession adds a session whose message timestamp DuckDB rejects,
+// so every push of it fails.
+func writeFailingSession(t *testing.T, local *db.DB) {
+	t.Helper()
+	id := "session-bad"
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:         syncSession(id, "alpha", id, "2026-01-01T00:00:00.000Z", 1),
+		Messages:        []db.Message{syncMessage(id, 0, "user", id, "not-a-timestamp")},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+}
+
+// A rebuild that ended with session errors resumes while the mirror still
+// needs a rebuild.
+func TestErroredRebuildResumesWhileRebuildRequired(t *testing.T) {
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	writeFailingSession(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+
+	_, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "session push errors")
+
+	res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "session push errors")
+	assert.Equal(t, "resuming an unfinished rebuild, started because: missing file", res.Diagnostics.RebuildReason)
+	assert.Equal(t, resumeSessionCount, res.Diagnostics.SkippedUnchangedSessions.Total)
+}
+
+// A rebuild that ended with session errors is dropped when the mirror needs
+// no rebuild, so later pushes go back to incremental instead of retrying the
+// failing rebuild forever.
+func TestErroredRebuildDroppedWhenMirrorNeedsNoRebuild(t *testing.T) {
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	_, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	writeFailingSession(t, local)
+
+	_, err = Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
+	require.ErrorContains(t, err, "session push errors")
+	require.FileExists(t, rebuildFilePath(path))
+
+	res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Empty(t, res.Diagnostics.RebuildReason)
+	assert.Equal(t, 1, res.Errors)
+	assert.NoFileExists(t, rebuildFilePath(path))
 }

@@ -309,6 +309,9 @@ func writeReplicaPushSummary(
 	if result.SkippedUnchanged > 0 {
 		fmt.Fprintf(w, "Skipped %d unchanged session(s)\n", result.SkippedUnchanged)
 	}
+	if result.SkippedResumed > 0 {
+		fmt.Fprintf(w, "Skipped %d session(s) already pushed by the unfinished full push\n", result.SkippedResumed)
+	}
 	if result.DeletedStale > 0 {
 		fmt.Fprintf(w, "Removed %d stale session(s)\n", result.DeletedStale)
 	}

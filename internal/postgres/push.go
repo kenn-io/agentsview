@@ -308,10 +308,26 @@ func (s *Sync) pushWithOptions(
 	if err != nil {
 		return result, err
 	}
+	if runPending && pendingRun.Errored && !full {
+		// Before runs were recorded, the push after one that ended with
+		// session errors was incremental unless a trigger above persisted.
+		log.Printf("pgsync: dropping the unfinished full push (%s); it ended with session errors and nothing else requires a full push",
+			pendingRun.Reason)
+		if err := state.SetSyncState(ctx, fullPushRunStateKey, ""); err != nil {
+			return result, fmt.Errorf("clearing %s: %w", fullPushRunStateKey, err)
+		}
+		runPending, resumed = false, false
+	}
+	if resumed && opts.Full {
+		// --full asks for every session to be rewritten, including ones the
+		// unfinished run wrote; its fingerprints cannot see in-place edits.
+		log.Printf("pgsync: full push requested; starting over instead of resuming the unfinished full push (%s)", pendingRun.Reason)
+		resumed = false
+	}
 	switch {
 	case resumed:
 		full = true
-		fullReason = "resuming interrupted full push (" + pendingRun.Reason + ")"
+		fullReason = "resuming an unfinished full push, started because: " + pendingRun.Reason
 	case runPending:
 		full = true
 		noteFull(pendingRun.Reason)
@@ -386,6 +402,7 @@ func (s *Sync) pushWithOptions(
 		current := s.newFullPushRun(fullReason, markerID, backfills)
 		if resumed {
 			current = pendingRun
+			current.Errored = false
 			if err := s.dropMissingRunSessions(ctx, &current); err != nil {
 				return result, err
 			}
@@ -553,7 +570,7 @@ func (s *Sync) pushWithOptions(
 			runCommitted = append(runCommitted, sess)
 		}
 	}
-	result.SkippedUnchanged = len(runCommitted)
+	result.SkippedResumed = len(runCommitted)
 
 	sessions := slices.Collect(maps.Values(sessionByID))
 	db.SortSessionsNewestFirst(sessions)

@@ -203,11 +203,17 @@ Environment variables override the config file:
   swaps it in only when it is complete. If the process stops partway, the
   next push continues that file instead of starting over, even when the
   existing mirror would accept an incremental push, and reports
-  `resuming interrupted rebuild`. Sessions the stopped rebuild already
+  `resuming an unfinished rebuild`. Sessions the stopped rebuild already
   wrote are kept unless they changed or were deleted since. The push
-  discards the file and starts over when the local archive, the project
-  scope, the machine name, or the mirror format changed since the rebuild
-  began. A push fails while another process has the rebuild file open.
+  discards the file and starts over when `--full` is passed or when the
+  local archive, the project scope, the machine name, or the mirror format
+  changed since the rebuild began. A rebuild that reaches the end with
+  session errors resumes only while the mirror still needs a rebuild;
+  otherwise the push discards it and updates the mirror incrementally.
+- **One rebuild at a time** — a push holds a lock beside the rebuild file
+  from the moment it reads the file until the swap. While another push holds
+  it, a watch-mode push waits for a later cycle and a manual push fails. A
+  push also fails while another process has the rebuild file open.
 - **The first push after a resync is always a full rebuild** — the mirror
   records the `database_id` of the SQLite archive generation it was built
   from, and a resync builds a fresh archive with a new `database_id`. A push

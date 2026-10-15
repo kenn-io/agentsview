@@ -784,7 +784,7 @@ var mirrorTables = []tableSpec{
 }
 
 // EnsureSchema creates the DuckDB mirror schema. It has no production
-// callers: Sync.Push always goes through ProbeMirror to pick rebuildMirror
+// callers: Sync.Push always goes through ProbeMirror to pick buildMirror
 // (create-only, via createSchema) or incrementalPush against an
 // already-valid mirror, and 'duckdb serve'/'duckdb quack serve' probe
 // instead of migrating (see ProbeMirror, WatchMirrorReplacement). It is

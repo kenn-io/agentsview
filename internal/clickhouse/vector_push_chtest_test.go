@@ -360,8 +360,9 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 // TestVectorPushScopedPromotesUntilArchiveCompletes pins the watch-mode
 // contract: a change-scoped push reconciles generation-wide until this
 // archive has recorded a clean generation-wide pass, then reads only its
-// changed sessions. Losing the marker (an interrupted pass) promotes again
-// even though the generation row itself is registered.
+// changed sessions. The first push is full, so it ignores the scope. Losing
+// the marker (an interrupted pass) promotes a scoped push again even though
+// the generation row itself is registered.
 func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
@@ -372,9 +373,8 @@ func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 	res, err := s.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, res.Vectors.SessionsPushed)
-	require.Len(t, source.genScopes, 2, "scoped export, then promoted generation-wide export")
-	assert.NotNil(t, source.genScopes[0])
-	assert.Nil(t, source.genScopes[1])
+	require.Len(t, source.genScopes, 1, "a full push exports generation-wide")
+	assert.Nil(t, source.genScopes[0])
 	assert.Nil(t, source.hashScopes[len(source.hashScopes)-1])
 
 	appendMessage(t, local, fixtureBetaID, "beta again", "2026-01-11T00:10:00.000Z")
@@ -407,8 +407,18 @@ func TestVectorPushPromotedExportNotReady(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
-	source.notReadyUnscoped = true
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	// Dropping the completion marker makes the next scoped push promote.
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err = conn.ExecContext(ctx,
+		`DELETE FROM vector_push_state WHERE source_archive_id = ? AND session_id = ''`, s.archiveID)
+	require.NoError(t, err)
+	appendMessage(t, local, fixtureBetaID, "beta again", "2026-01-11T00:10:00.000Z")
+	source.hashes[fixtureBetaID] = "beta-v2"
+	source.notReadyUnscoped = true
+	source.genScopes = nil
 
 	res, err := s.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
 	require.NoError(t, err)

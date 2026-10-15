@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,9 +65,9 @@ func TestFullPushResumesAcrossRestarts(t *testing.T) {
 	assert.Equal(t, []string{fixtureBetaID, fixtureChildID, fixtureAlphaID}, committed,
 		"sessions go newest first and none is pushed twice")
 	assert.True(t, final.Full)
-	assert.Equal(t, "resuming interrupted full push (first push from this archive)", final.FullReason)
+	assert.Equal(t, "resuming an unfinished full push, started because: first push from this archive", final.FullReason)
 	assert.Equal(t, 1, final.SessionsPushed)
-	assert.Equal(t, 2, final.SkippedUnchanged)
+	assert.Equal(t, 2, final.SkippedResumed)
 	assert.Zero(t, final.Errors)
 
 	refDSN, refDatabase := chtest.FreshDatabase(t)
@@ -142,7 +143,11 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 		exported = append(exported, id)
 		return nil
 	}
-	_, err := newTestSync(t, local, target, opts).Push(killCtx, false, nil)
+	// One session per vector batch, so the first session's vectors commit
+	// before the kill.
+	interruptedSync := newTestSync(t, local, target, opts)
+	interruptedSync.vectorBatchSessions = 1
+	_, err := interruptedSync.Push(killCtx, false, nil)
 	kill()
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, exported, 1)
@@ -155,9 +160,9 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 	}
 	res, err := newTestSync(t, local, target, opts).Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "resuming interrupted full push (first push from this archive)", res.FullReason)
+	assert.Equal(t, "resuming an unfinished full push, started because: first push from this archive", res.FullReason)
 	assert.Zero(t, res.SessionsPushed)
-	assert.Equal(t, 3, res.SkippedUnchanged)
+	assert.Equal(t, 3, res.SkippedResumed)
 	assert.Equal(t, 1, res.Vectors.SessionsPushed)
 	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
 	assert.Len(t, exported, 1)
@@ -190,4 +195,99 @@ func tableContent(t *testing.T, conn *sql.DB, table string) []string {
 	}
 	require.NoError(t, rows.Err())
 	return out
+}
+
+// killSecondSessionBatch makes s push one session per batch and kills the
+// push as its second batch starts, so exactly the newest session commits.
+func killSecondSessionBatch(t *testing.T, s *Sync, full bool) {
+	t.Helper()
+	killCtx, kill := context.WithCancel(t.Context())
+	defer kill()
+	batches := 0
+	s.hooks = &pushHooks{
+		sessionBatchSize: 1,
+		beforeSessionRows: func([]db.Session) error {
+			batches++
+			if batches == 2 {
+				kill()
+				return killCtx.Err()
+			}
+			return nil
+		},
+	}
+	_, err := s.Push(killCtx, full, nil)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// A resumed full push rewrites vectors for every session, including those
+// the interrupted process pushed, even when the caller scopes vectors to the
+// sessions this push changed: the interrupted process never reached its
+// vector phase.
+func TestResumedFullPushWritesVectorsForEarlierSessions(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	opts := storage.PusherOptions{VectorSource: newFixtureVectorSource()}
+	// A clean pass first, so a scoped vector push reads only its scope
+	// instead of covering the whole generation.
+	first, err := newTestSync(t, local, target, opts).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Vectors.SessionsPushed)
+	killSecondSessionBatch(t, newTestSync(t, local, target, opts), true)
+
+	res, err := newTestSync(t, local, target, opts).PushWithOptions(ctx,
+		storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.SkippedResumed, "the newest session committed before the kill")
+	assert.Equal(t, 2, res.Vectors.SessionsPushed,
+		"the committed session's vectors are pushed too")
+}
+
+// An explicit full push starts over instead of resuming an unfinished one.
+func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	killSecondSessionBatch(t, newTestSync(t, local, target, storage.PusherOptions{}), false)
+
+	res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "requested", res.FullReason)
+	assert.Equal(t, 3, res.SessionsPushed)
+	assert.Zero(t, res.SkippedResumed)
+}
+
+// A full push that ended with session errors does not keep later pushes
+// full once nothing else requires one; they go back to incremental.
+func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	first, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+
+	failing := newTestSync(t, local, target, storage.PusherOptions{})
+	failing.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+		for _, sess := range batch {
+			if sess.ID == fixtureAlphaID {
+				return errors.New("simulated session failure")
+			}
+		}
+		return nil
+	}}
+	errored, err := failing.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.NotZero(t, errored.Errors)
+
+	conn := chtest.Open(t, target.URL, target.Database)
+	key := failing.archiveKey(fullPushRunKeyBase)
+	meta, err := readMetadata(ctx, conn, key)
+	require.NoError(t, err)
+	require.NotEmpty(t, meta[key], "the errored run stays recorded")
+
+	next, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.False(t, next.Full)
+	assert.Empty(t, next.FullReason)
+	meta, err = readMetadata(ctx, conn, key)
+	require.NoError(t, err)
+	assert.Empty(t, meta[key], "the errored run record is cleared")
 }

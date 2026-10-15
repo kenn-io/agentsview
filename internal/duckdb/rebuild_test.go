@@ -3,6 +3,8 @@
 package duckdb
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,6 +40,28 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	require.NoError(t, err)
 	require.True(t, ok)
 	return ids
+}
+
+// rebuildMirror claims the mirror and rebuilds it the way Push does when a
+// rebuild is required, continuing an unfinished rebuild if one matches.
+func rebuildMirror(
+	ctx context.Context, path string, local *db.DB, machine string,
+	opts storage.MirrorPushOptions, reason string,
+	onProgress func(storage.MirrorPushProgress),
+) (result storage.MirrorPushResult, err error) {
+	run, err := newRebuildRun(ctx, local, machine, opts, reason)
+	if err != nil {
+		return result, err
+	}
+	lock, pending, err := claimRebuild(ctx, path, run, false, true)
+	if err != nil {
+		return result, err
+	}
+	defer func() { err = errors.Join(err, unlockRebuild(lock)) }()
+	if pending != nil {
+		run.Reason = pending.Reason
+	}
+	return buildMirror(ctx, path, local, machine, opts, run, onProgress)
 }
 
 func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T) {

@@ -48,6 +48,10 @@ type fullPushRun struct {
 	// the aggregate document hash it pushed.
 	VectorGeneration int64             `json:"vector_generation,omitempty"`
 	Vectors          map[string]string `json:"vectors,omitempty"`
+	// Errored reports that the run reached the end with session errors.
+	// Such a run resumes only while something else still forces a full
+	// push; otherwise the incremental push handles the failed sessions.
+	Errored bool `json:"errored,omitempty"`
 }
 
 // resumableAs reports whether the run's committed sessions are current for a
@@ -104,11 +108,11 @@ func (s *Sync) pendingFullPushRun(
 		return fullPushRun{}, false, false, nil
 	}
 	if err := json.Unmarshal([]byte(stored), &run); err != nil {
-		log.Printf("pgsync: restarting an interrupted full push whose record is unreadable: %v", err)
-		return fullPushRun{Reason: "interrupted full push"}, true, false, nil
+		log.Printf("pgsync: starting over instead of resuming an unfinished full push whose record is unreadable: %v", err)
+		return fullPushRun{Reason: "unfinished full push"}, true, false, nil
 	}
 	if !run.resumableAs(current) {
-		log.Printf("pgsync: restarting an interrupted full push (%s) because the target, archive, or format changed since it began",
+		log.Printf("pgsync: starting over instead of resuming the unfinished full push (%s) because the target, archive, or format changed since it began",
 			run.Reason)
 		return run, true, false, nil
 	}
@@ -177,8 +181,10 @@ func (s *Sync) startFullPushRun(
 }
 
 func runFingerprintHash(fingerprint string) string {
+	// Half a SHA-256 still tells one session's fingerprints apart, and the
+	// record, rewritten every checkpoint, holds one hash per session.
 	sum := sha256.Sum256([]byte(fingerprint))
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:16])
 }
 
 // sessionDone reports whether the run committed the session with this push
@@ -260,6 +266,7 @@ func (t *fullPushRunTracker) complete(ctx context.Context, sessionErrors int) er
 		return nil
 	}
 	if sessionErrors > 0 {
+		t.run.Errored = true
 		return t.save(ctx)
 	}
 	if err := t.state.SetSyncState(ctx, fullPushRunStateKey, ""); err != nil {
