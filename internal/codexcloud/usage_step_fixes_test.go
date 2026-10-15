@@ -333,6 +333,37 @@ func TestLostAccountStateKeepsAnOutstandingCheck(t *testing.T) {
 	assert.Len(t, env.plan(t, "a").rows, rows+1, "the answer is stored")
 }
 
+// TestLostAccountStateTrustsAnIdenticalAnswer covers a check after a
+// chat changed that OpenAI answered with exactly the stored row. That
+// answer covers the change, so a rebuild past the settle point must not
+// ask again.
+func TestLostAccountStateTrustsAnIdenticalAnswer(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+
+	env.clock.Advance(time.Hour)
+	changed := env.clock.Now()
+	env.threads.Update("a", func(th *codexcloudtest.Thread) {
+		th.UpdatedAt = changed.Unix()
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+	})
+	from := len(env.usage.Requests())
+	for range 3 {
+		env.run(t)
+		env.clock.Advance(time.Hour)
+	}
+	require.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "the change is checked once")
+	require.Contains(t, env.account(t).Refresh, "a", "and answered")
+
+	env.loseAccount(t, false)
+	env.clock.Set(changed.Add(settleAfter + time.Hour))
+	from = len(env.usage.Requests())
+	env.run(t)
+	assert.Empty(t, env.requestedRoots(from), "the identical answer already covered the change")
+}
+
 // TestLostAccountStateRequeuesRootsChangedAfterSettling covers roots that
 // settled and then changed, on the root itself or on a sub-agent chat,
 // with the pending mark for that change lost along with account.json:

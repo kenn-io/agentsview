@@ -384,6 +384,11 @@ func dedup(st *ThreadState, records []mirror.Record) []mirror.Record {
 			// plan usage record of any kind, so a row returning after an
 			// outcome is stored again.
 			if digest(record.Data) == st.LastPlanRecordDigest {
+				// The same row answered again still covers every change
+				// before this fetch.
+				if record.Kind == mirror.KindPlanUsageRow {
+					st.LastPlanRowAt = record.FetchedAt
+				}
 				continue
 			}
 			notePlanRecord(st, record)
