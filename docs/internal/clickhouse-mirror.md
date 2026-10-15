@@ -72,6 +72,14 @@ matches what the experimental `vector_similarity` index accelerates, which would
 need per-dimension tables and a raised `max_limit_for_vector_search_queries` if
 scale ever demands it.
 
+The vector phase writes changed sessions in batches of up to 500 sessions or
+about 32 MiB of document text and embeddings, whichever fills first. Each batch
+inserts its documents and chunks, deletes its sessions' older chunks and
+documents, then inserts their `vector_push_state` rows, all under one version.
+The statement count grows with the number of batches, not sessions. A crash
+before the state rows land leaves every session in the batch stale, so the next
+push repeats them.
+
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
 on read. Timestamps are `DateTime64(6, 'UTC')`. `sessions.last_message_at` is

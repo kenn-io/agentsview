@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -192,6 +193,108 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	assert.Zero(t, full.Vectors.SessionsUnchanged)
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID),
 		"a full re-push replaces rows instead of duplicating them")
+}
+
+// TestVectorPushBatchReplacesEachSessionsRows pins that one flush covering
+// several sessions removes each session's stale rows without touching what
+// the other sessions still hold, whether the sessions share a flush or not.
+func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		batchSessions int
+	}{
+		{name: "one flush", batchSessions: 0},
+		{name: "one flush per session", batchSessions: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			local, target := seedFixture(t)
+			source := newFixtureVectorSource()
+			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+			s.vectorBatchSessions = tc.batchSessions
+			conn := chtest.Open(t, target.URL, target.Database)
+
+			_, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			// Another generation embedded both alpha docs. Its chunks for a
+			// doc alpha still holds survive; those for a vanished doc go.
+			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{
+				{"fp-other-gen", "alpha-d0", int64(0), fixtureAlphaID, vecAlpha0a, uint64(1)},
+				{"fp-other-gen", "alpha-d1", int64(0), fixtureAlphaID, vecAlpha1, uint64(1)},
+			}))
+
+			// alpha drops a doc and re-embeds the survivor with one chunk;
+			// beta gains a doc.
+			source.hashes[fixtureAlphaID] = "alpha-v2"
+			source.docs[fixtureAlphaID] = []storage.VectorPushDoc{
+				vdoc(fixtureAlphaID, "alpha-d0", 0, "alpha first", "h-a0b", vecAlpha0a),
+			}
+			source.hashes[fixtureBetaID] = "beta-v2"
+			source.docs[fixtureBetaID] = []storage.VectorPushDoc{
+				vdoc(fixtureBetaID, "beta-d0", 0, "beta first", "h-b0", vecBeta0),
+				vdoc(fixtureBetaID, "beta-d1", 1, "beta second", "h-b1", vecChild0),
+			}
+			res, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 2, res.Vectors.SessionsPushed)
+			assert.Equal(t, 3, res.Vectors.DocsPushed)
+			assert.Equal(t, 3, res.Vectors.ChunksPushed)
+
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureAlphaID))
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", "alpha-d1"))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks",
+				"session_id = ? AND generation_fingerprint = ?", fixtureAlphaID, vectorFixtureFP))
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-d1"))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks",
+				"doc_key = ? AND generation_fingerprint = ?", "alpha-d0", "fp-other-gen"))
+			assert.Equal(t, 2, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID))
+			assert.Equal(t, 2, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureBetaID))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+				"session_id = ? AND doc_agg_hash = ?", fixtureAlphaID, "alpha-v2"))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+				"session_id = ? AND doc_agg_hash = ?", fixtureBetaID, "beta-v2"))
+		})
+	}
+}
+
+// TestVectorPushFailedFlushKeepsSessionsStale pins that a flush failing
+// after its rows land records no push state for any of its sessions, so the
+// next push repeats them instead of trusting the half-finished write.
+func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	conn := chtest.Open(t, target.URL, target.Database)
+
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	source.hashes[fixtureAlphaID] = "alpha-v2"
+	source.hashes[fixtureBetaID] = "beta-v2"
+	var flushed []string
+	boom := errors.New("injected vector state failure")
+	s.hooks = &pushHooks{beforeVectorState: func(ids []string) error {
+		flushed = append(flushed, ids...)
+		return boom
+	}}
+	_, err = s.Push(ctx, false, nil)
+	require.ErrorIs(t, err, boom)
+	assert.ElementsMatch(t, []string{fixtureAlphaID, fixtureBetaID}, flushed,
+		"both changed sessions share one flush")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"session_id = ? AND doc_agg_hash = ?", fixtureAlphaID, "alpha-v1"))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"session_id = ? AND doc_agg_hash = ?", fixtureBetaID, "beta-v1"))
+
+	s.hooks = nil
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.Vectors.SessionsPushed, "the failed flush's sessions are repeated")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"session_id = ? AND doc_agg_hash = ?", fixtureAlphaID, "alpha-v2"))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"session_id = ? AND doc_agg_hash = ?", fixtureBetaID, "beta-v2"))
 }
 
 func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {

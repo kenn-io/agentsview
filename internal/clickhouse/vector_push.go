@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// vectorProgressStride bounds how many unchanged sessions the delta scan
-// examines between progress reports; pushed sessions always report.
+// vectorProgressStride bounds how many sessions the delta scan examines
+// between progress reports; every vector batch flush also reports.
 const vectorProgressStride = 2000
 
 // vectorCompleteMarker is the vector_push_state session_id (never a real
@@ -129,9 +130,27 @@ func (s *Sync) pushVectors(
 			VectorChunksPushed:  res.ChunksPushed,
 		})
 	}
+	batch := s.newVectorBatch(gen.Fingerprint)
+	flush := func() error {
+		if batch.empty() {
+			return nil
+		}
+		if err := s.flushVectorBatch(ctx, batch); err != nil {
+			return err
+		}
+		res.SessionsPushed += len(batch.sessions)
+		res.DocsPushed += batch.docs
+		res.ChunksPushed += len(batch.chunkRows)
+		batch.reset()
+		report()
+		return nil
+	}
 	var evict []string
 	for sessionID, agg := range local {
 		examined++
+		if examined%vectorProgressStride == 0 {
+			report()
+		}
 		prev, hasState := state[sessionID]
 		if !resident[sessionID] {
 			// The session phase did not push this session (out of the
@@ -150,21 +169,29 @@ func (s *Sync) pushVectors(
 			res.SessionsDeferred++
 			continue
 		}
-		outcome, err := s.pushVectorSession(ctx, gen.Fingerprint, export, sessionID, agg)
+		docs, exportHash, err := export.SessionDocs(ctx, sessionID)
 		if err != nil {
-			return res, err
+			return res, fmt.Errorf("reading local docs for session %s: %w", sessionID, err)
 		}
-		if !outcome.pushed {
+		// The export hash covers exactly the docs read above, in the same
+		// local snapshot. A mismatch with the delta-scan hash means the
+		// local index changed between the scan and this export (an
+		// embeddings rebuild refilling the generation) and the docs may be
+		// a partial view. Defer: the next push re-derives the delta from
+		// the settled index.
+		if exportHash != agg {
 			res.SessionsDeferred++
-			if examined%vectorProgressStride == 0 {
-				report()
-			}
 			continue
 		}
-		res.SessionsPushed++
-		res.DocsPushed += outcome.docs
-		res.ChunksPushed += outcome.chunks
-		report()
+		batch.add(sessionID, agg, docs)
+		if batch.full() {
+			if err := flush(); err != nil {
+				return res, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return res, err
 	}
 	report()
 
@@ -421,88 +448,133 @@ func (s *Sync) archiveResidentSessionIDs(ctx context.Context, ids []string) (map
 	return resident, nil
 }
 
-type vectorSessionOutcome struct {
-	pushed bool
-	docs   int
-	chunks int
+// vectorBatchSessions bounds the sessions one vector flush covers. Their ids
+// appear in the flush's IN lists, so the bound keeps those statements under
+// max_query_size.
+const vectorBatchSessions = idBatchSize
+
+// vectorBatchBytes bounds the estimated document text and embedding payload
+// one flush holds in memory. A single session larger than the bound flushes
+// alone.
+const vectorBatchBytes = 32 << 20
+
+// vectorBatch accumulates the rows of several sessions so one flush writes
+// them with a fixed number of statements.
+type vectorBatch struct {
+	fingerprint string
+	maxSessions int
+	sessions    []string
+	stateHashes []string
+	docRows     [][]any
+	chunkRows   [][]any
+	docs        int
+	bytes       int
 }
 
-// pushVectorSession rewrites one session's documents, chunks, and push state
-// for the generation under one push version. Rows are inserted first, then
-// older versions of the session's rows are deleted, then the state row lands,
-// so an interrupted push leaves the state row behind and the next push
-// repeats the session instead of trusting a half-written one.
-func (s *Sync) pushVectorSession(
-	ctx context.Context, fingerprint string, export storage.VectorExport,
-	sessionID, aggHash string,
-) (vectorSessionOutcome, error) {
-	docs, exportHash, err := export.SessionDocs(ctx, sessionID)
-	if err != nil {
-		return vectorSessionOutcome{}, fmt.Errorf(
-			"reading local docs for session %s: %w", sessionID, err)
+func (s *Sync) newVectorBatch(fingerprint string) *vectorBatch {
+	maxSessions := vectorBatchSessions
+	if s.vectorBatchSessions > 0 {
+		maxSessions = s.vectorBatchSessions
 	}
-	// The export hash covers exactly the docs read above, in the same local
-	// snapshot. A mismatch with the delta-scan hash means the local index
-	// changed between the scan and this export (an embeddings rebuild
-	// refilling the generation) and the docs may be a partial view. Defer:
-	// the next push re-derives the delta from the settled index.
-	if exportHash != aggHash {
-		return vectorSessionOutcome{}, nil
-	}
-	version := newPushVersion()
-	docRows := make([][]any, 0, len(docs))
-	var chunkRows [][]any
+	return &vectorBatch{fingerprint: fingerprint, maxSessions: maxSessions}
+}
+
+// add queues one session's documents and chunks. Rows carry no push version
+// yet: the flush stamps one version on the whole batch.
+func (b *vectorBatch) add(sessionID, aggHash string, docs []storage.VectorPushDoc) {
+	b.sessions = append(b.sessions, sessionID)
+	b.stateHashes = append(b.stateHashes, aggHash)
+	b.docs += len(docs)
 	for _, doc := range docs {
 		offsets := doc.OffsetsJSON
 		if offsets == "" {
 			offsets = "[]"
 		}
-		docRows = append(docRows, []any{
+		b.docRows = append(b.docRows, []any{
 			doc.DocKey, doc.SessionID, doc.SourceUUID,
 			int64(doc.Ordinal), int64(doc.OrdinalEnd), doc.Subordinate,
-			offsets, doc.Content, doc.ContentHash, version,
+			offsets, doc.Content, doc.ContentHash, nil,
 		})
+		b.bytes += len(doc.DocKey) + len(doc.SessionID) + len(doc.SourceUUID) +
+			len(offsets) + len(doc.Content) + len(doc.ContentHash)
 		for _, chunk := range doc.Chunks {
-			chunkRows = append(chunkRows, []any{
-				fingerprint, doc.DocKey, int64(chunk.ChunkIndex), sessionID,
-				chunk.Embedding, version,
+			b.chunkRows = append(b.chunkRows, []any{
+				b.fingerprint, doc.DocKey, int64(chunk.ChunkIndex), sessionID,
+				chunk.Embedding, nil,
 			})
+			b.bytes += len(doc.DocKey) + len(sessionID) + 4*len(chunk.Embedding)
 		}
 	}
-	if err := insertRows(ctx, s.conn, "vector_documents", docRows); err != nil {
-		return vectorSessionOutcome{}, err
+}
+
+func (b *vectorBatch) empty() bool { return len(b.sessions) == 0 }
+
+func (b *vectorBatch) full() bool {
+	return len(b.sessions) >= b.maxSessions || b.bytes >= vectorBatchBytes
+}
+
+func (b *vectorBatch) reset() {
+	b.sessions, b.stateHashes = b.sessions[:0], b.stateHashes[:0]
+	b.docRows, b.chunkRows = nil, nil
+	b.docs, b.bytes = 0, 0
+}
+
+// flushVectorBatch rewrites the batch's documents, chunks, and push state for
+// the generation under one push version. Rows are inserted first, then older
+// versions of the batch sessions' rows are deleted, then the state rows land,
+// so an interrupted flush leaves every batch session's state row behind and
+// the next push repeats those sessions instead of trusting half-written ones.
+func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
+	version := newPushVersion()
+	for _, row := range b.docRows {
+		row[len(row)-1] = version
 	}
-	if err := insertRows(ctx, s.conn, "vector_chunks", chunkRows); err != nil {
-		return vectorSessionOutcome{}, err
+	for _, row := range b.chunkRows {
+		row[len(row)-1] = version
 	}
-	// Older versions of this session's rows are now superseded: chunks for
+	if err := insertRows(ctx, s.conn, "vector_documents", b.docRows); err != nil {
+		return err
+	}
+	if err := insertRows(ctx, s.conn, "vector_chunks", b.chunkRows); err != nil {
+		return err
+	}
+	placeholders, ids := inArgs(b.sessions)
+	// Older versions of these sessions' rows are now superseded: chunks for
 	// this generation, and every generation's chunks for documents that
 	// vanished locally (a document is shared across generations, so a
-	// vanished doc's rows are stale everywhere).
+	// vanished doc's rows are stale everywhere). The vanished-doc check
+	// pairs doc_key with session_id, so a doc that moved to another session
+	// still counts as vanished from its old one, and the subquery needs no
+	// second copy of the session list: rows at or above this version belong
+	// to this flush or to a later push.
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_chunks
-		WHERE session_id = ? AND generation_fingerprint = ? AND push_version < ?`,
-		sessionID, fingerprint, version); err != nil {
-		return vectorSessionOutcome{}, fmt.Errorf("deleting older clickhouse vector chunks for %s: %w", sessionID, err)
+		WHERE session_id IN (`+placeholders+`) AND generation_fingerprint = ? AND push_version < ?`,
+		slices.Concat(ids, []any{b.fingerprint, version})...); err != nil {
+		return fmt.Errorf("deleting older clickhouse vector chunks for %d session(s): %w", len(ids), err)
 	}
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_chunks
-		WHERE session_id = ? AND doc_key NOT IN (
-			SELECT doc_key FROM vector_documents WHERE session_id = ? AND push_version >= ?)`,
-		sessionID, sessionID, version); err != nil {
-		return vectorSessionOutcome{}, fmt.Errorf("deleting clickhouse vector chunks of vanished docs for %s: %w", sessionID, err)
+		WHERE session_id IN (`+placeholders+`) AND (session_id, doc_key) NOT IN (
+			SELECT session_id, doc_key FROM vector_documents WHERE push_version >= ?)`,
+		slices.Concat(ids, []any{version})...); err != nil {
+		return fmt.Errorf("deleting clickhouse vector chunks of vanished docs for %d session(s): %w", len(ids), err)
 	}
 	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_documents WHERE session_id = ? AND push_version < ?`,
-		sessionID, version); err != nil {
-		return vectorSessionOutcome{}, fmt.Errorf("deleting older clickhouse vector documents for %s: %w", sessionID, err)
+		DELETE FROM vector_documents WHERE session_id IN (`+placeholders+`) AND push_version < ?`,
+		slices.Concat(ids, []any{version})...); err != nil {
+		return fmt.Errorf("deleting older clickhouse vector documents for %d session(s): %w", len(ids), err)
 	}
-	if err := insertRows(ctx, s.conn, "vector_push_state", [][]any{{
-		s.archiveID, fingerprint, sessionID, aggHash, version,
-	}}); err != nil {
-		return vectorSessionOutcome{}, err
+	if s.hooks != nil && s.hooks.beforeVectorState != nil {
+		if err := s.hooks.beforeVectorState(b.sessions); err != nil {
+			return err
+		}
 	}
-	return vectorSessionOutcome{pushed: true, docs: len(docs), chunks: len(chunkRows)}, nil
+	stateRows := make([][]any, len(b.sessions))
+	for i, sessionID := range b.sessions {
+		stateRows[i] = []any{s.archiveID, b.fingerprint, sessionID, b.stateHashes[i], version}
+	}
+	return insertRows(ctx, s.conn, "vector_push_state", stateRows)
 }
 
 // evictVectorSession drops this archive's push state for one session and
