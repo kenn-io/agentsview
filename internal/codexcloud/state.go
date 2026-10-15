@@ -287,9 +287,54 @@ func (s *Store) SaveAccount(key AccountKey, st AccountState) error {
 	return save(path, st)
 }
 
-// LoadDescendants reads a usage root's known descendants.
+// LoadDescendants reads a usage root's known descendants. A file that does
+// not decode is set aside and rebuilt from the thread states that name
+// rootID as the root they count under. Read as empty, it would leave the
+// sub-agent chats out of the root's next plan usage request, and the
+// answer would replace the combined figures with the root's alone.
 func (s *Store) LoadDescendants(key AccountKey, rootID string) ([]string, error) {
-	return s.loadList(key, rootID, ".descendants.json")
+	path, err := s.path(key, rootID, ".descendants.json")
+	if err != nil {
+		return nil, err
+	}
+	_, statErr := os.Stat(path)
+	var ids []string
+	found, err := loadFound(s, path, &ids)
+	if err != nil || found || statErr != nil {
+		return ids, err
+	}
+	if ids, err = s.countedUnderRoot(key, rootID); err != nil {
+		return nil, err
+	}
+	return ids, s.SaveDescendants(key, rootID, ids)
+}
+
+// countedUnderRoot lists, sorted, the threads whose state says they count
+// under rootID.
+func (s *Store) countedUnderRoot(key AccountKey, rootID string) ([]string, error) {
+	dir, err := s.accountDir(key)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("codex-cloud: read account directory: %w", err)
+	}
+	var ids []string
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), threadStateSuffix)
+		if !ok || entry.IsDir() || !plainName(id) || id == rootID {
+			continue
+		}
+		st, err := s.LoadThread(key, id)
+		if err != nil {
+			return nil, err
+		}
+		if st.CountedUnder == rootID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // SaveDescendants writes a usage root's descendants; an empty list removes
