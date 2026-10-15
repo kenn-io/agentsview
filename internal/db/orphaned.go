@@ -1388,6 +1388,20 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying session labels: %w", err)
 		}
 	}
+	// CopySyncStateFrom copied the raw archive's parser bindings verbatim, so a
+	// retired page still binds its bare rollout parser id. Rebind it to the
+	// canonical page, or the next archive reparse would find the page under a
+	// new parser id and reject it as a different source.
+	if oldDBHasTable(ctx, tx, "raw_archive_sessions") {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE OR IGNORE main.raw_archive_sessions
+			SET parser_id = substr(parser_id, 1, instr(parser_id, ':')) ||
+					substr(`+retiredCodexTargetSQL("session_id")+`, -73),
+				session_id = `+retiredCodexTargetSQL("session_id")+`
+			WHERE `+retiredCodexTargetSQL("session_id")+` IS NOT NULL`); err != nil {
+			return fmt.Errorf("rebinding raw archive Codex pages: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_external_parents (
@@ -2968,7 +2982,7 @@ func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string
 		if err := rows.Scan(&id, &path); err != nil {
 			return nil, fmt.Errorf("scanning stale codex row: %w", err)
 		}
-		key := parser.CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
+		key := parser.CodexSessionUUIDFromPath(path)
 		prefixEnd := strings.LastIndex(id, ":") + 1
 		if key != "" && prefixEnd > 0 && id[prefixEnd:] != key {
 			liveIDs[id] = id[:prefixEnd] + key
@@ -3002,7 +3016,7 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 			_ = rows.Close()
 			return fmt.Errorf("scanning excluded Codex file name: %w", err)
 		}
-		key := parser.CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
+		key := parser.CodexSessionUUIDFromPath(path)
 		prefixEnd := strings.LastIndex(id, ":") + 1
 		if key == "" || prefixEnd == 0 || id[prefixEnd:] == key ||
 			parser.CodexThreadIDFromSessionKey(key) == key ||
