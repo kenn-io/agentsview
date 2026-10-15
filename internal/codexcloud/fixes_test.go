@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"runtime"
@@ -329,6 +330,58 @@ func TestWriteToLostMirrorKeepsHistoryDue(t *testing.T) {
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
 
 			env.clock.Advance(5 * time.Minute)
+			env.run(t)
+
+			records, err := mirror.ReadAll(t.Context(), path)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"a", "b", "c"}, recordedItemIDs(records))
+		})
+	}
+}
+
+// A failed refetch of a lost mirror writes nothing: a file holding only
+// the listing would replace the chat's archived history on import.
+func TestFailedRefetchOfLostMirrorWritesNothing(t *testing.T) {
+	for _, damage := range []string{"deleted", "truncated"} {
+		t.Run(damage, func(t *testing.T) {
+			env := newPassEnv(t)
+			updated := ago(time.Hour)
+			env.threads.Set(codexcloudtest.Thread{
+				ID: "t", Name: "thread t", CreatedAt: updated - 3600, UpdatedAt: updated,
+				Turns: []codexcloudtest.Turn{{
+					ID: "turn-1", Status: "inProgress", StartedAt: updated - 3600,
+					Items: []codexcloudtest.Item{
+						command("a", "completed", agoMs(time.Hour)), command("b", "completed", agoMs(time.Hour)),
+						command("c", "inProgress", 0),
+					},
+				}},
+			})
+			env.run(t)
+			path := env.mirrorPath(t, "t")
+			if damage == "deleted" {
+				require.NoError(t, os.Remove(path))
+			} else {
+				require.NoError(t, os.Truncate(path, 0))
+			}
+			fail, mu := true, &sync.Mutex{}
+			env.failThread("t", &fail, mu)
+
+			env.clock.Advance(5 * time.Minute)
+			env.run(t)
+
+			require.Contains(t, env.account(t).Retry, "t")
+			info, err := os.Stat(path)
+			if damage == "deleted" {
+				require.ErrorIs(t, err, fs.ErrNotExist)
+			} else {
+				require.NoError(t, err)
+				assert.Zero(t, info.Size())
+			}
+
+			mu.Lock()
+			fail = false
+			mu.Unlock()
+			env.clock.Advance(10 * time.Minute)
 			env.run(t)
 
 			records, err := mirror.ReadAll(t.Context(), path)
