@@ -349,10 +349,13 @@ func usageBackfillLocations(
 	ctx context.Context, cache *usageCache, local *time.Location,
 ) ([]*time.Location, error) {
 	localIdentity := usageTimezoneIdentityFor(local, nil)
+	// A coarse wall clock, as on Windows, gives zones requested moments apart
+	// the same stamp. Ids grow as zones are first requested, so a tie goes to
+	// the zone added last instead of to whatever order SQLite returns.
 	rows, err := cache.db.QueryContext(ctx, `SELECT timezone_name
 		FROM usage_rollup_timezones
 		WHERE timezone_key != ? AND timezone_name NOT IN ('', 'Local')
-		ORDER BY last_requested_at DESC LIMIT 8`, localIdentity.Key)
+		ORDER BY last_requested_at DESC, id DESC LIMIT 8`, localIdentity.Key)
 	if err != nil {
 		return nil, fmt.Errorf("reading recent usage timezones: %w", err)
 	}

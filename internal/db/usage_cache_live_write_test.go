@@ -396,6 +396,21 @@ func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
 		}
 		return names
 	}
+	requestStamps := func() map[string]string {
+		rows, err := cache.db.QueryContext(t.Context(), `SELECT timezone_name, last_requested_at
+			FROM usage_rollup_timezones`)
+		require.NoError(t, err)
+		defer rows.Close()
+		stamps := map[string]string{}
+		for rows.Next() {
+			var name, stamp string
+			require.NoError(t, rows.Scan(&name, &stamp))
+			stamps[name] = stamp
+		}
+		require.NoError(t, rows.Err())
+		return stamps
+	}
+	requested := requestStamps()
 	database.usageBackfillMu.Lock()
 	database.usageBackfillEnabled = true
 	database.usageBackfillMu.Unlock()
@@ -410,6 +425,10 @@ func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
 	require.Positive(t, installs.Load())
 	assert.Equal(t, []string{"Pacific/Auckland", "Europe/Paris", "Asia/Tokyo"}, recentZones(),
 		"background rebuilds reordered request recency")
+	rebuilt := requestStamps()
+	for zone, stamp := range requested {
+		assert.Equal(t, stamp, rebuilt[zone], "background rebuild restamped %s", zone)
+	}
 
 	for zone, stamp := range map[string]string{
 		"Asia/Tokyo": "2026-01-01T01:00:00Z", "Europe/Paris": "2026-01-01T02:00:00Z",
@@ -425,4 +444,47 @@ func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
 	require.Equal(t, built, installs.Load(), "request rebuilt totals the background had warmed")
 	assert.Equal(t, []string{"Asia/Tokyo", "Pacific/Auckland", "Europe/Paris"}, recentZones(),
 		"a warm request did not record its timezone")
+}
+
+func TestUsageTimezoneRecencyBreaksStampTies(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		stamps map[string]string
+	}{
+		{"all zones tied", map[string]string{
+			"Asia/Tokyo": "2026-01-01T01:00:00Z", "Europe/Paris": "2026-01-01T01:00:00Z",
+			"Pacific/Auckland": "2026-01-01T01:00:00Z",
+		}},
+		{"two newest tied", map[string]string{
+			"Asia/Tokyo": "2026-01-01T01:00:00Z", "Europe/Paris": "2026-01-01T02:00:00Z",
+			"Pacific/Auckland": "2026-01-01T02:00:00Z",
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			setUsageLocalLocation(t, time.UTC)
+			database := testDB(t)
+			seedLiveWriteSession(t, database, "session", "project", "2026-08-10T09:00:00Z", 0, 10)
+			for _, zone := range []string{"Asia/Tokyo", "Europe/Paris", "Pacific/Auckland"} {
+				_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: zone})
+				require.NoError(t, err)
+			}
+			snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+			require.NoError(t, err)
+			cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+			require.NoError(t, err)
+			for zone, stamp := range testCase.stamps {
+				_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones
+					SET last_requested_at = ? WHERE timezone_name = ?`, stamp, zone)
+				require.NoError(t, err)
+			}
+			locations, err := usageBackfillLocations(t.Context(), cache, snapshot.location)
+			require.NoError(t, err)
+			names := make([]string, 0, len(locations))
+			for _, location := range locations[1:] {
+				names = append(names, location.String())
+			}
+			assert.Equal(t, []string{"Pacific/Auckland", "Europe/Paris", "Asia/Tokyo"}, names,
+				"equal stamps did not favor the zone requested last")
+		})
+	}
 }
