@@ -4785,13 +4785,24 @@ func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 		},
 	)
 
+	ordinal := 1
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "claude:s-breakdown", []UsageEvent{{
+		SessionID: "claude:s-breakdown", MessageOrdinal: &ordinal,
+		Source: "step", Model: "claude-opus-4-6",
+		InputTokens: 250, OutputTokens: 125,
+		CacheCreationInputTokens: 50, CacheReadInputTokens: 25,
+		OccurredAt: "2026-05-20T10:40:00Z", DedupKey: "step:1",
+	}}))
+
 	u, err := d.GetSessionUsage(ctx, "claude:s-breakdown", true)
 	requireNoError(t, err, "GetSessionUsage")
-	require.Len(t, u.Breakdown, 2, "Breakdown")
+	require.Len(t, u.Breakdown, 3, "Breakdown")
 	assert.Equal(t, 650, u.TotalOutputTokens, "TotalOutputTokens")
 	assert.Equal(t, 1500, u.PeakContextTokens, "PeakContextTokens")
 
 	first := u.Breakdown[0]
+	assert.Equal(t, 1, first.Ordinal)
+	assert.Equal(t, "message", first.Source)
 	require.NotNil(t, first.MessageOrdinal, "first MessageOrdinal")
 	assert.Equal(t, 0, *first.MessageOrdinal, "first MessageOrdinal")
 	assert.Equal(t, "Prompt 1", first.Label, "first Label")
@@ -4801,6 +4812,7 @@ func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 	assert.Equal(t, 40, first.CacheReadInputTokens, "first CacheReadInputTokens")
 
 	second := u.Breakdown[1]
+	assert.Equal(t, 2, second.Ordinal)
 	require.NotNil(t, second.MessageOrdinal, "second MessageOrdinal")
 	assert.Equal(t, 1, *second.MessageOrdinal, "second MessageOrdinal")
 	assert.Equal(t, "Prompt 2", second.Label, "second Label")
@@ -4809,7 +4821,16 @@ func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 	assert.Equal(t, 10, second.CacheCreationInputTokens, "second CacheCreationInputTokens")
 	assert.Equal(t, 20, second.CacheReadInputTokens, "second CacheReadInputTokens")
 
-	breakdownCost := money.MustAdd(first.Cost, second.Cost)
+	third := u.Breakdown[2]
+	assert.Equal(t, 3, third.Ordinal)
+	assert.Equal(t, "Step 2", third.Label)
+	assert.Equal(t, "step", third.Source)
+	assert.Equal(t, 250, third.InputTokens)
+	assert.Equal(t, 125, third.OutputTokens)
+	assert.Equal(t, 50, third.CacheCreationInputTokens)
+	assert.Equal(t, 25, third.CacheReadInputTokens)
+
+	breakdownCost := money.MustAdd(money.MustAdd(first.Cost, second.Cost), third.Cost)
 	assert.Equal(t, breakdownCost, u.Cost,
 		"breakdown cost should sum to total cost")
 }

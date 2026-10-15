@@ -245,7 +245,7 @@ func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 	require.EqualError(t, err, "child usage failed")
 }
 
-func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t *testing.T) {
+func TestGetSessionUsageRollupTraversesNonSubagentAncestors(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
