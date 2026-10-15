@@ -122,3 +122,33 @@ func TestLegacyCodexPageMigrationKeepsCurationAndRawArchiveBinding(t *testing.T)
 		assert.Equal(t, 1, count, query)
 	}
 }
+
+func TestLegacyCodexTrashedPageLinksToThreadParsedAfterCopy(t *testing.T) {
+	// A trashed page whose rollout file is gone is copied before the parse and
+	// never reparsed, so its thread link must not wait for the thread row.
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	src := testDBAtPath(t, srcPath, "src")
+	insertSession(t, src, "codex:"+legacyRoll1, "project", func(s *Session) {
+		s.Agent = "codex"
+		s.FilePath = legacyPageFile(legacyRoll1)
+	})
+	ctx := t.Context()
+	require.NoError(t, src.SoftDeleteSession(ctx, "codex:"+legacyRoll1))
+	_, err := src.getWriter().Exec(ctx, `PRAGMA user_version = 133`)
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
+
+	dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	t.Cleanup(func() { dst.Close() })
+	_, err = dst.CopyTrashedDataFrom(srcPath)
+	require.NoError(t, err)
+	insertSession(t, dst, "codex:"+legacyThread, "project", func(s *Session) { s.Agent = "codex" })
+
+	var parent, relationship string
+	require.NoError(t, dst.getReader().QueryRow(ctx,
+		`SELECT COALESCE(parent_session_id, ''), relationship_type FROM sessions WHERE id = ?`,
+		"codex:"+legacyThread+"_"+legacyRoll1).Scan(&parent, &relationship))
+	assert.Equal(t, "codex:"+legacyThread, parent)
+	assert.Equal(t, "continuation", relationship)
+}

@@ -2272,7 +2272,9 @@ func copySessionDataForIDs(
 		return fmt.Errorf("remapping retired Codex parents: %w", err)
 	}
 	// A retired page the old archive left unlinked continues its thread. The
-	// thread ID is the page ID without its trailing _<rollout>.
+	// thread ID is the page ID without its trailing _<rollout>. The link does
+	// not wait for the thread row: trashed pages copy before the parse, and a
+	// page whose source file is gone is never parsed again to set it.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
 		SET parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
 			parser_parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
@@ -2280,9 +2282,7 @@ func copySessionDataForIDs(
 		FROM `+tempIDsTable+` copied
 		JOIN _codex_session_ids r ON r.retired = 1 AND r.source_id = copied.source_id
 		WHERE sessions.id = copied.id AND copied.id != copied.source_id
-		  AND COALESCE(sessions.parent_session_id, '') = ''
-		  AND EXISTS (SELECT 1 FROM main.sessions head
-			WHERE head.id = substr(sessions.id, 1, length(sessions.id) - 37))`); err != nil {
+		  AND COALESCE(sessions.parent_session_id, '') = ''`); err != nil {
 		return fmt.Errorf("linking retired Codex pages: %w", err)
 	}
 
@@ -3007,13 +3007,13 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 	if err != nil {
 		return fmt.Errorf("reading excluded Codex file names: %w", err)
 	}
+	defer rows.Close()
 	type page struct{ id, createdAt string }
 	var pages []page
 	for rows.Next() {
 		var id, path string
 		var createdAt sql.NullString
 		if err := rows.Scan(&id, &path, &createdAt); err != nil {
-			_ = rows.Close()
 			return fmt.Errorf("scanning excluded Codex file name: %w", err)
 		}
 		key := parser.CodexSessionUUIDFromPath(path)
@@ -3026,10 +3026,8 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 		pages = append(pages, page{id[:prefixEnd] + key, createdAt.String})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return fmt.Errorf("reading excluded Codex file names: %w", err)
 	}
-	_ = rows.Close()
 	for _, p := range pages {
 		if _, err := conn.ExecContext(ctx,
 			`INSERT OR IGNORE INTO excluded_sessions (id, created_at)
