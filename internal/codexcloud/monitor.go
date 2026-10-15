@@ -911,7 +911,7 @@ func (m *Monitor) writeResumeMetadata(key AccountKey, threadID string, thread js
 // newestTurn reads the newest turn's ID and whether it is in progress.
 func newestTurn(ctx context.Context, c *Conn, threadID string) (id string, running bool, err error) {
 	var page turnsPage
-	params := turnsParams{ThreadID: threadID, Limit: 1, ItemsView: turnView}
+	params := turnsParams{ThreadID: threadID, Limit: 1, ItemsView: TurnViewNotLoaded}
 	if err := c.Call(ctx, "thread/turns/list", params, &page); err != nil {
 		return "", false, err
 	}
