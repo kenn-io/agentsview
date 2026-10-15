@@ -85,6 +85,14 @@ func (Backend) NewPusher(
 	_ context.Context, target storage.ReplicaTarget, local *db.DB,
 	opts storage.PusherOptions,
 ) (storage.Pusher, error) {
+	// The PostgreSQL push has a fixed batch size, so a requested one would
+	// be silently ignored.
+	if target.PushBatchSize != 0 {
+		return nil, fmt.Errorf(
+			"push_batch_size is a ClickHouse setting; PostgreSQL push does not accept it (got %d)",
+			target.PushBatchSize,
+		)
+	}
 	s, err := New(
 		target.URL, target.Schema, local,
 		target.MachineName, target.AllowInsecure, opts,

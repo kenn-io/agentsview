@@ -24,7 +24,8 @@ type ReplicaTarget struct {
 	// PushVectors reports whether the target accepts the vector push phase.
 	PushVectors bool
 	// PushBatchSize is how many sessions one push batch writes. Zero selects
-	// the backend default. Only ClickHouse reads it.
+	// the backend default. Only ClickHouse reads it; PostgreSQL rejects a
+	// nonzero value.
 	PushBatchSize int
 }
 
