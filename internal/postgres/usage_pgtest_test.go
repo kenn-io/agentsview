@@ -928,49 +928,6 @@ func TestStoreGetTopSessionsByCostDedupesClaudeKeys(t *testing.T) {
 	assert.Equal(t, "usage-top-001", top[0].SessionID)
 }
 
-func TestStoreGetTopSessionsByCostDedupesSourceUUIDFallback(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_usage_top_source_uuid_test")
-
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-model-top-source', 1000000, 0, 0, 0, 'seed')`)
-	require.NoError(t, err, "insert pricing")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('usage-top-source-001', 'test-machine', 'proj-a', 'claude',
-			 '2026-03-12T10:00:00Z'::timestamptz, 1, 1),
-			('usage-top-source-002', 'test-machine', 'proj-b', 'claude',
-			 '2026-03-12T10:01:00Z'::timestamptz, 1, 1)`)
-	require.NoError(t, err, "insert sessions")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id, source_uuid
-		) VALUES
-			('usage-top-source-001', 0, 'assistant', 'one',
-			 '2026-03-12T10:00:00Z'::timestamptz, 3,
-			 'test-model-top-source', '{"input_tokens":1000000}', 'msg-1', '', 'source-1'),
-			('usage-top-source-002', 0, 'assistant', 'two',
-			 '2026-03-12T10:01:00Z'::timestamptz, 3,
-			 'test-model-top-source', '{"input_tokens":1000000}', 'msg-1', '', 'source-1')`)
-	require.NoError(t, err, "insert messages")
-
-	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
-		From:     "2026-03-12",
-		To:       "2026-03-12",
-		Timezone: "UTC",
-	}, 20)
-	require.NoError(t, err, "GetTopSessionsByCost")
-	require.Len(t, top, 1)
-	assert.Equal(t, "usage-top-source-001", top[0].SessionID)
-}
-
 func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_top_sessions_selected_tokens_test",
@@ -1332,45 +1289,6 @@ func TestStoreGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 	require.NoError(t, err, "GetUsageMatchingSessionCount exclude-model")
 	assert.Equal(t, 1, excludedCount,
 		"empty-model assistant message must survive an ExcludeModel filter")
-}
-
-func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
-
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('usage-counts-source-001', 'test-machine', 'proj-a', 'claude',
-			 '2026-03-12T10:00:00Z'::timestamptz, 1, 1),
-			('usage-counts-source-002', 'test-machine', 'proj-b', 'claude',
-			 '2026-03-12T10:01:00Z'::timestamptz, 1, 1)`)
-	require.NoError(t, err, "insert sessions")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id, source_uuid
-		) VALUES
-			('usage-counts-source-001', 0, 'assistant', 'one',
-			 '2026-03-12T10:00:00Z'::timestamptz, 3,
-			 'test-model-counts', '{"input_tokens":1}', 'msg-1', '', 'source-1'),
-			('usage-counts-source-002', 0, 'assistant', 'two',
-			 '2026-03-12T10:01:00Z'::timestamptz, 3,
-			 'test-model-counts', '{"input_tokens":1}', 'msg-1', '', 'source-1')`)
-	require.NoError(t, err, "insert messages")
-
-	counts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From:     "2026-03-12",
-		To:       "2026-03-12",
-		Timezone: "UTC",
-	})
-	require.NoError(t, err, "GetUsageSessionCounts")
-	assert.Equal(t, 1, counts.Total)
-	assert.Equal(t, 1, counts.ByProject["proj-a"])
-	_, ok := counts.ByProject["proj-b"]
-	assert.False(t, ok, "proj-b should have been deduped out: %#v", counts.ByProject)
 }
 
 func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {

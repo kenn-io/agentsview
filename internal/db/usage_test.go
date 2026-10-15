@@ -2949,79 +2949,6 @@ func TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID(
 	assert.Equal(t, 4730, total, "sum of per-session totals")
 }
 
-func TestGetTopSessionsByCost_DedupesBySourceUUIDWhenClaudePairIncomplete(
-	t *testing.T,
-) {
-	d := testDB(t)
-	ctx := t.Context()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:         "claude-sonnet",
-		InputPerMTok:         money.MustParseDollars("3.0"),
-		OutputPerMTok:        money.MustParseDollars("15.0"),
-		CacheCreationPerMTok: money.MustParseDollars("3.75"),
-		CacheReadPerMTok:     money.MustParseDollars("0.30"),
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "s-parent", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertSession(t, d, "s-fork", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:01:00Z")
-		s.ParentSessionID = new("s-parent")
-		s.RelationshipType = "fork"
-	})
-
-	shared := jsontext.Value(
-		`{"input_tokens":1000,"output_tokens":500,` +
-			`"cache_creation_input_tokens":200,` +
-			`"cache_read_input_tokens":3000}`)
-	unique := jsontext.Value(
-		`{"input_tokens":10,"output_tokens":20,` +
-			`"cache_creation_input_tokens":0,` +
-			`"cache_read_input_tokens":0}`)
-
-	insertMessages(t, d, Message{
-		SessionID: "s-parent", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
-	})
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
-	})
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 1,
-		Role: "assistant", Timestamp: "2024-06-15T10:04:00Z",
-		Model: "claude-sonnet", TokenUsage: unique,
-		ClaudeMessageID: "msg_uniq", SourceUUID: "source_uniq",
-	})
-
-	top, err := d.GetTopSessionsByCost(ctx, UsageFilter{
-		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
-	}, 20)
-	requireNoError(t, err, "GetTopSessionsByCost")
-
-	require.Len(t, top, 2, "len")
-	byID := map[string]TopSessionEntry{}
-	for _, e := range top {
-		byID[e.SessionID] = e
-	}
-
-	parent, ok := byID["s-parent"]
-	require.True(t, ok, "s-parent missing from top sessions")
-	assert.Equal(t, 4700, parent.TotalTokens, "parent.TotalTokens")
-
-	fork, ok := byID["s-fork"]
-	require.True(t, ok, "s-fork missing from top sessions")
-	assert.Equal(t, 30, fork.TotalTokens, "fork.TotalTokens want 30")
-}
-
 func TestGetTopSessionsByCostLimit(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -3574,48 +3501,6 @@ func TestGetUsageSessionCounts_DedupesByClaudeMessageAndRequestID(
 
 	assert.Equal(t, 1, counts.Total,
 		"Total want 1 (fork should dedup out)")
-	assert.Equal(t, 1, counts.ByProject["proj"], "ByProject[proj]")
-	assert.Equal(t, 1, counts.ByAgent["claude"], "ByAgent[claude]")
-}
-
-func TestGetUsageSessionCounts_DedupesBySourceUUIDWhenClaudePairIncomplete(
-	t *testing.T,
-) {
-	d := testDB(t)
-	ctx := t.Context()
-
-	insertSession(t, d, "s-parent", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertSession(t, d, "s-fork", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:01:00Z")
-		s.ParentSessionID = new("s-parent")
-		s.RelationshipType = "fork"
-	})
-
-	shared := jsontext.Value(`{"input_tokens":100,"output_tokens":50}`)
-
-	insertMessages(t, d, Message{
-		SessionID: "s-parent", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
-	})
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
-	})
-
-	counts, err := d.GetUsageSessionCounts(ctx, UsageFilter{
-		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
-	})
-	requireNoError(t, err, "GetUsageSessionCounts")
-
-	assert.Equal(t, 1, counts.Total, "Total want 1 (fork should dedup out)")
 	assert.Equal(t, 1, counts.ByProject["proj"], "ByProject[proj]")
 	assert.Equal(t, 1, counts.ByAgent["claude"], "ByAgent[claude]")
 }

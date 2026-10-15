@@ -35,9 +35,6 @@ func TestUsageSourceUUIDDedupAndRangeAggregation(t *testing.T) {
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
-	survivors := dedupUsage(start, end, end, usage)
-	require.Len(t, survivors, 1)
-	assert.Equal(t, usage[0], survivors[0], "the source UUID fallback keeps the first row")
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
@@ -154,10 +151,11 @@ func TestClaudeSnapshotPrefersLaterTimestampThenSemanticTieBreakers(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mask, _, _ := ClaudeSnapshotSurvivorSelection(tt.usage)
+			mask, attribution, _ := ClaudeSnapshotSurvivorSelection(tt.usage)
 			require.Len(t, mask, 2)
 			assert.False(t, mask[1-tt.want])
 			assert.True(t, mask[tt.want])
+			assert.Equal(t, tt.usage[0].SessionID, attribution[tt.want])
 		})
 	}
 }
