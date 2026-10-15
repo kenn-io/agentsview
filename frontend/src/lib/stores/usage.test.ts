@@ -1201,6 +1201,54 @@ describe("UsageStore session filter params", () => {
     },
   );
 
+  it("replaces a deleted project when a picker change cancels comparison recovery", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { usage } = await loadStore();
+      const remembered = usagePairwiseComparison();
+      remembered.right = { ...remembered.right, dimension: "project", value: "pl1:sha256:alpha" };
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockResolvedValueOnce(remembered);
+      await usage.fetchAll();
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+        usageSummaryWithOptions({
+          projects: ["beta"],
+          models: ["claude-sonnet-4-20250514", "gpt-4o"],
+        }),
+      );
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+      usageServiceMocks.getApiV1UsagePairwiseComparison
+        .mockRejectedValueOnce(
+          new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+        )
+        .mockImplementationOnce(
+          (_request, options) =>
+            new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("aborted", "AbortError")),
+              );
+            }),
+        )
+        .mockResolvedValueOnce(usagePairwiseComparison());
+      const refresh = usage.fetchAll();
+      await vi.waitFor(() =>
+        expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(2),
+      );
+
+      usage.setPairwiseSide("left", { value: "gpt-4o" });
+      await refresh;
+
+      const picked = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[2]?.[0];
+      expect(picked).toMatchObject({
+        left_dimension: "model",
+        left_value: "gpt-4o",
+        right_dimension: "project",
+        right_value: "pl1:sha256:beta",
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("clears pairwise querying when a selector change leaves no comparable values", async () => {
     const { usage } = await loadStore();
 

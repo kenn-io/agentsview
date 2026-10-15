@@ -645,15 +645,25 @@ class UsageStore {
       right: { ...this.pairwiseSelection.right },
     };
     const prev = next[side];
+    const otherSide = side === "left" ? "right" : "left";
+    const other = next[otherSide];
     const dimension = updates.dimension ?? prev.dimension;
     const options = this.pairwiseOptionsFor(dimension);
     const value =
       updates.value ??
       (options.includes(prev.value) && prev.dimension === dimension
         ? prev.value
-        : this.preferredPairwiseValue(dimension, next[side === "left" ? "right" : "left"].value));
+        : this.preferredPairwiseValue(dimension, other.value));
 
     next[side] = { dimension, value };
+    // A picker change can cancel the default-pair recovery, so replace a side
+    // that left the current choices instead of resending it.
+    if (other.value && !this.pairwiseOptionsFor(other.dimension).includes(other.value)) {
+      next[otherSide] = {
+        dimension: other.dimension,
+        value: this.preferredPairwiseValue(other.dimension, value),
+      };
+    }
     this.pairwiseSelection = next;
     if (this.summary) {
       this.clearPairwiseComparisonState();
