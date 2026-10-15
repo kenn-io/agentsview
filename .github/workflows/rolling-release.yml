@@ -1,6 +1,8 @@
 name: Rolling Release
 
 # Build directly-usable Linux and Windows binaries on every push to main.
+# A manual run (workflow_dispatch) builds the current tip of main, for when a
+# push did not start a run. Manual runs on other branches fail before building.
 #
 # Each build is published as a permanent snapshot prerelease tagged
 # "build-YYYYMMDD-<sha8>", where the date is the commit's committer date in
@@ -24,6 +26,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,7 +44,17 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       build_tag: ${{ steps.meta.outputs.build_tag }}
       build_date: ${{ steps.meta.outputs.build_date }}
+      subject: ${{ steps.meta.outputs.subject }}
     steps:
+      # A manual run can target any branch, and the latest job publishes a
+      # commit that diverged from latest, so only main may build.
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "Rolling builds publish only from main, not $GITHUB_REF." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           # git describe needs the full history and tags.
@@ -62,6 +75,9 @@ jobs:
           COMMIT_TIME=$(git show -s --format=%ct "$GITHUB_SHA")
           BUILD_TAG="build-$(date -u -d "@$COMMIT_TIME" +%Y%m%d)-${GITHUB_SHA::8}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # Manual runs carry no pushed commit message, so both triggers read
+          # the subject from git. A subject is always a single line.
+          SUBJECT=$(git log -1 --format=%s "$GITHUB_SHA")
 
           if [[ ! "$VERSION" =~ ^[^[:space:]]+$ ]]; then
             echo "Unexpected version string: '$VERSION'" >&2
@@ -78,6 +94,7 @@ jobs:
             echo "version=$VERSION"
             echo "build_tag=$BUILD_TAG"
             echo "build_date=$BUILD_DATE"
+            echo "subject=$SUBJECT"
           } >> "$GITHUB_OUTPUT"
 
   build-linux:
@@ -299,7 +316,7 @@ jobs:
         env:
           # Passed through the environment so the commit message cannot
           # inject shell syntax into the run script.
-          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_SUBJECT: ${{ needs.metadata.outputs.subject }}
         run: |
           ASSETS=(agentsview-linux-amd64 agentsview-windows-amd64.exe SHA256SUMS VERSION BUILD_TAG)
           FILES=("${ASSETS[@]/#/artifacts/}")
@@ -335,7 +352,7 @@ jobs:
               exit 0
               ;;
             absent)
-              SUBJECT=$(printf '%s\n' "$HEAD_COMMIT_MESSAGE" | head -1)
+              SUBJECT=$COMMIT_SUBJECT
               # shellcheck disable=SC2016 # Backticks are Markdown.
               NOTES=$(printf 'Snapshot build of `%s`.\n\n> %s\n' "$GITHUB_SHA" "$SUBJECT")
               # gh keeps the release as a draft until every asset has
@@ -385,7 +402,8 @@ jobs:
     # cancels an older pending one when another arrives, and runs can reach
     # this job out of order, so the guard step below refuses to move
     # "latest" backwards. If an older commit's job replaces a newer one
-    # while pending, "latest" stays one build behind until the next push.
+    # while pending, "latest" stays one build behind until the next push
+    # or manual run.
     concurrency:
       group: rolling-release-latest
       cancel-in-progress: false
@@ -488,11 +506,11 @@ jobs:
         env:
           # Passed through the environment so the commit message cannot
           # inject shell syntax into the run script.
-          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_SUBJECT: ${{ needs.metadata.outputs.subject }}
           CURRENT_LATEST: ${{ steps.guard.outputs.current }}
         run: |
           SHORT_SHA=${GITHUB_SHA::8}
-          SUBJECT=$(printf '%s\n' "$HEAD_COMMIT_MESSAGE" | head -1)
+          SUBJECT=$COMMIT_SUBJECT
           TITLE="Rolling build ($SHORT_SHA)"
 
           BASE="https://github.com/$GH_REPO/releases/download/latest"

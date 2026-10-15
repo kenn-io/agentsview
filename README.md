@@ -18,7 +18,9 @@ The latest release is **v0.44.0**. Check the
 ## Install
 
 These commands install the newest rolling build of this fork. A new rolling
-build is published on every push to `main`. Replace `<owner>/<repo>` with this
+build is published on every push to `main`. If a push does not start a build, a
+maintainer can build the tip of `main` with
+`gh workflow run rolling-release.yml --ref main`. Replace `<owner>/<repo>` with this
 repository, or copy the filled-in commands from the
 [rolling release notes](../../releases/tag/latest).
 
