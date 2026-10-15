@@ -1293,7 +1293,10 @@ a token update, has no token counts. For those, AgentsView asks OpenAI's usage
 report for the chat's share of your plan's weekly and five-hour limits, and the
 credits figure the report includes. That plan usage shows in the session
 details. Such sessions are left out of token and cost totals, and the totals say
-how many were left out ("N sessions billed as plan usage, not priced").
+how many were left out ("N sessions billed as plan usage, not priced"). That
+count includes a chat AgentsView has not asked about yet, such as one waiting
+while plan usage is paused. Its session details say "Plan usage: not checked
+yet" until the first answer arrives.
 
 AgentsView asks for plan usage again after a failed request or an incomplete
 report, waiting longer each time, up to 6 hours between requests. It refreshes
