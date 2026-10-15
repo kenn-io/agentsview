@@ -32,7 +32,7 @@ func TestDuckAnalyticsModelAndHourUseSameMessagePredicate(t *testing.T) {
 		false,
 		true,
 	)
-	assert.Contains(t, sql, "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.timestamp IS NOT NULL AND m.model = ? AND CAST(strftime(m.timestamp, '%H') AS INTEGER) = ?)")
+	assert.Contains(t, strings.Join(strings.Fields(sql), " "), "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.timestamp IS NOT NULL AND m.model = ? AND CAST(strftime(m.timestamp, '%H') AS INTEGER) = ?)")
 }
 
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
