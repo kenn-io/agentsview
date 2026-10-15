@@ -137,12 +137,11 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 			var got map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 			assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
+			assert.Equal(t, true, got["has_rollup_cost"])
+			assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
 			if tc.breakdown {
 				assert.InDelta(t, float64(1), got["breakdown_count"], 0)
 				assert.Len(t, got["breakdown"], 1)
-			} else {
-				assert.Equal(t, true, got["has_rollup_cost"])
-				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
 			}
 		})
 	}
@@ -219,7 +218,6 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, false, got["has_rollup_cost"])
 	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)

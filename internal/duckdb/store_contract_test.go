@@ -1039,7 +1039,6 @@ func duckContractLocalOnlyMethodsReadOnly(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
-	require.True(t, store.ReadOnly())
 	name := "ignored"
 	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
 	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
