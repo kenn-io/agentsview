@@ -1819,7 +1819,7 @@ func mustJSONString(t *testing.T, value string) string {
 
 // Two appended assistant entries with the same message.id form a
 // streaming run. The incremental path merges the run exactly as the
-// full parser does (mergeClaudeAssistantMessageChunks) and stays
+// full parser does (mergeClaudeAssistantMessageChunksContext) and stays
 // incremental, producing one merged message. Runs that straddle a
 // sync boundary are caught by the engine's LastClaudeMessageID check
 // instead.
