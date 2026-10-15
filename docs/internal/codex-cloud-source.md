@@ -363,7 +363,9 @@ update recovers the counts. If saving fails, records wait in memory and the
 status line warns. Past 256 waiting records a thread's queue is compacted to the
 records that still carry information, about three per turn. Compaction keeps the
 record before each run's peak, so the peak call is still priced as one request.
-A restart loses them.
+Other calls in the run are merged and priced at base rates, so during a save
+outage a long turn's long-context calls other than its peak are underpriced;
+this keeps the queue bounded. A restart loses them.
 
 ### From totals to usage events
 
