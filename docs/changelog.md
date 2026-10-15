@@ -88,6 +88,9 @@ The latest release is
 **Improvements**
 
 - Load Usage totals, top sessions and model comparison faster on large archives.
+- Push semantic search vectors to ClickHouse faster. Each write now covers up to
+  500 sessions instead of one. In testing, the vector part of a full push of
+  1,360 sessions took about 2 seconds instead of about 5 minutes.
 
 **Bug fixes**
 
