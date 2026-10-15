@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -147,7 +148,10 @@ type toolResultEventIdentity struct {
 // position can never pair the wrong occurrence; no unique match leaves the
 // event untouched. A later, unflagged occurrence of the same tool_use_id is
 // never touched, so a correction already in the transcript stays the one
-// the call's summary reflects.
+// the call's summary reflects. An identity shared by more than one current
+// event is ambiguous on the current side too, so none of them is restored;
+// this caps every archived occurrence to one restore and keeps a repeated
+// identity from multiplying one archived payload.
 func reconcileClaudePersistedToolResults(
 	ctx context.Context, candidate Candidate, prior PriorSession,
 	options ContentOptions, result HistoryResult,
@@ -157,7 +161,8 @@ func reconcileClaudePersistedToolResults(
 		return result, ctx.Err()
 	}
 	archived := archivedToolResultEventsByIdentity(prior.Messages)
-	changed := false
+	currentCounts := currentToolResultIdentityCounts(candidate.Messages)
+	var touched []*db.ToolCall
 	for mi := range candidate.Messages {
 		for ci := range candidate.Messages[mi].ToolCalls {
 			call := &candidate.Messages[mi].ToolCalls[ci]
@@ -170,30 +175,35 @@ func reconcileClaudePersistedToolResults(
 					toolUseID: event.ToolUseID, source: event.Source,
 					timestamp: event.Timestamp,
 				}
-				if !flagged[key] {
+				if !flagged[key] || currentCounts[key] != 1 {
 					continue
 				}
 				matches := archived[key]
 				if len(matches) != 1 {
 					continue
 				}
-				if restoreClaudeToolResultEvent(event, matches[0]) {
-					changed = true
+				if restoreClaudeToolResultEvent(event, matches[0]) &&
+					!slices.Contains(touched, call) {
+					touched = append(touched, call)
 				}
 			}
 		}
 	}
-	if !changed {
+	if len(touched) == 0 {
 		return result, ctx.Err()
 	}
 	// A restored event can reintroduce image bytes the live policy drops, the
 	// same risk VSCopilot's own merge above guards against, so reapply the
 	// policy here too before anything downstream reads the restored content.
 	candidate.Messages = dropToolResultImagesIfPolicy(candidate.Messages, options)
-	if err := PairToolResultEventSummariesContext(
-		ctx, candidate.Messages, options.BlockedResultCategories,
-	); err != nil {
-		return HistoryResult{}, err
+	// Recompute summaries only for restored calls; rerunning the pairing on
+	// an already-blocked call would reset its length from its cleared events.
+	for _, call := range touched {
+		if err := pairToolCallResultSummaryContext(
+			ctx, call, options.BlockedResultCategories,
+		); err != nil {
+			return HistoryResult{}, err
+		}
 	}
 	result.Candidate = candidate
 	result.Action = HistoryMerge
@@ -248,6 +258,25 @@ func flaggedPersistedToolResultIdentities(
 		}
 	}
 	return flagged
+}
+
+// currentToolResultIdentityCounts tallies how many current tool_result
+// events share each identity.
+func currentToolResultIdentityCounts(
+	messages []db.Message,
+) map[toolResultEventIdentity]int {
+	counts := make(map[toolResultEventIdentity]int)
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			for _, event := range call.ResultEvents {
+				counts[toolResultEventIdentity{
+					toolUseID: event.ToolUseID, source: event.Source,
+					timestamp: event.Timestamp,
+				}]++
+			}
+		}
+	}
+	return counts
 }
 
 // archivedToolResultEventsByIdentity indexes every archived tool_result

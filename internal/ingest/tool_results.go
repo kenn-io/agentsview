@@ -92,28 +92,38 @@ func PairToolResultEventSummariesContext(
 			return err
 		}
 		for j := range messages[i].ToolCalls {
-			call := &messages[i].ToolCalls[j]
-			if len(call.ResultEvents) == 0 {
-				continue
-			}
-			summary, err := SummarizeToolResultEventsContext(
-				ctx, call.ResultEvents,
-			)
-			if err != nil {
+			if err := pairToolCallResultSummaryContext(
+				ctx, &messages[i].ToolCalls[j], blocked,
+			); err != nil {
 				return err
 			}
-			call.ResultContentLength = len(summary)
-			if blocked[call.Category] {
-				call.ResultContent = ""
-				for k := range call.ResultEvents {
-					call.ResultEvents[k].Content = ""
-				}
-				continue
-			}
-			call.ResultContent = summary
 		}
 	}
 	return ctx.Err()
+}
+
+// pairToolCallResultSummaryContext derives one call's summary from its
+// structured result events, clearing the content of a blocked category.
+func pairToolCallResultSummaryContext(
+	ctx context.Context, call *db.ToolCall, blocked map[string]bool,
+) error {
+	if len(call.ResultEvents) == 0 {
+		return nil
+	}
+	summary, err := SummarizeToolResultEventsContext(ctx, call.ResultEvents)
+	if err != nil {
+		return err
+	}
+	call.ResultContentLength = len(summary)
+	if blocked[call.Category] {
+		call.ResultContent = ""
+		for k := range call.ResultEvents {
+			call.ResultEvents[k].Content = ""
+		}
+		return nil
+	}
+	call.ResultContent = summary
+	return nil
 }
 
 // SummarizeToolResultEventsContext returns the latest content per agent

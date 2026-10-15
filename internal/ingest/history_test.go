@@ -491,6 +491,106 @@ func TestReconcileProviderHistoryClaudeRestoresOnlyFlaggedOccurrence(t *testing.
 		result.Candidate.Messages[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
+func TestReconcileProviderHistoryClaudeRestoreGuards(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	tsStr := timeutil.Format(ts)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+	event := func(id, content string, length int) db.ToolResultEvent {
+		return db.ToolResultEvent{
+			ToolUseID: id, Source: "tool_result", Timestamp: tsStr,
+			Content: content, ContentLength: length,
+		}
+	}
+	flaggedResult := parser.ParsedToolResult{
+		ToolUseID: "toolu_1", Source: "tool_result",
+		PersistedOutputUnresolved: true,
+	}
+	prior := &ingest.PriorSession{Messages: []db.Message{{
+		Ordinal: 0, Role: "user", Timestamp: tsStr,
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "toolu_1", Category: "bash",
+			ResultEvents: []db.ToolResultEvent{
+				event("toolu_1", "full archived output", len("full archived output")),
+			},
+		}},
+	}}}
+
+	tests := []struct {
+		name    string
+		calls   []db.ToolCall
+		options ingest.ContentOptions
+		check   func(t *testing.T, calls []db.ToolCall)
+	}{
+		{
+			name: "two current events sharing one identity are not restored",
+			calls: []db.ToolCall{
+				{ToolUseID: "toolu_1", Category: "bash", ResultEvents: []db.ToolResultEvent{
+					event("toolu_1", placeholder, len(placeholder)),
+				}},
+				{ToolUseID: "toolu_1", Category: "bash", ResultEvents: []db.ToolResultEvent{
+					event("toolu_1", placeholder, len(placeholder)),
+				}},
+			},
+			check: func(t *testing.T, calls []db.ToolCall) {
+				t.Helper()
+				for _, call := range calls {
+					assert.Equal(t, placeholder, call.ResultEvents[0].Content)
+				}
+			},
+		},
+		{
+			name: "restore leaves an unrelated blocked call's length alone",
+			calls: []db.ToolCall{
+				{ToolUseID: "toolu_1", Category: "bash", ResultEvents: []db.ToolResultEvent{
+					event("toolu_1", placeholder, len(placeholder)),
+				}},
+				{
+					ToolUseID: "toolu_2", Category: "Read",
+					ResultContentLength: 300,
+					ResultEvents: []db.ToolResultEvent{
+						event("toolu_2", "", 300),
+					},
+				},
+			},
+			options: ingest.ContentOptions{
+				BlockedResultCategories: map[string]bool{"Read": true},
+			},
+			check: func(t *testing.T, calls []db.ToolCall) {
+				t.Helper()
+				assert.Equal(t, "full archived output", calls[0].ResultEvents[0].Content)
+				assert.Equal(t, 300, calls[1].ResultContentLength)
+				assert.Empty(t, calls[1].ResultContent)
+				assert.Empty(t, calls[1].ResultEvents[0].Content)
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := ingest.Candidate{
+				Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+				Messages: []db.Message{{
+					Ordinal: 0, Role: "user", Timestamp: tsStr, ToolCalls: tc.calls,
+				}},
+				Parsed: parser.ParseResult{
+					Session: parser.ParsedSession{
+						ID: "session-1", Agent: parser.AgentClaude,
+						File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+					},
+					Messages: []parser.ParsedMessage{{
+						Ordinal: 0, Timestamp: ts,
+						ToolResults: []parser.ParsedToolResult{flaggedResult},
+					}},
+				},
+			}
+			result, err := ingest.ReconcileProviderHistory(
+				t.Context(), candidate, prior, tc.options,
+			)
+			require.NoError(t, err)
+			tc.check(t, result.Candidate.Messages[0].ToolCalls)
+		})
+	}
+}
+
 func openCodeHistoryCandidate(hash, content string) ingest.Candidate {
 	return ingest.Candidate{
 		Session: db.Session{
