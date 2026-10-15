@@ -36,6 +36,10 @@ func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(t, "2026-06-16T10:00:00Z", r.Buckets[120].Start)
+	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 	bySession := make(map[string]SessionRow, len(r.BySession))
 	for _, row := range r.BySession {
 		bySession[row.SessionID] = row
