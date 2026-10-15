@@ -453,7 +453,7 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
-	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
+	cutoff := s.local.MirrorPushCutoff()
 
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and

@@ -1040,7 +1040,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	} else {
 		pusher = b.newDuckDBPusher(engine, duckCfg, cfg, projects, exclude)
 	}
-	pusher.window = archivePushWindow(engine, b.database)
+	pusher.window = archivePushWindow(engine)
 
 	startupSync := runPGWatchStartupSync
 	if b.watchHooks != nil && b.watchHooks.duckDBStartupSync != nil {
@@ -1176,7 +1176,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 			},
 		)
 	}
-	window := archivePushWindow(engine, b.database)
+	window := archivePushWindow(engine)
 	pusher.window = window
 	if storage.StoresFriction(backend) {
 		// Pushed sessions must carry current friction findings, so review

@@ -6765,33 +6765,17 @@ func (db *DB) CountSessionsForMirrorScope(
 	return count, nil
 }
 
-// ReselectMirrorWindowSince moves every session whose sync_marker lies in
-// [since, now) up to now, so the next incremental mirror push lists it again.
-// A push that runs while local sync keeps writing captures its cutoff before
-// it lists sessions; a write stamped before that cutoff but committed after
-// the listing would otherwise fall below every later window. Callers pass the
-// time the push began, taken while no sync transaction was open. It returns
-// the number of sessions moved.
-func (db *DB) ReselectMirrorWindowSince(
-	ctx context.Context, since string,
-) (int64, error) {
-	normalized, err := normalizeMirrorWindowBound(since)
-	if err != nil {
-		return 0, err
-	}
+// MirrorPushCutoff returns the cutoff a mirror push records as its next
+// window's lower bound. It reads the clock while holding the write lock, so
+// no write transaction is open: every write stamped before the cutoff has
+// committed and is visible to the push's later listing, and every later write
+// is stamped at or after the cutoff. A cutoff read without the lock can fall
+// after the stamp of a write that commits only after the push lists sessions;
+// no later window would list that write.
+func (db *DB) MirrorPushCutoff() string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	res, err := db.getWriter().Exec(ctx, `
-		UPDATE sessions
-		SET sync_marker = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE sync_marker >= ?
-		  AND sync_marker < strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-		normalized,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("reselecting sessions for mirror window since %s: %w", since, err)
-	}
-	return res.RowsAffected()
+	return time.Now().UTC().Format(mirrorWindowBoundLayout)
 }
 
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
@@ -6802,8 +6786,11 @@ func normalizeMirrorWindowBound(bound string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parsing mirror window bound %q: %w", bound, err)
 	}
-	return parsed.UTC().Format("2006-01-02T15:04:05.000Z"), nil
+	return parsed.UTC().Format(mirrorWindowBoundLayout), nil
 }
+
+// mirrorWindowBoundLayout matches the trigger-maintained sync_marker text.
+const mirrorWindowBoundLayout = "2006-01-02T15:04:05.000Z"
 
 // SessionProjectsByIDs returns each session's current project keyed by session
 // ID. IDs with no sessions row are absent from the result, so a caller can tell

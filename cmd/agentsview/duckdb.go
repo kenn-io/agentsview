@@ -46,8 +46,8 @@ type DuckDBPushConfig struct {
 // replicaPusher's watch-loop shape: local sync runs separately, so each push
 // sends whatever the archive holds when it starts.
 type duckDBPusher struct {
-	// window brackets each mirror push so archive writes that land while it
-	// runs reach the next incremental push; see archivePushWindow.
+	// window runs each mirror push once local sync settles; see
+	// archivePushWindow.
 	window        func(context.Context, func() error) error
 	ensurePricing func(context.Context) error
 	mirrorPush    func(context.Context, bool) (storage.MirrorPushResult, error)

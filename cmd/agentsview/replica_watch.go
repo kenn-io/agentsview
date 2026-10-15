@@ -26,8 +26,8 @@ type replicaPusher struct {
 	label string
 	// displayName names the replica product in operator-facing warnings.
 	displayName string
-	// window brackets each remote push so archive writes that land while
-	// it runs reach the next incremental push; see archivePushWindow.
+	// window runs each remote push once local sync settles; see
+	// archivePushWindow.
 	window        func(context.Context, func() error) error
 	ensurePricing func(context.Context) error
 	connect       func(context.Context) (storage.Pusher, error)

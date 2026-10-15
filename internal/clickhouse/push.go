@@ -57,7 +57,7 @@ func (s *Sync) PushWithOptions(
 		onProgress(storage.PushProgress{Phase: "preparing"})
 	}
 	version := newPushVersion()
-	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
+	cutoff := s.local.MirrorPushCutoff()
 
 	meta, err := readMetadata(ctx, conn,
 		s.archiveKey(lastPushCutoffKeyBase),

@@ -479,7 +479,7 @@ func (s *Sync) pushChangedSessions(
 	ctx context.Context, probe MirrorProbe, onProgress func(storage.MirrorPushProgress),
 	result *storage.MirrorPushResult,
 ) ([]db.Session, []db.Session, error) {
-	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
+	cutoff := s.local.MirrorPushCutoff()
 	result.Diagnostics.Cutoff = cutoff
 	candidates, err := s.local.ListSessionsForMirrorWindow(
 		ctx, probe.LastPushCutoff, nil, nil,

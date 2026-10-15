@@ -3,7 +3,10 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -477,47 +480,87 @@ func TestSyncMarkerMalformedCreatedAtIsDropped(t *testing.T) {
 	assert.Equal(t, "2026-07-02T09:30:00.000Z", readMarker("sm-mixed"))
 }
 
-func TestReselectMirrorWindowSinceMovesOnlyMarkersInsideWindow(t *testing.T) {
+// A push that starts while a sync transaction is open must either list that
+// transaction's session or record a cutoff at or below its stamp. Otherwise
+// the session falls below every later incremental window.
+func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
-	markers := map[string]string{
-		"before": "2026-07-01T09:59:59.999Z",
-		"at":     "2026-07-01T10:00:00.000Z",
-		"after":  "2026-07-01T11:00:00.000Z",
-		"skewed": "2099-01-01T00:00:00.000Z",
-	}
-	for id, marker := range markers {
-		insertSession(t, database, id, "proj")
-		_, err := database.getWriter().ExecContext(ctx,
-			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, id)
-		require.NoError(t, err)
-	}
-	readMarker := func(id string) string {
-		var marker string
-		require.NoError(t, database.getReader().QueryRow(ctx,
-			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
-		return marker
-	}
-
-	floor := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	moved, err := database.ReselectMirrorWindowSince(ctx, "2026-07-01T10:00:00Z")
+	insertSession(t, database, "written", "proj")
+	_, err := database.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+			local_modified_at = '2026-07-01T10:00:00.000Z' WHERE id = 'written'`)
 	require.NoError(t, err)
+	since := "2026-07-02T00:00:00Z"
+	// The open transaction's stamp sorts below any cutoff read from the
+	// clock now, as a stamp taken just before the cutoff would.
+	stamp := time.Now().Add(-time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
 
-	assert.Equal(t, int64(2), moved)
-	assert.Equal(t, markers["before"], readMarker("before"),
-		"a marker below the window was already pushed and stays put")
-	assert.Equal(t, markers["skewed"], readMarker("skewed"),
-		"a marker past now is already above every later cutoff")
-	for _, id := range []string{"at", "after"} {
-		assert.GreaterOrEqual(t, readMarker(id), floor,
-			"%s sits inside the window and moves up to now", id)
+	stamped := make(chan struct{})
+	release := make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- database.Update(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE sessions SET local_modified_at = ? WHERE id = 'written'`, stamp,
+			); err != nil {
+				return err
+			}
+			close(stamped)
+			<-release
+			return nil
+		})
+	}()
+	<-stamped
+
+	type listing struct {
+		ids    []string
+		cutoff string
+		err    error
 	}
-	listed, err := database.ListSessionsForMirrorWindow(ctx, floor, nil, nil)
-	require.NoError(t, err)
-	ids := make([]string, 0, len(listed))
-	for _, s := range listed {
-		ids = append(ids, s.ID)
+	listed := make(chan listing, 1)
+	go func() {
+		cutoff := database.MirrorPushCutoff()
+		sessions, err := database.ListSessionsForMirrorWindow(ctx, since, nil, nil)
+		ids := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			ids = append(ids, s.ID)
+		}
+		listed <- listing{ids, cutoff, err}
+	}()
+	// Commit only once the push has listed or is waiting for the write
+	// lock, so a push that ignores the open transaction lists first.
+	var got listing
+	received := false
+	for !received && !goroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
+		select {
+		case got = <-listed:
+			received = true
+		default:
+			runtime.Gosched()
+		}
 	}
-	assert.ElementsMatch(t, []string{"at", "after", "skewed"}, ids,
-		"a push whose cutoff fell before the move lists the moved sessions")
+	close(release)
+	if !received {
+		got = <-listed
+	}
+	require.NoError(t, <-committed)
+	require.NoError(t, got.err)
+
+	assert.Contains(t, got.ids, "written",
+		"the push must list the transaction that was open when it started")
+	assert.GreaterOrEqual(t, got.cutoff, stamp)
+}
+
+// goroutineBlockedOnMutexIn reports whether some goroutine is waiting to lock
+// a sync.Mutex inside a function whose name contains fn.
+func goroutineBlockedOnMutexIn(fn string) bool {
+	buf := make([]byte, 1<<20)
+	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -104,7 +103,8 @@ func (w localPushWatch) run(ctx context.Context) error {
 // archiveSyncLane owns local archive writes for a push-watch process. Watcher
 // batches sync on the watcher's dispatch goroutine; the lane goroutine runs
 // authoritative syncs on the floor interval, on lifecycle wake, and after the
-// watcher loses coverage. Each write marks the push loop dirty.
+// watcher loses coverage. A sync that writes the archive marks the push loop
+// dirty.
 type archiveSyncLane struct {
 	label        string
 	engine       *syncpkg.Engine
@@ -123,10 +123,14 @@ type archiveSyncLane struct {
 	fullPending atomic.Bool
 }
 
-func (l *archiveSyncLane) markReady() {
-	if l.ready.CompareAndSwap(false, true) {
-		l.openDispatch()
+// markReady opens watcher dispatch the first time a complete local sync runs
+// and reports whether this call did so.
+func (l *archiveSyncLane) markReady() bool {
+	if !l.ready.CompareAndSwap(false, true) {
+		return false
 	}
+	l.openDispatch()
+	return true
 }
 
 func (l *archiveSyncLane) push(
@@ -197,43 +201,34 @@ func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	opened := false
 	switch {
 	case !stats.AuthoritativeDiscoveryComplete():
 		log.Printf("%s: local sync discovery incomplete", l.label)
 	case !stats.ProcessingComplete():
 		log.Printf("%s: local sync processing incomplete", l.label)
 	default:
-		l.markReady()
+		opened = l.markReady()
 	}
-	if l.ready.Load() {
+	// The first complete sync queues the push that startup skipped. After
+	// that, a sync that wrote nothing leaves the push loop alone.
+	if opened || (l.ready.Load() && stats.ChangedArchive()) {
 		l.loop.NotifyDirty()
 	}
 }
 
 // archivePushWindow runs one remote push against the archive while local sync
-// keeps writing. Before the push it waits for open sync transactions and
-// flushes deferred signal recomputes, then records the start time. After the
-// push it moves sessions written since then into the next incremental window:
-// the push captures its cutoff before it lists sessions, and a write stamped
-// before the cutoff but committed after the listing would otherwise be
-// skipped by every later push.
+// keeps writing. Before the push it waits for an in-progress sync to finish and
+// flushes deferred signal recomputes, so the push copies settled sessions.
+// Writes that land during the push reach the next push because each push takes
+// its cutoff under the archive write lock (see db.MirrorPushCutoff).
 func archivePushWindow(
-	engine *syncpkg.Engine, database *db.DB,
+	engine *syncpkg.Engine,
 ) func(context.Context, func() error) error {
-	return func(ctx context.Context, push func() error) error {
-		var since string
-		if err := engine.RunExclusiveFlushed(func() error {
-			since = time.Now().UTC().Format(time.RFC3339Nano)
-			return nil
-		}); err != nil {
+	return func(_ context.Context, push func() error) error {
+		if err := engine.RunExclusiveFlushed(func() error { return nil }); err != nil {
 			return fmt.Errorf("starting push: %w", err)
 		}
-		pushErr := push()
-		if _, err := database.ReselectMirrorWindowSince(
-			context.WithoutCancel(ctx), since,
-		); err != nil {
-			return errors.Join(pushErr, err)
-		}
-		return pushErr
+		return push()
 	}
 }

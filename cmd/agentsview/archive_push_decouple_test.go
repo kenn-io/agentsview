@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/storage"
@@ -274,40 +273,49 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 	}
 }
 
-// A write stamped before a push's cutoff can commit after the push lists
-// sessions. The push window moves it into the next incremental window.
-func TestArchivePushWindowReselectsSessionsWrittenDuringPush(t *testing.T) {
+// A periodic local sync queues a push only when it writes the archive, or
+// when it is the first complete sync and startup never pushed.
+func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
-	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
-	t.Cleanup(engine.Close)
-	ctx := t.Context()
-	listed := func(cutoff string) bool {
-		sessions, err := database.ListSessionsForMirrorWindow(ctx, cutoff, nil, nil)
-		require.NoError(t, err)
-		for _, s := range sessions {
-			if s.ID == "written-during-push" {
-				return true
-			}
-		}
-		return false
-	}
-
-	var cutoff string
-	err := archivePushWindow(engine, database)(ctx, func() error {
-		require.NoError(t, database.UpsertSession(ctx, db.Session{
-			ID: "written-during-push", Agent: "codex", Project: "example",
-			Machine: "local",
-		}))
-		// Stand in for a push whose cutoff landed after the write's stamp
-		// but whose listing ran before the write committed.
-		require.Eventually(t, func() bool {
-			cutoff = time.Now().UTC().Format(time.RFC3339Nano)
-			return !listed(cutoff)
-		}, 10*time.Second, time.Millisecond)
-		return nil
+	codexRoot := t.TempDir()
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexRoot}},
 	})
-	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+	lane := &archiveSyncLane{
+		label: "test watch", engine: engine, openDispatch: func() {},
+	}
+	newLoop := func() {
+		loop, ticker := newPushLoopWithLabel("test watch", time.Hour, time.Hour,
+			func(context.Context, pushReason, *syncpkg.WatchBatch) error { return nil })
+		t.Cleanup(ticker.Stop)
+		lane.loop = loop
+	}
+	queued := func() bool {
+		pending, _ := pushLoopPendingState(lane.loop)
+		return pending
+	}
+	ctx := t.Context()
 
-	assert.True(t, listed(cutoff),
-		"the next incremental push must list a session written during this one")
+	newLoop()
+	lane.syncAll(ctx)
+	assert.True(t, queued(), "the first complete sync queues the skipped push")
+
+	newLoop()
+	lane.syncAll(ctx)
+	assert.False(t, queued(), "a sync that wrote nothing queues no push")
+
+	uuid := "b2c3d4e5-2222-4333-8444-555566667777"
+	day := filepath.Join(codexRoot, "2026", "10", "15")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(day, "rollout-2026-10-15T15-00-00-"+uuid+".jsonl"),
+		[]byte(testjsonl.NewSessionBuilder().
+			AddCodexMeta("2026-10-15T15:00:00Z", uuid, "/home/user/code/api", "codex_cli_rs").
+			AddCodexMessage("2026-10-15T15:00:01Z", "user", "hello").
+			String()),
+		0o644,
+	))
+	lane.syncAll(ctx)
+	assert.True(t, queued(), "a sync that wrote a session queues a push")
 }

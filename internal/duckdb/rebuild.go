@@ -476,7 +476,7 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 		)
 	}
 	return rebuildSnapshot{
-		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
+		cutoff:           local.MirrorPushCutoff(),
 		deletionRevision: deletionRevision,
 		sourceDatabaseID: sourceDatabaseID,
 		sourceArchiveID:  sourceArchiveID,

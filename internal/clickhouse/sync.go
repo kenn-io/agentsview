@@ -13,10 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// localSyncTimestampLayout is the layout ListSessionsForMirrorWindow
-// compares sync_marker against.
-const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
-
 // Sync pushes the SQLite archive into one ClickHouse mirror. Push is
 // one-way: it never reads content back into SQLite.
 type Sync struct {
