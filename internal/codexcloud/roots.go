@@ -224,13 +224,17 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 		threads = true
 		if err := s.restoreRoot(key, acct, id); err != nil {
 			skipped++
-			s.Log.Printf("codex-cloud: chat %s: left out of the rebuilt plan usage queue: %v", id, err)
+			s.Log.Printf("codex-cloud: chat %s: %v; plan usage for this chat waits for its next change", id, err)
 		}
 	}
 	if threads {
-		s.Log.Printf("codex-cloud: account state was missing or set aside; rebuilt the plan usage queue "+
-			"from the saved chat state: %d chats to check, %d to refresh, %d left out",
-			len(acct.UsagePending), len(acct.Refresh), skipped)
+		summary := fmt.Sprintf("codex-cloud: account.json was missing or set aside, so AgentsView rebuilt the "+
+			"plan usage queue from the saved chat state. %d chats will be checked now. %d stay on the daily refresh.",
+			len(acct.UsagePending), len(acct.Refresh))
+		if skipped > 0 {
+			summary += fmt.Sprintf(" %d could not be read (logged above).", skipped)
+		}
+		s.Log.Print(summary)
 	}
 	return threads, nil
 }
@@ -330,7 +334,7 @@ func (s *Store) storedPlan(key AccountKey, id string, st ThreadState) (planState
 	case mirror.KindPlanUsageRow:
 		var row mirror.PlanUsageRowData
 		if err := json.Unmarshal(st.LastPlanRow, &row); err != nil {
-			return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
+			return planState{}, fmt.Errorf("stored plan usage row: %w", err)
 		}
 		if !row.Final {
 			return planState{
@@ -358,7 +362,7 @@ func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 	// A local read with no request behind it to cancel.
 	records, err := mirror.ReadAll(context.Background(), path)
 	if err != nil {
-		return planState{}, fmt.Errorf("codex-cloud: chat %s: read mirror: %w", id, err)
+		return planState{}, fmt.Errorf("read mirror: %w", err)
 	}
 	var plan []mirror.Record
 	for _, r := range records {
@@ -371,11 +375,11 @@ func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 	}
 	last := plan[len(plan)-1]
 	if last.Kind == mirror.KindPlanUsageRow {
-		return rowPlan(id, last)
+		return rowPlan(last)
 	}
 	var outcome mirror.PlanUsageOutcomeData
 	if err := json.Unmarshal(last.Data, &outcome); err != nil {
-		return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage outcome: %w", id, err)
+		return planState{}, fmt.Errorf("stored plan usage outcome: %w", err)
 	}
 	switch outcome.Kind {
 	case mirror.OutcomeSettledNoRow, mirror.OutcomeCouldNotCheck, mirror.OutcomeTooManyDescendants:
@@ -388,7 +392,7 @@ func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 		if before.Kind != mirror.KindPlanUsageRow || !before.FetchedAt.Equal(last.FetchedAt) {
 			return planState{}, nil
 		}
-		row, err := rowPlan(id, before)
+		row, err := rowPlan(before)
 		if err != nil || row.settledAt.IsZero() {
 			// A row that is not final would be stored after the mark.
 			return planState{}, err
@@ -400,10 +404,10 @@ func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 }
 
 // rowPlan is what one stored plan usage row says about its root.
-func rowPlan(id string, record mirror.Record) (planState, error) {
+func rowPlan(record mirror.Record) (planState, error) {
 	var row mirror.PlanUsageRowData
 	if err := json.Unmarshal(record.Data, &row); err != nil {
-		return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
+		return planState{}, fmt.Errorf("stored plan usage row: %w", err)
 	}
 	if row.Final {
 		return planState{settledAt: record.FetchedAt}, nil
