@@ -288,30 +288,55 @@ func (s *Store) SaveAccount(key AccountKey, st AccountState) error {
 }
 
 // LoadDescendants reads a usage root's known descendants. A file that does
-// not decode is set aside and rebuilt from the thread states that name
-// rootID as the root they count under. Read as empty, it would leave the
-// sub-agent chats out of the root's next plan usage request, and the
-// answer would replace the combined figures with the root's alone.
+// not decode is rebuilt from the thread states that name rootID as the root
+// they count under. Read as empty, it would leave the sub-agent chats out
+// of the root's next plan usage request, and the answer would replace the
+// combined figures with the root's alone.
 func (s *Store) LoadDescendants(key AccountKey, rootID string) ([]string, error) {
-	path, err := s.path(key, rootID, ".descendants.json")
+	return s.loadRebuiltList(key, rootID, ".descendants.json", func(st ThreadState) bool {
+		return st.CountedUnder == rootID
+	})
+}
+
+// loadRebuiltList reads one ID list. A file that does not decode is
+// rebuilt, sorted, from the other thread states that match, then saved
+// over it, and its bytes are kept as <name>.corrupt. The damaged file stays
+// in place until the rebuilt list is saved, so a failed rebuild or a crash
+// is retried on the next load instead of reading a missing file as empty.
+func (s *Store) loadRebuiltList(key AccountKey, id, suffix string, match func(ThreadState) bool) ([]string, error) {
+	path, err := s.path(key, id, suffix)
 	if err != nil {
 		return nil, err
 	}
-	_, statErr := os.Stat(path)
-	var ids []string
-	found, err := loadFound(s, path, &ids)
-	if err != nil || found || statErr != nil {
-		return ids, err
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
 	}
-	if ids, err = s.countedUnderRoot(key, rootID); err != nil {
+	if err != nil {
+		return nil, fmt.Errorf("codex-cloud: read %s: %w", path, err)
+	}
+	var ids []string
+	decodeErr := json.Unmarshal(data, &ids)
+	if decodeErr == nil {
+		return ids, nil
+	}
+	if ids, err = s.matchingThreads(key, id, match); err != nil {
+		return nil, fmt.Errorf("codex-cloud: rebuild %s, which could not be decoded: %w", path, err)
+	}
+	if err := atomicfile.WriteFile(path+".corrupt", data); err != nil {
+		return nil, fmt.Errorf("codex-cloud: set aside %s: %w", path, err)
+	}
+	if err := s.saveList(key, id, suffix, ids); err != nil {
 		return nil, err
 	}
-	return ids, s.SaveDescendants(key, rootID, ids)
+	s.Log.Printf("codex-cloud: %s could not be decoded (%v); rebuilt it from the saved chat state "+
+		"and kept the damaged copy as %s.corrupt", path, decodeErr, filepath.Base(path))
+	return ids, nil
 }
 
-// countedUnderRoot lists, sorted, the threads whose state says they count
-// under rootID.
-func (s *Store) countedUnderRoot(key AccountKey, rootID string) ([]string, error) {
+// matchingThreads lists, sorted, the threads other than id whose state
+// matches.
+func (s *Store) matchingThreads(key AccountKey, id string, match func(ThreadState) bool) ([]string, error) {
 	dir, err := s.accountDir(key)
 	if err != nil {
 		return nil, err
@@ -322,16 +347,16 @@ func (s *Store) countedUnderRoot(key AccountKey, rootID string) ([]string, error
 	}
 	var ids []string
 	for _, entry := range entries {
-		id, ok := strings.CutSuffix(entry.Name(), threadStateSuffix)
-		if !ok || entry.IsDir() || !plainName(id) || id == rootID {
+		other, ok := strings.CutSuffix(entry.Name(), threadStateSuffix)
+		if !ok || entry.IsDir() || !plainName(other) || other == id {
 			continue
 		}
-		st, err := s.LoadThread(key, id)
+		st, err := s.LoadThread(key, other)
 		if err != nil {
 			return nil, err
 		}
-		if st.CountedUnder == rootID {
-			ids = append(ids, id)
+		if match(st) {
+			ids = append(ids, other)
 		}
 	}
 	return ids, nil
@@ -343,24 +368,21 @@ func (s *Store) SaveDescendants(key AccountKey, rootID string, ids []string) err
 	return s.saveList(key, rootID, ".descendants.json", ids)
 }
 
-// LoadWaiting reads the threads waiting for parentID to be mirrored.
+// LoadWaiting reads the threads waiting for parentID to be mirrored. A
+// file that does not decode is rebuilt from the thread states whose
+// resolved parent is parentID; LinkParent skips any of them that no longer
+// wait. Read as empty, the waiting chats would never join the parent's
+// group when it arrives.
 func (s *Store) LoadWaiting(key AccountKey, parentID string) ([]string, error) {
-	return s.loadList(key, parentID, ".waiting.json")
+	return s.loadRebuiltList(key, parentID, ".waiting.json", func(st ThreadState) bool {
+		return st.ResolvedParent == parentID
+	})
 }
 
 // SaveWaiting writes the threads waiting for parentID; an empty list
 // removes the file.
 func (s *Store) SaveWaiting(key AccountKey, parentID string, ids []string) error {
 	return s.saveList(key, parentID, ".waiting.json", ids)
-}
-
-func (s *Store) loadList(key AccountKey, id, suffix string) ([]string, error) {
-	path, err := s.path(key, id, suffix)
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	return ids, load(s, path, &ids)
 }
 
 func (s *Store) saveList(key AccountKey, id, suffix string, ids []string) error {
