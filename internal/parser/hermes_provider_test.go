@@ -1392,6 +1392,66 @@ func TestHermesProviderFindSourceResolvesStoredTranscriptInItsOwnRoot(t *testing
 	assert.Equal(t, storedPath, source.DisplayPath)
 }
 
+// A stored state.db path names the root that owns the session. When that
+// root no longer has the row, or the path is a legacy bare state.db, the
+// session-ID lookup must try the owning root before an unrelated root that
+// happens to hold the same ID.
+func TestHermesProviderFindSourcePrefersArchiveHintOwningRoot(t *testing.T) {
+	newRoots := func(t *testing.T) (firstRoot, secondRoot string) {
+		t.Helper()
+		firstRoot = t.TempDir()
+		secondRoot = t.TempDir()
+		for _, root := range []string{firstRoot, secondRoot} {
+			createHermesStateDB(t, root)
+		}
+		writeSourceFile(t, filepath.Join(firstRoot, "sessions", "shared-id.jsonl"),
+			hermesProviderJSONLFixture("unrelated session in the first root"))
+		return firstRoot, secondRoot
+	}
+	findSource := func(t *testing.T, roots []string, storedPath string) SourceRef {
+		t.Helper()
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{
+			Roots:   roots,
+			Machine: "devbox",
+		})
+		require.True(t, ok)
+		source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+			RawSessionID:   "shared-id",
+			StoredFilePath: storedPath,
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
+		return source
+	}
+
+	t.Run("member whose row is gone uses its own root's transcript", func(t *testing.T) {
+		firstRoot, secondRoot := newRoots(t)
+		ownTranscript := filepath.Join(secondRoot, "sessions", "shared-id.jsonl")
+		writeSourceFile(t, ownTranscript, hermesProviderJSONLFixture("archived session"))
+
+		source := findSource(t, []string{firstRoot, secondRoot},
+			filepath.Join(secondRoot, "state.db")+"#shared-id")
+
+		assert.Equal(t, ownTranscript, source.DisplayPath)
+	})
+
+	t.Run("legacy bare state.db hint uses its own root's member", func(t *testing.T) {
+		firstRoot, secondRoot := newRoots(t)
+		stateDB := filepath.Join(secondRoot, "state.db")
+		conn, err := sql.Open("sqlite3", stateDB)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `
+			INSERT INTO sessions (id, source, started_at)
+			VALUES ('shared-id', 'cli', 1778767200.0)`)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+
+		source := findSource(t, []string{firstRoot, secondRoot}, stateDB)
+
+		assert.Equal(t, stateDB+"#shared-id", source.DisplayPath)
+	})
+}
+
 func hermesProviderJSONLFixture(firstMessage string) string {
 	return `{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00.000000"}` + "\n" +
 		`{"role":"user","content":"` + firstMessage + `","timestamp":"2026-05-14T10:01:00.000000"}` + "\n" +

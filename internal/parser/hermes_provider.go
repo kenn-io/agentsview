@@ -1259,7 +1259,8 @@ func (s hermesSourceSet) FindSource(
 					)
 				}
 				if lookupErr != nil || !found {
-					if source, ok := s.transcriptSourceByRawID(roots, sessionID); ok {
+					ownerFirst, _ := hermesRootsOwnerFirst(roots, path)
+					if source, ok := s.transcriptSourceByRawID(ownerFirst, sessionID); ok {
 						return source, true, nil
 					}
 					continue
@@ -1342,7 +1343,17 @@ func (s hermesSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return notFound()
 	}
-	for _, root := range roots {
+	lookupRoots := roots
+	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
+		if path == "" {
+			continue
+		}
+		if ordered, ok := hermesRootsOwnerFirst(roots, path); ok {
+			lookupRoots = ordered
+			break
+		}
+	}
+	for _, root := range lookupRoots {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
 			isValidHermesSessionID(req.RawSessionID) {
 			found, err := hermesStateDBHasSession(ctx, stateDB, req.RawSessionID)
@@ -1550,6 +1561,28 @@ func (s hermesSourceSet) transcriptSourceForRoot(
 
 // transcriptSourceByRawID resolves a session's transcript file by its raw
 // session ID across the configured roots, without consulting state.db.
+// hermesRootsOwnerFirst moves the root that owns path to the front of roots.
+// A root owns its state.db, that database's members, and its transcripts.
+// Another configured root can hold an unrelated session with the same ID, so
+// a session-ID lookup for a stored path must try the owning root first. It
+// reports false, with roots unchanged, when no root owns path.
+func hermesRootsOwnerFirst(roots []string, path string) ([]string, bool) {
+	if stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db"); member {
+		path = stateDB
+	}
+	for i, root := range roots {
+		stateDB, _, hasState := hermesStatePaths(root)
+		if (hasState && samePath(path, stateDB)) ||
+			hermesPathInTranscriptDir(hermesTranscriptRoot(root), path) {
+			ordered := make([]string, 0, len(roots))
+			ordered = append(ordered, root)
+			ordered = append(ordered, roots[:i]...)
+			return append(ordered, roots[i+1:]...), true
+		}
+	}
+	return roots, false
+}
+
 func (s hermesSourceSet) transcriptSourceByRawID(
 	roots []string, sessionID string,
 ) (SourceRef, bool) {
