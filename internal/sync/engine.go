@@ -2599,6 +2599,21 @@ func providerChangedPathForceParse(
 			parser.IsGeminiProjectMetadataFile(eventPath) {
 			return false
 		}
+		// A Hermes/Augure Desktop state.db event's orphan-transcript
+		// fallback surfaces every transcript whose session currently has
+		// no row, including one that was never a member and so is
+		// unrelated to this event. Its plain transcript path (no "#"
+		// member suffix) isn't backed by the event, so without this
+		// carve-out it would force-reparse and rewrite every
+		// always-standalone sibling on every unrelated state.db write.
+		// Let the normal freshness gates decide, the same way full sync
+		// does for the identical source; keep the force on a remove
+		// event so a deletion still re-emits.
+		if eventKind != "remove" &&
+			(agent == parser.AgentHermes || agent == parser.AgentAugureDesktop) &&
+			!strings.Contains(sourcePath, "#") {
+			return false
+		}
 		return true
 	}
 	return eventKind == "remove" &&

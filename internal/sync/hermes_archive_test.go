@@ -1332,7 +1332,16 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 						require.NotNil(t, child)
 						assert.Equal(t, new("changed child prompt from transcript"), child.FirstMessage)
 						assert.Positive(t, scans.Load())
-						assert.LessOrEqual(t, scans.Load(), int64(4), "container opens must stay bounded as the archive grows")
+						// A state.db/WAL event's orphan-transcript fallback
+						// (surfacing a transcript whose row disappeared, see
+						// TestHermesStateEventSurfacesTranscriptAfterRowRemoved)
+						// adds one fixed extra state.db open to check
+						// transcript membership. That's a constant cost, not
+						// one that scales with archive size: 2 and 30
+						// members both land on the same count, which is what
+						// this assertion must keep proving as the bound
+						// grows with future fixed overhead.
+						assert.LessOrEqual(t, scans.Load(), int64(6), "container opens must stay bounded as the archive grows")
 					})
 				}
 			})
@@ -1686,6 +1695,36 @@ func TestHermesSingleSessionSyncAfterStateDBRemoval(t *testing.T) {
 	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
 	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
 		database.GetSessionFilePath(t.Context(), "hermes:child"))
+	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
+}
+
+// TestHermesStateEventSurfacesTranscriptAfterRowRemoved proves a state.db
+// change event picks up a session whose row was deleted since the last
+// sync, without waiting for the next full sync. changedPathSources's
+// state.db/WAL branch used to enumerate only current rows via
+// discoverStateEach, so a deleted row's surviving transcript stayed
+// unsynced -- stale database-sourced content lingered in the archive --
+// until some later full sync happened to run.
+func TestHermesStateEventSurfacesTranscriptAfterRowRemoved(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"))
+
+	execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
+
+	require.NoError(t, engine.syncPathsContext(t.Context(), []string{stateDB}, false))
+
+	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
+		database.GetSessionFilePath(t.Context(), "hermes:child"),
+		"a state.db event must surface a transcript whose row disappeared, without a full sync")
 	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
 }
 

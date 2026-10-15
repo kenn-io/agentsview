@@ -1110,12 +1110,34 @@ func (s hermesSourceSet) changedPathSources(
 				sources = append(sources, source)
 				return nil
 			})
-			if err == nil || ctx.Err() != nil {
-				return sources, err
+			if err != nil {
+				if ctx.Err() != nil {
+					return sources, err
+				}
+				// Root discovery falls back to the transcripts and reports
+				// the database failure as incomplete discovery.
+				return newHermesSourceSet(s.agent, []string{root}).Discover(ctx)
 			}
-			// Root discovery falls back to the transcripts and reports the
-			// database failure as incomplete discovery.
-			return newHermesSourceSet(s.agent, []string{root}).Discover(ctx)
+			// discoverStateEach only enumerates current rows. A session
+			// whose row was deleted since the last sync, with its
+			// transcript still on disk, would otherwise go unsynced by
+			// this event until the next full sync notices it. Surface it
+			// here too, the same way full sync's DiscoverEach does for
+			// every root, scoped to just this one root.
+			if transcriptErr := s.discoverTranscriptEach(
+				ctx, root, sessionsDir, stateDB, func(source SourceRef) error {
+					sources = append(sources, source)
+					return nil
+				},
+			); transcriptErr != nil {
+				if ctx.Err() != nil {
+					return sources, ctx.Err()
+				}
+				return sources, incompleteDiscoveryError(
+					s.agent, "discover orphaned transcripts", transcriptErr,
+				)
+			}
+			return sources, nil
 		}
 		if hermesPathInTranscriptDir(sessionsDir, path) {
 			id := HermesSessionID(filepath.Base(path))
