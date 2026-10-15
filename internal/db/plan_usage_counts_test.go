@@ -2,6 +2,7 @@ package db
 
 import (
 	"testing"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -250,4 +251,37 @@ func TestExportPlanOnlyEmptyCost(t *testing.T) {
 	idle := rows["claude-idle"]
 	require.NotNil(t, idle.ModelUsage)
 	assert.Empty(t, idle.ModelUsage.Models)
+}
+
+// The plan usage count scans message and usage rows for every report, so it
+// waits for a bulk-read slot and leaves a reader for quick reads.
+func TestPlanUsageCountsWaitForBulkReadSlot(t *testing.T) {
+	d := testDB(t)
+	synctest.Test(t, func(t *testing.T) {
+		var releases []func()
+		for range bulkReadSlots {
+			release, err := d.acquireBulkRead(t.Context())
+			require.NoError(t, err)
+			releases = append(releases, release)
+		}
+		defer func() {
+			for _, release := range releases {
+				release()
+			}
+		}()
+		done := make(chan error, 1)
+		go func() {
+			_, err := d.GetPlanUsageSessionCounts(t.Context(), UsageFilter{From: "2026-09-10", To: "2026-09-12"})
+			done <- err
+		}()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			require.Failf(t, "counted plan usage without a bulk-read slot", "error: %v", err)
+		default:
+		}
+		releases[0]()
+		releases = releases[1:]
+		require.NoError(t, <-done)
+	})
 }
