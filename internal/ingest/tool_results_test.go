@@ -9,13 +9,16 @@ import (
 	"go.kenn.io/agentsview/internal/ingest"
 )
 
-// TestSummarizeToolResultEventsContextLatestEventAlwaysDecides covers both
-// directions of a call with two result events, one real-text and one
-// withheld by content policy (blank Content, a kept ContentLength): the
-// chronologically later event — events[len(events)-1] — must always drive
-// the summary and length, whether it is the withheld one or the real-text
-// one. A later withheld correction must never fall back to an earlier
-// event's stale real text.
+// TestSummarizeToolResultEventsContextLatestEventAlwaysDecides covers which
+// event decides a call's summary and length, walking backward from the end
+// and skipping any event that doesn't participate
+// (db.ToolResultEventParticipates): a withheld correction (blank Content, a
+// kept ContentLength, SummaryParticipates explicitly true) always wins over
+// an earlier event's stale real text, a genuinely empty, non-participating
+// trailing event (blank, zero length, no explicit participation) is skipped
+// rather than treated as an authoritative correction, and a withheld
+// correction still wins even when a non-participating empty event trails
+// behind it.
 func TestSummarizeToolResultEventsContextLatestEventAlwaysDecides(t *testing.T) {
 	realText := "inline result"
 
@@ -28,7 +31,7 @@ func TestSummarizeToolResultEventsContextLatestEventAlwaysDecides(t *testing.T) 
 		{
 			name: "withheld then real: the later real event decides",
 			events: []db.ToolResultEvent{
-				{Content: "", ContentLength: 22},
+				{Content: "", ContentLength: 22, SummaryParticipates: new(true)},
 				{Content: realText, ContentLength: len(realText)},
 			},
 			wantText: realText, wantLength: len(realText),
@@ -37,7 +40,7 @@ func TestSummarizeToolResultEventsContextLatestEventAlwaysDecides(t *testing.T) 
 			name: "real then withheld: the later withheld event decides, not the earlier text",
 			events: []db.ToolResultEvent{
 				{Content: realText, ContentLength: len(realText)},
-				{Content: "", ContentLength: 22},
+				{Content: "", ContentLength: 22, SummaryParticipates: new(true)},
 			},
 			wantText: "", wantLength: 22,
 		},
@@ -51,6 +54,17 @@ func TestSummarizeToolResultEventsContextLatestEventAlwaysDecides(t *testing.T) 
 				{Content: "", ContentLength: 0},
 			},
 			wantText: realText, wantLength: len(realText),
+		},
+		{
+			// roborev's exact repro: a withheld correction must still win
+			// even with a non-participating empty event trailing behind it.
+			name: "real, then withheld, then a trailing empty event: the withheld correction still wins",
+			events: []db.ToolResultEvent{
+				{Content: realText, ContentLength: len(realText)},
+				{Content: "", ContentLength: 22, SummaryParticipates: new(true)},
+				{Content: "", ContentLength: 0},
+			},
+			wantText: "", wantLength: 22,
 		},
 	}
 	for _, tc := range tests {

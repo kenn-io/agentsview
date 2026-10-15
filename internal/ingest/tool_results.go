@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -118,14 +119,17 @@ func PairToolResultEventSummariesContext(
 
 // SummarizeToolResultEventsContext returns the latest content per agent
 // while preserving first-seen agent order and the last anonymous update, and
-// the length that content drives. The chronologically last event always
-// decides: when it has real text, the per-agent/anonymous logic below picks
-// the summary as usual; when it is withheld by content policy (empty
-// Content, a kept ContentLength), the summary is blank and its length is
-// that event's ContentLength, even if an earlier event had real text — a
-// later, withheld correction must never fall back to stale earlier text.
-// This is the one place that decides which event drives a call's summary
-// and length; callers never derive either independently.
+// the length that content drives. Walking backward and skipping any event
+// that doesn't participate (db.ToolResultEventParticipates), the first
+// participating event found decides: when it has real text, the
+// per-agent/anonymous logic below picks the summary as usual; when it is a
+// deliberately withheld correction (participates, but blank, with a kept
+// ContentLength), the summary is blank and its length is that event's
+// ContentLength, even if an earlier event had real text. A trailing event
+// that never participated (an ordinary empty or timing update) is skipped
+// rather than treated as an authoritative correction. This is the one place
+// that decides which event drives a call's summary and length; callers
+// never derive either independently.
 func SummarizeToolResultEventsContext(
 	ctx context.Context, events []db.ToolResultEvent,
 ) (string, int, error) {
@@ -157,9 +161,17 @@ func SummarizeToolResultEventsContext(
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
 	}
-	if last := events[len(events)-1]; strings.TrimSpace(last.Content) == "" &&
-		last.ContentLength > 0 {
-		return "", last.ContentLength, ctx.Err()
+	for _, event := range slices.Backward(events) {
+		if err := ctx.Err(); err != nil {
+			return "", 0, err
+		}
+		if !db.ToolResultEventParticipates(event) {
+			continue
+		}
+		if event.Content == "" {
+			return "", event.ContentLength, ctx.Err()
+		}
+		break
 	}
 	var summary string
 	switch {

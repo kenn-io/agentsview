@@ -223,11 +223,19 @@ func restoreClaudeToolResultEvent(
 	if archived.ContentLength <= 0 {
 		return false
 	}
+	participatesBefore := event.SummaryParticipates != nil && *event.SummaryParticipates
 	changed := event.Content != "" || event.ContentLength != archived.ContentLength ||
-		!bytes.Equal(event.RawContentDigest, archived.RawContentDigest)
+		!bytes.Equal(event.RawContentDigest, archived.RawContentDigest) ||
+		!participatesBefore
 	event.Content = ""
 	event.ContentLength = archived.ContentLength
 	event.RawContentDigest = archived.RawContentDigest
+	// Mark this event as the authoritative latest state explicitly, even
+	// though it carries no text: every consumer that decides which event
+	// drives a call's summary checks this field, not the shape of Content,
+	// so a withheld correction is never mistaken for an ordinary empty
+	// event or confused with an unrelated event's own dedup eligibility.
+	event.SummaryParticipates = new(true)
 	return changed
 }
 

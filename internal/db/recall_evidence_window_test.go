@@ -66,8 +66,8 @@ func TestRecallEvidenceWindowNeverRefillsAWithheldSummary(t *testing.T) {
 				ToolName: "Bash", Category: "Shell", ToolUseID: "tool-w",
 				ResultContentLength: 22,
 				ResultEvents: []ToolResultEvent{
-					{Content: "earlier real content", ContentLength: len("earlier real content")},
-					{Content: "", ContentLength: 22},
+					{Content: "earlier real content", ContentLength: len("earlier real content"), EventIndex: 0},
+					{Content: "", ContentLength: 22, SummaryParticipates: new(true), EventIndex: 1},
 				},
 			}},
 		},
@@ -75,6 +75,80 @@ func TestRecallEvidenceWindowNeverRefillsAWithheldSummary(t *testing.T) {
 
 	window, err := d.BuildRecallEvidenceWindow(
 		t.Context(), "withheld-session", 10, 11,
+	)
+	require.NoError(t, err)
+	require.Len(t, window.Messages, 2)
+	require.Len(t, window.Messages[1].ToolCalls, 1)
+	assert.Empty(t, window.Messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, 22, window.Messages[1].ToolCalls[0].ResultContentLength)
+}
+
+// TestRecallEvidenceWindowStillDedupsPastAnUnrelatedWithheldEvent covers the
+// other direction: an earlier event deliberately withheld by a prior
+// restore must never block a later, genuinely sole real-content event's
+// dedup refill through the SQL path.
+func TestRecallEvidenceWindowStillDedupsPastAnUnrelatedWithheldEvent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "dedup-session", "agentsview")
+	insertMessages(t, d,
+		recallEvidenceMessage(
+			"dedup-session", 10, "user", "run it", "src-10",
+		),
+		Message{
+			SessionID: "dedup-session", Ordinal: 11, Role: "assistant",
+			Content: "ok", ContentLength: 2, Timestamp: "2026-07-09T12:00:00Z",
+			SourceUUID: "src-11",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Shell", ToolUseID: "tool-d",
+				ResultContentLength: len("later real content"),
+				ResultEvents: []ToolResultEvent{
+					{Content: "", ContentLength: 11, SummaryParticipates: new(true), EventIndex: 0},
+					{Content: "later real content", EventIndex: 1},
+				},
+			}},
+		},
+	)
+
+	window, err := d.BuildRecallEvidenceWindow(
+		t.Context(), "dedup-session", 10, 11,
+	)
+	require.NoError(t, err)
+	require.Len(t, window.Messages, 2)
+	require.Len(t, window.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "later real content", window.Messages[1].ToolCalls[0].ResultContent)
+}
+
+// TestRecallEvidenceWindowWithheldCorrectionSurvivesATrailingEmptyEvent is
+// roborev's exact repro, through the SQL read path: a withheld correction
+// trailed by a non-participating empty event must still read back blank,
+// not the earlier real text.
+func TestRecallEvidenceWindowWithheldCorrectionSurvivesATrailingEmptyEvent(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "trailing-session", "agentsview")
+	insertMessages(t, d,
+		recallEvidenceMessage(
+			"trailing-session", 10, "user", "run it", "src-10",
+		),
+		Message{
+			SessionID: "trailing-session", Ordinal: 11, Role: "assistant",
+			Content: "ok", ContentLength: 2, Timestamp: "2026-07-09T12:00:00Z",
+			SourceUUID: "src-11",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Shell", ToolUseID: "tool-t",
+				ResultContentLength: 22,
+				ResultEvents: []ToolResultEvent{
+					{Content: "earlier real content", EventIndex: 0},
+					{Content: "", ContentLength: 22, SummaryParticipates: new(true), EventIndex: 1},
+					{Content: "", EventIndex: 2},
+				},
+			}},
+		},
+	)
+
+	window, err := d.BuildRecallEvidenceWindow(
+		t.Context(), "trailing-session", 10, 11,
 	)
 	require.NoError(t, err)
 	require.Len(t, window.Messages, 2)
