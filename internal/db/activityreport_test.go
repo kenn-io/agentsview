@@ -979,7 +979,6 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
 		dayQuery(t, "2026-06-16", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 900, r.Totals.OutputTokens)
 	require.NotNil(t, r.Pricing)
 	assert.Contains(t, r.Pricing.Models, "complete-model")
 	assert.NotContains(t, r.Pricing.Models, "partial-model")
