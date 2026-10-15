@@ -105,3 +105,48 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pageMessages, 1)
 }
+
+// TestCodexPurgedRolloutExclusionBlocksCanonicalPage covers a bare-rollout
+// page the user permanently purged remotely: only its exclusion remains. The
+// upgraded push must not republish the page under its canonical id.
+func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
+	const thread = "codex:11111111-1111-4111-8111-111111111111"
+	const rollout = "codex:22222222-2222-4222-8222-222222222222"
+	const page = thread + "_22222222-2222-4222-8222-222222222222"
+	const schema = "agentsview_codex_purged_rollout_test"
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: page, Agent: "codex", Project: "sample", Machine: "machine",
+		FilePath: &pagePath, MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+		StartedAt: new("2026-09-25T12:00:00Z"),
+	}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: page, Role: "assistant", Content: "page answer",
+		Timestamp: "2026-09-25T12:00:00Z",
+	}}))
+	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	// The remote bare-rollout row is already purged; only its exclusion stays.
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO excluded_sessions (id) VALUES ($1)`, rollout)
+	require.NoError(t, err)
+
+	pushed, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, pushed.Errors)
+
+	store := &Store{pg: syncer.pg}
+	row, err := store.GetSessionFull(ctx, page)
+	require.NoError(t, err)
+	assert.Nil(t, row, "the purged page stays excluded under its canonical id")
+	var excluded bool
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM excluded_sessions WHERE id = $1)`, page).Scan(&excluded))
+	assert.True(t, excluded)
+}
