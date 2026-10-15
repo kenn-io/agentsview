@@ -5,12 +5,15 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
@@ -515,8 +518,8 @@ func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	return fileStatTupleDigest(0xC2, paths...)
 }
 
-// ParseSourceSize estimates parsing size for memory admission and staging.
-// Compressed rollouts use five times their on-disk size without a sizing pass.
+// ParseSourceSize reports decoded size for memory admission and staging.
+// Codex writes one zstd frame; older frames may omit its decoded size.
 func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -525,14 +528,31 @@ func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (
 	if !ok {
 		return 0, errors.New("codex source path unavailable")
 	}
-	info, err := os.Stat(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
-	if isCompressedCodexRolloutPath(path) {
-		return info.Size() * 5, nil
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
 	}
-	return info.Size(), nil
+	if !isCompressedCodexRolloutPath(path) {
+		return info.Size(), nil
+	}
+	var prefix [zstd.HeaderMaxSize]byte
+	n, err := io.ReadFull(f, prefix[:])
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, err
+	}
+	var header zstd.Header
+	if err := header.Decode(prefix[:n]); err != nil {
+		return 0, fmt.Errorf("read codex rollout size: %w", err)
+	}
+	if !header.HasFCS || header.FrameContentSize > math.MaxInt64 {
+		return -1, nil
+	}
+	return int64(header.FrameContentSize), nil
 }
 
 func (p *codexProvider) Parse(
@@ -1115,6 +1135,11 @@ func (s codexSourceSet) SourcesForChangedPath(
 	if s.ownsCodexSidecars() &&
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return s.sourcesForIndexPath(ctx, req.Path)
+	}
+	if isCompressedCodexRolloutPath(req.Path) {
+		if plain := codexPlainRolloutPath(req.Path); IsRegularFile(plain) {
+			req.Path = plain
+		}
 	}
 	for _, root := range s.roots {
 		source, ok := s.sourceRef(root, req.Path, true)

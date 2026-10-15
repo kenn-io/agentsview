@@ -12659,6 +12659,8 @@ func (e *Engine) processProviderFile(
 			return processResult{err: err}, true
 		}
 	}
+	unknownSourceSize := sourceBytes < 0
+	sourceBytes = max(sourceBytes, 0) // Unknown sizes reserve the whole retention budget.
 	lease, err := e.retentionBudget().acquire(
 		ctx, sourceBytes,
 	)
@@ -12679,7 +12681,7 @@ func (e *Engine) processProviderFile(
 	var stagedSink *codexStagingSink
 	var stagedGCRelease func()
 	if file.Agent == parser.AgentCodex &&
-		sourceBytes > e.stagedCodexMin &&
+		(unknownSourceSize || sourceBytes > e.stagedCodexMin) &&
 		!e.forceParse {
 		stagedSink, err = newCodexStagingSink(ctx,
 			e.stagedCodexDir, e.blockedResultCategories, sourceBytes,

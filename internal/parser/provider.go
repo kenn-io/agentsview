@@ -110,8 +110,9 @@ type StoredFingerprintProvider interface {
 }
 
 // ParseSourceSizer reports all bytes a full parse may read, including companion
-// sources. It affects memory admission only, never stored fingerprints or offsets.
-// Providers without this capability use the discovered source's size.
+// sources. A negative size means unknown. It affects memory admission and
+// staging, never stored fingerprints or offsets. Providers without this
+// capability use the discovered source's size.
 type ParseSourceSizer interface {
 	ParseSourceSize(context.Context, SourceRef) (int64, error)
 }

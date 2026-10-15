@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
@@ -297,6 +298,102 @@ func TestCodexTruncatedCompressedRolloutKeepsArchive(t *testing.T) {
 				}
 			}
 			assert.Equal(t, 1, mentions, "the failure is logged once:\n%s", logs.String())
+		})
+	}
+}
+
+func TestCodexCompressedChangedPathKeepsNewerPlainMessages(t *testing.T) {
+	root := t.TempDir()
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
+	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, compressedRolloutContent(one, two, three))
+	database := openTestDB(t)
+	engine := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+	engine.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, compressedRolloutContent(one, two))
+	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{compressed})
+	require.NoError(t, err)
+	_, err = engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+}
+
+func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		outputSize int
+		knownSize  bool
+		staged     bool
+	}{
+		{name: "small known size", outputSize: 32, knownSize: true},
+		{name: "large known size", outputSize: 64 << 10, knownSize: true, staged: true},
+		{name: "unknown size", outputSize: 32, staged: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := strings.Repeat("x", tc.outputSize)
+			content := compressedRolloutContent(
+				codexUserEntryJSON("2026-09-01T10:00:01Z", "run command"),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-a", nil, "2026-09-01T10:00:02Z"),
+				testjsonl.CodexFunctionCallOutputJSON("call-a", output, "2026-09-01T10:00:03Z"),
+			)
+			var compressed []byte
+			if tc.knownSize {
+				compressed = zstdCompressString(t, content)
+			} else {
+				var buf bytes.Buffer
+				encoder, err := zstd.NewWriter(&buf)
+				require.NoError(t, err)
+				_, err = encoder.Write([]byte(content))
+				require.NoError(t, err)
+				require.NoError(t, encoder.Flush())
+				require.NoError(t, encoder.Close())
+				compressed = buf.Bytes()
+			}
+			var header zstd.Header
+			require.NoError(t, header.Decode(compressed))
+			require.Equal(t, tc.knownSize, header.HasFCS, "fixture must exercise the intended frame size")
+
+			root := t.TempDir()
+			path := filepath.Join(root, codexCompressedName)
+			require.NoError(t, os.WriteFile(path, compressed, 0o600))
+			engine := newCompressedRolloutEngine(t, openTestDB(t), root, EngineConfig{
+				StagedCodexParseMinBytes: 32 << 10,
+				CodexStagingDir:          t.TempDir(),
+			})
+			result := engine.processFile(t.Context(), parser.DiscoveredFile{
+				Agent: parser.AgentCodex, Path: path, SourceSize: int64(len(compressed)),
+			})
+			defer result.releaseStaged()
+			defer result.retentionLease.Release()
+			require.NoError(t, result.err)
+			require.Len(t, result.results, 1)
+			messages := result.results[0].Messages
+			require.Len(t, messages, 2)
+			require.Len(t, messages[1].ToolCalls, 1)
+			events := messages[1].ToolCalls[0].ResultEvents
+			require.Len(t, events, 1)
+			if tc.staged {
+				require.NotNil(t, result.staged, "decoded size must select scratch storage")
+				assert.NotEqual(t, output, events[0].Content, "the parsed result must not retain the tool output")
+				var stored string
+				require.NoError(t, result.staged.scratch.QueryRowContext(t.Context(),
+					"SELECT content FROM stage_events WHERE tool_use_id = ?", "call-a").Scan(&stored))
+				assert.Equal(t, output, stored)
+			} else {
+				assert.Nil(t, result.staged, "a small declared size does not need staging")
+				assert.Equal(t, output, events[0].Content)
+			}
+			if !tc.knownSize {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				second, err := engine.retentionBudget().acquire(ctx, 1)
+				defer second.Release()
+				assert.ErrorIs(t, err, context.Canceled, "an unknown size must hold the whole budget")
+			}
 		})
 	}
 }

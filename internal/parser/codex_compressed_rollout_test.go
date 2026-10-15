@@ -223,8 +223,8 @@ func TestCodexParseCompressedRolloutMatchesPlain(t *testing.T) {
 	require.True(t, ok, "the engine sizes its memory lease through ParseSourceSizer")
 	size, err := sizer.ParseSourceSize(t.Context(), source)
 	require.NoError(t, err)
-	assert.Equal(t, info.Size()*5, size,
-		"compressed parsing uses a cheap five-times-source-size estimate")
+	assert.Equal(t, int64(len(content)), size,
+		"memory admission uses decoded bytes while the fingerprint keeps compressed bytes")
 }
 
 func TestCodexS3PreferredFilesKeepsPlainOverCompressed(t *testing.T) {
@@ -267,7 +267,7 @@ func TestCodexIncrementalParseRefusesCompressedRollout(t *testing.T) {
 		Source:      source,
 		Fingerprint: fingerprint,
 		SessionID:   "codex:" + compressedThreadA,
-		Offset:      10,
+		Offset:      0,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, IncrementalNeedsFullParse, status)
