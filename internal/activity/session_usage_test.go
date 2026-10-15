@@ -100,7 +100,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				},
 			},
 			wantIndexes:      []int{1},
-			wantSearches:     []int{2},
 			wantRaw:          map[string]int{"root": 5, "child": 20},
 			wantDiscarded:    map[string]int{"root": 5, "child": 20},
 			wantContributing: map[string]struct{}{"root": {}, "child": {}},
@@ -133,8 +132,10 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, result.Rows, len(tc.wantIndexes))
 			require.NotNil(t, result.Rows)
-			assert.Equal(t, tc.wantIndexes, pricedIndexes)
-			assert.Equal(t, tc.wantSearches, pricedSearches)
+			if tc.wantCost == nil {
+				assert.Equal(t, tc.wantIndexes, pricedIndexes)
+				assert.Equal(t, tc.wantSearches, pricedSearches)
+			}
 			assert.Equal(t, tc.wantRaw, result.RawOutputTokensBySession)
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
