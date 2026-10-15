@@ -125,6 +125,16 @@ func TestCodexCloudOlderParserVersionReplacesArchive(t *testing.T) {
 
 	require.NoError(t, database.SetSessionDataVersion(ctx, "codex-cloud:thread-a",
 		db.AgentDataVersion(parser.AgentCodexCloud)-1))
+	// A deleted mirror rebuilt around a usage record holds no messages,
+	// which no parser change produces, so the archive stays.
+	require.NoError(t, os.Remove(path))
+	_, err = mirror.Append(path, 0, head[:1])
+	require.NoError(t, err)
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	messages, err = database.GetAllMessages(ctx, "codex-cloud:thread-a")
+	require.NoError(t, err)
+	assert.Len(t, messages, 2, "an empty mirror never replaces the archive")
+
 	require.NoError(t, os.Remove(path))
 	_, err = mirror.Append(path, 0, head)
 	require.NoError(t, err)
