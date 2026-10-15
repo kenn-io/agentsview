@@ -1290,7 +1290,7 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 		firstOutput, secondOutput                int
 	}{
 		{"sub-second order", "earlier", "later", "2026-06-16T10:30:00.123Z", 500, 9000},
-		{"equal instant uses session order", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 9000, 500},
+		{"equal instant uses session ID order", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 9000, 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)

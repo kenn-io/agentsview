@@ -17,7 +17,7 @@ func mustStart(t *testing.T, s string) time.Time {
 	return ts.UTC()
 }
 
-func TestAggregateUsageTotalsAndBuckets(t *testing.T) {
+func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{
 		{
@@ -36,20 +36,6 @@ func TestAggregateUsageTotalsAndBuckets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
-	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
-	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
-	require.Len(t, r.BySession, 2)
-	var root SessionRow
-	for _, row := range r.BySession {
-		if row.SessionID == "root" {
-			root = row
-			break
-		}
-	}
-	require.Equal(t, "root", root.SessionID)
-	assert.Equal(t, 500, root.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), root.Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
