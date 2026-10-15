@@ -1420,7 +1420,7 @@ func hermesStateDBHasReadableSession(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
 		}
-		return false, nil //nolint:nilerr // Same as above: an undecodable message does not count as a member.
+		return false, nil // Same as above: an undecodable message does not count as a member.
 	}
 	return true, nil
 }
