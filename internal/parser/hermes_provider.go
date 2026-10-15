@@ -2253,6 +2253,8 @@ func hermesProviderCapabilities() Capabilities {
 		Sync: ProviderSyncSemantics{
 			FingerprintHashRequiredForFreshness: true,
 			BatchFingerprintCache:               true,
+			PartialDiscovery:                    true,
+			MemberFreshnessOverridesFileForce:   true,
 		},
 	}
 }

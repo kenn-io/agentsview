@@ -625,7 +625,7 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 		if err != nil {
 			wrapped := fmt.Errorf("discover fallback provider %s: %w", agent, err)
 			_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
-			if !incomplete || ctx.Err() != nil || !usesPartialDiscovery(agent) {
+			if !incomplete || ctx.Err() != nil || !provider.Capabilities().Sync.PartialDiscovery {
 				return changedPathFallbackDiscovery{}, wrapped
 			}
 			discovery.incomplete = append(discovery.incomplete, wrapped)

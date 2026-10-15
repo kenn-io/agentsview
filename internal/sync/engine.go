@@ -1837,17 +1837,6 @@ func (e *Engine) syncChangedPathsLocked(
 	return stats, tombstoned, err
 }
 
-// usesPartialDiscovery reports whether agent's per-session discovery can
-// return a usable partial source set alongside DiscoveryIncompleteError.
-// Only Hermes and Augure Desktop's discovery works this way today; every
-// other provider that can return this error (Aider's time/dir/file
-// budgets, the raw-capture-backed providers) keeps the prior behavior of
-// discarding its sources on any discovery error, including an incomplete
-// one.
-func usesPartialDiscovery(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
-}
-
 // providerFingerprintCacheRootEligible reports whether at least one of a
 // provider's configured roots is eligible to receive the batch fingerprint
 // cache. A flat statExists works for most BatchFingerprintCache providers,
@@ -2296,7 +2285,7 @@ func (e *Engine) classifyProviderChangedPath(
 					)
 				}
 				_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
-				if !incomplete || ctx.Err() != nil || !usesPartialDiscovery(def.Type) {
+				if !incomplete || ctx.Err() != nil || !provider.Capabilities().Sync.PartialDiscovery {
 					continue
 				}
 			}
@@ -8588,7 +8577,7 @@ func (e *Engine) discoverProviderSources(
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
 			_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
-			if !incomplete || ctx.Err() != nil || !usesPartialDiscovery(agentType) {
+			if !incomplete || ctx.Err() != nil || !provider.Capabilities().Sync.PartialDiscovery {
 				continue
 			}
 		}
@@ -12651,8 +12640,8 @@ func (e *Engine) processProviderFile(
 	// looked at" (e.g. a routine remote-mirror import marking a
 	// freshly-synced state.db), not "every session this file fans out to
 	// must be rewritten." For Hermes/Augure Desktop, one state.db expands
-	// into many per-session members (usesPartialDiscovery's fan-out
-	// providers); folding the file-level flag into every member's
+	// into many per-session members (MemberFreshnessOverridesFileForce);
+	// folding the file-level flag into every member's
 	// incForceReplace would force-rewrite every session in the archive on
 	// every routine import, defeating this provider's whole per-session
 	// freshness model. Only a member-level force (sourceForceReplace,
@@ -12661,7 +12650,7 @@ func (e *Engine) processProviderFile(
 	// file.ForceFullParse's existing effect.
 	incForceReplace := sourceForceReplace || incRes.forceReplace ||
 		e.forceFullParse ||
-		(file.ForceFullParse && !usesPartialDiscovery(file.Agent))
+		(file.ForceFullParse && !providerSemantics.MemberFreshnessOverridesFileForce)
 
 	// DB-stored fingerprint skip. The provider has no database handle, so the
 	// engine reproduces the legacy DB-aware skip that single-session JSONL
@@ -12722,14 +12711,15 @@ func (e *Engine) processProviderFile(
 	// changed member; forceParseRequested's file.ForceFullParse term exists
 	// for providers where one DiscoveredFile is one physical file, so
 	// "reparse this file" and "reparse this member" are the same thing. For
-	// Hermes/Augure Desktop's per-session fan-out (usesPartialDiscovery's
-	// providers), they are not: a routine remote-mirror import marks the
-	// shared state.db ForceFullParse because the mirror layer can't
+	// Hermes/Augure Desktop's per-session fan-out
+	// (MemberFreshnessOverridesFileForce), they are not: a routine
+	// remote-mirror import marks the shared state.db ForceFullParse
+	// because the mirror layer can't
 	// incrementally diff it, and that flag reaches every member it fans out
 	// to. Excluding it here, specifically for this skip, keeps that import
 	// from rewriting every unchanged session on every routine sync.
 	memberForceParseRequested := e.forceParse || e.forceFullParse || file.ForceParse ||
-		(file.ForceFullParse && !usesPartialDiscovery(file.Agent))
+		(file.ForceFullParse && !providerSemantics.MemberFreshnessOverridesFileForce)
 	if !forceSourceCwdParse && !incForceReplace && !memberForceParseRequested &&
 		e.providerSourceUnchangedInDB(
 			ctx, source, fingerprint, providerSemantics, preParseStatHash,
