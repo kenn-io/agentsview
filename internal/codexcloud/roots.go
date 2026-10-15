@@ -229,10 +229,10 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 	}
 	if threads {
 		summary := fmt.Sprintf("codex-cloud: account.json was missing or set aside, so AgentsView rebuilt the "+
-			"plan usage queue from the saved chat state. %d chats will be checked now. %d stay on the daily refresh.",
+			"plan usage queue from the saved chat state. %d chats are due for a check. %d stay on the daily refresh.",
 			len(acct.UsagePending), len(acct.Refresh))
 		if skipped > 0 {
-			summary += fmt.Sprintf(" %d could not be read (logged above).", skipped)
+			summary += fmt.Sprintf(" %d were skipped; each has its own log line with the reason.", skipped)
 		}
 		s.Log.Print(summary)
 	}
