@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"strings"
@@ -58,36 +58,24 @@ func codexRolloutStem(name string) string {
 	return strings.TrimSuffix(name, codexRolloutSuffix)
 }
 
-// codexRolloutSnapshot is one Codex rollout opened for a full read.
+// codexRolloutSnapshot owns the source file and yields decoded bytes.
 type codexRolloutSnapshot struct {
-	// File holds the bytes to parse: the rollout itself, or for a
-	// compressed rollout a temporary plain copy that Close removes.
-	File *os.File
-	// Info describes File; its size bounds the read.
-	Info os.FileInfo
-	// Source describes the rollout on disk: the identity, size and
-	// modification time the session records, which are what Fingerprint
-	// stats on later passes.
-	Source os.FileInfo
-	// Compressed marks a snapshot unpacked from a .jsonl.zst file. The
-	// stored session cannot resume into it by byte offset, so callers take
-	// no checkpoint and no cursor from such a snapshot.
+	File       *os.File
+	Reader     io.Reader
+	Source     os.FileInfo
 	Compressed bool
-	// Hash is the content hash of the compressed file's own bytes, the
-	// value Fingerprint computes for the path, so the session records it
-	// instead of a hash of the unpacked bytes. Empty for a plain rollout.
-	Hash     string
-	tempPath string
+	decoder    *zstd.Decoder
+	raw        io.Reader
+	hash       hash.Hash
 }
 
 // plainCodexRolloutSnapshot wraps an already open plain rollout.
 func plainCodexRolloutSnapshot(f *os.File, info os.FileInfo) codexRolloutSnapshot {
-	return codexRolloutSnapshot{File: f, Info: info, Source: info}
+	return codexRolloutSnapshot{File: f, Reader: io.LimitReader(f, info.Size()), Source: info}
 }
 
-// openCodexRollout opens a rollout for a full read, unpacking a compressed
-// one to a temporary file first. A compressed file that does not decode in
-// full is a read failure of that rollout; nothing partial is returned.
+// openCodexRollout opens a bounded snapshot of the source. Compressed bytes
+// are hashed and decoded as the caller reads, without a temporary copy.
 func openCodexRollout(ctx context.Context, path string) (*codexRolloutSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -101,71 +89,40 @@ func openCodexRollout(ctx context.Context, path string) (*codexRolloutSnapshot, 
 		f.Close()
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
-	if !isCompressedCodexRolloutPath(path) {
-		return &codexRolloutSnapshot{File: f, Info: info, Source: info}, nil
+	snapshot := plainCodexRolloutSnapshot(f, info)
+	if isCompressedCodexRolloutPath(path) {
+		snapshot.Compressed = true
+		snapshot.hash = sha256.New()
+		snapshot.raw = io.TeeReader(snapshot.Reader, snapshot.hash)
+		snapshot.decoder, err = newCodexRolloutDecoder(ctxio.Reader{Context: ctx, Reader: snapshot.raw})
+		if err != nil {
+			snapshot.Close()
+			return nil, fmt.Errorf("decode %s: %w", path, err)
+		}
+		snapshot.Reader = snapshot.decoder
 	}
-	defer f.Close()
-	temp, err := os.CreateTemp("", "agentsview-codex-*.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("unpack %s: %w", path, err)
-	}
-	snapshot := &codexRolloutSnapshot{
-		File: temp, Source: info, Compressed: true, tempPath: temp.Name(),
-	}
-	hash := sha256.New()
-	if err := decodeCodexRollout(ctx, io.TeeReader(f, hash), temp); err != nil {
-		snapshot.Close()
-		return nil, fmt.Errorf("unpack %s: %w", path, err)
-	}
-	// The hash must cover the whole file, as Fingerprint's does, whatever
-	// the decoder left unread after the last frame.
-	if _, err := io.Copy(hash, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
-		snapshot.Close()
-		return nil, fmt.Errorf("hash %s: %w", path, err)
-	}
-	snapshot.Hash = hex.EncodeToString(hash.Sum(nil))
-	if _, err := temp.Seek(0, io.SeekStart); err != nil {
-		snapshot.Close()
-		return nil, fmt.Errorf("unpack %s: %w", path, err)
-	}
-	if snapshot.Info, err = temp.Stat(); err != nil {
-		snapshot.Close()
-		return nil, fmt.Errorf("unpack %s: %w", path, err)
-	}
-	return snapshot, nil
+	return &snapshot, nil
 }
 
-// Close releases the open file and removes the temporary copy of a
-// compressed rollout.
+// Close releases the decoder and the original source file.
 func (s *codexRolloutSnapshot) Close() error {
 	if s == nil || s.File == nil {
 		return nil
 	}
+	if s.decoder != nil {
+		s.decoder.Close()
+	}
 	err := s.File.Close()
 	s.File = nil
-	if s.tempPath != "" {
-		if removeErr := os.Remove(s.tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = errors.Join(err, removeErr)
-		}
-		s.tempPath = ""
-	}
 	return err
 }
 
-// identity returns the on-disk rollout's file identity.
-func (s *codexRolloutSnapshot) identity(path string) (inode, device uint64) {
-	if s.Compressed {
-		return sourceFileIdentityForPath(path, s.Source)
+// sourceHash completes the compressed-byte fingerprint without decoding again.
+func (s *codexRolloutSnapshot) sourceHash(ctx context.Context) (string, error) {
+	if _, err := io.Copy(io.Discard, ctxio.Reader{Context: ctx, Reader: s.raw}); err != nil {
+		return "", err
 	}
-	return sourceFileIdentityForFile(s.File, s.Source)
-}
-
-// changeTime returns the on-disk rollout's inode change time.
-func (s *codexRolloutSnapshot) changeTime(path string) (int64, bool) {
-	if s.Compressed {
-		return codexIndexChangeTime(path, s.Source)
-	}
-	return codexIndexChangeTimeForFile(s.File, s.Source)
+	return hex.EncodeToString(s.hash.Sum(nil)), nil
 }
 
 // newCodexRolloutDecoder returns a sequential, memory-bounded zstd decoder
@@ -178,48 +135,6 @@ func newCodexRolloutDecoder(src io.Reader) (*zstd.Decoder, error) {
 		zstd.WithDecoderMaxMemory(codexRolloutDecoderMemory),
 		zstd.WithDecoderMaxWindow(codexRolloutDecoderMaxWindow),
 	)
-}
-
-// codexRolloutPlainSize reports the bytes a full parse of path reads: the
-// file's size for a plain rollout, and for a compressed one the unpacked
-// size its frame header declares, falling back to the compressed size when
-// the header carries none or cannot be read.
-func codexRolloutPlainSize(path string, info os.FileInfo) int64 {
-	if !isCompressedCodexRolloutPath(path) {
-		return info.Size()
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return info.Size()
-	}
-	defer f.Close()
-	var head [zstd.HeaderMaxSize]byte
-	n, err := io.ReadFull(f, head[:])
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return info.Size()
-	}
-	var header zstd.Header
-	if err := header.Decode(head[:n]); err != nil || !header.HasFCS {
-		return info.Size()
-	}
-	if header.FrameContentSize > uint64(1<<62) {
-		return info.Size()
-	}
-	return int64(header.FrameContentSize)
-}
-
-// decodeCodexRollout writes the plain bytes of a compressed rollout to dst.
-// The zstd stream must decode to its end; a truncated or corrupt file fails.
-func decodeCodexRollout(ctx context.Context, src io.Reader, dst io.Writer) error {
-	decoder, err := newCodexRolloutDecoder(src)
-	if err != nil {
-		return err
-	}
-	defer decoder.Close()
-	if _, err := io.Copy(dst, ctxio.Reader{Context: ctx, Reader: decoder}); err != nil {
-		return err
-	}
-	return nil
 }
 
 // openCodexRolloutLines opens a rollout for a forward line scan, plain or

@@ -182,7 +182,7 @@ func TestReadCodexJSONLReaderReusesWorkspace(t *testing.T) {
 	var readErr error
 	allocs := testing.AllocsPerRun(100, func() {
 		r := bytes.NewReader(nil)
-		_, readErr = readCodexJSONLReader(r, r, func(string) {})
+		_, readErr = readCodexJSONLReader(r, func(string) {})
 	})
 
 	require.NoError(t, readErr)

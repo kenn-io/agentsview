@@ -1934,9 +1934,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	// The tee hashes the plain bytes: a compressed rollout's unpacked copy.
-	f, info := snapshot.File, snapshot.Info
-	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
+	// The tee hashes decoded bytes; the snapshot separately hashes the source.
+	f, info := snapshot.File, snapshot.Source
+	tee := newCodexHashAnchorTee(snapshot.Reader)
 	lr := newLineReaderContext(ctx, tee, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(
@@ -1953,15 +1953,10 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			break
 		}
 		if !gjson.Valid(line) {
-			var terminator [1]byte
-			if _, err := f.ReadAt(terminator[:], lr.bytesRead-1); err != nil {
-				return nil, nil, codexCursorState{}, false, nil, "", "",
-					fmt.Errorf("checking codex line terminator: %w", err)
-			}
 			// A writer may leave its final JSON record incomplete while the
 			// session is live. Count terminated malformed records, and count an
 			// unterminated tail only when the caller owns a stable snapshot.
-			if terminator[0] == '\n' || p.Config.StableSourceSnapshots {
+			if lr.terminated || p.Config.StableSourceSnapshots {
 				malformedLines++
 			}
 			continue
@@ -1988,8 +1983,8 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	b.refreshPendingCallPositions()
 	msgs := b.sink.Messages()
 	seed := b.codexCursorState
-	inode, device := snapshot.identity(path)
-	changeTime, _ := snapshot.changeTime(path)
+	inode, device := sourceFileIdentityForFile(f, info)
+	changeTime, _ := codexIndexChangeTimeForFile(f, info)
 	safe := false
 	// A snapshot that ends while the fork replay gate is still active
 	// contains only replayed parent history so far. Persisting a cursor
@@ -2097,7 +2092,10 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	if snapshot.Compressed {
 		// The session records the compressed file's own hash, which is what
 		// Fingerprint computes for the path on every later pass.
-		sess.File.Hash = snapshot.Hash
+		sess.File.Hash, err = snapshot.sourceHash(ctx)
+		if err != nil {
+			return nil, nil, codexCursorState{}, false, nil, "", "", err
+		}
 	}
 
 	var hashState []byte
@@ -2441,7 +2439,19 @@ func readCodexJSONLFromContext(
 	if snapshot.Compressed && offset != 0 {
 		return 0, fmt.Errorf("read %s: a compressed rollout has no byte offset %d", path, offset)
 	}
-	return readCodexJSONLSectionContext(ctx, snapshot.File, offset, snapshot.Info.Size(), fn)
+	if snapshot.Compressed {
+		consumed, err = readCodexJSONLReaderContext(ctx, snapshot.Reader, fn)
+		if err != nil && !errors.Is(err, errCodexIncrementalNeedsFullParse) {
+			return consumed, err
+		}
+		// An unfinished JSONL tail can stop the scan before a deferred
+		// checksum error. Finish this decoder to validate the whole frame.
+		if _, decodeErr := io.Copy(io.Discard, ctxio.Reader{Context: ctx, Reader: snapshot.Reader}); decodeErr != nil {
+			return consumed, decodeErr
+		}
+		return consumed, err
+	}
+	return readCodexJSONLSectionContext(ctx, snapshot.File, offset, snapshot.Source.Size(), fn)
 }
 
 // readCodexJSONLSection applies the conservative Codex JSONL rules to the
@@ -2471,23 +2481,21 @@ func readCodexJSONLSectionContext(
 		)
 	}
 	section := io.NewSectionReader(f, offset, limit-offset)
-	return readCodexJSONLReaderContext(ctx, section, section, fn)
+	return readCodexJSONLReaderContext(ctx, section, fn)
 }
 
 func readCodexJSONLReader(
 	r io.Reader,
-	at io.ReaderAt,
 	fn func(line string),
 ) (consumed int64, err error) {
 	return readCodexJSONLReaderContext(
-		context.Background(), r, at, fn,
+		context.Background(), r, fn,
 	)
 }
 
 func readCodexJSONLReaderContext(
 	ctx context.Context,
 	r io.Reader,
-	at io.ReaderAt,
 	fn func(line string),
 ) (consumed int64, err error) {
 	lr := newLineReaderContext(ctx, r, maxLineSize)
@@ -2500,11 +2508,7 @@ func readCodexJSONLReaderContext(
 		if !ok {
 			break
 		}
-		var terminator [1]byte
-		if _, err := at.ReadAt(terminator[:], lr.bytesRead-1); err != nil {
-			return consumed, err
-		}
-		if terminator[0] != '\n' {
+		if !lr.terminated {
 			if gjson.Valid(line) {
 				return consumed, errCodexIncrementalNeedsFullParse
 			}

@@ -515,9 +515,8 @@ func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	return fileStatTupleDigest(0xC2, paths...)
 }
 
-// ParseSourceSize reports the bytes a full parse reads: a compressed
-// rollout's unpacked size, so the engine's memory lease and its choice of
-// the staged parse see the plain bytes the parser will read.
+// ParseSourceSize estimates parsing size for memory admission and staging.
+// Compressed rollouts use five times their on-disk size without a sizing pass.
 func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -530,7 +529,10 @@ func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (
 	if err != nil {
 		return 0, err
 	}
-	return codexRolloutPlainSize(path, info), nil
+	if isCompressedCodexRolloutPath(path) {
+		return info.Size() * 5, nil
+	}
+	return info.Size(), nil
 }
 
 func (p *codexProvider) Parse(

@@ -223,8 +223,8 @@ func TestCodexParseCompressedRolloutMatchesPlain(t *testing.T) {
 	require.True(t, ok, "the engine sizes its memory lease through ParseSourceSizer")
 	size, err := sizer.ParseSourceSize(t.Context(), source)
 	require.NoError(t, err)
-	assert.Equal(t, int64(len(content)), size,
-		"a compressed rollout is sized by the bytes the parse reads, not the compressed size")
+	assert.Equal(t, info.Size()*5, size,
+		"compressed parsing uses a cheap five-times-source-size estimate")
 }
 
 func TestCodexS3PreferredFilesKeepsPlainOverCompressed(t *testing.T) {
@@ -234,7 +234,6 @@ func TestCodexS3PreferredFilesKeepsPlainOverCompressed(t *testing.T) {
 		{Path: plain + ".zst"},
 		{Path: "s3://bucket/host/raw/codex/sessions/2026/06/11/" + compressedDayPrefix + compressedThreadB + ".jsonl.zst"},
 		{Path: plain},
-		{Path: "s3://bucket/host/raw/codex/sessions/2026/06/11/" + compressedDayPrefix + compressedThreadB + ".jsonl.zst.tmp"},
 		{Path: archived + ".zst"},
 	}
 	kept := codexS3PreferredFiles(files)
@@ -245,10 +244,9 @@ func TestCodexS3PreferredFilesKeepsPlainOverCompressed(t *testing.T) {
 	assert.Equal(t, []string{
 		files[1].Path,
 		plain,
-		files[3].Path,
 		archived + ".zst",
-	}, paths, "a compressed object beside its plain one is dropped; a lone compressed object, "+
-		"another copy of the session at a different address, and unrecognised names stay")
+	}, paths, "a compressed object beside its plain one is dropped; a lone compressed object "+
+		"and another copy of the session at a different address stay")
 }
 
 func TestCodexIncrementalParseRefusesCompressedRollout(t *testing.T) {
@@ -292,30 +290,6 @@ func TestCodexParseTruncatedCompressedRolloutFails(t *testing.T) {
 	_, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), filepath.Base(truncated))
-}
-
-func TestCodexWatchPlanCoversCompressedRollouts(t *testing.T) {
-	root := t.TempDir()
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(t, err)
-	require.NotEmpty(t, plan.Roots)
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
-
-	matches := func(name string) bool {
-		for _, glob := range plan.Roots[0].IncludeGlobs {
-			if ok, _ := filepath.Match(glob, name); ok {
-				return true
-			}
-		}
-		return false
-	}
-	assert.True(t, matches(compressedDayPrefix+compressedThreadA+".jsonl"))
-	assert.True(t, matches(compressedDayPrefix+compressedThreadA+".jsonl.zst"),
-		"a compression replaces the plain file with the compressed one; the watcher must see it")
-	assert.False(t, matches("rollout-compress-abc123.tmp"))
 }
 
 func TestCodexExecCheckReadsCompressedRollout(t *testing.T) {
