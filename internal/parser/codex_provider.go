@@ -21,6 +21,7 @@ var (
 	_ RawCaptureProvider                = (*codexProvider)(nil)
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
 	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
+	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -141,6 +142,21 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+// SourceForReconciliation allows a rollout restored after discovery to use
+// its plain sibling while retaining the discovered session identity.
+// Only existing files qualify, including when checking for deleted sources.
+func (p *codexProvider) SourceForReconciliation(
+	ctx context.Context, path, _ string,
+) (SourceRef, bool, error) {
+	sources, err := p.sources.SourcesForChangedPath(ctx, ChangedPathRequest{
+		Path: path, EventKind: "write",
+	})
+	if err != nil || len(sources) == 0 || !IsRegularFile(sources[0].DisplayPath) {
+		return SourceRef{}, false, err
+	}
+	return sources[0], true, nil
 }
 
 func (p *codexProvider) DiscoverRawCaptureSourcesEach(
@@ -515,7 +531,7 @@ func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	return fileStatTupleDigest(0xC2, paths...)
 }
 
-// ParseSourceSize estimates parsing size for memory admission and staging.
+// ParseSourceSize provides a heuristic of convenience for scheduling.
 // Compressed rollouts use five times their on-disk size without a sizing pass.
 func (p *codexProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
 	if err := ctx.Err(); err != nil {
@@ -1115,6 +1131,12 @@ func (s codexSourceSet) SourcesForChangedPath(
 	if s.ownsCodexSidecars() &&
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return s.sourcesForIndexPath(ctx, req.Path)
+	}
+	if isCompressedCodexRolloutPath(req.Path) {
+		plain := codexPlainRolloutPath(req.Path)
+		if IsRegularFile(plain) {
+			req.Path = plain
+		}
 	}
 	for _, root := range s.roots {
 		source, ok := s.sourceRef(root, req.Path, true)

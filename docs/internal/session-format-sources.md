@@ -555,28 +555,28 @@ fixtures retain this field; missing identities remain source-local.
 ## Codex (`codex`)
 
 - **Compressed rollouts (checked 2026-10-15, source at commit
-  `3ee47c10513f1bb57d869ea650aba28638e3d11c`):** A background worker started
+  `1ef30bcbe784f1006548adc1542985be32b05109`):** A background worker started
   by the Codex app compresses rollouts whose modification time is at least
   seven days old to `rollout-<ts>-<uuid>.jsonl.zst`. Undo pages become
   `rollout-<ts>-<thread>_<rollout>.jsonl.zst`. It writes one zstd frame at
   level 3, removes the plain file, and preserves its modification time and
   permissions
-  ([compression.rs](https://github.com/openai/codex/blob/3ee47c10513f1bb57d869ea650aba28638e3d11c/codex-rs/rollout/src/compression.rs#L846-L973)).
+  ([compression.rs](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L846-L973)).
   Codex prefers the plain file while both forms exist and restores it before
   appending to a compressed thread
-  ([materialize_rollout_for_append_blocking](https://github.com/openai/codex/blob/3ee47c10513f1bb57d869ea650aba28638e3d11c/codex-rs/rollout/src/compression.rs#L121-L185)).
+  ([materialize_rollout_for_append_blocking](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L121-L185)).
   New frames declare the decoded size
-  ([encoder](https://github.com/openai/codex/blob/3ee47c10513f1bb57d869ea650aba28638e3d11c/codex-rs/rollout/src/compression.rs#L1011-L1018));
+  ([encoder](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L1011-L1018));
   Codex still reads older frames without it
-  ([prefix reader](https://github.com/openai/codex/blob/3ee47c10513f1bb57d869ea650aba28638e3d11c/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
+  ([prefix reader](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
   AgentsView treats both names as one session and prefers the plain file.
   Full parses and replay-parent reads stream decoded bytes through an
   `io.Reader` without a temporary decompressed copy. Compressed rollouts are
   parsed in full, without resumable checkpoints or decoded-byte offsets.
-  Scheduling estimates decoded size as five times the compressed file size,
-  without a separate decode or sizing pass. Stored fingerprints retain the
-  original compressed file's size, modification time, identity and hash. A
-  decoding error prevents partial results from replacing the archive.
+  Scheduling uses five times the compressed file size as a heuristic of
+  convenience, without a separate decode or sizing pass. Stored fingerprints
+  retain the original compressed file's size, modification time, identity and
+  hash. A decoding error prevents partial results from replacing the archive.
 
 - **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
   `thread/revert` writes a rollout named

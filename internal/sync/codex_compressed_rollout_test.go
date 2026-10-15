@@ -207,6 +207,27 @@ func TestCodexPlainRolloutWinsUntilCompressed(t *testing.T) {
 	assert.Equal(t, 1, countCodexSessions(t, database))
 }
 
+func TestCodexChangedPathPrefersPlainOverCompressed(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "new answer")
+	root := t.TempDir()
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, compressedRolloutContent(one))
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+	e.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "new answer"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+	plan, err := e.PlanChangedPathsContext(t.Context(), []string{compressed})
+	require.NoError(t, err)
+	require.Len(t, plan.Files, 1)
+	assert.Equal(t, plain, plan.Files[0].Path)
+	_, err = e.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "new answer"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+}
+
 // TestCodexCompressionAfterSyncKeepsArchiveAndSkipsUnchangedFile: a rollout
 // synced while plain and then compressed by Codex keeps its archived rows,
 // follows the path change, and is not parsed again while it stays unchanged.
@@ -299,4 +320,29 @@ func TestCodexTruncatedCompressedRolloutKeepsArchive(t *testing.T) {
 			assert.Equal(t, 1, mentions, "the failure is logged once:\n%s", logs.String())
 		})
 	}
+}
+
+func TestCodexReconciliationPrefersRestoredPlain(t *testing.T) {
+	root := t.TempDir()
+	content := compressedRolloutContent(codexUserEntryJSON("2026-09-01T10:00:01Z", "one"))
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, content)
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, compressed, sources[0].DisplayPath)
+	candidate, ok := e.reconciliationCandidate(t.Context(), provider, sources[0], []string{root}, nil)
+	require.True(t, ok)
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, content)
+	files, err := e.rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{candidate},
+		map[parser.AgentType]parser.Provider{parser.AgentCodex: provider}, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, plain, files[0].ProviderSource.DisplayPath)
 }
