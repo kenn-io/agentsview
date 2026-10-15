@@ -162,7 +162,8 @@ func reconcileClaudePersistedToolResults(
 	}
 	archived := archivedToolResultEventsByIdentity(prior.Messages)
 	currentCounts := currentToolResultIdentityCounts(candidate.Messages)
-	var touched []*db.ToolCall
+	type callPos struct{ mi, ci int }
+	var touched []callPos
 	for mi := range candidate.Messages {
 		for ci := range candidate.Messages[mi].ToolCalls {
 			call := &candidate.Messages[mi].ToolCalls[ci]
@@ -182,9 +183,10 @@ func reconcileClaudePersistedToolResults(
 				if len(matches) != 1 {
 					continue
 				}
+				pos := callPos{mi, ci}
 				if restoreClaudeToolResultEvent(event, matches[0]) &&
-					!slices.Contains(touched, call) {
-					touched = append(touched, call)
+					!slices.Contains(touched, pos) {
+					touched = append(touched, pos)
 				}
 			}
 		}
@@ -196,9 +198,20 @@ func reconcileClaudePersistedToolResults(
 	// same risk VSCopilot's own merge above guards against, so reapply the
 	// policy here too before anything downstream reads the restored content.
 	candidate.Messages = dropToolResultImagesIfPolicy(candidate.Messages, options)
-	// Recompute summaries only for restored calls; rerunning the pairing on
-	// an already-blocked call would reset its length from its cleared events.
-	for _, call := range touched {
+	// Recompute summaries only for restored calls, resolved by position
+	// because the policy above may have cloned the messages. A blocked
+	// call is only re-blanked: its length was set by the first pass, which
+	// saw every event, and recomputing from the now-blank events would
+	// overwrite it with the restored event's length.
+	for _, pos := range touched {
+		call := &candidate.Messages[pos.mi].ToolCalls[pos.ci]
+		if options.BlockedResultCategories[call.Category] {
+			call.ResultContent = ""
+			for k := range call.ResultEvents {
+				call.ResultEvents[k].Content = ""
+			}
+			continue
+		}
 		if err := pairToolCallResultSummaryContext(
 			ctx, call, options.BlockedResultCategories,
 		); err != nil {

@@ -563,6 +563,51 @@ func TestReconcileProviderHistoryClaudeRestoreGuards(t *testing.T) {
 				assert.Empty(t, calls[1].ResultEvents[0].Content)
 			},
 		},
+		{
+			name: "restore under the drop-images policy recomputes the returned call",
+			calls: []db.ToolCall{
+				{ToolUseID: "toolu_1", Category: "bash", ResultEvents: []db.ToolResultEvent{
+					event("toolu_1", placeholder, len(placeholder)),
+				}},
+			},
+			options: ingest.ContentOptions{
+				ToolResultImages: config.ToolResultImagesDrop,
+			},
+			check: func(t *testing.T, calls []db.ToolCall) {
+				t.Helper()
+				assert.Equal(t, "full archived output", calls[0].ResultEvents[0].Content)
+				assert.Equal(t, "full archived output", calls[0].ResultContent)
+				assert.Equal(t, len("full archived output"), calls[0].ResultContentLength)
+			},
+		},
+		{
+			name: "restore on a blocked call keeps its pre-reconcile length",
+			calls: []db.ToolCall{
+				{
+					ToolUseID: "toolu_1", Category: "Read",
+					ResultContentLength: 777,
+					ResultEvents: []db.ToolResultEvent{
+						event("toolu_1", placeholder, len(placeholder)),
+						{
+							ToolUseID: "toolu_1", Source: "tool_result",
+							Timestamp: timeutil.Format(ts.Add(time.Second)),
+							Content:   "", ContentLength: 777,
+						},
+					},
+				},
+			},
+			options: ingest.ContentOptions{
+				BlockedResultCategories: map[string]bool{"Read": true},
+			},
+			check: func(t *testing.T, calls []db.ToolCall) {
+				t.Helper()
+				assert.Equal(t, 777, calls[0].ResultContentLength)
+				assert.Empty(t, calls[0].ResultContent)
+				for _, ev := range calls[0].ResultEvents {
+					assert.Empty(t, ev.Content)
+				}
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
