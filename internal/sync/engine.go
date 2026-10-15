@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -521,6 +522,11 @@ type EngineConfig struct {
 	// DisableSignalRecomputation skips quality and secret signal work. It is
 	// reserved for bounded parsers whose result does not consume those fields.
 	DisableSignalRecomputation bool
+	// FrictionEnabled turns on Friction Log review. Sync never reviews a
+	// session inline; it marks changed sessions stale, and BackfillFriction
+	// and DrainStaleFrictionLocked review them later. Both are no-ops when
+	// this is false.
+	FrictionEnabled bool
 	// DisableFilesystemProjectDiscovery prevents project attribution from
 	// touching working directories recorded in imported transcripts. Bounded
 	// capture uses lexical metadata instead.
@@ -749,7 +755,11 @@ type Engine struct {
 	// recompute triggered by incremental writes, so streaming
 	// sessions don't rescan their whole history on every appended
 	// line. Close flushes and stops it.
-	signalSched *signalScheduler
+	signalSched        *signalScheduler
+	frictionEnabled    bool
+	frictionBackfillMu gosync.Mutex
+	// frictionReviewHook replaces friction.Review in tests.
+	frictionReviewHook func(friction.SessionInput) []friction.Signal
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers
@@ -1021,6 +1031,7 @@ func NewEngine(ctx context.Context,
 		disableSignalRecompute: cfg.DisableSignalRecomputation ||
 			database.ArchiveContent().UsageOnly(),
 		disableProjectDiscovery: cfg.DisableFilesystemProjectDiscovery,
+		frictionEnabled:         cfg.FrictionEnabled,
 		stableSourceSnapshots:   cfg.StableSourceSnapshots,
 		idPrefix:                cfg.IDPrefix,
 		archiveSessionPolicy:    cfg.ArchiveSessionPolicy,

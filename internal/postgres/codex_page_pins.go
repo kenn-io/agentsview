@@ -174,6 +174,11 @@ func (s *Sync) migrateCodexPages(
 		if _, err := s.pushSecretFindings(ctx, tx, pageID); err != nil {
 			return err
 		}
+		// The page row now carries current friction metadata, so the batch
+		// loop would treat its findings as already pushed.
+		if _, err := s.pushFrictionFindings(ctx, tx, pageID); err != nil {
+			return err
+		}
 		if err := restorePinnedMessages(ctx, tx, pageID, pins); err != nil {
 			return err
 		}

@@ -85,6 +85,20 @@ The latest release is
   rates. Hosted deployments must grant the runtime role `UPDATE` on three new
   `tool_calls` columns before upgrading, or hosted startup fails; see
   [Hosted Raw Sync](/docs/hosted-raw-sync/#http-control-plane).
+- Turn on the Friction Log with `enabled = true` under `[friction]` to record
+  corrections, tool errors, workarounds, deferrals, repeated patterns,
+  frustration, and interruptions for each session. Findings are stored in
+  SQLite and sent to PostgreSQL mirrors, ready for upcoming digest, API, and UI
+  work. Review is off by default and never runs during sync: the daemon reviews
+  changed sessions in the background after each sync, so sync speed is the
+  same with it on or off. Turning it on reviews existing sessions in the
+  background. The first PostgreSQL push after turning it on reviews every
+  waiting session before it starts and holds sync until it is done. It then
+  sends every session once. Sessions above 2,000 message, tool-call, and
+  result-event rows or 4 MiB of stored text are marked skipped rather than
+  reviewed. Hosted raw sync adds findings to existing sessions through a
+  `pg raw-reparse` rollout. See
+  [Friction Log](/docs/configuration/#friction-log).
 
 **Improvements**
 

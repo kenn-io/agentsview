@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/artifact"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -98,6 +100,13 @@ func projectionOutcome(content string) rawderive.ParsedManifest {
 		UsageEvents: []parser.ParsedUsageEvent{{Source: "turn", Model: "synthetic-model", InputTokens: 11, OutputTokens: 7}},
 	}}}}}
 }
+
+// Codex keeps prose and tool calls in separate messages, so the deferral
+// is its own assistant reply.
+func deferralReply() parser.ParsedMessage {
+	return parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, Content: "Continue next session."}
+}
+
 func (f projectionFixture) lease(t *testing.T, m rawsync.CanonicalManifest) rawderive.JobLease {
 	t.Helper()
 	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
@@ -135,6 +144,102 @@ func TestRawProjectionPublishesNormalizedGraph(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
 	assert.Equal(t, "complete", state)
 	assert.ErrorIs(t, f.sink.Project(t.Context(), lease, m, projectionOutcome("must not replace")), rawderive.ErrLeaseLost)
+}
+
+func TestRawProjectionFrictionUsesFinalSessionIdentity(t *testing.T) {
+	f := newProjectionFixture(t)
+	var firstID, firstFingerprint string
+	for _, tc := range []struct {
+		device, id, sourceID string
+	}{
+		{"device-a", "codex:portable", "portable"},
+		{"device-b", "codex:transport-alias", "portable"},
+		{"device-c", "codex:unrelated", "unrelated"},
+	} {
+		outcome := projectionOutcome("finish the task")
+		parsed := &outcome.Outcome.Results[0].Result
+		parsed.Session.ID, parsed.Session.SourceSessionID = tc.id, tc.sourceID
+		parsed.Messages = append(parsed.Messages, deferralReply())
+		m, _ := f.accept(t, tc.device, "capture-"+tc.device, "")
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+		resolved, err := f.sink.Resolve(t.Context(), tc.id)
+		require.NoError(t, err)
+		require.Equal(t, RawIdentityUnique, resolved.State)
+		findings := pgFrictionFindings(t, &Sync{pg: f.runtime}, resolved.SessionID)
+		require.Len(t, findings, 1)
+		assert.Equal(t, "deferral", findings[0].Kind)
+		assert.Equal(t, "[friction/deferral] "+resolved.SessionID+": next session", findings[0].Title)
+		switch tc.device {
+		case "device-a":
+			firstID, firstFingerprint = resolved.SessionID, findings[0].Fingerprint
+		case "device-b":
+			assert.Equal(t, firstID, resolved.SessionID, "capture IDs do not split identical session content")
+			assert.Equal(t, firstFingerprint, findings[0].Fingerprint)
+		case "device-c":
+			assert.NotEqual(t, firstID, resolved.SessionID)
+			assert.NotEqual(t, firstFingerprint, findings[0].Fingerprint, "unrelated sessions have distinct deferral identities")
+		}
+	}
+}
+
+func TestRawProjectionRefreshesFrictionForExistingPhysicalSession(t *testing.T) {
+	f := newProjectionFixture(t)
+	for _, table := range []string{"friction_findings"} {
+		_, err := f.admin.Exec(`REVOKE ALL PRIVILEGES ON "` + table + `" FROM "` + f.role + `"`)
+		require.NoError(t, err)
+		_, err = f.admin.Exec(`GRANT SELECT,INSERT,DELETE ON "` + table + `" TO "` + f.role + `"`)
+		require.NoError(t, err)
+	}
+	require.NoError(t, CheckHostedRuntimeWritable(
+		t.Context(), f.runtime, f.schema, config.ArchiveContentFull,
+	))
+	outcome := projectionOutcome("finish the task")
+	result := &outcome.Outcome.Results[0].Result
+	result.Messages = append(result.Messages, deferralReply())
+	m1, accepted := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(
+		t.Context(), f.lease(t, m1), m1, outcome,
+	))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	findings := pgFrictionFindings(t, &Sync{pg: f.runtime}, resolved.SessionID)
+	require.Len(t, findings, 1)
+	var originalRevision string
+	require.NoError(t, f.runtime.QueryRowContext(
+		t.Context(), `SELECT raw_content_revision FROM sessions WHERE id=$1`,
+		resolved.SessionID,
+	).Scan(&originalRevision))
+
+	_, err = f.runtime.ExecContext(t.Context(), `
+		UPDATE sessions SET friction_count=0, friction_rules_version='friction-v0',
+			friction_hash='stale' WHERE id=$1`, resolved.SessionID)
+	require.NoError(t, err)
+
+	// Reproject the same source content under a new manifest. Content identity
+	// stays fixed, so only a separate friction-version fence can refresh the
+	// already materialized physical session.
+	m2, _ := f.accept(t, "device-a", "capture-b", accepted.Receipt)
+	require.Equal(t, m1.Manifest.SourceKey, m2.Manifest.SourceKey)
+	require.NoError(t, f.sink.Project(
+		t.Context(), f.lease(t, m2), m2, outcome,
+	))
+
+	var version, hash, revision string
+	var count int
+	require.NoError(t, f.runtime.QueryRowContext(
+		t.Context(), `SELECT friction_rules_version,friction_count,friction_hash,
+			raw_content_revision FROM sessions WHERE id=$1`, resolved.SessionID,
+	).Scan(&version, &count, &hash, &revision))
+	assert.Equal(t, friction.RulesVersion, version)
+	assert.Equal(t, 1, count)
+	assert.NotEmpty(t, hash)
+	assert.NotEqual(t, "stale", hash)
+	assert.Equal(t, originalRevision, revision,
+		"friction refresh must not change raw content identity")
+	findings = pgFrictionFindings(t, &Sync{pg: f.runtime}, resolved.SessionID)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "deferral", findings[0].Kind)
+	assert.Equal(t, "[friction/deferral] "+resolved.SessionID+": next session", findings[0].Title)
 }
 
 func TestRawProjectionGenerationAndLeaseFences(t *testing.T) {

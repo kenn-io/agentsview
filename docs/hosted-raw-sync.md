@@ -24,10 +24,10 @@ flowchart LR
 The server can now parse accepted generations directly into PostgreSQL. Enable
 `raw_derivation` on an explicitly provisioned hosted tenant to make uploaded
 sessions browsable. Hosted processing uses no SQLite archive intermediary;
-SQLite databases captured from providers remain valid source artifacts.
-Hosted raw sync carries no archive labels or launcher parent links. Label
-filters on hosted sessions match nothing.
-Embedding work is durably queued, but its consumer is not implemented.
+SQLite databases captured from providers remain valid source artifacts. Hosted
+raw sync carries no archive labels or launcher parent links. Label filters on
+hosted sessions match nothing. Embedding work is durably queued, but its
+consumer is not implemented.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
@@ -135,6 +135,7 @@ GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.raw_pins TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
+GRANT INSERT, DELETE ON hosted_sessions.friction_findings TO hosted_runtime;
 
 GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   hosted_sessions.tool_calls_id_seq, hosted_sessions.tool_result_events_id_seq,
@@ -260,8 +261,8 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version, schedule current
-heads explicitly in bounded batches:
+After an executable upgrade changes the parser data version or the Friction Log
+rules, schedule current heads explicitly in bounded batches:
 
 ```bash
 agentsview pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -470,6 +471,17 @@ schema owner, grant the additional privileges and restart `pg serve`:
 ```sql
 GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
 ```
+
+Upgrading also adds the `friction_findings` table, which the runtime role
+rewrites when it projects a session. Grant it as the schema owner before
+restarting `pg serve`:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON agentsview.friction_findings TO raw_sync_runtime;
+```
+
+Then run the rollout in [Reparse and rollback](#reparse-and-rollback) so
+sessions projected before the upgrade get findings.
 
 Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
 Until these grants are applied, the normal session UI continues to work, but

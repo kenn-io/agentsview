@@ -634,6 +634,13 @@ type AutomatedConfig struct {
 	ExactMatches []string `toml:"exact_matches" json:"exact_matches,omitempty"`
 }
 
+// FrictionConfig controls Friction Log analysis. It is off by default because
+// reviewing transcripts costs CPU that users without a digest do not need.
+type FrictionConfig struct {
+	// Enabled reviews changed sessions in the background after each sync.
+	Enabled bool `toml:"enabled" json:"enabled,omitempty"`
+}
+
 // AgentConfig holds per-agent runtime overrides.
 type AgentConfig struct {
 	Binary      string `json:"binary,omitempty" toml:"binary"`
@@ -915,6 +922,7 @@ type Config struct {
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -1667,6 +1675,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1956,6 +1965,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
+	if meta.IsDefined("friction", "enabled") {
+		c.Friction.Enabled = file.Friction.Enabled
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes

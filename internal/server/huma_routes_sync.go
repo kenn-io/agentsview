@@ -251,6 +251,7 @@ func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.
 		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		ArchiveContent:          cfg.ArchiveContent,
+		FrictionEnabled:         cfg.Friction.Enabled,
 		Emitter:                 emitter,
 	})
 	return s.onDemandEngine

@@ -206,6 +206,12 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 				v.Field(i).Len() == 0 {
 				continue
 			}
+			// Friction is derived after content identity is assigned; including it
+			// would make finding subjects participate in their own session ID.
+			if f.Name == "Friction" || f.Name == "FrictionCount" ||
+				f.Name == "FrictionRulesVersion" || f.Name == "FrictionHash" {
+				continue
+			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)
 			if err != nil {
 				return nil, err

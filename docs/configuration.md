@@ -233,6 +233,7 @@ zoom_level = 120
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
+| `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log) |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
@@ -1643,6 +1644,37 @@ and CLI report stale results. Scoped upgrades and schema repairs finish before
 HTTP readiness. Their startup output prints phase and completion lines, and
 `agentsview daemon status` shows the starting PID, elapsed time, current phase,
 progress detail, and log path while the daemon holds the start lock.
+
+### Friction Log
+
+The Friction Log records moments a session went wrong: corrections, failed
+commands, workarounds, deferrals, repeated patterns, frustration, and
+interruptions. Review is off by default because it reads every changed
+transcript a second time.
+
+```toml
+[friction]
+enabled = true
+```
+
+Restart the daemon after changing this setting. When enabled:
+
+- Sync stays as fast as with review off. It marks changed sessions as needing
+  review, and the daemon reviews them in the background after each sync.
+- Turning review on for an existing archive reviews every session in the
+  background. Sync keeps running while it catches up.
+- A PostgreSQL push first reviews every session still waiting, so the mirror
+  receives current findings. It holds sync until that finishes.
+- Sessions above 2,000 message, tool-call, and result-event rows or 4 MiB of
+  stored text are marked skipped rather than reviewed.
+- A daemon without automatic sync does not review in the background. That
+  includes a daemon started with `--no-sync` and one serving a seeded or
+  restored archive-only database. Its sessions are reviewed before a
+  PostgreSQL push. A `--no-sync` daemon also catches up after it restarts with
+  automatic sync.
+
+Hosted raw sync reviews sessions as it projects them, whatever this setting
+says. See [Hosted Raw Sync](/docs/hosted-raw-sync/).
 
 ### Restricting Ingestion by Working Directory
 

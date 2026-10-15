@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -22,7 +23,11 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 )
 
-func rawProcessingVersion() string { return fmt.Sprintf("parser-data-%d", db.CurrentDataVersion()) }
+// Friction rules are part of the version so a rules change reaches existing
+// hosted sessions through the same reparse rollout as a parser change.
+func rawProcessingVersion() string {
+	return fmt.Sprintf("parser-data-%d+%s", db.CurrentDataVersion(), friction.RulesVersion)
+}
 
 // pgRawRuntime owns one bounded sequential worker/maintenance loop. Stop joins
 // all materialization/parser work before custody and database owners may close.

@@ -81,4 +81,15 @@ func TestReview(t *testing.T) {
 		assert.Equal(t, DetectorInterruption, got[n-1].Detector)
 		assert.Equal(t, n-1, got[n-1].Seq)
 	})
+
+	t.Run("text detectors match assistant text case-insensitively", func(t *testing.T) {
+		in := BuildSessionInput("s1", Dims{}, false, []RawMessage{
+			{Ordinal: 0, Role: "assistant", Content: "TEMPORARY HACK. NEXT SESSION I'LL FIX IT."},
+		}, nil, BuildOptions{})
+		var labels []string
+		for _, s := range Review(in) {
+			labels = append(labels, s.Label)
+		}
+		assert.Equal(t, []string{"temporary", "next session"}, labels)
+	})
 }
