@@ -1043,14 +1043,9 @@ func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T
 	assert.Equal(t, 1, r.Totals.Sessions)
 }
 
-// TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder confirms DuckDB orders the
-// usage stream by the parsed instant so first-seen-wins fallback dedup keeps
-// the chronologically earlier row when two rows share a source UUID in the same
-// second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
-// already sorts on the parsed time (not the formatted text), so this locks in
-// that cross-backend behavior, matching the SQLite
-// TestGetActivityReport_UsageDedupOrdering.
-func TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder(t *testing.T) {
+// Source UUID fallback keeps the earlier parsed instant even when session ID
+// order puts the later fractional-second row first.
+func TestDuckActivityReportSourceUUIDFallbackOrdersTimeBeforeSessionID(t *testing.T) {
 	ctx := t.Context()
 	pricing := []db.ModelPricing{{
 		ModelPattern:  "claude-sonnet-4-20250514",
@@ -1061,18 +1056,18 @@ func TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder(t *testing.T) {
 	// A resumed/forked pair shares one source UUID fallback dedup identity
 	// across two sessions: the earlier whole-second instant carries 500 output
 	// tokens, the later instant 9000. Dedup must keep the 500 row.
-	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	earlier := syncSession("z-earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
 	earlier.Agent = "claude"
-	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	earlierMsg := syncMessage("z-earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
 	earlierMsg.Model = "claude-sonnet-4-20250514"
 	earlierMsg.ClaudeMessageID = "dup-m"
 	earlierMsg.SourceUUID = "dup-source"
 	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 
-	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
+	later := syncSession("a-later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
 	later.Agent = "claude"
-	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
+	laterMsg := syncMessage("a-later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
 	laterMsg.Model = "claude-sonnet-4-20250514"
 	laterMsg.ClaudeMessageID = "dup-m"
 	laterMsg.SourceUUID = "dup-source"
