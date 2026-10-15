@@ -189,7 +189,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
-	if sourceVersion < codexRevertPageDataVersion {
+	if sourceVersion < codexLegacyPageHeaderDataVersion {
 		// A parsed head can occupy the old page's ID. Keep the mapping even
 		// when the page was reparsed; export reconciliation needs it too.
 		// Index the remaining orphan IDs before checking them once per page.
@@ -403,7 +403,8 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 			old_s.started_at, old_s.ended_at, old_s.deleted_at, old_s.created_at
 		FROM old_db.sessions old_s
 		JOIN _trashed_ids copied ON copied.source_id = old_s.id
-		WHERE copied.id != copied.source_id`); err != nil {
+		WHERE copied.id != copied.source_id
+		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'`); err != nil {
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
 
@@ -1080,6 +1081,10 @@ func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
 // Before this version, every Codex rollout of a thread shared one session ID.
 const codexRevertPageDataVersion = 131
 
+// Before this version, a revert page whose header named its own rollout was
+// stored as codex:<rollout> instead of codex:<thread>_<rollout>.
+const codexLegacyPageHeaderDataVersion = 134
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -1174,6 +1179,28 @@ func (d *DB) CopyExcludedSessionsFrom(
 		  AND substr(page.id, -37, 1) = '_'`)
 	if err != nil {
 		return fmt.Errorf("copying excluded Codex pages: %w", err)
+	}
+	if sourceVersion < codexLegacyPageHeaderDataVersion {
+		// A page deleted under its bare rollout id is now parsed under
+		// <thread>_<rollout>. Exclude that page too.
+		_, err = conn.ExecContext(ctx, `
+			INSERT OR IGNORE INTO excluded_sessions (id, created_at)
+			SELECT page.id, legacy.created_at
+			FROM main.sessions page
+			JOIN excluded_sessions legacy
+			  ON legacy.id = substr(page.id, 1, length(page.id) - 73) || substr(page.id, -36)
+			WHERE page.agent IN ('codex', 'traex', 'augure-code')
+			  AND substr(page.id, -37, 1) = '_'`)
+		if err != nil {
+			return fmt.Errorf("copying excluded legacy Codex pages: %w", err)
+		}
+		if hasFilePath {
+			// The page may be gone from disk, so read its new ID from the
+			// file name retained with the deletion.
+			if err := excludeLegacyCodexPagesByFileName(ctx, conn); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2799,7 +2826,7 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 
 // prepareCodexSessionIDMap resolves old rollout filenames once per copy.
 // The complete map also handles pre-version-40 fork identities; only pre-131
-// thread-to-page mappings move curation, Recall, and conversation identities.
+// thread-to-page mappings and pre-134 rollout-to-page mappings move curation, Recall, and conversation identities.
 // Populate in batches, then check destination IDs with joins instead of one
 // query per candidate. The view includes pages as they are copied or parsed.
 func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacyForks bool) (version int, err error) {
@@ -2822,7 +2849,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("reading Codex source version: %w", err)
 	}
 	version, _ = DecodeUserVersion(version)
-	if version >= codexRevertPageDataVersion && !includeLegacyForks {
+	if version >= codexLegacyPageHeaderDataVersion && !includeLegacyForks {
 		return version, nil
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
@@ -2849,8 +2876,11 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	}
 	for sourceID, targetID := range candidates {
 		prefixEnd := strings.LastIndex(sourceID, ":") + 1
-		isPage := version < codexRevertPageDataVersion &&
-			parser.CodexThreadIDFromSessionKey(targetID[prefixEnd:]) == sourceID[prefixEnd:]
+		sourceKey, targetKey := sourceID[prefixEnd:], targetID[prefixEnd:]
+		thread := parser.CodexThreadIDFromSessionKey(targetKey)
+		isPage := version < codexRevertPageDataVersion && thread == sourceKey ||
+			version < codexLegacyPageHeaderDataVersion && thread != targetKey &&
+				targetKey == thread+"_"+sourceKey
 		args = append(args, sourceID, targetID, isPage)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
@@ -2893,4 +2923,52 @@ func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string
 		return nil, fmt.Errorf("reading stale codex rows: %w", err)
 	}
 	return liveIDs, nil
+}
+
+// excludeLegacyCodexPagesByFileName excludes the <thread>_<rollout> ID of each
+// deleted Codex page that was stored under its bare rollout ID, using the
+// source file name kept in the exclusion.
+func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT id, file_path, created_at FROM old_db.excluded_sessions
+		WHERE file_path IS NOT NULL
+		  AND (id GLOB 'codex:*' OR id GLOB '*~codex:*'
+		    OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
+		    OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*')`)
+	if err != nil {
+		return fmt.Errorf("reading excluded Codex file names: %w", err)
+	}
+	type page struct{ id, createdAt string }
+	var pages []page
+	for rows.Next() {
+		var id, path string
+		var createdAt sql.NullString
+		if err := rows.Scan(&id, &path, &createdAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scanning excluded Codex file name: %w", err)
+		}
+		key := parser.CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
+		prefixEnd := strings.LastIndex(id, ":") + 1
+		if key == "" || prefixEnd == 0 || id[prefixEnd:] == key ||
+			parser.CodexThreadIDFromSessionKey(key) == key ||
+			!strings.HasSuffix(key, "_"+id[prefixEnd:]) {
+			continue
+		}
+		pages = append(pages, page{id[:prefixEnd] + key, createdAt.String})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("reading excluded Codex file names: %w", err)
+	}
+	_ = rows.Close()
+	for _, p := range pages {
+		if _, err := conn.ExecContext(ctx,
+			`INSERT OR IGNORE INTO excluded_sessions (id, created_at)
+			 VALUES (?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now')))`,
+			p.id, p.createdAt,
+		); err != nil {
+			return fmt.Errorf("excluding legacy Codex page %s: %w", p.id, err)
+		}
+	}
+	return nil
 }

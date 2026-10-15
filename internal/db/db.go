@@ -576,7 +576,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (133: Codex-format sessions store git_branch from session_meta git.branch.
 // Re-parse unchanged Codex-format sources in place so existing sessions gain
 // the branch they started on.)
-const dataVersion = 133
+// (134: a Codex revert page written by Codex Desktop 0.148.0-alpha.15 through
+// 0.154.0-alpha.6.2 keeps its own rollout id in session_meta.id and the thread
+// id in session_meta.session_id. It is now stored as codex:<thread>_<rollout>,
+// linked to its thread, instead of codex:<rollout>. This changes session ids,
+// so it is a full rebuild; the resync's curation copy moves the old row's
+// state to the new id.)
+const dataVersion = 134
 
 const archiveOnlyVersionBase = 1 << 20
 

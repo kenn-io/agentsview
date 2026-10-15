@@ -77,6 +77,7 @@ type codexSessionBuilder struct {
 	parentSessionID             string
 	relationshipType            RelationshipType
 	historyBase                 string
+	metaSessionID               string
 	forkedFromID                string
 	forkBaseInherited           bool
 	sessionKind                 string
@@ -427,6 +428,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
+	b.metaSessionID = payload.Get("session_id").Str
 	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
 	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
 	b.forkBaseInherited = codexForkBaseInherited(payload, b.historyBase, b.forkedFromID)
@@ -1906,6 +1908,18 @@ func codexForkBaseInherited(payload gjson.Result, base, forkedFromID string) boo
 	return cutoff.Exists() && end.Exists() && cutoff.Int() == end.Int()
 }
 
+// codexRevertPageThreadID resolves the thread a revert page belongs to. Codex
+// Desktop 0.148.0-alpha.15 through 0.154.0-alpha.6.2 wrote the page's own
+// rollout id in session_meta.id and the thread id in session_meta.session_id;
+// current builds write the thread id in id. The older shape counts only when
+// the file name is exactly <session_id>_<id>.
+func codexRevertPageThreadID(key, id, sessionID string) string {
+	if sessionID != "" && key == sessionID+"_"+id {
+		return sessionID
+	}
+	return id
+}
+
 // codexRevertPage returns the session id and parent of a rollout Codex
 // thread/revert wrote as rollout-<ts>-<thread>_<rollout>.jsonl. The page
 // continues the session of the rollout its history_base names; without a base
@@ -2022,11 +2036,16 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	}
 
 	sessionID := b.sessionID
+	titleKey := b.sessionID
 	parentSessionID, relationshipType := b.parentSessionID, b.relationshipType
 	if pageID, pageParent, ok := codexRevertPage(
-		path, b.sessionID, b.historyBase, b.forkedFromID, b.forkBaseInherited,
+		path, codexRevertPageThreadID(
+			CodexSessionUUIDFromFilename(filepath.Base(path)),
+			b.sessionID, b.metaSessionID,
+		), b.historyBase, b.forkedFromID, b.forkBaseInherited,
 	); ok {
 		sessionID = pageID
+		titleKey = pageID
 		parentSessionID, relationshipType = pageParent, RelContinuation
 	}
 	if sessionID == "" {
@@ -2055,7 +2074,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	sessionName := ""
 	sessionNamePresent := false
 	if p.spec.agent == AgentCodex {
-		sessionName, sessionNamePresent, _ = p.sources.metadata.ReadThreadName(path, b.sessionID)
+		sessionName, sessionNamePresent, _ = p.sources.metadata.ReadThreadName(path, titleKey)
 	}
 	if !sessionNamePresent && sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {

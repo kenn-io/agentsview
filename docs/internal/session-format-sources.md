@@ -692,7 +692,20 @@ fixtures retain this field; missing identities remain source-local.
   rebuilds keep metadata scoped to each file. Activity hints still find the
   newest surviving page without an original thread row. Reverified these
   archive and activity paths on 2026-10-02. Other Codex versions may differ.
-  Tests: `TestCodexRevertPageSessionsThroughAPI`,
+  Codex Desktop builds `0.148.0-alpha.15` through `0.154.0-alpha.6.2` wrote
+  these files with the page's own rollout id in `session_meta.id` and the
+  thread id in `session_meta.session_id`. AgentsView accepts that header only
+  when the file name is `<session_id>_<id>`, and stores the page under the
+  file-name key like any other revert page. Data version 134 rebuilds archives
+  that stored such pages as `codex:<rollout>`, moving curation, trash, and
+  deletions to the canonical page whether its file is present or gone.
+  Tests: `TestCodexOlderHeaderRevertPageUpgradeMovesCuration`,
+  `TestCodexOlderHeaderRevertPagesFormATree`,
+  `TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing`,
+  `TestCodexOlderHeaderRevertPageIndexRenameWorkIgnoresArchiveSize`,
+  `TestSyncPathsCodexIndexEventRefreshesOlderHeaderRevertPageName`,
+  `TestCodexOlderHeaderRevertPageTitleAndSubagent`,
+  `TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow`, `TestCodexRevertPageSessionsThroughAPI`,
   `TestCodexRevertPagesFormATree`, `TestCodexRevertPagesRetainDailyUsage`,
   `TestCodexRevertPageUpgradeReplacesStaleThreadRow`,
   `TestCopySessionMetadataFrom_CodexPagePins`,

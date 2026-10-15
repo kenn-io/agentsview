@@ -87,6 +87,10 @@ The latest release is
 
 **Bug fixes**
 
+- Codex pages from Desktop builds 0.148.0-alpha.15 through 0.154.0-alpha.6.2
+  now join their thread with its title instead of showing as separate untitled
+  sessions. The upgrade rebuilds the archive once and keeps names, stars, pins,
+  trash, and deletions on the right page.
 - Hidden tabs release their live connections so new tabs load, and catch up when
   shown again.
 - DeepSeek Harness v4 sessions now appear after sync, with tool results and

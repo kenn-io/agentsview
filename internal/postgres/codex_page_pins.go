@@ -16,7 +16,9 @@ import (
 // Publish that page and move its remote pins before replacing the thread row.
 // If the original rollout is absent, retire the duplicate thread transcript
 // after preserving its curation. The transaction also covers later batches and
-// leaves the old row intact if publication fails.
+// leaves the old row intact if publication fails. Before data version 134, a
+// page whose header named its own rollout was stored under that rollout id; it
+// retires into its canonical page the same way.
 func (s *Sync) migrateCodexPages(
 	ctx context.Context, tx *sql.Tx, batch []db.Session,
 	markerID string, legacyMarkerMachines []string,
@@ -35,6 +37,9 @@ func (s *Sync) migrateCodexPages(
 					continue
 				}
 				threads[id] = sess
+				if thread := parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:]); thread != sess.ID[prefixEnd:] {
+					threads[sess.ID[:prefixEnd]+sess.ID[prefixEnd+len(thread)+1:]] = sess
+				}
 			}
 		}
 	}
@@ -72,7 +77,13 @@ func (s *Sync) migrateCodexPages(
 	}
 	for _, old := range pages {
 		syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
-		migratePage := old.dataVersion < 131 && old.path != ""
+		prefixEnd := strings.LastIndex(old.id, ":") + 1
+		key := parser.CodexSessionUUIDFromFilename(old.path[strings.LastIndexAny(old.path, `/\`)+1:])
+		oldKey := old.id[prefixEnd:]
+		keyThread := parser.CodexThreadIDFromSessionKey(key)
+		migratePage := old.path != "" && key != "" && key != oldKey &&
+			(old.dataVersion < 131 && keyThread == oldKey ||
+				old.dataVersion < 134 && keyThread != key && key == keyThread+"_"+oldKey)
 		if !syncScope && !migratePage {
 			continue
 		}
@@ -101,11 +112,6 @@ func (s *Sync) migrateCodexPages(
 			}
 		}
 		if !migratePage {
-			continue
-		}
-		prefixEnd := strings.LastIndex(old.id, ":") + 1
-		key := parser.CodexSessionUUIDFromFilename(old.path[strings.LastIndexAny(old.path, `/\`)+1:])
-		if key == "" || key == old.id[prefixEnd:] || parser.CodexThreadIDFromSessionKey(key) != old.id[prefixEnd:] {
 			continue
 		}
 		pins, err := snapshotPinnedMessages(ctx, tx, old.id)

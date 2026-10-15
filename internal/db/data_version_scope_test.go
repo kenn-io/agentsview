@@ -23,6 +23,11 @@ func TestScopedDataVersionProviders(t *testing.T) {
 	)
 }
 
+// Version 134 reshapes Codex session IDs, so it must rebuild every provider.
+func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
+	assert.Nil(t, ScopedDataVersionProviders(133, 134))
+}
+
 func TestValidateDataVersionScopes(t *testing.T) {
 	require.NoError(t, validateDataVersionScopes(dataVersionScopes),
 		"declared parser upgrades must stay within the scoped-upgrade rules")

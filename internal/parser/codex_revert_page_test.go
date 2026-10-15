@@ -59,6 +59,13 @@ func parseRevertSource(t *testing.T, agent AgentType, root, rawID string) *Parse
 	return &outcome.Results[0].Result.Session
 }
 
+func sessionIDField(sessionID string) map[string]any {
+	if sessionID == "" {
+		return nil
+	}
+	return map[string]any{"session_id": sessionID}
+}
+
 func TestCodexRevertPageParentFollowsHistoryBase(t *testing.T) {
 	pageKey := revertThread + "_" + revertRollout
 	tests := []struct {
@@ -69,18 +76,27 @@ func TestCodexRevertPageParentFollowsHistoryBase(t *testing.T) {
 		wantID     string
 		wantParent string
 		wantRel    RelationshipType
+		sessionID  string // session_meta.session_id; the older header puts the thread here
 	}{
-		{"base_is_thread", AgentCodex, revertThread, revertThread, "codex:" + pageKey, "codex:" + revertThread, RelContinuation},
-		{"base_is_rollout", AgentCodex, revertThread, revertRollout1, "codex:" + pageKey, "codex:" + revertThread + "_" + revertRollout1, RelContinuation},
-		{"no_base", AgentCodex, revertThread, "", "codex:" + pageKey, "codex:" + revertThread, RelContinuation},
-		{"header_disagrees", AgentCodex, revertOther, revertThread, "codex:" + revertOther, "", ""},
-		{"traex", AgentTraeX, revertThread, revertThread, "traex:" + pageKey, "traex:" + revertThread, RelContinuation},
+		{"base_is_thread", AgentCodex, revertThread, revertThread, "codex:" + pageKey, "codex:" + revertThread, RelContinuation, ""},
+		{"base_is_rollout", AgentCodex, revertThread, revertRollout1, "codex:" + pageKey, "codex:" + revertThread + "_" + revertRollout1, RelContinuation, ""},
+		{"no_base", AgentCodex, revertThread, "", "codex:" + pageKey, "codex:" + revertThread, RelContinuation, ""},
+		{"header_disagrees", AgentCodex, revertOther, revertThread, "codex:" + revertOther, "", "", ""},
+		{"traex", AgentTraeX, revertThread, revertThread, "traex:" + pageKey, "traex:" + revertThread, RelContinuation, ""},
+		{"older_header_base_is_thread", AgentCodex, revertRollout, revertThread, "codex:" + pageKey, "codex:" + revertThread, RelContinuation, revertThread},
+		{"older_header_base_is_rollout", AgentCodex, revertRollout, revertRollout1, "codex:" + pageKey, "codex:" + revertThread + "_" + revertRollout1, RelContinuation, revertThread},
+		{"older_header_no_base", AgentCodex, revertRollout, "", "codex:" + pageKey, "codex:" + revertThread, RelContinuation, revertThread},
+		{"older_header_traex", AgentTraeX, revertRollout, revertThread, "traex:" + pageKey, "traex:" + revertThread, RelContinuation, revertThread},
+		{"older_header_augure_code", AgentAugureCode, revertRollout, revertThread, "augure-code:" + pageKey, "augure-code:" + revertThread, RelContinuation, revertThread},
+		// A header id or session_id that disagrees with the file name is no page.
+		{"older_header_session_id_disagrees", AgentCodex, revertRollout, revertThread, "codex:" + revertRollout, "", "", revertOther},
+		{"older_header_id_disagrees", AgentCodex, revertOther, revertThread, "codex:" + revertOther, "", "", revertThread},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeRevertRollout(t, root, pageKey,
-				revertPageMeta(tt.headerID, tt.base, nil),
+				revertPageMeta(tt.headerID, tt.base, sessionIDField(tt.sessionID)),
 				testjsonl.CodexMsgJSON("user", "page prompt", "2026-09-01T11:00:01Z"),
 			)
 			sess := parseRevertSource(t, tt.agent, root, pageKey)
@@ -224,6 +240,39 @@ func TestCodexFindSourceResolvesRevertPageID(t *testing.T) {
 	_, found, err = provider.FindSource(t.Context(), FindSourceRequest{FullSessionID: "codex:" + revertThread})
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+// An older-header page takes its thread's index title, and a subagent page's
+// session_id (its spawner) is ignored because it does not match the file name.
+func TestCodexOlderHeaderRevertPageTitleAndSubagent(t *testing.T) {
+	pageKey := revertThread + "_" + revertRollout
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	writeIndex(t, home, `{"id":"`+revertThread+`","thread_name":"Thread title"}`+"\n", time.Now())
+	writeRevertRollout(t, root, pageKey,
+		revertPageMeta(revertRollout, revertThread, sessionIDField(revertThread)),
+		testjsonl.CodexMsgJSON("user", "page prompt", "2026-09-01T11:00:01Z"),
+	)
+	page := parseRevertSource(t, AgentCodex, root, pageKey)
+	assert.Equal(t, "codex:"+pageKey, page.ID)
+	assert.Equal(t, "Thread title", page.SessionName)
+	assert.True(t, page.SessionNamePresent)
+
+	subRoot := t.TempDir()
+	writeRevertRollout(t, subRoot, pageKey,
+		revertPageMeta(revertRollout, revertThread, map[string]any{
+			"session_id":    revertSpawner,
+			"thread_source": "subagent",
+			"source": map[string]any{"subagent": map[string]any{"thread_spawn": map[string]any{
+				"parent_thread_id": revertSpawner,
+				"depth":            1,
+			}}},
+		}),
+		testjsonl.CodexMsgJSON("assistant", "page work", "2026-09-01T11:00:01Z"),
+	)
+	sub := parseRevertSource(t, AgentCodex, subRoot, pageKey)
+	assert.Equal(t, "codex:"+revertRollout, sub.ID, "a spawner session_id is not the page's thread")
+	assert.Equal(t, RelSubagent, sub.RelationshipType)
 }
 
 func TestCodexReadThreadNameMapsRevertPageKeyToThread(t *testing.T) {

@@ -136,8 +136,10 @@ Before data version 131, deleting a Codex-format thread excluded all its rollout
 files under one ID. The upgrade marks those exclusions with
 `include_codex_pages`, so pages remain excluded even if their files were absent
 during the upgrade and return later. Copies preserve that scope across later
-rebuilds. New deletions keep the default per-file scope. Session and recall
-imports use the same exclusion check.
+rebuilds. New deletions keep the default per-file scope. Data version 134 moves
+pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
+name kept with each deletion when the file is gone. Session and recall imports
+use the same exclusion check.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
