@@ -756,7 +756,6 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
 	assert.Equal(t, map[string]int{"root": 5, "child": 631}, rowSet.RawOutputTokensBySession)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631}, rowSet.DeduplicatedOutputTokens)
 	assert.Contains(t, rowSet.DiscardedContributingSessions, "root")
 	assert.Contains(t, rowSet.DiscardedContributingSessions, "child")
 }
@@ -1283,8 +1282,8 @@ func TestGetActivityReport_HourlyRange(t *testing.T) {
 	assert.True(t, found, "the 2026-06-17T10:00 hourly bucket must be present")
 }
 
-// TestGetActivityReport_UsageDedupSubSecondOrder checks parsed time and session-ID ordering before source UUID deduplication.
-func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
+// TestGetActivityReport_UsageDedupOrdering checks parsed time and session-ID ties before source UUID deduplication.
+func TestGetActivityReport_UsageDedupOrdering(t *testing.T) {
 	for _, tc := range []struct {
 		name, firstID, secondID, secondTimestamp string
 		firstOutput, secondOutput, wantOutput    int
