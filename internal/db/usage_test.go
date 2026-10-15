@@ -1971,40 +1971,6 @@ func TestGetDailyUsageRanksTruncatedClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.040775"), result.Totals.TotalCost)
 }
 
-func TestGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	seedOpusPricing(t, d)
-	insertSession(t, d, "a-null-snapshot", "proj", func(s *Session) {
-		s.Agent = "claude"
-	})
-	insertSession(t, d, "z-timestamped-snapshot", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2026-05-20T10:00:00Z")
-	})
-	insertMessages(t, d,
-		Message{
-			SessionID: "a-null-snapshot", Ordinal: 0, Role: "assistant",
-			Model: "claude-opus-4-6", ClaudeMessageID: "msg-null-ts",
-			ClaudeRequestID: "req-null-ts",
-			TokenUsage: jsontext.Value(
-				`{"input_tokens":10,"output_tokens":100}`),
-		},
-		Message{
-			SessionID: "z-timestamped-snapshot", Ordinal: 0, Role: "assistant",
-			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
-			ClaudeMessageID: "msg-null-ts", ClaudeRequestID: "req-null-ts",
-			TokenUsage: jsontext.Value(
-				`{"input_tokens":900,"output_tokens":100}`),
-		},
-	)
-
-	result, err := d.GetDailyUsage(ctx, UsageFilter{Timezone: "UTC"})
-	requireNoError(t, err, "GetDailyUsage")
-	assert.Equal(t, 900, result.Totals.InputTokens)
-	assert.Equal(t, 100, result.Totals.OutputTokens)
-}
-
 // seedSnapshotTiePair stores one Claude request (msg-tie/req-tie) streamed
 // into two sessions with equal output tokens: z-snapshot carries the larger
 // input count at zTimestamp and a-snapshot the smaller one at aTimestamp.
@@ -2013,7 +1979,9 @@ func seedSnapshotTiePair(t *testing.T, d *DB, zTimestamp, aTimestamp string) {
 	for _, id := range []string{"z-snapshot", "a-snapshot"} {
 		insertSession(t, d, id, "proj", func(s *Session) {
 			s.Agent = "claude"
-			s.StartedAt = new("2026-05-20T10:00:00Z")
+			if id == "z-snapshot" || aTimestamp != "" {
+				s.StartedAt = new("2026-05-20T10:00:00Z")
+			}
 		})
 	}
 	insertMessages(t, d,
@@ -2075,6 +2043,13 @@ func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
 		wantInput    int
 	}{
 		{
+			name:         "missing timestamp",
+			zTimestamp:   "2026-05-20T10:30:00Z",
+			wantSession:  "z-snapshot",
+			wantAttribut: "z-snapshot",
+			wantInput:    900,
+		},
+		{
 			name:         "mixed fractional precision",
 			zTimestamp:   "2026-05-20T10:30:00.1Z",
 			aTimestamp:   "2026-05-20T10:30:00Z",
@@ -2102,6 +2077,13 @@ func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
 			assert.JSONEq(t, fmt.Sprintf(
 				`{"input_tokens":%d,"output_tokens":100}`, tt.wantInput),
 				got[0][2])
+			if tt.aTimestamp == "" {
+				seedOpusPricing(t, d)
+				result, err := d.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+				require.NoError(t, err)
+				assert.Equal(t, 900, result.Totals.InputTokens)
+				assert.Equal(t, 100, result.Totals.OutputTokens)
+			}
 		})
 	}
 }
@@ -2220,33 +2202,31 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
 				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: uniqueSourceUUID,
 			})
-			t.Run("daily top and counts", func(t *testing.T) {
-				result, err := d.GetDailyUsage(t.Context(), UsageFilter{
-					From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
-				})
-				require.NoError(t, err, "GetDailyUsage")
-				require.Len(t, result.Daily, 1, "daily entries =")
-				day := result.Daily[0]
-				want := [4]int{120, 580, 1200, 55000}
-				wantSessions := 2
-				assert.Equal(t, want[0], day.InputTokens)
-				assert.Equal(t, want[1], day.OutputTokens)
-				assert.Equal(t, want[2], day.CacheCreationTokens)
-				assert.Equal(t, want[3], day.CacheReadTokens)
-				filter := UsageFilter{From: "2026-04-10", To: "2026-04-10", Timezone: "UTC"}
-				top, err := d.GetTopSessionsByCost(t.Context(), filter, 20)
-				require.NoError(t, err, "GetTopSessionsByCost")
-				require.Len(t, top, wantSessions)
-				assert.Equal(t, "source-main", top[0].SessionID)
-				assert.Equal(t, 51600, top[0].TotalTokens)
-				assert.Equal(t, "unique-session", top[1].SessionID)
-				assert.Equal(t, 5300, top[1].TotalTokens)
-				counts, err := d.GetUsageSessionCounts(t.Context(), filter)
-				require.NoError(t, err, "GetUsageSessionCounts")
-				assert.Equal(t, wantSessions, counts.Total)
-				assert.Equal(t, map[string]int{"proj": wantSessions}, counts.ByProject)
-				assert.Equal(t, map[string]int{"claude": wantSessions}, counts.ByAgent)
+			result, err := d.GetDailyUsage(t.Context(), UsageFilter{
+				From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
 			})
+			require.NoError(t, err, "GetDailyUsage")
+			require.Len(t, result.Daily, 1, "daily entries =")
+			day := result.Daily[0]
+			want := [4]int{120, 580, 1200, 55000}
+			wantSessions := 2
+			assert.Equal(t, want[0], day.InputTokens)
+			assert.Equal(t, want[1], day.OutputTokens)
+			assert.Equal(t, want[2], day.CacheCreationTokens)
+			assert.Equal(t, want[3], day.CacheReadTokens)
+			filter := UsageFilter{From: "2026-04-10", To: "2026-04-10", Timezone: "UTC"}
+			top, err := d.GetTopSessionsByCost(t.Context(), filter, 20)
+			require.NoError(t, err, "GetTopSessionsByCost")
+			require.Len(t, top, wantSessions)
+			assert.Equal(t, "source-main", top[0].SessionID)
+			assert.Equal(t, 51600, top[0].TotalTokens)
+			assert.Equal(t, "unique-session", top[1].SessionID)
+			assert.Equal(t, 5300, top[1].TotalTokens)
+			counts, err := d.GetUsageSessionCounts(t.Context(), filter)
+			require.NoError(t, err, "GetUsageSessionCounts")
+			assert.Equal(t, wantSessions, counts.Total)
+			assert.Equal(t, map[string]int{"proj": wantSessions}, counts.ByProject)
+			assert.Equal(t, map[string]int{"claude": wantSessions}, counts.ByAgent)
 		})
 	}
 	t.Run("missing dedup keys counted every time", func(t *testing.T) {

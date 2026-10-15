@@ -489,44 +489,6 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 		"the source child metadata must not override parent attribution")
 }
 
-func TestStoreGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_daily_usage_null_snapshot_timestamp_test")
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok,
-			output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('a-null-snapshot', 'test-machine', 'proj', 'claude',
-			 NULL, 1, 0),
-			('z-timestamped-snapshot', 'test-machine', 'proj', 'claude',
-			 '2026-05-20T10:00:00Z'::timestamptz, 1, 0);
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id
-		) VALUES
-			('a-null-snapshot', 0, 'assistant', 'missing timestamp', NULL, 17,
-			 'claude-opus-4-6', '{"input_tokens":10,"output_tokens":100}',
-			 'msg-null-ts', 'req-null-ts'),
-			('z-timestamped-snapshot', 0, 'assistant', 'timestamped',
-			 '2026-05-20T10:30:00Z'::timestamptz, 11,
-			 'claude-opus-4-6', '{"input_tokens":900,"output_tokens":100}',
-			 'msg-null-ts', 'req-null-ts')`)
-	require.NoError(t, err)
-
-	result, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	assert.Equal(t, 900, result.Totals.InputTokens)
-	assert.Equal(t, 100, result.Totals.OutputTokens)
-}
-
 func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_daily_usage_numeric_string_snapshot_test")
@@ -567,32 +529,61 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 }
 
 func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_daily_usage_snapshot_tie_test")
-	pb := &paramBuilder{}
-	rowsSQL := `
-		SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
-			'message' AS usage_source,
-			'2026-05-20T10:31:00Z'::timestamptz AS ts,
-			'{"input_tokens":900,"output_tokens":100}' AS token_usage,
-			0 AS output_tokens, 'msg-tie' AS claude_message_id,
-			'req-tie' AS claude_request_id
-		UNION ALL
-		SELECT 'a-snapshot', 0, 'message',
-			'2026-05-20T10:30:00Z'::timestamptz,
-			'{"input_tokens":10,"output_tokens":100}', 0,
-			'msg-tie', 'req-tie'`
-	ranked := pgSnapshotRankedDailyUsageRowsSQL(
-		pb, rowsSQL, db.UsageFilter{})
-	var sessionID, attributionSessionID, tokenJSON string
-	err := store.DB().QueryRow(`
-		SELECT session_id, snapshot_attribution_session_id, token_usage
-		FROM (`+ranked+`)`, pb.args...).Scan(
-		&sessionID, &attributionSessionID, &tokenJSON)
-	require.NoError(t, err)
-	assert.Equal(t, "z-snapshot", sessionID)
-	assert.Equal(t, "a-snapshot", attributionSessionID)
-	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
+	for _, tc := range []struct {
+		name            string
+		aTimestamp      any
+		wantAttribution string
+	}{
+		{"latest timestamp", "2026-05-20T10:30:00Z", "a-snapshot"},
+		{"missing timestamp", nil, "z-snapshot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store := prepareUsageSchema(t, "agentsview_daily_usage_snapshot_tie_test")
+			ctx := t.Context()
+			_, err := store.DB().ExecContext(ctx, `
+				INSERT INTO model_pricing (
+					model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+					cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+				) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+				INSERT INTO sessions (
+					id, machine, project, agent, started_at, message_count, user_message_count
+				) VALUES
+					('a-snapshot', 'test-machine', 'proj', 'claude', NULL, 1, 0),
+					('z-snapshot', 'test-machine', 'proj', 'claude',
+					 '2026-05-20T10:00:00Z'::timestamptz, 1, 0)`)
+			require.NoError(t, err)
+			_, err = store.DB().ExecContext(ctx, `
+				INSERT INTO messages (
+					session_id, ordinal, role, content, timestamp, content_length,
+					model, token_usage, claude_message_id, claude_request_id
+				) VALUES
+					('a-snapshot', 0, 'assistant', 'one', $1, 3,
+					 'claude-opus-4-6', '{"input_tokens":10,"output_tokens":100}',
+					 'msg-tie', 'req-tie'),
+					('z-snapshot', 0, 'assistant', 'two',
+					 '2026-05-20T10:31:00Z'::timestamptz, 3,
+					 'claude-opus-4-6', '{"input_tokens":900,"output_tokens":100}',
+					 'msg-tie', 'req-tie')`, tc.aTimestamp)
+			require.NoError(t, err)
+			pb := &paramBuilder{}
+			rowsSQL := pgUsageRowsSQLWithWhere(pgUsageMessageEligibility, pgUsageEventEligibility)
+			ranked := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, db.UsageFilter{})
+			var sessionID, attributionSessionID, tokenJSON string
+			err = store.DB().QueryRow(`
+				SELECT session_id, snapshot_attribution_session_id, token_usage
+				FROM (`+ranked+`)`, pb.args...).Scan(&sessionID, &attributionSessionID, &tokenJSON)
+			require.NoError(t, err)
+			assert.Equal(t, "z-snapshot", sessionID)
+			assert.Equal(t, tc.wantAttribution, attributionSessionID)
+			assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
+			if tc.aTimestamp == nil {
+				result, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+				require.NoError(t, err)
+				assert.Equal(t, 900, result.Totals.InputTokens)
+				assert.Equal(t, 100, result.Totals.OutputTokens)
+			}
+		})
+	}
 }
 
 func TestStoreGetSessionUsagePricedModel(t *testing.T) {
