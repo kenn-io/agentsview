@@ -160,7 +160,7 @@ func SummarizeToolResultEventsContext(
 	if last := events[len(events)-1]; strings.TrimSpace(last.Content) == "" {
 		return "", last.ContentLength, ctx.Err()
 	}
-	summary := ""
+	var summary string
 	switch {
 	case len(latestByAgent) == 1:
 		summary = latestByAgent[orderedAgents[0]].content

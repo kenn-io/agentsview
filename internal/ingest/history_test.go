@@ -290,6 +290,7 @@ func TestReconcileProviderHistoryClaudeRestoresSingleOccurrence(t *testing.T) {
 			priorContent: "full archived output", priorContentLength: len("full archived output"),
 			wantAction: ingest.HistoryMerge, wantPriorContributed: true,
 			check: func(t *testing.T, call db.ToolCall) {
+				t.Helper()
 				require.Len(t, call.ResultEvents, 1)
 				assert.Equal(t, "full archived output", call.ResultEvents[0].Content)
 				assert.Equal(t, len("full archived output"), call.ResultEvents[0].ContentLength)
@@ -306,9 +307,10 @@ func TestReconcileProviderHistoryClaudeRestoresSingleOccurrence(t *testing.T) {
 			},
 			wantAction: ingest.HistoryMerge, wantPriorContributed: true,
 			check: func(t *testing.T, call db.ToolCall) {
-				assert.Equal(t, "", call.ResultEvents[0].Content)
+				t.Helper()
+				assert.Empty(t, call.ResultEvents[0].Content)
 				assert.Equal(t, 500, call.ResultEvents[0].ContentLength)
-				assert.Equal(t, "", call.ResultContent)
+				assert.Empty(t, call.ResultContent)
 				assert.Equal(t, 500, call.ResultContentLength)
 			},
 		},
@@ -318,6 +320,7 @@ func TestReconcileProviderHistoryClaudeRestoresSingleOccurrence(t *testing.T) {
 			priorContentLength: len("archived under a different timestamp"),
 			wantAction:         ingest.HistoryReplace,
 			check: func(t *testing.T, call db.ToolCall) {
+				t.Helper()
 				assert.Equal(t, placeholder, call.ResultEvents[0].Content)
 			},
 		},
@@ -327,6 +330,7 @@ func TestReconcileProviderHistoryClaudeRestoresSingleOccurrence(t *testing.T) {
 			options:    ingest.ContentOptions{ToolResultImages: config.ToolResultImagesDrop},
 			wantAction: ingest.HistoryMerge, wantPriorContributed: true,
 			check: func(t *testing.T, call db.ToolCall) {
+				t.Helper()
 				assert.NotContains(t, call.ResultEvents[0].Content, "input_image")
 				assert.NotContains(t, call.ResultEvents[0].Content, "aGVsbG8")
 				assert.NotContains(t, call.ResultContent, "input_image")
@@ -449,7 +453,7 @@ func TestReconcileProviderHistoryClaudeRestoresArchivedDigestForLengthOnly(t *te
 	require.NoError(t, err)
 	assert.Equal(t, ingest.HistoryMerge, result.Action)
 	event := result.Candidate.Messages[0].ToolCalls[0].ResultEvents[0]
-	assert.Equal(t, archivedDigest, []byte(event.RawContentDigest))
+	assert.Equal(t, archivedDigest, event.RawContentDigest)
 
 	// A later reparse that again sees only the placeholder, and again
 	// restores from the same unchanged archive, must find nothing left to

@@ -2439,7 +2439,9 @@ func resolveClaudePersistedToolResultsContext(
 			block[persistedOutputUnresolvedKey] = jsontext.Value("true")
 			marked, err := json.Marshal(block, json.Deterministic(true))
 			if err != nil {
-				continue //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
+				// Marking failed; leave this block as the parser's own
+				// original text rather than fail the whole line.
+				continue
 			}
 			blocks[i] = marked
 			changed = true
