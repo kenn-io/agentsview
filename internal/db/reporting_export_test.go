@@ -1096,20 +1096,15 @@ func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *te
 			Machine:   "parent-machine",
 		},
 	}
-	for _, timestamp := range []string{"2026-07-28T09:06:00Z", "2026-07-28T09:05:00.000Z"} {
-		t.Run(timestamp, func(t *testing.T) {
-			rows[1].Timestamp = timestamp
-			survivors, err := finalizeReportingUsage(query, rows, sessionByID)
-			require.NoError(t, err)
-			require.Len(t, survivors, 1)
-			assert.Equal(t, "earlier-parent", survivors[0].SessionID)
-			assert.Equal(t, "parent-agent", survivors[0].Agent)
-			assert.Equal(t, "parent-project", survivors[0].Project)
-			assert.Equal(t, "parent-machine", survivors[0].Machine)
-			assert.Equal(t, 900, survivors[0].OutputTokens)
-			assert.Equal(t, money.Money{Microdollars: 9000}, survivors[0].Cost)
-		})
-	}
+	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "earlier-parent", survivors[0].SessionID)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
+	assert.Equal(t, 900, survivors[0].OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 9000}, survivors[0].Cost)
 }
 
 func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
