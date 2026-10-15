@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -132,9 +133,14 @@ func NewHTTPBackendForServer(
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
+	browserURL := baseURL
+	if requestsign.SignsFromEnvironment(baseURL) {
+		// Signed machine listeners serve no browser UI, so omit session links.
+		browserURL = ""
+	}
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
-		browserURL:        baseURL,
+		browserURL:        browserURL,
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,

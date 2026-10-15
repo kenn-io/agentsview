@@ -19,8 +19,8 @@ const replayApplicationID = 0x41565347
 const replaySchema = `PRAGMA application_id=1096176455;
 CREATE TABLE signing_state (version INTEGER NOT NULL, highwater INTEGER NOT NULL);
 INSERT INTO signing_state VALUES (1, 0);
-CREATE TABLE signing_nonces (key_id TEXT NOT NULL, nonce_hash BLOB NOT NULL, expires INTEGER NOT NULL, PRIMARY KEY(key_id,nonce_hash));
-CREATE INDEX signing_expiry ON signing_nonces(expires);`
+CREATE TABLE signing_nonces (key_id TEXT NOT NULL, nonce_hash BLOB NOT NULL, retain_until INTEGER NOT NULL, PRIMARY KEY(key_id,nonce_hash));
+CREATE INDEX signing_retention ON signing_nonces(retain_until);`
 
 type Replay struct {
 	db    *sql.DB
@@ -153,24 +153,25 @@ func replayURIPath(absPath, volume string) string {
 
 func (s *Replay) Close() error { return s.db.Close() }
 
-func (s *Replay) Admit(ctx context.Context, keyID, nonce string, created, expires int64) error {
-	return s.admit(ctx, keyID, nonce, created, expires, nil)
-}
-
-func (s *Replay) admit(ctx context.Context, keyID, nonce string, created, expires int64, check func() error) error {
+// Admit durably records a nonce whose signature was fresh when its headers
+// were received. Admission must finish within admissionGrace after expiry, and
+// each nonce is retained that long, so a replay that was also fresh on receipt
+// is rejected even while the original body is still in flight.
+func (s *Replay) Admit(
+	ctx context.Context, keyID, nonce string, created, expires int64, received time.Time,
+) error {
+	if !fresh(created, expires, received) {
+		return ErrInvalid
+	}
+	retainUntil := expires + int64(admissionGrace/time.Second)
 	// _txlock=immediate acquires the database writer lock before sampling time.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ErrReplay
 	}
 	defer func() { _ = tx.Rollback() }()
-	if check != nil {
-		if err = check(); err != nil {
-			return err
-		}
-	}
 	now := time.Now()
-	if !fresh(created, expires, now) {
+	if now.Unix() >= retainUntil {
 		return ErrInvalid
 	}
 	if err = ctx.Err(); err != nil {
@@ -180,8 +181,8 @@ func (s *Replay) admit(ctx context.Context, keyID, nonce string, created, expire
 	if err = tx.QueryRowContext(ctx, "SELECT highwater FROM signing_state WHERE version=1").Scan(&highwater); err != nil || now.Unix() < highwater {
 		return ErrReplay
 	}
-	// Expiry is exclusive, so an entry at the current second is no longer usable.
-	if _, err = tx.ExecContext(ctx, "DELETE FROM signing_nonces WHERE expires <= ?", now.Unix()); err != nil {
+	// Retention is exclusive, so an entry at the current second is no longer usable.
+	if _, err = tx.ExecContext(ctx, "DELETE FROM signing_nonces WHERE retain_until <= ?", now.Unix()); err != nil {
 		return ErrReplay
 	}
 	var count int
@@ -189,7 +190,7 @@ func (s *Replay) admit(ctx context.Context, keyID, nonce string, created, expire
 		return ErrReplay
 	}
 	hash := sha256.Sum256([]byte(nonce))
-	if _, err = tx.ExecContext(ctx, "INSERT INTO signing_nonces(key_id,nonce_hash,expires) VALUES(?,?,?)", keyID, hash[:], expires); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO signing_nonces(key_id,nonce_hash,retain_until) VALUES(?,?,?)", keyID, hash[:], retainUntil); err != nil {
 		return ErrReplay
 	}
 	result, err := tx.ExecContext(ctx, "UPDATE signing_state SET highwater = ? WHERE version=1", now.Unix())

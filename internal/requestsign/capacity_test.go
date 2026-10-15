@@ -1,7 +1,9 @@
 package requestsign
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -106,4 +108,78 @@ func TestVerifierBoundsConcurrentHandlersUntilTheyReturn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	require.NoError(t, resp.Body.Close())
+}
+
+func TestVerifierQueuesBodiesWithoutBlockingReads(t *testing.T) {
+	key := signingKey(t)
+	state := filepath.Join(t.TempDir(), "replay.db")
+	require.NoError(t, InitReplay(state))
+	replay, err := OpenReplay(state)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = replay.Close() })
+	var handler http.Handler
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	verifier, err := NewVerifier(VerifyConfig{
+		ExternalURL: ts.URL,
+		Replay:      replay,
+		Keys:        func() (map[string]Key, error) { return map[string]Key{key.ID: key}, nil },
+	})
+	require.NoError(t, err)
+	handler = verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), nil, nil)
+	signer, err := NewSigner(ts.URL, key)
+	require.NoError(t, err)
+	signed := func(method string, body []byte) *http.Request {
+		req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+"/api", bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test")
+		require.NoError(t, signer.Sign(req))
+		return req
+	}
+	statuses := make(chan int, maxConcurrentBodies+1)
+	send := func(req *http.Request) {
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			statuses <- -1 // Fails the status assertion below.
+			return
+		}
+		_ = resp.Body.Close()
+		statuses <- resp.StatusCode
+	}
+	body := []byte("chunk")
+	writers := make([]*io.PipeWriter, 0, maxConcurrentBodies)
+	for range maxConcurrentBodies {
+		req := signed(http.MethodPost, body)
+		pr, pw := io.Pipe()
+		req.Body, req.GetBody = pr, nil
+		writers = append(writers, pw)
+		go send(req)
+	}
+	// Synchronization only: wait until every stalled upload holds a body slot.
+	require.Eventually(t, func() bool { return len(verifier.bodySlots) == maxConcurrentBodies },
+		10*time.Second, 10*time.Millisecond)
+
+	read, err := ts.Client().Do(signed(http.MethodGet, nil))
+	require.NoError(t, err)
+	require.NoError(t, read.Body.Close())
+	assert.Equal(t, http.StatusNoContent, read.StatusCode, "reads never wait for upload bodies")
+
+	go send(signed(http.MethodPost, body))
+	for _, pw := range writers {
+		_, err := pw.Write(body)
+		require.NoError(t, err)
+		require.NoError(t, pw.Close())
+	}
+	for range maxConcurrentBodies + 1 {
+		select {
+		case status := <-statuses:
+			assert.Equal(t, http.StatusNoContent, status, "queued uploads are admitted, not refused")
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "uploads should finish once bodies arrive")
+		}
+	}
 }

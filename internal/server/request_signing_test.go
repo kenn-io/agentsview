@@ -32,7 +32,8 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	// Main stays unsigned; the machine listener must independently require auth.
 	srv.cfg.RequireAuth = false
 	var handler http.Handler
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	externalPrefix := "/company/agentsview"
+	ts := httptest.NewTLSServer(stripExternalPrefix(externalPrefix, &handler))
 	defer ts.Close()
 	key := make([]byte, 64)
 	_, err := rand.Read(key)
@@ -43,7 +44,6 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	replayPath := filepath.Join(dir, "replay.db")
 	require.NoError(t, requestsign.InitReplay(replayPath))
 	policyPath := filepath.Join(dir, "policy.json")
-	externalPrefix := "/company/agentsview"
 	policy := requestsign.Policy{ExternalURL: ts.URL + externalPrefix, ReplayDB: replayPath, Keys: []requestsign.PolicyKey{{ID: "reader-key", File: keyFile, Grant: "reader"}}}
 	data, err := json.Marshal(policy)
 	require.NoError(t, err)
@@ -78,6 +78,8 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 		{"GET", "/api/ping", "test-bearer", "", 200},
 		{"GET", "/api/v1/version", "test-bearer", "", 200},
 		{"GET", "/api/v1/sessions", "test-bearer", "", 200},
+		{"GET", "/api/v1/recent-edits", "test-bearer", "", 200},
+		{"GET", "/api/v1/activity/report/r1/other", "test-bearer", "", 403},
 		{"POST", "/api/v1/recall/query", "test-bearer", `{"query":"missing","mode":"lexical"}`, 200},
 		{"POST", "/api/v1/recall/query", "test-bearer", `{"query":"missing","mode":"lexical","skip_recording":false}`, 200},
 		{"GET", "/api/v1/version", "wrong", "", 401},
@@ -160,7 +162,9 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "native credential revocation did not finish")
 	}
-	unsignedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+externalPrefix+"/api/v1/version", nil)
+	// Unsigned traffic from the public terminator never reaches the request
+	// log, so an encoded newline cannot forge log lines.
+	unsignedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+externalPrefix+"/api/v1/x%0aGET%20/api/v1/forged", nil)
 	require.NoError(t, err)
 	originalLogWriter := log.Writer()
 	var requestLog bytes.Buffer
@@ -170,6 +174,14 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, unsigned.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, unsigned.StatusCode)
+	assert.Empty(t, requestLog.String())
+	signedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+externalPrefix+"/api/v1/version", nil)
+	require.NoError(t, err)
+	signedRequest.Header.Set("Authorization", "Bearer rotated-bearer")
+	signed, err := client.Do(signedRequest)
+	require.NoError(t, err)
+	require.NoError(t, signed.Body.Close())
+	assert.Equal(t, http.StatusOK, signed.StatusCode)
 	assert.Contains(t, requestLog.String(), "GET /api/v1/version")
 	// Unchanged main listener keeps its local unsigned API behavior.
 	main := httptest.NewRecorder()
@@ -182,7 +194,8 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	srv.cfg.RequireAuth = false
 	srv.cfg.AuthToken = ""
 	var handler http.Handler
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	externalPrefix := "/native"
+	ts := httptest.NewTLSServer(stripExternalPrefix(externalPrefix, &handler))
 	defer ts.Close()
 
 	dir := testutil.PrivateTempDir(t)
@@ -193,7 +206,6 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	replayPath := filepath.Join(dir, "replay.db")
 	require.NoError(t, requestsign.InitReplay(replayPath))
 	policyPath := filepath.Join(dir, "policy.json")
-	externalPrefix := "/native"
 	policy := requestsign.Policy{
 		ExternalURL: ts.URL + externalPrefix,
 		ReplayDB:    replayPath,
@@ -219,4 +231,14 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// stripExternalPrefix stands in for the loopback TLS terminator in front of the
+// machine listener, which removes exactly the external prefix.
+func stripExternalPrefix(prefix string, handler *http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
+		r.RequestURI = r.URL.RequestURI()
+		(*handler).ServeHTTP(w, r)
+	})
 }

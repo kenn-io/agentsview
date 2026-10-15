@@ -13,30 +13,40 @@ import (
 	"time"
 )
 
+// VerifyConfig describes a listener behind a loopback-only TLS terminator that
+// strips the configured external prefix. Forwarded headers never supply
+// authority; the external URL is trusted operator configuration.
 type VerifyConfig struct {
 	ExternalURL string
-	// StripPrefix explicitly trusts a loopback-only TLS terminator that strips
-	// the configured external prefix. Forwarded headers never supply authority.
-	StripPrefix bool
 	Replay      *Replay
 	Keys        func() (map[string]Key, error)
 }
 
 const (
 	maxConcurrentVerifications = 8
+	maxConcurrentBodies        = 8
 	maxConcurrentHandlers      = 32
 	maxConcurrentStreams       = 8
 )
 
 type Verifier struct {
 	base         *url.URL
-	strip        bool
 	replay       *Replay
 	keys         func() (map[string]Key, error)
 	verifySlots  chan struct{}
+	bodySlots    chan struct{}
 	handlerSlots chan struct{}
 	streamSlots  chan struct{}
 	bodyTimeout  time.Duration
+	// now records when request headers arrive; signatures must be fresh then.
+	now func() time.Time
+}
+
+// verifiedSignature is a header signature that passed MAC verification.
+type verifiedSignature struct {
+	key      Key
+	input    signatureInput
+	received time.Time
 }
 
 func NewVerifier(cfg VerifyConfig) (*Verifier, error) {
@@ -49,35 +59,31 @@ func NewVerifier(cfg VerifyConfig) (*Verifier, error) {
 	}
 	return &Verifier{
 		base:         base,
-		strip:        cfg.StripPrefix,
 		replay:       cfg.Replay,
 		keys:         cfg.Keys,
 		verifySlots:  make(chan struct{}, maxConcurrentVerifications),
+		bodySlots:    make(chan struct{}, maxConcurrentBodies),
 		handlerSlots: make(chan struct{}, maxConcurrentHandlers),
 		streamSlots:  make(chan struct{}, maxConcurrentStreams),
-		bodyTimeout:  30 * time.Second,
+		bodyTimeout:  maxBodyWait,
+		now:          time.Now,
 	}, nil
 }
 
 func (v *Verifier) target(r *http.Request) (string, error) {
-	if r.URL.IsAbs() || !strings.HasPrefix(r.RequestURI, "/") || r.RequestURI != r.URL.RequestURI() || validateTarget(r.URL) != nil {
+	if r.URL.IsAbs() || !strings.HasPrefix(r.RequestURI, "/") ||
+		r.RequestURI != r.URL.RequestURI() || validateTarget(r.URL) != nil {
 		return "", ErrInvalid
 	}
-	if v.strip {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		ip := net.ParseIP(host)
-		if err != nil || ip == nil || !ip.IsLoopback() {
-			return "", ErrInvalid
-		}
-	} else if r.TLS == nil {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil || !ip.IsLoopback() {
 		return "", ErrInvalid
 	}
 	u := *r.URL
 	u.Scheme, u.Host = v.base.Scheme, v.base.Host
-	if v.strip {
-		u.Path = v.base.Path + u.Path
-		u.RawPath = ""
-	}
+	u.Path = v.base.Path + u.Path
+	u.RawPath = ""
 	if !withinBase(&u, v.base) {
 		return "", ErrInvalid
 	}
@@ -98,14 +104,19 @@ func (v *Verifier) key(id string) (Key, error) {
 
 // Wrap checks headers and MAC before native authentication or body reads.
 // authorize sees native identity and the signing key. Signing is never native
-// authorization. Both authorization stages are rechecked before durable admission.
-func (v *Verifier) Wrap(next http.Handler, authenticate func(http.Handler) http.Handler, authorize func(Key, *http.Request) bool) http.Handler {
+// authorization. Both authorization stages are rechecked after the body
+// arrives and before durable admission.
+func (v *Verifier) Wrap(
+	next http.Handler,
+	authenticate func(http.Handler) http.Handler,
+	authorize func(Key, *http.Request) bool,
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case v.handlerSlots <- struct{}{}:
 			defer func() { <-v.handlerSlots }()
 		default:
-			http.Error(w, "signature verification busy", http.StatusServiceUnavailable)
+			busyError(w)
 			return
 		}
 		if v.longLivedStream(r) {
@@ -113,112 +124,16 @@ func (v *Verifier) Wrap(next http.Handler, authenticate func(http.Handler) http.
 			case v.streamSlots <- struct{}{}:
 				defer func() { <-v.streamSlots }()
 			default:
-				http.Error(w, "signature verification busy", http.StatusServiceUnavailable)
+				busyError(w)
 				return
 			}
 		}
-		incoming := r
-		released := false
-		release := func() {
-			if !released {
-				<-v.verifySlots
-				released = true
-			}
-		}
-		select {
-		case v.verifySlots <- struct{}{}:
-			defer release()
-		default:
-			http.Error(w, "signature verification busy", http.StatusServiceUnavailable)
+		signed, status := v.verifyHeaders(r)
+		if status != 0 {
+			signatureError(w, status)
 			return
 		}
-		if err := validateHeaders(r, true); err != nil {
-			signatureError(w, 401)
-			return
-		}
-		target, err := v.target(r)
-		if err != nil {
-			signatureError(w, 401)
-			return
-		}
-		input, err := parseInput(r.Header.Get("Signature-Input"))
-		if err != nil || !fresh(input.created, input.expires, time.Now()) {
-			signatureError(w, 401)
-			return
-		}
-		key, err := v.key(input.keyID)
-		raw := r.Header.Get("Signature")
-		encoded, ok := strings.CutPrefix(raw, "sig1=:")
-		encoded, suffix := strings.CutSuffix(encoded, ":")
-		signature, decodeErr := base64.StdEncoding.Strict().DecodeString(encoded)
-		if err != nil || !ok || !suffix || decodeErr != nil || len(signature) != 32 || !hmac.Equal(signature, macValue(key.Secret, signatureBase(r, target, input.params))) {
-			signatureError(w, 401)
-			return
-		}
-		bodyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if authorize != nil && !authorize(key, r) {
-				signatureError(w, 403)
-				return
-			}
-			if r.ContentLength > MaxBodyBytes {
-				signatureError(w, 413)
-				return
-			}
-			controller := http.NewResponseController(w)
-			if err := controller.SetReadDeadline(time.Now().Add(v.bodyTimeout)); err != nil {
-				signatureError(w, 503)
-				return
-			}
-			defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
-			var body []byte
-			if r.Body != nil {
-				body, err = io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
-				_ = r.Body.Close()
-				if err != nil {
-					signatureError(w, 408)
-					return
-				}
-			}
-			if len(body) > MaxBodyBytes {
-				signatureError(w, 413)
-				return
-			}
-			if len(incoming.Trailer) != 0 || len(r.Trailer) != 0 {
-				signatureError(w, 401)
-				return
-			}
-			if !hmac.Equal([]byte(r.Header.Get("Content-Digest")), []byte(digest(body))) {
-				signatureError(w, 401)
-				return
-			}
-			if err = r.Context().Err(); err != nil {
-				signatureError(w, 401)
-				return
-			}
-			// Holding the replay write lock prevents lock wait from extending freshness
-			// or admitting a key revoked while another request was committing.
-			err = v.replay.admit(r.Context(), input.keyID, input.nonce, input.created, input.expires, func() error {
-				current, err := v.key(input.keyID)
-				if err != nil || !hmac.Equal(current.Secret, key.Secret) || current.Grant != key.Grant || current.DeviceID != key.DeviceID || authorize != nil && !authorize(current, r) {
-					return ErrInvalid
-				}
-				return nil
-			})
-			if err != nil {
-				if errors.Is(err, ErrReplay) {
-					signatureError(w, 409)
-				} else {
-					signatureError(w, 401)
-				}
-				return
-			}
-			_ = controller.SetReadDeadline(time.Time{})
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-			release()
-			next.ServeHTTP(w, r)
-		})
-		var bodyStage http.Handler = bodyHandler
+		bodyStage := v.bodyStage(next, authorize, signed, r)
 		if authenticate != nil {
 			bodyStage = authenticate(bodyStage)
 		}
@@ -226,23 +141,147 @@ func (v *Verifier) Wrap(next http.Handler, authenticate func(http.Handler) http.
 	})
 }
 
+// verifyHeaders checks the signature over headers alone. It returns a non-zero
+// HTTP status on rejection.
+func (v *Verifier) verifyHeaders(r *http.Request) (verifiedSignature, int) {
+	select {
+	case v.verifySlots <- struct{}{}:
+		defer func() { <-v.verifySlots }()
+	case <-r.Context().Done():
+		return verifiedSignature{}, http.StatusServiceUnavailable
+	}
+	received := v.now()
+	if err := validateHeaders(r, true); err != nil {
+		return verifiedSignature{}, http.StatusUnauthorized
+	}
+	target, err := v.target(r)
+	if err != nil {
+		return verifiedSignature{}, http.StatusUnauthorized
+	}
+	input, err := parseInput(r.Header.Get("Signature-Input"))
+	if err != nil || !fresh(input.created, input.expires, received) {
+		return verifiedSignature{}, http.StatusUnauthorized
+	}
+	key, err := v.key(input.keyID)
+	encoded, ok := strings.CutPrefix(r.Header.Get("Signature"), "sig1=:")
+	encoded, suffix := strings.CutSuffix(encoded, ":")
+	signature, decodeErr := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil || !ok || !suffix || decodeErr != nil || len(signature) != 32 ||
+		!hmac.Equal(signature, macValue(key.Secret, signatureBase(r, target, input.params))) {
+		return verifiedSignature{}, http.StatusUnauthorized
+	}
+	return verifiedSignature{key: key, input: input, received: received}, 0
+}
+
+func (v *Verifier) bodyStage(
+	next http.Handler,
+	authorize func(Key, *http.Request) bool,
+	signed verifiedSignature,
+	incoming *http.Request,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authorize != nil && !authorize(signed.key, r) {
+			signatureError(w, http.StatusForbidden)
+			return
+		}
+		if r.ContentLength > MaxBodyBytes {
+			signatureError(w, http.StatusRequestEntityTooLarge)
+			return
+		}
+		body, status := v.readAndAdmit(w, r, incoming, signed, authorize)
+		if status != 0 {
+			signatureError(w, status)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		next.ServeHTTP(w, r)
+	})
+}
+
+// readAndAdmit buffers the signed body, checks its digest, rechecks the key and
+// grant, and durably admits the nonce. It returns a non-zero HTTP status on
+// rejection.
+func (v *Verifier) readAndAdmit(
+	w http.ResponseWriter,
+	r, incoming *http.Request,
+	signed verifiedSignature,
+	authorize func(Key, *http.Request) bool,
+) ([]byte, int) {
+	if r.ContentLength != 0 {
+		select {
+		case v.bodySlots <- struct{}{}:
+			defer func() { <-v.bodySlots }()
+		case <-r.Context().Done():
+			return nil, http.StatusServiceUnavailable
+		}
+	}
+	body, status := v.readBody(w, r)
+	if status != 0 {
+		return nil, status
+	}
+	if len(incoming.Trailer) != 0 || len(r.Trailer) != 0 ||
+		!hmac.Equal([]byte(r.Header.Get("Content-Digest")), []byte(digest(body))) ||
+		r.Context().Err() != nil {
+		return nil, http.StatusUnauthorized
+	}
+	// The key may have been rotated or revoked, or the native credential
+	// withdrawn, while the body was in flight.
+	current, err := v.key(signed.input.keyID)
+	if err != nil || !hmac.Equal(current.Secret, signed.key.Secret) ||
+		current.Grant != signed.key.Grant || current.DeviceID != signed.key.DeviceID ||
+		authorize != nil && !authorize(current, r) {
+		return nil, http.StatusUnauthorized
+	}
+	in := signed.input
+	err = v.replay.Admit(r.Context(), in.keyID, in.nonce, in.created, in.expires, signed.received)
+	if errors.Is(err, ErrReplay) {
+		return nil, http.StatusConflict
+	}
+	if err != nil {
+		return nil, http.StatusUnauthorized
+	}
+	return body, 0
+}
+
+func (v *Verifier) readBody(w http.ResponseWriter, r *http.Request) ([]byte, int) {
+	controller := http.NewResponseController(w)
+	if err := controller.SetReadDeadline(time.Now().Add(v.bodyTimeout)); err != nil {
+		return nil, http.StatusServiceUnavailable
+	}
+	defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
+	if r.Body == nil {
+		return nil, 0
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
+	_ = r.Body.Close()
+	if err != nil {
+		return nil, http.StatusRequestTimeout
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, http.StatusRequestEntityTooLarge
+	}
+	return body, 0
+}
+
 func (v *Verifier) longLivedStream(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
-	path := r.URL.Path
-	if !v.strip {
-		path = strings.TrimPrefix(path, v.base.Path)
-		if path == "" {
-			path = "/"
-		}
-	}
-	return path == "/api/v1/events" || strings.HasSuffix(path, "/watch")
+	return r.URL.Path == "/api/v1/events" || strings.HasSuffix(r.URL.Path, "/watch")
 }
 
+// Public errors carry no key IDs, content, credentials or signature material.
 func signatureError(w http.ResponseWriter, status int) {
+	writeSigningError(w, status, `{"error":"request signing rejected","code":"request_signing_rejected"}`)
+}
+
+func busyError(w http.ResponseWriter) {
+	writeSigningError(w, http.StatusServiceUnavailable, `{"error":"request signing busy","code":"request_signing_busy"}`)
+}
+
+func writeSigningError(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	// No key IDs, content, credentials or signature material in public errors.
-	_, _ = io.WriteString(w, `{"error":"request signing rejected","code":"request_signing_rejected"}`+"\n")
+	_, _ = io.WriteString(w, body+"\n")
 }

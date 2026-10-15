@@ -43,7 +43,6 @@ func ReadSecret(path string) ([]byte, error) {
 
 type Policy struct {
 	ExternalURL string      `json:"external_url"`
-	StripPrefix bool        `json:"strip_prefix"`
 	ReplayDB    string      `json:"replay_db"`
 	Listen      string      `json:"listen"`
 	Keys        []PolicyKey `json:"keys"`

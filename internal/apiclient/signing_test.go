@@ -36,20 +36,20 @@ func TestNativeHTTPAndRawClientsSignFromEnvironment(t *testing.T) {
 	replay, err := requestsign.OpenReplay(state)
 	require.NoError(t, err)
 	defer replay.Close()
-	verifier, err = requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: ts.URL + "/native", Replay: replay, Keys: func() (map[string]requestsign.Key, error) {
+	verifier, err = requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: ts.URL, Replay: replay, Keys: func() (map[string]requestsign.Key, error) {
 		return map[string]requestsign.Key{"native-key": {ID: "native-key", Secret: secret}}, nil
 	}})
 	require.NoError(t, err)
-	t.Setenv("AGENTSVIEW_SIGNING_URL", ts.URL+"/native")
+	t.Setenv("AGENTSVIEW_SIGNING_URL", ts.URL)
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "native-key")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", file)
-	client, err := NewHTTPClient(ts.URL+"/native", "test-token", ts.Client())
+	client, err := NewHTTPClient(ts.URL, "test-token", ts.Client())
 	require.NoError(t, err)
 	response, err := client.GetAPIV1VersionWithResponse(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, response)
 	assert.Equal(t, 200, response.StatusCode)
-	raw, err := RawRequest(ts.URL+"/native", ts.Client(), func(api *Client) error {
+	raw, err := RawRequest(ts.URL, ts.Client(), func(api *Client) error {
 		_, err := api.GetAPIV1VersionWithResponse(t.Context())
 		return err
 	}, func(_ context.Context, r *http.Request) error {

@@ -74,11 +74,18 @@ func TestSignerPinsDestinationAndRejectsAmbiguity(t *testing.T) {
 	key := signingKey(t)
 	signer, err := NewSigner("https://example.com/native", key)
 	require.NoError(t, err)
+	// Each request carries valid credentials, so only the target can reject it.
+	valid, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/native/api/v1/ping", nil)
+	require.NoError(t, err)
+	valid.Header.Set("Authorization", "Bearer test")
+	require.NoError(t, signer.Sign(valid))
 	for _, target := range []string{"http://example.com/native/api/v1/ping", "https://other.example/native/api/v1/ping", "https://example.com/native-alias/api/v1/ping", "https://example.com/native/api/../config", "https://example.com/native/api/%70ing", "https://example.com/native//api", "https://example.com/native/api?bad=%XX"} {
 		t.Run(target, func(t *testing.T) {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
 			require.NoError(t, err)
-			assert.Error(t, signer.Sign(req))
+			req.Header.Set("Authorization", "Bearer test")
+			require.ErrorIs(t, signer.Sign(req), ErrInvalid)
+			assert.Empty(t, req.Header.Get("Signature"))
 		})
 	}
 	for _, change := range []func(*http.Request){
@@ -92,20 +99,37 @@ func TestSignerPinsDestinationAndRejectsAmbiguity(t *testing.T) {
 		change(req)
 		require.Error(t, signer.Sign(req))
 	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://example.com/native/api", bytes.NewReader(make([]byte, (4<<20)+1)))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://example.com/native/api", bytes.NewReader(make([]byte, MaxBodyBytes)))
 	require.NoError(t, err)
-	require.Error(t, signer.Sign(req))
+	req.Header.Set("Authorization", "Bearer test")
+	require.NoError(t, signer.Sign(req), "a body at the limit signs")
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, "https://example.com/native/api", bytes.NewReader(make([]byte, MaxBodyBytes+1)))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer test")
+	require.ErrorContains(t, signer.Sign(req), "exceeds body limit")
+	assert.Empty(t, req.Header.Get("Signature"))
 }
 
-func TestClientFromEnvironmentLeavesLoopbackDaemonUnsigned(t *testing.T) {
+func TestClientFromEnvironmentLeavesOtherOriginsUnsigned(t *testing.T) {
 	t.Setenv("AGENTSVIEW_SIGNING_URL", "https://history.example.com/native")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader-key")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", "unused-key-file")
 
-	original := &http.Client{}
-	got, err := ClientFromEnvironment("http://127.0.0.2:8080/api", original)
-	require.NoError(t, err)
-	assert.Same(t, original, got)
+	// A local daemon and an HTTP remote-sync host keep their own transport.
+	for _, target := range []string{"http://127.0.0.2:8080/api", "https://peer.example.com:8443"} {
+		original := &http.Client{}
+		got, err := ClientFromEnvironment(target, original)
+		require.NoError(t, err, target)
+		assert.Same(t, original, got, target)
+		assert.False(t, SignsFromEnvironment(target), target)
+	}
+	// The signing host never receives credentials over plain HTTP or outside
+	// its configured prefix.
+	for _, target := range []string{"http://history.example.com/native", "https://history.example.com/other"} {
+		_, err := ClientFromEnvironment(target, &http.Client{})
+		require.Error(t, err, target)
+	}
+	assert.True(t, SignsFromEnvironment("https://history.example.com/native/"))
 }
 
 func TestSignerDoesNotFollowRedirects(t *testing.T) {

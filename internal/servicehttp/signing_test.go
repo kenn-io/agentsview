@@ -32,7 +32,7 @@ func TestSignedReaderDiscoversNonRecordingRecall(t *testing.T) {
 	replay, err := requestsign.OpenReplay(state)
 	require.NoError(t, err)
 	defer replay.Close()
-	verifier, err := requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: ts.URL + "/native", Replay: replay, Keys: func() (map[string]requestsign.Key, error) {
+	verifier, err := requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: ts.URL, Replay: replay, Keys: func() (map[string]requestsign.Key, error) {
 		return map[string]requestsign.Key{"reader": {ID: "reader", Secret: secret}}, nil
 	}})
 	require.NoError(t, err)
@@ -40,28 +40,29 @@ func TestSignedReaderDiscoversNonRecordingRecall(t *testing.T) {
 		assert.Equal(t, "Bearer test", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/native/api/v1/version":
+		case "/api/v1/version":
 			w.Header().Set("X-Agentsview-Recall-Queries", "non-recording")
 			_, _ = w.Write([]byte(`{"api_version":4,"read_only":true}`))
-		case "/native/api/v1/recall/query":
+		case "/api/v1/recall/query":
 			_, _ = w.Write([]byte(`{"mode":"lexical","recall_entries":[],"session_matches":[]}`))
 		default:
 			assert.Failf(t, "unexpected request", "path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}), nil, nil)
-	t.Setenv("AGENTSVIEW_SIGNING_URL", ts.URL+"/native")
+	t.Setenv("AGENTSVIEW_SIGNING_URL", ts.URL)
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", keyFile)
-	api, err := apiclient.NewHTTPClient(ts.URL+"/native", "test", ts.Client())
+	api, err := apiclient.NewHTTPClient(ts.URL, "test", ts.Client())
 	require.NoError(t, err)
 	caps, err := probeHTTPServerCapabilities(t.Context(), api)
 	require.NoError(t, err)
 	require.True(t, caps.ReadOnly)
-	backend := NewHTTPBackendForServer(ts.URL+"/native", "test", caps).(*httpBackend)
+	backend := NewHTTPBackendForServer(ts.URL, "test", caps).(*httpBackend)
 	backend.client = ts.Client()
 	backend.longRunningClient = ts.Client()
 	assert.True(t, service.SupportsRecallQueries(backend))
+	assert.Empty(t, backend.sessionWebURL("claude:abc"), "signed machine listeners serve no browser UI")
 	_, err = backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "sample", Mode: "lexical"})
 	require.NoError(t, err)
 	_, err = backend.Sync(t.Context(), service.SyncInput{})

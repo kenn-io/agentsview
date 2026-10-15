@@ -21,6 +21,13 @@ const (
 	MaxHeaderBytes = 16 << 10
 	validity       = 30 * time.Second
 	futureSkew     = 5 * time.Second
+	// maxBodyWait bounds a signed body transfer, so a 4 MiB chunk needs about
+	// 280 kbit/s. Signatures must be fresh only when their headers arrive.
+	maxBodyWait = 2 * time.Minute
+	// admissionGrace bounds how long after expiry a request may still be
+	// admitted: native authentication plus the body transfer. Nonces are
+	// retained for the same period so a replay cannot follow the original.
+	admissionGrace = maxBodyWait + 30*time.Second
 	components     = `("@method" "@target-uri" "content-digest" "content-type" "authorization" "x-agentsview-device-id" "upload-offset" "x-agentsview-search-intent")`
 )
 

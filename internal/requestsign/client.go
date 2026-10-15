@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -125,49 +124,59 @@ func (s *Signer) Client(client *http.Client) (*http.Client, error) {
 	return &c, nil
 }
 
-// ClientFromEnvironment is opt-in for all native HTTP API paths. Local daemon
-// transports remain unsigned when their target differs from the explicit base.
-// A matching origin outside the configured prefix always fails closed.
+// ClientFromEnvironment signs requests to the origin configured by
+// AGENTSVIEW_SIGNING_URL and leaves every other origin unchanged, so local
+// daemons and other remote hosts keep their existing transport. Plain HTTP to
+// the signing host and a different prefix on the signing origin fail closed.
 func ClientFromEnvironment(baseURL string, client *http.Client) (*http.Client, error) {
-	target := os.Getenv("AGENTSVIEW_SIGNING_URL")
-	id, file := os.Getenv("AGENTSVIEW_SIGNING_KEY_ID"), os.Getenv("AGENTSVIEW_SIGNING_KEY_FILE")
-	if target == "" && id == "" && file == "" {
-		return client, nil
+	target, signed, err := environmentTarget(baseURL)
+	if err != nil || !signed {
+		return client, err
 	}
-	if target == "" || id == "" || file == "" {
-		return nil, errors.New("set AGENTSVIEW_SIGNING_URL, AGENTSVIEW_SIGNING_KEY_ID and AGENTSVIEW_SIGNING_KEY_FILE together")
-	}
-	base, err := externalBase(target)
+	secret, err := ReadSecret(os.Getenv("AGENTSVIEW_SIGNING_KEY_FILE"))
 	if err != nil {
 		return nil, err
 	}
-	requested, err := url.Parse(strings.TrimRight(baseURL, "/"))
-	if err != nil {
-		return nil, ErrInvalid
-	}
-	if requested.Scheme != base.Scheme || requested.Host != base.Host {
-		if requested.Host == base.Host {
-			return nil, errors.New("HTTP signing target cannot downgrade HTTPS")
-		}
-		// Only loopback/Unix local-daemon calls can bypass an explicit signing policy.
-		// Remote mismatches must fail before any bearer or credential leaves the process.
-		hostname := requested.Hostname()
-		ip := net.ParseIP(hostname)
-		if requested.Scheme == "http" && (strings.EqualFold(hostname, "localhost") || ip != nil && ip.IsLoopback()) {
-			return client, nil
-		}
-		return nil, errors.New("HTTP target differs from configured signing origin")
-	}
-	if requested.Path != base.Path {
-		return nil, errors.New("HTTP target differs from configured signing prefix")
-	}
-	secret, err := ReadSecret(file)
-	if err != nil {
-		return nil, err
-	}
-	signer, err := NewSigner(target, Key{ID: id, Secret: secret})
+	signer, err := NewSigner(target, Key{ID: os.Getenv("AGENTSVIEW_SIGNING_KEY_ID"), Secret: secret})
 	if err != nil {
 		return nil, err
 	}
 	return signer.Client(client)
+}
+
+// SignsFromEnvironment reports whether ClientFromEnvironment signs requests to
+// baseURL. Signed origins are machine listeners that browsers cannot use.
+func SignsFromEnvironment(baseURL string) bool {
+	_, signed, err := environmentTarget(baseURL)
+	return signed && err == nil
+}
+
+func environmentTarget(baseURL string) (string, bool, error) {
+	target := os.Getenv("AGENTSVIEW_SIGNING_URL")
+	id, file := os.Getenv("AGENTSVIEW_SIGNING_KEY_ID"), os.Getenv("AGENTSVIEW_SIGNING_KEY_FILE")
+	if target == "" && id == "" && file == "" {
+		return "", false, nil
+	}
+	if target == "" || id == "" || file == "" {
+		return "", false, errors.New(
+			"set AGENTSVIEW_SIGNING_URL, AGENTSVIEW_SIGNING_KEY_ID and AGENTSVIEW_SIGNING_KEY_FILE together")
+	}
+	base, err := externalBase(target)
+	if err != nil {
+		return "", false, err
+	}
+	requested, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil {
+		return "", false, ErrInvalid
+	}
+	if requested.Host != base.Host {
+		return "", false, nil
+	}
+	if requested.Scheme != base.Scheme {
+		return "", false, errors.New("HTTP target cannot downgrade the HTTPS signing origin")
+	}
+	if requested.Path != base.Path {
+		return "", false, errors.New("HTTP target differs from configured signing prefix")
+	}
+	return target, true, nil
 }

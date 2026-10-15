@@ -24,6 +24,9 @@ func TestVerifierTamperingRequiredAndReplay(t *testing.T) {
 	var verifier *Verifier
 	var reached int
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stand in for the loopback TLS terminator that strips the prefix.
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/native")
+		r.RequestURI = r.URL.RequestURI()
 		verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached++; w.WriteHeader(http.StatusNoContent) }), nil, nil).ServeHTTP(w, r)
 	}))
 	defer ts.Close()

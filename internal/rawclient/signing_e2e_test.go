@@ -56,7 +56,7 @@ func TestSignedRawSyncTLSRewritingPrefix(t *testing.T) {
 	require.NoError(t, err)
 	replay := filepath.Join(dir, "replay.db")
 	require.NoError(t, requestsign.InitReplay(replay))
-	policy := requestsign.Policy{ExternalURL: ts.URL + "/native", StripPrefix: true, ReplayDB: replay, Keys: []requestsign.PolicyKey{{ID: "device-key", File: file, Grant: "contributor", DeviceID: enrolled.Identity.DeviceID}}}
+	policy := requestsign.Policy{ExternalURL: ts.URL + "/native", ReplayDB: replay, Keys: []requestsign.PolicyKey{{ID: "device-key", File: file, Grant: "contributor", DeviceID: enrolled.Identity.DeviceID}}}
 	policyPath := filepath.Join(dir, "policy.json")
 	writePolicy := func() {
 		data, err := json.Marshal(policy)

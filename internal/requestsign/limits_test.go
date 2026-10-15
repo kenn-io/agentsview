@@ -98,3 +98,55 @@ func TestParserRejectsDuplicateParametersAndMalformedMAC(t *testing.T) {
 		assert.Error(t, err)
 	}
 }
+
+func TestVerifierAdmitsBodyThatOutlivesSignature(t *testing.T) {
+	key := signingKey(t)
+	path := filepath.Join(t.TempDir(), "replay.db")
+	require.NoError(t, InitReplay(path))
+	replay, err := OpenReplay(path)
+	require.NoError(t, err)
+	defer replay.Close()
+	var verifier *Verifier
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }), nil, nil).ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+	verifier, err = NewVerifier(VerifyConfig{ExternalURL: ts.URL, Replay: replay, Keys: func() (map[string]Key, error) { return map[string]Key{key.ID: key}, nil }})
+	require.NoError(t, err)
+	signer, err := NewSigner(ts.URL, key)
+	require.NoError(t, err)
+	// The signature expired ten seconds ago, but its headers arrived while it
+	// was still fresh; only the slow body finished after expiry.
+	created := time.Now().Unix() - 40
+	verifier.now = func() time.Time { return time.Unix(created+20, 0) }
+	signedAt := func(created int64) *http.Request {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api", strings.NewReader("chunk"))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test")
+		require.NoError(t, signer.Sign(req))
+		input, err := parseInput(req.Header.Get("Signature-Input"))
+		require.NoError(t, err)
+		params := fmt.Sprintf(`%s;created=%d;expires=%d;nonce="%s";keyid="%s";alg="hmac-sha256"`, components, created, created+30, input.nonce, key.ID)
+		req.Header.Set("Signature-Input", "sig1="+params)
+		req.Header.Set("Signature", "sig1=:"+base64.StdEncoding.EncodeToString(macValue(key.Secret, signatureBase(req, req.URL.String(), params)))+":")
+		return req
+	}
+	send := func(req *http.Request) int {
+		resp, err := ts.Client().Do(req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		return resp.StatusCode
+	}
+	req := signedAt(created)
+	assert.Equal(t, http.StatusNoContent, send(req))
+	// The nonce outlives expiry, so a replay that was also fresh on receipt
+	// cannot be admitted after the original.
+	replayed := req.Clone(t.Context())
+	replayed.Body, err = req.GetBody()
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, send(replayed))
+	// Admission is refused once the grace period after expiry has passed.
+	stale := time.Now().Unix() - 200
+	verifier.now = func() time.Time { return time.Unix(stale+20, 0) }
+	assert.Equal(t, http.StatusUnauthorized, send(signedAt(stale)))
+}

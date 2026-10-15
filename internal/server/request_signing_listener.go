@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -25,8 +24,9 @@ type RestrictedListener struct {
 	once       sync.Once
 }
 
-// StartRestrictedListener starts only after explicit policy configuration. Plain
-// HTTP is supported solely for an explicitly trusted loopback TLS terminator.
+// StartRestrictedListener starts only after explicit policy configuration. It
+// serves plain HTTP to a trusted loopback TLS terminator that strips the
+// external prefix.
 func (s *Server) StartRestrictedListener(ctx context.Context, policyFile string) (*RestrictedListener, error) {
 	policy, _, err := requestsign.ReadPolicy(policyFile)
 	if err != nil {
@@ -41,9 +41,6 @@ func (s *Server) StartRestrictedListener(ctx context.Context, policyFile string)
 	if err != nil || ip == nil || !ip.IsLoopback() {
 		return nil, errors.New("machine signing listener must bind a loopback IP")
 	}
-	if !policy.StripPrefix {
-		return nil, errors.New("plain machine listener requires explicit strip_prefix TLS termination; use RestrictedHandler with a native TLS listener for preserved-prefix transport")
-	}
 	handler, closeState, err := s.RestrictedHandler(policyFile)
 	if err != nil {
 		return nil, err
@@ -56,7 +53,6 @@ func (s *Server) StartRestrictedListener(ctx context.Context, policyFile string)
 	srv := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
 		MaxHeaderBytes: requestsign.MaxHeaderBytes, IdleTimeout: 60 * time.Second,
-		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	ingress := &RestrictedListener{server: srv, listener: ln, closeState: closeState}

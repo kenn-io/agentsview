@@ -218,7 +218,6 @@ func TestRestrictedListenerRequiresAuthTokenForReaderGrant(t *testing.T) {
 	policyFile := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{
 		ExternalURL: "https://example.com/native",
-		StripPrefix: true,
 		ReplayDB:    replayPath,
 		Listen:      "127.0.0.1:0",
 		Keys:        []requestsign.PolicyKey{{ID: "reader", File: secretFile, Grant: "reader"}},
@@ -244,7 +243,7 @@ func TestRestrictedListenerRejectsPublicBinding(t *testing.T) {
 	state := filepath.Join(dir, "replay.db")
 	require.NoError(t, requestsign.InitReplay(state))
 	policyFile := filepath.Join(dir, "policy.json")
-	policy := requestsign.Policy{ExternalURL: "https://example.com/native", StripPrefix: true, ReplayDB: state, Listen: "0.0.0.0:0", Keys: []requestsign.PolicyKey{{ID: "reader", File: secretFile, Grant: "reader"}}}
+	policy := requestsign.Policy{ExternalURL: "https://example.com/native", ReplayDB: state, Listen: "0.0.0.0:0", Keys: []requestsign.PolicyKey{{ID: "reader", File: secretFile, Grant: "reader"}}}
 	data, err := json.Marshal(policy)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(policyFile, data, 0o600))
@@ -279,7 +278,6 @@ func TestRestrictedListenerDefaultAvoidsOccupiedHTTPPort(t *testing.T) {
 	policyFile := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{
 		ExternalURL: "https://example.com/native",
-		StripPrefix: true,
 		ReplayDB:    state,
 		Keys:        []requestsign.PolicyKey{{ID: "reader", File: secretFile, Grant: "reader"}},
 	}

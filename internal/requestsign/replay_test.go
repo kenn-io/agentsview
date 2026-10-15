@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -74,7 +73,7 @@ func TestReplayConcurrentAcrossStoresAndRestart(t *testing.T) {
 			if i%2 == 0 {
 				store = b
 			}
-			if store.Admit(t.Context(), "key", nonce, now, now+30) == nil {
+			if store.Admit(t.Context(), "key", nonce, now, now+30, time.Now()) == nil {
 				accepted.Add(1)
 			}
 		})
@@ -86,9 +85,9 @@ func TestReplayConcurrentAcrossStoresAndRestart(t *testing.T) {
 	c, err := OpenReplay(path)
 	require.NoError(t, err)
 	defer c.Close()
-	require.ErrorIs(t, c.Admit(t.Context(), "key", nonce, now, now+30), ErrReplay)
+	require.ErrorIs(t, c.Admit(t.Context(), "key", nonce, now, now+30, time.Now()), ErrReplay)
 	// Independent keys do not share nonce identities.
-	assert.NoError(t, c.Admit(t.Context(), "other-key", nonce, now, now+30))
+	assert.NoError(t, c.Admit(t.Context(), "other-key", nonce, now, now+30, time.Now()))
 }
 
 func TestReplayMissingCorruptCapacityAndRollbackFailClosed(t *testing.T) {
@@ -103,38 +102,45 @@ func TestReplayMissingCorruptCapacityAndRollbackFailClosed(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	now := time.Now().Unix()
-	require.NoError(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30))
+	require.NoError(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30, time.Now()))
 	// Advance the persisted watermark without waiting for wall-clock rollback.
 	_, err = store.db.ExecContext(t.Context(), "UPDATE signing_state SET highwater = ?", now+100)
 	require.NoError(t, err)
-	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30), ErrReplay)
+	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30, time.Now()), ErrReplay)
 	_, err = store.db.ExecContext(t.Context(), "UPDATE signing_state SET highwater = ?", now)
 	require.NoError(t, err)
 	store.limit = 1
-	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30), ErrReplay)
+	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30, time.Now()), ErrReplay)
 	corrupt := filepath.Join(t.TempDir(), "corrupt.db")
 	require.NoError(t, os.WriteFile(corrupt, []byte("corrupt"), 0o600))
 	_, err = OpenReplay(corrupt)
 	require.Error(t, err)
 }
 
-func TestReplayRechecksFreshnessAfterWriteLock(t *testing.T) {
+func TestReplayChecksFreshnessAtReceiptAndRetainsNonceThroughGrace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "replay.db")
 	require.NoError(t, InitReplay(path))
 	store, err := OpenReplay(path)
 	require.NoError(t, err)
 	defer store.Close()
-	now := time.Now().Unix()
-	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now-30, now), ErrInvalid)
-	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now+6, now+36), ErrInvalid)
-	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+31), ErrInvalid)
-	// The check callback runs while the writer lock is held, so a request that
-	// expires during the lock wait must be rejected.
-	synctest.Test(t, func(t *testing.T) {
-		created := time.Now().Unix()
-		require.ErrorIs(t, store.admit(t.Context(), "key", replayNonce(t), created, created+1, func() error {
-			time.Sleep(time.Second)
-			return nil
-		}), ErrInvalid)
-	})
+	now := time.Now()
+	unix := now.Unix()
+	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), unix-30, unix, now), ErrInvalid)
+	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), unix+6, unix+36, now), ErrInvalid)
+	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), unix, unix+31, now), ErrInvalid)
+
+	// A slow body may finish after the signature expired: its headers were
+	// fresh when received 40 seconds ago, and expiry was 30 seconds ago.
+	slow := replayNonce(t)
+	received := now.Add(-40 * time.Second)
+	require.NoError(t, store.Admit(t.Context(), "key", slow, unix-60, unix-30, received))
+	// A replay that was also fresh on receipt is rejected while the original
+	// nonce is retained, even though both arrive after expiry.
+	require.ErrorIs(t, store.Admit(t.Context(), "key", slow, unix-60, unix-30, received), ErrReplay)
+
+	// Admission is refused once the grace period after expiry has passed.
+	stale := now.Add(-200 * time.Second)
+	require.ErrorIs(t,
+		store.Admit(t.Context(), "key", replayNonce(t), stale.Unix()-10, stale.Unix()+20, stale),
+		ErrInvalid)
 }
