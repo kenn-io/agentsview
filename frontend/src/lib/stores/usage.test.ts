@@ -64,6 +64,7 @@ const usageServiceMocks = vi.hoisted(() => {
         },
       ],
       agentTotals: [],
+      branchTotals: [],
       sessionCounts: {
         total: 0,
         byProject: {},
@@ -137,6 +138,12 @@ const usageServiceMocks = vi.hoisted(() => {
   };
 });
 
+const metadataServiceMocks = vi.hoisted(() => ({
+  getApiV1Branches: vi.fn().mockResolvedValue({
+    branches: [{ project: "alpha", branch: "main", session_count: 3 }],
+  }),
+}));
+
 const apiRuntimeMocks = vi.hoisted(() => {
   class ApiError extends Error {
     constructor(
@@ -170,6 +177,9 @@ vi.mock("../api/generated/index", () => ({
         ? usageServiceMocks.getUsageZoom(params, options)
         : usageServiceMocks.getApiV1UsageTopSessions(params, options),
     ),
+  },
+  MetadataService: {
+    getApiV1Branches: metadataServiceMocks.getApiV1Branches,
   },
 }));
 
@@ -271,6 +281,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
       },
     ],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 0,
       byProject: {},
@@ -284,6 +295,24 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
       hitRate: 0,
       savingsVsUncached: testMoney(0),
     },
+  };
+}
+
+function usageSummaryWithBranch(): UsageSummaryResponse {
+  return {
+    ...usageSummary(),
+    branchTotals: [
+      {
+        project_key: "pl1:sha256:alpha",
+        project: "alpha",
+        branch: "main",
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(0),
+      },
+    ],
   };
 }
 
@@ -339,6 +368,7 @@ function usageSummaryWithOptions(
       cost: testMoney(0),
     })),
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 0,
       byProject: {},
@@ -422,6 +452,7 @@ describe("UsageStore filter persistence", () => {
     usage.excludedProjectKeys = "pl1:sha256:proj-a";
     usage.excludedAgents = "claude";
     usage.excludedModels = "opus";
+    usage.selectedGitBranch = "proj-a\u001fmain";
     await usage.fetchAll();
 
     const saved = JSON.parse(localStorage.getItem("usage-filters") ?? "{}");
@@ -429,6 +460,7 @@ describe("UsageStore filter persistence", () => {
     expect(saved.excludedProjectKeys).toBeUndefined();
     expect(saved.excludedAgents).toBe("claude");
     expect(saved.excludedModels).toBe("opus");
+    expect(saved.selectedGitBranch).toBe("proj-a\u001fmain");
   });
 
   it("restores usage filters from localStorage on load", async () => {
@@ -557,6 +589,240 @@ describe("UsageStore group-by linking", () => {
   });
 });
 
+describe("UsageStore lazy branch breakdowns", () => {
+  beforeEach(() => {
+    installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
+    vi.clearAllMocks();
+  });
+
+  it("omits branch breakdowns from the ordinary summary", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchSummary();
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.not.objectContaining({ branch_breakdowns: true }),
+    );
+  });
+
+  it("fetches once when Branch is first selected and reuses the rich summary", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary();
+    await Promise.resolve();
+    const summaryCalls = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    const comparisonCalls = usageServiceMocks.getApiV1UsageComparison.mock.calls.length;
+    const pairwiseCalls = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls.length;
+    const topSessionCalls = usageServiceMocks.getApiV1UsageTopSessions.mock.calls.length;
+
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ branch_breakdowns: true }),
+      ),
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(summaryCalls + 1);
+    expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(comparisonCalls);
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(pairwiseCalls);
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(topSessionCalls);
+
+    usage.setTimeSeriesGroupBy("model");
+    usage.setTimeSeriesGroupBy("branch");
+    await Promise.resolve();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(summaryCalls + 1);
+  });
+
+  it("enriches after Branch is selected during the initial summary load", async () => {
+    let resolveInitial: ((value: UsageSummaryResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitial = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(usageSummaryWithBranch());
+    const { usage } = await loadStore();
+
+    const initialLoad = usage.fetchSummary({ loadComparison: false });
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1));
+    usage.setAttributionGroupBy("branch");
+    resolveInitial?.(usageSummary());
+    await initialLoad;
+
+    await vi.waitFor(() => expect(usage.summary?.branchTotals).toHaveLength(1));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ branch_breakdowns: true }),
+    );
+  });
+
+  it("keeps rich branch data when it finishes before a cached refetch", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary({ loadComparison: false });
+    const callsBeforeRefetch = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    let resolveOrdinary: ((value: UsageSummaryResponse) => void) | undefined;
+    let resolveRich: ((value: UsageSummaryResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOrdinary = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRich = resolve;
+          }),
+      );
+
+    const refetch = usage.fetchSummary({ loadComparison: false });
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(callsBeforeRefetch + 1),
+    );
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(callsBeforeRefetch + 2),
+    );
+    resolveRich?.(usageSummaryWithBranch());
+    await vi.waitFor(() => expect(usage.summary?.branchTotals).toHaveLength(1));
+
+    resolveOrdinary?.(usageSummary());
+    const loaded = await refetch;
+
+    expect(usage.summary?.branchTotals).toHaveLength(1);
+    expect(loaded?.summary.branchTotals).toHaveLength(1);
+  });
+
+  it("starts current branch enrichment while a stale request is pending", async () => {
+    let resolveStaleRich: ((value: UsageSummaryResponse) => void) | undefined;
+    let resolveRefetch: ((value: UsageSummaryResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockResolvedValueOnce(usageSummary())
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStaleRich = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefetch = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(usageSummaryWithBranch());
+    const { usage } = await loadStore();
+    await usage.fetchSummary({ loadComparison: false });
+
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2));
+
+    usage.setAttributionGroupBy("agent");
+    usage.excludedAgents = "claude";
+    const refetch = usage.fetchSummary({ loadComparison: false });
+    await vi.waitFor(() => expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3));
+    usage.setAttributionGroupBy("branch");
+
+    resolveRefetch?.(usageSummary());
+    await refetch;
+    resolveStaleRich?.(usageSummaryWithBranch());
+
+    await vi.waitFor(() => expect(usage.summary?.branchTotals).toHaveLength(1));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(4);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        branch_breakdowns: true,
+        exclude_agent: "claude",
+      }),
+    );
+  });
+
+  it("preserves completed comparison during branch enrichment", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary();
+    await vi.waitFor(() => expect(usage.summary?.comparison).toEqual(usageComparison()));
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(usageSummaryWithBranch());
+
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() => expect(usage.summary?.branchTotals).toHaveLength(1));
+
+    expect(usage.summary?.comparison).toEqual(usageComparison());
+  });
+
+  it("keeps in-flight comparison and pairwise requests during branch enrichment", async () => {
+    let resolveComparison: ((value: Comparison) => void) | undefined;
+    let resolvePairwise: ((value: ServiceUsagePairwiseComparisonResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveComparison = resolve;
+        }),
+    );
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePairwise = resolve;
+        }),
+    );
+    usageServiceMocks.getApiV1UsageSummary
+      .mockResolvedValueOnce(usageSummary())
+      .mockResolvedValueOnce(usageSummaryWithBranch());
+
+    const { usage } = await loadStore();
+    const refresh = usage.fetchAll();
+    await vi.waitFor(() => {
+      expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(1);
+      expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+    });
+    const comparisonSignal = (
+      usageServiceMocks.getApiV1UsageComparison.mock.calls[0]?.[1] as
+        | { signal?: AbortSignal }
+        | undefined
+    )?.signal;
+    const pairwiseSignal = (
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls[0]?.[1] as
+        | { signal?: AbortSignal }
+        | undefined
+    )?.signal;
+    expect(comparisonSignal).toBeDefined();
+    expect(pairwiseSignal).toBeDefined();
+
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() => expect(usage.summary?.branchTotals).toHaveLength(1));
+    const comparisonWasAborted = comparisonSignal?.aborted;
+    const pairwiseWasAborted = pairwiseSignal?.aborted;
+
+    resolveComparison?.(usageComparison());
+    resolvePairwise?.(usagePairwiseComparison());
+    await refresh;
+
+    expect(comparisonWasAborted).toBe(false);
+    expect(pairwiseWasAborted).toBe(false);
+    expect(usage.summary?.branchTotals).toHaveLength(1);
+    expect(usage.summary?.comparison).toEqual(usageComparison());
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+  });
+
+  it("drops retained branch data on a non-Branch full refresh", async () => {
+    const { usage } = await loadStore();
+    usage.setAttributionGroupBy("branch");
+    await usage.fetchSummary();
+    usage.setAttributionGroupBy("model");
+
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.not.objectContaining({ branch_breakdowns: true }),
+    );
+
+    const before = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(before + 1),
+    );
+  });
+});
+
 describe("UsageStore session filter params", () => {
   beforeEach(() => {
     installStorage();
@@ -569,6 +835,7 @@ describe("UsageStore session filter params", () => {
 
     sessions.filters.project = "proj-a";
     sessions.filters.machine = "host-a,host-b";
+    sessions.filters.branch = "proj-a\u001fmain";
     sessions.filters.agent = "claude,codex";
     sessions.filters.termination = "abandoned";
     sessions.filters.minUserMessages = 5;
@@ -582,6 +849,7 @@ describe("UsageStore session filter params", () => {
       expect.objectContaining({
         project: "proj-a",
         machine: "host-a,host-b",
+        git_branch: "proj-a\u001fmain",
         agent: "claude,codex",
         termination: "abandoned",
         min_user_messages: 5,
@@ -596,6 +864,7 @@ describe("UsageStore session filter params", () => {
       expect.objectContaining({
         project: "proj-a",
         machine: "host-a,host-b",
+        git_branch: "proj-a\u001fmain",
         agent: "claude,codex",
         termination: "abandoned",
         min_user_messages: 5,
@@ -707,6 +976,24 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("toggles a project key and refreshes usage", async () => {
+    const { usage } = await loadStore();
+    const summary = usageServiceMocks.getApiV1UsageSummary;
+
+    usage.toggleProjectKey("pl1:sha256:project");
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:project");
+    await vi.waitFor(() =>
+      expect(summary.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ exclude_project_key: "pl1:sha256:project" }),
+      ),
+    );
+
+    usage.toggleProjectKey("pl1:sha256:project");
+    expect(usage.excludedProjectKeys).toBe("");
+    await vi.waitFor(() => expect(summary.mock.lastCall?.[0]?.exclude_project_key).toBeUndefined());
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+  });
+
   it.each(["excluded", "excluded recovery failure", "selected", "zoomed"] as const)(
     "refreshes response-scoped %s project keys after archive identity changes",
     async (scope) => {
@@ -805,6 +1092,246 @@ describe("UsageStore session filter params", () => {
       if (original) usageServiceMocks.getApiV1UsageSummary.mockImplementation(original);
     },
   );
+
+  it("recovers a stale persisted opaque branch selection", async () => {
+    const staleBranch = "pl1:sha256:stale\u001fmain";
+    const storage = installStorage({
+      "usage-filters": JSON.stringify({
+        selectedGitBranch: staleBranch,
+      }),
+    });
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ selected_git_branch: staleBranch }),
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ selected_git_branch: "main" }),
+    );
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(storage.getItem("usage-filters") ?? "{}").selectedGitBranch).toBe("main");
+    expect(usage.summary).not.toBeNull();
+  });
+
+  it("recovers a stale opaque URL branch during a cached refetch", async () => {
+    const staleBranch = "pl1:sha256:stale\u001fmain";
+    const { usage } = await loadStore();
+    await usage.fetchSummary({ loadComparison: false });
+    const summaryCalls = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    usage.selectedGitBranch = staleBranch;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockResolvedValueOnce(usageSummary(2));
+
+    await usage.fetchAll();
+
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(2));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(summaryCalls + 2);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ selected_git_branch: "main" }),
+    );
+  });
+
+  it("preserves a valid qualified branch while clearing a stale project key", async () => {
+    const validBranch = "pl1:sha256:valid\u001fmain";
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+    usage.excludedProjectKeys = "pl1:sha256:stale";
+    usage.selectedGitBranch = validBranch;
+
+    await usage.fetchAll();
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.selectedGitBranch).toBe(validBranch);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ selected_git_branch: validBranch }),
+    );
+  });
+
+  it("falls back after both project and branch keys prove stale", async () => {
+    const staleBranch = "pl1:sha256:stale-branch\u001fmain";
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+    usage.excludedProjectKeys = "pl1:sha256:stale-project";
+    usage.selectedGitBranch = staleBranch;
+
+    await usage.fetchAll();
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ selected_git_branch: "main" }),
+    );
+    expect(usage.summary).not.toBeNull();
+  });
+
+  it("passes the branch selection to usage endpoints", async () => {
+    const { usage } = await loadStore();
+
+    usage.selectedGitBranch = "proj-a\u001fmain\u001eproj-b\u001fdev";
+
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        selected_git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+      }),
+    );
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        selected_git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+      }),
+    );
+  });
+
+  it("sends the sidebar branch filter and the local selection as separate params", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+
+    sessions.filters.branch = "proj-a\u001fmain\u001eproj-b\u001fdev";
+    usage.selectedGitBranch = "proj-c\u001ffeat";
+    await usage.fetchAll();
+
+    // The server resolves project keys and intersects the two lists, so a
+    // selection with no overlap is not collapsed or dropped in the browser.
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        selected_git_branch: "proj-c\u001ffeat",
+      }),
+    );
+  });
+
+  it("scopes the local branch selection to the sidebar project filter", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const tokenA = "proj-a\u001fmain";
+    const tokenB = "proj-b\u001fdev";
+
+    sessions.filters.project = "proj-a";
+    usage.selectedGitBranch = `main\u001e${tokenA}\u001e${tokenB}`;
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        selected_git_branch: `main\u001e${tokenA}`,
+        project: "proj-a",
+      }),
+    );
+
+    // Plain names remain valid when a different project is pinned; only
+    // conflicting legacy project-pair tokens are removed.
+    sessions.filters.project = "proj-c";
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ project: "proj-c" }),
+    );
+    const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+    expect(params?.selected_git_branch).toBe("main");
+  });
+
+  it("keeps a clicked branch matching the legacy sidebar token for its project", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const legacy = "alpha\u001fmain";
+    const clicked = "pl1:sha256:alpha\u001fmain";
+    sessions.filters.branch = legacy;
+    usage.summary = usageSummaryWithBranch();
+
+    usage.toggleBranch(clicked);
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ git_branch: legacy, selected_git_branch: legacy }),
+    );
+    expect(usage.isBranchSelected(clicked)).toBe(true);
+    usage.cancelInFlightReads();
+
+    // A reload has no usage rows to resolve the key, so the stored
+    // selection must still match the sidebar on the first request.
+    const reloaded = await loadStore();
+    const reloadedSessions = await import("./sessions.svelte.js");
+    reloadedSessions.sessions.filters.branch = legacy;
+    await reloaded.usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ git_branch: legacy, selected_git_branch: legacy }),
+    );
+  });
+
+  // A path-like project has no label in usage rows, so the browser cannot
+  // tell which legacy sidebar token an opaque key stands for.
+  it("sends a stored opaque branch key beside a legacy sidebar token it cannot resolve", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const selected = "pl1:sha256:alpha\u001fmain";
+    sessions.filters.branch = "/repos/alpha\u001fmain";
+    usage.selectedGitBranch = selected;
+
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        git_branch: "/repos/alpha\u001fmain",
+        selected_git_branch: selected,
+      }),
+    );
+  });
+
+  it("preserves a legacy branch token when toggled by plain branch name", async () => {
+    const { usage } = await loadStore();
+    const token = "proj-amain";
+    usage.selectedGitBranch = token;
+
+    usage.toggleBranch("feature");
+    expect(usage.selectedGitBranch).toBe(`${token}feature`);
+
+    usage.toggleBranch("main");
+    expect(usage.selectedGitBranch).toBe("feature");
+  });
+
+  it("toggles the branch selection with the list separator", async () => {
+    const { usage } = await loadStore();
+    const tokenA = "proj-a\u001fmain";
+    const tokenB = "proj-b\u001fmain";
+
+    usage.toggleBranch(tokenA);
+    usage.toggleBranch(tokenB);
+    expect(usage.selectedGitBranch).toBe(`${tokenA}\u001e${tokenB}`);
+    expect(usage.isBranchSelected(tokenA)).toBe(true);
+    expect(usage.isBranchSelected(tokenB)).toBe(true);
+    expect(usage.hasActiveFilters).toBe(true);
+
+    usage.toggleBranch(tokenA);
+    expect(usage.selectedGitBranch).toBe(tokenB);
+    expect(usage.isBranchSelected(tokenA)).toBe(false);
+    expect(usage.isBranchSelected(tokenB)).toBe(true);
+
+    usage.selectAllBranches();
+    expect(usage.selectedGitBranch).toBe("");
+  });
 
   it.each(["default", "rolled dates", "excluded model", "empty range"] as const)(
     "starts the %s comparison before totals and adopts its echo",
@@ -2024,6 +2551,7 @@ describe("UsageStore time-series range selection", () => {
           modelBreakdowns: [],
           agentBreakdowns: [],
           machineBreakdowns: [],
+          branchBreakdowns: [],
         },
         {
           date: "2026-06-08",
@@ -2047,6 +2575,7 @@ describe("UsageStore time-series range selection", () => {
           modelBreakdowns: [],
           agentBreakdowns: [],
           machineBreakdowns: [],
+          branchBreakdowns: [],
         },
         {
           date: "2026-06-09",
@@ -2070,6 +2599,7 @@ describe("UsageStore time-series range selection", () => {
           modelBreakdowns: [],
           agentBreakdowns: [],
           machineBreakdowns: [],
+          branchBreakdowns: [],
         },
       ];
       usage.summary = context;
@@ -2117,6 +2647,94 @@ describe("UsageStore time-series range selection", () => {
       usage.cancelInFlightReads();
     },
   );
+
+  it("recomputes branch totals for the selected days before the range request finishes", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const branch = (name: string, cost: number) => ({
+      project_key: "pl1:sha256:alpha",
+      project: "alpha",
+      branch: name,
+      inputTokens: cost * 10,
+      outputTokens: cost,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(cost),
+    });
+    const day = (date: string, branchBreakdowns: ReturnType<typeof branch>[]) => ({
+      date,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost: testMoney(0),
+      modelsUsed: [],
+      projectBreakdowns: [],
+      modelBreakdowns: [],
+      agentBreakdowns: [],
+      machineBreakdowns: [],
+      branchBreakdowns,
+    });
+    const context = usageSummary(15);
+    context.daily = [
+      day("2026-06-07", [branch("main", 1)]),
+      day("2026-06-08", [branch("dev", 4), branch("main", 2)]),
+      day("2026-06-09", [branch("dev", 8)]),
+    ];
+    context.branchTotals = [branch("dev", 12), branch("main", 3)];
+    usage.summary = context;
+
+    usage.setTimeRange("2026-06-08", "2026-06-09");
+
+    expect(usage.summary?.branchTotals).toEqual([branch("dev", 12), branch("main", 2)]);
+    usage.cancelInFlightReads();
+  });
+
+  it("reports a data source that cannot group usage by branch", async () => {
+    const { usage } = await loadStore();
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (!params.branch_breakdowns) return usageSummary(4);
+      throw new apiRuntimeMocks.ApiError(
+        400,
+        "branch breakdowns are not supported by this backend",
+        "branch_breakdowns_unsupported",
+      );
+    });
+    await usage.fetchSummary();
+    expect(usage.branchBreakdownError).toBeNull();
+
+    usage.setAttributionGroupBy("branch");
+
+    await vi.waitFor(() =>
+      expect(usage.branchBreakdownError).toBe(
+        "Branch grouping is not available for this data source.",
+      ),
+    );
+  });
+
+  it("loads branch breakdowns for the chart window when Branch is chosen under a brush", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const plainWindow = usageSummary(15);
+    plainWindow.from = "2026-06-04";
+    plainWindow.to = "2026-06-18";
+    const richWindow = { ...usageSummaryWithBranch(), from: "2026-06-04", to: "2026-06-18" };
+    const richRange = { ...usageSummaryWithBranch(), from: "2026-06-07", to: "2026-06-10" };
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (!params.branch_breakdowns)
+        return { ...usageSummary(4), from: params.from, to: params.to };
+      return params.from === "2026-06-04" ? richWindow : richRange;
+    });
+    usage.summary = plainWindow;
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    await vi.waitFor(() => expect(usage.isTimeRangeSummaryProvisional).toBe(false));
+
+    usage.setAttributionGroupBy("branch");
+
+    await vi.waitFor(() => expect(usage.timeSeriesSummary).toEqual(richWindow));
+    expect(usage.summary?.branchTotals).toEqual(richRange.branchTotals);
+    expect(usage.selectedTimeRange).toEqual({ from: "2026-06-07", to: "2026-06-10" });
+  });
 
   it("restores the parent summary when the selected-range request fails", async () => {
     const { usage } = await loadStore();
@@ -2298,6 +2916,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "p1",
       excludedProjectKeys: "pk1",
       excludedAgents: "a1",
+      selectedGitBranch: "",
       excludedModels: "m1",
     });
     expect(params).toEqual({
@@ -2317,12 +2936,30 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
+      selectedGitBranch: "",
       excludedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",
       to: "2026-01-15",
     });
+  });
+
+  it("emits branch for selected branch tokens", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const tokens = "proj-a\u001fmain\u001eproj-b\u001fdev";
+    const params = buildUsageUrlParams({
+      from: "",
+      to: "",
+      isPinned: false,
+      windowDays: 30,
+      excludedProjects: "",
+      excludedProjectKeys: "",
+      excludedAgents: "",
+      selectedGitBranch: tokens,
+      excludedModels: "",
+    });
+    expect(params).toEqual({ branch: tokens });
   });
 
   it("returns empty object when nothing is set", async () => {
@@ -2335,6 +2972,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
+      selectedGitBranch: "",
       excludedModels: "",
     });
     expect(params).toEqual({});
@@ -2350,6 +2988,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
+      selectedGitBranch: "",
       excludedModels: "",
     });
     expect(params).toEqual({});
@@ -2365,6 +3004,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
+      selectedGitBranch: "",
       excludedModels: "",
     });
     expect(params).toEqual({ window_days: "7" });
@@ -2380,6 +3020,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
+      selectedGitBranch: "",
       excludedModels: "",
     });
     expect(params).toEqual({
@@ -2522,16 +3163,22 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("reports a failed summary after a selection change instead of keeping the old totals", async () => {
-    const { usage } = await loadStore();
-    await usage.fetchAll();
-    expect(usage.errors.summary).toBeNull();
-    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
-    usage.toggleSelection("project", "pl1:sha256:alpha");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.errors.summary).toBe("selection failed");
-    usage.cancelInFlightReads();
-  });
+  it.each([
+    ["project", "pl1:sha256:alpha"],
+    ["branch", "pl1:sha256:alpha\u001fmain"],
+  ] as const)(
+    "reports a failed summary after a %s selection change instead of keeping the old totals",
+    async (by, id) => {
+      const { usage } = await loadStore();
+      await usage.fetchAll();
+      expect(usage.errors.summary).toBeNull();
+      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
+      usage.toggleSelection(by, id);
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      expect(usage.errors.summary).toBe("selection failed");
+      usage.cancelInFlightReads();
+    },
+  );
 
   it("refetches the full window when a brush interrupts a selection refresh", async () => {
     const { usage } = await loadStore();

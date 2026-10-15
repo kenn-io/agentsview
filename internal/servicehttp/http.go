@@ -993,6 +993,12 @@ func (b *httpBackend) UsageSummary(
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
 	}
+	if req.ExcludeGitBranch != "" {
+		q.ExcludeGitBranch = new(req.ExcludeGitBranch)
+	}
+	if req.SelectedGitBranch != "" {
+		q.SelectedGitBranch = new(req.SelectedGitBranch)
+	}
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)
 	}
@@ -1030,6 +1036,9 @@ func (b *httpBackend) UsageSummary(
 	if req.Breakdowns != nil {
 		q.Breakdowns = new(*req.Breakdowns)
 	}
+	if req.BranchBreakdowns != nil {
+		q.BranchBreakdowns = new(*req.BranchBreakdowns)
+	}
 	if req.SessionCounts != nil {
 		q.SessionCounts = new(*req.SessionCounts)
 	}
@@ -1064,6 +1073,7 @@ func (b *httpBackend) UsageSummary(
 		Pricing: wire.Pricing, Projects: wire.Projects, From: wire.From, To: wire.To,
 		Totals: wire.Totals, Daily: wire.Daily, ProjectTotals: wire.ProjectTotals,
 		ModelTotals: wire.ModelTotals, AgentTotals: wire.AgentTotals,
+		BranchTotals:  wire.BranchTotals,
 		SessionCounts: wire.SessionCounts, CacheStats: wire.CacheStats,
 		UnsupportedUsage: wire.UnsupportedUsage,
 	}
@@ -1121,6 +1131,12 @@ func (b *httpBackend) UsagePairwiseComparison(
 	}
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
+	}
+	if req.ExcludeGitBranch != "" {
+		q.ExcludeGitBranch = new(req.ExcludeGitBranch)
+	}
+	if req.SelectedGitBranch != "" {
+		q.SelectedGitBranch = new(req.SelectedGitBranch)
 	}
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)

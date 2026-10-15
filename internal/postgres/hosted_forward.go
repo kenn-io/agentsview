@@ -42,6 +42,10 @@ func (h *HostedStore) GetBranches(ctx context.Context, excludeOneShot, excludeAu
 	return h.physical.GetBranches(ctx, excludeOneShot, excludeAutomated)
 }
 
+func (h *HostedStore) SearchBranchNames(ctx context.Context, query db.BranchQuery) (db.BranchResult, error) {
+	return h.physical.SearchBranchNames(ctx, query)
+}
+
 func (h *HostedStore) ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error) {
 	return h.physical.ListProjectIdentityObservations(ctx, labels)
 }

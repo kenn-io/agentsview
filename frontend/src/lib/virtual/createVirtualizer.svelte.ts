@@ -90,8 +90,13 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
     }
     lastMeasureCacheKey = opts.measureCacheKey;
 
+    // TanStack notifies only when the visible range changes. A new count
+    // with an unchanged range (for example, a list remounted into a
+    // zero-height viewport) still changes the total size readers render.
+    const countChanged = opts.count !== instance.options.count;
     instance.setOptions(resolvedOpts);
     instance._willUpdate();
+    if (countChanged) _version++;
 
     postUpdate?.(instance, opts, cacheKeyChanged);
 

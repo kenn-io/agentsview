@@ -7,12 +7,17 @@
   import { tick } from "svelte";
   import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
+  import {
+    branchFilterToken,
+    branchLabel,
+  } from "../../branchFilters.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import type { DbTopSessionEntry } from "../../api/generated/index.js";
+  import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
 
   interface Props {
     colorMap: ReadonlyMap<string, string>;
@@ -29,6 +34,9 @@
   const hasSelection = $derived(usage.hasSelection(groupBy));
   const view = $derived(usage.toggles.attribution.view);
   const isTokenMode = $derived(usage.mode === "token");
+  const noBranchLabel = $derived(m.shared_no_branch());
+  const UNATTRIBUTED_ID = "__unattributed__";
+  const OTHER_ID = "__attribution_other__";
 
   interface Row {
     id: string;
@@ -36,6 +44,7 @@
     value: number;
     color: string;
     pct: number;
+    selectable: boolean;
   }
 
   let panel: HTMLElement;
@@ -92,6 +101,7 @@
       id: string;
       label: string;
       value: number;
+      selectable?: boolean;
     }> = [];
 
     if (zoomedProject && groupBy === "project") {
@@ -120,6 +130,27 @@
           ? sumSelectedTokens(m, usage.selectedTokenTypes)
           : m.cost.microdollars,
       }));
+    } else if (groupBy === "branch") {
+      items = s!.branchTotals.map((b) => ({
+        id: branchFilterToken(b.project_key, b.branch),
+        label: branchLabel(b.project, b.branch, noBranchLabel),
+        value: isTokenMode
+          ? sumSelectedTokens(b, usage.selectedTokenTypes)
+          : b.cost.microdollars,
+      }));
+      const attributed = items.reduce((sum, item) => sum + item.value, 0);
+      const total = isTokenMode
+        ? sumSelectedTokens(s!.totals, usage.selectedTokenTypes)
+        : s!.totals.totalCost.microdollars;
+      const unattributed = Math.max(0, total - attributed);
+      if (unattributed > 0) {
+        items.push({
+          id: UNATTRIBUTED_ID,
+          label: m.usage_unattributed(),
+          value: unattributed,
+          selectable: false,
+        });
+      }
     } else {
       items = s!.agentTotals.map((a) => ({
         id: a.agent,
@@ -144,13 +175,52 @@
       value: d.value,
       color: zoomedProject
         ? colorMap.get(zoomedProject.key) ?? "var(--text-muted)"
-        : colorMap.get(d.id) ?? "var(--text-muted)",
+        : d.id === UNATTRIBUTED_ID
+          ? "var(--text-muted)"
+          : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
+      selectable: d.selectable ?? true,
     }));
   });
 
-  const treemapItems = $derived(
-    rows.map((r) => ({
+  // Zoomed rows are sessions, not attribution items, so they never select.
+  function isInteractive(row: Row): boolean {
+    return !zoomedProject && row.selectable;
+  }
+
+  const RAIL_ROW_HEIGHT = 24;
+  const LIST_ROW_HEIGHT = 42;
+  let railScrollElement: HTMLDivElement | undefined = $state();
+  let listScrollElement: HTMLDivElement | undefined = $state();
+
+  const railVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => railScrollElement ?? null,
+    estimateSize: () => RAIL_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
+
+  const listVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => listScrollElement ?? null,
+    estimateSize: () => LIST_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
+
+  // One SVG group is drawn per tile, and branch grouping can produce
+  // thousands of (project, branch) rows whose tiles would be sub-pixel.
+  // Reserve the final capped tile for their aggregate so the treemap still
+  // represents the full total. The side rail and list view retain every row.
+  const TREEMAP_MAX_TILES = 40;
+
+  const treemapItems = $derived.by(() => {
+    const total = rows.reduce((sum, item) => sum + item.value, 0);
+    const visibleCount = rows.length > TREEMAP_MAX_TILES
+      ? TREEMAP_MAX_TILES - 1
+      : TREEMAP_MAX_TILES;
+    const items = rows.slice(0, visibleCount).map((r) => ({
       id: r.id,
       label: r.label,
       value: r.value,
@@ -158,13 +228,29 @@
       title: rowTitle(r.id, r.label),
       selected: usage.isSelected(groupBy, r.id),
       dimmed: !zoomedProject && hasSelection && !usage.isSelected(groupBy, r.id),
-      meta: fmtPct(r.value, rows.reduce(
-        (sum, item) => sum + item.value, 0,
-      )),
-    })),
-  );
+      meta: fmtPct(r.value, total),
+      selectable: r.selectable,
+    }));
+    const omitted = rows.slice(visibleCount);
+    if (omitted.length > 0) {
+      const value = omitted.reduce((sum, row) => sum + row.value, 0);
+      items.push({
+        id: OTHER_ID,
+        label: m.shared_other(),
+        value,
+        color: "var(--text-muted)",
+        title: m.shared_other(),
+        selected: false,
+        dimmed: false,
+        meta: fmtPct(value, total),
+        selectable: false,
+      });
+    }
+    return items;
+  });
 
   function rowTitle(id: string, label: string): string {
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return label;
     if (zoomedProject) {
       const row = usage.zoomRows?.find((row) => zoomRowId(row) === id);
       return row ? zoomRowText(row, usage.zoomRows!).title : label;
@@ -173,6 +259,7 @@
   }
 
   function handleSelect(id: string) {
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return;
     usage.toggleSelection(groupBy, id);
   }
 
@@ -250,6 +337,13 @@
         >
           {m.analytics_col_agent()}
         </button>
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "branch"}
+          onclick={() => handleGroupByChange("branch")}
+        >
+          {m.usage_branch()}
+        </button>
       </div>
       <div class="segment-toggle">
         <button
@@ -271,6 +365,8 @@
   </div>
   {#if zoomedProject && usage.errors.zoom}
     <div class="empty">{usage.errors.zoom}</div>
+  {:else if !zoomedProject && groupBy === "branch" && usage.branchBreakdownError}
+    <div class="empty">{usage.branchBreakdownError}</div>
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
@@ -288,79 +384,88 @@
             formatValue={isTokenMode ? formatTokenCount : undefined}
           />
         </div>
-        <div class="side-rail">
-          {#each rows as row, i (row.id)}
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
-            <div
-              class="rail-row"
-              data-row-id={row.id}
-              class:selected={usage.isSelected(groupBy, row.id)}
-              class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
-              role={zoomedProject ? undefined : "button"}
-              tabindex={zoomedProject ? undefined : 0}
-              aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
-              title={rowTitle(row.id, row.label)}
-              onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
-              ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
-              onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
-            >
-              <span class="rail-rank">{i + 1}</span>
-              <span
-                class="rail-dot"
-                style="background: {row.color}"
-              ></span>
-              <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">
-                {isTokenMode
-                  ? formatTokenCount(row.value)
-                  : formatMoney(moneyFromMicrodollars(row.value))}
-              </span>
-            </div>
-          {/each}
+        <div class="side-rail" bind:this={railScrollElement}>
+          <div
+            class="rail-virtual-spacer"
+            style="height: {railVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+          >
+            {#each railVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+              {@const row = rows[virtualRow.index]}
+              {#if row}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
+                <div
+                  class="rail-row"
+                  data-row-id={row.id}
+                  class:selected={usage.isSelected(groupBy, row.id)}
+                  class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
+                  role={isInteractive(row) ? "button" : undefined}
+                  tabindex={isInteractive(row) ? 0 : undefined}
+                  aria-pressed={isInteractive(row) ? usage.isSelected(groupBy, row.id) : undefined}
+                  title={rowTitle(row.id, row.label)}
+                  style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                  onclick={isInteractive(row) ? (event) => handleClick(event, row.id) : undefined}
+                  ondblclick={isInteractive(row) && groupBy === "project" ? () => handleOpen(row.id) : undefined}
+                  onkeydown={isInteractive(row) ? (event) => handleKey(event, row.id) : undefined}
+                >
+                  <span class="rail-rank">{virtualRow.index + 1}</span>
+                  <span class="rail-dot" style="background: {row.color}"></span>
+                  <span class="rail-label">{row.label}</span>
+                  <span class="rail-cost">
+                    {isTokenMode
+                      ? formatTokenCount(row.value)
+                      : formatMoney(moneyFromMicrodollars(row.value))}
+                  </span>
+                </div>
+              {/if}
+            {/each}
+          </div>
         </div>
       </div>
     {:else}
-      <div class="list-view">
-        {#each rows as row, i (row.id)}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
-          <div
-            class="list-row"
-            data-row-id={row.id}
-            class:selected={usage.isSelected(groupBy, row.id)}
-            class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
-            role={zoomedProject ? undefined : "button"}
-            tabindex={zoomedProject ? undefined : 0}
-            aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
-            title={rowTitle(row.id, row.label)}
-            onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
-            ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
-            onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
-          >
-            <span class="list-rank">{i + 1}</span>
-            <span
-              class="list-dot"
-              style="background: {row.color}"
-            ></span>
-            <div class="list-info">
-              <span class="list-label">{row.label}</span>
-              <div class="list-bar-track">
-                <div
-                  class="list-bar-fill"
-                  style="width: {Math.max(row.pct * 100, 1)}%;
-                         background: {row.color};"
-                ></div>
+      <div class="list-view" bind:this={listScrollElement}>
+        <div
+          class="list-virtual-spacer"
+          style="height: {listVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+        >
+          {#each listVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+            {@const row = rows[virtualRow.index]}
+            {#if row}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
+              <div
+                class="list-row"
+                data-row-id={row.id}
+                class:selected={usage.isSelected(groupBy, row.id)}
+                class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
+                role={isInteractive(row) ? "button" : undefined}
+                tabindex={isInteractive(row) ? 0 : undefined}
+                aria-pressed={isInteractive(row) ? usage.isSelected(groupBy, row.id) : undefined}
+                title={rowTitle(row.id, row.label)}
+                style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                onclick={isInteractive(row) ? (event) => handleClick(event, row.id) : undefined}
+                ondblclick={isInteractive(row) && groupBy === "project" ? () => handleOpen(row.id) : undefined}
+                onkeydown={isInteractive(row) ? (event) => handleKey(event, row.id) : undefined}
+              >
+                <span class="list-rank">{virtualRow.index + 1}</span>
+                <span class="list-dot" style="background: {row.color}"></span>
+                <div class="list-info">
+                  <span class="list-label">{row.label}</span>
+                  <div class="list-bar-track">
+                    <div
+                      class="list-bar-fill"
+                      style="width: {Math.max(row.pct * 100, 1)}%; background: {row.color};"
+                    ></div>
+                  </div>
+                </div>
+                <span class="list-pct">{(row.pct * 100).toFixed(1)}%</span>
+                <span class="list-cost">
+                  {isTokenMode
+                    ? formatTokenCount(row.value)
+                    : formatMoney(moneyFromMicrodollars(row.value))}
+                </span>
               </div>
-            </div>
-            <span class="list-pct">
-              {(row.pct * 100).toFixed(1)}%
-            </span>
-            <span class="list-cost">
-              {isTokenMode
-                ? formatTokenCount(row.value)
-                : formatMoney(moneyFromMicrodollars(row.value))}
-            </span>
-          </div>
-        {/each}
+            {/if}
+          {/each}
+        </div>
       </div>
     {/if}
   {/if}
@@ -447,9 +552,6 @@
   }
 
   .side-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
     overflow-y: auto;
     max-height: 280px;
   }
@@ -461,6 +563,7 @@
     padding: 3px 4px;
     border-radius: var(--radius-sm);
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
   .rail-row[role="button"]:hover {
@@ -517,9 +620,8 @@
 
   /* List view */
   .list-view {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    max-height: 420px;
+    overflow-y: auto;
   }
 
   .list-row {
@@ -529,6 +631,7 @@
     padding: 4px 6px;
     border-radius: var(--radius-sm);
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
   .list-row[role="button"]:hover {

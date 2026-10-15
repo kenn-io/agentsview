@@ -401,6 +401,7 @@ func (s *Store) activityReportSessions(
 		s.ended_at,
 		s.is_automated AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent,
+		s.git_branch,
 		s.push_version
 	FROM sessions s
 	WHERE ` + where
@@ -421,7 +422,7 @@ func (s *Store) activityReportSessions(
 		var version uint64
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &version,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &m.GitBranch, &version,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf(
 				"scanning clickhouse activity report session: %w", err)

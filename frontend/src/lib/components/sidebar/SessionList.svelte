@@ -508,7 +508,6 @@
       onToggleGroupByAgent={toggleGroupByAgent}
       onToggleGroupByProject={toggleGroupByProject}
       onClearGroupMode={() => setGroupMode("none")}
-      extraActive={sessions.filters.termination !== ""}
       onClearExtra={() => sessions.setTerminationFilter("")}
       extraSections={statusFilterSection}
     />

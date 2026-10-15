@@ -1,6 +1,7 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { branchTokenLabel } from "../../branchFilters.js";
   import { router } from "../../stores/router.svelte.js";
   import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
   import {
@@ -34,6 +35,12 @@
     sessions.filters.machine
       ? sessions.filters.machine.split(",")
       : [],
+  );
+  const selectedBranches = $derived(
+    sessions.selectedBranches.map((token) => ({
+      token,
+      label: branchTokenLabel(token, m.shared_no_branch()),
+    })),
   );
 
   // Label and pull request filters narrow only the session list, so this
@@ -73,6 +80,14 @@
 
   function removeMachine(machine: string) {
     sessions.toggleMachineFilter(machine);
+  }
+
+  function removeBranch(token: string) {
+    sessions.toggleBranchFilter(token);
+  }
+
+  function removeBranchTitle(label: string): string {
+    return m.shared_active_filters_remove_branch({ branch: label });
   }
 
   function removeAgent(agent: string) {
@@ -116,6 +131,19 @@
         title={removeMachineTitle(machine)}
       >
         {sessions.machineLabel(machine)}
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
+      </button>
+    {/each}
+
+    {#each selectedBranches as branch (branch.token)}
+      <button
+        class="filter-chip"
+        onclick={() => removeBranch(branch.token)}
+        title={removeBranchTitle(branch.label)}
+      >
+        {branch.label}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>

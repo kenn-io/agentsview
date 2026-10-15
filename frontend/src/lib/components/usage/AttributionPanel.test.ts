@@ -19,11 +19,47 @@ vi.mock("../../api/generated/index", () => ({
   UsageService: usageServiceMocks,
 }));
 
+// The first index the mocked virtualizer renders, standing in for a scroll
+// position so tests can reach rows past the top of a long list.
+const virtualWindow = vi.hoisted(() => ({ start: 0 }));
+
+vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
+  createVirtualizer: (
+    options: () => {
+      count: number;
+      estimateSize: (index: number) => number;
+      getItemKey?: (index: number) => string | number;
+    },
+  ) => ({
+    get instance() {
+      const opts = options();
+      const first = Math.min(virtualWindow.start, opts.count);
+      const count = Math.min(opts.count - first, 12);
+      const size = opts.estimateSize(0);
+      return {
+        getTotalSize: () => opts.count * size,
+        getVirtualItems: () =>
+          Array.from({ length: count }, (_, offset) => {
+            const index = first + offset;
+            return {
+              index,
+              key: opts.getItemKey?.(index) ?? index,
+              start: index * size,
+              size,
+              end: (index + 1) * size,
+            };
+          }),
+      };
+    },
+  }),
+}));
+
 import AttributionPanel from "./AttributionPanel.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
 import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+import { branchFilterToken } from "../../branchFilters.js";
 
 function summaryWithAgents(agents: string[]): UsageSummaryResponse {
   return {
@@ -41,6 +77,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
     daily: [],
     projectTotals: [],
     modelTotals: [],
+    branchTotals: [],
     agentTotals: agents.map((agent, i) => ({
       agent,
       inputTokens: 60 - i * 20,
@@ -134,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  virtualWindow.start = 0;
   usage.backToProjects();
   usage.selectedProjectKey = "";
   usage.selectedModel = "";
@@ -661,4 +699,201 @@ describe("AttributionPanel job groups", () => {
       unmount(component);
     },
   );
+});
+
+function summaryWithBranches(): UsageSummaryResponse {
+  const summary = summaryWithAgents([]);
+  summary.branchTotals = [
+    {
+      project_key: "pl1:sha256:alpha",
+      project: "alpha",
+      branch: "main",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(8),
+    },
+    {
+      project_key: "pl1:sha256:alpha",
+      project: "alpha",
+      branch: "dev",
+      inputTokens: 40,
+      outputTokens: 20,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(4),
+    },
+  ];
+  return summary;
+}
+
+function manyBranches(count: number, cost: (index: number) => number) {
+  return Array.from({ length: count }, (_, index) => ({
+    project_key: `pl1:sha256:${index}`,
+    project: `project-${index}`,
+    branch: `branch-${index}`,
+    inputTokens: index,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    cost: testMoney(cost(index)),
+  }));
+}
+
+describe("AttributionPanel branch mode", () => {
+  beforeEach(() => {
+    usage.summary = summaryWithBranches();
+    usage.toggles.attribution.groupBy = "branch";
+    usage.toggles.attribution.view = "list";
+  });
+
+  afterEach(() => {
+    usage.summary = null;
+    usage.attributionSummary = null;
+    usage.toggles.attribution.groupBy = "project";
+    usage.selectedGitBranch = "";
+    usage.branchBreakdownError = null;
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  it("shows a branch loading failure instead of unattributed rows", async () => {
+    usage.summary!.branchTotals = [];
+    usage.branchBreakdownError = "Branch grouping is not available for this data source.";
+    const component = mountPanel();
+    await tick();
+
+    expect(document.querySelector(".empty")?.textContent).toBe(
+      "Branch grouping is not available for this data source.",
+    );
+    expect(document.querySelector(".list-row")).toBeNull();
+    unmount(component);
+  });
+
+  it("shows fully unattributed usage instead of an empty branch panel", async () => {
+    usage.summary!.branchTotals = [];
+    const spy = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
+    const component = mountPanel();
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeNull();
+    const row = document.querySelector<HTMLElement>(".list-row");
+    expect(row?.textContent).toContain("Unattributed");
+    expect(row?.textContent).toContain("$12.00");
+    expect(row?.textContent).toContain("100.0%");
+    row?.click();
+    expect(spy).not.toHaveBeenCalled();
+    unmount(component);
+  });
+
+  it("includes the unattributed remainder in branch percentages", async () => {
+    usage.summary!.branchTotals = [usage.summary!.branchTotals[0]!];
+    const component = mountPanel();
+    await tick();
+
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".list-row")).map((row) =>
+      row.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(rows).toEqual(["1 alpha/main 66.7% $8.00", "2 Unattributed 33.3% $4.00"]);
+    unmount(component);
+  });
+
+  it("routes a branch row click into the branch selection toggle", async () => {
+    const spy = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
+    const component = mountPanel();
+    await tick();
+
+    const row = Array.from(document.querySelectorAll<HTMLDivElement>(".list-row")).find((r) =>
+      r.textContent?.includes("alpha/dev"),
+    );
+    expect(row).toBeTruthy();
+    row?.click();
+    await tick();
+
+    expect(spy).toHaveBeenCalledWith(branchFilterToken("pl1:sha256:alpha", "dev"), {
+      preserveTimeRange: true,
+    });
+    unmount(component);
+  });
+
+  it("marks selected branch rows as pressed and dims the rest", async () => {
+    usage.selectedGitBranch = branchFilterToken("pl1:sha256:alpha", "dev");
+    const component = mountPanel();
+    await tick();
+
+    const rows = Array.from(document.querySelectorAll<HTMLDivElement>(".list-row"));
+    const dev = rows.find((r) => r.textContent?.includes("alpha/dev"));
+    const main = rows.find((r) => r.textContent?.includes("alpha/main"));
+    expect(dev?.getAttribute("aria-pressed")).toBe("true");
+    expect(dev?.classList.contains("dimmed")).toBe(false);
+    expect(main?.getAttribute("aria-pressed")).toBe("false");
+    expect(main?.classList.contains("dimmed")).toBe(true);
+    unmount(component);
+  });
+
+  it("virtualizes a large branch list and selects a row scrolled into view", async () => {
+    usage.summary!.branchTotals = manyBranches(1000, (index) => 1000 - index);
+    virtualWindow.start = 500;
+    const spy = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
+
+    const component = mountPanel();
+    await tick();
+
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(rows).toHaveLength(12);
+    expect(document.querySelector<HTMLElement>(".list-virtual-spacer")?.style.height).toBe(
+      "42000px",
+    );
+    expect(rows[0]!.textContent).toContain("branch-500");
+    expect(rows[0]!.style.transform).toBe("translateY(21000px)");
+    rows[0]!.click();
+    expect(spy).toHaveBeenCalledExactlyOnceWith(branchFilterToken("pl1:sha256:500", "branch-500"), {
+      preserveTimeRange: true,
+    });
+    unmount(component);
+  });
+
+  it("virtualizes the large treemap rail while retaining the tile cap", async () => {
+    usage.summary!.branchTotals = manyBranches(1000, (index) => 1000 - index);
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mountPanel();
+    await tick();
+
+    expect(document.querySelectorAll("g.tile").length).toBeLessThanOrEqual(40);
+    expect(document.querySelectorAll(".rail-row")).toHaveLength(12);
+    expect(document.querySelector<HTMLElement>(".rail-virtual-spacer")?.style.height).toBe(
+      "24000px",
+    );
+    unmount(component);
+  });
+
+  it("aggregates omitted rows into a non-interactive Other tile", async () => {
+    usage.summary!.totals.totalCost = testMoney(80);
+    usage.summary!.branchTotals = manyBranches(41, (index) => (index < 39 ? 2 : 1));
+    usage.toggles.attribution.view = "treemap";
+    const toggleBranch = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
+
+    const component = mountPanel();
+    await tick();
+
+    const tiles = document.querySelectorAll<SVGGElement>("g.tile");
+    expect(tiles).toHaveLength(40);
+    const otherTile = Array.from(tiles).find(
+      (tile) => tile.querySelector("title")?.textContent === "Other",
+    );
+    expect(otherTile).toBeDefined();
+    expect(otherTile?.getAttribute("role")).toBeNull();
+    expect(otherTile?.getAttribute("tabindex")).toBeNull();
+
+    const otherRect = otherTile?.querySelector("rect");
+    const area =
+      Number(otherRect?.getAttribute("width")) * Number(otherRect?.getAttribute("height"));
+    expect(area / (600 * 260)).toBeCloseTo(2 / 80, 2);
+
+    otherTile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(toggleBranch).not.toHaveBeenCalled();
+    await unmount(component);
+  });
 });

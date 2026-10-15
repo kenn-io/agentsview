@@ -1,5 +1,47 @@
 components:
   schemas:
+    ActivityBranchKeyMinutes:
+      additionalProperties: false
+      properties:
+        agent_minutes:
+          format: double
+          type: number
+        automated_agent_minutes:
+          format: double
+          type: number
+        automated_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        branch:
+          type: string
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        interactive_agent_minutes:
+          format: double
+          type: number
+        interactive_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        project:
+          type: string
+        project_key:
+          type: string
+        subagent_agent_minutes:
+          format: double
+          type: number
+        subagent_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+      required:
+        - project_key
+        - project
+        - branch
+        - agent_minutes
+        - cost
+        - automated_agent_minutes
+        - interactive_agent_minutes
+        - subagent_agent_minutes
+        - automated_cost
+        - interactive_cost
+        - subagent_cost
+      type: object
     ActivityBucket:
       additionalProperties: false
       properties:
@@ -138,6 +180,10 @@ components:
           items:
             $ref: "#/components/schemas/ActivityKeyMinutes"
           type: array
+        by_branch:
+          items:
+            $ref: "#/components/schemas/ActivityBranchKeyMinutes"
+          type: array
         by_model:
           items:
             $ref: "#/components/schemas/ActivityKeyMinutes"
@@ -208,6 +254,7 @@ components:
         - by_project
         - by_model
         - by_agent
+        - by_branch
         - by_session
         - sessions_total
       type: object
@@ -511,6 +558,39 @@ components:
           type: array
       required:
         - session_ids
+      type: object
+    BranchTotal:
+      additionalProperties: false
+      properties:
+        branch:
+          type: string
+        cacheCreationTokens:
+          format: int64
+          type: integer
+        cacheReadTokens:
+          format: int64
+          type: integer
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        project:
+          type: string
+        project_key:
+          type: string
+      required:
+        - project_key
+        - project
+        - branch
+        - inputTokens
+        - outputTokens
+        - cacheCreationTokens
+        - cacheReadTokens
+        - cost
       type: object
     BranchesResponse:
       additionalProperties: false
@@ -976,6 +1056,39 @@ components:
         - concentration
         - agents
       type: object
+    DbBranchBreakdown:
+      additionalProperties: false
+      properties:
+        branch:
+          type: string
+        cacheCreationTokens:
+          format: int64
+          type: integer
+        cacheReadTokens:
+          format: int64
+          type: integer
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        project:
+          type: string
+        project_key:
+          type: string
+      required:
+        - project_key
+        - project
+        - branch
+        - inputTokens
+        - outputTokens
+        - cacheCreationTokens
+        - cacheReadTokens
+        - cost
+      type: object
     DbBranchInfo:
       additionalProperties: false
       properties:
@@ -989,6 +1102,27 @@ components:
         - project
         - branch
         - token
+      type: object
+    DbBranchOption:
+      additionalProperties: false
+      properties:
+        branch:
+          type: string
+      required:
+        - branch
+      type: object
+    DbBranchResult:
+      additionalProperties: false
+      properties:
+        branches:
+          items:
+            $ref: "#/components/schemas/DbBranchOption"
+          type: array
+        has_more:
+          type: boolean
+      required:
+        - branches
+        - has_more
       type: object
     DbCacheHitRatioDistribution:
       additionalProperties: false
@@ -1309,6 +1443,10 @@ components:
           items:
             $ref: "#/components/schemas/DbAgentBreakdown"
           type: array
+        branchBreakdowns:
+          items:
+            $ref: "#/components/schemas/DbBranchBreakdown"
+          type: array
         cacheCreationTokens:
           format: int64
           type: integer
@@ -1353,6 +1491,7 @@ components:
         - projectBreakdowns
         - agentBreakdowns
         - machineBreakdowns
+        - branchBreakdowns
       type: object
     DbDistributionBucket:
       additionalProperties: false
@@ -7793,6 +7932,10 @@ components:
           items:
             $ref: "#/components/schemas/AgentTotal"
           type: array
+        branchTotals:
+          items:
+            $ref: "#/components/schemas/BranchTotal"
+          type: array
         cacheStats:
           $ref: "#/components/schemas/CacheStats"
         comparison:
@@ -7837,6 +7980,7 @@ components:
         - projectTotals
         - modelTotals
         - agentTotals
+        - branchTotals
         - sessionCounts
         - cacheStats
       type: object
@@ -8268,12 +8412,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -8663,12 +8807,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -8882,12 +9026,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -9101,12 +9245,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -9308,12 +9452,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -9515,12 +9659,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -9746,12 +9890,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -9972,12 +10116,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -10179,12 +10323,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -10398,12 +10542,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -10605,12 +10749,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -10812,12 +10956,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -11031,12 +11175,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -11384,6 +11528,137 @@ paths:
       summary: Get imported asset
       tags:
         - Assets
+  /api/v1/branch-names:
+    get:
+      operationId: get-api-v1-branch-names
+      parameters:
+        - description: Include one-shot sessions
+          explode: false
+          in: query
+          name: include_one_shot
+          schema:
+            description: Include one-shot sessions
+            type: boolean
+        - description: Include automated sessions
+          explode: false
+          in: query
+          name: include_automated
+          schema:
+            description: Include automated sessions
+            type: boolean
+        - description: "Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"
+          explode: false
+          in: query
+          name: scope
+          schema:
+            description: "Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"
+            enum:
+              - roots
+              - all
+            type: string
+        - description: Restrict to these projects before deduplicating branch names
+          explode: true
+          in: query
+          name: projects
+          schema:
+            description: Restrict to these projects before deduplicating branch names
+            items:
+              type: string
+            type: array
+        - description: Case-insensitive branch name substring
+          explode: false
+          in: query
+          name: search
+          schema:
+            description: Case-insensitive branch name substring
+            type: string
+        - description: Maximum number of branch names
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 100
+            description: Maximum number of branch names
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBranchResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Search branch names
+      tags:
+        - Metadata
   /api/v1/branches:
     get:
       operationId: get-api-v1-branches
@@ -17112,12 +17387,12 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by exact full stored session ID
           explode: false
@@ -17869,12 +18144,12 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -18257,12 +18532,12 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -22977,12 +23252,12 @@ paths:
           schema:
             description: Filter by project
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
             type: string
         - description: Filter by agent
           explode: false
@@ -23292,12 +23567,26 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+          explode: false
+          in: query
+          name: exclude_git_branch
+          schema:
+            description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+          explode: false
+          in: query
+          name: selected_git_branch
+          schema:
+            description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
             type: string
         - description: Exclude a project
           explode: false
@@ -23387,6 +23676,14 @@ paths:
           schema:
             default: true
             description: Include per-model, per-project, and per-agent breakdowns
+            type: boolean
+        - description: Include per-project branch breakdowns
+          explode: false
+          in: query
+          name: branch_breakdowns
+          schema:
+            default: false
+            description: Include per-project branch breakdowns
             type: boolean
         - description: Include distinct session counts
           explode: false
@@ -23537,12 +23834,26 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+          explode: false
+          in: query
+          name: exclude_git_branch
+          schema:
+            description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+          explode: false
+          in: query
+          name: selected_git_branch
+          schema:
+            description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
             type: string
         - description: Exclude a project
           explode: false
@@ -23632,6 +23943,14 @@ paths:
           schema:
             default: true
             description: Include per-model, per-project, and per-agent breakdowns
+            type: boolean
+        - description: Include per-project branch breakdowns
+          explode: false
+          in: query
+          name: branch_breakdowns
+          schema:
+            default: false
+            description: Include per-project branch breakdowns
             type: boolean
         - description: Include distinct session counts
           explode: false
@@ -23807,12 +24126,26 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+          explode: false
+          in: query
+          name: exclude_git_branch
+          schema:
+            description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+          explode: false
+          in: query
+          name: selected_git_branch
+          schema:
+            description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
             type: string
         - description: Exclude a project
           explode: false
@@ -23902,6 +24235,14 @@ paths:
           schema:
             default: true
             description: Include per-model, per-project, and per-agent breakdowns
+            type: boolean
+        - description: Include per-project branch breakdowns
+          explode: false
+          in: query
+          name: branch_breakdowns
+          schema:
+            default: false
+            description: Include per-project branch breakdowns
             type: boolean
         - description: Include distinct session counts
           explode: false
@@ -24042,12 +24383,26 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+          explode: false
+          in: query
+          name: exclude_git_branch
+          schema:
+            description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+          explode: false
+          in: query
+          name: selected_git_branch
+          schema:
+            description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
             type: string
         - description: Exclude a project
           explode: false
@@ -24137,6 +24492,14 @@ paths:
           schema:
             default: true
             description: Include per-model, per-project, and per-agent breakdowns
+            type: boolean
+        - description: Include per-project branch breakdowns
+          explode: false
+          in: query
+          name: branch_breakdowns
+          schema:
+            default: false
+            description: Include per-project branch breakdowns
             type: boolean
         - description: Include distinct session counts
           explode: false
@@ -24277,12 +24640,26 @@ paths:
           schema:
             description: Filter by machine
             type: string
-        - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+        - description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
           explode: false
           in: query
           name: git_branch
           schema:
-            description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            description: Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+          explode: false
+          in: query
+          name: exclude_git_branch
+          schema:
+            description: Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+            type: string
+        - description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+          explode: false
+          in: query
+          name: selected_git_branch
+          schema:
+            description: Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
             type: string
         - description: Exclude a project
           explode: false
@@ -24372,6 +24749,14 @@ paths:
           schema:
             default: true
             description: Include per-model, per-project, and per-agent breakdowns
+            type: boolean
+        - description: Include per-project branch breakdowns
+          explode: false
+          in: query
+          name: branch_breakdowns
+          schema:
+            default: false
+            description: Include per-project branch breakdowns
             type: boolean
         - description: Include distinct session counts
           explode: false

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
-  import type { ActivitySessionRow } from "../../api/generated/index";
+  import type { Report, SessionRow } from "../../api/types.js";
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
   import { Button, TableHeaderCell } from "@kenn-io/kit-ui";
@@ -44,11 +43,7 @@
 
   let scrollEl: HTMLDivElement | undefined = $state();
 
-  // by_session is typed `any[] | null` by the codegen; cast to the
-  // generated element model for field-level type safety.
-  const rows = $derived(
-    report.by_session ?? [],
-  );
+  const rows = $derived(report.by_session ?? []);
 
   // A failed request stops automatic loading so a persistent error cannot
   // turn into a request loop; the retry button resumes it.
@@ -88,8 +83,8 @@
     return Math.round(v).toLocaleString();
   }
 
-  function rowModel(row: ActivitySessionRow): string {
-    const models = (row.models ?? []) as string[];
+  function rowModel(row: SessionRow): string {
+    const models = row.models ?? [];
     if (models.length > 1) return m.activity_mixed();
     return row.primary_model || "—";
   }

@@ -7,9 +7,35 @@ import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
-import { UsageService } from "../../api/generated/index";
+import { MetadataService, UsageService } from "../../api/generated/index";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
+
+vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
+  createVirtualizer: (
+    options: () => {
+      count: number;
+      estimateSize: (index: number) => number;
+      getItemKey?: (index: number) => string | number;
+    },
+  ) => ({
+    get instance() {
+      const opts = options();
+      const size = opts.estimateSize(0);
+      return {
+        getTotalSize: () => opts.count * size,
+        getVirtualItems: () =>
+          Array.from({ length: opts.count }, (_, index) => ({
+            index,
+            key: opts.getItemKey?.(index) ?? index,
+            start: index * size,
+            size,
+            end: (index + 1) * size,
+          })),
+      };
+    },
+  }),
+}));
 
 async function flushEffects() {
   await tick();
@@ -36,6 +62,7 @@ function usageSummaryWithUnsupported(kind?: string): UsageSummaryResponse {
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 0,
       byProject: {},
@@ -96,6 +123,7 @@ function tenModelUsageSummary(): UsageSummaryResponse {
         projectBreakdowns: [],
         agentBreakdowns: [],
         machineBreakdowns: [],
+        branchBreakdowns: [],
       },
     ],
     from: "2026-07-01",
@@ -149,6 +177,8 @@ afterEach(() => {
   usage.knownProjects = [];
   settings.chartPalette = "agentsview";
   sessions.projects = [];
+  sessions.filters.includeOneShot = true;
+  sessions.filters.includeAutomated = false;
   yokedDates.setEnabled(false);
   localStorage.clear();
 });
@@ -687,6 +717,40 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(loadAgents).toHaveBeenCalled();
+  });
+
+  it("searches branches with the active usage session filters", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const searchBranches = vi
+      .spyOn(MetadataService, "getApiV1BranchNames")
+      .mockResolvedValue({ branches: [], has_more: false });
+    router.route = "usage";
+    router.params = {
+      include_one_shot: "false",
+      include_automated: "true",
+    };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[title="Branch"]')?.click();
+
+    await vi.waitFor(() =>
+      expect(searchBranches).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include_one_shot: false,
+          include_automated: true,
+          scope: "all",
+        }),
+      ),
+    );
   });
 
   it("ignores response-scoped project keys restored from a URL", async () => {

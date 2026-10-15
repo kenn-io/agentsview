@@ -270,6 +270,30 @@ describe("createVirtualizer reactivity", () => {
     vi.useRealTimers();
   });
 
+  it("notifies readers when the count changes without a range change", async () => {
+    const onInstanceChange = vi.fn();
+    const scrollElement = document.createElement("div");
+    const options = {
+      count: 0,
+      getScrollElement: () => scrollElement,
+      estimateSize: (): number => 50,
+    };
+    const component = mount(VirtualizerTest, {
+      target: document.createElement("div"),
+      props: { type: "element", options, onInstanceChange },
+    });
+    await tick();
+    expect(onInstanceChange).toHaveBeenCalledTimes(1);
+
+    // The mocked core never calls onChange, as when the range is unchanged.
+    component.setOptions({ ...options, count: 3 });
+    await tick();
+    expect(lastOptions.value!.count).toBe(3);
+    expect(onInstanceChange).toHaveBeenCalledTimes(2);
+
+    unmount(component);
+  });
+
   it.each([
     {
       type: "element" as const,

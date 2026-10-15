@@ -14,6 +14,8 @@
     title?: string;
     selected?: boolean;
     dimmed?: boolean;
+    // Aggregate tiles (such as an "Other" remainder) are not selectable.
+    selectable?: boolean;
   }
 
   interface Props {
@@ -67,6 +69,8 @@
             {@const large = tileWidth > 60 && tileHeight > 40}
             {@const medium = tileWidth > 40 && tileHeight > 20}
             {@const clipId = `${uid}-tile-${index}`}
+            {@const select = (tile.selectable ?? true) ? onSelect : undefined}
+            {@const open = (tile.selectable ?? true) ? onOpen : undefined}
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
@@ -75,13 +79,13 @@
               class="tile"
               class:dimmed={tile.dimmed}
               clip-path={`url(#${clipId})`}
-              tabindex={onSelect ? 0 : undefined}
-              role={onSelect ? "button" : undefined}
-              aria-pressed={onSelect ? tile.selected ?? false : undefined}
-              aria-label={onSelect ? tile.title ?? m.usage_click_to_focus({ label: tile.label }) : undefined}
-              onclick={onSelect ? (event) => { if (event.detail < 2 || !onOpen) onSelect(tile.id); } : undefined}
-              ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
-              onkeydown={onSelect ? (event) => handleKey(event, tile.id) : undefined}
+              tabindex={select ? 0 : undefined}
+              role={select ? "button" : undefined}
+              aria-pressed={select ? tile.selected ?? false : undefined}
+              aria-label={select ? tile.title ?? m.usage_click_to_focus({ label: tile.label }) : undefined}
+              onclick={select ? (event) => { if (event.detail < 2 || !open) select(tile.id); } : undefined}
+              ondblclick={open ? () => open(tile.id) : undefined}
+              onkeydown={select ? (event) => handleKey(event, tile.id) : undefined}
             >
               <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
               <Group x={node.x0} y={node.y0}>

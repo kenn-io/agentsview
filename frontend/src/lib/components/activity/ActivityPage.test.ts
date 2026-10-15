@@ -93,6 +93,7 @@ function projectReport(): Report {
     ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     sessions_total: 0,
     projects: {},

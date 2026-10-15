@@ -495,6 +495,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   $effect(() => {
     const headerProject = sessions.filters.project;
     const headerMachine = sessions.filters.machine;
+    const headerBranch = sessions.filters.branch;
     const headerAgent = sessions.filters.agent;
     const headerTermination = sessions.filters.termination;
     const headerRecentlyActive = sessions.filters.recentlyActive;
@@ -511,6 +512,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     const changed =
       untrack(() => analytics.project) !== headerProject ||
       untrack(() => analytics.machine) !== headerMachine ||
+      untrack(() => analytics.branch) !== headerBranch ||
       untrack(() => analytics.agent) !== headerAgent ||
       untrack(() => analytics.termination) !== headerTermination ||
       untrack(() => analytics.recentlyActive) !==
@@ -527,6 +529,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     if (changed) {
       analytics.project = headerProject;
       analytics.machine = headerMachine;
+      analytics.branch = headerBranch;
       analytics.agent = headerAgent;
       analytics.termination = headerTermination;
       analytics.recentlyActive = headerRecentlyActive;
