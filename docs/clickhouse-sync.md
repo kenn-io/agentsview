@@ -138,10 +138,11 @@ the summary counts the skipped sessions. The push starts over instead when
 the mirror format changed since it began. A full push that ends with session
 errors resumes only while something else still requires a full push. Otherwise
 the next push is incremental and retries the failed sessions. If a full push
-that ended with session errors began under a different push scope, archive, or
-mirror format, the next push is full too, and pushes stay full until one
-finishes without errors. This brings back sessions a filtered push removed from
-the mirror when you restore the wider scope.
+ended with session errors and began under a different push scope, archive, or
+mirror format, the next push is also full. Pushes stay full until one finishes
+without errors. This brings back sessions that a filtered push removed from the
+mirror when you restore the wider scope. The push log names each session that
+failed, and pushes return to incremental once those sessions push cleanly.
 
 If any sessions fail to push, the cursor is not advanced so they are retried on
 the next run. The exit code is 1 when any errors occur, 0 otherwise.

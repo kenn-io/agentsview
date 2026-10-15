@@ -252,10 +252,10 @@ func Push(
 		case errored.Reason == heldReason:
 			resume(errored)
 		default:
-			// Name the readers too, since closing them would allow an
-			// incremental update instead of the rebuild.
+			// Lead with the readers, since they are why this push rebuilds,
+			// and closing them would allow an incremental update instead.
 			resume(errored)
-			reason += "; reader processes hold the mirror, so an incremental update is unavailable"
+			reason = heldReason + "; " + reason
 		}
 		if lock == nil {
 			if err := claim(true); err != nil {

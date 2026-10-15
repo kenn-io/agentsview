@@ -310,6 +310,7 @@ func TestHeldPushResumingErroredRebuildNamesReaders(t *testing.T) {
 	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.ErrorContains(t, err, "session push errors")
 	assert.Equal(t,
-		"resuming an unfinished rebuild, started because: --full requested; reader processes hold the mirror, so an incremental update is unavailable",
+		"mirror is held open by reader processes; incremental write access unavailable; "+
+			"resuming an unfinished rebuild, started because: --full requested",
 		res.Diagnostics.RebuildReason)
 }
