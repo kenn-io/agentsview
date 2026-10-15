@@ -1593,7 +1593,8 @@ func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing
 				require.Len(t, pages[1].Rows, 1)
 				assert.Equal(t, parentID, pages[0].Rows[0].ID)
 				assert.Equal(t, child.ID, pages[1].Rows[0].ID)
-				exported = append(pages[0].Rows, pages[1].Rows...)
+				exported = append(exported, pages[0].Rows...)
+				exported = append(exported, pages[1].Rows...)
 			} else {
 				result, err := d.ExportSessionSummaries(ctx, opts)
 				require.NoError(t, err)

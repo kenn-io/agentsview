@@ -2796,7 +2796,6 @@ func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
 			require.Len(t, sessionUsage.Breakdown, 1)
 			require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
 			assert.Equal(t, 0, *sessionUsage.Breakdown[0].MessageOrdinal)
-
 		})
 	}
 }
