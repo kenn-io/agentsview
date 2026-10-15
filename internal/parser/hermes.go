@@ -624,7 +624,15 @@ func HermesStoredPathIsAggregateArchive(path string) bool {
 	if path == "" {
 		return false
 	}
-	if _, _, ok := ParseVirtualSourcePath(path); ok {
+	// ParseVirtualSourcePathForBase, not the bare ParseVirtualSourcePath:
+	// a literal "#" can appear in a real directory name ancestor to
+	// state.db (e.g. a profile directory named "profile#one"), which the
+	// bare split would misread as a virtual member suffix even though
+	// the container part's basename is never "state.db". Requiring the
+	// container to actually end in "state.db" is what tells apart a
+	// genuine "state.db#<id>" member from an unrelated "#" elsewhere in
+	// the path.
+	if _, _, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
 		return false
 	}
 	return filepath.Base(path) == "state.db"

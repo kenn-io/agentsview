@@ -1313,6 +1313,21 @@ func (s hermesSourceSet) FindSource(
 				req.RawSessionID != "" && samePath(filepath.Clean(path), filepath.Clean(stateDB)) {
 				continue
 			}
+			// A stored transcript path can be stale in format, not just
+			// stale versus state.db (handled above): a session first
+			// stored from the legacy session_<id>.json snapshot, which
+			// later gained a real <id>.jsonl, must refresh from the
+			// jsonl -- the same preference discovery and changed-path
+			// handling already give it via findHermesSourceFile. Resolve
+			// by session ID instead of trusting the stored path's exact
+			// file, so refresh doesn't stay stuck rereading the
+			// superseded snapshot.
+			if sessionID := HermesSessionID(filepath.Base(path)); isValidHermesSessionID(sessionID) {
+				if source, ok := s.transcriptSourceForRoot(root, sessionID); ok {
+					return source, true, nil
+				}
+				continue
+			}
 			if source, ok := s.sourceRef(root, path); ok {
 				return source, true, nil
 			}
@@ -1395,14 +1410,17 @@ func hermesStateDBHasReadableSession(
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return false, ctxErr
 	}
-	if err != nil || !found {
+	if err != nil {
+		return false, nil //nolint:nilerr // A row that fails this real read does not count as a member; see the doc comment above.
+	}
+	if !found {
 		return false, nil
 	}
 	if _, err := readHermesStateMessagesForSession(ctx, conn, rawID); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
 		}
-		return false, nil
+		return false, nil //nolint:nilerr // Same as above: an undecodable message does not count as a member.
 	}
 	return true, nil
 }

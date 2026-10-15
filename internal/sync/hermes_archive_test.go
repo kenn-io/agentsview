@@ -2123,6 +2123,57 @@ func TestHermesSingleSessionSyncSwitchesToNewStateDBRow(t *testing.T) {
 	}, messageContents(t, database, "hermes:late"))
 }
 
+// TestHermesSingleSessionRefreshPrefersNewerJSONLOverStaleJSONSnapshot
+// proves a transcript-only session first stored from the legacy
+// session_<id>.json snapshot refreshes from a newer <id>.jsonl once one
+// appears for the same session ID, instead of staying stuck rereading the
+// stored path's exact, now-superseded file. FindSource's stored-hint loop
+// used to trust that exact path directly for a non-member transcript hint,
+// bypassing the JSONL-preferred-over-JSON selection discovery and
+// changed-path handling already apply through findHermesSourceFile.
+func TestHermesSingleSessionRefreshPrefersNewerJSONLOverStaleJSONSnapshot(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		withArchive bool
+	}{
+		{name: "no state.db at all"},
+		{name: "state.db present without this session's row", withArchive: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+			if test.withArchive {
+				// writeHermesArchiveStateDB seeds an unrelated "child"
+				// member; "standalone" never gets a row in this state.db.
+				writeHermesArchiveStateDB(t, root)
+			}
+			writeHermesSessionsFile(t, root, "session_standalone.json",
+				`{"messages":[{"role":"user","content":"snapshot prompt"}]}`)
+
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			require.Equal(t, []string{"snapshot prompt"}, messageContents(t, database, "hermes:standalone"))
+			require.Equal(t, filepath.Join(sessionsDir, "session_standalone.json"),
+				database.GetSessionFilePath(t.Context(), "hermes:standalone"))
+
+			writeHermesSessionsFile(t, root, "standalone.jsonl",
+				`{"role":"user","content":"jsonl prompt","timestamp":"2026-05-14T10:01:00Z"}`+"\n")
+
+			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:standalone"))
+
+			assert.Equal(t, []string{"jsonl prompt"}, messageContents(t, database, "hermes:standalone"),
+				"refresh must prefer the newer jsonl over the stale stored json snapshot")
+			assert.Equal(t, filepath.Join(sessionsDir, "standalone.jsonl"),
+				database.GetSessionFilePath(t.Context(), "hermes:standalone"))
+		})
+	}
+}
+
 func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
 	for _, test := range []struct {
 		name   string
