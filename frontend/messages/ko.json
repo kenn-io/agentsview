@@ -1823,6 +1823,32 @@
       }
     }
   ],
+  "session_tree_view_label": "세션 트리 보기",
+  "session_tree_view_sessions": "세션",
+  "session_tree_view_inputs": "입력",
+  "session_input_tree_loading": "입력을 불러오는 중...",
+  "session_input_tree_error": "입력을 불러오지 못했습니다",
+  "session_input_tree_empty": "사용자 입력 없음",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "숨긴 입력 {countLabel}개",
+        "countPlural=other": "숨긴 입력 {countLabel}개"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "숨긴 입력 표시",
+  "session_input_tree_jump_to": "입력으로 이동: {preview}",
+  "session_input_tree_open": "해당 세션에서 열기: {preview}",
+  "session_input_tree_current": "현재",
   "code_block_copy": "코드 블록 복사",
   "code_block_copy_title": "코드 복사",
   "common_copied": "복사됨!",

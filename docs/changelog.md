@@ -11,6 +11,13 @@ The latest published release is
 
 **New features**
 
+- See where a conversation branched. When a session has forks, the session
+  tree in the analysis panel has an **Inputs** view that shows every prompt in
+  the fork family as one tree. Prompts the sessions share appear once, the tree
+  splits where a fork's prompts diverge, and each branch ends with a label for
+  its session. Click a prompt on the open session's path to jump to it, or any
+  other prompt to open the session that holds it. Long runs of prompts without
+  a split fold into one row.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

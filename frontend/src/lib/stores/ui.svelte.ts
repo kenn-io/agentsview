@@ -29,6 +29,8 @@ import {
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream" | "skim";
 export type TranscriptMode = "normal" | "focused";
+/** What the session tree shows: related sessions, or the inputs of a fork family. */
+export type SessionTreeView = "sessions" | "inputs";
 export type PublishTarget =
   | { kind: "session"; id: string }
   | { kind: "insight"; id: number }
@@ -142,6 +144,8 @@ function readBlockFilters(): Set<BlockType> {
 const LAYOUT_KEY = "agentsview-message-layout";
 const ZOOM_KEY = "agentsview-zoom-level";
 const VALID_TRANSCRIPT_MODES: TranscriptMode[] = ["normal", "focused"];
+const SESSION_TREE_VIEW_KEY = "agentsview-session-tree-view";
+const VALID_SESSION_TREE_VIEWS: SessionTreeView[] = ["sessions", "inputs"];
 
 const IS_DESKTOP =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
@@ -257,6 +261,18 @@ function readStoredTranscriptMode(): TranscriptMode {
   return "normal";
 }
 
+function readStoredSessionTreeView(): SessionTreeView {
+  try {
+    const raw = localStorage?.getItem(SESSION_TREE_VIEW_KEY);
+    if (raw && VALID_SESSION_TREE_VIEWS.includes(raw as SessionTreeView)) {
+      return raw as SessionTreeView;
+    }
+  } catch {
+    // ignore
+  }
+  return "sessions";
+}
+
 function readStoredSidebarWidth(): number {
   try {
     return clampStoredSidebarWidth(localStorage?.getItem(SIDEBAR_WIDTH_KEY));
@@ -327,6 +343,7 @@ class UIStore {
   vitalsWidth: number = $state(readStoredVitalsWidth());
   /** Height limit for the session tree above the session vitals. */
   sessionTreeHeight: number = $state(readStoredSessionTreeHeight());
+  sessionTreeView: SessionTreeView = $state(readStoredSessionTreeView());
   /** Height limit for the user input outline in the session vitals. */
   sessionInputOutlineHeight: number = $state(readStoredSessionInputOutlineHeight());
   activeModal: ModalType = $state(null);
@@ -398,6 +415,14 @@ class UIStore {
       $effect(() => {
         try {
           localStorage?.setItem(SESSION_TREE_HEIGHT_KEY, String(this.sessionTreeHeight));
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(SESSION_TREE_VIEW_KEY, this.sessionTreeView);
         } catch {
           // ignore
         }
@@ -633,6 +658,10 @@ class UIStore {
 
   setSessionTreeHeight(height: number) {
     this.sessionTreeHeight = clampStoredSessionTreeHeight(height);
+  }
+
+  setSessionTreeView(view: SessionTreeView) {
+    this.sessionTreeView = view;
   }
 
   setSessionInputOutlineHeight(height: number) {

@@ -1,6 +1,8 @@
 <script lang="ts">
   import {
+    SegmentedControl,
     SplitResizeHandle,
+    type SegmentedControlOption,
     type SplitResizeEvent,
   } from "@kenn-io/kit-ui";
   import { tick } from "svelte";
@@ -12,8 +14,10 @@
   } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
   import { router } from "../../stores/router.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
+  import { ui, type SessionTreeView } from "../../stores/ui.svelte.js";
   import { formatNumber } from "../../utils/format.js";
+  import SessionInputTree from "./SessionInputTree.svelte";
+  import { forkFamilySize } from "./input-tree.js";
   import {
     SESSION_TREE_HEIGHT_MIN,
     SESSION_TREE_HEIGHT_STORAGE_MAX,
@@ -58,6 +62,18 @@
 
   let rows = $derived(tree ? flattenTree(tree.root) : []);
   let visible = $derived(rows.length > 1);
+  // The input view needs a fork to branch; other sessions show only the
+  // session view.
+  let hasForks = $derived(
+    tree ? forkFamilySize(tree.root, tree.active_session_id) > 1 : false,
+  );
+  let view = $derived<SessionTreeView>(
+    hasForks ? ui.sessionTreeView : "sessions",
+  );
+  const viewOptions = $derived<SegmentedControlOption[]>([
+    { value: "sessions", label: m.session_tree_view_sessions() },
+    { value: "inputs", label: m.session_tree_view_inputs() },
+  ]);
 
   // Sizes below are CSS pixels (clientHeight/offsetHeight), not
   // getBoundingClientRect, which includes interface zoom.
@@ -211,44 +227,58 @@
     style:max-height={`${maxHeight}px`}
   >
     <header class="tree-header">
-      <span>{m.session_tree_title()}</span>
-      {#if tree?.truncated}
+      <span class="tree-heading">{m.session_tree_title()}</span>
+      {#if tree?.truncated && view === "sessions"}
         <span class="tree-truncated">{m.session_tree_truncated()}</span>
+      {/if}
+      {#if hasForks}
+        <span class="tree-view-switch">
+          <SegmentedControl
+            options={viewOptions}
+            value={view}
+            ariaLabel={m.session_tree_view_label()}
+            onchange={(next) => ui.setSessionTreeView(next as SessionTreeView)}
+          />
+        </span>
       {/if}
     </header>
 
-    <div class="tree-list" bind:this={listElement}>
-      {#each rows as node (node.session.id)}
-        {@const session = node.session}
-        <a
-          class="tree-node"
-          class:active={node.is_active}
-          class:leaf={node.is_leaf}
-          class:branch-start={node.is_branch_start}
-          href={router.buildSessionHref(session.id)}
-          aria-current={node.is_active ? "page" : undefined}
-          title={sessionTitle(session)}
-          style={`--tree-depth: ${node.depth};`}
-          onclick={(event) => navigate(event, session.id)}
-        >
-          <span class="tree-guide" aria-hidden="true"></span>
-          <span class="tree-marker" aria-hidden="true"></span>
-          <span class="tree-body">
-            <span class="tree-row-main">
-              <span class="tree-title">{sessionTitle(session)}</span>
-              <span class="tree-rel">
-                {relationshipLabel(session.relationship_type)}
+    {#if view === "inputs"}
+      <SessionInputTree {sessionId} />
+    {:else}
+      <div class="tree-list" bind:this={listElement}>
+        {#each rows as node (node.session.id)}
+          {@const session = node.session}
+          <a
+            class="tree-node"
+            class:active={node.is_active}
+            class:leaf={node.is_leaf}
+            class:branch-start={node.is_branch_start}
+            href={router.buildSessionHref(session.id)}
+            aria-current={node.is_active ? "page" : undefined}
+            title={sessionTitle(session)}
+            style={`--tree-depth: ${node.depth};`}
+            onclick={(event) => navigate(event, session.id)}
+          >
+            <span class="tree-guide" aria-hidden="true"></span>
+            <span class="tree-marker" aria-hidden="true"></span>
+            <span class="tree-body">
+              <span class="tree-row-main">
+                <span class="tree-title">{sessionTitle(session)}</span>
+                <span class="tree-rel">
+                  {relationshipLabel(session.relationship_type)}
+                </span>
+              </span>
+              <span class="tree-preview">{sessionPreview(session)}</span>
+              <span class="tree-meta">
+                <span>{session.agent}</span>
+                <span>{messageCountLabel(session.message_count)}</span>
               </span>
             </span>
-            <span class="tree-preview">{sessionPreview(session)}</span>
-            <span class="tree-meta">
-              <span>{session.agent}</span>
-              <span>{messageCountLabel(session.message_count)}</span>
-            </span>
-          </span>
-        </a>
-      {/each}
-    </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   </section>
   <SplitResizeHandle
     orientation="vertical"
@@ -284,6 +314,18 @@
     font-weight: 600;
     letter-spacing: 0.6px;
     text-transform: uppercase;
+  }
+
+  .tree-heading {
+    margin-right: auto;
+  }
+
+  .tree-view-switch {
+    flex-shrink: 0;
+    --kit-control-height: 20px;
+    --kit-control-font-size: 10px;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .tree-truncated {

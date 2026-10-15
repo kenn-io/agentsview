@@ -1602,6 +1602,31 @@
       }
     }
   ],
+  "session_tree_view_label": "会话树视图",
+  "session_tree_view_sessions": "会话",
+  "session_tree_view_inputs": "输入",
+  "session_input_tree_loading": "正在加载输入...",
+  "session_input_tree_error": "输入加载失败",
+  "session_input_tree_empty": "没有用户输入",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "已折叠 {countLabel} 条输入"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "展开折叠的输入",
+  "session_input_tree_jump_to": "跳转到输入：{preview}",
+  "session_input_tree_open": "在所属会话中打开：{preview}",
+  "session_input_tree_current": "当前",
   "code_block_copy": "复制代码块",
   "code_block_copy_title": "复制代码",
   "common_copied": "已复制！",

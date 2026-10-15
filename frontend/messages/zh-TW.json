@@ -1618,6 +1618,31 @@
       }
     }
   ],
+  "session_tree_view_label": "會話樹檢視",
+  "session_tree_view_sessions": "會話",
+  "session_tree_view_inputs": "輸入",
+  "session_input_tree_loading": "正在載入輸入...",
+  "session_input_tree_error": "輸入載入失敗",
+  "session_input_tree_empty": "沒有用戶輸入",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "已摺疊 {countLabel} 則輸入"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "展開摺疊的輸入",
+  "session_input_tree_jump_to": "跳轉到輸入：{preview}",
+  "session_input_tree_open": "在所屬會話中開啟：{preview}",
+  "session_input_tree_current": "目前",
   "code_block_copy": "複製代碼塊",
   "code_block_copy_title": "複製代碼",
   "code_block_copy": "複製程式碼區塊",

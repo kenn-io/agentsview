@@ -1869,6 +1869,32 @@
       }
     }
   ],
+  "session_tree_view_label": "Vue de l'arbre des sessions",
+  "session_tree_view_sessions": "Sessions",
+  "session_tree_view_inputs": "Entrées",
+  "session_input_tree_loading": "Chargement des entrées...",
+  "session_input_tree_error": "Échec du chargement des entrées",
+  "session_input_tree_empty": "Aucune entrée utilisateur",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} entrée masquée",
+        "countPlural=other": "{countLabel} entrées masquées"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "Afficher les entrées masquées",
+  "session_input_tree_jump_to": "Aller à l'entrée : {preview}",
+  "session_input_tree_open": "Ouvrir dans sa session : {preview}",
+  "session_input_tree_current": "actuelle",
   "code_block_copy": "Copier le bloc de code",
   "code_block_copy_title": "Copier le code",
   "common_copied": "Copié !",

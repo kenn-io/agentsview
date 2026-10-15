@@ -1870,6 +1870,32 @@
       }
     }
   ],
+  "session_tree_view_label": "Sessiya ağacı görünüşü",
+  "session_tree_view_sessions": "Sessiyalar",
+  "session_tree_view_inputs": "Girişlər",
+  "session_input_tree_loading": "Girişlər yüklənir...",
+  "session_input_tree_error": "Girişləri yükləmək alınmadı",
+  "session_input_tree_empty": "İstifadəçi girişi yoxdur",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} gizli giriş",
+        "countPlural=other": "{countLabel} gizli giriş"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "Gizli girişləri göstər",
+  "session_input_tree_jump_to": "Girişə keç: {preview}",
+  "session_input_tree_open": "Öz sessiyasında aç: {preview}",
+  "session_input_tree_current": "cari",
   "code_block_copy": "Kod blokunu kopyala",
   "code_block_copy_title": "Kodu kopyala",
   "common_copied": "Kopyalandı!",

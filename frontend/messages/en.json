@@ -1682,6 +1682,32 @@
       }
     }
   ],
+  "session_tree_view_label": "Session tree view",
+  "session_tree_view_sessions": "Sessions",
+  "session_tree_view_inputs": "Inputs",
+  "session_input_tree_loading": "Loading inputs...",
+  "session_input_tree_error": "Failed to load inputs",
+  "session_input_tree_empty": "No user inputs",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} hidden input",
+        "countPlural=other": "{countLabel} hidden inputs"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "Show hidden inputs",
+  "session_input_tree_jump_to": "Jump to input: {preview}",
+  "session_input_tree_open": "Open in its session: {preview}",
+  "session_input_tree_current": "current",
   "code_block_copy": "Copy code block",
   "code_block_copy_title": "Copy code",
   "common_copied": "Copied!",
