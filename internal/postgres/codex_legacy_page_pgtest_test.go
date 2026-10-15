@@ -133,6 +133,7 @@ func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
 	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
 	// The remote bare-rollout row is already purged; only its exclusion stays.
 	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO excluded_sessions (id) VALUES ($1)`, rollout)
 	require.NoError(t, err)
