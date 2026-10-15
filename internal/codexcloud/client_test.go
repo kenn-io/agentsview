@@ -167,14 +167,7 @@ func TestAllowlist(t *testing.T) {
 
 func TestServerRequestsNeverAnswered(t *testing.T) {
 	host := codexcloudtest.NewHost(t)
-	release := make(chan struct{})
-	host.Handle("thread/list", func(jsontext.Value) (any, *codexcloudtest.Error) {
-		select {
-		case <-release:
-		case <-host.Context().Done():
-		}
-		return map[string]any{"data": []any{}}, nil
-	})
+	host.Hold("thread/list")
 	conn := dial(t, host, codexcloud.ModeMonitor)
 
 	require.NoError(t, host.ServerRequest(t.Context(), "item/commandExecution/requestApproval",
@@ -191,10 +184,8 @@ func TestServerRequestsNeverAnswered(t *testing.T) {
 	}
 	require.ErrorIs(t, conn.Err(), codexcloud.ErrRefreshRequested)
 	require.ErrorIs(t, <-pending, codexcloud.ErrRefreshRequested)
-	// The blocked handler holds up the host's read loop, so a reply the
-	// client sent before closing stays unread until the handler returns and
-	// the host reads the connection to its end.
-	close(release)
+	// The host reads on while thread/list is held, so it records any reply
+	// the client sent before closing.
 	require.Eventually(t, func() bool { return host.OpenConnections() == 0 }, 5*time.Second, 5*time.Millisecond)
 	assert.Equal(t, []string{"initialize", "initialized", "thread/list"}, host.Methods(),
 		"no server request may be answered")
