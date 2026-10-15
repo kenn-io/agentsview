@@ -19,17 +19,30 @@ func mustStart(t *testing.T, s string) time.Time {
 
 func TestAggregateUsageTotalsAndBuckets(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
-	usage := []UsageRow{{
-		SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-		InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
-	}}
-	r, err := Aggregate(p, nil, nil, usage)
+	usage := []UsageRow{
+		{
+			SessionID: "root", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 100, OutputTokens: 5, Cost: money.MustParseDollars("1.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+		{
+			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
+			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+	}
+	sessions := []SessionMeta{{SessionID: "root"}, {SessionID: "child"}}
+	r, err := Aggregate(p, sessions, nil, usage)
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
 	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
 	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
+	require.Len(t, r.BySession, 2)
+	assert.Equal(t, "root", r.BySession[1].SessionID)
+	assert.Equal(t, 500, r.BySession[1].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.BySession[1].Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
