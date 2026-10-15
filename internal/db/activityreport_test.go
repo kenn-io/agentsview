@@ -1296,9 +1296,12 @@ func TestGetActivityReport_HourlyRange(t *testing.T) {
 // TestGetActivityReport_UsageDedupSubSecondOrder checks parsed timestamp
 // ordering and session-ID tie-breaking before source UUID deduplication.
 func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
-	for _, tc := range []struct{ name, firstID, secondID, secondTimestamp string }{
-		{"sub-second order", "earlier", "later", "2026-06-16T10:30:00.123Z"},
-		{"equal instant uses session order", "a-session", "z-session", "2026-06-16T05:30:00-05:00"},
+	for _, tc := range []struct {
+		name, firstID, secondID, secondTimestamp string
+		firstOutput, secondOutput                int
+	}{
+		{"sub-second order", "earlier", "later", "2026-06-16T10:30:00.123Z", 500, 9000},
+		{"equal instant uses session order", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 9000, 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -1319,7 +1322,7 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 				Timestamp:       "2026-06-16T10:30:00Z",
 				Model:           "claude-sonnet-4-20250514",
 				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-				TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput)),
 			})
 			insertSession(t, d, tc.secondID, "proj2", func(s *Session) {
 				s.Agent = "claude"
@@ -1331,7 +1334,7 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 				Timestamp:       tc.secondTimestamp,
 				Model:           "claude-sonnet-4-20250514",
 				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-				TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.secondOutput)),
 			})
 
 			r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
