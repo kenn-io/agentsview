@@ -1273,6 +1273,62 @@ describe("UsageStore session filter params", () => {
     expect(params?.git_branch).toBe("main");
   });
 
+  it("keeps a clicked branch matching the legacy sidebar token for its project", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const legacy = "alpha\u001fmain";
+    const clicked = "pl1:sha256:alpha\u001fmain";
+    sessions.filters.branch = legacy;
+    usage.summary = usageSummaryWithBranch();
+
+    usage.toggleBranch(clicked);
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ git_branch: legacy }),
+    );
+    expect(usage.isBranchSelected(clicked)).toBe(true);
+    usage.cancelInFlightReads();
+
+    // A reload has no usage rows to resolve the key, so the stored
+    // selection must still match the sidebar on the first request.
+    const reloaded = await loadStore();
+    const reloadedSessions = await import("./sessions.svelte.js");
+    reloadedSessions.sessions.filters.branch = legacy;
+    await reloaded.usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ git_branch: legacy }),
+    );
+  });
+
+  it("intersects a stored opaque branch key with the legacy sidebar token for its project", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const selected = "pl1:sha256:alpha\u001fmain";
+    sessions.filters.branch = "alpha\u001fmain";
+    usage.selectedGitBranch = selected;
+    usage.summary = usageSummaryWithBranch();
+
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ git_branch: selected }),
+    );
+  });
+
+  it("does not match a clicked branch to another project's legacy sidebar token", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    sessions.filters.branch = "beta\u001fmain";
+    usage.summary = usageSummaryWithBranch();
+
+    usage.toggleBranch("pl1:sha256:alpha\u001fmain");
+
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ git_branch: "\u001dno_branch_match" }),
+    );
+    usage.cancelInFlightReads();
+  });
+
   it("preserves a legacy branch token when toggled by plain branch name", async () => {
     const { usage } = await loadStore();
     const token = "proj-amain";
@@ -2620,6 +2676,72 @@ describe("UsageStore time-series range selection", () => {
       usage.cancelInFlightReads();
     },
   );
+
+  it("recomputes branch totals for the selected days before the range request finishes", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const branch = (name: string, cost: number) => ({
+      project_key: "pl1:sha256:alpha",
+      project: "alpha",
+      branch: name,
+      inputTokens: cost * 10,
+      outputTokens: cost,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(cost),
+    });
+    const day = (date: string, branchBreakdowns: ReturnType<typeof branch>[]) => ({
+      date,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost: testMoney(0),
+      modelsUsed: [],
+      projectBreakdowns: [],
+      modelBreakdowns: [],
+      agentBreakdowns: [],
+      machineBreakdowns: [],
+      branchBreakdowns,
+    });
+    const context = usageSummary(15);
+    context.daily = [
+      day("2026-06-07", [branch("main", 1)]),
+      day("2026-06-08", [branch("dev", 4), branch("main", 2)]),
+      day("2026-06-09", [branch("dev", 8)]),
+    ];
+    context.branchTotals = [branch("dev", 12), branch("main", 3)];
+    usage.summary = context;
+
+    usage.setTimeRange("2026-06-08", "2026-06-09");
+
+    expect(usage.summary?.branchTotals).toEqual([branch("dev", 12), branch("main", 2)]);
+    usage.cancelInFlightReads();
+  });
+
+  it("loads branch breakdowns for the chart window when Branch is chosen under a brush", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const plainWindow = usageSummary(15);
+    plainWindow.from = "2026-06-04";
+    plainWindow.to = "2026-06-18";
+    const richWindow = { ...usageSummaryWithBranch(), from: "2026-06-04", to: "2026-06-18" };
+    const richRange = { ...usageSummaryWithBranch(), from: "2026-06-07", to: "2026-06-10" };
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (!params.branch_breakdowns)
+        return { ...usageSummary(4), from: params.from, to: params.to };
+      return params.from === "2026-06-04" ? richWindow : richRange;
+    });
+    usage.summary = plainWindow;
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    await vi.waitFor(() => expect(usage.isTimeRangeSummaryProvisional).toBe(false));
+
+    usage.setAttributionGroupBy("branch");
+
+    await vi.waitFor(() => expect(usage.timeSeriesSummary).toEqual(richWindow));
+    expect(usage.summary?.branchTotals).toEqual(richRange.branchTotals);
+    expect(usage.selectedTimeRange).toEqual({ from: "2026-06-07", to: "2026-06-10" });
+  });
 
   it("restores the parent summary when the selected-range request fails", async () => {
     const { usage } = await loadStore();

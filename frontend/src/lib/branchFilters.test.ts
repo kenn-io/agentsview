@@ -23,6 +23,32 @@ describe("branch filter compatibility", () => {
     expect(branchFilterValuesEqual("main", branchFilterToken("proj-a", "main"))).toBe(true);
   });
 
+  it("matches a legacy project label to the opaque key that stands for it", () => {
+    const labels = new Map([
+      ["pl1:sha256:alpha", "alpha"],
+      ["pl1:sha256:beta", "beta"],
+    ]);
+    const lookup = (key: string) => labels.get(key);
+    const legacy = branchFilterToken("alpha", "main");
+
+    expect(
+      branchFilterValuesEqual(legacy, branchFilterToken("pl1:sha256:alpha", "main"), lookup),
+    ).toBe(true);
+    expect(
+      branchFilterValuesEqual(branchFilterToken("pl1:sha256:beta", "main"), legacy, lookup),
+    ).toBe(false);
+    expect(
+      branchFilterValuesEqual(legacy, branchFilterToken("pl1:sha256:unknown", "main"), lookup),
+    ).toBe(false);
+    expect(
+      intersectBranchFilterValues(
+        [branchFilterToken("pl1:sha256:alpha", "main")],
+        [legacy, branchFilterToken("beta", "main")],
+        lookup,
+      ),
+    ).toEqual([branchFilterToken("pl1:sha256:alpha", "main")]);
+  });
+
   it("normalizes legacy picker values and preserves no-branch selections", () => {
     expect(
       branchPickerValues([

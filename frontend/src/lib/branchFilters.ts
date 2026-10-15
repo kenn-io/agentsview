@@ -40,11 +40,34 @@ function branchName(value: string): string {
   return splitBranchFilterToken(value).branch;
 }
 
-export function branchFilterValuesEqual(left: string, right: string): boolean {
-  const leftToken = splitBranchFilterToken(left);
-  const rightToken = splitBranchFilterToken(right);
+// Resolves an opaque project key to the raw project label it stands for.
+export type ProjectLabelLookup = (projectKey: string) => string | undefined;
+
+export function isOpaqueProjectKey(project: string): boolean {
+  return project.startsWith(OPAQUE_PROJECT_KEY_PREFIX);
+}
+
+// Legacy URLs qualify branches by raw project label while usage rows use
+// opaque keys. Each key stands for exactly one label, so a key and a label
+// name the same project only when the key resolves to that label.
+function sameProject(left: string, right: string, projectLabel?: ProjectLabelLookup): boolean {
+  if (!left || !right || left === right) return true;
+  const leftOpaque = isOpaqueProjectKey(left);
+  if (!projectLabel || leftOpaque === isOpaqueProjectKey(right)) return false;
+  return leftOpaque ? projectLabel(left) === right : projectLabel(right) === left;
+}
+
+export function branchFilterValuesEqual(
+  left: string,
+  right: string,
+  projectLabel?: ProjectLabelLookup,
+): boolean {
   if (branchName(left) !== branchName(right)) return false;
-  return !leftToken.project || !rightToken.project || leftToken.project === rightToken.project;
+  return sameProject(
+    splitBranchFilterToken(left).project,
+    splitBranchFilterToken(right).project,
+    projectLabel,
+  );
 }
 
 export function branchPickerValues(values: string[]): string[] {
@@ -56,7 +79,7 @@ export function portableBranchFilterValues(values: string[]): string[] {
     ...new Set(
       values.map((value) => {
         const { project } = splitBranchFilterToken(value);
-        return project.startsWith(OPAQUE_PROJECT_KEY_PREFIX) ? branchFilterValue(value) : value;
+        return isOpaqueProjectKey(project) ? branchFilterValue(value) : value;
       }),
     ),
   ];
@@ -88,21 +111,21 @@ export function scopeBranchFilterValues(values: string[], project: string): stri
   if (!project) return values;
   return values.filter((value) => {
     const decoded = splitBranchFilterToken(value);
-    return (
-      !decoded.project ||
-      decoded.project === project ||
-      decoded.project.startsWith(OPAQUE_PROJECT_KEY_PREFIX)
-    );
+    return !decoded.project || decoded.project === project || isOpaqueProjectKey(decoded.project);
   });
 }
 
-export function intersectBranchFilterValues(left: string[], right: string[]): string[] {
+export function intersectBranchFilterValues(
+  left: string[],
+  right: string[],
+  projectLabel?: ProjectLabelLookup,
+): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
   for (const leftValue of left) {
     const leftToken = splitBranchFilterToken(leftValue);
     for (const rightValue of right) {
-      if (!branchFilterValuesEqual(leftValue, rightValue)) continue;
+      if (!branchFilterValuesEqual(leftValue, rightValue, projectLabel)) continue;
       const value = leftToken.project ? leftValue : rightValue;
       if (!seen.has(value)) {
         seen.add(value);

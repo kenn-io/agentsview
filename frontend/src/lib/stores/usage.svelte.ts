@@ -16,10 +16,13 @@ import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usa
 import {
   BRANCH_LIST_SEP,
   NO_BRANCH_MATCH_TOKEN,
+  branchFilterToken,
   branchFilterValuesEqual,
   intersectBranchFilterValues,
+  isOpaqueProjectKey,
   portableBranchFilterValues,
   scopeBranchFilterValues,
+  splitBranchFilterToken,
 } from "../branchFilters.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
@@ -235,6 +238,7 @@ function summaryForDateRange(
   const projectTotals = new Map<string, UsageSummaryResponse["projectTotals"][number]>();
   const modelTotals = new Map<string, UsageSummaryResponse["modelTotals"][number]>();
   const agentTotals = new Map<string, UsageSummaryResponse["agentTotals"][number]>();
+  const branchTotals = new Map<string, UsageSummaryResponse["branchTotals"][number]>();
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheCreationTokens = 0;
@@ -299,6 +303,28 @@ function summaryForDateRange(
       total.cost.microdollars += item.cost.microdollars;
       agentTotals.set(item.agent, total);
     }
+
+    // Branch totals exist only when the window was fetched with branch
+    // breakdowns, matching how the server folds them from the same days.
+    for (const item of day.branchBreakdowns ?? []) {
+      const key = branchFilterToken(item.project_key, item.branch);
+      const total = branchTotals.get(key) ?? {
+        project_key: item.project_key,
+        project: item.project,
+        branch: item.branch,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: { microdollars: 0 },
+      };
+      total.inputTokens += item.inputTokens;
+      total.outputTokens += item.outputTokens;
+      total.cacheCreationTokens += item.cacheCreationTokens;
+      total.cacheReadTokens += item.cacheReadTokens;
+      total.cost.microdollars += item.cost.microdollars;
+      branchTotals.set(key, total);
+    }
   }
 
   const byCost = <T extends { cost: { microdollars: number } }>(a: T, b: T) =>
@@ -328,6 +354,13 @@ function summaryForDateRange(
     ),
     agentTotals: [...agentTotals.values()].sort(
       (a, b) => byCost(a, b) || a.agent.localeCompare(b.agent),
+    ),
+    branchTotals: [...branchTotals.values()].sort(
+      (a, b) =>
+        byCost(a, b) ||
+        a.project_key.localeCompare(b.project_key) ||
+        a.project.localeCompare(b.project) ||
+        a.branch.localeCompare(b.branch),
     ),
     cacheStats: {
       cacheReadTokens,
@@ -385,6 +418,10 @@ class UsageStore {
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   private summaryHasBranchBreakdowns = $state(false);
+  // The full-window chart summary is fetched separately while a range is
+  // brushed, so it tracks its own branch breakdown availability.
+  private contextHasBranchBreakdowns = false;
+  private branchBreakdownContextVersion = 0;
   private branchBreakdownSummaryVersion = 0;
   private branchBreakdownRequestVersion = 0;
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
@@ -553,6 +590,7 @@ class UsageStore {
     const both = intersectBranchFilterValues(
       local.split(BRANCH_LIST_SEP),
       sidebarBranch.split(BRANCH_LIST_SEP),
+      this.projectLabelForKey,
     );
     return both.length > 0 ? both.join(BRANCH_LIST_SEP) : NO_BRANCH_MATCH_TOKEN;
   }
@@ -627,6 +665,7 @@ class UsageStore {
     if (this.isPinned && this.from === from && this.to === to) return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
     this.isTimeRangeSummaryProvisional = false;
     this.isPinned = true;
     this.from = from;
@@ -644,6 +683,7 @@ class UsageStore {
       return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
     this.isTimeRangeSummaryProvisional = false;
     this.windowDays = days;
     this.isPinned = false;
@@ -669,6 +709,7 @@ class UsageStore {
     }
     if (this.selectedTimeRange === null) {
       this.timeSeriesContextSummary = this.summary;
+      this.contextHasBranchBreakdowns = this.summaryHasBranchBreakdowns;
     }
     this.selectedTimeRange = { from, to };
     if (this.timeSeriesContextSummary) {
@@ -688,13 +729,18 @@ class UsageStore {
   clearTimeRange(refresh = true) {
     if (this.selectedTimeRange === null) return;
     this.selectedTimeRange = null;
-    if (this.timeSeriesContextSummary) {
-      this.summary = this.timeSeriesContextSummary;
-      this.timeSeriesContextSummary = null;
-    }
+    this.restoreTimeSeriesContext();
     if (this.referenceSummary) this.attributionSummary = this.referenceSummary;
     this.isTimeRangeSummaryProvisional = false;
     if (refresh) void this.fetchAll();
+  }
+
+  private restoreTimeSeriesContext(): void {
+    if (!this.timeSeriesContextSummary) return;
+    this.summary = this.timeSeriesContextSummary;
+    this.summaryHasBranchBreakdowns = this.contextHasBranchBreakdowns;
+    this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
   }
 
   setPairwiseSide(side: UsagePairwiseSide, updates: Partial<UsagePairwiseSideSelection>): void {
@@ -838,15 +884,49 @@ class UsageStore {
     });
   }
 
+  // Usage rows know each opaque project key's label, so a key and a legacy
+  // label-qualified filter for the same project compare equal.
+  private projectLabelForKey = (projectKey: string): string | undefined => {
+    for (const summary of [
+      this.summary,
+      this.timeSeriesContextSummary,
+      this.referenceSummary,
+      this.attributionSummary,
+    ]) {
+      const match =
+        summary?.branchTotals.find((total) => total.project_key === projectKey) ??
+        summary?.projectTotals.find((total) => total.project_key === projectKey);
+      if (match) return match.project;
+    }
+    return undefined;
+  };
+
+  // A reload has no usage rows to resolve an opaque key against yet. Storing
+  // the selection in the sidebar's label form keeps it matching the sidebar.
+  private sidebarFormOfBranch(value: string): string {
+    if (!isOpaqueProjectKey(splitBranchFilterToken(value).project)) return value;
+    const sidebar = sessions.filters.branch ? sessions.filters.branch.split(BRANCH_LIST_SEP) : [];
+    return (
+      sidebar.find((token) => {
+        const project = splitBranchFilterToken(token).project;
+        return (
+          project !== "" &&
+          !isOpaqueProjectKey(project) &&
+          branchFilterValuesEqual(token, value, this.projectLabelForKey)
+        );
+      }) ?? value
+    );
+  }
+
   toggleBranch(value: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.selectedGitBranch;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     const current = this.selectedGitBranch ? this.selectedGitBranch.split(BRANCH_LIST_SEP) : [];
-    this.selectedGitBranch = current.some((selected) => branchFilterValuesEqual(selected, value))
-      ? current
-          .filter((selected) => !branchFilterValuesEqual(selected, value))
-          .join(BRANCH_LIST_SEP)
-      : [...current, value].join(BRANCH_LIST_SEP);
+    const matches = (selected: string) =>
+      branchFilterValuesEqual(selected, value, this.projectLabelForKey);
+    this.selectedGitBranch = current.some(matches)
+      ? current.filter((selected) => !matches(selected)).join(BRANCH_LIST_SEP)
+      : [...current, this.sidebarFormOfBranch(value)].join(BRANCH_LIST_SEP);
     if (!options.preserveTimeRange) {
       void this.fetchAll();
       return;
@@ -896,7 +976,7 @@ class UsageStore {
     if (!this.selectedGitBranch) return false;
     return this.selectedGitBranch
       .split(BRANCH_LIST_SEP)
-      .some((selected) => branchFilterValuesEqual(selected, value));
+      .some((selected) => branchFilterValuesEqual(selected, value, this.projectLabelForKey));
   }
 
   selectAllProjects(): void {
@@ -1054,10 +1134,7 @@ class UsageStore {
     const hadSelectedRange = this.selectedTimeRange !== null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
-      if (this.timeSeriesContextSummary) {
-        this.summary = this.timeSeriesContextSummary;
-        this.timeSeriesContextSummary = null;
-      }
+      this.restoreTimeSeriesContext();
       this.isTimeRangeSummaryProvisional = false;
     }
     const fetchVersion = ++this.fetchAllVersion;
@@ -1279,9 +1356,20 @@ class UsageStore {
           );
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
-          this.timeSeriesContextSummary = contextData;
+          const contextHasBranchBreakdowns = contextParams?.branch_breakdowns === true;
+          const preserveRichContext =
+            !contextHasBranchBreakdowns &&
+            this.toggles.attribution.groupBy === "branch" &&
+            this.contextHasBranchBreakdowns &&
+            this.branchBreakdownContextVersion === v &&
+            this.timeSeriesContextSummary !== null;
+          if (!preserveRichContext) {
+            this.timeSeriesContextSummary = contextData;
+            this.contextHasBranchBreakdowns = contextHasBranchBreakdowns;
+          }
         } else if (this.selectedTimeRange === null) {
           this.timeSeriesContextSummary = null;
+          this.contextHasBranchBreakdowns = false;
         }
         this.errors.summary = null;
         const loaded = {
@@ -1355,9 +1443,8 @@ class UsageStore {
           this.timeSeriesContextSummary !== null
         ) {
           this.invalidatePanel("pairwise");
-          this.summary = this.timeSeriesContextSummary;
+          this.restoreTimeSeriesContext();
           this.selectedTimeRange = null;
-          this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
           this.attributionSummary = this.referenceSummary;
@@ -1404,25 +1491,45 @@ class UsageStore {
 
   private async ensureBranchBreakdowns(): Promise<void> {
     const summaryVersion = this.versions.summary;
+    const range = this.selectedTimeRange;
+    const needSummary = !this.summaryHasBranchBreakdowns;
+    // While a range is brushed the chart draws the full-window summary, so it
+    // needs branch breakdowns too or every series falls into Unattributed.
+    const needContext =
+      range !== null && this.timeSeriesContextSummary !== null && !this.contextHasBranchBreakdowns;
     if (
       this.summary === null ||
-      this.summaryHasBranchBreakdowns ||
+      (!needSummary && !needContext) ||
       this.branchBreakdownRequestVersion === summaryVersion
     )
       return;
     this.branchBreakdownRequestVersion = summaryVersion;
     try {
-      const data = await UsageService.getApiV1UsageSummary({
-        ...this.baseParams(),
-        branch_breakdowns: true,
-      });
-      if (this.versions.summary === summaryVersion && this.summary !== null) {
+      const params: UsageParams = { ...this.baseParams(), branch_breakdowns: true };
+      const [data, contextData] = await Promise.all([
+        needSummary ? UsageService.getApiV1UsageSummary(params) : null,
+        needContext
+          ? UsageService.getApiV1UsageSummary({ ...params, from: this.from, to: this.to })
+          : null,
+      ]);
+      if (this.versions.summary !== summaryVersion || this.summary === null) return;
+      if (data !== null) {
         this.summary = {
           ...data,
           comparison: this.summary.comparison,
         };
         this.summaryHasBranchBreakdowns = true;
         this.branchBreakdownSummaryVersion = summaryVersion;
+      }
+      if (
+        contextData !== null &&
+        this.selectedTimeRange?.from === range?.from &&
+        this.selectedTimeRange?.to === range?.to &&
+        this.timeSeriesContextSummary !== null
+      ) {
+        this.timeSeriesContextSummary = contextData;
+        this.contextHasBranchBreakdowns = true;
+        this.branchBreakdownContextVersion = summaryVersion;
       }
     } catch (e) {
       if (this.versions.summary === summaryVersion) {
