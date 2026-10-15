@@ -580,12 +580,24 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 // HermesRootResolvesToStateDB reports whether a configured Hermes/Augure
 // Desktop root resolves to a real state.db home, the same way discovery
 // does: the root itself can be the state.db file, a directory containing
-// it, or a not-yet-created "sessions" directory whose sibling state.db
-// already exists. A flat os.Stat on the configured root alone (true for
-// only the first two cases) misses that third, entirely normal layout.
+// it, a not-yet-created "sessions" directory whose sibling state.db
+// already exists, or a profiles container (.hermes/profiles) that expands
+// to at least one child home resolving to a state.db. A flat os.Stat on
+// the configured root alone misses all but the simplest of these cases.
 func HermesRootResolvesToStateDB(root string) bool {
-	_, _, ok := hermesStatePaths(root)
-	return ok
+	if _, _, ok := hermesStatePaths(root); ok {
+		return true
+	}
+	if !isHermesProfilesContainer(root) {
+		return false
+	}
+	profileRoots, _ := hermesProfileArchiveRoots(root)
+	for _, profileRoot := range profileRoots {
+		if _, _, ok := hermesStatePaths(profileRoot); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
