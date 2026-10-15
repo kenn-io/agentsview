@@ -118,12 +118,14 @@ func PairToolResultEventSummariesContext(
 
 // SummarizeToolResultEventsContext returns the latest content per agent
 // while preserving first-seen agent order and the last anonymous update, and
-// the length that content drives. When no event has real text but one is
-// withheld by content policy (empty Content, nonzero ContentLength), that
-// withheld event drives the length instead, so a call whose text an archive
-// policy blanks still reports the length the archive restored for it. This
-// is the one place that decides which event drives a call's summary and
-// length; callers never derive either independently.
+// the length that content drives. The chronologically last event always
+// decides: when it has real text, the per-agent/anonymous logic below picks
+// the summary as usual; when it is withheld by content policy (empty
+// Content, a kept ContentLength), the summary is blank and its length is
+// that event's ContentLength, even if an earlier event had real text — a
+// later, withheld correction must never fall back to stale earlier text.
+// This is the one place that decides which event drives a call's summary
+// and length; callers never derive either independently.
 func SummarizeToolResultEventsContext(
 	ctx context.Context, events []db.ToolResultEvent,
 ) (string, int, error) {
@@ -137,15 +139,11 @@ func SummarizeToolResultEventsContext(
 	orderedAgents := make([]string, 0, len(events))
 	lastAnonymous := ""
 	allHaveAgentID := true
-	withheldLength := 0
 	for _, event := range events {
 		if err := ctx.Err(); err != nil {
 			return "", 0, err
 		}
 		if strings.TrimSpace(event.Content) == "" {
-			if event.ContentLength > 0 {
-				withheldLength = event.ContentLength
-			}
 			continue
 		}
 		agentID := strings.TrimSpace(event.AgentID)
@@ -158,6 +156,9 @@ func SummarizeToolResultEventsContext(
 			orderedAgents = append(orderedAgents, agentID)
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
+	}
+	if last := events[len(events)-1]; strings.TrimSpace(last.Content) == "" {
+		return "", last.ContentLength, ctx.Err()
 	}
 	summary := ""
 	switch {
@@ -178,5 +179,5 @@ func SummarizeToolResultEventsContext(
 		}
 		summary = strings.Join(parts, "\n\n")
 	}
-	return summary, db.ResolveResultContentLength(summary, withheldLength), ctx.Err()
+	return summary, len(summary), ctx.Err()
 }
