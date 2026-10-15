@@ -238,11 +238,11 @@ func TestFailingHistoryKeepsTheRootsChangeTime(t *testing.T) {
 
 	env.run(t)
 	require.Contains(t, env.account(t).Retry, "a")
-	require.Equal(t, listed, env.account(t).UsagePending["a"].LastChange)
+	require.WithinDuration(t, listed, env.account(t).UsagePending["a"].LastChange, 0)
 	for range 4 {
 		env.clock.Advance(time.Hour)
 		env.run(t)
-		assert.Equal(t, listed, env.account(t).UsagePending["a"].LastChange, "a failed retry is not a change")
+		assert.WithinDuration(t, listed, env.account(t).UsagePending["a"].LastChange, 0, "a failed retry is not a change")
 	}
 
 	env.clock.Set(listed.Add(settleAfter + 30*time.Minute))
@@ -254,7 +254,7 @@ func TestFailingHistoryKeepsTheRootsChangeTime(t *testing.T) {
 	relisted := env.clock.Now().Add(-time.Minute).Truncate(time.Second)
 	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.UpdatedAt = relisted.Unix() })
 	env.run(t)
-	assert.Equal(t, relisted, env.account(t).UsagePending["a"].LastChange, "a newer listing time marks the root again")
+	assert.WithinDuration(t, relisted, env.account(t).UsagePending["a"].LastChange, 0, "a newer listing time marks the root again")
 }
 
 // TestLostAccountStateRestoresRefreshRoots covers a root whose newest
