@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,8 @@ func matrixSQL(d filterMatrixDialect, sql string, offset int) string {
 	}
 	return sql
 }
+
+var matrixSQLToken = regexp.MustCompile(`'(?:[^']|'')*'|"(?:[^"]|"")*"|\bs\.[a-z_][a-z_0-9]*\b`)
 
 func TestFilterMatrixAnalytics(t *testing.T) {
 	for _, d := range filterMatrixDialects {
@@ -74,7 +77,9 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 						got := BuildAnalyticsWhere(c.f, b, prefix, "", nil)
 						want := c.sql
 						if prefix == "" {
-							want = strings.ReplaceAll(want, "s.", "")
+							want = matrixSQLToken.ReplaceAllStringFunc(want, func(token string) string {
+								return strings.TrimPrefix(token, "s.")
+							})
 						}
 						assert.Equal(t, matrixSQL(d, want, 2), got, "prefix %q", prefix)
 						assert.Equal(t, c.args, b.Args())

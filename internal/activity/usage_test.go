@@ -259,4 +259,7 @@ func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
 	r := Report{Buckets: make([]Bucket, len(windows))}
 	applyUsage(&r, p, windows, start, end, usage, nil)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 }

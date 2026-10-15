@@ -104,16 +104,15 @@ func TestBuildReportArtifacts(t *testing.T) {
 			)
 			require.NoError(t, err)
 			assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
-			if !withProgress {
-				return
+			if withProgress {
+				assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
+				assert.Equal(t, []Progress{
+					{Phase: ProgressScanningActivity, SessionsTotal: 1},
+					{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
+					{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+					{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+				}, progress)
 			}
-			assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
-			assert.Equal(t, []Progress{
-				{Phase: ProgressScanningActivity, SessionsTotal: 1},
-				{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
-				{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-				{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-			}, progress)
 			assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
 			assert.Same(t, backend.pricing, artifacts.Report.Pricing)
 			assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
