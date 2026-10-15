@@ -39,6 +39,7 @@
   } from "../../search/session-scope.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
+  let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
   let destroyed = false;
@@ -375,6 +376,7 @@
 
   function handleScroll() {
     if (!containerRef) return;
+    containerScrollTop = containerRef.scrollTop;
     if (scrollRaf !== null) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
@@ -501,15 +503,6 @@
       messages.sessionId === sessionId && sessions.activeSessionId === sessionId;
   }
 
-  // Staged jumps own TanStack reconciliation before ordinalJump is installed.
-  $effect(() => {
-    const sessionId = messages.sessionId;
-    const activeSessionId = sessions.activeSessionId;
-    void sessionId;
-    void activeSessionId;
-    return () => endScrollOwnership();
-  });
-
   function scrollToDisplayIndex(
     getIndex: () => number,
     waitFrames = 0,
@@ -538,11 +531,13 @@
     return ui.sortNewestFirst ? displayItemsAsc.length - 1 - ascIndex : ascIndex;
   }
 
+  // Updating until must re-arm the expiry timer, so this object uses deep reactive state.
   let ordinalJump: {
     reqId: number;
     ordinal: number;
     sessionId: string | null;
     until: number;
+    offset?: number;
     sawLoadingOlder: boolean;
     targetHolds: () => boolean;
   } | null = $state(null);
@@ -562,6 +557,8 @@
   $effect(() => {
     const jump = ordinalJump;
     if (!jump) return;
+    // TanStack may not notify when scrolling stays within the same visible rows.
+    void containerScrollTop;
     const items = displayItemsAsc;
     const loadingOlder = messages.loadingOlder;
     const instance = virtualizer.instance;
@@ -585,9 +582,16 @@
     if (!instance) return;
     // getOffsetForIndex initializes scrollOffset through TanStack's private getter.
     const offset = instance.getOffsetForIndex(index, "start")?.[0];
-    if (offset !== undefined && Math.abs(offset - (instance.scrollOffset ?? 0)) > 1) {
-      instance.scrollToIndex(index, { align: "start" });
+    if (offset === undefined) return;
+    const previousOffset = untrack(() => jump.offset);
+    jump.offset = offset;
+    if (Math.abs(offset - (instance.scrollOffset ?? 0)) <= 1) return;
+    if (previousOffset === offset) {
+      // The viewport moved without a layout change, including focus and browser-find scrolling.
+      endScrollOwnership(jump.reqId);
+      return;
     }
+    instance.scrollToIndex(index, { align: "start" });
   });
 
   function endScrollOwnership(reqId = lastScrollRequest): number {

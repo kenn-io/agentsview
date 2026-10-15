@@ -81,6 +81,7 @@ vi.mock("@tanstack/virtual-core", async (importOriginal) => {
       constructor(options: VirtualizerOptions<HTMLElement, HTMLElement>) {
         super(options);
         if (virtualizerMock.real) {
+          // Let the component own the same real instance whose scroll element the test observes.
           virtualizerMock.real.setOptions(options);
           return virtualizerMock.real;
         }
@@ -266,6 +267,43 @@ describe("MessageList follow cancellation", () => {
     },
   );
 
+  it.each([125, 450])(
+    "ends the hold when scrolling to %s without a preceding input event",
+    async (offset) => {
+      const { flushFrames } = controlFrames();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      ui.followLatest = false;
+      messages.hasOlder = false;
+      messages.messages = Array.from({ length: 10 }, (_, index) => makeMessage(index));
+      const { instance, element, measureRow } = realJumpScroll();
+      component = mount(MessageList, { target: document.body });
+      await flushScrollUpdates();
+      // The fixture owns geometry; forward its scrolling to the component's real event handler.
+      const container = document.querySelector<HTMLElement>(".message-list-scroll")!;
+      Object.defineProperty(container, "scrollTop", { get: () => element.scrollTop });
+      element.addEventListener("scroll", () => container.dispatchEvent(new Event("scroll")));
+      component.scrollToOrdinal(1);
+      flushFrames();
+      await flushScrollUpdates();
+      flushFrames();
+      await flushScrollUpdates();
+      expect(element.scrollTop).toBe(120);
+
+      element.scrollTop = offset;
+      await flushScrollUpdates();
+      flushFrames();
+      expect(element.scrollTop).toBe(offset);
+
+      // Isolate the expired hold from TanStack's normal compensation for row growth.
+      instance.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      measureRow(0, 300);
+      instance.getVirtualItems();
+      await flushScrollUpdates();
+      flushFrames();
+      expect(element.scrollTop).toBe(offset);
+    },
+  );
+
   it("cancels reconciliation when the jump expires between newest-first appends", async () => {
     const { flushFrames } = controlFrames();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -431,15 +469,69 @@ describe("MessageList follow cancellation", () => {
     scrollToOrdinal: (ordinal: number, call?: ScrollCall) => void;
   };
 
+  it("cancels a queued jump before the first frame of a new session", async () => {
+    const { frames, flushFrames } = controlFrames();
+    ui.followLatest = false;
+    messages.messages = Array.from({ length: 40 }, (_, index) => makeMessage(index));
+    const { instance, element, measureRow } = realJumpScroll();
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(instance.getVirtualItems().some((item) => item.index === 30)).toBe(false);
+    ui.selectedOrdinal = 30;
+    component.scrollToOrdinal(30);
+    expect(element.scrollTop).toBeGreaterThan(0);
+    expect(frames.size).toBeGreaterThan(0);
+
+    sessions.activeSessionId = "s2";
+    messages.sessionId = "s2";
+    messages.messages = Array.from({ length: 40 }, (_, index) => ({
+      ...makeMessage(index),
+      session_id: "s2",
+    }));
+    await flushScrollUpdates();
+    expect(element.scrollTop).toBe(0);
+    expect(instance.options.getItemKey(30)).toBe("s2-m-30");
+    measureRow(0, 300);
+    instance.getVirtualItems();
+    flushFrames();
+    // Check before the staged jump's promise resumes and can cancel itself.
+    expect(element.scrollTop).toBe(0);
+    await flushScrollUpdates();
+    flushFrames();
+    expect(element.scrollTop).toBe(0);
+    expect(ui.selectedOrdinal).toBe(30);
+  });
+
+  it("keeps following latest when the previous tool target is rewritten", async () => {
+    const { flushFrames } = controlFrames();
+    ui.followLatest = false;
+    messages.messages = [makeMessage(10), withCall(makeMessage(11), "grep-call"), makeMessage(12)];
+    const { instance, element, measureRow } = realJumpScroll();
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    component.scrollToOrdinal(11, { index: 0, toolUseId: "grep-call" });
+    await flushScrollUpdates();
+    expect(element.scrollTop).toBe(100);
+
+    component.scrollToLatest();
+    messages.messages = [makeMessage(10), withCall(makeMessage(11), "other-call"), makeMessage(12)];
+    await flushScrollUpdates();
+    measureRow(0, 300);
+    instance.getVirtualItems();
+    await flushScrollUpdates();
+    flushFrames();
+    await flushScrollUpdates();
+    flushFrames();
+
+    expect(element.scrollTop).toBe(400);
+  });
+
   it.each([
     "tool rewrite",
-    "session change",
     "manual scroll",
     "new ordinal request",
-    "repeat ordinal request",
     "tool rewrite with newer selection",
     "tool rewrite between estimate frames",
-    "tool rewrite after scrollToLatest",
   ])("cancels a queued jump after a %s", async (change) => {
     const { frames, flushFrames } = controlFrames();
     // Advance the staged wait while leaving TanStack's earlier reconciliation queued.
@@ -449,16 +541,7 @@ describe("MessageList follow cancellation", () => {
       callback(0);
     };
     ui.followLatest = false;
-    const sessionChange = change === "session change";
-    const latestRequest = change === "tool rewrite after scrollToLatest";
-    const ordinal = sessionChange ? 30 : 11;
-    messages.messages = sessionChange
-      ? Array.from({ length: 40 }, (_, index) => makeMessage(index))
-      : [
-          makeMessage(10),
-          withCall(makeMessage(11), "grep-call"),
-          ...(latestRequest ? [makeMessage(12)] : []),
-        ];
+    messages.messages = [makeMessage(10), withCall(makeMessage(11), "grep-call")];
     const { instance, element, measureRow } = realJumpScroll();
     component = mount(MessageList, { target: document.body });
     await flushScrollUpdates();
@@ -467,24 +550,10 @@ describe("MessageList follow cancellation", () => {
       instance.setOptions({ ...instance.options, overscan: 0 });
       expect(instance.getVirtualItems().some((item) => item.index === 1)).toBe(false);
     }
-    if (sessionChange) {
-      expect(instance.getVirtualItems().some((item) => item.index === ordinal)).toBe(false);
-      measureRow(0, 300);
-      await flushScrollUpdates();
-      expect(instance.getOffsetForIndex(1, "start")?.[0]).toBe(300);
-    }
-    ui.selectedOrdinal = ordinal;
-    (component as JumpList).scrollToOrdinal(
-      ordinal,
-      sessionChange ? undefined : { index: 0, toolUseId: "grep-call" },
-    );
+    ui.selectedOrdinal = 11;
+    component.scrollToOrdinal(11, { index: 0, toolUseId: "grep-call" });
     await flushScrollUpdates();
-    if (sessionChange) {
-      expect(element.scrollTop).toBeGreaterThan(0);
-      expect(frames.size).toBeGreaterThan(0);
-    } else {
-      expect(element.scrollTop).toBe(change === "tool rewrite between estimate frames" ? 120 : 100);
-    }
+    expect(element.scrollTop).toBe(change === "tool rewrite between estimate frames" ? 120 : 100);
 
     if (change === "tool rewrite between estimate frames") {
       flushEstimateFrame();
@@ -493,27 +562,8 @@ describe("MessageList follow cancellation", () => {
     const loaded = deferred<void>();
     if (change.startsWith("tool rewrite")) {
       if (change === "tool rewrite with newer selection") ui.selectedOrdinal = 10;
-      if (latestRequest) component.scrollToLatest();
-      messages.messages = [
-        makeMessage(10),
-        withCall(makeMessage(11), "other-call"),
-        ...(latestRequest ? [makeMessage(12)] : []),
-      ];
-    } else if (change === "session change") {
-      sessions.activeSessionId = "s2";
-      messages.sessionId = "s2";
-      messages.messages = Array.from({ length: 40 }, (_, index) => ({
-        ...makeMessage(index),
-        session_id: "s2",
-      }));
+      messages.messages = [makeMessage(10), withCall(makeMessage(11), "other-call")];
     } else if (change === "manual scroll") {
-      document
-        .querySelector<HTMLElement>(".message-list-scroll")!
-        .dispatchEvent(new Event("wheel"));
-    } else if (change === "repeat ordinal request") {
-      component.scrollToOrdinal(11, { index: 0, toolUseId: "grep-call" });
-      expect(ui.selectedOrdinal).toBe(11);
-      await flushScrollUpdates();
       document
         .querySelector<HTMLElement>(".message-list-scroll")!
         .dispatchEvent(new Event("wheel"));
@@ -528,15 +578,7 @@ describe("MessageList follow cancellation", () => {
       await flushScrollUpdates();
     }
     // At the top, default size anchoring cannot mask a stale index reconcile.
-    if (sessionChange) {
-      expect(element.scrollTop).toBe(0);
-      expect(instance.options.getItemKey(ordinal)).toBe("s2-m-30");
-      measureRow(0, 100);
-      instance.getVirtualItems();
-      expect(instance.getOffsetForIndex(1, "start")?.[0]).toBe(100);
-    } else if (!latestRequest) {
-      instance.options.scrollToFn(0, {}, instance);
-    }
+    instance.options.scrollToFn(0, {}, instance);
     measureRow(0, 300);
     instance.getVirtualItems();
     await flushScrollUpdates();
@@ -544,12 +586,14 @@ describe("MessageList follow cancellation", () => {
     await flushScrollUpdates();
     flushFrames();
 
-    expect(element.scrollTop).toBe(latestRequest ? 400 : 0);
-    if (change.startsWith("tool rewrite") && !latestRequest) {
-      expect(ui.selectedOrdinal).toBe(change === "tool rewrite with newer selection" ? 10 : null);
-    } else if (!latestRequest) {
-      expect(ui.selectedOrdinal).toBe(ordinal);
-    }
+    expect(element.scrollTop).toBe(0);
+    expect(ui.selectedOrdinal).toBe(
+      change.startsWith("tool rewrite")
+        ? change === "tool rewrite with newer selection"
+          ? 10
+          : null
+        : 11,
+    );
     loaded.resolve();
     await flushScrollUpdates();
     flushFrames();

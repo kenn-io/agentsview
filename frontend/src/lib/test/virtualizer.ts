@@ -1,8 +1,8 @@
-// kit-ui-check-ignore: test fixture drives the real TanStack core that the local wrapper uses.
 import {
   observeElementOffset,
   type Virtualizer,
   type VirtualizerOptions,
+  // kit-ui-check-ignore: test fixture drives the real TanStack core that the local wrapper uses.
 } from "@tanstack/virtual-core";
 
 export function realVirtualizer(
