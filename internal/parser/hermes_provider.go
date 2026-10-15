@@ -698,8 +698,8 @@ func (s hermesSourceSet) discoverTranscriptEach(
 	ctx context.Context, root, sessionsDir, stateDB string,
 	yield func(SourceRef) error,
 ) error {
-	// One read-only connection and prepared statement serve every membership
-	// check in the pass; opening state.db per transcript file would scale
+	// One read-only connection serves every membership check in the
+	// pass; opening state.db per transcript file would scale
 	// reconciliation work with archive size instead of the changed batch.
 	// Opened lazily so transcript-free directories cost nothing.
 	var membership *hermesStateMembership
