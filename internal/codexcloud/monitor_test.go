@@ -633,8 +633,9 @@ func TestCompactedRecordsParseToTheSameUsage(t *testing.T) {
 	require.Equal(t, 900, wantPeak)
 
 	compacted := compactPending(slices.Clone(tokens))
-	// gpt-b 500 is dropped: 600 has the same context and covers its tokens.
-	assert.Len(t, compacted, len(tokens)-1)
+	// Nothing is dropped: gpt-b 500 is the record before its run's peak, kept so
+	// the peak stays priced as one call.
+	assert.Len(t, compacted, len(tokens))
 	gotTokens, gotPeak := parse(compacted)
 
 	assert.Equal(t, wantTokens, gotTokens)
