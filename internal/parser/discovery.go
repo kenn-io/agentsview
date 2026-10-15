@@ -800,8 +800,8 @@ func CodexSessionUUIDFromFilename(name string) string {
 // so the file name sits inside the escaped last segment.
 func CodexSessionUUIDFromPath(path string) string {
 	if rest, ok := strings.CutPrefix(path, "archive://"); ok {
-		if i := strings.LastIndex(rest, "/"); i >= 0 {
-			if unescaped, err := url.PathUnescape(rest[i+1:]); err == nil {
+		if _, after, found := strings.CutLast(rest, "/"); found {
+			if unescaped, err := url.PathUnescape(after); err == nil {
 				path = unescaped
 			}
 		}
