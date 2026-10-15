@@ -337,7 +337,7 @@ func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
 	require.Equal(t, export.CostSourceMixed, got.CostSource)
 }
 
-func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
+func TestGetSessionUsageRollupOmitsCostForSubagentWithoutUsageRows(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},

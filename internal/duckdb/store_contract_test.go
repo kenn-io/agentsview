@@ -181,6 +181,7 @@ func TestDuckDBStoreContract(t *testing.T) {
 		{"sessions_cursors_and_metadata", duckContractSessionsCursorsAndMetadata},
 		{"messages_search_and_secrets", duckContractMessagesSearchAndSecrets},
 		{"starred_and_pinned_reads", duckContractStarredAndPinnedReads},
+		{"local_only_methods_read_only", duckContractLocalOnlyMethodsReadOnly},
 		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
 		{"data_inventory_rules_candidates", duckContractDataInventoryRulesCandidates},
 	}
@@ -1032,4 +1033,33 @@ func duckContentSessionIDs(matches []db.ContentMatch) []string {
 		ids[i] = match.SessionID
 	}
 	return ids
+}
+
+func duckContractLocalOnlyMethodsReadOnly(
+	t *testing.T, store *Store, fixture syncFixture,
+) {
+	t.Helper()
+	require.True(t, store.ReadOnly())
+	name := "ignored"
+	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
+	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
+	_, err := store.RestoreSession(t.Context(), fixture.alphaID)
+	requireReadOnlyDuck(t, err)
+	_, err = store.DeleteSessionIfTrashed(t.Context(), fixture.alphaID)
+	requireReadOnlyDuck(t, err)
+	_, err = store.EmptyTrash(t.Context())
+	requireReadOnlyDuck(t, err)
+	_, err = store.InsertInsight(t.Context(), db.Insight{})
+	requireReadOnlyDuck(t, err)
+	requireReadOnlyDuck(t, store.DeleteInsight(t.Context(), 1))
+	_, err = store.RecordRecallQueryEvent(t.Context(), db.RecallQueryEvent{
+		Surface: db.RecallQuerySurfaceQuery,
+	})
+	requireReadOnlyDuck(t, err)
+}
+
+func requireReadOnlyDuck(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }

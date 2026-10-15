@@ -236,6 +236,28 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotNil(t, projectPins[0].Content)
 		assert.Equal(t, "alpha first", *projectPins[0].Content)
 	})
+
+	t.Run("writes_are_read_only", func(t *testing.T) {
+		ok, err := store.StarSession(t.Context(), fixtureBetaID)
+		require.ErrorIs(t, err, db.ErrReadOnly)
+		assert.False(t, ok)
+		require.ErrorIs(t, store.UnstarSession(t.Context(), fixtureAlphaID), db.ErrReadOnly)
+		require.ErrorIs(t, store.BulkStarSessions(t.Context(), []string{fixtureBetaID}), db.ErrReadOnly)
+		pinID, err := store.PinMessage(t.Context(), fixtureAlphaID, 1, nil)
+		require.ErrorIs(t, err, db.ErrReadOnly)
+		assert.Zero(t, pinID)
+		require.ErrorIs(t, store.UnpinMessage(t.Context(), fixtureAlphaID, 1), db.ErrReadOnly)
+		require.ErrorIs(t, store.RenameSession(t.Context(), fixtureAlphaID, nil), db.ErrReadOnly)
+		require.ErrorIs(t, store.SoftDeleteSession(t.Context(), fixtureAlphaID), db.ErrReadOnly)
+		_, err = store.RestoreSession(t.Context(), fixtureAlphaID)
+		require.ErrorIs(t, err, db.ErrReadOnly)
+		_, err = store.DeleteSessionIfTrashed(t.Context(), fixtureAlphaID)
+		require.ErrorIs(t, err, db.ErrReadOnly)
+		_, err = store.EmptyTrash(t.Context())
+		require.ErrorIs(t, err, db.ErrReadOnly)
+		_, err = store.InsertInsight(t.Context(), db.Insight{})
+		require.ErrorIs(t, err, db.ErrReadOnly)
+	})
 }
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
