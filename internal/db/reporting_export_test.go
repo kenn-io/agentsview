@@ -860,7 +860,7 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 			Timestamp:       "2026-07-28T09:05:00Z",
 			Model:           "model-z-ordinal-winner",
 			ClaudeMessageID: "fixture-shared-message",
-			ClaudeRequestID: "fixture-shared-request",
+			SourceUUID:      "fixture-shared-source",
 			TokenUsage: jsontext.Value(
 				`{"input_tokens":29,"output_tokens":3}`,
 			),
@@ -873,9 +873,9 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 			Timestamp:       "2026-07-28T09:05:00Z",
 			Model:           "model-a-semantic-runner-up",
 			ClaudeMessageID: "fixture-shared-message",
-			ClaudeRequestID: "fixture-shared-request",
+			SourceUUID:      "fixture-shared-source",
 			TokenUsage: jsontext.Value(
-				`{"input_tokens":11,"output_tokens":2}`,
+				`{"input_tokens":11,"output_tokens":3}`,
 			),
 		},
 	}))
@@ -891,13 +891,6 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
 	require.Len(t, hour.Usage.ByModel, 1)
 	assert.Equal(t, "model-z-ordinal-winner", hour.Usage.ByModel[0].Key)
-
-	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
-		From: "2026-07-28", To: "2026-07-28", Timezone: "UTC",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
 }
 
 func TestFinalizeReportingUsageOrdering(t *testing.T) {

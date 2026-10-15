@@ -777,10 +777,10 @@ func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T
 		ts:      instant,
 		validTS: true,
 	}
-	sessionOrder := map[string]int{"a-parent": 0, "z-child": 1}
+	sessionOrder := map[string]int{"z-child": 0, "a-parent": 1}
 
-	assert.True(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
-	assert.False(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
+	assert.False(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
+	assert.True(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
 }
 
 func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
