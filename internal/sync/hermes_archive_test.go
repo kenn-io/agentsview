@@ -1349,6 +1349,47 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 	}
 }
 
+// TestHermesFingerprintSeedingDoesNotParseSiblingTranscripts proves
+// fingerprint-cache seeding detects an unchanged sibling by hashing its
+// transcript's bytes, not by fully decoding it the way a real Parse does.
+// Before this, seeding called chooseHermesStateSessionSource (a full
+// JSON/JSONL decode) on every member just to pick a selected path for
+// stat purposes, so an unchanged full sync still paid parse cost that
+// scaled with archive size instead of staying flat.
+func TestHermesFingerprintSeedingDoesNotParseSiblingTranscripts(t *testing.T) {
+	for _, members := range []int{2, 30} {
+		t.Run(strconv.Itoa(members), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			for i := range members {
+				id := fmt.Sprintf("member-%03d", i)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
+					(id, source, model, started_at, ended_at, message_count)
+					VALUES (?, 'cli', 'model', 1778767200, 1778767800, 1)`, id)
+				require.NoError(t, err)
+				writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), id)
+			}
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+			before := parser.HermesTranscriptParses()
+			stats := engine.SyncAll(t.Context(), nil)
+			assert.Zero(t, stats.Synced, "an unchanged full sync must not resync any sibling")
+			assert.Zero(t, stats.Failed)
+			after := parser.HermesTranscriptParses()
+			assert.Zero(t, after-before,
+				"fingerprint-cache seeding must not decode any sibling transcript on an unchanged full sync")
+		})
+	}
+}
+
 // TestHermesFingerprintCacheRootEligibility proves
 // providerFingerprintCacheRootEligible/withProviderFingerprintCache decide
 // whether to attach the batch fingerprint cache correctly across every root
@@ -1372,6 +1413,7 @@ func TestHermesFingerprintCacheRootEligibility(t *testing.T) {
 		{
 			name: "existing root",
 			buildRoots: func(t *testing.T) (string, string) {
+				t.Helper()
 				root := t.TempDir()
 				return root, root
 			},
@@ -1380,6 +1422,7 @@ func TestHermesFingerprintCacheRootEligibility(t *testing.T) {
 		{
 			name: "missing root",
 			buildRoots: func(t *testing.T) (string, string) {
+				t.Helper()
 				return t.TempDir(), filepath.Join(t.TempDir(), "missing")
 			},
 			wantBoundedOpens: false,
@@ -1387,6 +1430,7 @@ func TestHermesFingerprintCacheRootEligibility(t *testing.T) {
 		{
 			name: "sessions dir not yet created",
 			buildRoots: func(t *testing.T) (string, string) {
+				t.Helper()
 				root := t.TempDir()
 				return root, filepath.Join(root, "sessions")
 			},
@@ -1395,6 +1439,7 @@ func TestHermesFingerprintCacheRootEligibility(t *testing.T) {
 		{
 			name: "profiles container",
 			buildRoots: func(t *testing.T) (string, string) {
+				t.Helper()
 				profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
 				profileRoot := filepath.Join(profilesRoot, "research")
 				require.NoError(t, os.MkdirAll(profileRoot, 0o755))
@@ -1546,6 +1591,72 @@ func TestHermesSingleSessionRefreshDoesNotUnmigrateLegacySibling(t *testing.T) {
 			assert.Equal(t, parser.VirtualSourcePath(stateDB, "sibling"),
 				database.GetSessionFilePath(t.Context(), siblingID),
 				"refreshing an unrelated legacy session must not undo a sibling's migration")
+		})
+	}
+}
+
+// TestHermesSingleSessionRefreshOfDeletedLegacySessionIsNoOp proves the
+// Hermes/Augure Desktop carve-out in Engine.FindSourceFile: when a legacy
+// session's refresh resolves to not-found (its state.db row AND its
+// transcript are both genuinely gone, not just migrated to its own
+// per-session path), FindSourceFile must trust that authoritative
+// not-found instead of falling back to the stored bare state.db path --
+// that fallback is exactly the whole-archive-reparse harm
+// TestHermesSingleSessionRefreshDoesNotUnmigrateLegacySibling fixed for the
+// migrated case, reached through a different caller.
+func TestHermesSingleSessionRefreshOfDeletedLegacySessionIsNoOp(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			execHermesState(t, stateDB, `INSERT INTO sessions
+				(id, source, model, started_at, ended_at, message_count)
+				VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+			execHermesState(t, stateDB, `INSERT INTO messages
+				(session_id, role, content, timestamp)
+				VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			// Seed both sessions the pre-PR way: FilePath stamped as the
+			// bare state.db path for every session.
+			legacy := engine.processFile(t.Context(), parser.DiscoveredFile{Path: stateDB, Agent: agent})
+			require.NoError(t, legacy.err)
+			require.Len(t, legacy.results, 2)
+			writes := make([]pendingWrite, len(legacy.results))
+			for i, result := range legacy.results {
+				writes[i] = pendingWrite{sess: result.Session, msgs: result.Messages, usageEvents: result.UsageEvents}
+			}
+			written, _, failed, _ := engine.writeBatch(writes, syncWriteDefault, true)
+			require.Equal(t, len(legacy.results), written)
+			require.Zero(t, failed)
+			childID := string(agent) + ":child"
+			siblingID := string(agent) + ":sibling"
+
+			// Migrate the sibling to its own per-session path.
+			writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "sibling")
+			require.NoError(t, engine.syncPathsContext(
+				t.Context(), []string{filepath.Join(root, "sessions", "sibling.jsonl")}, false,
+			))
+			siblingBefore, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			require.Equal(t, parser.VirtualSourcePath(stateDB, "sibling"), *siblingBefore.FilePath)
+
+			// "child" is now genuinely gone: its row is removed and it
+			// never had a transcript file.
+			execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
+
+			err = engine.SyncSingleSessionContext(t.Context(), childID)
+			assert.Error(t, err, "refreshing a session with no row and no transcript must not succeed")
+
+			siblingAfter, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			assert.Equal(t, siblingBefore, siblingAfter,
+				"a deleted legacy session's failed refresh must not touch an unrelated migrated sibling")
 		})
 	}
 }

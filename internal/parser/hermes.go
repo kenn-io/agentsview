@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -178,8 +179,19 @@ func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSes
 	return parseHermesJSONLSession(path, project, machine)
 }
 
+// hermesTranscriptParses counts full decodes of a Hermes transcript file
+// (JSON or JSONL), the expensive step fingerprinting must not pay for a
+// sibling it hasn't confirmed changed. HermesTranscriptParses exposes it so
+// tests can assert that count stays flat as sibling count grows.
+var hermesTranscriptParses atomic.Int64
+
+// HermesTranscriptParses returns how many Hermes transcript files have
+// been fully decoded (JSON or JSONL) since process start.
+func HermesTranscriptParses() int64 { return hermesTranscriptParses.Load() }
+
 // parseHermesJSONLSession parses a Hermes Agent JSONL session file.
 func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+	hermesTranscriptParses.Add(1)
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -388,6 +400,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 
 // parseHermesJSONSession parses a Hermes CLI-format JSON session file.
 func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+	hermesTranscriptParses.Add(1)
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -598,6 +611,23 @@ func HermesRootResolvesToStateDB(root string) bool {
 		}
 	}
 	return false
+}
+
+// HermesStoredPathIsAggregateArchive reports whether path is the bare
+// state.db archive path rather than a per-session "state.db#<id>" member
+// path or a standalone transcript file. A session synced before the
+// per-session rework has its stored FilePath stamped as this bare path,
+// since the old whole-archive write stamped it for every session alike.
+// A caller resolving one specific session must not treat that stamp as a
+// match for the session it's asking about.
+func HermesStoredPathIsAggregateArchive(path string) bool {
+	if path == "" {
+		return false
+	}
+	if _, _, ok := ParseVirtualSourcePath(path); ok {
+		return false
+	}
+	return filepath.Base(path) == "state.db"
 }
 
 func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
@@ -927,6 +957,48 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 		"",
 	)
 	return ss, messages, selectedPath, nil
+}
+
+// readHermesStateSessionFingerprintInputs reads a member's DB-side session
+// and messages, plus every transcript candidate path that exists on disk,
+// without deciding which candidate Parse would pick or decoding any of
+// their content. Fingerprinting only needs to detect whether a candidate
+// changed, not which one is the richer source -- that decision
+// (chooseHermesStateSessionSource) fully parses a candidate transcript's
+// messages just to score it, which makes fingerprinting as expensive as a
+// real parse for every sibling on every pass. Hashing every existing
+// candidate's bytes, rather than only the parsed winner's, still catches
+// any change to any candidate while skipping that decode entirely; the
+// real Parse path still makes the authoritative richer-source choice when
+// a session is actually reparsed.
+func readHermesStateSessionFingerprintInputs(ctx context.Context,
+	conn *sql.DB, stateDB, rawSessionID string,
+) (hermesStateSession, []hermesStateMessage, []string, error) {
+	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
+	}
+	if !found {
+		return hermesStateSession{}, nil, nil, fmt.Errorf(
+			"hermes session %s not found in %s: %w",
+			rawSessionID, stateDB, os.ErrNotExist,
+		)
+	}
+	messages, err := readHermesStateMessagesForSession(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
+	}
+	sessionsDir := filepath.Join(filepath.Dir(stateDB), "sessions")
+	var candidates []string
+	for _, p := range []string{
+		filepath.Join(sessionsDir, "session_"+rawSessionID+".json"),
+		filepath.Join(sessionsDir, rawSessionID+".jsonl"),
+	} {
+		if IsRegularFile(p) {
+			candidates = append(candidates, p)
+		}
+	}
+	return ss, messages, candidates, nil
 }
 
 func copyHermesTranscriptFile(w io.Writer, path string) error {

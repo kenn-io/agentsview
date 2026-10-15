@@ -1795,16 +1795,16 @@ func hermesStateMemberFingerprint(
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
 	if reconciliationCacheAvailable(ctx) && !src.FingerprintSingleMember {
-		if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
-			return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
+		if h, candidatePaths, ok := cachedHermesMemberCore(ctx, src); ok {
+			return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
 		}
 		// One bulk pass over state.db seeds every member's core, so the rest
 		// of the reconciliation fingerprints without reopening the database.
 		// Seeding failures fall through to the instrumented per-member open,
 		// which surfaces the underlying error with its usual handling.
 		if seedHermesMemberCores(ctx, src.StateDB) == nil {
-			if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
-				return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
+			if h, candidatePaths, ok := cachedHermesMemberCore(ctx, src); ok {
+				return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
 			}
 		}
 	}
@@ -1814,7 +1814,7 @@ func hermesStateMemberFingerprint(
 		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
 	}
 	defer conn.Close()
-	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(
+	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
 		conn, src.StateDB, src.SessionID,
 	)
@@ -1831,11 +1831,11 @@ func hermesStateMemberFingerprint(
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
 		return SourceFingerprint{}, err
 	}
-	return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
+	return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
 }
 
 func hermesStateMemberFingerprintFinish(
-	source SourceRef, src hermesSource, h hash.Hash, selectedPath string,
+	source SourceRef, src hermesSource, h hash.Hash, candidatePaths []string,
 ) (SourceFingerprint, error) {
 	info, err := os.Stat(src.StateDB)
 	if err != nil {
@@ -1852,17 +1852,17 @@ func hermesStateMemberFingerprintFinish(
 	if err == nil && SQLiteWALInfoHasFrames(walInfo) {
 		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
-	if selectedPath != src.StateDB {
-		selectedInfo, err := os.Stat(selectedPath)
+	for _, path := range candidatePaths {
+		candidateInfo, err := os.Stat(path)
 		if err != nil {
-			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", selectedPath, err)
+			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
 		}
-		fingerprint.Size += selectedInfo.Size()
+		fingerprint.Size += candidateInfo.Size()
 		fingerprint.MTimeNS = max(
-			fingerprint.MTimeNS, selectedInfo.ModTime().UnixNano(),
+			fingerprint.MTimeNS, candidateInfo.ModTime().UnixNano(),
 		)
 		if err := addHermesFingerprintPart(
-			h, "selected-transcript", selectedPath, selectedInfo,
+			h, "candidate-transcript", path, candidateInfo,
 		); err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -1877,8 +1877,8 @@ func hermesStateMemberFingerprintFinish(
 // shared state.db connection; the fingerprint path resumes the digest instead
 // of reopening the database, producing byte-identical hashes either way.
 type hermesMemberFingerprintCore struct {
-	HashState    []byte `json:"hash_state"`
-	SelectedPath string `json:"selected_path"`
+	HashState      []byte   `json:"hash_state"`
+	CandidatePaths []string `json:"candidate_paths"`
 }
 
 func hermesMemberCoreCacheKey(fingerprintKey string) string {
@@ -1942,7 +1942,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 func cacheHermesMemberCore(
 	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
 ) error {
-	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(
+	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
 		conn, stateDB, id,
 	)
@@ -1965,7 +1965,7 @@ func cacheHermesMemberCore(
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	payload, err := json.Marshal(hermesMemberFingerprintCore{
-		HashState: state, SelectedPath: selectedPath,
+		HashState: state, CandidatePaths: candidatePaths,
 	})
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
@@ -1980,23 +1980,23 @@ func cacheHermesMemberCore(
 // back to the instrumented per-member open path.
 func cachedHermesMemberCore(
 	ctx context.Context, src hermesSource,
-) (hash.Hash, string, bool) {
+) (hash.Hash, []string, bool) {
 	value, found, err := reconciliationCacheGet(
 		ctx, hermesMemberCoreCacheKey(src.Path),
 	)
 	if err != nil || !found {
-		return nil, "", false
+		return nil, nil, false
 	}
 	var core hermesMemberFingerprintCore
 	if err := json.Unmarshal([]byte(value), &core); err != nil {
-		return nil, "", false
+		return nil, nil, false
 	}
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok || unmarshaler.UnmarshalBinary(core.HashState) != nil {
-		return nil, "", false
+		return nil, nil, false
 	}
-	return h, core.SelectedPath, true
+	return h, core.CandidatePaths, true
 }
 
 func addHermesStateSessionFingerprint(

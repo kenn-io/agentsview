@@ -20401,6 +20401,24 @@ func (e *Engine) FindSourceFile(ctx context.Context, sessionID string) string {
 		return f
 	}
 
+	// A legacy Hermes/Augure Desktop row's stored file_path is the bare
+	// state.db archive path -- that's what every session got under the
+	// old whole-archive write, before per-session paths existed. The
+	// provider facade above already checked this specific session
+	// against current archive membership and returned not-found
+	// authoritatively; falling back to the bare archive path here would
+	// let SyncSingleSessionContext reparse and force-replace every
+	// session in state.db, the same harm FindSource's own stored-hint
+	// check now guards against. Trust the provider's not-found, the way
+	// the non-FileBased DB-backed providers above already do
+	// unconditionally. A standalone transcript file's stored path still
+	// falls through below -- it's a real, individually-owned file, not a
+	// shared container.
+	if (def.Type == parser.AgentHermes || def.Type == parser.AgentAugureDesktop) &&
+		parser.HermesStoredPathIsAggregateArchive(storedPath) {
+		return ""
+	}
+
 	// Prefer stored file_path — it's authoritative and handles
 	// cases where the session ID doesn't match the filename.
 	// Resolve virtual paths (e.g. Visual Studio Copilot's

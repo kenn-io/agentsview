@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -571,53 +570,52 @@ func TestPreparedDeltaImportFinalCacheFailureRetainsJournal(t *testing.T) {
 
 func TestImporterHermesDatabaseDeltaBoundsSharedScans(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		for _, members := range []int{2, 30} {
-			t.Run(string(agent)+"/"+strconv.Itoa(members), func(t *testing.T) {
-				database := dbtest.OpenTestDB(t)
-				root := t.TempDir()
-				const remoteDir = "/srv/agent/sessions"
-				localDir := remappedRemotePath(root, remoteDir)
-				require.NoError(t, os.MkdirAll(localDir, 0o755))
-				stateDB := filepath.Join(filepath.Dir(localDir), "state.db")
-				writeHermesImportStateDB(t, stateDB)
-				conn, err := sql.Open("sqlite3", stateDB)
+		t.Run(string(agent), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const remoteDir = "/srv/agent/sessions"
+			localDir := remappedRemotePath(root, remoteDir)
+			require.NoError(t, os.MkdirAll(localDir, 0o755))
+			stateDB := filepath.Join(filepath.Dir(localDir), "state.db")
+			writeHermesImportStateDB(t, stateDB)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			const members = 2
+			for i := range members {
+				id := fmt.Sprintf("member-%03d", i)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,model,started_at,message_count) VALUES(?,'cli','model',1778767200,1); INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,'user','sibling message',1778767210)`, id, id)
 				require.NoError(t, err)
-				for i := range members {
-					id := fmt.Sprintf("member-%03d", i)
-					_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,model,started_at,message_count) VALUES(?,'cli','model',1778767200,1); INSERT INTO messages(session_id,role,content,timestamp) VALUES(?,'user','sibling message',1778767210)`, id, id)
-					require.NoError(t, err)
-				}
-				require.NoError(t, conn.Close())
-				targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {remoteDir}}}
-				importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
-				seed, err := importer.ImportExtracted(t.Context(), targets, root)
-				require.NoError(t, err)
-				require.Equal(t, members+1, seed.SessionsSynced)
-				siblingID := "remote~" + string(agent) + ":member-000"
-				before, err := database.GetSessionFull(t.Context(), siblingID)
-				require.NoError(t, err)
-				require.NotNil(t, before)
-				conn, err = sql.Open("sqlite3", stateDB)
-				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), "UPDATE messages SET content='changed database message' WHERE session_id='database-only'")
-				require.NoError(t, err)
-				require.NoError(t, conn.Close())
-				path, err := mirrorRelativeLocalChangePath(root, stateDB)
-				require.NoError(t, err)
-				pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{Journal: MirrorChangeJournal{Version: mirrorJournalVersion, Entries: []MirrorChangeEntry{{Path: path, InvalidateCache: true}}}})
-				require.NoError(t, err)
-				stats, err := pending.Execute(t.Context())
-				require.NoError(t, err)
-				assert.Equal(t, 1, stats.SessionsSynced)
-				after, err := database.GetSessionFull(t.Context(), siblingID)
-				require.NoError(t, err)
-				assert.Equal(t, before, after)
-				changed, err := database.GetSessionFull(t.Context(), "remote~"+string(agent)+":database-only")
-				require.NoError(t, err)
-				require.NotNil(t, changed)
-				assert.Equal(t, new("changed database message"), changed.FirstMessage)
-			})
-		}
+			}
+			require.NoError(t, conn.Close())
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {remoteDir}}}
+			importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
+			seed, err := importer.ImportExtracted(t.Context(), targets, root)
+			require.NoError(t, err)
+			require.Equal(t, members+1, seed.SessionsSynced)
+			siblingID := "remote~" + string(agent) + ":member-000"
+			before, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			conn, err = sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "UPDATE messages SET content='changed database message' WHERE session_id='database-only'")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			path, err := mirrorRelativeLocalChangePath(root, stateDB)
+			require.NoError(t, err)
+			pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{Journal: MirrorChangeJournal{Version: mirrorJournalVersion, Entries: []MirrorChangeEntry{{Path: path, InvalidateCache: true}}}})
+			require.NoError(t, err)
+			stats, err := pending.Execute(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.SessionsSynced)
+			after, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			changed, err := database.GetSessionFull(t.Context(), "remote~"+string(agent)+":database-only")
+			require.NoError(t, err)
+			require.NotNil(t, changed)
+			assert.Equal(t, new("changed database message"), changed.FirstMessage)
+		})
 	}
 }
 
