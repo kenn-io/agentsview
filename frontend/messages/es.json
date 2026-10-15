@@ -1870,6 +1870,32 @@
       }
     }
   ],
+  "session_tree_view_label": "Vista del árbol de sesiones",
+  "session_tree_view_sessions": "Sesiones",
+  "session_tree_view_inputs": "Entradas",
+  "session_input_tree_loading": "Cargando entradas...",
+  "session_input_tree_error": "No se pudieron cargar las entradas",
+  "session_input_tree_empty": "No hay entradas del usuario",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} entrada oculta",
+        "countPlural=other": "{countLabel} entradas ocultas"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "Mostrar entradas ocultas",
+  "session_input_tree_jump_to": "Ir a la entrada: {preview}",
+  "session_input_tree_open": "Abrir en su sesión: {preview}",
+  "session_input_tree_current": "actual",
   "code_block_copy": "Copiar bloque de código",
   "code_block_copy_title": "Copiar código",
   "common_copied": "¡Copiado!",

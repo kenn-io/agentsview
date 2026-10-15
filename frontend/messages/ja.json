@@ -1866,6 +1866,32 @@
       }
     }
   ],
+  "session_tree_view_label": "セッションツリーの表示",
+  "session_tree_view_sessions": "セッション",
+  "session_tree_view_inputs": "入力",
+  "session_input_tree_loading": "入力を読み込み中...",
+  "session_input_tree_error": "入力を読み込めませんでした",
+  "session_input_tree_empty": "ユーザー入力はありません",
+  "session_input_tree_hidden": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} 件の入力を非表示",
+        "countPlural=other": "{countLabel} 件の入力を非表示"
+      }
+    }
+  ],
+  "session_input_tree_show_hidden": "非表示の入力を表示",
+  "session_input_tree_jump_to": "入力へ移動: {preview}",
+  "session_input_tree_open": "所属するセッションで開く: {preview}",
+  "session_input_tree_current": "現在",
   "code_block_copy": "コードブロックをコピーする",
   "code_block_copy_title": "コードをコピーする",
   "common_copied": "コピーしました！",

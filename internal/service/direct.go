@@ -581,43 +581,20 @@ func findMessagePageStart(
 func (b *directBackend) buildForkContextMessages(
 	ctx context.Context, id string,
 ) ([]db.Message, error) {
-	current, err := b.db.GetSession(ctx, id)
+	current, currentMsgs, contextMsgs, err := b.forkContext(ctx, b.db, id)
 	if err != nil || current == nil {
 		return nil, err
-	}
-	currentMsgs, err := b.db.GetAllMessages(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if current.RelationshipType != "fork" ||
-		current.ParentSessionID == nil ||
-		*current.ParentSessionID == "" {
-		return currentMsgs, nil
-	}
-
-	boundary, hasBoundary := forkBoundaryTime(currentMsgs, current.StartedAt)
-	contextMsgs, err := b.forkAncestorMessages(
-		ctx,
-		*current.ParentSessionID,
-		boundary,
-		hasBoundary,
-		map[string]bool{id: true},
-	)
-	if err != nil {
-		return nil, err
-	}
-	if replay, ok := b.codexForkReplayMessages(ctx, *current); ok {
-		contextMsgs = truncateForkContextToReplay(
-			contextMsgs, replay,
-		)
 	}
 	if len(contextMsgs) == 0 {
 		return currentMsgs, nil
 	}
 
+	boundary, _ := forkBoundaryTime(currentMsgs, current.StartedAt)
+	// forkContext may share rows with its source; renumber a copy.
+	contextMsgs = slices.Clone(contextMsgs)
 	contextLen := len(contextMsgs)
 	for i := range contextMsgs {
-		contextMsgs[i].Ordinal = i - contextLen - 1
+		contextMsgs[i].Ordinal = forkContextOrdinal(i, contextLen)
 	}
 	boundaryMsg := db.Message{
 		ID:                -1,
@@ -644,6 +621,64 @@ func (b *directBackend) buildForkContextMessages(
 	out = append(out, boundaryMsg)
 	out = append(out, currentMsgs...)
 	return out, nil
+}
+
+// forkContextOrdinal is the ordinal the fork context view gives the i-th of
+// n inherited messages. Inherited rows count up to -2, and -1 is the fork
+// boundary marker.
+func forkContextOrdinal(i, n int) int {
+	return i - n - 1
+}
+
+// forkMessageSource reads the rows that fork context is built from.
+type forkMessageSource interface {
+	GetSession(ctx context.Context, id string) (*db.Session, error)
+	GetAllMessages(ctx context.Context, sessionID string) ([]db.Message, error)
+}
+
+// forkContext returns a session, its own messages, and the parent prefix it
+// inherits as a fork. Inherited messages keep their own session IDs and
+// ordinals. The prefix is empty when the session is not a fork. Callers must
+// not modify the returned messages, which may be shared with src.
+func (b *directBackend) forkContext(
+	ctx context.Context, src forkMessageSource, id string,
+) (*db.Session, []db.Message, []db.Message, error) {
+	current, err := src.GetSession(ctx, id)
+	if err != nil || current == nil {
+		return nil, nil, nil, err
+	}
+	currentMsgs, err := src.GetAllMessages(ctx, id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !isForkWithParent(current) {
+		return current, currentMsgs, nil, nil
+	}
+
+	boundary, hasBoundary := forkBoundaryTime(currentMsgs, current.StartedAt)
+	contextMsgs, err := forkAncestorMessages(
+		ctx,
+		src,
+		*current.ParentSessionID,
+		boundary,
+		hasBoundary,
+		map[string]bool{id: true},
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if replay, ok := b.codexForkReplayMessages(ctx, *current); ok {
+		contextMsgs = truncateForkContextToReplay(
+			contextMsgs, replay,
+		)
+	}
+	return current, currentMsgs, contextMsgs, nil
+}
+
+func isForkWithParent(s *db.Session) bool {
+	return s.RelationshipType == "fork" &&
+		s.ParentSessionID != nil &&
+		*s.ParentSessionID != ""
 }
 
 func (b *directBackend) codexForkReplayMessages(
@@ -686,8 +721,9 @@ func truncateForkContextToReplay(
 	return contextMsgs[:len(replay)]
 }
 
-func (b *directBackend) forkAncestorMessages(
+func forkAncestorMessages(
 	ctx context.Context,
+	src forkMessageSource,
 	sessionID string,
 	before time.Time,
 	hasBefore bool,
@@ -698,24 +734,23 @@ func (b *directBackend) forkAncestorMessages(
 	}
 	visited[sessionID] = true
 
-	session, err := b.db.GetSession(ctx, sessionID)
+	session, err := src.GetSession(ctx, sessionID)
 	if err != nil || session == nil {
 		return nil, err
 	}
-	msgs, err := b.db.GetAllMessages(ctx, sessionID)
+	msgs, err := src.GetAllMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	msgs = messagesBefore(msgs, before, hasBefore)
 
-	if session.RelationshipType != "fork" ||
-		session.ParentSessionID == nil ||
-		*session.ParentSessionID == "" {
+	if !isForkWithParent(session) {
 		return msgs, nil
 	}
 	parentBoundary, parentHasBoundary := forkBoundaryTime(msgs, session.StartedAt)
-	parentMsgs, err := b.forkAncestorMessages(
+	parentMsgs, err := forkAncestorMessages(
 		ctx,
+		src,
 		*session.ParentSessionID,
 		parentBoundary,
 		parentHasBoundary,

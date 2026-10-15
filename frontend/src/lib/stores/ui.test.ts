@@ -640,6 +640,68 @@ describe("UIStore", () => {
     });
   });
 
+  describe("session tree view", () => {
+    const SESSION_TREE_VIEW_KEY = "agentsview-session-tree-view";
+
+    async function importWithStoredView(stored: string | null, cacheKey: string) {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) => (key === SESSION_TREE_VIEW_KEY ? stored : null)),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?${cacheKey}`);
+      return { ui: mod.ui as typeof ui, setItem };
+    }
+
+    it("reads the stored view and falls back to sessions", async () => {
+      const original = globalThis.localStorage;
+
+      try {
+        const inputs = await importWithStoredView("inputs", "sessionTreeViewInputs");
+        const invalid = await importWithStoredView("graph", "sessionTreeViewInvalid");
+        const missing = await importWithStoredView(null, "sessionTreeViewMissing");
+
+        expect(inputs.ui.sessionTreeView).toBe("inputs");
+        expect(invalid.ui.sessionTreeView).toBe("sessions");
+        expect(missing.ui.sessionTreeView).toBe("sessions");
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("persists the view through setSessionTreeView", async () => {
+      const original = globalThis.localStorage;
+
+      try {
+        const { ui: store, setItem } = await importWithStoredView(
+          null,
+          "sessionTreeViewPersist",
+        );
+        setItem.mockClear();
+
+        store.setSessionTreeView("inputs");
+        await tick();
+
+        expect(store.sessionTreeView).toBe("inputs");
+        expect(setItem).toHaveBeenCalledWith(SESSION_TREE_VIEW_KEY, "inputs");
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
   describe("session input outline height", () => {
     const SESSION_INPUT_OUTLINE_HEIGHT_KEY = "agentsview-session-input-outline-height";
 

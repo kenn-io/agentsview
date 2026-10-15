@@ -9,14 +9,23 @@ import {
 } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types/core.js";
-import type { SessionTreeResponse } from "../../api/generated/index.js";
+import type {
+  ServiceInputTree,
+  ServiceInputTreeNode,
+  SessionTreeResponse,
+} from "../../api/generated/index.js";
 
 const mocks = vi.hoisted(() => ({
   fetchSessionTree: vi.fn(),
+  fetchSessionInputTree: vi.fn(),
 }));
 
 vi.mock("../../api/sessionTree.js", () => ({
   fetchSessionTree: mocks.fetchSessionTree,
+}));
+
+vi.mock("../../api/inputTree.js", () => ({
+  fetchSessionInputTree: mocks.fetchSessionInputTree,
 }));
 
 import { m } from "../../i18n/index.js";
@@ -102,6 +111,47 @@ function makeTree(): SessionTreeResponse {
   };
 }
 
+function inputNode(
+  parent: number,
+  sessionId: string,
+  ordinal: number,
+  preview: string,
+  extra: Partial<ServiceInputTreeNode> = {},
+): ServiceInputTreeNode {
+  return {
+    parent,
+    session_id: sessionId,
+    ordinal,
+    preview,
+    is_shell: false,
+    end_session_ids: [],
+    ...extra,
+  };
+}
+
+// The fork "child" branched from "root" after their shared first input.
+function makeInputTree(
+  nodes: ServiceInputTreeNode[] = [
+    inputNode(-1, "root", 0, "shared start", { active_ordinal: -5 }),
+    inputNode(0, "root", 2, "root follow-up", { end_session_ids: ["root"] }),
+    inputNode(0, "child", 0, "fork input", {
+      active_ordinal: 0,
+      end_session_ids: ["child"],
+    }),
+  ],
+): ServiceInputTree {
+  return {
+    active_session_id: "child",
+    root_session_id: "root",
+    truncated: false,
+    nodes,
+    sessions: [
+      makeSession("root", { relationship_type: "", message_count: 4 }),
+      makeSession("child", { relationship_type: "fork", message_count: 2 }),
+    ],
+  };
+}
+
 async function flush() {
   await tick();
   await Promise.resolve();
@@ -166,6 +216,7 @@ describe("SessionRelationshipTree", () => {
 
   beforeEach(() => {
     mocks.fetchSessionTree.mockReset();
+    mocks.fetchSessionInputTree.mockReset();
     window.history.replaceState(null, "", "/sessions/child");
     router.route = "sessions";
     router.sessionId = "child";
@@ -178,6 +229,8 @@ describe("SessionRelationshipTree", () => {
       component = undefined;
     }
     ui.setSessionTreeHeight(280);
+    ui.setSessionTreeView("sessions");
+    ui.clearScrollState();
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
@@ -264,6 +317,181 @@ describe("SessionRelationshipTree", () => {
       .click();
 
     expect(navigate).toHaveBeenCalledWith("sibling");
+  });
+
+  describe("input view", () => {
+    function radio(label: string) {
+      return [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+        .find((button) => button.textContent?.trim() === label);
+    }
+
+    function inputRow(preview: string) {
+      return [...document.querySelectorAll<HTMLElement>(".input-row")]
+        .find((row) => row.textContent?.includes(preview));
+    }
+
+    async function mountWithInputs(inputTree = makeInputTree()) {
+      mocks.fetchSessionTree.mockResolvedValue(makeTree());
+      mocks.fetchSessionInputTree.mockResolvedValue(inputTree);
+      ui.setSessionTreeView("inputs");
+      component = mount(SessionRelationshipTree, {
+        target: document.body,
+        props: { sessionId: "child" },
+      });
+      await flush();
+      await flush();
+    }
+
+    it("is offered only when the active session belongs to a fork family", async () => {
+      const tree = makeTree();
+      tree.root.children[0]!.session.relationship_type = "subagent";
+      mocks.fetchSessionTree.mockResolvedValue(tree);
+      ui.setSessionTreeView("inputs");
+
+      component = mount(SessionRelationshipTree, {
+        target: document.body,
+        props: { sessionId: "child" },
+      });
+      await flush();
+
+      expect(document.querySelector('[role="radiogroup"]')).toBeNull();
+      expect(radio(m.session_tree_view_inputs())).toBeUndefined();
+      expect(mocks.fetchSessionInputTree).not.toHaveBeenCalled();
+      expect(document.querySelector('a[href="/sessions/sibling"]')).not.toBeNull();
+    });
+
+    it("switches to the input tree and remembers the choice", async () => {
+      mocks.fetchSessionTree.mockResolvedValue(makeTree());
+      mocks.fetchSessionInputTree.mockResolvedValue(makeInputTree());
+      component = mount(SessionRelationshipTree, {
+        target: document.body,
+        props: { sessionId: "child" },
+      });
+      await flush();
+
+      radio(m.session_tree_view_inputs())!.click();
+      await flush();
+      await flush();
+
+      expect(ui.sessionTreeView).toBe("inputs");
+      expect(mocks.fetchSessionInputTree).toHaveBeenCalledWith(
+        "child",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(document.querySelector('a[href="/sessions/sibling"]')).toBeNull();
+      expect(inputRow("shared start")?.classList.contains("branch-point")).toBe(true);
+      expect(inputRow("root follow-up")?.classList.contains("leaf")).toBe(true);
+      const fork = inputRow("fork input");
+      expect(fork?.classList.contains("on-path")).toBe(true);
+      expect(fork?.textContent).toContain(m.session_input_tree_current());
+      expect(inputRow("root follow-up")?.textContent).toContain(
+        m.session_tree_relationship_root(),
+      );
+    });
+
+    it("jumps within the open session to an input on its path", async () => {
+      const navigate = vi
+        .spyOn(router, "navigateToSession")
+        .mockImplementation(() => {});
+      await mountWithInputs();
+
+      const shared = inputRow("shared start") as HTMLAnchorElement;
+      expect(shared.getAttribute("href")).toBe("/sessions/child?msg=-5");
+      shared.click();
+
+      expect(ui.selectedOrdinal).toBe(-5);
+      expect(ui.pendingScrollOrdinal).toBe(-5);
+      expect(ui.pendingScrollSession).toBeNull();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("opens the session that holds an input off the active path", async () => {
+      const navigate = vi
+        .spyOn(router, "navigateToSession")
+        .mockImplementation(() => {});
+      await mountWithInputs();
+
+      const other = inputRow("root follow-up") as HTMLAnchorElement;
+      expect(other.getAttribute("href")).toBe("/sessions/root?msg=2");
+      other.click();
+
+      expect(navigate).toHaveBeenCalledWith("root");
+      expect(ui.pendingScrollOrdinal).toBe(2);
+      expect(ui.pendingScrollSession).toBe("root");
+    });
+
+    it("folds long runs of inputs until opened", async () => {
+      await mountWithInputs(
+        makeInputTree([
+          inputNode(-1, "root", 0, "input 0", { active_ordinal: 0 }),
+          inputNode(0, "root", 2, "input 1", { active_ordinal: 2 }),
+          inputNode(1, "root", 4, "input 2", { active_ordinal: 4 }),
+          inputNode(2, "root", 6, "input 3", { active_ordinal: 6 }),
+          inputNode(3, "root", 8, "input 4", { active_ordinal: 8 }),
+          inputNode(4, "root", 10, "root end", { end_session_ids: ["root"] }),
+          inputNode(4, "child", 0, "fork end", {
+            active_ordinal: 0,
+            end_session_ids: ["child"],
+          }),
+        ]),
+      );
+
+      const gap = document.querySelector<HTMLButtonElement>(".input-row.gap");
+      expect(gap?.textContent).toContain(
+        m.session_input_tree_hidden({ count: 3, countLabel: "3" }),
+      );
+      expect(inputRow("input 2")).toBeUndefined();
+
+      gap!.click();
+      await flush();
+
+      expect(document.querySelector(".input-row.gap")).toBeNull();
+      expect(inputRow("input 2")).not.toBeUndefined();
+    });
+
+    it("keeps the selected input visible inside a folded run", async () => {
+      ui.selectOrdinal(4);
+      await mountWithInputs(
+        makeInputTree([
+          inputNode(-1, "root", 0, "input 0", { active_ordinal: 0 }),
+          inputNode(0, "root", 2, "input 1", { active_ordinal: 2 }),
+          inputNode(1, "root", 4, "input 2", { active_ordinal: 4 }),
+          inputNode(2, "root", 6, "input 3", { active_ordinal: 6 }),
+          inputNode(3, "root", 8, "input 4", { active_ordinal: 8 }),
+          inputNode(4, "root", 10, "root end", { end_session_ids: ["root"] }),
+          inputNode(4, "child", 0, "fork end", {
+            active_ordinal: 0,
+            end_session_ids: ["child"],
+          }),
+        ]),
+      );
+
+      expect(document.querySelector(".input-row.gap")).toBeNull();
+      expect(inputRow("input 2")?.classList.contains("selected")).toBe(true);
+    });
+
+    it("marks a partial input tree", async () => {
+      await mountWithInputs({ ...makeInputTree(), truncated: true });
+
+      expect(document.querySelector(".input-state.truncated")?.textContent).toBe(
+        m.session_tree_truncated(),
+      );
+    });
+
+    it("reports a failed load", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mocks.fetchSessionTree.mockResolvedValue(makeTree());
+      mocks.fetchSessionInputTree.mockRejectedValue(new Error("boom"));
+      ui.setSessionTreeView("inputs");
+      component = mount(SessionRelationshipTree, {
+        target: document.body,
+        props: { sessionId: "child" },
+      });
+      await flush();
+      await flush();
+
+      expect(document.body.textContent).toContain(m.session_input_tree_error());
+    });
   });
 
   describe("height", () => {

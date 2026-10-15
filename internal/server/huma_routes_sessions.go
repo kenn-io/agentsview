@@ -40,6 +40,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/{id}/input-outline", "List session input outline", s.humaInputOutline)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
 	s.get(group, "/sessions/{id}/tree", "Get session relationship tree", s.humaGetSessionTree)
+	s.get(group, "/sessions/{id}/input-tree", "Get session input branch tree", s.humaGetSessionInputTree)
 	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)
 	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
 	s.get(group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
@@ -426,6 +427,24 @@ func (s *Server) humaGetSessionTree(
 			Truncated:       truncated,
 		},
 	}, nil
+}
+
+func (s *Server) humaGetSessionInputTree(
+	ctx context.Context,
+	in *idPathInput,
+) (*jsonOutput[*service.InputTree], error) {
+	reader, ok := s.sessions.(service.InputTreeReader)
+	if !ok {
+		return nil, apiError(http.StatusNotImplemented, "input tree not available")
+	}
+	tree, err := reader.InputTree(ctx, in.ID)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if tree == nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+	return &jsonOutput[*service.InputTree]{Body: tree}, nil
 }
 
 func (s *Server) sessionTreeRoot(

@@ -432,6 +432,17 @@ for example, when you use "retry from here" to branch a conversation. Large
 forks (more than 3 user turns) appear as separate session entries grouped with
 their parent. Small retries fold into the main session.
 
+Open **Analysis** on a session with forks to see its session tree. Switch the
+tree to **Inputs** to see the prompts of the session and its forks as one tree:
+
+- Prompts the sessions share appear once. The tree splits where a fork's
+    prompts diverge, and each branch ends with a label for its session.
+- The open session's path is highlighted. Click a prompt on it to scroll the
+    conversation there; click any other prompt to open the session that holds
+    it.
+- Runs of prompts without a split fold into one row. Click the row to show
+    them.
+
 Subagent sessions spawned by the Task tool are organized under their parent in
 the sidebar's [sub-agent tree](#sub-agent-tree) and are also viewable inline
 through the parent session's tool blocks (see

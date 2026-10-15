@@ -37,8 +37,7 @@ func (b *directBackend) InputOutline(
 func inputOutlineFromMessages(msgs []db.Message) *InputOutline {
 	items := make([]InputOutlineItem, 0)
 	for _, msg := range msgs {
-		if msg.Role != "user" || msg.IsSystem ||
-			db.IsSystemPrefixed(msg.Content, msg.Role) {
+		if !isOutlineInput(msg) {
 			continue
 		}
 		if item, ok := inputOutlineItem(
@@ -48,6 +47,12 @@ func inputOutlineFromMessages(msgs []db.Message) *InputOutline {
 		}
 	}
 	return &InputOutline{Items: items, Count: len(items)}
+}
+
+// isOutlineInput reports whether a message is an input the user wrote.
+func isOutlineInput(msg db.Message) bool {
+	return msg.Role == "user" && !msg.IsSystem &&
+		!db.IsSystemPrefixed(msg.Content, msg.Role)
 }
 
 func inputOutlineItem(
