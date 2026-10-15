@@ -1764,7 +1764,7 @@
   .plan-usage-trigger {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
   }
 
   .plan-usage-trigger--empty {
