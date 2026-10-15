@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -829,6 +830,12 @@ const hermesStateMessagesQuery = `
 	WHERE session_id = ?
 	ORDER BY timestamp ASC, id ASC`
 
+// hermesStateMessageTimestampsQuery selects the one hermesStateMessagesQuery
+// column that can fail to scan. Every other column there is COALESCEd text,
+// which always scans into a string. Keep the two queries in step.
+const hermesStateMessageTimestampsQuery = `
+	SELECT timestamp FROM messages WHERE session_id = ?`
+
 // checkHermesStateSchema prepares the per-session read queries, so a
 // database whose tables or columns cannot satisfy them fails before any of
 // its sessions are treated as readable.
@@ -853,18 +860,10 @@ func prepareHermesStateQuery(ctx context.Context, conn *sql.DB, query string) er
 func readHermesStateSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) (hermesStateSession, bool, error) {
-	row := conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID)
-	var ss hermesStateSession
-	var started, ended float64
-	err := row.Scan(
-		&ss.id, &ss.source, &ss.model,
-		&ss.parentSessionID, &started, &ended,
-		&ss.messageCount, &ss.inputTokens, &ss.outputTokens,
-		&ss.cacheReadTokens, &ss.cacheWriteTokens,
-		&ss.reasoningTokens, &ss.estimatedCost, &ss.actualCost,
-		&ss.costStatus, &ss.costSource, &ss.title, &ss.apiCallCount,
+	ss, err := scanHermesStateSession(
+		conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID),
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return hermesStateSession{}, false, nil
 	}
 	if err != nil {
@@ -872,9 +871,28 @@ func readHermesStateSession(ctx context.Context,
 			"query hermes session %s: %w", rawSessionID, err,
 		)
 	}
+	return ss, true, nil
+}
+
+// scanHermesStateSession scans one hermesStateSessionQuery row. It accepts
+// *sql.Row and *sql.Rows so a caller that must tell a query failure from a
+// row that fails to scan can iterate the rows itself.
+func scanHermesStateSession(row interface{ Scan(...any) error }) (hermesStateSession, error) {
+	var ss hermesStateSession
+	var started, ended float64
+	if err := row.Scan(
+		&ss.id, &ss.source, &ss.model,
+		&ss.parentSessionID, &started, &ended,
+		&ss.messageCount, &ss.inputTokens, &ss.outputTokens,
+		&ss.cacheReadTokens, &ss.cacheWriteTokens,
+		&ss.reasoningTokens, &ss.estimatedCost, &ss.actualCost,
+		&ss.costStatus, &ss.costSource, &ss.title, &ss.apiCallCount,
+	); err != nil {
+		return hermesStateSession{}, err
+	}
 	ss.startedAt = hermesUnixTime(started)
 	ss.endedAt = hermesUnixTime(ended)
-	return ss, true, nil
+	return ss, nil
 }
 
 func readHermesStateMessagesForSession(ctx context.Context,

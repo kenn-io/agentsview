@@ -1393,42 +1393,81 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 	return hermesStateDBHasReadableSession(ctx, conn, rawID)
 }
 
-// hermesStateDBHasReadableSession reports whether conn's sessions table
-// holds a member for rawID that the real per-session reader
-// (readHermesStateSession, readHermesStateMessagesForSession -- the same
-// reader buildHermesStateResult and Fingerprint use) can actually read, not
-// just whether a row with this id exists. A row that exists but fails that
-// real read -- a malformed started_at or ended_at, or a message that fails
-// to decode, the same per-session parse failure this provider isolates
-// elsewhere -- must not count as membership: every caller of this check
-// (discovery's orphan-transcript fallback, a transcript-event's
-// stale-vs-database preference, FindSource's stored-hint and raw-ID
-// fallback, which single-session refresh also goes through) needs "is this
-// session's database row actually usable," not "does a row with this id
-// exist." Treating it as usable anyway would suppress the session's
-// transcript or hand a refresh a row it cannot read. The row's own virtual
-// member still surfaces the decode failure as its own visible parse error;
-// this check's only concern is whether something else should be preferred.
+// hermesStateDBHasReadableSession reports whether conn holds a session row
+// for rawID that the per-session reader can read. A row that exists but does
+// not scan, such as a malformed started_at or a message with a malformed
+// timestamp, does not count: callers use this answer to decide whether the
+// session's transcript should stand in for it. That row's own state.db
+// member still reports the scan failure as its parse error.
+//
+// Only scan failures mean "not a member". A failed query, such as a busy or
+// unreadable database, is returned to the caller: answering "not a member"
+// would let a transient read failure swap the session's source to its
+// transcript.
+//
+// The message check selects only timestamps. Discovery runs this check for
+// every transcript beside state.db, so reading message content here would
+// read the whole archive on each pass.
 func hermesStateDBHasReadableSession(
 	ctx context.Context, conn *sql.DB, rawID string,
 ) (bool, error) {
-	_, found, err := readHermesStateSession(ctx, conn, rawID)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, ctxErr
-	}
+	sessionRows, err := conn.QueryContext(ctx, hermesStateSessionQuery, rawID)
 	if err != nil {
-		return false, nil //nolint:nilerr // A row that fails this real read does not count as a member; see the doc comment above.
+		return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
 	}
-	if !found {
+	readable, err := hermesRowsScanCleanly(ctx, sessionRows, func(rows *sql.Rows) error {
+		_, err := scanHermesStateSession(rows)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
+	}
+	if !readable.scanned || readable.malformed {
 		return false, nil
 	}
-	if _, err := readHermesStateMessagesForSession(ctx, conn, rawID); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, ctxErr
-		}
-		return false, nil // Same as above: an undecodable message does not count as a member.
+	timestampRows, err := conn.QueryContext(ctx, hermesStateMessageTimestampsQuery, rawID)
+	if err != nil {
+		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
 	}
-	return true, nil
+	readable, err = hermesRowsScanCleanly(ctx, timestampRows, func(rows *sql.Rows) error {
+		var ts float64
+		return rows.Scan(&ts)
+	})
+	if err != nil {
+		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
+	}
+	return !readable.malformed, nil
+}
+
+type hermesRowsScanResult struct {
+	scanned   bool
+	malformed bool
+}
+
+// hermesRowsScanCleanly scans every row and closes rows. It reports a row
+// that fails to scan as malformed, and returns query and iteration failures
+// as errors.
+func hermesRowsScanCleanly(
+	ctx context.Context, rows *sql.Rows, scan func(*sql.Rows) error,
+) (hermesRowsScanResult, error) {
+	defer rows.Close()
+	var result hermesRowsScanResult
+	for rows.Next() {
+		result.scanned = true
+		if err := scan(rows); err != nil {
+			// A cancelled context closes rows, so the scan fails for that
+			// reason rather than because the row is malformed.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return hermesRowsScanResult{}, ctxErr
+			}
+			result.malformed = true
+			return result, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return hermesRowsScanResult{}, err
+	}
+	return result, rows.Close()
 }
 
 func (s hermesSourceSet) Fingerprint(

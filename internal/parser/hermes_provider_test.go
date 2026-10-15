@@ -1299,6 +1299,25 @@ func TestHermesStateMembershipHonorsCallerCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestHermesStateMembershipReturnsQueryFailures(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DROP TABLE messages")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	membership, err := openHermesStateMembership(t.Context(), stateDB)
+	require.NoError(t, err)
+	t.Cleanup(membership.Close)
+
+	found, err := membership.Has(t.Context(), "child")
+
+	require.Error(t, err, "a failed messages query must not read as a missing member")
+	assert.False(t, found)
+}
+
 func TestHermesProviderFindSourceDoesNotReturnStateDBForMissingRawID(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
