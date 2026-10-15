@@ -228,7 +228,7 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 		}
 	}
 	if threads {
-		s.Log.Printf("codex-cloud: account state was missing or unreadable; rebuilt the plan usage queue "+
+		s.Log.Printf("codex-cloud: account state was missing or set aside; rebuilt the plan usage queue "+
 			"from the saved chat state: %d chats to check, %d to refresh, %d left out",
 			len(acct.UsagePending), len(acct.Refresh), skipped)
 	}
