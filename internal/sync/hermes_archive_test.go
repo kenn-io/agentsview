@@ -1349,122 +1349,103 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 	}
 }
 
-// TestHermesFingerprintCacheActivatesForSessionsRootLayout covers a root
-// layout withProviderFingerprintCache's eligibility check used to miss: the
-// configured root is the "sessions" directory, no transcript has ever been
-// written so that directory does not exist on disk yet, but its sibling
-// state.db does. A flat os.Stat on the configured root alone cannot see
-// that the database exists, so the batch fingerprint cache never turned on
-// for this entirely normal layout, and every member reopened state.db on
-// its own. This proves the cache activates and bounds the opens the same
-// way TestHermesIncrementalSyncBoundsSiblingWrites proves for the layouts
-// it covers.
-func TestHermesFingerprintCacheActivatesForSessionsRootLayout(t *testing.T) {
-	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		t.Run(string(agent), func(t *testing.T) {
-			root := t.TempDir()
-			stateDB := writeHermesArchiveStateDB(t, root)
-			conn, err := sql.Open("sqlite3", stateDB)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, conn.Close()) })
-			const members = 11
-			for i := range members {
-				id := fmt.Sprintf("member-%03d", i)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
-					(id, source, model, started_at, ended_at, message_count)
-					VALUES (?, 'cli', 'model', 1778767200, 1778767800, 1)`, id)
-				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages
-					(session_id, role, content, timestamp) VALUES (?, 'user', 'hello', 1778767210)`, id)
-				require.NoError(t, err)
+// TestHermesFingerprintCacheRootEligibility proves
+// providerFingerprintCacheRootEligible/withProviderFingerprintCache decide
+// whether to attach the batch fingerprint cache correctly across every root
+// shape Hermes and Augure Desktop can be configured with: a flat root that
+// exists on disk, a root that does not exist anywhere, a "sessions"
+// directory that has not been created yet but whose sibling state.db has,
+// and a profiles container (.hermes/profiles) that expands to per-profile
+// archive roots during discovery. A flat os.Stat on the configured root
+// alone cannot see any of the latter three, so without resolving them the
+// way discovery does, the cache never activated for those layouts and
+// every sibling member reopened state.db on its own; conversely, a cache
+// that merely differs in context identity without actually bounding opens
+// would pass a bare context-identity check, so every case counts real
+// database opens instead.
+func TestHermesFingerprintCacheRootEligibility(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		buildRoots       func(t *testing.T) (archiveRoot, configuredRoot string)
+		wantBoundedOpens bool
+	}{
+		{
+			name: "existing root",
+			buildRoots: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				return root, root
+			},
+			wantBoundedOpens: true,
+		},
+		{
+			name: "missing root",
+			buildRoots: func(t *testing.T) (string, string) {
+				return t.TempDir(), filepath.Join(t.TempDir(), "missing")
+			},
+			wantBoundedOpens: false,
+		},
+		{
+			name: "sessions dir not yet created",
+			buildRoots: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				return root, filepath.Join(root, "sessions")
+			},
+			wantBoundedOpens: true,
+		},
+		{
+			name: "profiles container",
+			buildRoots: func(t *testing.T) (string, string) {
+				profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+				profileRoot := filepath.Join(profilesRoot, "research")
+				require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+				return profileRoot, profilesRoot
+			},
+			wantBoundedOpens: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+				t.Run(string(agent), func(t *testing.T) {
+					archiveRoot, configuredRoot := test.buildRoots(t)
+					writeHermesArchiveStateDB(t, archiveRoot)
+					execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO sessions
+						(id, source, model, started_at, ended_at, message_count)
+						VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+					execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO messages
+						(session_id, role, content, timestamp)
+						VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+
+					provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{archiveRoot}})
+					require.True(t, ok)
+					sources, err := provider.Discover(t.Context())
+					require.NoError(t, err)
+					require.Len(t, sources, 2, "both sibling members must be discovered")
+
+					engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {configuredRoot}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+
+					ctx, closeCache, err := engine.withProviderFingerprintCache(t.Context(), nil)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, closeCache()) })
+
+					var scans atomic.Int64
+					scanCtx := parser.WithSharedContainerScanObserver(ctx, func() { scans.Add(1) })
+					for _, source := range sources {
+						_, err := provider.Fingerprint(scanCtx, source)
+						require.NoError(t, err)
+					}
+
+					if test.wantBoundedOpens {
+						assert.LessOrEqual(t, scans.Load(), int64(1),
+							"a root the cache recognizes must bound the two siblings to one database open")
+					} else {
+						assert.Equal(t, int64(2), scans.Load(),
+							"without an eligible root each sibling must open the database on its own")
+					}
+				})
 			}
-			sessionsRoot := filepath.Join(root, "sessions")
-			_, statErr := os.Stat(sessionsRoot)
-			require.True(t, os.IsNotExist(statErr),
-				"the sessions dir must not exist on disk yet")
-
-			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{agent: {sessionsRoot}}, Machine: "local",
-			})
-			t.Cleanup(engine.Close)
-			seed := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, seed.Failed)
-			// writeHermesArchiveStateDB seeds one more member ("child")
-			// beyond the ones added here.
-			require.Equal(t, members+1, seed.Synced)
-
-			_, err = conn.ExecContext(t.Context(),
-				"UPDATE messages SET content = 'changed member-000 content' WHERE session_id = 'member-000'")
-			require.NoError(t, err)
-
-			var scans atomic.Int64
-			ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-			stats := engine.SyncAll(ctx, nil)
-			assert.Equal(t, 1, stats.Synced)
-			assert.Zero(t, stats.Failed)
-
-			assert.Positive(t, scans.Load())
-			assert.LessOrEqual(t, scans.Load(), int64(4),
-				"a sessions-dir root whose sibling state.db exists must still activate the batch fingerprint cache")
-		})
-	}
-}
-
-// TestHermesFingerprintCacheActivatesForProfilesContainerLayout mirrors
-// TestHermesFingerprintCacheActivatesForSessionsRootLayout for the other
-// layout providerFingerprintCacheRootEligible must recognize: the
-// configured root is a profiles container (.hermes/profiles), which
-// expands to per-profile archive roots during discovery. A flat os.Stat
-// on the container itself says nothing about whether any expanded
-// profile resolves to a state.db, so without expanding it the same way
-// discovery does, the cache never activated for anyone using profiles.
-func TestHermesFingerprintCacheActivatesForProfilesContainerLayout(t *testing.T) {
-	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		t.Run(string(agent), func(t *testing.T) {
-			profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
-			profileRoot := filepath.Join(profilesRoot, "research")
-			require.NoError(t, os.MkdirAll(profileRoot, 0o755))
-			stateDB := writeHermesArchiveStateDB(t, profileRoot)
-			conn, err := sql.Open("sqlite3", stateDB)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, conn.Close()) })
-			const members = 11
-			for i := range members {
-				id := fmt.Sprintf("member-%03d", i)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
-					(id, source, model, started_at, ended_at, message_count)
-					VALUES (?, 'cli', 'model', 1778767200, 1778767800, 1)`, id)
-				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages
-					(session_id, role, content, timestamp) VALUES (?, 'user', 'hello', 1778767210)`, id)
-				require.NoError(t, err)
-			}
-
-			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{agent: {profilesRoot}}, Machine: "local",
-			})
-			t.Cleanup(engine.Close)
-			seed := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, seed.Failed)
-			// writeHermesArchiveStateDB seeds one more member ("child")
-			// beyond the ones added here.
-			require.Equal(t, members+1, seed.Synced)
-
-			_, err = conn.ExecContext(t.Context(),
-				"UPDATE messages SET content = 'changed member-000 content' WHERE session_id = 'member-000'")
-			require.NoError(t, err)
-
-			var scans atomic.Int64
-			ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-			stats := engine.SyncAll(ctx, nil)
-			assert.Equal(t, 1, stats.Synced)
-			assert.Zero(t, stats.Failed)
-
-			assert.Positive(t, scans.Load())
-			assert.LessOrEqual(t, scans.Load(), int64(4),
-				"a profiles-container root must still activate the batch fingerprint cache")
 		})
 	}
 }
@@ -1735,25 +1716,54 @@ func TestHermesTranscriptBesideStateDBReplacesMessages(t *testing.T) {
 	}
 }
 
-func TestHermesSingleSessionSyncAfterStateDBRemoval(t *testing.T) {
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-	require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
-		database.GetSessionFilePath(t.Context(), "hermes:child"))
+// TestHermesSingleSessionSyncAfterStateDBDamage pins FindSource's stored
+// member-path hint against current state.db membership, not just the
+// database file's existence: when a synced session's row disappears but
+// its transcript remains, refreshing that single session must fall back
+// to the transcript instead of erroring or returning nothing. It covers
+// both ways the row can disappear: the whole state.db file removed, and
+// just the row deleted from an otherwise intact state.db.
+func TestHermesSingleSessionSyncAfterStateDBDamage(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		damage func(t *testing.T, stateDB string)
+	}{
+		{
+			name: "state.db removed",
+			damage: func(t *testing.T, stateDB string) {
+				t.Helper()
+				require.NoError(t, os.Remove(stateDB))
+			},
+		},
+		{
+			name: "row removed",
+			damage: func(t *testing.T, stateDB string) {
+				t.Helper()
+				execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+				database.GetSessionFilePath(t.Context(), "hermes:child"))
 
-	require.NoError(t, os.Remove(stateDB))
+			test.damage(t, stateDB)
 
-	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
-	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
-		database.GetSessionFilePath(t.Context(), "hermes:child"))
-	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
+			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
+			assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
+				database.GetSessionFilePath(t.Context(), "hermes:child"))
+			assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
+		})
+	}
 }
 
 // TestHermesStateEventSurfacesTranscriptAfterRowRemoved proves a state.db
@@ -1783,32 +1793,6 @@ func TestHermesStateEventSurfacesTranscriptAfterRowRemoved(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
 		database.GetSessionFilePath(t.Context(), "hermes:child"),
 		"a state.db event must surface a transcript whose row disappeared, without a full sync")
-	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
-}
-
-// TestHermesSingleSessionSyncAfterRowRemoved pins FindSource's stored
-// member-path hint against current state.db membership, not just the
-// database file's existence: when a synced session's row is deleted from
-// state.db but its transcript remains, refreshing that single session must
-// fall back to the transcript instead of erroring or returning nothing.
-func TestHermesSingleSessionSyncAfterRowRemoved(t *testing.T) {
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-	require.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
-		database.GetSessionFilePath(t.Context(), "hermes:child"))
-
-	execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
-
-	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "hermes:child"))
-	assert.Equal(t, filepath.Join(root, "sessions", "child.jsonl"),
-		database.GetSessionFilePath(t.Context(), "hermes:child"))
 	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
 }
 
@@ -1900,74 +1884,6 @@ func TestHermesSingleSessionSyncKeepsTranscriptSource(t *testing.T) {
 			assert.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
 				database.GetSessionFilePath(t.Context(), "hermes:child"),
 				"refreshing one transcript must not reparse the whole archive")
-		})
-	}
-}
-
-// TestProviderFingerprintCacheRequiresExistingRoot proves that the context
-// withProviderFingerprintCache returns actually bounds Hermes database
-// opens, not merely that it differs in identity from the input context (a
-// context carrying a cache that does nothing would also differ in identity
-// and pass a bare != check). It reuses the db-open counting mechanism
-// TestHermesIncrementalSyncBoundsSiblingWrites relies on: with the cache
-// present, fingerprinting two sibling members of the same state.db opens it
-// once; without a cache (a missing configured root attaches none), the same
-// two members each pay their own open.
-func TestProviderFingerprintCacheRequiresExistingRoot(t *testing.T) {
-	// archiveRoot holds the real Hermes archive (state.db with two member
-	// sessions) that every sub-case fingerprints through. Only the engine's
-	// *configured* root varies, since that's what withProviderFingerprintCache
-	// decides on.
-	archiveRoot := t.TempDir()
-	writeHermesArchiveStateDB(t, archiveRoot)
-	execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO sessions
-		(id, source, model, started_at, ended_at, message_count)
-		VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
-	execHermesState(t, filepath.Join(archiveRoot, "state.db"), `INSERT INTO messages
-		(session_id, role, content, timestamp)
-		VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
-	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{Roots: []string{archiveRoot}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 2, "both sibling members must be discovered")
-
-	for _, test := range []struct {
-		name                 string
-		configuredRootExists bool
-		wantBoundedOpens     bool
-	}{
-		{name: "existing Hermes root", configuredRootExists: true, wantBoundedOpens: true},
-		{name: "missing Hermes root", configuredRootExists: false, wantBoundedOpens: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			configuredRoot := archiveRoot
-			if !test.configuredRootExists {
-				configuredRoot = filepath.Join(t.TempDir(), "missing")
-			}
-			engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {configuredRoot}}, Machine: "local",
-			})
-			t.Cleanup(engine.Close)
-
-			ctx, closeCache, err := engine.withProviderFingerprintCache(t.Context(), nil)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, closeCache()) })
-
-			var scans atomic.Int64
-			scanCtx := parser.WithSharedContainerScanObserver(ctx, func() { scans.Add(1) })
-			for _, source := range sources {
-				_, err := provider.Fingerprint(scanCtx, source)
-				require.NoError(t, err)
-			}
-
-			if test.wantBoundedOpens {
-				assert.LessOrEqual(t, scans.Load(), int64(1),
-					"a present cache must bound the two siblings to one database open")
-			} else {
-				assert.Equal(t, int64(2), scans.Load(),
-					"without a cache each sibling must open the database on its own")
-			}
 		})
 	}
 }
