@@ -200,17 +200,18 @@ stored offset resets the thread's resume point, so the next pass fetches the
 whole thread again. A live-token or plan usage write checks for this first,
 because its append would recreate the file and hide the loss. The write then
 starts the new file with the saved listing, which the parser needs. If the full
-fetch fails, nothing is written. Until the mirror holds the thread again, sync
-keeps the archived copy as it is. It skips a parse with fewer messages than the
-archive, or one with no token counts where the archive has some. Server history
-carries no token counts, so after a refetch the archived counts stay until new
-live counts arrive. Sync always replaces an archived copy from an older parser
-version, so a parser change still takes effect. A descendants or waiting file
-that does not decode is rebuilt from the saved thread files. A descendants list
-collects the threads counted under that root. A waiting list collects the
-threads whose parent is the waiting thread. The damaged file stays in place
-until the rebuilt list is saved, so a failed rebuild is tried again on the next
-load.
+fetch fails, the fetch writes nothing. Until the mirror holds the thread again,
+sync keeps the archived copy as it is. It skips a parse with fewer messages than
+the archive, or one with no token counts where the archive has some. Server
+history carries no token counts, so after a refetch the archived counts stay
+until new live counts arrive. Sync replaces an archived copy from an older
+parser version, so a parser change still takes effect, unless the file holds no
+messages: no parser change empties a chat, but a deleted file rebuilt around a
+usage record does. A descendants or waiting file that does not decode is rebuilt
+from the saved thread files. A descendants list collects the threads counted
+under that root. A waiting list collects the threads whose parent is the waiting
+thread. The damaged file stays in place until the rebuilt list is saved, so a
+failed rebuild is tried again on the next load.
 
 A missing or corrupt `account.json` with thread files still present makes
 AgentsView rebuild the plan usage queue from the thread files. The queue is the

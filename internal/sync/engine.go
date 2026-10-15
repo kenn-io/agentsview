@@ -18839,18 +18839,25 @@ func (e *Engine) reconcileProviderHistoryContext(
 			// where the archive has some was refetched from server history.
 			// Either way the archived chat stays as it is until the mirror
 			// holds new messages or new live counts. An archive row from an
-			// older parser version is always replaced, so a parser change
-			// can still reparse it.
-			if stored != nil &&
-				stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud) &&
-				len(candidate.Messages) <= stored.MessageCount &&
-				(len(candidate.Messages) < stored.MessageCount ||
-					stored.HasTotalOutputTokens && !candidate.Parsed.Session.HasTotalOutputTokens) {
-				log.Printf(
-					"codex-cloud: keeping the archived copy of %s until the fetcher refills its mirror file (%d messages archived, %d in the file)",
-					candidate.Session.ID, stored.MessageCount, len(candidate.Messages),
-				)
-				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
+			// older parser version is replaced, so a parser change can still
+			// reparse it, unless the mirror holds no messages at all: no
+			// parser change empties a chat, but a deleted mirror rebuilt
+			// around a usage record does.
+			if stored != nil && len(candidate.Messages) <= stored.MessageCount {
+				current := stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud)
+				var reason string
+				switch {
+				case len(candidate.Messages) == 0 && stored.MessageCount > 0,
+					current && len(candidate.Messages) < stored.MessageCount:
+					reason = fmt.Sprintf("the mirror file has fewer messages (%d saved, %d in the file)",
+						stored.MessageCount, len(candidate.Messages))
+				case current && stored.HasTotalOutputTokens && !candidate.Parsed.Session.HasTotalOutputTokens:
+					reason = "the mirror file has no token counts"
+				}
+				if reason != "" {
+					log.Printf("codex-cloud: kept the saved copy of %s: %s", candidate.Session.ID, reason)
+					return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
+				}
 			}
 		case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 			if len(candidate.Messages) > 0 {
