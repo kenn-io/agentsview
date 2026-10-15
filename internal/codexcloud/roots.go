@@ -257,6 +257,9 @@ func (s *Store) unsettledRoot(key AccountKey, id string) (bool, time.Time, error
 		return false, time.Time{}, err
 	}
 	change := st.changedAt()
+	if st.UsageChange.After(change) {
+		change = st.UsageChange
+	}
 	descendants, err := s.LoadDescendants(key, id)
 	if err != nil {
 		return false, time.Time{}, err

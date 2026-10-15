@@ -56,13 +56,14 @@ func doubled(first, limit time.Duration, attempts int) time.Duration {
 	return min(wait, limit)
 }
 
-// markPending marks a usage root pending after it or a descendant was
-// fetched. A root already pending keeps its next attempt; a root with a
+// markPending marks a usage root pending after it or a descendant changed
+// at change. A root already pending keeps its next attempt; a root with a
 // usable row re-enters after its re-entry wait, so a running thread
-// fetched every pass is not queried every pass.
-func markPending(acct *AccountState, root string, now time.Time, running bool) {
+// fetched every pass is not queried every pass. A newly pending root is
+// due from its change on.
+func markPending(acct *AccountState, root string, change time.Time, running bool) {
 	if entry, ok := acct.UsagePending[root]; ok {
-		entry.LastChange, entry.LateFailures = now, 0
+		entry.LastChange, entry.LateFailures = change, 0
 		if !running {
 			entry.Reentries = 0
 		}
@@ -71,35 +72,86 @@ func markPending(acct *AccountState, root string, now time.Time, running bool) {
 	}
 	if ref, ok := acct.Refresh[root]; ok {
 		reentries := ref.Reentries
-		if !running || now.Sub(ref.LastChange) >= reentryQuiet {
+		if !running || change.Sub(ref.LastChange) >= reentryQuiet {
 			reentries = 0
 		}
 		acct.UsagePending[root] = PendingEntry{
-			Since: now, NextAttempt: ref.LastAttempt.Add(doubled(usageRetryFirst, usageRetryLimit, reentries+1)),
-			LastChange: now, HasRow: true, Reentries: reentries,
+			Since: change, NextAttempt: ref.LastAttempt.Add(doubled(usageRetryFirst, usageRetryLimit, reentries+1)),
+			LastChange: change, HasRow: true, Reentries: reentries,
 		}
 		delete(acct.Refresh, root)
 		return
 	}
-	acct.UsagePending[root] = PendingEntry{Since: now, NextAttempt: now, LastChange: now}
+	acct.UsagePending[root] = PendingEntry{Since: change, NextAttempt: change, LastChange: change}
 }
 
-// linkUsage links a committed thread to its usage root, writes a "counted
-// under" record to every thread newly counted under a root, and marks the
-// root pending. The caller holds the account lock and saves acct.
-func (s *Syncer) linkUsage(key AccountKey, acct *AccountState, threadID, parent string, now time.Time) error {
+// usageMark is a root linkUsage marked pending and the change it marked.
+type usageMark struct {
+	root   string
+	change time.Time
+}
+
+// linkUsage links a committed thread to its usage root and writes a
+// "counted under" record to every thread newly counted under a root. It
+// links every time, so a link a crash stopped is redone. It marks the root
+// pending only when change, the thread's own last change, is later than
+// the change the root last recorded, or when a thread joined the root's
+// group now; a chat fetched again with nothing new leaves the root's
+// schedule alone. The caller holds the account lock, saves acct, and then
+// passes the mark to noteMarked.
+func (s *Syncer) linkUsage(
+	key AccountKey, acct *AccountState, threadID, parent string, change, now time.Time,
+) (usageMark, error) {
+	joined := false
 	root, err := s.Store.LinkParent(key, threadID, parent, func(id, root string) error {
+		joined = true
 		return s.countedUnder(key, acct, id, root, now)
 	})
 	if err != nil {
-		return err
+		return usageMark{}, err
+	}
+	if joined && now.After(change) {
+		change = now
+	}
+	recorded, err := s.recordedChange(key, acct, root)
+	if err != nil || !change.After(recorded) {
+		return usageMark{}, err
 	}
 	running, err := s.groupRunning(key, acct, root)
 	if err != nil {
+		return usageMark{}, err
+	}
+	markPending(acct, root, change, running)
+	return usageMark{root: root, change: change}, nil
+}
+
+// recordedChange is the last change recorded for root: its pending or
+// refresh entry's, else the one saved on the root.
+func (s *Syncer) recordedChange(key AccountKey, acct *AccountState, root string) (time.Time, error) {
+	if entry, ok := acct.UsagePending[root]; ok {
+		return entry.LastChange, nil
+	}
+	if ref, ok := acct.Refresh[root]; ok {
+		return ref.LastChange, nil
+	}
+	st, err := s.Store.LoadThread(key, root)
+	return st.UsageChange, err
+}
+
+// noteMarked saves a mark on its root once the account state holding it
+// is saved, so the same change does not mark the root again after its
+// entry is gone. Saving it first would let a crash before the account
+// save lose the mark.
+func (s *Syncer) noteMarked(key AccountKey, mark usageMark) error {
+	if mark.root == "" {
+		return nil
+	}
+	st, err := s.Store.LoadThread(key, mark.root)
+	if err != nil || !mark.change.After(st.UsageChange) {
 		return err
 	}
-	markPending(acct, root, now, running)
-	return nil
+	st.UsageChange = mark.change
+	return s.Store.SaveThread(key, mark.root, st)
 }
 
 // countedUnder records that threadID's usage counts toward root. It needs

@@ -518,7 +518,8 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	} else {
 		delete(acct.Unfinished, id)
 	}
-	if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
+	mark, err := p.linkUsage(p.key, &acct, id, parent, next.changedAt(), now)
+	if err != nil {
 		return err
 	}
 	updated := time.Unix(next.UpdatedAt, 0)
@@ -532,7 +533,10 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	default:
 		delete(acct.CheckAgain, id)
 	}
-	return p.Store.SaveAccount(p.key, acct)
+	if err := p.Store.SaveAccount(p.key, acct); err != nil {
+		return err
+	}
+	return p.noteMarked(p.key, mark)
 }
 
 // timeoutMessage is the retry message for a thread whose history OpenAI
@@ -571,19 +575,30 @@ func (p *pass) retryLater(
 	}
 	entry.NextAttempt = now.Add(wait)
 	acct.Retry[id] = entry
+	var mark usageMark
 	if listing != nil {
 		// Store the metadata now, so the thread imports even while its
 		// history cannot be fetched.
 		record := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: listing}
-		if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now); err != nil {
+		committed, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now)
+		if err != nil {
 			return err
 		}
+		// The stored updatedAt stays as it was, so the listing's is the
+		// chat's newest change.
+		change := committed.changedAt()
+		if updated, ok := listingUpdatedAt(listing); ok && time.Unix(updated, 0).After(change) {
+			change = time.Unix(updated, 0)
+		}
 		parent := resolveParent(id, listing, st.ResolvedParent, nil, false)
-		if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
+		if mark, err = p.linkUsage(p.key, &acct, id, parent, change, now); err != nil {
 			return err
 		}
 	}
-	return p.Store.SaveAccount(p.key, acct)
+	if err := p.Store.SaveAccount(p.key, acct); err != nil {
+		return err
+	}
+	return p.noteMarked(p.key, mark)
 }
 
 // unreadable stops retrying a thread that has failed for unreadableAfter.
