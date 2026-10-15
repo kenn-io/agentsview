@@ -468,13 +468,17 @@ under" reference resolves at any depth, not just to the direct parent.
 
 Sessions with no usage events are left out of token and cost totals in every
 backend. Those with a `session_plan_usage` row are counted as "billed as plan
-usage"; a thread with neither token records nor any plan usage record has no row
-yet, so it is not counted. The count is computed at query time from
-`session_plan_usage`, with the same filters as the totals, because the usage
-cache has no record of plan usage. A plan-only session still produces activity
-facts, so per-model views show its message count, but those columns read "Plan
-usage", not zero. The source does not set `NoPerMessageTokenData`, whose "no
-token data" notice would contradict that count.
+usage". A thread with neither token records nor any plan usage record still gets
+a row, with no figures, no outcome, and no coverage, which session details show
+as "Plan usage: not checked yet". A chat waiting for its first plan usage answer
+is therefore counted even when pauses, the per-pass request budget, or homes
+that refuse plan usage keep that answer from arriving. The count is computed at
+query time from `session_plan_usage`, with the same filters as the totals,
+because the usage cache has no record of plan usage. A plan-only session still
+produces activity facts, so per-model views show its message count, but those
+columns read "Plan usage", not zero. The source does not set
+`NoPerMessageTokenData`, whose "no token data" notice would contradict that
+count.
 
 ## Configuration and gates
 

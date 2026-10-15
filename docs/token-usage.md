@@ -80,9 +80,10 @@ plan usage instead. OpenAI's usage report gives each one's share of your ChatGPT
 plan's weekly and five-hour limits, and a credits figure. Those chats are left
 out of token and cost totals. The Usage page and `agentsview usage daily` say
 how many were left out, and per-model rows show "Plan usage" where those chats
-are the model's only usage. A chat with recorded token counts and a finished
-turn that live capture did not fully see stays in the totals, and the totals
-note that its token counts are low. See
+are the model's only usage. A chat that AgentsView has not asked about yet is
+counted too, and its session details say "Plan usage: not checked yet". A chat
+with recorded token counts and a finished turn that live capture did not fully
+see stays in the totals, and the totals note that its token counts are low. See
 [Codex Cloud](/docs/configuration/#codex-cloud) for setup and limits.
 
 Junie coverage is for CLI sessions; it excludes tool calls and IDE-only
