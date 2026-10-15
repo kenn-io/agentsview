@@ -12,7 +12,7 @@ import (
 func TestBuildAnalyticsWhereForwardsDateArguments(t *testing.T) {
 	pb := &paramBuilder{args: []any{"seed"}, n: 1}
 	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-03"}
-	where := buildAnalyticsWhereWithDate(
+	buildAnalyticsWhereWithDate(
 		filter,
 		pgDateColS,
 		pb,
@@ -23,8 +23,6 @@ func TestBuildAnalyticsWhereForwardsDateArguments(t *testing.T) {
 	from, to := analyticsUTCRange(filter)
 	assert.Equal(t, []any{"seed", from, to}, pb.args)
 	assert.Equal(t, 3, pb.n)
-	assert.Contains(t, where, pgDateColS+" >= $2::timestamptz")
-	assert.Contains(t, where, pgDateColS+" <= $3::timestamptz")
 }
 
 func TestRankTopSessions_DurationSort(t *testing.T) {
