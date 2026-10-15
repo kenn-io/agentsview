@@ -207,8 +207,10 @@ func reconcileClaudePersistedToolResults(
 // category), event is left alone: restoring a bare length would reproduce
 // the same "blank content, kept length" shape the read side already uses to
 // mean a deduped summary, and there is no way to tell the two apart later.
-// Accepted limit: once the side file for such an event ages out, its length
-// cannot be recovered on a later reparse; it reads back as 0.
+// Accepted limit: once the side file for such an event ages out, its
+// archived length cannot be recovered on a later reparse; event keeps
+// whatever length the current placeholder text itself resolves to, not the
+// archived length.
 func restoreClaudeToolResultEvent(
 	event *db.ToolResultEvent, archived db.ToolResultEvent,
 ) bool {

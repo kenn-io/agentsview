@@ -154,8 +154,10 @@ kept length" already means something else to every reader of
 `tool_result_events` (a deduped summary, re-derived from its one
 content-bearing event), and restoring a bare length would reproduce that
 same shape for an unrelated reason with no way to tell the two apart later.
-Accepted limit: once such an event's side file ages out, its length cannot
-be recovered on a later reparse; it reads back as 0.
+Accepted limit: once such an event's side file ages out, its archived
+length cannot be recovered on a later reparse; the event keeps whatever
+length its current placeholder text itself resolves to, not the archived
+length.
 
 This is the same provider-history dispatcher every other agent's archive
 preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`
