@@ -167,7 +167,7 @@ func (s *Syncer) countedUnder(key AccountKey, acct *AccountState, threadID, root
 	if err != nil {
 		return err
 	}
-	if _, _, err := commitThread(s.Store, key, threadID, st, []mirror.Record{record}, now); err != nil {
+	if _, err := commitBesideHistory(s.Store, key, threadID, st, []mirror.Record{record}, now); err != nil {
 		return err
 	}
 	delete(acct.UsagePending, threadID)
@@ -598,7 +598,7 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, lastChange, now time
 	}
 	// Recover records a crash left unsaved first, so the newest row in
 	// the file, not an older one the saved state names, is kept.
-	if st, _, err = commitThread(s.Store, key, root, st, nil, now); err != nil {
+	if st, err = commitBesideHistory(s.Store, key, root, st, nil, now); err != nil {
 		return err
 	}
 	if len(st.LastPlanRow) == 0 {
@@ -624,7 +624,7 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, lastChange, now time
 		records = append(records, leftOut)
 	}
 	// One commit, so a crash cannot keep the final row without its mark.
-	_, _, err = commitThread(s.Store, key, root, st, records, now)
+	_, err = commitBesideHistory(s.Store, key, root, st, records, now)
 	return err
 }
 
@@ -639,7 +639,7 @@ func (s *Syncer) appendPlan(key AccountKey, root string, now time.Time, kind mir
 	if err != nil {
 		return err
 	}
-	_, _, err = commitThread(s.Store, key, root, st, []mirror.Record{record}, now)
+	_, err = commitBesideHistory(s.Store, key, root, st, []mirror.Record{record}, now)
 	return err
 }
 

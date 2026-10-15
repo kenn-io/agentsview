@@ -420,7 +420,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		// a metadata record its mirror file would never be parsed.
 		listing = retry.Listing
 	}
-	lost, err := p.mirrorLost(id, st)
+	lost, err := mirrorLost(p.Store, p.key, id, st)
 	if err != nil {
 		return err
 	}
@@ -661,11 +661,11 @@ func listingCreatedAt(listing jsontext.Value) (int64, bool) {
 
 // mirrorLost reports a mirror file that is missing or shorter than the
 // recorded offset while the thread has a resume point.
-func (p *pass) mirrorLost(id string, st ThreadState) (bool, error) {
+func mirrorLost(store *Store, key AccountKey, id string, st ThreadState) (bool, error) {
 	if st.Offset == 0 && st.ResumeTurnID == "" {
 		return false, nil
 	}
-	path, err := p.Store.MirrorPath(p.key, id)
+	path, err := store.MirrorPath(key, id)
 	if err != nil {
 		return false, err
 	}

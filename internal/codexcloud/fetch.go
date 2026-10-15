@@ -496,6 +496,25 @@ func commitThread(
 	return st, len(kept) > 0, nil
 }
 
+// commitBesideHistory is commitThread for writers other than the history
+// fetch. Its append would recreate a lost mirror file and save an offset
+// that matches it, so the next fetch would no longer see the loss and
+// would resume past the lost history. A lost mirror first resets the
+// resume point, so the next fetch reads the whole chat again.
+func commitBesideHistory(
+	store *Store, key AccountKey, threadID string, st ThreadState, records []mirror.Record, now time.Time,
+) (ThreadState, error) {
+	lost, err := mirrorLost(store, key, threadID, st)
+	if err != nil {
+		return st, err
+	}
+	if lost {
+		st = forgetHistory(st)
+	}
+	next, _, err := commitThread(store, key, threadID, st, records, now)
+	return next, err
+}
+
 // forgetHistory resets a thread whose mirror file was lost after its
 // resume point moved: the next fetch reads every turn and item again, and
 // dedup drops what the remaining file already holds.
