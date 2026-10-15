@@ -143,14 +143,16 @@ func verifyUsageRollupQuery(
 		placeholders, args := InPlaceholders(chunk)
 		args = append(args, timezoneID)
 		rows, err := conn.QueryContext(ctx, `SELECT id, install_revision, pricing_hash
-			FROM usage_rollup_installs WHERE id IN `+placeholders+` AND timezone_id = ?`, args...)
+			FROM usage_rollup_installs
+			WHERE id IN `+placeholders+` AND timezone_id = ?`, args...)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var install usageRollupInstall
-			if err := rows.Scan(&install.ID, &install.InstallRevision, &install.PricingHash); err != nil {
+			if err := rows.Scan(
+				&install.ID, &install.InstallRevision, &install.PricingHash); err != nil {
 				return err
 			}
 			current[install.ID] = install
@@ -183,7 +185,8 @@ func verifyUsageRollupInstall(
 	// The write sequence identifies the exact rows whose source and baked
 	// metadata Ensure checked. A different sequence can belong to a build from
 	// an older archive snapshot, even when its number is higher.
-	if install.InstallRevision != required.InstallRevision || install.PricingHash != required.PricingHash {
+	if install.InstallRevision != required.InstallRevision ||
+		install.PricingHash != required.PricingHash {
 		return fmt.Errorf("%w: usage rollup session %s changed before read",
 			errUsageCacheSourceChanged, sessionID)
 	}
