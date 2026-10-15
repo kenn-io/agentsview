@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/codexcloud/codexcloudtest"
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -327,21 +328,24 @@ func TestTokenCanary(t *testing.T) {
 		assert.Contains(t, all, Message(f, time.Time{}), "the canary reached the %s path", f)
 	}
 
-	files := 0
+	files, mirrors := 0, 0
 	require.NoError(t, filepath.WalkDir(env.root, func(path string, d fs.DirEntry, err error) error {
 		require.NoError(t, err)
 		if d.IsDir() {
 			return nil
 		}
+		if strings.HasSuffix(path, mirrorSuffix) {
+			mirrors++
+		}
 		files++
-		data, err := os.ReadFile(path)
-		require.NoError(t, err)
+		text := fileText(t, path)
 		for _, secret := range secrets {
-			assert.NotContains(t, string(data), secret, "file %s", path)
+			assert.NotContains(t, text, secret, "file %s", path)
 		}
 		return nil
 	}))
 	require.NotZero(t, files)
+	require.NotZero(t, mirrors, "the passes wrote mirror files")
 	require.NotEmpty(t, logs.String(), "the refused passes log their errors")
 	for _, secret := range secrets {
 		assert.NotContains(t, logs.String(), secret, "log")
@@ -349,6 +353,27 @@ func TestTokenCanary(t *testing.T) {
 			assert.NotContains(t, out, secret, "status")
 		}
 	}
+}
+
+// fileText returns the text a secret could hide in: the decoded kind and
+// data of every record for a compressed mirror file, the raw bytes otherwise.
+func fileText(t *testing.T, path string) string {
+	t.Helper()
+	if !strings.HasSuffix(path, mirrorSuffix) {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		return string(data)
+	}
+	records, err := mirror.ReadAll(t.Context(), path)
+	require.NoError(t, err)
+	var b strings.Builder
+	for _, r := range records {
+		b.WriteString(string(r.Kind))
+		b.WriteByte('\n')
+		b.Write(r.Data)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // passKeyFor reads the account key of the login in home.
