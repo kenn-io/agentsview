@@ -1,8 +1,12 @@
 package codexcloud
 
 import (
+	"bytes"
+	"encoding/json/jsontext"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -268,4 +272,44 @@ func TestLostAccountStateRequeuesRootsChangedAfterSettling(t *testing.T) {
 	from := len(env.usage.Requests())
 	env.run(t)
 	assert.Equal(t, []string{"own", "parent"}, env.requestedSince(from), "each changed root is asked about again")
+}
+
+// TestLostAccountStateSkipsUnreadableRoots covers a rebuild that meets a
+// root it cannot read: that root is logged and skipped, and the others
+// are queued, so the account keeps syncing.
+func TestLostAccountStateSkipsUnreadableRoots(t *testing.T) {
+	env := newUsageEnv(t)
+	var logged bytes.Buffer
+	env.syncer.Store.Log = log.New(&logged, "", 0)
+	for _, id := range []string{"good", "badrow", "badmirror"} {
+		env.threads.Set(finishedThread(id, ago(time.Hour), message(id+"-m", "hi")))
+	}
+	env.usage.SetRow("good", codexcloudtest.Row("good", "partial", pct(1), nil))
+	env.usage.SetRow("badrow", codexcloudtest.Row("badrow", "partial", pct(1), nil))
+	env.run(t)
+
+	st, err := env.syncer.Store.LoadThread(passKey, "badrow")
+	require.NoError(t, err)
+	require.Equal(t, string(mirror.KindPlanUsageRow), st.LastPlanRecordKind)
+	st.LastPlanRow = jsontext.Value(`"not a row"`)
+	require.NoError(t, env.syncer.Store.SaveThread(passKey, "badrow", st))
+	// Its newest record is a "left out" outcome, which is read from the
+	// mirror file.
+	require.NoError(t, os.Chmod(env.mirrorPath(t, "badmirror"), 0))
+	t.Cleanup(func() { _ = os.Chmod(env.mirrorPath(t, "badmirror"), 0o600) })
+
+	env.loseAccount(t, false)
+	env.clock.Advance(time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	assert.Equal(t, []string{"good"}, env.requestedSince(from), "the readable root is asked about again")
+	acct := env.account(t)
+	assert.Contains(t, acct.UsagePending, "good")
+	assert.NotContains(t, acct.UsagePending, "badrow")
+	assert.NotContains(t, acct.UsagePending, "badmirror")
+	_, err = os.Stat(filepath.Join(env.root, string(passKey), "account.json"))
+	require.NoError(t, err, "the rebuilt account state is saved")
+	assert.Contains(t, logged.String(), "chat badrow")
+	assert.Contains(t, logged.String(), "chat badmirror")
 }
