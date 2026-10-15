@@ -18829,43 +18829,24 @@ func (e *Engine) reconcileProviderHistoryContext(
 			if err != nil {
 				return ingest.HistoryResult{}, err
 			}
-			if stored != nil && len(candidate.Messages) < stored.MessageCount {
-				// A chat's history only grows, so a shorter mirror file
-				// lost part of it: the fetcher refetches the chat, and the
-				// archived transcript and live token counts stay until then.
+			// A chat's history only grows, and token counts reach the
+			// mirror only from live capture. So a mirror with fewer
+			// messages lost part of the chat, and one with no token counts
+			// where the archive has some was refetched from server history.
+			// Either way the archived chat stays as it is until the mirror
+			// holds new messages or new live counts. An archive row from an
+			// older parser version is always replaced, so a parser change
+			// can still reparse it.
+			if stored != nil &&
+				stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud) &&
+				len(candidate.Messages) <= stored.MessageCount &&
+				(len(candidate.Messages) < stored.MessageCount ||
+					stored.HasTotalOutputTokens && !candidate.Parsed.Session.HasTotalOutputTokens) {
 				log.Printf(
-					"preserve %s %s: mirror holds fewer messages than the archive (%d stored, %d parsed)",
-					agent, candidate.Session.ID, stored.MessageCount, len(candidate.Messages),
+					"codex-cloud: keeping the archived copy of %s until the fetcher refills its mirror file (%d messages archived, %d in the file)",
+					candidate.Session.ID, stored.MessageCount, len(candidate.Messages),
 				)
 				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
-			}
-			if stored != nil && len(candidate.Parsed.UsageEvents) == 0 {
-				// Token counts reach the mirror only from live capture, so a
-				// refetched mirror has none. The archived ones stay until
-				// new live records arrive; the first of those carries the
-				// running total, so keeping both would count it twice.
-				archive, ok := store.(*db.DB)
-				if !ok {
-					return ingest.HistoryResult{}, fmt.Errorf(
-						"codex-cloud: archive store %T cannot read usage events", store,
-					)
-				}
-				events, err := archive.GetUsageEvents(ctx, candidate.Session.ID)
-				if err != nil {
-					return ingest.HistoryResult{}, err
-				}
-				for _, ev := range events {
-					candidate.Parsed.UsageEvents = append(candidate.Parsed.UsageEvents, parser.ParsedUsageEvent{
-						SessionID: ev.SessionID, MessageOrdinal: ev.MessageOrdinal,
-						Source: ev.Source, Model: ev.Model, ProviderID: ev.ProviderID,
-						InputTokens: ev.InputTokens, OutputTokens: ev.OutputTokens,
-						CacheCreationInputTokens: ev.CacheCreationInputTokens,
-						CacheReadInputTokens:     ev.CacheReadInputTokens,
-						ReasoningTokens:          ev.ReasoningTokens, Cost: ev.Cost,
-						CostStatus: ev.CostStatus, CostSource: ev.CostSource,
-						OccurredAt: ev.OccurredAt, DedupKey: ev.DedupKey,
-					})
-				}
 			}
 		case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 			if len(candidate.Messages) > 0 {
