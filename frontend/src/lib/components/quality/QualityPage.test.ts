@@ -4,6 +4,8 @@ import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { branchFilterToken } from "../../branchFilters.js";
 
 // @ts-ignore
 import QualityPage from "./QualityPage.svelte";
@@ -24,6 +26,8 @@ describe("QualityPage", () => {
     document.body.innerHTML = "";
     router.route = "sessions";
     router.params = {};
+    sessions.filters.branch = "";
+    analytics.branch = "";
     vi.restoreAllMocks();
   });
 
@@ -34,6 +38,34 @@ describe("QualityPage", () => {
     expect(document.body.textContent).toContain("Deterministic Recommendations");
     expect(document.body.textContent).toContain("Quality Patterns");
     expect(insights.load).not.toHaveBeenCalled();
+  });
+
+  it("loads signals for the branch filter set before the page opened", async () => {
+    const main = branchFilterToken("pl1:sha256:alpha", "main");
+    sessions.filters.branch = main;
+    const branchAtFetch: string[] = [];
+    vi.mocked(analytics.fetchSignalsForQuality).mockImplementation(async () => {
+      branchAtFetch.push(analytics.branch);
+    });
+
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+
+    expect(analytics.branch).toBe(main);
+    expect(branchAtFetch.at(-1)).toBe(main);
+  });
+
+  it("reloads signals when only the branch filter changes", async () => {
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+    vi.mocked(analytics.fetchSignalsForQuality).mockClear();
+
+    const dev = branchFilterToken("pl1:sha256:alpha", "dev");
+    sessions.filters.branch = dev;
+    await tick();
+
+    expect(analytics.branch).toBe(dev);
+    expect(analytics.fetchSignalsForQuality).toHaveBeenCalledTimes(1);
   });
 
   it("shows refresh activity while a filtered quality query is running", async () => {
