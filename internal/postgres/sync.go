@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -193,6 +194,16 @@ type Sync struct {
 	afterVectorGenerationLookup func()
 	// afterScopedVectorApply is a scoped-retry test hook.
 	afterScopedVectorApply func()
+
+	// fullRun tracks the running full push's progress; nil outside one.
+	fullRun *fullPushRunTracker
+	// fullRunCheckpointInterval, when positive, replaces
+	// fullPushRunCheckpointInterval.
+	fullRunCheckpointInterval time.Duration
+	// pushBatchSize, when positive, replaces the session batch size.
+	pushBatchSize int
+	// afterPushBatch is a test hook called after each session batch.
+	afterPushBatch func()
 
 	closeOnce sync.Once
 	closeErr  error

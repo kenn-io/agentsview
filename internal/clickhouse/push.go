@@ -174,7 +174,7 @@ func (s *Sync) PushWithOptions(
 	if err != nil {
 		return result, fmt.Errorf("listing sessions for clickhouse push: %w", err)
 	}
-	sortNewestFirst(candidates)
+	db.SortSessionsNewestFirst(candidates)
 	inScope, outOfScope := s.partitionPushScope(candidates)
 	if err := s.deleteResidentSessions(ctx, sessionIDs(outOfScope), &result); err != nil {
 		return result, err

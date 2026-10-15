@@ -89,7 +89,33 @@ func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions,
 	onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
+	result, err := s.pushWithOptions(ctx, opts, onProgress)
+	if run := s.fullRun; run != nil {
+		s.fullRun = nil
+		if err != nil {
+			// Keep what the run committed since its last checkpoint. The
+			// push may have failed because ctx ended, so save without it.
+			err = errors.Join(err, run.save(context.WithoutCancel(ctx)))
+		}
+	}
+	return result, err
+}
+
+func (s *Sync) pushWithOptions(
+	ctx context.Context, opts storage.PushOptions,
+	onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
 	full := opts.Full
+	fullReason := ""
+	if full {
+		fullReason = "requested"
+	}
+	// noteFull records why the push became full; the first reason wins.
+	noteFull := func(reason string) {
+		if fullReason == "" {
+			fullReason = reason
+		}
+	}
 	start := time.Now()
 	var result storage.PushResult
 	s.fullVectorSessions = make(map[string]struct{}, len(opts.FullVectorSessions))
@@ -156,6 +182,7 @@ func (s *Sync) PushWithOptions(
 		}
 		lastPush = ""
 		full = true
+		noteFull(reason)
 		pushStateCleared = true
 	}
 	archiveID, err := s.local.GetArchiveID(ctx)
@@ -184,6 +211,7 @@ func (s *Sync) PushWithOptions(
 		lastPush = ""
 		boundaryState = ""
 		full = true
+		noteFull("source archive identity changed")
 		pushStateCleared = true
 	}
 	databaseGeneration, err := s.local.GetDatabaseID(ctx)
@@ -218,6 +246,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: session alias backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling session aliases")
 	}
 	provenanceBackfillState := aliasBackfillState
 	if s.isFiltered() {
@@ -237,6 +266,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: session provenance backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling session provenance")
 	}
 	var transcriptRevisionBackfillNeeded bool
 	full, transcriptRevisionBackfillNeeded, err = applyTranscriptRevisionBackfillRequirement(ctx, state, full)
@@ -247,6 +277,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling transcript revisions")
 	}
 	var timestampNormalizationBackfillNeeded bool
 	full, timestampNormalizationBackfillNeeded, err = applyTimestampNormalizationBackfillRequirement(ctx, state, full)
@@ -257,6 +288,33 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: timestamp normalization backfill marker missing; forcing full push",
 		)
+		noteFull("normalizing timestamps")
+	}
+	var backfills []string
+	for key, needed := range map[string]bool{
+		sessionAliasBackfillStateKey:           aliasBackfillNeeded,
+		sessionProvenanceBackfillStateKey:      provenanceBackfillNeeded,
+		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
+		timestampNormalizationBackfillStateKey: timestampNormalizationBackfillNeeded,
+	} {
+		if needed {
+			backfills = append(backfills, key)
+		}
+	}
+	slices.Sort(backfills)
+	pendingRun, runPending, resumed, err := s.pendingFullPushRun(
+		ctx, state, s.newFullPushRun("", markerID, backfills),
+	)
+	if err != nil {
+		return result, err
+	}
+	switch {
+	case resumed:
+		full = true
+		fullReason = "resuming interrupted full push (" + pendingRun.Reason + ")"
+	case runPending:
+		full = true
+		noteFull(pendingRun.Reason)
 	}
 	if full {
 		lastPush = ""
@@ -296,6 +354,7 @@ func (s *Sync) PushWithOptions(
 			)
 			lastPush = ""
 			full = true
+			noteFull("PG push marker missing")
 			if len(legacyMarkerMachines) == 0 {
 				legacyMarkerMachines = nil
 			}
@@ -317,6 +376,25 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
+	result.Full = full
+	if full && fullReason != "requested" {
+		result.FullReason = fullReason
+	}
+	var run *fullPushRunTracker
+	if full {
+		log.Printf("pgsync: full push (%s)", fullReason)
+		current := s.newFullPushRun(fullReason, markerID, backfills)
+		if resumed {
+			current = pendingRun
+			if err := s.dropMissingRunSessions(ctx, &current); err != nil {
+				return result, err
+			}
+		}
+		if run, err = s.startFullPushRun(ctx, state, current); err != nil {
+			return result, err
+		}
+	}
+	s.fullRun = run
 	if s.isFiltered() {
 		scopeMoveCandidates, scopeErr := listPGProjectScopeMoveCandidates(
 			ctx, s.local, lastPush,
@@ -466,14 +544,19 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
-
-	var sessions []db.Session
-	for _, sess := range sessionByID {
-		sessions = append(sessions, sess)
+	// Sessions the interrupted run committed still belong in the boundary
+	// state this push records, since PG holds them at these fingerprints.
+	var runCommitted []db.Session
+	for id, sess := range sessionByID {
+		if run.sessionDone(id, sessionFingerprints[id]) {
+			delete(sessionByID, id)
+			runCommitted = append(runCommitted, sess)
+		}
 	}
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ID < sessions[j].ID
-	})
+	result.SkippedUnchanged = len(runCommitted)
+
+	sessions := slices.Collect(maps.Values(sessionByID))
+	db.SortSessionsNewestFirst(sessions)
 
 	// Non-nil only for change-scoped pushes: sessionByID now holds
 	// exactly this push's changed relational sessions, and the vector
@@ -490,7 +573,7 @@ func (s *Sync) PushWithOptions(
 			// they can advance their own watermark without
 			// moving the unfiltered/global cursor.
 			if err := finalizeFilteredPushState(ctx,
-				state, lastPush, cutoff, sessions,
+				state, lastPush, cutoff, runCommitted,
 				priorFingerprints, sessionFingerprints,
 				result.Errors,
 			); err != nil {
@@ -498,7 +581,7 @@ func (s *Sync) PushWithOptions(
 			}
 		} else {
 			if err := finalizeUnfilteredPushState(ctx,
-				state, lastPush, cutoff, sessions,
+				state, lastPush, cutoff, runCommitted,
 				priorFingerprints, sessionFingerprints,
 				result.Errors,
 			); err != nil {
@@ -555,19 +638,26 @@ func (s *Sync) PushWithOptions(
 		if err != nil {
 			return result, err
 		}
+		if err := run.complete(ctx, result.Errors); err != nil {
+			return result, err
+		}
 		result.Duration = time.Since(start)
 		return result, nil
 	}
 
-	var pushed []db.Session
+	pushed := make([]db.Session, 0, len(sessions))
 	// Sessions whose individual retry also failed: their PG sessions/messages
 	// rows are stale or absent, so the vector phase must not push their newer
 	// local vectors ahead of them.
 	var failedSessions map[string]struct{}
-	const batchSize = 50
+	batchSize := 50
+	if s.pushBatchSize > 0 {
+		batchSize = s.pushBatchSize
+	}
 	for i := 0; i < len(sessions); i += batchSize {
 		end := min(i+batchSize, len(sessions))
 		batch := sessions[i:end]
+		committedBefore := len(pushed)
 
 		batchResult, err := s.pushBatch(
 			ctx, batch, full, markerID, legacyMarkerMachines,
@@ -605,6 +695,11 @@ func (s *Sync) PushWithOptions(
 				}
 			}
 		}
+		if err := run.recordSessions(
+			ctx, pushed[committedBefore:], sessionFingerprints,
+		); err != nil {
+			return result, err
+		}
 		if onProgress != nil {
 			onProgress(storage.PushProgress{
 				SessionsDone:     end,
@@ -614,6 +709,9 @@ func (s *Sync) PushWithOptions(
 				Errors:           result.Errors,
 			})
 		}
+		if s.afterPushBatch != nil {
+			s.afterPushBatch()
+		}
 	}
 
 	if s.isFiltered() {
@@ -621,7 +719,7 @@ func (s *Sync) PushWithOptions(
 		// they can advance their own watermark without moving
 		// the unfiltered/global cursor.
 		if err := finalizeFilteredPushState(ctx,
-			state, lastPush, cutoff, pushed,
+			state, lastPush, cutoff, append(pushed, runCommitted...),
 			priorFingerprints, sessionFingerprints,
 			result.Errors,
 		); err != nil {
@@ -629,7 +727,7 @@ func (s *Sync) PushWithOptions(
 		}
 	} else {
 		if err := finalizeUnfilteredPushState(ctx,
-			state, lastPush, cutoff, pushed,
+			state, lastPush, cutoff, append(pushed, runCommitted...),
 			priorFingerprints, sessionFingerprints,
 			result.Errors,
 		); err != nil {
@@ -695,6 +793,9 @@ func (s *Sync) PushWithOptions(
 		opts.LastReconciledVectorGeneration, failedSessions, onProgress,
 	)
 	if err != nil {
+		return result, err
+	}
+	if err := run.complete(ctx, result.Errors); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)

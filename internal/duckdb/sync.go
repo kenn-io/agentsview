@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -138,7 +137,8 @@ func (s *Sync) isFiltered() bool {
 // build predating the read-only serve change — and fails closed. When the
 // incremental push's own write open is blocked by reader processes, the
 // push defers (storage.MirrorPushOptions.Automatic) or falls back to a rebuild, which
-// never write-opens the destination (temp file plus atomic rename). Every
+// never write-opens the destination (rebuild file plus atomic rename). A
+// rebuild that was killed partway resumes on the next push. Every
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
@@ -179,6 +179,21 @@ func Push(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
 		machine, localDatabaseID, localArchiveID,
 	)
+	run, err := newRebuildRun(ctx, local, machine, opts, reason)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	pending, err := pendingRebuild(ctx, path, run)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	runReason := reason
+	if pending != nil {
+		// A rebuild killed partway resumes even when the mirror would now
+		// accept an incremental push, so a requested rebuild still finishes.
+		runReason = pending.Reason
+		reason = "resuming interrupted rebuild (" + pending.Reason + ")"
+	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 		switch {
@@ -192,11 +207,12 @@ func Push(
 		}
 		reason = "mirror is held open by reader processes; " +
 			"incremental write access unavailable"
+		runReason = reason
 	} else if err := ensureReplaceableMirror(path, probe); err != nil {
 		return storage.MirrorPushResult{}, err
 	}
 	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
-	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	result, err := rebuildMirror(ctx, path, local, machine, opts, runReason, onProgress)
 	result.Diagnostics.RebuildReason = reason
 	if err == nil {
 		cleanUpLegacyDuckDBSyncState(ctx, local)
@@ -404,7 +420,7 @@ func (s *Sync) pushChangedSessions(
 			"listing sessions for duckdb incremental push: %w", err,
 		)
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
+	db.SortSessionsNewestFirst(candidates)
 
 	inScope, outOfScope := s.partitionPushScope(candidates)
 	result.Diagnostics.CandidateSessions = countPushSessions(inScope)

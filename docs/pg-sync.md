@@ -153,6 +153,15 @@ sum/max/min, system message ordinals, tool call counts) are checked against
 PostgreSQL. Use `--full` to bypass both layers and re-push everything — for
 example, after a schema reset or when message content was rewritten in place.
 
+Every push sends the most recently active sessions first, so recent activity
+reaches PostgreSQL before older history. A full push that stops partway, for
+example because the process restarted, resumes on the next push: sessions it
+already pushed are skipped unless PostgreSQL lost them, and the push reports
+`resuming interrupted full push`. Progress is saved at most every 15 seconds,
+so a restart repeats at most that much work. The push starts over instead when
+the target, the local archive, or the data format changed since it began. A
+pending full push takes precedence over `--full`.
+
 If any sessions fail to push, the watermark is not advanced so they are retried
 on the next run. The exit code is 1 when any errors occur, 0 otherwise.
 

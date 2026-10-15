@@ -3241,9 +3241,12 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// The failed push committed sess-1 under the repaired archive before
+	// metadata publication failed, so the retry resumes that run.
 	second, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, second.SessionsPushed)
+	assert.Zero(t, second.SessionsPushed)
+	assert.Equal(t, 1, second.SkippedUnchanged)
 	var gotArchiveID string
 	require.NoError(t, pg.QueryRowContext(ctx, `
 		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,

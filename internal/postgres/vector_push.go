@@ -522,7 +522,8 @@ func (s *Sync) skipVectorsOnPrivilegeError(err error, res *storage.VectorPushRes
 // vanished locally would otherwise be evicted — vector state running ahead of
 // the sessions/messages rows its session-phase push failed to write. full,
 // or a session's entry in s.fullVectorSessions, re-sends unchanged sessions
-// too, while still honoring out-of-scope exclusion,
+// too, except those the running full push already pushed before an
+// interruption, while still honoring out-of-scope exclusion,
 // ownership conflicts, and failed-session deferral. onProgress, when non-nil,
 // receives a Phase "vectors" report after every pushed session and every
 // vectorProgressStride examined ones, so long delta scans stay visible
@@ -576,7 +577,8 @@ func (s *Sync) applyVectorDeltas(
 			continue
 		}
 		_, repair := s.fullVectorSessions[sessionID]
-		if !full && !repair && hasState && prev.docAggHash == agg {
+		if !repair && hasState && prev.docAggHash == agg &&
+			(!full || s.fullRun.vectorDone(gen.id, sessionID, agg)) {
 			res.SessionsUnchanged++
 			continue
 		}
@@ -599,6 +601,9 @@ func (s *Sync) applyVectorDeltas(
 			res.DocsPushed += outcome.docs
 			res.ChunksPushed += outcome.chunks
 			res.DocsDeleted += outcome.deleted
+			if err := s.fullRun.recordVector(ctx, gen.id, sessionID, agg); err != nil {
+				return err
+			}
 			report()
 		} else if examined%vectorProgressStride == 0 {
 			report()

@@ -5,9 +5,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"log"
-	"slices"
-	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -108,31 +105,4 @@ func (s *Sync) readRunFingerprints(ctx context.Context, since uint64) (map[strin
 		return nil, fmt.Errorf("reading clickhouse sessions the interrupted full push wrote: %w", err)
 	}
 	return out, nil
-}
-
-// sortNewestFirst orders sessions by their latest activity, newest first, so
-// an interrupted push has already published the recent part of the charts.
-func sortNewestFirst(sessions []db.Session) {
-	recency := make(map[string]time.Time, len(sessions))
-	for _, sess := range sessions {
-		recency[sess.ID] = sessionRecency(sess)
-	}
-	slices.SortFunc(sessions, func(a, b db.Session) int {
-		if c := recency[b.ID].Compare(recency[a.ID]); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
-}
-
-func sessionRecency(sess db.Session) time.Time {
-	for _, v := range []*string{sess.EndedAt, sess.StartedAt, &sess.CreatedAt} {
-		if v == nil {
-			continue
-		}
-		if t, ok := parseTimestamp(*v); ok {
-			return t
-		}
-	}
-	return time.Time{}
 }

@@ -10,7 +10,7 @@ import (
 
 // checkWorkDirPrivate verifies the mirror work directory belongs to the
 // current user and is not writable by group or other, so nothing else on
-// the machine can plant symlinks or swap rebuild temp files inside it (see
+// the machine can plant symlinks or swap the rebuild file inside it (see
 // ensureMirrorWorkDir). Directories created by older builds used 0755,
 // which passes: only the write bits matter.
 func checkWorkDirPrivate(workDir string, info os.FileInfo) error {

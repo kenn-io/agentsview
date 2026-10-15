@@ -111,7 +111,10 @@ and a push version at or after the run's. The vector phase skips a session whose
 `vector_push_state` row has a matching hash and a version at or after the run's.
 Any mismatch starts a new full push. A resumed run skips the whole-mirror usage
 repricing that the run's first process already did. Pushes send sessions newest
-activity first (`ended_at`, then `started_at`, then `created_at`).
+activity first (`ended_at`, then `started_at`, then `created_at`). A Codex
+revert page goes right after its thread's session, which mirrors read to decide
+whether the page is trashed. PostgreSQL pushes and DuckDB rebuilds use the same
+order.
 
 **Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
 DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
