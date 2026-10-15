@@ -392,6 +392,8 @@ class UsageStore {
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   // The zoom query the current rows (or the request filling them) belong to.
   private zoomScope = "";
+  // The sort metric and token types the current rows were ranked by.
+  private zoomRanking = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -1421,13 +1423,26 @@ class UsageStore {
   ): Promise<FetchResult> {
     const version = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
+    const ranking = {
+      sort: this.mode === "token" ? "tokens" : "cost",
+      token_types:
+        this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+          ? this.selectedTokenTypes.join(",")
+          : undefined,
+    } as const;
     if (panel === "zoom") {
       // Rows from another range or scope are wrong, so clear them. A metric or
-      // token-type change, a refresh, or a remount keeps them, even if it fails.
+      // token-type change, a refresh, or a remount keeps them, even if it fails,
+      // unless the server cut the list at the limit: the new metric can pick
+      // other rows out of the remainder.
       // active_since moves on every call, so key on whether it is set.
       const scope = JSON.stringify({ ...query, active_since: query.active_since !== undefined });
-      if (scope !== this.zoomScope) this.zoomRows = null;
+      const rankingKey = JSON.stringify(ranking);
+      const cut = this.zoomRows?.some((row) => !row.groupKey && !row.sessionId) ?? false;
+      if (scope !== this.zoomScope || (cut && rankingKey !== this.zoomRanking))
+        this.zoomRows = null;
       this.zoomScope = scope;
+      this.zoomRanking = rankingKey;
     }
     const isFirstLoad = (panel === "zoom" ? this.zoomRows : this.topSessions) === null;
     if (isFirstLoad) {
@@ -1439,14 +1454,7 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
-        {
-          ...query,
-          sort: this.mode === "token" ? "tokens" : "cost",
-          token_types:
-            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-              ? this.selectedTokenTypes.join(",")
-              : undefined,
-        },
+        { ...query, ...ranking },
         { signal },
       );
       if (this.versions[panel] !== version) return "aborted";

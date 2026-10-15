@@ -2588,6 +2588,26 @@ describe("UsageStore project zoom", () => {
     },
   );
 
+  it.each(["a metric change", "a token-type change"])(
+    "drops a zoom list cut at the limit after %s, and reports a failed refetch",
+    async (event) => {
+      const { usage } = await loadStore();
+      if (event === "a token-type change") usage.setMode("token");
+      const cut = [group(1), { ...topSession(""), cost: testMoney(5) }];
+      usageServiceMocks.getUsageZoom.mockResolvedValueOnce(cut);
+      usage.setOpenProject("pl1:sha256:alpha");
+      await vi.waitFor(() => expect(usage.zoomRows).toEqual(cut));
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      usageServiceMocks.getUsageZoom.mockRejectedValueOnce(new Error("zoom failed"));
+      if (event === "a metric change") usage.setMode("token");
+      else usage.setSelectedTokenTypes(["output"]);
+      expect(usage.zoomRows).toBeNull();
+      expect(usage.loading.zoom).toBe(true);
+      await vi.waitFor(() => expect(usage.errors.zoom).toBe("zoom failed"));
+      expect(usage.zoomRows).toBeNull();
+    },
+  );
+
   it("drops zoom rows when Recently active toggles, but keeps them when only its cutoff moves", async () => {
     const { usage } = await loadStore();
     const { sessions } = await import("./sessions.svelte.js");
