@@ -462,7 +462,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		switch {
 		case threadErr:
 			p.Log.Printf("codex-cloud: chat %s: %v", id, Redact(err, p.login.Token))
-			return p.retryLater(id, st, acct, retry, listing, Message(f, time.Time{}), now)
+			return p.retryLater(id, st, lost, acct, retry, listing, Message(f, time.Time{}), now)
 		case errors.Is(err, ErrCallTimeout):
 			// The timeout ended the connection, so the pass ends. Without
 			// a retry entry the next pass would pick this thread first
@@ -471,7 +471,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			p.Log.Printf("codex-cloud: chat %s: %v", id, Redact(err, p.login.Token))
 			// The wait counts from the timeout, not from the fetch's
 			// start, which can be minutes earlier.
-			if recordErr := p.retryLater(id, st, acct, retry, listing, timeoutMessage, p.Now()); recordErr != nil {
+			if recordErr := p.retryLater(id, st, lost, acct, retry, listing, timeoutMessage, p.Now()); recordErr != nil {
 				return recordErr
 			}
 			return err
@@ -546,8 +546,10 @@ const timeoutMessage = "OpenAI did not answer in time when reading a chat."
 // retryLater puts a failed thread in the retry set with its backoff, or
 // retires it after unreadableAfter. A listing record is stored now, so the
 // thread imports with its metadata while its history cannot be fetched.
+// After a lost mirror (lost) nothing is written: the file would hold only
+// the listing, and importing it would replace the chat's archived history.
 func (p *pass) retryLater(
-	id string, st ThreadState, acct AccountState, retry RetryEntry, listing jsontext.Value,
+	id string, st ThreadState, lost bool, acct AccountState, retry RetryEntry, listing jsontext.Value,
 	message string, now time.Time,
 ) error {
 	entry := RetryEntry{
@@ -567,7 +569,7 @@ func (p *pass) retryLater(
 		entry.FirstFailure = now
 	}
 	if now.Sub(entry.FirstFailure) >= unreadableAfter {
-		return p.unreadable(id, st, acct, entry, now)
+		return p.unreadable(id, st, lost, acct, entry, now)
 	}
 	wait := retryFirst
 	for range entry.Attempts - 1 {
@@ -576,7 +578,7 @@ func (p *pass) retryLater(
 	entry.NextAttempt = now.Add(wait)
 	acct.Retry[id] = entry
 	var mark usageMark
-	if listing != nil {
+	if listing != nil && !lost {
 		// Store the metadata now, so the thread imports even while its
 		// history cannot be fetched.
 		record := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: listing}
@@ -605,7 +607,7 @@ func (p *pass) retryLater(
 // Storing the listing's updatedAt makes later listings see the thread as
 // unchanged, so only a new updatedAt selects it again; what is already
 // stored stays.
-func (p *pass) unreadable(id string, st ThreadState, acct AccountState, entry RetryEntry, now time.Time) error {
+func (p *pass) unreadable(id string, st ThreadState, lost bool, acct AccountState, entry RetryEntry, now time.Time) error {
 	p.Log.Printf("codex-cloud: chat %s: stopped retrying after failing since %s: %s "+
 		"Its next change in OpenAI starts the retries again.",
 		id, entry.FirstFailure.Format(time.RFC3339), entry.Message)
@@ -613,7 +615,7 @@ func (p *pass) unreadable(id string, st ThreadState, acct AccountState, entry Re
 		st.UpdatedAt = updated
 	}
 	var records []mirror.Record
-	if entry.Listing != nil {
+	if entry.Listing != nil && !lost {
 		records = []mirror.Record{{Kind: mirror.KindThread, FetchedAt: now, Data: entry.Listing}}
 	}
 	if _, _, err := commitThread(p.Store, p.key, id, st, records, now); err != nil {
