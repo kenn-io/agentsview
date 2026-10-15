@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#ceff715d835017daa9ec099446fa6ce71233829f",
-    "@lucide/svelte": "1.52.0",
+    "@lucide/svelte": "1.53.0",
     "@tanstack/virtual-core": "3.17.11",
     "d3-hierarchy": "3.1.2",
     "d3-scale": "4.0.2",
@@ -40,7 +40,7 @@
     "@inlang/paraglide-js": "^2.20.2",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@testing-library/svelte": "^5.3.1",
     "@tsconfig/svelte": "5.0.8",
