@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/timeutil"
@@ -106,10 +105,7 @@ func ReconcileProviderHistory(
 			return result, ctx.Err()
 		}
 		parsedMessages := candidate.Messages
-		merged := decision.merged
-		if options.ToolResultImages == config.ToolResultImagesDrop && !options.ArchiveContent.OmitsToolContent() {
-			merged, _ = db.ProjectToolResultImagesWithoutWriting(merged, options.ToolResultImages, "")
-		}
+		merged := dropToolResultImagesIfPolicy(decision.merged, options)
 		candidate.Messages = merged
 		applyVisualStudioCopilotArchiveSessionFields(
 			&candidate.Session, &prior.Session, parsedMessages, merged,
@@ -194,12 +190,7 @@ func reconcileClaudePersistedToolResults(
 	// A restored event can reintroduce image bytes the live policy drops, the
 	// same risk VSCopilot's own merge above guards against, so reapply the
 	// policy here too before anything downstream reads the restored content.
-	if options.ToolResultImages == config.ToolResultImagesDrop &&
-		!options.ArchiveContent.OmitsToolContent() {
-		candidate.Messages, _ = db.ProjectToolResultImagesWithoutWriting(
-			candidate.Messages, options.ToolResultImages, "",
-		)
-	}
+	candidate.Messages = dropToolResultImagesIfPolicy(candidate.Messages, options)
 	if err := PairToolResultEventSummariesContext(
 		ctx, candidate.Messages, options.BlockedResultCategories,
 	); err != nil {

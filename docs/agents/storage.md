@@ -151,9 +151,11 @@ raw digest are restored; when a blocked category archived only a length, only
 the length is restored and the text stays blank.
 
 This is the same provider-history dispatcher every other agent's archive
-preservation already goes through, gated by `ingest.IsClaudeFormatAgent`
-(covers both Claude Code and iCodeMate CLI), so hosted Postgres mirrors reach
-it with no separate wiring. `internal/sync/engine.go`'s
+preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`
+(the agent and a `.jsonl` path, covering both Claude Code and iCodeMate CLI;
+`ingest.IsClaudeFormatAgent` alone would also match iCodeMate's unrelated
+VSCode-extension storage path), so hosted Postgres mirrors reach it with no
+separate wiring. `internal/sync/engine.go`'s
 `reconcileProviderHistoryContext` checks cheaply, over the parsed messages and
 before any store read, whether anything is flagged before loading the
 archived session. Rebuilds read the old archive, and S3 Claude sessions follow
