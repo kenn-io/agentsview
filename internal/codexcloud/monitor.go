@@ -294,7 +294,12 @@ func (m *Monitor) start(j *join) bool {
 	if m.closed || m.stopped[j.key] != nil || !m.Waits.HomeReady(j.login.Home, j.login.AuthModTime) {
 		return false
 	}
-	m.joins[j.key][j.threadID] = j
+	// reserve made this map; a join without its reservation never starts.
+	joins := m.joins[j.key]
+	if joins == nil {
+		return false
+	}
+	joins[j.threadID] = j
 	m.wg.Go(func() { m.run(j) })
 	return true
 }

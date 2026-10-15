@@ -72,7 +72,11 @@ func (m *Monitor) Discover(ctx context.Context) error {
 	}
 	m.Status.SetLive(SourceRowKey, "", false)
 	for _, key := range order {
-		err := m.discoverAccount(ctx, gates, key, groups[key][0])
+		logins := groups[key]
+		if len(logins) == 0 {
+			continue
+		}
+		err := m.discoverAccount(ctx, gates, key, logins[0])
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
