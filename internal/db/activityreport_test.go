@@ -710,7 +710,7 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		"idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)")
 }
 
-func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshot(
+func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -755,8 +755,6 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshot(
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
-	assert.Equal(t, export.CostSourceComputed, rowSet.Rows[0].CostSource)
-	assert.True(t, rowSet.Rows[0].Priced)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {

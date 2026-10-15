@@ -5180,7 +5180,7 @@ func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
 	assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
 }
 
-func TestGetSessionUsage_PrefersCompleteClaudeSnapshot(t *testing.T) {
+func TestGetSessionUsage_PrefersCompleteClaudeSnapshotWithinSession(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	seedOpusPricing(t, d)
