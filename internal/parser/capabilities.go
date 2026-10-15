@@ -50,7 +50,8 @@ type ProviderSyncSemantics struct {
 	// per-session member sources, and each member's own freshness check
 	// decides whether it is rewritten. A file-level ForceFullParse, such as
 	// a remote import marking a fetched database, does not force every
-	// member to be rewritten.
+	// member to be rewritten. The provider's standalone sources, which are
+	// physical files themselves, keep the force.
 	MemberFreshnessOverridesFileForce bool
 	// SkipCacheFreshWithoutStoredRow permits a matching skip-cache entry to
 	// remain fresh before this provider has persisted a row for the source.

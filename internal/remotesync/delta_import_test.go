@@ -625,6 +625,53 @@ func TestImporterHermesRoutineImportSkipsUnchangedMemberDespiteFileForceFullPars
 	}
 }
 
+// TestImporterHermesStandaloneTranscriptEditReplacesStoredMessages covers
+// the other side of the exemption above: a transcript with no state.db is
+// the fetched file itself, so the journal's ForceFullParse must still
+// replace its stored messages when an earlier message changed remotely.
+func TestImporterHermesStandaloneTranscriptEditReplacesStoredMessages(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const remoteDir = "/srv/agent/sessions"
+			localDir := remappedRemotePath(root, remoteDir)
+			require.NoError(t, os.MkdirAll(localDir, 0o755))
+			transcript := filepath.Join(localDir, "standalone.jsonl")
+			const reply = `{"role":"assistant","content":"first reply","timestamp":"2026-05-14T14:00:11Z"}` + "\n"
+			require.NoError(t, os.WriteFile(transcript, []byte(
+				`{"role":"user","content":"original prompt","timestamp":"2026-05-14T14:00:10Z"}`+"\n"+reply,
+			), 0o600))
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {remoteDir}}}
+			importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
+			seed, err := importer.ImportExtracted(t.Context(), targets, root)
+			require.NoError(t, err)
+			require.Equal(t, 1, seed.SessionsSynced)
+
+			require.NoError(t, os.WriteFile(transcript, []byte(
+				`{"role":"user","content":"edited prompt that is longer","timestamp":"2026-05-14T14:00:10Z"}`+"\n"+reply,
+			), 0o600))
+			path, err := mirrorRelativeLocalChangePath(root, transcript)
+			require.NoError(t, err)
+			pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{
+				Journal: MirrorChangeJournal{
+					Version: mirrorJournalVersion,
+					Entries: []MirrorChangeEntry{{
+						Path: path, InvalidateCache: true, ForceFullParse: true,
+					}},
+				},
+			})
+			require.NoError(t, err)
+			_, err = pending.Execute(t.Context())
+			require.NoError(t, err)
+			messages, err := database.GetAllMessages(t.Context(), "remote~"+string(agent)+":standalone")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, "edited prompt that is longer", messages[0].Content)
+		})
+	}
+}
+
 func TestImporterHermesDatabaseDeltaBoundsSharedScans(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
 		t.Run(string(agent), func(t *testing.T) {

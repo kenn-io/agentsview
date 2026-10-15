@@ -12646,11 +12646,14 @@ func (e *Engine) processProviderFile(
 	// every routine import, defeating this provider's whole per-session
 	// freshness model. Only a member-level force (sourceForceReplace,
 	// incRes.forceReplace, or the engine-wide e.forceFullParse) bypasses
-	// the member's own unchanged-skip below; every other provider keeps
-	// file.ForceFullParse's existing effect.
+	// the member's own unchanged-skip below. A standalone source, such as
+	// a Hermes transcript, is the fetched file itself and keeps
+	// file.ForceFullParse's existing effect, so an in-place remote edit
+	// still replaces its stored messages.
+	fileForceFullParse := file.ForceFullParse &&
+		(!providerSemantics.MemberFreshnessOverridesFileForce || !providerVirtualSourceContainerExists(file.Path))
 	incForceReplace := sourceForceReplace || incRes.forceReplace ||
-		e.forceFullParse ||
-		(file.ForceFullParse && !providerSemantics.MemberFreshnessOverridesFileForce)
+		e.forceFullParse || fileForceFullParse
 
 	// DB-stored fingerprint skip. The provider has no database handle, so the
 	// engine reproduces the legacy DB-aware skip that single-session JSONL
@@ -12716,10 +12719,11 @@ func (e *Engine) processProviderFile(
 	// remote-mirror import marks the shared state.db ForceFullParse
 	// because the mirror layer can't
 	// incrementally diff it, and that flag reaches every member it fans out
-	// to. Excluding it here, specifically for this skip, keeps that import
-	// from rewriting every unchanged session on every routine sync.
+	// to. Excluding it here (fileForceFullParse), specifically for this
+	// skip, keeps that import from rewriting every unchanged session on
+	// every routine sync.
 	memberForceParseRequested := e.forceParse || e.forceFullParse || file.ForceParse ||
-		(file.ForceFullParse && !providerSemantics.MemberFreshnessOverridesFileForce)
+		fileForceFullParse
 	if !forceSourceCwdParse && !incForceReplace && !memberForceParseRequested &&
 		e.providerSourceUnchangedInDB(
 			ctx, source, fingerprint, providerSemantics, preParseStatHash,
