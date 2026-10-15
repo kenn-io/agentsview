@@ -306,6 +306,8 @@ function usageSummaryWithOptions(
   const totalCost = options.totalCost ?? 0;
   const projects = options.projects ?? ["alpha", "beta"];
   const models = options.models ?? ["claude-sonnet-4-20250514", "gpt-4o"];
+  // Usage without a known project still has a project entry, with an empty key.
+  const projectEntries = projects.length === 0 && models.length > 0 ? [""] : projects;
   return {
     from: "2024-01-01",
     to: "2024-01-31",
@@ -319,8 +321,8 @@ function usageSummaryWithOptions(
       cacheSavings: testMoney(0),
     },
     daily: [],
-    projectTotals: projects.map((project) => ({
-      project_key: `pl1:sha256:${project}`,
+    projectTotals: projectEntries.map((project) => ({
+      project_key: project && `pl1:sha256:${project}`,
       project,
       inputTokens: 0,
       outputTokens: 0,
