@@ -1562,17 +1562,18 @@ func (s hermesSourceSet) transcriptSourceForRoot(
 // transcriptSourceByRawID resolves a session's transcript file by its raw
 // session ID across the configured roots, without consulting state.db.
 // hermesRootsOwnerFirst moves the root that owns path to the front of roots.
-// A root owns its state.db, that database's members, and its transcripts.
-// Another configured root can hold an unrelated session with the same ID, so
-// a session-ID lookup for a stored path must try the owning root first. It
-// reports false, with roots unchanged, when no root owns path.
+// A root owns its state.db, that database's members, and its transcripts,
+// even after its state.db is deleted. Another configured root can hold an
+// unrelated session with the same ID, so a session-ID lookup for a stored
+// path must try the owning root first. It reports false, with roots
+// unchanged, when no root owns path.
 func hermesRootsOwnerFirst(roots []string, path string) ([]string, bool) {
 	if stateDB, _, member := ParseVirtualSourcePathForBase(path, "state.db"); member {
 		path = stateDB
 	}
 	for i, root := range roots {
-		stateDB, _, hasState := hermesStatePaths(root)
-		if (hasState && samePath(path, stateDB)) ||
+		stateDB, _, isArchive := hermesArchiveRootPaths(root)
+		if (isArchive && samePath(path, stateDB)) ||
 			hermesPathInTranscriptDir(hermesTranscriptRoot(root), path) {
 			ordered := make([]string, 0, len(roots))
 			ordered = append(ordered, root)

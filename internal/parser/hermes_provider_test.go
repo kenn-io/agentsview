@@ -1435,6 +1435,18 @@ func TestHermesProviderFindSourcePrefersArchiveHintOwningRoot(t *testing.T) {
 		assert.Equal(t, ownTranscript, source.DisplayPath)
 	})
 
+	t.Run("member whose state.db is deleted uses its own root's transcript", func(t *testing.T) {
+		firstRoot, secondRoot := newRoots(t)
+		stateDB := filepath.Join(secondRoot, "state.db")
+		require.NoError(t, os.Remove(stateDB))
+		ownTranscript := filepath.Join(secondRoot, "sessions", "shared-id.jsonl")
+		writeSourceFile(t, ownTranscript, hermesProviderJSONLFixture("archived session"))
+
+		source := findSource(t, []string{firstRoot, secondRoot}, stateDB+"#shared-id")
+
+		assert.Equal(t, ownTranscript, source.DisplayPath)
+	})
+
 	t.Run("legacy bare state.db hint uses its own root's member", func(t *testing.T) {
 		firstRoot, secondRoot := newRoots(t)
 		stateDB := filepath.Join(secondRoot, "state.db")
