@@ -403,7 +403,9 @@ type countingUsageCacheStatementRunner struct {
 	queryArgCounts []int
 }
 
-func (r *countingUsageCacheStatementRunner) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (r *countingUsageCacheStatementRunner) QueryContext(
+	ctx context.Context, query string, args ...any,
+) (*sql.Rows, error) {
 	r.queryArgCounts = append(r.queryArgCounts, len(args))
 	return r.usageCacheStatementRunner.QueryContext(ctx, query, args...)
 }
@@ -448,10 +450,6 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 	got, err := readUsageCachedSessions(t.Context(), runner, ids)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
-	assert.Len(t, runner.queryArgCounts, 2)
-	for _, count := range runner.queryArgCounts {
-		assert.LessOrEqual(t, count, maxSQLVars)
-	}
 	assert.Equal(t, []int{500, 5}, runner.queryArgCounts)
 }
 
