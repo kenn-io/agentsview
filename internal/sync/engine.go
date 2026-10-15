@@ -18827,6 +18827,22 @@ func (e *Engine) reconcileProviderHistoryContext(
 				// Different sources and SQLite members remain authoritative.
 				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
 			}
+		case parser.AgentCodexCloud:
+			store := e.historyStore()
+			stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
+			if err != nil {
+				return ingest.HistoryResult{}, err
+			}
+			if stored != nil && len(candidate.Messages) < stored.MessageCount {
+				// A chat's history only grows, so a shorter mirror file
+				// lost part of it: the fetcher refetches the chat, and the
+				// archived transcript and live token counts stay until then.
+				log.Printf(
+					"preserve %s %s: mirror holds fewer messages than the archive (%d stored, %d parsed)",
+					agent, candidate.Session.ID, stored.MessageCount, len(candidate.Messages),
+				)
+				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
+			}
 		case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 			if len(candidate.Messages) > 0 {
 				break
