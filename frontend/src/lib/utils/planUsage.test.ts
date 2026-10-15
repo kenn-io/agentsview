@@ -63,6 +63,7 @@ describe("describePlanUsage", () => {
   });
 
   it.each([
+    ["a row with nothing recorded yet", plan(), "Plan usage: not checked yet"],
     [
       "a pending unavailable row",
       plan({ data_as_of: AS_OF, data_status: "unavailable" }),
