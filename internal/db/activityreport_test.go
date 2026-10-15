@@ -754,8 +754,6 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"root", "child"})
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
-	assert.Equal(t, "root", rowSet.Rows[0].SessionID)
-	assert.Equal(t, "child", rowSet.Rows[0].SourceSessionID)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
 }
 

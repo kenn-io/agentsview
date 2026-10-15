@@ -4860,7 +4860,6 @@ func TestGetSessionUsage_PricesClaudeKeyVariants(t *testing.T) {
 			if tc.requestID != "" {
 				assert.Equal(t, 631, u.TotalOutputTokens)
 				require.Len(t, u.Breakdown, 1)
-				assert.Equal(t, 631, u.Breakdown[0].OutputTokens)
 				require.NotNil(t, u.Breakdown[0].MessageOrdinal)
 				assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal)
 			}

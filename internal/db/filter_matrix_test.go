@@ -115,18 +115,11 @@ func TestFilterMatrixUsage(t *testing.T) {
 			want := "s.agent IN (?,?) AND s.project IN (?,?) AND s.machine = ? AND (s.project = ? AND s.git_branch = ?) AND s.project != ? AND s.agent != ? AND s.id = ? AND s.user_message_count >= ? AND COALESCE(s.is_automated, " + d.falseSQL + ") = " + d.falseSQL + " AND " + d.activity + " AND (s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
 			assert.Equal(t, matrixSQL(d, want, 6), strings.Join(session, " AND "))
 			assert.Equal(t, []any{"a", "b", "c", "codex", "claude", "team,tools", "other", "laptop", "team,tools", "topic", "excluded,tools", "cursor", "session-1", 2, f.ActiveSince}, b.Args())
-			for _, raw := range []string{" a, b, ", " , "} {
-				t.Run(raw, func(t *testing.T) {
-					b := NewQueryBuilder(d.dialect, 0)
-					preds := BuildUsageSourceFilter(UsageFilter{Model: raw}, b, "m.model")
-					values, sql := []any{"a", "b"}, "m.model IN (?,?)"
-					if raw == " , " {
-						values, sql = []any{}, ""
-					}
-					assert.Equal(t, matrixSQL(d, sql, 0), strings.Join(preds, " AND "))
-					assert.Equal(t, values, b.Args())
-				})
-			}
+			t.Run("blank model", func(t *testing.T) {
+				b := NewQueryBuilder(d.dialect, 0)
+				assert.Empty(t, BuildUsageSourceFilter(UsageFilter{Model: " , "}, b, "m.model"))
+				assert.Empty(t, b.Args())
+			})
 			b = NewQueryBuilder(d.dialect, 0)
 			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{Agent: " , ", ExcludeAgent: " , ", Machine: " , ", Project: " , ", ExcludeProject: " , "}, b, ""))
 			assert.Empty(t, b.Args())

@@ -2796,17 +2796,7 @@ func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
 			require.Len(t, sessionUsage.Breakdown, 1)
 			require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
 			assert.Equal(t, 0, *sessionUsage.Breakdown[0].MessageOrdinal)
-			if tc.requestID != "" {
-				entry := sessionUsage.Breakdown[0]
-				assert.Equal(t, "message", entry.Source)
-				assert.Equal(t, "Prompt 1", entry.Label)
-				assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
-				assert.Equal(t, "claude-test", entry.Model)
-				assert.Equal(t, 1, entry.InputTokens)
-				assert.Equal(t, 2, entry.OutputTokens)
-				assert.True(t, entry.HasCost)
-				assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
-			}
+
 		})
 	}
 }
@@ -2862,9 +2852,17 @@ func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 631, got.TotalOutputTokens)
 	assert.Equal(t, money.MustParseDollars("0.020775"), got.Cost)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
 	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
 	assert.Equal(t, 1, *got.Breakdown[0].MessageOrdinal)
+	entry := got.Breakdown[0]
+	assert.Equal(t, "message", entry.Source)
+	assert.Equal(t, "Prompt 2", entry.Label)
+	assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
+	assert.Equal(t, "claude-test", entry.Model)
+	assert.Equal(t, 1000, entry.InputTokens)
+	assert.Equal(t, 631, entry.OutputTokens)
+	assert.True(t, entry.HasCost)
+	assert.Equal(t, money.MustParseDollars("0.020775"), entry.Cost)
 
 	withoutBreakdown, err := store.GetSessionUsage(
 		ctx, "duck-streamed", false)

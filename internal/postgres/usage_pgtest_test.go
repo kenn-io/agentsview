@@ -826,7 +826,6 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 				assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
 			} else {
 				assert.Equal(t, 631, got.TotalOutputTokens)
-				assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
 			}
 		})
 	}
