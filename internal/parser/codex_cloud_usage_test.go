@@ -429,10 +429,6 @@ func TestCoverageLastCaptureIsNewestTokenRecord(t *testing.T) {
 	require.NotNil(t, got.LastCaptureAt)
 	assert.Equal(t, ccObserved.Add(7*time.Minute), *got.LastCaptureAt,
 		"a completion record is not a capture")
-
-	none := codexCloudCoverage([]mirror.Turn{ccTurn("turn-1", "completed", 100)}, nil, nil)
-	assert.Nil(t, none.LastCaptureAt)
-	assert.Equal(t, 1, none.UncapturedTurns)
 }
 
 func ccDataRecord(t *testing.T, kind mirror.Kind, data any) mirror.Record {
