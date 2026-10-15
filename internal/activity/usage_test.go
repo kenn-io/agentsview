@@ -36,6 +36,16 @@ func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	bySession := make(map[string]SessionRow, len(r.BySession))
+	for _, row := range r.BySession {
+		bySession[row.SessionID] = row
+	}
+	require.Contains(t, bySession, "root")
+	require.Contains(t, bySession, "child")
+	assert.Equal(t, 500, bySession["root"].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), bySession["root"].Cost)
+	assert.Zero(t, bySession["child"].OutputTokens)
+	assert.Zero(t, bySession["child"].Cost.Microdollars)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {

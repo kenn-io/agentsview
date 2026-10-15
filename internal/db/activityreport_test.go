@@ -967,7 +967,6 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 		s.Agent = "claude"
 		s.StartedAt = Ptr("2026-06-16T10:31:00Z")
 		s.EndedAt = Ptr("2026-06-16T10:31:00Z")
-		s.IsAutomated = true
 	})
 	insertMessages(t, d, Message{
 		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
