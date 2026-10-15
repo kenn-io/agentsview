@@ -386,17 +386,31 @@
 
   // Scroll to the active session when it changes (e.g. from
   // the command palette). Expands collapsed agent groups and
-  // scrolls the item into view. Only fires on selection
-  // changes, not on displayItems rebuilds, so collapsing a
-  // group containing the active session stays collapsed.
+  // scrolls the item into view. Rebuilds that keep the active
+  // session in the group it was revealed in do not re-trigger,
+  // so collapsing that group keeps it collapsed. A rebuild that
+  // moves it to another group reveals it again: a fork opened
+  // directly can load as its own group before the sidebar
+  // index places it under its root.
   let prevRevealedId: string | null = null;
+  let prevRevealedGroupKey: string | null = null;
   $effect(() => {
     const activeId = sessions.activeSessionId;
     if (!activeId) {
       prevRevealedId = null;
+      prevRevealedGroupKey = null;
       return;
     }
-    if (activeId === prevRevealedId) return;
+    if (
+      activeId === prevRevealedId &&
+      groups.some(
+        (g) =>
+          g.key === prevRevealedGroupKey &&
+          g.sessions.some((s) => s.id === activeId),
+      )
+    ) {
+      return;
+    }
     if (!containerRef) return;
     // Read displayItems inside the effect so Svelte tracks
     // it — needed to re-run after a group expansion.
@@ -458,6 +472,7 @@
     // Item found — mark as revealed so subsequent
     // displayItems rebuilds don't re-trigger.
     prevRevealedId = activeId;
+    prevRevealedGroupKey = item.group?.key ?? null;
     const itemBottom = item.top + item.height;
     const viewTop = containerRef.scrollTop;
     const viewBottom = viewTop + containerRef.clientHeight;

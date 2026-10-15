@@ -661,6 +661,112 @@ describe("SessionList visible hydration", () => {
     ).not.toBeNull();
   });
 
+  it("reveals a fork again when the sidebar index moves it under its root", async () => {
+    // The fork's own request can finish before the sidebar index. The fork
+    // then shows as a top-level row until the index places it under its
+    // root, whose group starts collapsed.
+    const fork = makeSession({
+      id: "fork",
+      parent_session_id: "root",
+      relationship_type: "fork",
+      first_message: "fork transcript",
+      started_at: "2024-01-01T03:00:00Z",
+      ended_at: "2024-01-01T04:00:00Z",
+      is_index_only: false,
+    });
+    sessions.sessions = [fork];
+    sessions.activeSessionId = "fork";
+    let resolveHydration!: () => void;
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveHydration = resolve;
+      }),
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(document.querySelector('[data-session-id="fork"]')?.getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(document.querySelector('[data-session-id="root"]')).toBeNull();
+
+    sessions.sidebarIndexVersion++;
+    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Map()]]);
+    sessions.sessions = [
+      makeSession({
+        id: "root",
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: "2024-01-01T02:00:00Z",
+        is_index_only: true,
+      }),
+      fork,
+    ];
+    await tick();
+    resolveHydration();
+    await tick();
+    await tick();
+
+    const forkRow = document.querySelector<HTMLElement>('[data-session-id="fork"]');
+    expect(forkRow).not.toBeNull();
+    expect(forkRow?.getAttribute("aria-current")).toBe("page");
+    expect(
+      document.querySelector(
+        `[data-session-id="root"] button[aria-label="${m.sidebar_row_collapse()}"]`,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("keeps the active session's group collapsed after the user collapses it", async () => {
+    const indexRows = () => [
+      makeSession({
+        id: "root",
+        first_message: "root transcript",
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: "2024-01-01T02:00:00Z",
+        is_index_only: false,
+      }),
+      makeSession({
+        id: "fork",
+        parent_session_id: "root",
+        relationship_type: "fork",
+        first_message: "fork transcript",
+        started_at: "2024-01-01T03:00:00Z",
+        ended_at: "2024-01-01T04:00:00Z",
+        is_index_only: false,
+      }),
+    ];
+    sessions.sessions = indexRows();
+    sessions.activeSessionId = "fork";
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(document.querySelector('[data-session-id="fork"]')).not.toBeNull();
+    document
+      .querySelector<HTMLButtonElement>(
+        `[data-session-id="root"] button[aria-label="${m.sidebar_row_collapse()}"]`,
+      )!
+      .click();
+    await tick();
+    expect(document.querySelector('[data-session-id="fork"]')).toBeNull();
+
+    // A sidebar refresh rebuilds every group and row.
+    sessions.sidebarIndexVersion++;
+    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Map()]]);
+    sessions.sessions = indexRows();
+    await tick();
+    await tick();
+
+    expect(document.querySelector('[data-session-id="fork"]')).toBeNull();
+    expect(
+      document.querySelector(
+        `[data-session-id="root"] button[aria-label="${m.sidebar_row_expand()}"]`,
+      ),
+    ).not.toBeNull();
+  });
+
   it("keeps a starred fork's descendant off the main line", async () => {
     sessions.sessions = [
       makeSession({
