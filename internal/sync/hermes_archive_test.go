@@ -1991,6 +1991,11 @@ func writeHermesSessionsFile(t *testing.T, root, name, content string) string {
 	return path
 }
 
+// execHermesState opens stateDB and execs one statement. It mirrors
+// cursor_ide_integration_test.go's execCursorIDEStateDB, but this file
+// is package sync (internal tests) while that one is package sync_test
+// (external/integration tests), so the two can't share one unexported
+// helper across that package boundary.
 func execHermesState(t *testing.T, stateDB, statement string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite3", stateDB)

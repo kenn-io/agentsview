@@ -1266,12 +1266,7 @@ func (s hermesSourceSet) FindSource(
 				return s.stateMemberSourceRef(root, stateDB, req.RawSessionID), true, nil
 			}
 		}
-		transcriptRoot := hermesTranscriptRoot(root)
-		path := findHermesSourceFile(transcriptRoot, req.RawSessionID)
-		if path == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, path); ok {
+		if source, ok := s.transcriptSourceForRoot(root, req.RawSessionID); ok {
 			return source, true, nil
 		}
 	}
@@ -1381,18 +1376,26 @@ func (s hermesSourceSet) sourceFromRef(source SourceRef) (hermesSource, bool) {
 	return hermesSource{}, false
 }
 
+// transcriptSourceForRoot resolves a session's transcript file by its raw
+// session ID under one configured root, without consulting state.db.
+func (s hermesSourceSet) transcriptSourceForRoot(
+	root, sessionID string,
+) (SourceRef, bool) {
+	transcriptRoot := hermesTranscriptRoot(root)
+	path := findHermesSourceFile(transcriptRoot, sessionID)
+	if path == "" {
+		return SourceRef{}, false
+	}
+	return s.sourceRef(root, path)
+}
+
 // transcriptSourceByRawID resolves a session's transcript file by its raw
 // session ID across the configured roots, without consulting state.db.
 func (s hermesSourceSet) transcriptSourceByRawID(
 	roots []string, sessionID string,
 ) (SourceRef, bool) {
 	for _, root := range roots {
-		transcriptRoot := hermesTranscriptRoot(root)
-		path := findHermesSourceFile(transcriptRoot, sessionID)
-		if path == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, path); ok {
+		if source, ok := s.transcriptSourceForRoot(root, sessionID); ok {
 			return source, true
 		}
 	}

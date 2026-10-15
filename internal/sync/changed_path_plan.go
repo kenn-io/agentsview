@@ -624,14 +624,8 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 		sources, err := provider.Discover(ctx)
 		if err != nil {
 			wrapped := fmt.Errorf("discover fallback provider %s: %w", agent, err)
-			// Only Hermes and Augure Desktop's per-session discovery returns
-			// a partial source set alongside DiscoveryIncompleteError; every
-			// other provider keeps the prior behavior of discarding on any
-			// discovery error, including an incomplete one.
 			_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
-			usesPartialSources := agent == parser.AgentHermes ||
-				agent == parser.AgentAugureDesktop
-			if !incomplete || ctx.Err() != nil || !usesPartialSources {
+			if !incomplete || ctx.Err() != nil || !usesPartialDiscovery(agent) {
 				return changedPathFallbackDiscovery{}, wrapped
 			}
 			discovery.incomplete = append(discovery.incomplete, wrapped)
