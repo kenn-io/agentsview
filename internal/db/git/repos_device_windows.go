@@ -21,7 +21,18 @@ func repoRootOwned(path string) bool {
 		return false
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	return err == nil && windows.EqualSid(owner, user.User.Sid)
+	if err != nil {
+		return false
+	}
+	if windows.EqualSid(owner, user.User.Sid) {
+		return true
+	}
+	// Elevated users create paths owned by Administrators; Git accepts that group for its members.
+	if !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return false
+	}
+	member, err := windows.Token(0).IsMember(owner)
+	return err == nil && member
 }
 
 // Git for Windows reports zero for st_dev during repository discovery.
