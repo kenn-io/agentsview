@@ -544,7 +544,8 @@ class UsageStore {
   }
 
   private preferredPairwiseValue(dimension: UsagePairwiseDimension, fallback: string): string {
-    const options = this.pairwiseOptionsFor(dimension);
+    // Usage without a known project has an empty key, which the server cannot compare.
+    const options = this.pairwiseOptionsFor(dimension).filter(Boolean);
     for (const option of options) {
       if (option !== fallback) return option;
     }

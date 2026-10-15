@@ -1251,6 +1251,19 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("picks a named project when unnamed usage costs the most", async () => {
+    const { usage } = await loadStore();
+    usage.summary = usageSummaryWithOptions({ projects: ["", "alpha"], models: ["gpt-4o"] });
+    usage.pairwiseSelection.right = { dimension: "model", value: "gpt-4o" };
+
+    usage.setPairwiseSide("left", { dimension: "project" });
+
+    expect(usage.pairwiseSelection.left).toEqual({
+      dimension: "project",
+      value: "pl1:sha256:alpha",
+    });
+  });
+
   it("clears pairwise querying when a selector change leaves no comparable values", async () => {
     const { usage } = await loadStore();
 
