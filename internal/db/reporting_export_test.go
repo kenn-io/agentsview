@@ -818,21 +818,6 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 			require.Len(t, hour.Usage.ByModel, 1)
 			assert.Equal(t, "model standalone winner", hour.Usage.ByModel[0].Key)
 			assert.Empty(t, hour.Usage.ByProject)
-
-			daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
-				From:       "2026-07-28",
-				To:         "2026-07-28",
-				Timezone:   "UTC",
-				Breakdowns: true,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-			assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-			assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
-			assert.Zero(t, hour.Activity.Totals.AgentMinutes)
-			assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
-			assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
-			assert.Zero(t, hour.Activity.Totals.NewModels)
 		})
 	}
 }

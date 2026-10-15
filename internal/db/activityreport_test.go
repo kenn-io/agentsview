@@ -1285,7 +1285,7 @@ func TestGetActivityReport_UsageDedupOrdering(t *testing.T) {
 		name, firstID, secondID, secondTimestamp string
 		firstOutput, secondOutput, wantOutput    int
 	}{
-		{"parsed time", "earlier", "later", "2026-06-16T10:30:00.123Z", 500, 9000, 500},
+		{"parsed time", "z-earlier", "a-later", "2026-06-16T10:30:00.123Z", 500, 9000, 500},
 		{"equal instant uses session ID before token payload", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 500, 9000, 9000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
