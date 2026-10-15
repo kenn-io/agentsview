@@ -171,6 +171,7 @@ SELECT
 	'' AS project,
 	'cursor' AS agent,
 	'' AS machine,
+	'' AS git_branch,
 	toInt64(0) AS user_message_count,
 	cu.is_headless AS is_automated,
 	'' AS display_name,
@@ -260,6 +261,7 @@ func chUsageRawSQLFromWheres(
 				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
 				CAST(NULL AS Nullable(Int64)) AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.git_branch AS git_branch,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
@@ -287,6 +289,7 @@ func chUsageRawSQLFromWheres(
 				ue.cost_microdollars AS cost_microdollars,
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.git_branch AS git_branch,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
@@ -447,6 +450,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			p.web_search_requests_norm AS web_search_requests,
 			p.cost_microdollars AS cost_microdollars, p.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.git_branch AS git_branch,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
@@ -847,6 +851,7 @@ func chUsageCTEFromRawSource(
 				if(attributed.id = '', ranked.project, attributed.project) AS project,
 				if(attributed.id = '', ranked.agent, attributed.agent) AS agent,
 				if(attributed.id = '', ranked.machine, attributed.machine) AS machine,
+				if(attributed.id = '', ranked.git_branch, attributed.git_branch) AS git_branch,
 				if(attributed.id = '', ranked.user_message_count, attributed.user_message_count) AS user_message_count,
 				if(attributed.id = '', ranked.is_automated, attributed.is_automated) AS is_automated,
 				if(attributed.id = '', ranked.display_name, ifNull(COALESCE(
@@ -1237,15 +1242,19 @@ const chUsageBillableSelect = `
 // ordinary cache miss that Go prices for this read; only push writes records.
 type chDailyUsageGroupRow struct {
 	chUsageAggregateRow
-	explicit   bool
-	kind       string
-	contextID  string
-	bandAbove  int64
-	events     int
-	tokenCost  int64
-	savings    int64
-	priceError string
-	overflow   bool
+	gitBranch string
+	// branchAttributed is false for rows no session owns (cursor usage),
+	// which belong under no branch rather than under the empty branch.
+	branchAttributed bool
+	explicit         bool
+	kind             string
+	contextID        string
+	bandAbove        int64
+	events           int
+	tokenCost        int64
+	savings          int64
+	priceError       string
+	overflow         bool
 }
 
 // chUsagePricedCTE attaches each row's price record under pricingDigest.
@@ -1321,6 +1330,12 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if f.Breakdowns {
 		machineSelect = "machine"
 	}
+	branchSelect := "''"
+	branchAttributedSelect := "0"
+	if f.BranchBreakdowns {
+		branchSelect = "if(source = 'cursor', '', git_branch)"
+		branchAttributedSelect = "source != 'cursor'"
+	}
 	customPred := "0"
 	var customArgs []any
 	if len(customModels) > 0 {
@@ -1336,6 +1351,8 @@ func (s *Store) forEachDailyUsageGroupRow(
 		usage_classified AS (
 			SELECT *,
 				` + machineSelect + ` AS group_machine,
+				` + branchSelect + ` AS group_branch,
+				` + branchAttributedSelect + ` AS group_branch_attributed,
 				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + ` AS explicit_row,
 				multiIf(
 					reported_cost_rows = 1, '` + chUsagePriceKindReported + `',
@@ -1349,6 +1366,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			FROM usage_priced
 		)
 		SELECT session_id, local_date, project, agent, group_machine, model, provider_id,
+			group_branch, group_branch_attributed,
 			if(explicit_row, dedup_group, '') AS explicit_key,
 			if(explicit_row, '', price_kind) AS group_kind,
 			if(explicit_row, '', if(
@@ -1376,10 +1394,11 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(authoritative_cost), toInt64(any(authoritative_cost_rows))
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
+			group_branch, group_branch_attributed,
 			explicit_key, group_kind, group_context, group_band
 		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
-			model ASC, row_price_model ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
-			row_source ASC, row_usage_dedup_key ASC`
+			model ASC, group_branch ASC, group_branch_attributed ASC, row_price_model ASC,
+			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC, row_usage_dedup_key ASC`
 	args = append(args, pricedArgs...)
 	args = append(args, customArgs...)
 	readCtx, err := withUsageDeltaTables(ctx, state)
@@ -1399,6 +1418,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		if err := rows.Scan(
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.providerID,
+			&r.gitBranch, &r.branchAttributed,
 			&explicitKey, &r.kind, &r.contextID, &r.bandAbove, &r.events,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.tokenCost, &r.savings,
@@ -1501,9 +1521,6 @@ var errUsagePriceContextChanged = errors.New("usage price context changed during
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	if f.BranchBreakdowns {
-		return db.DailyUsageResult{}, db.ErrBranchBreakdownsUnsupported
-	}
 	// One parts snapshot names the prepared state and the kept read alike,
 	// so a push that lands during the read makes the next request miss.
 	ctx, err := s.withPartsSnapshot(ctx)
@@ -1538,12 +1555,14 @@ func (s *Store) dailyUsageForCatalog(
 		customModels = chCustomPricedModels(priceContexts, rateResolver)
 	}
 	type usageAccumKey struct {
-		date       string
-		project    string
-		agent      string
-		machine    string
-		model      string
-		providerID string
+		date             string
+		project          string
+		agent            string
+		machine          string
+		model            string
+		providerID       string
+		gitBranch        string
+		branchAttributed bool
 	}
 	accum := map[usageAccumKey]*chUsageBucket{}
 	type sessionCost struct {
@@ -1562,6 +1581,7 @@ func (s *Store) dailyUsageForCatalog(
 		key := usageAccumKey{
 			date: r.date, project: r.project, agent: r.agent,
 			machine: r.machine, model: r.model, providerID: r.providerID,
+			gitBranch: r.gitBranch, branchAttributed: r.branchAttributed,
 		}
 		if r.project != "" {
 			projectLabels[r.project] = true
@@ -1653,7 +1673,13 @@ func (s *Store) dailyUsageForCatalog(
 				if a.machine != b.machine {
 					return a.machine < b.machine
 				}
-				return a.model < b.model
+				if a.model != b.model {
+					return a.model < b.model
+				}
+				if a.gitBranch != b.gitBranch {
+					return a.gitBranch < b.gitBranch
+				}
+				return !a.branchAttributed && b.branchAttributed
 			})
 			weights := make([]money.Money, len(keys))
 			for i, key := range keys {
@@ -1688,11 +1714,16 @@ func (s *Store) dailyUsageForCatalog(
 		}
 	}
 
+	type branchMapKey struct {
+		project string
+		branch  string
+	}
 	type dayMaps struct {
 		models    map[string]chUsageBucket
 		projects  map[string]chUsageBucket
 		agents    map[string]chUsageBucket
 		machines  map[string]chUsageBucket
+		branches  map[branchMapKey]chUsageBucket
 		totalCost money.Money
 	}
 	days := map[string]*dayMaps{}
@@ -1704,6 +1735,7 @@ func (s *Store) dailyUsageForCatalog(
 				projects: map[string]chUsageBucket{},
 				agents:   map[string]chUsageBucket{},
 				machines: map[string]chUsageBucket{},
+				branches: map[branchMapKey]chUsageBucket{},
 			}
 			days[key.date] = day
 		}
@@ -1723,6 +1755,14 @@ func (s *Store) dailyUsageForCatalog(
 				return db.DailyUsageResult{}, err
 			}
 			if err := addChUsageBucket(day.machines, key.machine, *b); err != nil {
+				return db.DailyUsageResult{}, err
+			}
+		}
+		if f.BranchBreakdowns && key.branchAttributed {
+			if err := addChUsageBucket(day.branches, branchMapKey{
+				project: key.project,
+				branch:  key.gitBranch,
+			}, *b); err != nil {
 				return db.DailyUsageResult{}, err
 			}
 		}
@@ -1791,6 +1831,22 @@ func (s *Store) dailyUsageForCatalog(
 				)
 			}
 		}
+		if f.BranchBreakdowns {
+			branchBreakdowns := make([]db.BranchBreakdown, 0, len(day.branches))
+			for bk, b := range day.branches {
+				branchBreakdowns = append(branchBreakdowns, db.BranchBreakdown{
+					Project:             bk.project,
+					Branch:              bk.branch,
+					InputTokens:         b.inputTok,
+					OutputTokens:        b.outputTok,
+					CacheCreationTokens: b.cacheCr,
+					CacheReadTokens:     b.cacheRd,
+					Cost:                b.cost,
+				})
+			}
+			db.SortBranchBreakdowns(branchBreakdowns)
+			entry.BranchBreakdowns = branchBreakdowns
+		}
 		result.Daily = append(result.Daily, entry)
 		result.Totals.InputTokens += entry.InputTokens
 		result.Totals.OutputTokens += entry.OutputTokens
@@ -1838,8 +1894,8 @@ func (s *Store) dailyUsageForCatalog(
 	return result, nil
 }
 
-func addChUsageBucket(
-	m map[string]chUsageBucket, key string, b chUsageBucket,
+func addChUsageBucket[K comparable](
+	m map[K]chUsageBucket, key K, b chUsageBucket,
 ) error {
 	cur := m[key]
 	cur.inputTok += b.inputTok

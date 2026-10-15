@@ -183,6 +183,7 @@ func usagePriceFilters() map[string]db.UsageFilter {
 	return map[string]db.UsageFilter{
 		"utc":        {Timezone: "UTC"},
 		"breakdowns": {Timezone: "UTC", Breakdowns: true},
+		"branches":   {Timezone: "UTC", BranchBreakdowns: true},
 		"new york":   {Timezone: "America/New_York", Breakdowns: true},
 		"window":     {Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
 		"model":      {Timezone: "UTC", Model: "round-test", Breakdowns: true},
