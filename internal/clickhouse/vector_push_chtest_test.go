@@ -679,3 +679,19 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "test reason")
 }
+
+func TestVectorPushRepairsNamedSessions(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	repair, err := s.PushWithOptions(ctx, storage.PushOptions{
+		FullVectorSessions: []string{fixtureAlphaID},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, repair.Vectors.SessionsPushed, "the named session is re-sent")
+	assert.Equal(t, 1, repair.Vectors.SessionsUnchanged, "other sessions keep the hash skip")
+}

@@ -39,11 +39,12 @@ const vectorCompleteMarker = ""
 // pass interrupted or deferred sessions), so a partial generation is always
 // completed by the next push rather than only when its sessions change.
 // full re-sends every session's vectors, repairing state rows that wrongly
-// report a session current. failed names sessions whose session-phase push
-// failed this run; their vectors are deferred so vector rows never run
-// ahead of the session rows.
+// report a session current; repair does the same for only the sessions it
+// names. failed names sessions whose session-phase push failed this run;
+// their vectors are deferred so vector rows never run ahead of the session
+// rows.
 func (s *Sync) pushVectors(
-	ctx context.Context, full bool, scope []string,
+	ctx context.Context, full bool, repair []string, scope []string,
 	failed map[string]struct{}, onProgress func(storage.PushProgress),
 ) (storage.VectorPushResult, error) {
 	var res storage.VectorPushResult
@@ -161,12 +162,12 @@ func (s *Sync) pushVectors(
 			}
 			continue
 		}
-		if !full && hasState && prev == agg {
+		if !full && !slices.Contains(repair, sessionID) && hasState && prev == agg {
 			res.SessionsUnchanged++
 			continue
 		}
 		if _, isFailed := failed[sessionID]; isFailed {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 			continue
 		}
 		docs, exportHash, err := export.SessionDocs(ctx, sessionID)
@@ -180,7 +181,7 @@ func (s *Sync) pushVectors(
 		// a partial view. Defer: the next push re-derives the delta from
 		// the settled index.
 		if exportHash != agg {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 			continue
 		}
 		batch.add(sessionID, agg, docs)
@@ -200,7 +201,7 @@ func (s *Sync) pushVectors(
 			continue
 		}
 		if _, isFailed := failed[sessionID]; isFailed {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 			continue
 		}
 		evict = append(evict, sessionID)

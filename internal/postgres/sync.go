@@ -171,6 +171,9 @@ type Sync struct {
 	// databaseGeneration identifies the exact local database generation that
 	// produced each pushed session and its identity snapshot.
 	databaseGeneration string
+	// fullVectorSessions holds PushOptions.FullVectorSessions for the push
+	// in progress.
+	fullVectorSessions map[string]struct{}
 
 	// Project filtering for push scope.
 	projects        []string
@@ -179,6 +182,9 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource storage.VectorPushSource
+	// recipePrivilegeLogged limits the notice that this writer cannot
+	// publish embedding recipes to once per Sync.
+	recipePrivilegeLogged bool
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.

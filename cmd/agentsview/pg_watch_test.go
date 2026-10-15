@@ -689,3 +689,48 @@ func TestNewPGPushCommandRejectsAllWatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--all cannot be combined with --watch")
 }
+
+// TestPGPusherFullVectorRepairNarrowsToDeferredSessions pins how a --full
+// watch finishes its vector repair: the first vector phase that runs repairs
+// the generation, each session it deferred keeps a per-session repair until
+// its vectors push, and later deferrals of other sessions owe no repair.
+func TestPGPusherFullVectorRepairNarrowsToDeferredSessions(t *testing.T) {
+	deferred := func(ids ...string) storage.PushResult {
+		return storage.PushResult{Errors: len(ids), Vectors: storage.VectorPushResult{
+			GenerationID: 1, SessionsDeferred: len(ids), DeferredSessionIDs: ids,
+		}}
+	}
+	target := &fakeTarget{}
+	pusher, _ := newTestReplicaPusher(target)
+	pusher.fullVectorsPending = true
+	steps := []storage.PushResult{
+		{Vectors: storage.VectorPushResult{Skipped: true}},
+		deferred("s1"),
+		deferred("s1", "s2"),
+		deferred(),
+		deferred("s3"),
+	}
+	for _, result := range steps {
+		target.pushResult = result
+		_ = pusher.push(t.Context(), reasonChange, false)
+	}
+	require.Len(t, target.pushOpts, 5)
+	type sent struct {
+		fullVectors bool
+		sessions    []string
+		scoped      bool
+	}
+	var got []sent
+	for _, opts := range target.pushOpts {
+		got = append(got, sent{
+			opts.FullVectors, opts.FullVectorSessions, opts.ScopeVectorsToChangedSessions,
+		})
+	}
+	assert.Equal(t, []sent{
+		{fullVectors: true},
+		{fullVectors: true},
+		{sessions: []string{"s1"}},
+		{sessions: []string{"s1"}},
+		{scoped: true},
+	}, got)
+}

@@ -195,10 +195,13 @@ func (s *Sync) PushWithOptions(
 	}
 
 	var vectorScope []string
-	if opts.ScopeVectorsToChangedSessions {
+	if opts.ScopeVectorsToChangedSessions && !opts.FullVectors {
 		vectorScope = sessionIDs(changed)
 	}
-	result.Vectors, err = s.pushVectors(ctx, full, vectorScope, failed, onProgress)
+	result.Vectors, err = s.pushVectors(
+		ctx, full || opts.FullVectors, opts.FullVectorSessions, vectorScope,
+		failed, onProgress,
+	)
 	if err != nil {
 		return result, fmt.Errorf("vector push: %w", err)
 	}

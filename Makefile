@@ -411,7 +411,7 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
-		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestHostedRuntimeHealthRequiresStatusToken' -count=1
+		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig' -count=1
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
@@ -422,7 +422,7 @@ test-postgres-ci:
 
 test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
-		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestHostedRuntimeHealthRequiresStatusToken' -count=1
+		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig' -count=1
 
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci

@@ -10,8 +10,10 @@ services:
       FORGE_DIR: /agents/forge
       OPENCODE_DIR: /agents/opencode
       # Set both of these to serve from PostgreSQL instead of the local archive.
-      # PG_SERVE: "1"
+      # AGENTSVIEW_MODE: pg-serve
       # AGENTSVIEW_PG_URL: postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require
+      # Read the bearer token from a mounted secret instead of /data/config.toml.
+      # AGENTSVIEW_AUTH_TOKEN_FILE: /run/secrets/agentsview_token
     volumes:
       - agentsview-data:/data
       - ${HOME}/.claude/projects:/agents/claude:ro

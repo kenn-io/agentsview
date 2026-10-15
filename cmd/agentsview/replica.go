@@ -32,6 +32,9 @@ type ReplicaPushConfig struct {
 	Debounce        time.Duration
 	Interval        time.Duration
 	NoVectors       bool
+	// Embed builds pending embeddings in this process before each push
+	// (pg push --embed). It requires the local archive writer.
+	Embed bool
 	// ScopeVectorsToChangedSessions is set internally by the watch
 	// loop for change-triggered pushes; it has no CLI flag.
 	ScopeVectorsToChangedSessions bool
@@ -105,6 +108,9 @@ func runReplicaPush(
 	)
 	defer stop()
 
+	// --embed builds in this process, so it never auto-starts a daemon; a
+	// live daemon still wins the writer and rejects the request.
+	appCfg.NoDaemonAutostart = cfg.Embed
 	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentArchiveWrite)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)
@@ -182,10 +188,12 @@ func runReplicaPushTarget(
 	result, err := writer.ReplicaPush(
 		ctx, backend, target, cfg, projects, excludeProjects,
 	)
+	if err == nil || result.SessionsPushed > 0 || result.MessagesPushed > 0 {
+		writeReplicaPushSummary(os.Stdout, backend.DisplayName(), result)
+	}
 	if err != nil {
 		return err
 	}
-	writeReplicaPushSummary(os.Stdout, backend.DisplayName(), result)
 	if result.Errors > 0 {
 		return fmt.Errorf("%d session(s) failed", result.Errors)
 	}
