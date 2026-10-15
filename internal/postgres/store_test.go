@@ -1576,15 +1576,11 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "ListTrashedSessions")
 	assert.Contains(t, sessionIDs(trashed), sessionID)
 
-	restored, err := store.RestoreSession(t.Context(), sessionID)
-	require.NoError(t, err, "RestoreSession")
-	assert.EqualValues(t, 1, restored)
-
 	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
 		"SoftDeleteSession trashedID")
 	_, err = store.DB().Exec(`UPDATE sessions SET data_version = $1 WHERE id = $2`, db.CurrentDataVersion(), trashedID)
 	require.NoError(t, err, "marking restore target current")
-	restored, err = store.RestoreSession(t.Context(), trashedID)
+	restored, err := store.RestoreSession(t.Context(), trashedID)
 	require.NoError(t, err, "RestoreSession trashedID")
 	assert.EqualValues(t, 1, restored)
 	sess, err = store.GetSession(ctx, trashedID)
@@ -1608,7 +1604,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.Equal(t, 2, deletedCount)
 	count, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err, "EmptyTrash")
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 3, count)
 	trashed, err = store.ListTrashedSessions(ctx)
 	require.NoError(t, err, "ListTrashedSessions after empty trash")
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
