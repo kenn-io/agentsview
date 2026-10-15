@@ -472,6 +472,11 @@ func downloadFile(ctx context.Context,
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download failed: %s", resp.Status)
 	}
+	// Report the start, so a progress display times the transfer from
+	// the response rather than from the first 32 KB.
+	if progressFn != nil {
+		progressFn(0, totalSize)
+	}
 
 	out, err := os.Create(dest)
 	if err != nil {

@@ -704,3 +704,56 @@ func TestPerformUpdateInstallTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestDownloadFileReportsProgress(t *testing.T) {
+	const size = 100_000 // spans several 32 KB reads
+	type report struct{ downloaded, total int64 }
+	tests := []struct {
+		name        string
+		status      int
+		wantReports []report // first and last report; nil when none
+		wantErrSub  string
+	}{
+		{
+			name:        "reports the start before any bytes",
+			status:      http.StatusOK,
+			wantReports: []report{{0, size}, {size, size}},
+		},
+		{
+			name:       "failed response reports nothing",
+			status:     http.StatusNotFound,
+			wantErrSub: "404",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tt.status)
+					if tt.status == http.StatusOK {
+						_, _ = w.Write(make([]byte, size))
+					}
+				},
+			))
+			defer srv.Close()
+
+			var reports []report
+			_, err := downloadFile(t.Context(), srv.URL,
+				filepath.Join(t.TempDir(), "asset"), size,
+				func(downloaded, total int64) {
+					reports = append(reports, report{downloaded, total})
+				},
+			)
+			if tt.wantErrSub != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrSub)
+				assert.Empty(t, reports)
+				return
+			}
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(reports), 2)
+			assert.Equal(t, tt.wantReports,
+				[]report{reports[0], reports[len(reports)-1]})
+		})
+	}
+}

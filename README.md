@@ -51,7 +51,9 @@ to fix that.
 
 Run `agentsview update` to move to the newest rolling build. It checks for a new
 build every time you run it and replaces the program you ran, even when the
-file has another name such as `agentsview-linux-amd64`. Running
+file has another name such as `agentsview-linux-amd64`. While it downloads, it
+shows the average speed and the elapsed time against the estimated total, such
+as `2.1 MB/s  0:19 elapsed / ~1:06 total`. Running
 `agentsview serve` from a newer rolling build replaces an older daemon that is
 still running.
 

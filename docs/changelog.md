@@ -120,6 +120,10 @@ The latest published release is
 
 **Improvements**
 
+- `agentsview update` shows the download speed and the elapsed time against
+  the estimated total next to the downloaded size, for example
+  `2.1 MB/s  0:19 elapsed / ~1:06 total`. The line redraws about five times a
+  second.
 - Dashboard repository discovery reuses unchanged Git trust settings, reducing repeated Git launches.
 - Dashboard Git totals reuse discovery for ordinary checkouts owned by the
   server's user. Other layouts use fresh Git discovery. Directories with no

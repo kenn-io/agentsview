@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/update"
@@ -104,21 +105,11 @@ func runUpdate(ctx context.Context, cfg UpdateConfig) {
 		}
 	}
 
-	progressFn := func(downloaded, total int64) {
-		if total > 0 {
-			pct := float64(downloaded) / float64(total) * 100
-			fmt.Printf(
-				"\r  %s / %s (%.0f%%)",
-				update.FormatSize(downloaded),
-				update.FormatSize(total),
-				pct,
-			)
-		}
-	}
+	progress := newDownloadProgress(os.Stdout, time.Now)
 
 	if err := performUpdateWithDaemonLifecycle(ctx,
 		info,
-		progressFn,
+		progress.update,
 		loadDaemonConfigForUpdate,
 		stopWritableDaemonsForUpdate,
 		update.PerformUpdate,
