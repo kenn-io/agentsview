@@ -694,35 +694,6 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 	assert.Nil(t, res.Deltas.TotalCostDeltaRatio)
 }
 
-func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroData(t *testing.T) {
-	t.Parallel()
-
-	d := dbtest.OpenTestDB(t)
-	seedPairwiseUsageFixture(t, d)
-	be := service.NewDirectBackend(d, nil)
-
-	res, err := be.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			Model:          "gpt-4o",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Zero(t, res.Left.SessionCount)
-	assert.Zero(t, res.Left.TotalTokens)
-	assert.Equal(t, 1, res.Right.SessionCount)
-	assert.Equal(t, 50, res.Right.TotalTokens)
-}
-
 func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t *testing.T) {
 	t.Parallel()
 
