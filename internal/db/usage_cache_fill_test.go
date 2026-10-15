@@ -450,7 +450,7 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 	got, err := readUsageCachedSessions(t.Context(), runner, ids)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
-	assert.Equal(t, []int{500, 5}, runner.queryArgCounts)
+	assert.Equal(t, []int{maxSQLVars, 5}, runner.queryArgCounts)
 }
 
 func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {
