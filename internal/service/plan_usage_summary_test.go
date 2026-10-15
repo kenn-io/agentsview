@@ -103,6 +103,14 @@ func assertPlanOnlySummary(t *testing.T, be service.SessionService) {
 	require.NoError(t, err)
 	assert.Equal(t, "gpt-5-codex", cmp.Left.Value)
 	assert.Equal(t, "claude-sonnet-4", cmp.Right.Value)
+
+	// The default pair skips it: it has no token data to compare.
+	cmp, err = be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		From: "2026-09-10", To: "2026-09-10", Timezone: "UTC", IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "claude-sonnet-4", cmp.Left.Value)
+	assert.Equal(t, "project", cmp.Right.Dimension)
 }
 
 // TestSessionDetailIncludesPlanUsage checks that session details carry a
