@@ -144,3 +144,26 @@ func TestUsageMatchingSessionCountRollupCountsUsageEventSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, legacy, facts)
 }
+
+func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "blank-agent", "project", func(session *Session) {
+		session.Agent = ""
+		session.StartedAt = Ptr("2026-08-10T08:00:00Z")
+	})
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "blank-agent", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+		TokenUsage: []byte(`{"input_tokens":3,"output_tokens":4}`),
+		SourceUUID: "source",
+	}}))
+	filter := UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+		SkipSessionCounts: true,
+	}
+	legacy, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	facts, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, legacy.Totals, facts.Totals)
+}

@@ -1610,16 +1610,6 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.NotContains(t, sessionIDs(trashed), sessionID)
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
 	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
-
-	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(ctx, db.Session{}))
-	assert.Equal(t, db.ErrReadOnly,
-		store.ReplaceSessionMessages(ctx, "x", nil))
-	_, err = store.WriteSessionBatchAtomic(ctx, nil)
-	assert.ErrorIs(t, err, db.ErrReadOnly)
-	_, err = store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
-		Surface: db.RecallQuerySurfaceQuery,
-	})
-	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
 func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {

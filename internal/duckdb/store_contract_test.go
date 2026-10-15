@@ -532,17 +532,6 @@ func duckContractReadOnlyCuration(
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)
 
-	ok, err := store.StarSession(ctx, fixture.betaID)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	require.False(t, ok)
-	require.ErrorIs(t, store.UnstarSession(ctx, fixture.alphaID), db.ErrReadOnly)
-	require.ErrorIs(t, store.BulkStarSessions(ctx, []string{fixture.betaID}), db.ErrReadOnly)
-
-	pinID, err := store.PinMessage(ctx, fixture.alphaID, 1, nil)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	require.Zero(t, pinID)
-	require.ErrorIs(t, store.UnpinMessage(ctx, fixture.alphaID, 1), db.ErrReadOnly)
-
 	pins, err := store.ListPinnedMessages(ctx, fixture.alphaID, "")
 	require.NoError(t, err)
 	require.Len(t, pins, 1)

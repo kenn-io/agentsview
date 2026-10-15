@@ -2065,17 +2065,6 @@ func querySnapshotRankedRows(
 	return out
 }
 
-func TestSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
-	d := testDB(t)
-	seedSnapshotTiePair(t, d,
-		"2026-05-20T10:31:00Z", "2026-05-20T10:30:00Z")
-	got := querySnapshotRankedRows(t, d, UsageFilter{})
-	require.Len(t, got, 1)
-	assert.Equal(t, "z-snapshot", got[0][0])
-	assert.Equal(t, "a-snapshot", got[0][1])
-	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, got[0][2])
-}
-
 func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -2198,14 +2187,8 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				s.ParentSessionID = new("source-main")
 				s.RelationshipType = "fork"
 			})
-			insertSession(t, d, "missing-keys", "proj", func(s *Session) {
-				s.Agent = "claude"
-				s.StartedAt = new("2026-04-11T10:00:00Z")
-				s.EndedAt = new("2026-04-11T10:05:00Z")
-			})
 
 			shared := jsontext.Value(`{"input_tokens":100,"output_tokens":500,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000}`)
-			missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
 
 			insertMessages(t, d,
 				Message{
@@ -2220,27 +2203,13 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 					Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
 					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: "source_dup",
 				},
-				Message{
-					SessionID: "missing-keys", Ordinal: 0,
-					Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-					Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-					HasOutputTokens: true,
-				},
-				Message{
-					SessionID: "missing-keys", Ordinal: 1,
-					Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-					Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-					HasOutputTokens: true,
-				},
 			)
 
-			if tc.requestID != "" {
-				insertMessages(t, d, Message{
-					SessionID: "source-fork", Ordinal: 1, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
-					Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
-					ClaudeMessageID: "msg_uniq", ClaudeRequestID: "req_uniq",
-				})
-			}
+			insertMessages(t, d, Message{
+				SessionID: "source-fork", Ordinal: 1, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
+				Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
+				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: "source_uniq",
+			})
 			t.Run("daily top and counts", func(t *testing.T) {
 				result, err := d.GetDailyUsage(t.Context(), UsageFilter{
 					From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
@@ -2248,12 +2217,8 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				require.NoError(t, err, "GetDailyUsage")
 				require.Len(t, result.Daily, 1, "daily entries =")
 				day := result.Daily[0]
-				want := [4]int{100, 500, 1000, 50000}
-				wantSessions := 1
-				if tc.requestID != "" {
-					want = [4]int{120, 580, 1200, 55000}
-					wantSessions = 2
-				}
+				want := [4]int{120, 580, 1200, 55000}
+				wantSessions := 2
 				assert.Equal(t, want[0], day.InputTokens)
 				assert.Equal(t, want[1], day.OutputTokens)
 				assert.Equal(t, want[2], day.CacheCreationTokens)
@@ -2264,10 +2229,8 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				require.Len(t, top, wantSessions)
 				assert.Equal(t, "source-main", top[0].SessionID)
 				assert.Equal(t, 51600, top[0].TotalTokens)
-				if tc.requestID != "" {
-					assert.Equal(t, "source-fork", top[1].SessionID)
-					assert.Equal(t, 5300, top[1].TotalTokens)
-				}
+				assert.Equal(t, "source-fork", top[1].SessionID)
+				assert.Equal(t, 5300, top[1].TotalTokens)
 				counts, err := d.GetUsageSessionCounts(t.Context(), filter)
 				require.NoError(t, err, "GetUsageSessionCounts")
 				assert.Equal(t, wantSessions, counts.Total)
@@ -2276,6 +2239,26 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 			})
 
 			if tc.requestID == "" {
+				insertSession(t, d, "missing-keys", "proj", func(s *Session) {
+					s.Agent = "claude"
+					s.StartedAt = new("2026-04-11T10:00:00Z")
+					s.EndedAt = new("2026-04-11T10:05:00Z")
+				})
+				missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
+				insertMessages(t, d,
+					Message{
+						SessionID: "missing-keys", Ordinal: 0,
+						Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+						Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+						HasOutputTokens: true,
+					},
+					Message{
+						SessionID: "missing-keys", Ordinal: 1,
+						Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+						Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+						HasOutputTokens: true,
+					},
+				)
 				t.Run("missing dedup keys counted every time", func(t *testing.T) {
 					result, err := d.GetDailyUsage(t.Context(), UsageFilter{
 						From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",

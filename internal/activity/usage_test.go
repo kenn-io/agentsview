@@ -183,12 +183,10 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 		},
 	}
 
-	t.Run("all rows", func(t *testing.T) {
-		mask, attribution, webSearchRequests := ClaudeSnapshotSurvivorSelection(usage)
-		assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
-		assert.Equal(t, []string{"", "", "e", "x", "a", ""}, attribution)
-		assert.Equal(t, []int{0, 0, 2, 4, 3, 0}, webSearchRequests)
-	})
+	mask, attribution, webSearchRequests := ClaudeSnapshotSurvivorSelection(usage)
+	assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
+	assert.Equal(t, []string{"", "", "e", "x", "a", ""}, attribution)
+	assert.Equal(t, []int{0, 0, 2, 4, 3, 0}, webSearchRequests)
 }
 
 func TestUsageSurvivorSelectionFiltersRangeBeforeIdentityClaim(t *testing.T) {
