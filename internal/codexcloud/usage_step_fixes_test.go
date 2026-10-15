@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,6 +224,39 @@ func TestItemsAppendedBeforeACrashMarkTheRootAgain(t *testing.T) {
 	assert.Equal(t, appended, env.account(t).Refresh["a"].LastChange, "with the recovered items' fetch time")
 }
 
+// TestFailingHistoryKeepsTheRootsChangeTime covers a chat whose history
+// read keeps failing while its listing time stays put: each retry leaves
+// the root's last change at the listing time, so the root settles 7 days
+// after it, and only a newer listing time marks it again.
+func TestFailingHistoryKeepsTheRootsChangeTime(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(1), nil))
+	fail, mu := true, &sync.Mutex{}
+	env.failThread("a", &fail, mu)
+	listed := time.Unix(ago(time.Hour), 0)
+
+	env.run(t)
+	require.Contains(t, env.account(t).Retry, "a")
+	require.Equal(t, listed, env.account(t).UsagePending["a"].LastChange)
+	for range 4 {
+		env.clock.Advance(time.Hour)
+		env.run(t)
+		assert.Equal(t, listed, env.account(t).UsagePending["a"].LastChange, "a failed retry is not a change")
+	}
+
+	env.clock.Set(listed.Add(settleAfter + 30*time.Minute))
+	env.run(t)
+	require.Contains(t, env.account(t).Retry, "a", "the history read still fails")
+	assert.NotContains(t, env.account(t).UsagePending, "a", "the root settles 7 days after the listing time")
+
+	env.clock.Advance(time.Hour)
+	relisted := env.clock.Now().Add(-time.Minute).Truncate(time.Second)
+	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.UpdatedAt = relisted.Unix() })
+	env.run(t)
+	assert.Equal(t, relisted, env.account(t).UsagePending["a"].LastChange, "a newer listing time marks the root again")
+}
+
 // TestLostAccountStateRestoresRefreshRoots covers a root whose newest
 // plan usage record is a complete row: after account.json is lost it
 // goes back on the refresh schedule, not the pending queue, so it is not
@@ -363,9 +397,9 @@ func TestLostAccountStateSkipsUnreadableRoots(t *testing.T) {
 	st.LastPlanRow = jsontext.Value(`"not a row"`)
 	require.NoError(t, env.syncer.Store.SaveThread(passKey, "badrow", st))
 	// Its newest record is a "left out" outcome, which is read from the
-	// mirror file.
-	require.NoError(t, os.Chmod(env.mirrorPath(t, "badmirror"), 0))
-	t.Cleanup(func() { _ = os.Chmod(env.mirrorPath(t, "badmirror"), 0o600) })
+	// mirror file. Bytes that are not a frame make that read fail on every
+	// platform and for every user, which a file mode does not.
+	require.NoError(t, os.WriteFile(env.mirrorPath(t, "badmirror"), []byte("not a mirror frame"), 0o600))
 
 	env.loseAccount(t, false)
 	env.clock.Advance(time.Hour)
