@@ -2852,101 +2852,41 @@ func TestGetTopSessionsByCost_DisplayNameFallback(t *testing.T) {
 		"s-id DisplayName")
 }
 
-// TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID
-// mirrors TestGetDailyUsage_DedupesByClaudeMessageAndRequestID
-// for the top-sessions query: a parent session and a forked
-// session that both replay the same Claude message should only
-// count that message once in the per-session totals. The
-// earliest-timestamp session wins the credit.
-func TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID(
-	t *testing.T,
-) {
+func TestUsageTopSessionsAndCountsDedupSourceUUIDFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-
 	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:         "claude-sonnet",
-		InputPerMTok:         money.MustParseDollars("3.0"),
-		OutputPerMTok:        money.MustParseDollars("15.0"),
-		CacheCreationPerMTok: money.MustParseDollars("3.75"),
-		CacheReadPerMTok:     money.MustParseDollars("0.30"),
+		ModelPattern: "claude-sonnet", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}), "UpsertModelPricing")
-
-	// Parent session starts first.
-	insertSession(t, d, "s-parent", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	// Forked session starts a minute later.
-	insertSession(t, d, "s-fork", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:01:00Z")
-		s.ParentSessionID = new("s-parent")
-		s.RelationshipType = "fork"
-	})
-
-	shared := jsontext.Value(
-		`{"input_tokens":1000,"output_tokens":500,` +
-			`"cache_creation_input_tokens":200,` +
-			`"cache_read_input_tokens":3000}`)
-	unique := jsontext.Value(
-		`{"input_tokens":10,"output_tokens":20,` +
-			`"cache_creation_input_tokens":0,` +
-			`"cache_read_input_tokens":0}`)
-
-	// The shared message exists on both sessions with the same
-	// Claude IDs; the parent's timestamp is earlier so it should
-	// win the dedup.
-	insertMessages(t, d, Message{
-		SessionID: "s-parent", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
-	})
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
-	})
-	// Plus a unique fork-only message so the fork still appears.
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 1,
-		Role: "assistant", Timestamp: "2024-06-15T10:04:00Z",
-		Model: "claude-sonnet", TokenUsage: unique,
-		ClaudeMessageID: "msg_uniq", ClaudeRequestID: "req_uniq",
-	})
-
-	top, err := d.GetTopSessionsByCost(ctx, UsageFilter{
-		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
-	}, 20)
-	requireNoError(t, err, "GetTopSessionsByCost")
-
-	require.Len(t, top, 2, "len")
-
-	byID := map[string]TopSessionEntry{}
-	for _, e := range top {
-		byID[e.SessionID] = e
+	for i, id := range []string{"s-parent", "s-fork"} {
+		timestamp := []string{"2024-06-15T10:02:00Z", "2024-06-15T10:03:00Z"}[i]
+		insertSession(t, d, id, id, func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = &timestamp
+		})
+		insertMessages(t, d, Message{
+			SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: timestamp,
+			Model: "claude-sonnet", TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+			ClaudeMessageID: "msg-dup", SourceUUID: "source-dup",
+		})
 	}
-
-	parent, ok := byID["s-parent"]
-	require.True(t, ok, "s-parent missing from top sessions")
-	// Parent owns shared: 1000+500+200+3000 = 4700 tokens.
-	assert.Equal(t, 4700, parent.TotalTokens, "parent.TotalTokens")
-
-	fork, ok := byID["s-fork"]
-	require.True(t, ok, "s-fork missing from top sessions")
-	// Fork should only own the unique message: 10+20 = 30
-	// tokens. If the dedup were missing, the shared row would
-	// be counted again and this would jump to 4730.
-	assert.Equal(t, 30, fork.TotalTokens,
-		"fork.TotalTokens want 30 "+
-			"(shared message should be deduped)")
-
-	// Total across both entries must equal the undeduped
-	// message sum: parent 4700 + fork 30 = 4730.
-	total := parent.TotalTokens + fork.TotalTokens
-	assert.Equal(t, 4730, total, "sum of per-session totals")
+	filter := UsageFilter{From: "2024-06-15", To: "2024-06-15", Timezone: "UTC"}
+	top, err := d.GetTopSessionsByCost(ctx, filter, 20)
+	requireNoError(t, err, "GetTopSessionsByCost")
+	require.Len(t, top, 1)
+	assert.Equal(t, "s-parent", top[0].SessionID)
+	assert.Equal(t, 1500, top[0].TotalTokens)
+	legacyTop, err := d.getTopSessionsByCostLegacy(ctx, filter, 20)
+	requireNoError(t, err, "getTopSessionsByCostLegacy")
+	assert.Equal(t, top, legacyTop)
+	counts, err := d.GetUsageSessionCounts(ctx, filter)
+	requireNoError(t, err, "GetUsageSessionCounts")
+	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, map[string]int{"s-parent": 1}, counts.ByProject)
+	assert.Equal(t, map[string]int{"claude": 1}, counts.ByAgent)
+	legacyCounts, err := d.getUsageSessionCountsLegacy(ctx, filter)
+	requireNoError(t, err, "getUsageSessionCountsLegacy")
+	assert.Equal(t, counts, legacyCounts)
 }
 
 func TestGetTopSessionsByCostLimit(t *testing.T) {
@@ -3455,56 +3395,6 @@ func TestNewUsageSessionCounts(t *testing.T) {
 // GetDailyUsage, so it must also NOT be counted in
 // GetUsageSessionCounts — otherwise the summary cards disagree
 // with the charts.
-func TestGetUsageSessionCounts_DedupesByClaudeMessageAndRequestID(
-	t *testing.T,
-) {
-	d := testDB(t)
-	ctx := t.Context()
-
-	// Parent starts first.
-	insertSession(t, d, "s-parent", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	// Fork starts a minute later.
-	insertSession(t, d, "s-fork", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:01:00Z")
-		s.ParentSessionID = new("s-parent")
-		s.RelationshipType = "fork"
-	})
-
-	shared := jsontext.Value(
-		`{"input_tokens":100,"output_tokens":50}`)
-
-	// Parent has one unique message.
-	insertMessages(t, d, Message{
-		SessionID: "s-parent", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
-	})
-	// Fork's ONLY qualifying message is a replay of the parent
-	// row — same claude IDs. After dedup the fork contributes
-	// nothing and must not be counted.
-	insertMessages(t, d, Message{
-		SessionID: "s-fork", Ordinal: 0,
-		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
-		Model: "claude-sonnet", TokenUsage: shared,
-		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
-	})
-
-	counts, err := d.GetUsageSessionCounts(ctx, UsageFilter{
-		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
-	})
-	requireNoError(t, err, "GetUsageSessionCounts")
-
-	assert.Equal(t, 1, counts.Total,
-		"Total want 1 (fork should dedup out)")
-	assert.Equal(t, 1, counts.ByProject["proj"], "ByProject[proj]")
-	assert.Equal(t, 1, counts.ByAgent["claude"], "ByAgent[claude]")
-}
-
 // TestUsageQueryEligibilityParity seeds messages that fail each
 // disqualification predicate and asserts all three usage queries
 // ignore them. Guardrail against drift between usage queries.
