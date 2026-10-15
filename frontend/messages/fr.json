@@ -2906,7 +2906,12 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input time",
+        "local countPlural = count: plural"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countLabel} tour non capturé ; l'utilisation du forfait le compte s'il a eu lieu avant {time}",
