@@ -152,6 +152,11 @@ func (db *DB) GetPlanUsageSessionCounts(
 	ctx context.Context, f UsageFilter,
 ) (PlanUsageSessionCounts, error) {
 	query, args := planUsageCountSQL(f)
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return PlanUsageSessionCounts{}, err
+	}
+	defer release()
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return PlanUsageSessionCounts{}, fmt.Errorf("querying plan usage session counts: %w", err)
