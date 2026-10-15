@@ -1738,7 +1738,8 @@ pass batches recovered folders and reconciles their original provider root
 scopes before releasing polling. A failed reconciliation keeps polling active
 for the next retry. A deferred folder keeps polling until its whole subtree is
 watched or the directory disappears.
-New native events use the normal sync interval while discovery retries back off.
+New native events sync on the normal interval, apart from failed discovery,
+which keeps backing off up to two minutes.
 A regular file replacing the directory or an ancestor releases polling.
 A directory symlink keeps polling. Removing a root from the watch plan releases
 its polling obligations. Budget or native watch resource exhaustion keeps
