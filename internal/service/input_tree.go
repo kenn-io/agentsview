@@ -311,9 +311,8 @@ func (t *inputTreeBuilder) nodesDepthFirst() []InputTreeNode {
 		}
 		position[idx] = len(out)
 		out = append(out, node)
-		children := t.nodes[idx].children
-		for i := len(children) - 1; i >= 0; i-- {
-			stack = append(stack, children[i])
+		for _, child := range slices.Backward(t.nodes[idx].children) {
+			stack = append(stack, child)
 		}
 	}
 	return out

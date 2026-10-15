@@ -166,6 +166,7 @@ func TestDirectBackend_InputTreeActiveOrdinalsMatchMessageView(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.activeID, func(t *testing.T) {
+			t.Parallel()
 			tree, err := reader.InputTree(t.Context(), tt.activeID)
 			require.NoError(t, err)
 			require.NotNil(t, tree)
