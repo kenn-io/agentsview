@@ -191,7 +191,7 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 		got["rollup_cost"])
 }
 
-func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t *testing.T) {
+func TestHandleSessionUsage_RollupSelectsRootFirstForSharedSourceUUID(t *testing.T) {
 	te := setup(t)
 	seedSessionUsagePricing(t, te.db)
 	te.seedSession(t, "z-root-rollup-attribution", "project", 1, func(s *db.Session) {
@@ -207,8 +207,7 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
 			m.Role, m.Model = "assistant", controlledSessionUsageModel
 			m.Timestamp = "2026-03-12T10:00:00Z"
-			m.ClaudeMessageID = "shared-rollup-attribution"
-			m.ClaudeRequestID = "shared-rollup-attribution-request"
+			m.SourceUUID = "shared-rollup-attribution"
 			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 		})
 	}
