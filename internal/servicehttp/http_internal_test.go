@@ -213,71 +213,6 @@ func TestStatsUsesLongRunningClient(t *testing.T) {
 }
 
 func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
-	for _, versionSource := range []string{"known", "probed"} {
-		for _, tt := range []struct {
-			name      string
-			version   int
-			explicit  bool
-			fallback  bool
-			wantError bool
-		}{
-			{name: "default", version: 12},
-			{name: "fallback", version: 12, explicit: true, fallback: true},
-			{name: "older default", version: 11, wantError: true},
-			{name: "older fallback", version: 11, explicit: true, fallback: true, wantError: true},
-			{name: "older explicit pair", version: 11, explicit: true},
-		} {
-			t.Run(versionSource+"/"+tt.name, func(t *testing.T) {
-				paths := []string{}
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					paths = append(paths, r.URL.Path)
-					w.Header().Set("Content-Type", "application/json")
-					if r.URL.Path == "/api/v1/version" {
-						_, _ = fmt.Fprintf(w, `{"api_version":%d}`, tt.version)
-						return
-					}
-					assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
-					if tt.explicit {
-						assert.Equal(t, "model", r.URL.Query().Get("left_dimension"))
-						assert.Equal(t, "model-a", r.URL.Query().Get("left_value"))
-						assert.Equal(t, "model", r.URL.Query().Get("right_dimension"))
-						assert.Equal(t, "model-b", r.URL.Query().Get("right_value"))
-					} else {
-						assert.Empty(t, r.URL.Query().Get("left_dimension"))
-						assert.Empty(t, r.URL.Query().Get("right_dimension"))
-					}
-					assert.Equal(t, tt.fallback, r.URL.Query().Get("fallback_to_default") == "true")
-					_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
-				}))
-				t.Cleanup(srv.Close)
-				backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-				if versionSource == "known" {
-					backend.apiVersion = tt.version
-				}
-				req := service.UsagePairwiseComparisonRequest{FallbackToDefault: tt.fallback}
-				if tt.explicit {
-					req.LeftDimension, req.LeftValue = "model", "model-a"
-					req.RightDimension, req.RightValue = "model", "model-b"
-				}
-				result, err := backend.UsagePairwiseComparison(t.Context(), req)
-				wantPaths := []string{}
-				if versionSource == "probed" && (!tt.explicit || tt.fallback) {
-					wantPaths = append(wantPaths, "/api/v1/version")
-				}
-				if tt.wantError {
-					require.ErrorContains(t, err, "upgrade the server")
-					assert.Nil(t, result)
-				} else {
-					require.NoError(t, err)
-					require.NotNil(t, result)
-					assert.Equal(t, 42, result.Left.TotalTokens)
-					wantPaths = append(wantPaths, "/api/v1/usage/pairwise-comparison")
-				}
-				assert.Equal(t, wantPaths, paths)
-			})
-		}
-	}
-
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
@@ -287,7 +222,6 @@ func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 		}))
 		transport := srv.Client().Transport
 		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-		backend.apiVersion = service.UsagePairwiseDefaultsAPIVersion
 		backend.client.Transport = transport
 		backend.longRunningClient.Transport = transport
 		backend.client.Timeout = 10 * time.Millisecond
