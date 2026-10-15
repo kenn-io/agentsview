@@ -43,6 +43,7 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			want:   UsageDedupToken{Kind: "usage", Value: "k"},
 		},
 		{name: "no identity"},
+		{name: "message UUID without agent has no identity", source: "message", uuid: "u"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			identity := UsageIdentity{

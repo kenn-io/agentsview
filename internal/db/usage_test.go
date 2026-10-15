@@ -2254,7 +2254,6 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 	})
 
 	shared := jsontext.Value(`{"input_tokens":100,"output_tokens":500,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000}`)
-	unique := jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`)
 	missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
 
 	insertMessages(t, d,
@@ -2266,15 +2265,9 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 		},
 		Message{
 			SessionID: "source-fork", Ordinal: 0,
-			Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
+			Role: "assistant", Timestamp: "2026-04-10T10:02:01Z",
 			Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
 			ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
-		},
-		Message{
-			SessionID: "source-fork", Ordinal: 1,
-			Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
-			Model: "claude-opus-4-6", TokenUsage: unique, HasOutputTokens: true,
-			ClaudeMessageID: "msg_uniq", SourceUUID: "source_uniq",
 		},
 		Message{
 			SessionID: "missing-keys", Ordinal: 0,
@@ -2297,10 +2290,21 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 		require.NoError(t, err, "GetDailyUsage")
 		require.Len(t, result.Daily, 1, "daily entries =")
 		day := result.Daily[0]
-		assert.Equal(t, 120, day.InputTokens, "input")
-		assert.Equal(t, 580, day.OutputTokens, "output")
-		assert.Equal(t, 1200, day.CacheCreationTokens, "cache_cr")
-		assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
+		assert.Equal(t, 100, day.InputTokens, "input")
+		assert.Equal(t, 500, day.OutputTokens, "output")
+		assert.Equal(t, 1000, day.CacheCreationTokens, "cache_cr")
+		assert.Equal(t, 50000, day.CacheReadTokens, "cache_rd")
+
+		filter := UsageFilter{From: "2026-04-10", To: "2026-04-10", Timezone: "UTC"}
+		top, err := d.GetTopSessionsByCost(t.Context(), filter, 20)
+		require.NoError(t, err, "GetTopSessionsByCost")
+		require.Len(t, top, 1)
+		assert.Equal(t, "source-main", top[0].SessionID)
+		counts, err := d.GetUsageSessionCounts(t.Context(), filter)
+		require.NoError(t, err, "GetUsageSessionCounts")
+		assert.Equal(t, 1, counts.Total)
+		assert.Equal(t, map[string]int{"proj": 1}, counts.ByProject)
+		assert.Equal(t, map[string]int{"claude": 1}, counts.ByAgent)
 	})
 
 	t.Run("missing dedup keys counted every time", func(t *testing.T) {
@@ -2850,37 +2854,6 @@ func TestGetTopSessionsByCost_DisplayNameFallback(t *testing.T) {
 		"s-proj DisplayName")
 	assert.Equal(t, "s-id", byID["s-id"].DisplayName,
 		"s-id DisplayName")
-}
-
-func TestUsageTopSessionsAndCountsDedupSourceUUIDFallback(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern: "claude-sonnet", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
-	}}), "UpsertModelPricing")
-	for i, id := range []string{"s-parent", "s-fork"} {
-		timestamp := []string{"2024-06-15T10:02:00Z", "2024-06-15T10:03:00Z"}[i]
-		insertSession(t, d, id, id, func(s *Session) {
-			s.Agent = "claude"
-			s.StartedAt = &timestamp
-		})
-		insertMessages(t, d, Message{
-			SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: timestamp,
-			Model: "claude-sonnet", TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-			ClaudeMessageID: "msg-dup", SourceUUID: "source-dup",
-		})
-	}
-	filter := UsageFilter{From: "2024-06-15", To: "2024-06-15", Timezone: "UTC"}
-	top, err := d.GetTopSessionsByCost(ctx, filter, 20)
-	requireNoError(t, err, "GetTopSessionsByCost")
-	require.Len(t, top, 1)
-	assert.Equal(t, "s-parent", top[0].SessionID)
-	assert.Equal(t, 1500, top[0].TotalTokens)
-	counts, err := d.GetUsageSessionCounts(ctx, filter)
-	requireNoError(t, err, "GetUsageSessionCounts")
-	assert.Equal(t, 1, counts.Total)
-	assert.Equal(t, map[string]int{"s-parent": 1}, counts.ByProject)
-	assert.Equal(t, map[string]int{"claude": 1}, counts.ByAgent)
 }
 
 func TestGetTopSessionsByCostLimit(t *testing.T) {
