@@ -198,11 +198,10 @@ func (s *Store) UsageGroupFor(key AccountKey, root string) (UsageGroup, error) {
 
 // rebuildUsageQueue refills acct's plan usage queue from the per-thread
 // state, for an account whose account.json was lost or set aside. Every
-// mirrored usage root without a settled plan usage outcome becomes
-// pending. Its last change is the newest change stored for its group, not
-// now, so a root that changed more than settleAfter ago settles on its
-// first answer. It reads only local files and fetches nothing. It reports
-// whether the account has any thread state files.
+// mirrored usage root goes back where its newest plan usage record and its
+// group's newest change put it; see restoreRoot. It reads only local files
+// and fetches nothing. It reports whether the account has any thread state
+// files.
 func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, error) {
 	dir, err := s.accountDir(key)
 	if err != nil {
@@ -222,90 +221,130 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 			continue
 		}
 		threads = true
-		pending, change, err := s.unsettledRoot(key, id)
-		if err != nil {
+		if err := s.restoreRoot(key, acct, id); err != nil {
 			return false, err
-		}
-		if pending {
-			acct.UsagePending[id] = PendingEntry{Since: change, LastChange: change}
 		}
 	}
 	if threads {
 		s.Log.Printf("codex-cloud: account state was missing or unreadable; rebuilt the plan usage queue "+
-			"with %d chats from the saved chat state", len(acct.UsagePending))
+			"from the saved chat state: %d chats to check, %d to refresh", len(acct.UsagePending), len(acct.Refresh))
 	}
 	return threads, nil
 }
 
-// unsettledRoot reports whether id is a mirrored usage root whose plan
-// usage has not settled, and the newest change stored for its group.
-func (s *Store) unsettledRoot(key AccountKey, id string) (bool, time.Time, error) {
+// restoreRoot puts one thread back in acct's plan usage queue if it is a
+// mirrored usage root. A root whose newest plan usage record settled it
+// after its group's newest change stays out. A root whose newest record is
+// a complete row goes back on the refresh schedule, so it drops out
+// without a request once its chat has gone settleAfter without a change,
+// and a later partial answer cannot replace its row. Any other root is
+// pending. Both kinds keep the group's newest change as their last change,
+// not now, so a root that changed more than settleAfter ago settles on its
+// first answer.
+func (s *Store) restoreRoot(key AccountKey, acct *AccountState, id string) error {
 	mirrored, err := s.known(key, id)
 	if err != nil || !mirrored {
-		return false, time.Time{}, err
+		return err
 	}
 	root, err := s.RootOf(key, id)
 	if err != nil || root != id {
-		return false, time.Time{}, err
+		return err
 	}
 	st, err := s.LoadThread(key, id)
 	if err != nil {
-		return false, time.Time{}, err
+		return err
 	}
-	settled, err := s.planSettled(key, id, st)
-	if err != nil || settled {
-		return false, time.Time{}, err
+	change, err := s.groupChange(key, id, st)
+	if err != nil {
+		return err
 	}
+	plan, err := s.storedPlan(key, id, st)
+	if err != nil {
+		return err
+	}
+	switch {
+	case plan.settledAt.After(change):
+	case plan.available:
+		// The row's fetch time is only in the mirror file; with no last
+		// attempt, the refresh falls due a day after the row's data.
+		acct.Refresh[id] = RefreshEntry{DataAsOf: plan.dataAsOf, LastChange: change}
+	default:
+		acct.UsagePending[id] = PendingEntry{Since: change, LastChange: change}
+	}
+	return nil
+}
+
+// groupChange is the newest change stored for root's group: the root's
+// own change, the change that last marked it pending, and each
+// descendant's change.
+func (s *Store) groupChange(key AccountKey, root string, st ThreadState) (time.Time, error) {
 	change := st.changedAt()
 	if st.UsageChange.After(change) {
 		change = st.UsageChange
 	}
-	descendants, err := s.LoadDescendants(key, id)
+	descendants, err := s.LoadDescendants(key, root)
 	if err != nil {
-		return false, time.Time{}, err
+		return time.Time{}, err
 	}
 	for _, d := range descendants {
 		dst, err := s.LoadThread(key, d)
 		if err != nil {
-			return false, time.Time{}, err
+			return time.Time{}, err
 		}
 		if c := dst.changedAt(); c.After(change) {
 			change = c
 		}
 	}
-	return true, change, nil
+	return change, nil
 }
 
-// planSettled reports whether a root's newest plan usage record settles
-// it: a final row, or an outcome that ends its checks.
-func (s *Store) planSettled(key AccountKey, id string, st ThreadState) (bool, error) {
+// planState is what a root's newest plan usage record says about it.
+type planState struct {
+	// settledAt is when the record that settled the root was stored, zero
+	// when the newest record does not settle it.
+	settledAt time.Time
+	// available marks a newest record that is a complete row that is not
+	// final; dataAsOf is that row's data time.
+	available bool
+	dataAsOf  time.Time
+}
+
+// storedPlan reads a root's newest plan usage record. A row that is not
+// final is in the thread state. A final row or an outcome may settle the
+// root, and only the mirror file has the time it was stored, so those are
+// read from there.
+func (s *Store) storedPlan(key AccountKey, id string, st ThreadState) (planState, error) {
 	switch mirror.Kind(st.LastPlanRecordKind) {
 	case mirror.KindPlanUsageRow:
 		var row mirror.PlanUsageRowData
 		if err := json.Unmarshal(st.LastPlanRow, &row); err != nil {
-			return false, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
+			return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
 		}
-		return row.Final, nil
+		if !row.Final {
+			return planState{available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf}, nil
+		}
+		return s.mirrorPlan(key, id)
 	case mirror.KindPlanUsageOutcome:
-		return s.outcomeSettled(key, id)
+		return s.mirrorPlan(key, id)
 	default:
-		return false, nil
+		return planState{}, nil
 	}
 }
 
-// outcomeSettled reads the newest plan usage outcome in a root's mirror
-// file, which its state does not keep, and reports whether it settles the
-// root. A "left out" outcome settles it only when it is the mark written in
-// one commit with a final row, as settleLeftOut does.
-func (s *Store) outcomeSettled(key AccountKey, id string) (bool, error) {
+// mirrorPlan reads the newest plan usage record in a root's mirror file.
+// A final row settles the root. Of the outcomes, "settled with no row",
+// "could not check", and "too many sub-agent chats" settle it, and "left
+// out" settles it only when it is the mark written in one commit with a
+// final row, as settleLeftOut does.
+func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 	path, err := s.MirrorPath(key, id)
 	if err != nil {
-		return false, err
+		return planState{}, err
 	}
 	// A local read with no request behind it to cancel.
 	records, err := mirror.ReadAll(context.Background(), path)
 	if err != nil {
-		return false, fmt.Errorf("codex-cloud: chat %s: read mirror: %w", id, err)
+		return planState{}, fmt.Errorf("codex-cloud: chat %s: read mirror: %w", id, err)
 	}
 	var plan []mirror.Record
 	for _, r := range records {
@@ -313,31 +352,47 @@ func (s *Store) outcomeSettled(key AccountKey, id string) (bool, error) {
 			plan = append(plan, r)
 		}
 	}
-	if len(plan) == 0 || plan[len(plan)-1].Kind != mirror.KindPlanUsageOutcome {
-		return false, nil
+	if len(plan) == 0 {
+		return planState{}, nil
 	}
 	last := plan[len(plan)-1]
+	if last.Kind == mirror.KindPlanUsageRow {
+		return rowPlan(id, last)
+	}
 	var outcome mirror.PlanUsageOutcomeData
 	if err := json.Unmarshal(last.Data, &outcome); err != nil {
-		return false, fmt.Errorf("codex-cloud: chat %s: stored plan usage outcome: %w", id, err)
+		return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage outcome: %w", id, err)
 	}
 	switch outcome.Kind {
 	case mirror.OutcomeSettledNoRow, mirror.OutcomeCouldNotCheck, mirror.OutcomeTooManyDescendants:
-		return true, nil
+		return planState{settledAt: last.FetchedAt}, nil
 	case mirror.OutcomeLeftOut:
 		if len(plan) < 2 {
-			return false, nil
+			return planState{}, nil
 		}
 		before := plan[len(plan)-2]
 		if before.Kind != mirror.KindPlanUsageRow || !before.FetchedAt.Equal(last.FetchedAt) {
-			return false, nil
+			return planState{}, nil
 		}
-		var row mirror.PlanUsageRowData
-		if err := json.Unmarshal(before.Data, &row); err != nil {
-			return false, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
+		row, err := rowPlan(id, before)
+		if err != nil || row.settledAt.IsZero() {
+			// A row that is not final would be stored after the mark.
+			return planState{}, err
 		}
-		return row.Final, nil
+		return row, nil
 	default:
-		return false, nil
+		return planState{}, nil
 	}
+}
+
+// rowPlan is what one stored plan usage row says about its root.
+func rowPlan(id string, record mirror.Record) (planState, error) {
+	var row mirror.PlanUsageRowData
+	if err := json.Unmarshal(record.Data, &row); err != nil {
+		return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
+	}
+	if row.Final {
+		return planState{settledAt: record.FetchedAt}, nil
+	}
+	return planState{available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf}, nil
 }

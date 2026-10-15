@@ -1,6 +1,7 @@
 package codexcloud
 
 import (
+	"net/http"
 	"os"
 	"slices"
 	"testing"
@@ -55,8 +56,8 @@ func TestLostAccountStateRebuildsPlanUsageQueue(t *testing.T) {
 	from, fetchFrom := len(env.usage.Requests()), len(env.host.Requests())
 	env.run(t)
 
-	assert.Equal(t, []string{"available", "leftout", "partial"}, env.requestedSince(from),
-		"every unsettled root is asked about again")
+	assert.Equal(t, []string{"leftout", "partial"}, env.requestedSince(from),
+		"every pending root is asked about again; the complete row waits for its refresh")
 	assert.Empty(t, env.fetchedThreads(fetchFrom), "no chat is fetched again")
 	acct = env.account(t)
 	assert.Equal(t, fetchNow, acct.UsagePending["partial"].LastChange, "the stored change time, not now")
@@ -69,7 +70,8 @@ func TestLostAccountStateRebuildsPlanUsageQueue(t *testing.T) {
 	env.clock.Set(fetchNow.Add(settleAfter + time.Hour))
 	from = len(env.usage.Requests())
 	env.run(t)
-	assert.Equal(t, []string{"available", "leftout", "partial"}, env.requestedSince(from))
+	assert.Equal(t, []string{"leftout", "partial"}, env.requestedSince(from),
+		"the complete row drops out with no request")
 	partial := env.plan(t, "partial")
 	assert.True(t, partial.rows[len(partial.rows)-1].Final, "the partial row settles")
 	leftOut := env.plan(t, "leftout")
@@ -77,6 +79,7 @@ func TestLostAccountStateRebuildsPlanUsageQueue(t *testing.T) {
 	acct = env.account(t)
 	assert.NotContains(t, acct.UsagePending, "partial")
 	assert.NotContains(t, acct.UsagePending, "leftout")
+	assert.NotContains(t, acct.Refresh, "available")
 
 	// Settled roots stay settled when the account state is lost once more.
 	env.loseAccount(t, false)
@@ -179,4 +182,90 @@ func TestChangeLostWithTheAccountSaveIsMarkedAgain(t *testing.T) {
 
 	assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "the root is asked about again")
 	assert.Equal(t, changed, env.account(t).Refresh["a"].LastChange, "with the committed change time")
+}
+
+// TestLostAccountStateRestoresRefreshRoots covers a root whose newest
+// plan usage record is a complete row: after account.json is lost it
+// goes back on the refresh schedule, not the pending queue, so it is not
+// asked about early, and it drops out without a request once its chat
+// has gone 7 days without a change.
+func TestLostAccountStateRestoresRefreshRoots(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(2), nil))
+	env.run(t)
+	dataAsOf := env.account(t).Refresh["a"].DataAsOf
+	require.False(t, dataAsOf.IsZero())
+
+	env.loseAccount(t, false)
+	env.clock.Advance(time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+	assert.Empty(t, env.requestedRoots(from), "a complete row is not asked about before its refresh is due")
+	acct := env.account(t)
+	assert.NotContains(t, acct.UsagePending, "a")
+	assert.Equal(t, RefreshEntry{DataAsOf: dataAsOf, LastChange: fetchNow}, acct.Refresh["a"])
+
+	env.clock.Set(dataAsOf.Add(refreshEvery))
+	env.run(t)
+	assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "refreshed a day after its data")
+
+	// Lost after the settle point, with the server now answering partial:
+	// the root drops out with no request, and its complete row stays the
+	// newest.
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(3), nil))
+	env.loseAccount(t, true)
+	env.clock.Set(fetchNow.Add(settleAfter + time.Hour))
+	from = len(env.usage.Requests())
+	env.run(t)
+	assert.Empty(t, env.requestedRoots(from))
+	assert.NotContains(t, env.account(t).Refresh, "a")
+	plan := env.plan(t, "a")
+	last := plan.rows[len(plan.rows)-1]
+	assert.Equal(t, mirror.UsageAvailable, last.Row.DataStatus)
+	assert.False(t, last.Final)
+}
+
+// TestLostAccountStateRequeuesRootsChangedAfterSettling covers roots that
+// settled and then changed, on the root itself or on a sub-agent chat,
+// with the pending mark for that change lost along with account.json:
+// the change is newer than the settled record, so each root is pending
+// again.
+func TestLostAccountStateRequeuesRootsChangedAfterSettling(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("own", ago(time.Hour), message("o", "hi")))
+	env.threads.Set(finishedThread("parent", ago(time.Hour), message("p", "hi")))
+	child := finishedThread("child", ago(time.Hour), message("c", "hi"))
+	child.ParentThreadID = "parent"
+	env.threads.Set(child)
+	// "own" settles with a final row, "parent" with no row.
+	env.usage.SetRow("own", codexcloudtest.Row("own", "partial", pct(1), nil))
+	env.run(t)
+	env.clock.Set(fetchNow.Add(settleAfter + time.Hour))
+	env.run(t)
+	require.True(t, env.plan(t, "own").rows[len(env.plan(t, "own").rows)-1].Final)
+	parent := env.plan(t, "parent")
+	require.Equal(t, mirror.OutcomeSettledNoRow, parent.outcomes[len(parent.outcomes)-1].Kind)
+	require.Empty(t, env.account(t).UsagePending)
+
+	// New activity, while plan usage requests fail, so no new record
+	// follows the settled one before the account state is lost.
+	env.clock.Advance(time.Hour)
+	for _, id := range []string{"own", "child"} {
+		env.threads.Update(id, func(th *codexcloudtest.Thread) {
+			th.UpdatedAt = env.clock.Now().Unix() - 60
+			th.Turns[0].Items = append(th.Turns[0].Items, message(id+"-2", "more"))
+		})
+	}
+	env.usage.Refuse(http.StatusInternalServerError, nil, "")
+	env.run(t)
+	require.Contains(t, env.account(t).UsagePending, "own")
+	require.Contains(t, env.account(t).UsagePending, "parent")
+	env.usage.Accept()
+
+	env.loseAccount(t, false)
+	env.clock.Advance(time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+	assert.Equal(t, []string{"own", "parent"}, env.requestedSince(from), "each changed root is asked about again")
 }
