@@ -6003,6 +6003,62 @@ components:
         - preview
         - is_shell
       type: object
+    ServiceInputTree:
+      additionalProperties: false
+      properties:
+        active_session_id:
+          type: string
+        nodes:
+          items:
+            $ref: "#/components/schemas/ServiceInputTreeNode"
+          type: array
+        root_session_id:
+          type: string
+        sessions:
+          items:
+            $ref: "#/components/schemas/DbSession"
+          type: array
+        truncated:
+          type: boolean
+      required:
+        - active_session_id
+        - root_session_id
+        - nodes
+        - sessions
+        - truncated
+      type: object
+    ServiceInputTreeNode:
+      additionalProperties: false
+      properties:
+        active_ordinal:
+          format: int64
+          type: integer
+        end_session_ids:
+          items:
+            type: string
+          type: array
+        is_shell:
+          type: boolean
+        ordinal:
+          format: int64
+          type: integer
+        parent:
+          format: int64
+          type: integer
+        preview:
+          type: string
+        session_id:
+          type: string
+        timestamp:
+          type: string
+      required:
+        - parent
+        - session_id
+        - ordinal
+        - preview
+        - is_shell
+        - end_session_ids
+      type: object
     ServiceMemoryArchiveStatus:
       additionalProperties: false
       properties:
@@ -18905,6 +18961,93 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: List session input outline
+      tags:
+        - Sessions
+  /api/v1/sessions/{id}/input-tree:
+    get:
+      operationId: get-api-v1-sessions-id-input-tree
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceInputTree"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get session input branch tree
       tags:
         - Sessions
   /api/v1/sessions/{id}/md:

@@ -2203,6 +2203,76 @@ func sessionTreeMaxNodesForTest() int {
 	return 500
 }
 
+func TestGetSessionInputTree_MergesForkPrefix(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "input-root", "my-app", 4, func(s *db.Session) {
+		s.StartedAt = new("2025-01-15T10:00:00Z")
+	})
+	te.seedSession(t, "input-fork", "my-app", 2, func(s *db.Session) {
+		s.ParentSessionID = new("input-root")
+		s.RelationshipType = "fork"
+		s.StartedAt = new("2025-01-15T10:02:00Z")
+	})
+	msg := func(sid string, ordinal int, role, content, ts string) db.Message {
+		return db.Message{
+			SessionID:     sid,
+			Ordinal:       ordinal,
+			Role:          role,
+			Content:       content,
+			ContentLength: len(content),
+			Timestamp:     ts,
+		}
+	}
+	dbtest.SeedMessages(t, te.db,
+		msg("input-root", 0, "user", "shared input", "2025-01-15T10:00:00Z"),
+		msg("input-root", 1, "assistant", "answer", "2025-01-15T10:01:00Z"),
+		msg("input-root", 2, "user", "root input", "2025-01-15T10:05:00Z"),
+		msg("input-root", 3, "assistant", "answer", "2025-01-15T10:06:00Z"),
+		msg("input-fork", 0, "user", "fork input", "2025-01-15T10:02:00Z"),
+		msg("input-fork", 1, "assistant", "answer", "2025-01-15T10:03:00Z"),
+	)
+
+	w := te.get(t, "/api/v1/sessions/input-fork/input-tree")
+	assertStatus(t, w, http.StatusOK)
+
+	var resp struct {
+		ActiveSessionID string `json:"active_session_id"`
+		RootSessionID   string `json:"root_session_id"`
+		Nodes           []struct {
+			Parent        int      `json:"parent"`
+			Preview       string   `json:"preview"`
+			ActiveOrdinal *int     `json:"active_ordinal"`
+			EndSessionIDs []string `json:"end_session_ids"`
+		} `json:"nodes"`
+		Sessions  []db.Session `json:"sessions"`
+		Truncated bool         `json:"truncated"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	assert.Equal(t, "input-fork", resp.ActiveSessionID)
+	assert.Equal(t, "input-root", resp.RootSessionID)
+	assert.False(t, resp.Truncated)
+	require.Len(t, resp.Sessions, 2)
+	require.Len(t, resp.Nodes, 3)
+	assert.Equal(t, "shared input", resp.Nodes[0].Preview)
+	assert.Equal(t, -1, resp.Nodes[0].Parent)
+	assert.Equal(t, "root input", resp.Nodes[1].Preview)
+	assert.Equal(t, []string{"input-root"}, resp.Nodes[1].EndSessionIDs)
+	assert.Nil(t, resp.Nodes[1].ActiveOrdinal)
+	assert.Equal(t, "fork input", resp.Nodes[2].Preview)
+	assert.Equal(t, 0, resp.Nodes[2].Parent)
+	assert.Equal(t, []string{"input-fork"}, resp.Nodes[2].EndSessionIDs)
+	require.NotNil(t, resp.Nodes[2].ActiveOrdinal)
+	assert.Equal(t, 0, *resp.Nodes[2].ActiveOrdinal)
+}
+
+func TestGetSessionInputTree_NotFound(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/sessions/missing/input-tree")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
 func TestGetMessages_AscDefault(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 10)

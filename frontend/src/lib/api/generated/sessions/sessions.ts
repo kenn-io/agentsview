@@ -17,6 +17,7 @@ import type {
   GetApiV1SessionsByIdExportPathParameters,
   GetApiV1SessionsByIdInputOutlineParams,
   GetApiV1SessionsByIdInputOutlinePathParameters,
+  GetApiV1SessionsByIdInputTreePathParameters,
   GetApiV1SessionsByIdMdParams,
   GetApiV1SessionsByIdMdPathParameters,
   GetApiV1SessionsByIdMessagesParams,
@@ -50,6 +51,7 @@ import type {
   ResumeRequest,
   ResumeResponse,
   ServiceInputOutline,
+  ServiceInputTree,
   ServiceMessageList,
   ServiceSessionDetail,
   ServiceSessionList,
@@ -380,6 +382,25 @@ export const getApiV1SessionsByIdInputOutline = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<ServiceInputOutline> => {
   return orvalFetch<ServiceInputOutline>(getGetApiV1SessionsByIdInputOutlineUrl({ id }, params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1SessionsByIdInputTreeUrl = ({
+  id,
+}: GetApiV1SessionsByIdInputTreePathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/input-tree`;
+};
+
+/**
+ * @summary Get session input branch tree
+ */
+export const getApiV1SessionsByIdInputTree = async (
+  { id }: GetApiV1SessionsByIdInputTreePathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<ServiceInputTree> => {
+  return orvalFetch<ServiceInputTree>(getGetApiV1SessionsByIdInputTreeUrl({ id }), {
     ...options,
     method: "GET",
   });
