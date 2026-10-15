@@ -180,7 +180,7 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}{
 		{"sessions_cursors_and_metadata", duckContractSessionsCursorsAndMetadata},
 		{"messages_search_and_secrets", duckContractMessagesSearchAndSecrets},
-		{"read_only_curation", duckContractReadOnlyCuration},
+		{"starred_and_pinned_reads", duckContractStarredAndPinnedReads},
 		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
 		{"local_only_methods_read_only", duckContractLocalOnlyMethodsReadOnly},
 		{"data_inventory_rules_candidates", duckContractDataInventoryRulesCandidates},
@@ -521,7 +521,7 @@ func duckContractMessagesSearchAndSecrets(
 	require.Contains(t, source, "secret token")
 }
 
-func duckContractReadOnlyCuration(
+func duckContractStarredAndPinnedReads(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()

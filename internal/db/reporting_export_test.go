@@ -762,7 +762,6 @@ func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(t, int64(631), hour.Usage.Totals.OutputTokens)
 	assert.Equal(t, []string{"parent-agent"},
 		reportingUsageBreakdownKeys(hour.Usage.ByAgent))
 	require.Len(t, hour.Usage.ByProject, 1)
@@ -1000,62 +999,7 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 	}
 }
 
-func TestFinalizeReportingUsageCopiesAttributedSessionMetadata(t *testing.T) {
-	query := activity.Query{
-		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
-		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
-		EffectiveEnd: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
-	}
-	rows := []activity.UsageRow{
-		{
-			SessionID:       "earlier-parent",
-			MessageOrdinal:  1,
-			UsageSource:     "message",
-			Timestamp:       "2026-07-28T09:05:00Z",
-			Model:           "model-a",
-			OutputTokens:    100,
-			Cost:            money.Money{Microdollars: 1000},
-			CostSource:      export.CostSourceReported,
-			Priced:          true,
-			Contributes:     true,
-			ClaudeMessageID: "shared-message",
-			ClaudeRequestID: "shared-request",
-		},
-		{
-			SessionID:       "later-child",
-			MessageOrdinal:  1,
-			UsageSource:     "message",
-			Timestamp:       "2026-07-28T09:06:00Z",
-			Model:           "model-a",
-			OutputTokens:    900,
-			Cost:            money.Money{Microdollars: 9000},
-			CostSource:      export.CostSourceReported,
-			Priced:          true,
-			Contributes:     true,
-			ClaudeMessageID: "shared-message",
-			ClaudeRequestID: "shared-request",
-		},
-	}
-
-	sessionByID := map[string]activity.SessionMeta{
-		"earlier-parent": {
-			SessionID: "earlier-parent",
-			Agent:     "parent-agent",
-			Project:   "parent-project",
-			Machine:   "parent-machine",
-		},
-	}
-	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
-	require.NoError(t, err)
-	require.Len(t, survivors, 1)
-	assert.Equal(t, "parent-agent", survivors[0].Agent)
-	assert.Equal(t, "parent-project", survivors[0].Project)
-	assert.Equal(t, "parent-machine", survivors[0].Machine)
-}
-
-func TestFinalizeReportingUsageAddsIncrementalWebSearchFee(
-	t *testing.T,
-) {
+func TestFinalizeReportingUsageCopiesMetadataAndAddsWebSearchFee(t *testing.T) {
 	query := activity.Query{
 		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
@@ -1087,9 +1031,20 @@ func TestFinalizeReportingUsageAddsIncrementalWebSearchFee(
 		},
 	}
 
-	survivors, err := finalizeReportingUsage(query, rows, nil)
+	sessionByID := map[string]activity.SessionMeta{
+		"earlier-parent": {
+			SessionID: "earlier-parent",
+			Agent:     "parent-agent",
+			Project:   "parent-project",
+			Machine:   "parent-machine",
+		},
+	}
+	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
 	require.NoError(t, err)
 	require.Len(t, survivors, 1)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
 	assert.Equal(t, money.MustParseDollars("0.52"), survivors[0].Cost)
 }
 

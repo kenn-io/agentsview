@@ -2205,8 +2205,12 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				},
 			)
 
+			insertSession(t, d, "unique-session", "proj", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = new("2026-04-10T10:03:00Z")
+			})
 			insertMessages(t, d, Message{
-				SessionID: "source-fork", Ordinal: 1, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
+				SessionID: "unique-session", Ordinal: 0, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
 				Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
 				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: "source_uniq",
 			})
@@ -2229,7 +2233,7 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				require.Len(t, top, wantSessions)
 				assert.Equal(t, "source-main", top[0].SessionID)
 				assert.Equal(t, 51600, top[0].TotalTokens)
-				assert.Equal(t, "source-fork", top[1].SessionID)
+				assert.Equal(t, "unique-session", top[1].SessionID)
 				assert.Equal(t, 5300, top[1].TotalTokens)
 				counts, err := d.GetUsageSessionCounts(t.Context(), filter)
 				require.NoError(t, err, "GetUsageSessionCounts")
@@ -2237,41 +2241,39 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 				assert.Equal(t, map[string]int{"proj": wantSessions}, counts.ByProject)
 				assert.Equal(t, map[string]int{"claude": wantSessions}, counts.ByAgent)
 			})
-
-			if tc.requestID == "" {
-				insertSession(t, d, "missing-keys", "proj", func(s *Session) {
-					s.Agent = "claude"
-					s.StartedAt = new("2026-04-11T10:00:00Z")
-					s.EndedAt = new("2026-04-11T10:05:00Z")
-				})
-				missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
-				insertMessages(t, d,
-					Message{
-						SessionID: "missing-keys", Ordinal: 0,
-						Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-						Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-						HasOutputTokens: true,
-					},
-					Message{
-						SessionID: "missing-keys", Ordinal: 1,
-						Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-						Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-						HasOutputTokens: true,
-					},
-				)
-				t.Run("missing dedup keys counted every time", func(t *testing.T) {
-					result, err := d.GetDailyUsage(t.Context(), UsageFilter{
-						From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",
-					})
-					require.NoError(t, err, "GetDailyUsage")
-					require.Len(t, result.Daily, 1,
-						"output want 20 (both no-key rows counted): %v", result.Daily)
-					assert.Equal(t, 20, result.Daily[0].OutputTokens,
-						"output want 20 (both no-key rows counted): %v", result.Daily)
-				})
-			}
 		})
 	}
+	t.Run("missing dedup keys counted every time", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "missing-keys", "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new("2026-04-11T10:00:00Z")
+			s.EndedAt = new("2026-04-11T10:05:00Z")
+		})
+		missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
+		insertMessages(t, d,
+			Message{
+				SessionID: "missing-keys", Ordinal: 0,
+				Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+				Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+				HasOutputTokens: true,
+			},
+			Message{
+				SessionID: "missing-keys", Ordinal: 1,
+				Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+				Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+				HasOutputTokens: true,
+			},
+		)
+		result, err := d.GetDailyUsage(t.Context(), UsageFilter{
+			From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",
+		})
+		require.NoError(t, err, "GetDailyUsage")
+		require.Len(t, result.Daily, 1,
+			"output want 20 (both no-key rows counted): %v", result.Daily)
+		assert.Equal(t, 20, result.Daily[0].OutputTokens,
+			"output want 20 (both no-key rows counted): %v", result.Daily)
+	})
 }
 
 func TestGetDailyUsageLongLivedSession(t *testing.T) {
