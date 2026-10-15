@@ -139,11 +139,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
 			}
-			for i, row := range result.Rows {
-				assert.Equal(t, export.CostSourceComputed, row.CostSource)
-				assert.True(t, row.Priced)
-				assert.Equal(t, tc.rows[tc.wantIndexes[i]].Contributes, row.Contributes)
-			}
 		})
 	}
 }

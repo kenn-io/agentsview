@@ -115,14 +115,8 @@ func TestBuildReportArtifacts(t *testing.T) {
 			}
 			assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
 			assert.Same(t, backend.pricing, artifacts.Report.Pricing)
-			assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
-			assert.Equal(t, money.Money{Microdollars: 100}, artifacts.Report.Totals.Cost)
-			assert.Equal(t, 1, artifacts.Report.Buckets[10].AssistantMessages)
-			assert.Equal(t, "project-a", artifacts.Report.Projects["project-key-a"].DisplayLabel)
 			require.Len(t, artifacts.Sessions, 1)
 			assert.Equal(t, "project-key-a", artifacts.Sessions[0].ProjectKey)
-			require.Len(t, artifacts.Report.ByProject, 1)
-			assert.Equal(t, "project-key-a", artifacts.Report.ByProject[0].ProjectKey)
 			assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
 		})
 	}

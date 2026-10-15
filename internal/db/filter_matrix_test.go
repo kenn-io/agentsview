@@ -42,9 +42,9 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 		t.Run(d.name, func(t *testing.T) {
 			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
 			clean := "s.termination_status = 'clean'"
-			model := "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model = ?)"
+			model := "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model IN (?,?))"
 			if d.name == "clickhouse" {
-				model = "s.id IN (SELECT m.session_id FROM messages m WHERE m.model = ?)"
+				model = "s.id IN (SELECT m.session_id FROM messages m WHERE m.model IN (?,?))"
 			}
 			cases := []struct {
 				name string
@@ -60,7 +60,7 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 				{"branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("team,tools", "topic")}, base + " AND (s.project = ? AND s.git_branch = ?)", []any{"team,tools", "topic"}},
 				{"empty-branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("alpha", "") + branchListSep + EncodeBranchFilterToken("alpha", "unknown")}, base + " AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?))", []any{"alpha", "", "alpha", "unknown"}},
 				{"agent", AnalyticsFilter{Agent: "codex"}, base + " AND s.agent = ?", []any{"codex"}},
-				{"model", AnalyticsFilter{Model: "gpt-4o"}, base + " AND " + model, []any{"gpt-4o"}},
+				{"model", AnalyticsFilter{Model: " a, b "}, base + " AND " + model, []any{"a", "b"}},
 				{"minimum", AnalyticsFilter{MinUserMessages: 3}, base + " AND s.user_message_count >= ?", []any{3}},
 				{"all-overrides-legacy", AnalyticsFilter{AutomatedScope: "all", ExcludeAutomated: true}, base, []any{}},
 				{"human", AnalyticsFilter{AutomatedScope: "human"}, base + " AND s.is_automated = " + d.falseSQL, []any{}},
