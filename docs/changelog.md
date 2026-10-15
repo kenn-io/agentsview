@@ -89,6 +89,13 @@ The latest release is
 **Improvements**
 
 - Load Usage totals, top sessions and model comparison faster on large archives.
+- The Usage page starts its model comparison together with totals instead of
+  waiting for them. On an archive of 24,000 sessions the page finished in 4.0
+  seconds instead of 5.6. The comparison pickers stay disabled until totals and
+  the first pair arrive. If a date or filter change leaves a compared model or
+  project with no usage, the comparison switches to the two costliest models, or
+  to projects when fewer than two models have usage. API clients can omit both
+  sides of `GET /api/v1/usage/pairwise-comparison` to get the same default pair.
 - Push semantic search vectors to ClickHouse faster. Each write now covers up to
   500 sessions instead of one. In testing, the vector part of a full push of
   1,360 sessions took about 2 seconds instead of about 5 minutes.
@@ -99,8 +106,6 @@ The latest release is
 
 **Bug fixes**
 
-- The Usage page loads faster by starting model comparison alongside totals.
-  The pairwise comparison API accepts both sides omitted and selects a default pair.
 - Codex pages from Desktop builds 0.148.0-alpha.15 through 0.154.0-alpha.6.2
   now join their thread with its title instead of showing as separate untitled
   sessions. The upgrade rebuilds the archive once and keeps names, stars, pins,
