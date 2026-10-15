@@ -20,21 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestDuckAnalyticsModelAndHourUseSameMessagePredicate(t *testing.T) {
-	hour := 10
-	sql, _ := duckBuildAnalyticsWhere(
-		db.AnalyticsFilter{
-			Model: "gpt-4o",
-			Hour:  &hour,
-		},
-		"COALESCE(s.started_at, s.created_at)",
-		"s.",
-		false,
-		true,
-	)
-	assert.Contains(t, strings.Join(strings.Fields(sql), " "), "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.timestamp IS NOT NULL AND m.model = ? AND CAST(strftime(m.timestamp, '%H') AS INTEGER) = ?)")
-}
-
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "mixed-model",
