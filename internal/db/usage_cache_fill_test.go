@@ -455,6 +455,9 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 
 func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {
 	database := testDB(t)
+	database.SetUsageCacheNotificationWork(func() (func(), bool) {
+		return nil, false
+	})
 	for _, id := range []string{"changed", "unchanged"} {
 		insertSession(t, database, id, "project")
 		insertMessages(t, database, asstMsgAt(id, 0, "answer", "2026-08-10T10:00:00Z"))
