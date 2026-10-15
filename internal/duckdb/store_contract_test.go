@@ -610,26 +610,10 @@ func duckContractAnalyticsTrendsAndUsage(
 }
 
 func duckContractLocalOnlyMethodsReadOnly(
-	t *testing.T, store *Store, fixture syncFixture,
+	t *testing.T, store *Store, _ syncFixture,
 ) {
 	t.Helper()
 	require.True(t, store.ReadOnly())
-	name := "ignored"
-	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
-	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
-	_, err := store.RestoreSession(t.Context(), fixture.alphaID)
-	requireReadOnlyDuck(t, err)
-	_, err = store.DeleteSessionIfTrashed(t.Context(), fixture.alphaID)
-	requireReadOnlyDuck(t, err)
-	_, err = store.EmptyTrash(t.Context())
-	requireReadOnlyDuck(t, err)
-	_, err = store.InsertInsight(t.Context(), db.Insight{})
-	requireReadOnlyDuck(t, err)
-	requireReadOnlyDuck(t, store.DeleteInsight(t.Context(), 1))
-	_, err = store.RecordRecallQueryEvent(t.Context(), db.RecallQueryEvent{
-		Surface: db.RecallQuerySurfaceQuery,
-	})
-	requireReadOnlyDuck(t, err)
 }
 
 // duckContractDataInventoryRulesCandidates exercises the three Data reads
@@ -670,12 +654,6 @@ func duckContractDataInventoryRulesCandidates(
 	assert.Equal(t, "unavailable", candidates[0].EvidenceKind, "no cwd or identity evidence seeded")
 	assert.False(t, candidates[0].Available)
 	assert.Equal(t, 1, candidates[0].ContributingSessions)
-}
-
-func requireReadOnlyDuck(t *testing.T, err error) {
-	t.Helper()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
 
 func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(

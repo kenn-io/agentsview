@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -782,90 +783,67 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 }
 
 func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_session_usage_source_uuid_test")
+	for _, tc := range []struct {
+		name        string
+		requestID   string
+		firstOutput int
+		lastOutput  int
+		wantCost    string
+		wantOrdinal int
+	}{
+		{"source_uuid", "", 500, 500, "0.0175", 0},
+		{"complete_pair", "req-stream", 5, 631, "0.020775", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store := prepareUsageSchema(t, "agentsview_session_usage_"+tc.name+"_test")
+			ctx := context.Background()
+			_, err := store.DB().ExecContext(ctx, `
+				INSERT INTO model_pricing (
+					model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+					cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+				) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed')`)
+			require.NoError(t, err, "insert pricing")
+			_, err = store.DB().ExecContext(ctx, `
+				INSERT INTO sessions (
+					id, machine, project, agent, started_at,
+					message_count, user_message_count,
+					total_output_tokens, has_total_output_tokens
+				) VALUES (
+					'claude:usage-source', 'test-machine', 'proj', 'claude-code',
+					'2026-03-12T10:00:00Z'::timestamptz, 2, 1, $1, $2
+				)`, tc.firstOutput+tc.lastOutput, tc.requestID != "")
+			require.NoError(t, err, "insert session")
+			_, err = store.DB().ExecContext(ctx, `
+				INSERT INTO messages (
+					session_id, ordinal, role, content, timestamp, content_length,
+					model, token_usage, claude_message_id, claude_request_id, source_uuid
+				) VALUES
+					('claude:usage-source', 0, 'assistant', 'one',
+					 '2026-03-12T10:01:00Z'::timestamptz, 3,
+					 'claude-opus-4-6', $1, 'msg-1', $3, 'source-1'),
+					('claude:usage-source', 1, 'assistant', 'two',
+					 '2026-03-12T10:02:00Z'::timestamptz, 3,
+					 'claude-opus-4-6', $2, 'msg-1', $3, 'source-1')`,
+				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput),
+				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput), tc.requestID)
+			require.NoError(t, err, "insert messages")
 
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed')`)
-	require.NoError(t, err, "insert pricing")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES (
-			'claude:usage-source', 'test-machine', 'proj', 'claude-code',
-			'2026-03-12T10:00:00Z'::timestamptz, 2, 1
-		)`)
-	require.NoError(t, err, "insert session")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id, source_uuid
-		) VALUES
-			('claude:usage-source', 0, 'assistant', 'one',
-			 '2026-03-12T10:00:00Z'::timestamptz, 3,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":500}',
-			 'msg-1', '', 'source-1'),
-			('claude:usage-source', 1, 'assistant', 'two',
-			 '2026-03-12T10:01:00Z'::timestamptz, 3,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":500}',
-			 'msg-1', '', 'source-1')`)
-	require.NoError(t, err, "insert messages")
-
-	got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
-	require.NoError(t, err, "GetSessionUsage")
-	require.NotNil(t, got, "GetSessionUsage result")
-	assert.True(t, got.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.0175"), got.Cost)
-	assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
-	require.Len(t, got.Breakdown, 1, "Breakdown")
-	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
-	assert.Equal(t, 0, *got.Breakdown[0].MessageOrdinal)
-}
-
-func TestStoreGetSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_session_usage_streamed_snapshot_test")
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count,
-			total_output_tokens, has_total_output_tokens
-		) VALUES (
-			'claude:streamed', 'test-machine', 'proj', 'claude-code',
-			'2026-03-12T10:00:00Z'::timestamptz, 2, 1, 636, TRUE
-		);
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id
-		) VALUES
-			('claude:streamed', 0, 'assistant', 'partial',
-			 '2026-03-12T10:01:00Z'::timestamptz, 7,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":5}',
-			 'msg-stream', 'req-stream'),
-			('claude:streamed', 1, 'assistant', 'complete',
-			 '2026-03-12T10:02:00Z'::timestamptz, 8,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":631}',
-			 'msg-stream', 'req-stream')`)
-	require.NoError(t, err)
-
-	got, err := store.GetSessionUsage(ctx, "claude:streamed", true)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, 631, got.TotalOutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.020775"), got.Cost)
-	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
-	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
-	assert.Equal(t, 1, *got.Breakdown[0].MessageOrdinal)
+			got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
+			require.NoError(t, err, "GetSessionUsage")
+			require.NotNil(t, got, "GetSessionUsage result")
+			assert.Equal(t, money.MustParseDollars(tc.wantCost), got.Cost)
+			require.Len(t, got.Breakdown, 1, "Breakdown")
+			require.NotNil(t, got.Breakdown[0].MessageOrdinal)
+			assert.Equal(t, tc.wantOrdinal, *got.Breakdown[0].MessageOrdinal)
+			if tc.requestID == "" {
+				assert.True(t, got.HasCost)
+				assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
+			} else {
+				assert.Equal(t, 631, got.TotalOutputTokens)
+				assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
+			}
+		})
+	}
 }
 
 func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
