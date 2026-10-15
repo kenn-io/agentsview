@@ -254,6 +254,11 @@ The latest published release is
 - Opening a forked session's link directly, or reloading the page while viewing
   a fork, no longer hangs on "Loading messages...". Once the sidebar's first
   rows load, it expands the fork's group and highlights the fork.
+- A forked session you open directly now always appears in the sidebar under
+  the session it branched from, with its row highlighted. Before, when the
+  fork loaded ahead of the rest of the sidebar, it could stay hidden inside
+  that session's collapsed group. A group you collapse yourself still stays
+  collapsed.
 - Oversized telemetry requests return HTTP 413.
 - Tool calls whose input is a raw script or patch, such as Codex `exec` and
   `apply_patch` calls, now show that input when expanded. Copy input, Copy
