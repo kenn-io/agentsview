@@ -2058,12 +2058,12 @@ func TestSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 			wantInput:    900,
 		},
 		{
-			name:         "equivalent offsets use session fallback",
+			name:         "later timestamp overrides session ID",
 			zTimestamp:   "2026-05-20T05:30:00-05:00",
-			aTimestamp:   "2026-05-20T10:30:00Z",
-			wantSession:  "z-snapshot",
-			wantAttribut: "a-snapshot",
-			wantInput:    900,
+			aTimestamp:   "2026-05-20T10:31:00Z",
+			wantSession:  "a-snapshot",
+			wantAttribut: "z-snapshot",
+			wantInput:    10,
 		},
 	}
 	for _, tt := range tests {

@@ -533,9 +533,11 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 		name            string
 		aTimestamp      any
 		wantAttribution string
+		wantSession     string
+		wantInput       int
 	}{
-		{"latest timestamp", "2026-05-20T10:30:00Z", "a-snapshot"},
-		{"missing timestamp", nil, "z-snapshot"},
+		{"later timestamp overrides session ID", "2026-05-20T10:32:00Z", "z-snapshot", "a-snapshot", 10},
+		{"missing timestamp", nil, "z-snapshot", "z-snapshot", 900},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_daily_usage_snapshot_tie_test")
@@ -569,9 +571,9 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 				SELECT session_id, snapshot_attribution_session_id, token_usage
 				FROM (`+ranked+`)`, pb.args...).Scan(&sessionID, &attributionSessionID, &tokenJSON)
 			require.NoError(t, err)
-			assert.Equal(t, "z-snapshot", sessionID)
+			assert.Equal(t, tc.wantSession, sessionID)
 			assert.Equal(t, tc.wantAttribution, attributionSessionID)
-			assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
+			assert.JSONEq(t, fmt.Sprintf(`{"input_tokens":%d,"output_tokens":100}`, tc.wantInput), tokenJSON)
 		})
 	}
 }
