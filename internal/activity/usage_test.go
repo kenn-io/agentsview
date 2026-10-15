@@ -219,7 +219,8 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 	}
 }
 
-func TestUsageSurvivorSelectionFiltersRangeBeforeSourceUUIDClaim(t *testing.T) {
+// Agent and source UUID deduplicate rows with an empty UsageSource after range filtering.
+func TestUsageSurvivorSelectionFiltersRangeBeforeUngatedAgentSourceUUIDDedup(t *testing.T) {
 	rows := []UsageRow{
 		{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
 		{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
