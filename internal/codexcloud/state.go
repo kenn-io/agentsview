@@ -370,8 +370,14 @@ func loadFound[T any](s *Store, path string, v *T) (bool, error) {
 	if err := atomicfile.Replace(path, path+".corrupt"); err != nil {
 		return false, fmt.Errorf("codex-cloud: decode %s: %w; set it aside: %w", path, decodeErr, err)
 	}
-	s.Log.Printf("codex-cloud: %s could not be decoded (%v); moved it to %s.corrupt and will fetch again",
-		path, decodeErr, filepath.Base(path))
+	// A thread state file names what to fetch again. A lost account.json
+	// is followed by the plan usage queue rebuild, which logs its own line.
+	var then string
+	if strings.HasSuffix(path, threadStateSuffix) {
+		then = " and will fetch the chat again"
+	}
+	s.Log.Printf("codex-cloud: %s could not be decoded (%v); set it aside as %s.corrupt%s",
+		path, decodeErr, filepath.Base(path), then)
 	var zero T
 	*v = zero
 	return false, nil
