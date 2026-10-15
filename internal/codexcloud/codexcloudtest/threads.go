@@ -115,7 +115,7 @@ func (s *Threads) ThreadList(params jsontext.Value) (any, *Error) {
 		p.Limit = 50
 	}
 	s.mu.Lock()
-	var rows []Thread
+	rows := []Thread{}
 	for _, thread := range s.threads {
 		if thread.Archived == p.Archived && thread.SubAgent == (len(p.SourceKinds) > 0) {
 			rows = append(rows, thread)
@@ -247,7 +247,7 @@ func (s *Threads) ItemsList(params jsontext.Value) (any, *Error) {
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	var rows []map[string]any
+	rows := []map[string]any{}
 	for _, turn := range thread.Turns {
 		if p.TurnID != "" && turn.ID != p.TurnID {
 			continue
