@@ -300,8 +300,10 @@ func TestTurnEndingBetweenCallsNotFinished(t *testing.T) {
 		ID: "turn-1", Status: "inProgress", StartedAt: ago(time.Hour),
 		Items: []codexcloudtest.Item{message("a", "one")},
 	}}})
-	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
-		reply, rpcErr := env.threads.TurnsList(params)
+	// The turn ends once its items are read. Statuses read first still show it
+	// running; statuses read after the items would show it ended.
+	env.host.Handle("thread/items/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		reply, rpcErr := env.threads.ItemsList(params)
 		env.threads.Update("t", func(thread *codexcloudtest.Thread) {
 			thread.Turns[0].Status = "completed"
 			thread.Turns[0].CompletedAt = ago(time.Hour)
