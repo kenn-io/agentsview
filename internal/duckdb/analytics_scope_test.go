@@ -56,27 +56,13 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Nil(t, scope)
 	})
 
-	t.Run("selected model pairs user+assistant; other model yields none", func(t *testing.T) {
+	t.Run("other model yields no rows", func(t *testing.T) {
 		scope, err := store.analytics().ResolveMessageScope(
 			t.Context(), []string{sessionA, sessionB},
 			db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
-		stats := scope.StatsBySession()
-		sA, ok := stats[sessionA]
-		require.True(t, ok)
-		assert.Equal(t, 1, sA.UserMessages)
-		assert.Equal(t, 1, sA.AssistantMessages)
-		assert.Equal(t, 2, sA.Messages)
-		assert.Zero(t, stats[sessionB].Messages, "non-selected model contributes nothing")
-	})
-
-	t.Run("TimingBySession returns one entry per matched row", func(t *testing.T) {
-		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-		assert.Len(t, scope.TimingBySession()[sessionA], 2)
+		assert.Empty(t, scope[sessionB], "non-selected model contributes nothing")
 	})
 
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {

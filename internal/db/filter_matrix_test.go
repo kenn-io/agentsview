@@ -39,6 +39,10 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 		t.Run(d.name, func(t *testing.T) {
 			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
 			clean := "s.termination_status = 'clean'"
+			model := "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model = ?)"
+			if d.name == "clickhouse" {
+				model = "s.id IN (SELECT m.session_id FROM messages m WHERE m.model = ?)"
+			}
 			cases := []struct {
 				name string
 				f    AnalyticsFilter
@@ -53,17 +57,28 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 				{"branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("team,tools", "topic")}, base + " AND (s.project = ? AND s.git_branch = ?)", []any{"team,tools", "topic"}},
 				{"empty-branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("alpha", "") + branchListSep + EncodeBranchFilterToken("alpha", "unknown")}, base + " AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?))", []any{"alpha", "", "alpha", "unknown"}},
 				{"agent", AnalyticsFilter{Agent: "codex"}, base + " AND s.agent = ?", []any{"codex"}},
+				{"model", AnalyticsFilter{Model: "gpt-4o"}, base + " AND " + model, []any{"gpt-4o"}},
 				{"minimum", AnalyticsFilter{MinUserMessages: 3}, base + " AND s.user_message_count >= ?", []any{3}},
+				{"all-overrides-legacy", AnalyticsFilter{AutomatedScope: "all", ExcludeAutomated: true}, base, []any{}},
+				{"human", AnalyticsFilter{AutomatedScope: "human"}, base + " AND s.is_automated = " + d.falseSQL, []any{}},
 				{"automated", AnalyticsFilter{AutomatedScope: "automated"}, base + " AND s.is_automated = " + d.trueSQL, []any{}},
 				{"human-one-shot", AnalyticsFilter{ExcludeAutomated: true, ExcludeOneShot: true}, base + " AND s.user_message_count > 1 AND s.is_automated = " + d.falseSQL, []any{}},
+				{"automated-one-shot", AnalyticsFilter{AutomatedScope: "automated", ExcludeOneShot: true}, base + " AND (s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") AND s.is_automated = " + d.trueSQL, []any{}},
+				{"subagents-one-shot", AnalyticsFilter{IncludeSubagents: true, ExcludeOneShot: true}, "s.message_count > 0 AND s.relationship_type NOT IN ('fork') AND s.deleted_at IS NULL AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent')", []any{}},
 				{"interactive", AnalyticsFilter{ExcludeInteractive: true}, base + " AND s.is_automated = " + d.trueSQL, []any{}},
 			}
 			for _, c := range cases {
 				t.Run(c.name, func(t *testing.T) {
-					b := NewQueryBuilder(d.dialect, 2)
-					got := BuildAnalyticsWhere(c.f, b, "s.", "", nil)
-					assert.Equal(t, matrixSQL(d, c.sql, 2), got)
-					assert.Equal(t, c.args, b.Args())
+					for _, prefix := range []string{"s.", ""} {
+						b := NewQueryBuilder(d.dialect, 2)
+						got := BuildAnalyticsWhere(c.f, b, prefix, "", nil)
+						want := c.sql
+						if prefix == "" {
+							want = strings.ReplaceAll(want, "s.", "")
+						}
+						assert.Equal(t, matrixSQL(d, want, 2), got, "prefix %q", prefix)
+						assert.Equal(t, c.args, b.Args())
+					}
 				})
 			}
 			b := NewQueryBuilder(d.dialect, 2)
@@ -88,7 +103,7 @@ func TestFilterMatrixUsage(t *testing.T) {
 			assert.Empty(t, BuildUsageSourceFilter(UsageFilter{}, b, "ue.model"))
 			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{}, b, ""))
 			assert.Empty(t, b.Args())
-			f := UsageFilter{Model: " a, b, ", ExcludeModel: " c, ", Agent: " codex, claude, ", ProjectLabels: []string{"team,tools", "other"}, Machine: " laptop, ", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: " cursor, ", MinUserMessages: 2, ExcludeOneShot: true, AutomatedScope: "human", ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
+			f := UsageFilter{Model: " a, b, ", ExcludeModel: " c, ", Agent: " codex, claude, ", ProjectLabels: []string{"team,tools", "other"}, Machine: " laptop, ", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: " cursor, ", MinUserMessages: 2, ExcludeOneShot: true, ExcludeAutomated: true, ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
 			source := BuildUsageSourceFilter(f, b, "ue.model")
 			assert.Equal(t, matrixSQL(d, "ue.model IN (?,?) AND ue.model != ?", 3), strings.Join(source, " AND "))
 			session := BuildUsageSessionFilter(f, b, "session-1")
@@ -113,6 +128,9 @@ func TestFilterMatrixUsage(t *testing.T) {
 			b = NewQueryBuilder(d.dialect, 2)
 			assert.Equal(t, matrixSQL(d, "s.project IN (?,?) AND s.project NOT IN (?,?)", 2), strings.Join(BuildUsageSessionFilter(UsageFilter{Project: " a, b, ", ExcludeProject: " c, d, "}, b, ""), " AND "))
 			assert.Equal(t, []any{"a", "b", "c", "d"}, b.Args())
+			b = NewQueryBuilder(d.dialect, 0)
+			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{AutomatedScope: "all", ExcludeAutomated: true}, b, ""))
+			assert.Empty(t, b.Args())
 			b = NewQueryBuilder(d.dialect, 0)
 			preds := BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "automated"}, b, "")
 			automated := "COALESCE(s.is_automated, " + d.falseSQL + ")"

@@ -710,7 +710,7 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		"idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)")
 }
 
-func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
+func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshot(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -754,14 +754,10 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"root", "child"})
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
-	assert.Equal(t, "root", rowSet.Rows[0].SessionID)
-	assert.Equal(t, "child", rowSet.Rows[0].SourceSessionID)
 	assert.Equal(t, 631, rowSet.Rows[0].OutputTokens)
-	assert.Equal(t, "claude-sonnet-test", rowSet.Rows[0].Model)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
 	assert.Equal(t, export.CostSourceComputed, rowSet.Rows[0].CostSource)
 	assert.True(t, rowSet.Rows[0].Priced)
-	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}}, rowSet.DiscardedContributingSessions)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {

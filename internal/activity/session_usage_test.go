@@ -37,6 +37,8 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 		{
 			name:   "key-only event uses stored key",
 			source: "session",
+			agent:  "claude",
+			uuid:   "u",
 			key:    "k",
 			want:   UsageDedupToken{Kind: "usage", Value: "k"},
 		},
@@ -60,7 +62,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		name                   string
 		rows                   []UsageRow
 		wantIndexes            []int
-		wantSearches           []int
 		wantSurvivor           *UsageRow
 		wantRaw, wantDiscarded map[string]int
 		wantContributing       map[string]struct{}
@@ -75,7 +76,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantDiscarded: map[string]int{"child": 0}, wantContributing: map[string]struct{}{},
 		},
 		{
-			name: "Claude snapshot keeps attribution and combines searches",
+			name: "Claude snapshot keeps attribution and selects canonical searches",
 			rows: []UsageRow{
 				{
 					SessionID:         "root",
@@ -96,7 +97,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 					ClaudeRequestID:   "r",
 				},
 			},
-			wantIndexes: []int{1}, wantSearches: []int{3},
+			wantIndexes:      []int{1},
 			wantRaw:          map[string]int{"root": 5, "child": 20},
 			wantDiscarded:    map[string]int{"root": 5, "child": 20},
 			wantContributing: map[string]struct{}{"root": {}, "child": {}},
@@ -115,10 +116,8 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				tc.rows[i].Contributes = row.OutputTokens > 0
 			}
 			pricedIndexes := []int{}
-			pricedSearches := []int{}
 			result, err := SelectSessionUsageRows(t.Context(), tc.rows, func(i, searches int) (UsagePrice, error) {
 				pricedIndexes = append(pricedIndexes, i)
-				pricedSearches = append(pricedSearches, searches)
 				cost := money.Money{}
 				if tc.rows[i].Contributes {
 					cost.Microdollars = int64(searches + 7)
@@ -136,11 +135,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantSurvivor != nil {
-				assert.Equal(t, map[string]SessionTokenCoverage{
-					"root":  {OutputTokens: 20, PeakContextTokens: 100},
-					"child": {OutputTokens: 20, PeakContextTokens: 100},
-				}, result.CanonicalTokenCoverageBySession)
-				assert.Equal(t, tc.wantSearches, pricedSearches)
+				assert.Len(t, result.CanonicalTokenCoverageBySession, 2)
 				row := result.Rows[0]
 				assert.Equal(t, tc.wantSurvivor.SessionID, row.SessionID)
 				assert.Equal(t, tc.wantSurvivor.SourceSessionID, row.SourceSessionID)

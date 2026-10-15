@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,50 +9,20 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestBuildAnalyticsWhere_ModelFilter(t *testing.T) {
+func TestBuildAnalyticsWhereForwardsDateArguments(t *testing.T) {
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhereWithDate(
-		db.AnalyticsFilter{
-			From:  "2024-06-01",
-			To:    "2024-06-03",
-			Model: "gpt-4o, claude-3-5-sonnet",
-		},
+	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-03"}
+	buildAnalyticsWhereWithDate(
+		filter,
 		pgDateColS,
 		pb,
 		true,
 		"s.id",
 	)
 
-	assert.Contains(t, where,
-		"EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id",
-	)
-	assert.Contains(t, where, "m.model IN (")
-	assert.Len(t, pb.args, 4, "date range plus two model args")
-	assert.Equal(t, "gpt-4o", pb.args[2])
-	assert.Equal(t, "claude-3-5-sonnet", pb.args[3])
-}
-
-func TestBuildAnalyticsWhere_ModelFilterTrimsEmptyValues(t *testing.T) {
-	pb := &paramBuilder{}
-	where := buildAnalyticsWhereWithDate(
-		db.AnalyticsFilter{
-			From:  "2024-06-01",
-			To:    "2024-06-03",
-			Model: " , gpt-4o , ",
-		},
-		pgDateCol,
-		pb,
-		true,
-		"id",
-	)
-
-	assert.Contains(t, where, "m.model = ")
-	assert.NotContains(t, where, "m.model IN (")
-	assert.Equal(t, "gpt-4o", pb.args[2])
-	assert.Equal(t, 1,
-		strings.Count(where, "m.model = "),
-		"expected a single model predicate",
-	)
+	from, to := analyticsUTCRange(filter)
+	assert.Equal(t, []any{from, to}, pb.args)
+	assert.Equal(t, 2, pb.n)
 }
 
 func TestRankTopSessions_DurationSort(t *testing.T) {

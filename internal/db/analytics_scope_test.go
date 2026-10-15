@@ -104,41 +104,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 			"sessionB should yield no rows")
 	})
 
-	t.Run("StatsBySession counts user and assistant", func(t *testing.T) {
-		d := setup(t)
-		scope, err := d.resolveAnalyticsMessageScope(
-			t.Context(),
-			[]string{sessionA},
-			AnalyticsFilter{Model: model},
-			false,
-		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-
-		stats := scope.StatsBySession()
-		sA, ok := stats[sessionA]
-		require.True(t, ok, "sessionA stats must exist")
-		assert.Equal(t, 1, sA.UserMessages, "user message count")
-		assert.Equal(t, 1, sA.AssistantMessages, "assistant message count")
-		assert.Equal(t, 2, sA.Messages, "total message count")
-	})
-
-	t.Run("TimingBySession returns one entry per row", func(t *testing.T) {
-		d := setup(t)
-		scope, err := d.resolveAnalyticsMessageScope(
-			t.Context(),
-			[]string{sessionA},
-			AnalyticsFilter{Model: model},
-			false,
-		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-
-		timing := scope.TimingBySession()
-		tA := timing[sessionA]
-		assert.Len(t, tA, 2, "timing should have 2 entries")
-	})
-
 	t.Run("includeContent=false omits content", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(

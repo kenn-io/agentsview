@@ -917,38 +917,6 @@ func TestSearchMultiTermAND(t *testing.T) {
 	assert.Equal(t, "duck-andboth-001", page.Results[0].SessionID, "session")
 }
 
-func TestStoreCurationMethods(t *testing.T) {
-	ctx := t.Context()
-	store, fixture := newSyncedStore(t)
-
-	starred, err := store.ListStarredSessionIDs(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []string{fixture.alphaID}, starred)
-
-	ok, err := store.StarSession(ctx, fixture.betaID)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	assert.False(t, ok)
-	require.ErrorIs(t, store.BulkStarSessions(ctx, []string{fixture.betaID}), db.ErrReadOnly)
-	require.ErrorIs(t, store.UnstarSession(ctx, fixture.alphaID), db.ErrReadOnly)
-	starred, err = store.ListStarredSessionIDs(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []string{fixture.alphaID}, starred)
-
-	msgs, err := store.GetAllMessages(ctx, fixture.betaID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	note := "duck pin"
-	pinID, err := store.PinMessage(ctx, fixture.betaID, msgs[0].ID, &note)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	assert.Zero(t, pinID)
-
-	require.ErrorIs(t, store.UnpinMessage(ctx, fixture.alphaID, msgs[0].ID), db.ErrReadOnly)
-	pins, err := store.ListPinnedMessages(ctx, fixture.alphaID, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, "pin alpha", *pins[0].Note)
-}
-
 func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)

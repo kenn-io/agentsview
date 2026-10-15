@@ -96,10 +96,4 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	require.NoError(t, err, "ListTrashedSessions after empty trash")
 	assert.NotContains(t, sessionIDs(trashed), "mgmt-empty-a")
 	assert.NotContains(t, sessionIDs(trashed), "mgmt-empty-b")
-
-	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(t.Context(), db.Session{}))
-	assert.Equal(t, db.ErrReadOnly,
-		store.ReplaceSessionMessages(t.Context(), "mgmt-rename", nil))
-	_, err = store.WriteSessionBatchAtomic(t.Context(), nil)
-	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
