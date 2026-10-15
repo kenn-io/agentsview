@@ -347,10 +347,11 @@ func plainName(name string) bool {
 }
 
 // load reads one state file; a missing file leaves v zero. A file that
-// does not decode is moved aside to <name>.corrupt and v is left zero, so
-// the thread or account counts as never synced and is fetched again, as
-// for a lost state file. Without this, one damaged file would stop the
-// account's sync on every pass.
+// does not decode is moved aside to <name>.corrupt and v is left zero, as
+// for a lost state file: a thread counts as never synced and is fetched
+// again, and a lost account.json is followed by the plan usage queue
+// rebuild from the saved chat state. Without this, one damaged file would
+// stop the account's sync on every pass.
 func load[T any](s *Store, path string, v *T) error {
 	_, err := loadFound(s, path, v)
 	return err
