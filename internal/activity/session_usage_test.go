@@ -133,6 +133,11 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantCost != nil {
 				assert.Equal(t, *tc.wantCost, result.Rows[0].Cost)
+				assert.Equal(t, "root", result.Rows[0].SessionID)
+				assert.Equal(t, "child", result.Rows[0].SourceSessionID)
+				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)
+				require.NoError(t, err)
+				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
 			}
 			for i, row := range result.Rows {
 				assert.Equal(t, export.CostSourceComputed, row.CostSource)
