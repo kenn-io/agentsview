@@ -19,6 +19,10 @@ vi.mock("../../api/generated/index", () => ({
   UsageService: usageServiceMocks,
 }));
 
+// The first index the mocked virtualizer renders, standing in for a scroll
+// position so tests can reach rows past the top of a long list.
+const virtualWindow = vi.hoisted(() => ({ start: 0 }));
+
 vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
   createVirtualizer: (
     options: () => {
@@ -29,18 +33,22 @@ vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
   ) => ({
     get instance() {
       const opts = options();
-      const count = Math.min(opts.count, 12);
+      const first = Math.min(virtualWindow.start, opts.count);
+      const count = Math.min(opts.count - first, 12);
       const size = opts.estimateSize(0);
       return {
         getTotalSize: () => opts.count * size,
         getVirtualItems: () =>
-          Array.from({ length: count }, (_, index) => ({
-            index,
-            key: opts.getItemKey?.(index) ?? index,
-            start: index * size,
-            size,
-            end: (index + 1) * size,
-          })),
+          Array.from({ length: count }, (_, offset) => {
+            const index = first + offset;
+            return {
+              index,
+              key: opts.getItemKey?.(index) ?? index,
+              start: index * size,
+              size,
+              end: (index + 1) * size,
+            };
+          }),
       };
     },
   }),
@@ -163,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  virtualWindow.start = 0;
   usage.backToProjects();
   usage.selectedProjectKey = "";
   usage.selectedModel = "";
@@ -823,19 +832,23 @@ describe("AttributionPanel branch mode", () => {
     unmount(component);
   });
 
-  it("virtualizes a large branch list without losing exact selection", async () => {
+  it("virtualizes a large branch list and selects a row scrolled into view", async () => {
     usage.summary!.branchTotals = manyBranches(1000, (index) => 1000 - index);
+    virtualWindow.start = 500;
     const spy = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
 
     const component = mountPanel();
     await tick();
 
-    expect(document.querySelectorAll(".list-row")).toHaveLength(12);
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(rows).toHaveLength(12);
     expect(document.querySelector<HTMLElement>(".list-virtual-spacer")?.style.height).toBe(
       "42000px",
     );
-    document.querySelector<HTMLElement>(".list-row")?.click();
-    expect(spy).toHaveBeenCalledWith(branchFilterToken("pl1:sha256:0", "branch-0"), {
+    expect(rows[0]!.textContent).toContain("branch-500");
+    expect(rows[0]!.style.transform).toBe("translateY(21000px)");
+    rows[0]!.click();
+    expect(spy).toHaveBeenCalledExactlyOnceWith(branchFilterToken("pl1:sha256:500", "branch-500"), {
       preserveTimeRange: true,
     });
     unmount(component);

@@ -175,7 +175,7 @@ describe("BranchPicker", () => {
     view.unmount();
   });
 
-  it("positions the panel fixed so overflow ancestors cannot clip it", async () => {
+  it("places the panel below the trigger in viewport coordinates", async () => {
     const search = vi.fn().mockResolvedValue({ branches: [], has_more: false });
     component = mount(BranchPicker, {
       target: document.body,
@@ -211,9 +211,8 @@ describe("BranchPicker", () => {
     await flush();
 
     const panel = document.querySelector<HTMLElement>(".branch-picker-panel")!;
-    const style = panel.getAttribute("style") ?? "";
-    expect(style).toContain("left:");
-    expect(style).toContain("top:");
+    expect(panel.style.left).toBe("20px");
+    expect(panel.style.top).toBe("62px");
   });
 
   it("waits for the debounce before searching typed text", async () => {
