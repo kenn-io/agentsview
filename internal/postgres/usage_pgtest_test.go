@@ -897,7 +897,7 @@ func TestStoreGetSessionUsageNotFound(t *testing.T) {
 	assert.Nil(t, got, "GetSessionUsage")
 }
 
-func TestStoreGetTopSessionsByCostDedupesClaudeKeys(t *testing.T) {
+func TestStoreTopSessionsAndCountsDedupClaudeKeys(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_top_test")
 
 	ctx := context.Background()
@@ -938,6 +938,17 @@ func TestStoreGetTopSessionsByCostDedupesClaudeKeys(t *testing.T) {
 	require.NoError(t, err, "GetTopSessionsByCost")
 	require.Len(t, top, 1)
 	assert.Equal(t, "usage-top-001", top[0].SessionID)
+
+	counts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
+		From:     "2026-03-12",
+		To:       "2026-03-12",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetUsageSessionCounts")
+	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, 1, counts.ByProject["proj-a"])
+	_, ok := counts.ByProject["proj-b"]
+	assert.False(t, ok, "proj-b should have been deduped out: %#v", counts.ByProject)
 }
 
 func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
@@ -980,45 +991,6 @@ func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	assert.Equal(t, 2, top[0].CacheCreationTokens)
 	assert.Equal(t, 3, top[0].CacheReadTokens)
 	assert.Equal(t, 65, top[0].TotalTokens)
-}
-
-func TestStoreGetUsageSessionCountsDedupesClaudeKeys(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_usage_counts_test")
-
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('usage-counts-001', 'test-machine', 'proj-a', 'claude',
-			 '2026-03-12T10:00:00Z'::timestamptz, 1, 1),
-			('usage-counts-002', 'test-machine', 'proj-b', 'claude',
-			 '2026-03-12T10:01:00Z'::timestamptz, 1, 1)`)
-	require.NoError(t, err, "insert sessions")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id
-		) VALUES
-			('usage-counts-001', 0, 'assistant', 'one',
-			 '2026-03-12T10:00:00Z'::timestamptz, 3,
-			 'test-model-counts', '{"input_tokens":1}', 'msg-1', 'req-1'),
-			('usage-counts-002', 0, 'assistant', 'two',
-			 '2026-03-12T10:01:00Z'::timestamptz, 3,
-			 'test-model-counts', '{"input_tokens":1}', 'msg-1', 'req-1')`)
-	require.NoError(t, err, "insert messages")
-
-	counts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From:     "2026-03-12",
-		To:       "2026-03-12",
-		Timezone: "UTC",
-	})
-	require.NoError(t, err, "GetUsageSessionCounts")
-	assert.Equal(t, 1, counts.Total)
-	assert.Equal(t, 1, counts.ByProject["proj-a"])
-	_, ok := counts.ByProject["proj-b"]
-	assert.False(t, ok, "proj-b should have been deduped out: %#v", counts.ByProject)
 }
 
 func TestStoreGetUsageSessionCountsFiltersAfterCrossSessionSnapshotSelection(

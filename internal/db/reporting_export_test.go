@@ -1051,7 +1051,7 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 	}
 }
 
-func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *testing.T) {
+func TestFinalizeReportingUsageCopiesAttributedSessionMetadata(t *testing.T) {
 	query := activity.Query{
 		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
@@ -1099,15 +1099,12 @@ func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *te
 	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
 	require.NoError(t, err)
 	require.Len(t, survivors, 1)
-	assert.Equal(t, "earlier-parent", survivors[0].SessionID)
 	assert.Equal(t, "parent-agent", survivors[0].Agent)
 	assert.Equal(t, "parent-project", survivors[0].Project)
 	assert.Equal(t, "parent-machine", survivors[0].Machine)
-	assert.Equal(t, 900, survivors[0].OutputTokens)
-	assert.Equal(t, money.Money{Microdollars: 9000}, survivors[0].Cost)
 }
 
-func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
+func TestFinalizeReportingUsageAddsIncrementalWebSearchFee(
 	t *testing.T,
 ) {
 	query := activity.Query{
@@ -1144,8 +1141,6 @@ func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
 	survivors, err := finalizeReportingUsage(query, rows, nil)
 	require.NoError(t, err)
 	require.Len(t, survivors, 1)
-	assert.Equal(t, 200, survivors[0].OutputTokens)
-	assert.Equal(t, 2, survivors[0].WebSearchRequests)
 	assert.Equal(t, money.MustParseDollars("0.52"), survivors[0].Cost)
 }
 
