@@ -35,7 +35,7 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			want:      UsageDedupToken{Kind: "source", Value: "claude:u"},
 		},
 		{
-			name:   "key-only event uses stored key",
+			name:   "non-message source ignores source UUID",
 			source: "session",
 			agent:  "claude",
 			uuid:   "u",

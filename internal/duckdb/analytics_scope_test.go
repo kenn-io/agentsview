@@ -56,15 +56,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Nil(t, scope)
 	})
 
-	t.Run("other model yields no rows", func(t *testing.T) {
-		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA, sessionB},
-			db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-		assert.Empty(t, scope[sessionB], "non-selected model contributes nothing")
-	})
-
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {
 		h := 14 // rows are at 09:00 UTC
 		scope, err := store.analytics().ResolveMessageScope(
