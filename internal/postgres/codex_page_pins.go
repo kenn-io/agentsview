@@ -82,7 +82,7 @@ func (s *Sync) migrateCodexPages(
 	for _, old := range pages {
 		syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
 		prefixEnd := strings.LastIndex(old.id, ":") + 1
-		key := parser.CodexSessionUUIDFromFilename(old.path[strings.LastIndexAny(old.path, `/\`)+1:])
+		key := parser.CodexSessionUUIDFromPath(old.path)
 		oldKey := old.id[prefixEnd:]
 		keyThread := parser.CodexThreadIDFromSessionKey(key)
 		threadShape := old.dataVersion < 131 && keyThread == oldKey
