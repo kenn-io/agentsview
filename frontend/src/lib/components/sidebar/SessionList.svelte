@@ -442,12 +442,15 @@
         const match = g.sessions.find((s) => s.id === activeId);
         if (!match) continue;
         if (match.id === g.primarySessionId) break; // already primary
-        const next = new Set(expandedGroups);
-        if (!next.has(g.key)) next.add(g.key);
-        // Auto-expand the correct sub-group.
-        next.add(`subagent:${g.key}`);
-        next.add(`team:${g.key}`);
-        expandedGroups = next;
+        const keys = [g.key, `subagent:${g.key}`, `team:${g.key}`];
+        // Write only when a key is new. This effect reads
+        // expandedGroups, and until the first hydration the
+        // rows are the painted snapshot, so expanding cannot
+        // reveal the row yet. A fresh Set on every pass would
+        // re-run the effect until Svelte aborts the flush.
+        if (keys.some((key) => !expandedGroups.has(key))) {
+          expandedGroups = new Set([...expandedGroups, ...keys]);
+        }
         return;
       }
       return;
