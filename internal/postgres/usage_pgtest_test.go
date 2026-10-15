@@ -1884,6 +1884,7 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 3)
+	assert.Equal(t, "pg-sub-parent", rowSet.Rows[2].SessionID)
 	assert.Equal(t, []string{
 		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
 	}, []string{

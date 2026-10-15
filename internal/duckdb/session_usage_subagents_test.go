@@ -135,6 +135,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sqliteRows.Rows, 3)
 	require.Len(t, duckRows.Rows, 3)
+	assert.Equal(t, parentID, duckRows.Rows[2].SessionID)
 	assert.Equal(t, []string{
 		childAID, childBID, latestChildID,
 	}, []string{

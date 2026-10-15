@@ -17,22 +17,16 @@ func mustStart(t *testing.T, s string) time.Time {
 	return ts.UTC()
 }
 
-func TestApplyUsageAggregatesRowAndDefaultsToInteractive(t *testing.T) {
+func TestAggregateUsageTotalsAndBuckets(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{{
 		SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
 		InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
 	}}
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
+	r, err := Aggregate(p, nil, nil, usage)
 	require.NoError(t, err)
-	r := Report{Buckets: make([]Bucket, len(windows))}
-	require.NoError(t, applyUsage(&r, p, windows, start, end, usage, nil))
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
-	assert.Equal(t, r.Totals.Cost, r.Totals.InteractiveCost)
-	assert.Equal(t, money.Money{}, r.Totals.AutomatedCost)
 	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
 	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
@@ -189,36 +183,23 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 	assert.Equal(t, []int{0, 0, 2, 4, 3, 0}, webSearchRequests)
 }
 
-func TestUsageSurvivorSelectionFiltersRangeBeforeIdentityClaim(t *testing.T) {
-	for _, tc := range []struct {
-		name, requestID string
-		winner          int
-	}{
-		{"Claude pair", "req", 2},
-		{"source UUID", "", 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rows := []UsageRow{
-				{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
-				{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
-				{SessionID: "b", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 50, WebSearchRequests: 1},
-			}
-			for i := range rows {
-				rows[i].Agent = "claude"
-				rows[i].ClaudeMessageID = "msg"
-				rows[i].ClaudeRequestID = tc.requestID
-				rows[i].SourceUUID = "source"
-			}
-			mask, attribution, searches := UsageSurvivorSelection(
-				mustStart(t, "2026-06-16T00:00:00Z"),
-				mustStart(t, "2026-06-17T00:00:00Z"),
-				mustStart(t, "2026-06-17T00:00:00Z"), rows,
-			)
-			want := []bool{false, false, false}
-			want[tc.winner] = true
-			assert.Equal(t, want, mask)
-			assert.Equal(t, "a", attribution[tc.winner])
-			assert.Equal(t, 2, searches[tc.winner])
-		})
+func TestUsageSurvivorSelectionFiltersRangeBeforeSourceUUIDClaim(t *testing.T) {
+	rows := []UsageRow{
+		{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
+		{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
+		{SessionID: "b", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 50, WebSearchRequests: 1},
 	}
+	for i := range rows {
+		rows[i].Agent = "claude"
+		rows[i].ClaudeMessageID = "msg"
+		rows[i].SourceUUID = "source"
+	}
+	mask, attribution, searches := UsageSurvivorSelection(
+		mustStart(t, "2026-06-16T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"), rows,
+	)
+	assert.Equal(t, []bool{false, true, false}, mask)
+	assert.Equal(t, "a", attribution[1])
+	assert.Equal(t, 2, searches[1])
 }

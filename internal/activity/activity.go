@@ -923,17 +923,6 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 	return out
 }
 
-// applyUsage dedups usage rows to the range, then accumulates tokens and cost
-// into r.Totals and the window whose [Start, End) contains each row's
-// timestamp.
-func applyUsage(r *Report, p Params, windows []BucketWindow, start, end time.Time,
-	usage []UsageRow, kindBy map[string]sessionKind,
-) error {
-	survivors := dedupUsage(start, end, p.EffectiveEnd, usage)
-	return applyUsageRows(r, windows, survivors, AllocateUsageCosts(survivors),
-		kindBy)
-}
-
 func applyUsageRows(
 	r *Report, windows []BucketWindow, usage []UsageRow,
 	allocated []UsageCostAllocation,
