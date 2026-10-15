@@ -403,7 +403,7 @@ func dedup(st *ThreadState, records []mirror.Record) []mirror.Record {
 func notePlanRecord(st *ThreadState, record mirror.Record) {
 	st.LastPlanRecordDigest, st.LastPlanRecordKind = digest(record.Data), string(record.Kind)
 	if record.Kind == mirror.KindPlanUsageRow {
-		st.LastPlanRow = record.Data
+		st.LastPlanRow, st.LastPlanRowAt = record.Data, record.FetchedAt
 	}
 }
 
@@ -505,7 +505,7 @@ func forgetMirror(st ThreadState) ThreadState {
 	st.Offset = 0
 	st.MetaDigest = ""
 	st.ItemDigests = nil
-	st.LastPlanRecordDigest, st.LastPlanRecordKind, st.LastPlanRow = "", "", nil
+	st.LastPlanRecordDigest, st.LastPlanRecordKind, st.LastPlanRow, st.LastPlanRowAt = "", "", nil, time.Time{}
 	for i := range st.Turns {
 		st.Turns[i].Digest = ""
 	}

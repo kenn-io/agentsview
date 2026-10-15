@@ -238,12 +238,14 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 // restoreRoot puts one thread back in acct's plan usage queue if it is a
 // mirrored usage root. A root whose newest plan usage record settled it
 // after its group's newest change stays out. A root whose newest record is
-// a complete row goes back on the refresh schedule, so it drops out
-// without a request once its chat has gone settleAfter without a change,
-// and a later partial answer cannot replace its row. Any other root is
-// pending. Both kinds keep the group's newest change as their last change,
-// not now, so a root that changed more than settleAfter ago settles on its
-// first answer.
+// a complete row fetched after that change goes back on the refresh
+// schedule, so it drops out without a request once its chat has gone
+// settleAfter without a change, and a later partial answer cannot replace
+// its row. A complete row fetched before that change leaves the check for
+// the change outstanding, so that root is pending and keeps its row. Any
+// other root is pending. Both kinds keep the group's newest change as
+// their last change, not now, so a root that changed more than
+// settleAfter ago settles on its first answer.
 func (s *Store) restoreRoot(key AccountKey, acct *AccountState, id string) error {
 	mirrored, err := s.known(key, id)
 	if err != nil || !mirrored {
@@ -267,10 +269,15 @@ func (s *Store) restoreRoot(key AccountKey, acct *AccountState, id string) error
 	}
 	switch {
 	case plan.settledAt.After(change):
-	case plan.available:
-		// The row's fetch time is only in the mirror file; with no last
-		// attempt, the refresh falls due a day after the row's data.
+	case plan.available && (plan.fetchedAt.IsZero() || !change.After(plan.fetchedAt)):
+		// With no last attempt, the refresh falls due a day after the
+		// row's data.
 		acct.Refresh[id] = RefreshEntry{DataAsOf: plan.dataAsOf, LastChange: change}
+	case plan.available:
+		// The chat changed after the row was fetched, so the request for
+		// that change was still outstanding. On the refresh schedule a
+		// root past settleAfter would drop out unasked.
+		acct.UsagePending[id] = PendingEntry{Since: change, LastChange: change, HasRow: true}
 	default:
 		acct.UsagePending[id] = PendingEntry{Since: change, LastChange: change}
 	}
@@ -307,9 +314,11 @@ type planState struct {
 	// when the newest record does not settle it.
 	settledAt time.Time
 	// available marks a newest record that is a complete row that is not
-	// final; dataAsOf is that row's data time.
+	// final; dataAsOf is that row's data time and fetchedAt when it was
+	// fetched, zero in a state file saved before that was kept.
 	available bool
 	dataAsOf  time.Time
+	fetchedAt time.Time
 }
 
 // storedPlan reads a root's newest plan usage record. A row that is not
@@ -324,7 +333,9 @@ func (s *Store) storedPlan(key AccountKey, id string, st ThreadState) (planState
 			return planState{}, fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", id, err)
 		}
 		if !row.Final {
-			return planState{available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf}, nil
+			return planState{
+				available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf, fetchedAt: st.LastPlanRowAt,
+			}, nil
 		}
 		return s.mirrorPlan(key, id)
 	case mirror.KindPlanUsageOutcome:
@@ -397,5 +408,7 @@ func rowPlan(id string, record mirror.Record) (planState, error) {
 	if row.Final {
 		return planState{settledAt: record.FetchedAt}, nil
 	}
-	return planState{available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf}, nil
+	return planState{
+		available: row.Row.DataStatus == mirror.UsageAvailable, dataAsOf: row.DataAsOf, fetchedAt: record.FetchedAt,
+	}, nil
 }
