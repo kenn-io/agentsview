@@ -1321,8 +1321,14 @@ func (s hermesSourceSet) FindSource(
 			// handling already give it via findHermesSourceFile. Resolve
 			// by session ID instead of trusting the stored path's exact
 			// file, so refresh doesn't stay stuck rereading the
-			// superseded snapshot.
+			// superseded snapshot. Only the root that owns the stored path
+			// may answer here: another root can hold an unrelated session
+			// with the same ID. The RawSessionID lookup below searches the
+			// remaining roots when the owning root no longer has it.
 			if sessionID := HermesSessionID(filepath.Base(path)); isValidHermesSessionID(sessionID) {
+				if !hermesPathInTranscriptDir(hermesTranscriptRoot(root), path) {
+					continue
+				}
 				if source, ok := s.transcriptSourceForRoot(root, sessionID); ok {
 					return source, true, nil
 				}

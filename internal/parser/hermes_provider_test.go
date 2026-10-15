@@ -1349,6 +1349,30 @@ func TestHermesProviderFindSourceFallsBackToTranscriptWhenStateDBUnreadable(t *t
 	assert.Equal(t, transcriptPath, source.DisplayPath)
 }
 
+func TestHermesProviderFindSourceResolvesStoredTranscriptInItsOwnRoot(t *testing.T) {
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	writeSourceFile(t, filepath.Join(firstRoot, "shared-id.jsonl"),
+		hermesProviderJSONLFixture("unrelated session in the first root"))
+	storedPath := filepath.Join(secondRoot, "shared-id.jsonl")
+	writeSourceFile(t, storedPath, hermesProviderJSONLFixture("archived session"))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots:   []string{firstRoot, secondRoot},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID:   "shared-id",
+		StoredFilePath: storedPath,
+	})
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, storedPath, source.DisplayPath)
+}
+
 func hermesProviderJSONLFixture(firstMessage string) string {
 	return `{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00.000000"}` + "\n" +
 		`{"role":"user","content":"` + firstMessage + `","timestamp":"2026-05-14T10:01:00.000000"}` + "\n" +
