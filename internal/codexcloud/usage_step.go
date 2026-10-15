@@ -593,7 +593,9 @@ func (s *Syncer) appendPlan(key AccountKey, root string, now time.Time, kind mir
 
 // showUsage sets the account's plan usage line.
 func (s *Syncer) showUsage(key AccountKey, now time.Time) {
+	unlock := s.Store.Lock(key)
 	acct, err := s.Store.LoadAccount(key)
+	unlock()
 	if err != nil {
 		s.Log.Printf("codex-cloud: %v", err)
 		return

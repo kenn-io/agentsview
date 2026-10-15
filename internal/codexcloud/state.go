@@ -19,6 +19,9 @@ import (
 // mirrorSuffix ends every mirror file; the provider discovers only these.
 const mirrorSuffix = ".jsonl.zstd"
 
+// threadStateSuffix ends every thread state file.
+const threadStateSuffix = ".state.json"
+
 // ListingID names one thread/list listing the fetcher walks.
 type ListingID string
 
@@ -69,6 +72,19 @@ type ThreadState struct {
 	// Listing is the newest listing record, so a mirror file rebuilt for a
 	// thread outside this pass's listing pages still gets its metadata.
 	Listing jsontext.Value `json:"listing,omitzero"`
+}
+
+// changedAt is the thread's last change: its newest updatedAt, or the
+// last fetch that found something new, whichever is later. It is zero for
+// a thread with neither.
+func (st ThreadState) changedAt() time.Time {
+	changed := st.LastProgress
+	if st.UpdatedAt != 0 {
+		if updated := time.Unix(st.UpdatedAt, 0); updated.After(changed) {
+			changed = updated
+		}
+	}
+	return changed
 }
 
 // WaitState is a per-account or per-home wait after a failure.
@@ -201,7 +217,7 @@ func (s *Store) MirrorPath(key AccountKey, threadID string) (string, error) {
 // thread: offset zero makes the next append recover every stored frame.
 func (s *Store) LoadThread(key AccountKey, threadID string) (ThreadState, error) {
 	var st ThreadState
-	path, err := s.path(key, threadID, ".state.json")
+	path, err := s.path(key, threadID, threadStateSuffix)
 	if err != nil {
 		return st, err
 	}
@@ -210,21 +226,25 @@ func (s *Store) LoadThread(key AccountKey, threadID string) (ThreadState, error)
 
 // SaveThread writes one thread's state.
 func (s *Store) SaveThread(key AccountKey, threadID string, st ThreadState) error {
-	path, err := s.path(key, threadID, ".state.json")
+	path, err := s.path(key, threadID, threadStateSuffix)
 	if err != nil {
 		return err
 	}
 	return save(path, st)
 }
 
-// LoadAccount reads one account's state, with every set allocated.
+// LoadAccount reads one account's state, with every set allocated. When
+// account.json is missing or damaged while thread state files remain, it
+// rebuilds the plan usage queue and saves the result. The caller holds the
+// account lock.
 func (s *Store) LoadAccount(key AccountKey) (AccountState, error) {
 	var st AccountState
 	path, err := s.path(key, "account", ".json")
 	if err != nil {
 		return st, err
 	}
-	if err := load(s, path, &st); err != nil {
+	found, err := loadFound(s, path, &st)
+	if err != nil {
 		return st, err
 	}
 	st.Watermarks = allocated(st.Watermarks)
@@ -235,7 +255,17 @@ func (s *Store) LoadAccount(key AccountKey) (AccountState, error) {
 	st.UsagePending = allocated(st.UsagePending)
 	st.Refresh = allocated(st.Refresh)
 	st.Backfilled = allocated(st.Backfilled)
-	return st, nil
+	if found {
+		return st, nil
+	}
+	// A lost or damaged account.json drops the plan usage queue, and the
+	// chats it named look unchanged to the next listing, so nothing would
+	// queue them again. Saving the rebuilt state here makes it happen once.
+	threads, err := s.rebuildUsageQueue(key, &st)
+	if err != nil || !threads {
+		return st, err
+	}
+	return st, s.SaveAccount(key, st)
 }
 
 // SaveAccount writes one account's state.
@@ -314,25 +344,32 @@ func plainName(name string) bool {
 // for a lost state file. Without this, one damaged file would stop the
 // account's sync on every pass.
 func load[T any](s *Store, path string, v *T) error {
+	_, err := loadFound(s, path, v)
+	return err
+}
+
+// loadFound is load that also reports whether the file was there and
+// decoded.
+func loadFound[T any](s *Store, path string, v *T) (bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("codex-cloud: read %s: %w", path, err)
+		return false, fmt.Errorf("codex-cloud: read %s: %w", path, err)
 	}
 	decodeErr := json.Unmarshal(data, v)
 	if decodeErr == nil {
-		return nil
+		return true, nil
 	}
 	if err := atomicfile.Replace(path, path+".corrupt"); err != nil {
-		return fmt.Errorf("codex-cloud: decode %s: %w; set it aside: %w", path, decodeErr, err)
+		return false, fmt.Errorf("codex-cloud: decode %s: %w; set it aside: %w", path, decodeErr, err)
 	}
 	s.Log.Printf("codex-cloud: %s could not be decoded (%v); moved it to %s.corrupt and will fetch again",
 		path, decodeErr, filepath.Base(path))
 	var zero T
 	*v = zero
-	return nil
+	return false, nil
 }
 
 func save(path string, v any) error {
