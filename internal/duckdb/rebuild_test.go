@@ -53,7 +53,7 @@ func rebuildMirror(
 	if err != nil {
 		return result, err
 	}
-	lock, pending, err := claimRebuild(ctx, path, run, false, true)
+	lock, pending, err := claimRebuild(ctx, path, run, false)
 	if err != nil {
 		return result, err
 	}

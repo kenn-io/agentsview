@@ -208,8 +208,10 @@ Environment variables override the config file:
   discards the file and starts over when `--full` is passed or when the
   local archive, the project scope, the machine name, or the mirror format
   changed since the rebuild began. A rebuild that reaches the end with
-  session errors resumes only while the mirror still needs a rebuild;
-  otherwise the push discards it and updates the mirror incrementally.
+  session errors resumes only while the mirror still needs a rebuild,
+  including when reader processes hold the mirror and a manual push falls
+  back to a rebuild. Otherwise the push discards it once the incremental
+  update runs.
 - **One rebuild at a time** — a push holds a lock beside the rebuild file
   from the moment it reads the file until the swap. While another push holds
   it, a watch-mode push waits for a later cycle and a manual push fails. A

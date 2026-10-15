@@ -123,9 +123,12 @@ func (s *Sync) PushWithOptions(
 	// An unfinished full push stays full until one finishes. Resuming keeps
 	// the sessions it already wrote, so restarts converge.
 	run, pending, resumed := s.pendingFullPushRun(meta[s.archiveKey(fullPushRunKeyBase)], databaseID)
-	if pending && run.Errored && !full {
+	if resumed && run.Errored && !full {
 		// Before runs were recorded, the push after one that ended with
 		// session errors was incremental unless a trigger above persisted.
+		// Only a run that matches this push can be dropped: one with another
+		// scope may have deleted sessions this scope keeps, and only a full
+		// push writes back sessions older than the stored cutoff.
 		log.Printf("clickhouse push: dropping the unfinished full push (%s); it ended with session errors and nothing else requires a full push",
 			run.Reason)
 		if err := writeMetadata(ctx, conn, map[string]string{s.archiveKey(fullPushRunKeyBase): ""}); err != nil {

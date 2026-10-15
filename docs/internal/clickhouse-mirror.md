@@ -110,15 +110,18 @@ session as done when this archive's mirror session row has the local fingerprint
 and a push version at or after the run's. The vector phase skips a session whose
 `vector_push_state` row has a matching hash and a version at or after the run's.
 Any mismatch starts a new full push, and so does `--full`. A run that ends with
-session errors stays recorded with an `errored` flag. The next push resumes it
-only when another trigger already forces a full push, and clears it otherwise. A
-resumed run checks vectors for every session even when the caller scopes vectors
-to changed sessions, because the earlier process may have stopped before its
-vector phase. A resumed run skips the whole-mirror usage repricing that the
-run's first process already did. Pushes send sessions newest activity first
-(`ended_at`, then `started_at`, then `created_at`). A Codex revert page goes
-right after its thread's session, which mirrors read to decide whether the page
-is trashed. PostgreSQL pushes and DuckDB rebuilds use the same order.
+session errors stays recorded with an `errored` flag. When the record matches,
+the next push resumes it only if another trigger already forces a full push, and
+clears it otherwise. A record that does not match keeps the next push full: a
+filtered run deletes mirror sessions outside its scope, and only a full push
+writes back sessions older than the stored cursor. A resumed run checks vectors
+for every session even when the caller scopes vectors to changed sessions,
+because the earlier process may have stopped before its vector phase. A resumed
+run skips the whole-mirror usage repricing that the run's first process already
+did. Pushes send sessions newest activity first (`ended_at`, then `started_at`,
+then `created_at`). A Codex revert page goes right after its thread's session,
+which mirrors read to decide whether the page is trashed. PostgreSQL pushes and
+DuckDB rebuilds use the same order.
 
 **Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
 DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,

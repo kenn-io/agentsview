@@ -262,3 +262,31 @@ func TestErroredRebuildDroppedWhenMirrorNeedsNoRebuild(t *testing.T) {
 	assert.Equal(t, 1, res.Errors)
 	assert.NoFileExists(t, rebuildFilePath(path))
 }
+
+// While a reader holds the mirror, every manual push falls back to a
+// rebuild. A rebuild that ended with session errors is kept until the
+// incremental push can run, so the next held push resumes it instead of
+// starting over.
+func TestErroredRebuildResumesWhileMirrorHeld(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	held, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, held.Close()) }()
+	writeFailingSession(t, local)
+
+	_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "session push errors")
+	require.FileExists(t, rebuildFilePath(path))
+
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "session push errors")
+	assert.Equal(t,
+		"resuming an unfinished rebuild, started because: mirror is held open by reader processes; incremental write access unavailable",
+		res.Diagnostics.RebuildReason)
+	assert.Equal(t, resumeSessionCount, res.Diagnostics.SkippedUnchangedSessions.Total)
+}

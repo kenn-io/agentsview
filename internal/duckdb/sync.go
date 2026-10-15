@@ -192,17 +192,28 @@ func Push(
 			err = errors.Join(err, unlockRebuild(lock))
 		}
 	}()
+	resume := func(pending *rebuildRun) {
+		run.Reason = pending.Reason
+		reason = "resuming an unfinished rebuild, started because: " + pending.Reason
+	}
+	// errored is an unfinished rebuild that ended with session errors while
+	// the mirror needs no rebuild. It is kept until the incremental push
+	// runs, so a push that readers block resumes it instead of starting over.
+	var errored *rebuildRun
 	claim := func(required bool) error {
-		claimed, pending, err := claimRebuild(ctx, path, run, full, required)
+		claimed, pending, err := claimRebuild(ctx, path, run, full)
 		if err != nil {
 			return err
 		}
 		lock = claimed
-		if pending != nil {
+		switch {
+		case pending == nil:
+		case pending.Errored && !required:
+			errored = pending
+		default:
 			// An unfinished rebuild resumes even when the mirror would now
 			// accept an incremental push, so a requested rebuild still finishes.
-			run.Reason = pending.Reason
-			reason = "resuming an unfinished rebuild, started because: " + pending.Reason
+			resume(pending)
 		}
 		return nil
 	}
@@ -217,18 +228,28 @@ func Push(
 	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+		held := err != nil && isMirrorHeldError(err)
+		if errored != nil && !held {
+			log.Printf("duckdbsync: discarding the unfinished rebuild (%s); it ended with session errors and the mirror needs no rebuild",
+				errored.Reason)
+			err = errors.Join(err, removeRebuildFile(rebuildFilePath(path)))
+		}
 		switch {
 		case err == nil:
 			cleanUpLegacyDuckDBSyncState(ctx, local)
 			return result, nil
-		case !isMirrorHeldError(err):
+		case !held:
 			return result, err
 		case opts.Automatic:
 			return deferredHeldMirrorPush(), nil
 		}
-		reason = "mirror is held open by reader processes; " +
-			"incremental write access unavailable"
-		run.Reason = reason
+		if errored != nil {
+			resume(errored)
+		} else {
+			reason = "mirror is held open by reader processes; " +
+				"incremental write access unavailable"
+			run.Reason = reason
+		}
 		if lock == nil {
 			if err := claim(true); err != nil {
 				return rebuildClaimFailed(path, opts, err)

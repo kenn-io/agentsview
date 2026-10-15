@@ -291,3 +291,43 @@ func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, meta[key], "the errored run record is cleared")
 }
+
+// A filtered full push deletes sessions outside its scope and then fails a
+// session, so the stored scope stays unfiltered. When the next push restores
+// that scope, nothing else forces a full push, but the deleted sessions are
+// older than the stored cutoff and only a full push writes them back. The
+// errored run belongs to the filtered scope, so it cannot resume and keeps
+// the push full.
+func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	conn := chtest.Open(t, target.URL, target.Database)
+	first, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+
+	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
+	filtered.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+		for _, sess := range batch {
+			if sess.ID == fixtureAlphaID {
+				return errors.New("simulated session failure")
+			}
+		}
+		return nil
+	}}
+	errored, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "push scope changed", errored.FullReason)
+	require.NotZero(t, errored.Errors)
+	require.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID),
+		"the filtered push removed the out-of-scope session")
+
+	next, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.True(t, next.Full)
+	assert.Equal(t, "push scope changed", next.FullReason)
+	assert.Zero(t, next.Errors)
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID),
+		"the out-of-scope session is back in the mirror")
+	assert.Equal(t, 3, chtest.Count(t, conn, "sessions", ""))
+}

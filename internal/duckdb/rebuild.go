@@ -122,7 +122,8 @@ type rebuildRun struct {
 	SourceArchiveID  string `json:"source_archive_id"`
 	// Errored reports that the rebuild reached the end with session errors.
 	// Such a rebuild resumes only while something else still requires a
-	// rebuild; otherwise the incremental push handles the failed sessions.
+	// rebuild, including readers blocking the incremental push; otherwise
+	// the incremental push handles the failed sessions.
 	Errored bool `json:"errored,omitempty"`
 }
 
@@ -162,11 +163,10 @@ func (r rebuildRun) resumableAs(current rebuildRun) bool {
 // the rebuild swaps in or fails, then unlocks it.
 //
 // fresh discards an unfinished rebuild: --full asks for every session to be
-// rewritten, and the file's fingerprints cannot see in-place edits. A rebuild
-// that ended with session errors is discarded too unless required, so when
-// the mirror needs no rebuild the incremental push handles those sessions.
+// rewritten, and the file's fingerprints cannot see in-place edits. The
+// caller decides whether a rebuild that ended with session errors resumes.
 func claimRebuild(
-	ctx context.Context, path string, current rebuildRun, fresh, required bool,
+	ctx context.Context, path string, current rebuildRun, fresh bool,
 ) (*flock.Flock, *rebuildRun, error) {
 	workDir, err := ensureMirrorWorkDir(path)
 	if err != nil {
@@ -185,10 +185,6 @@ func claimRebuild(
 		switch {
 		case fresh:
 			log.Printf("duckdbsync: --full requested; discarding the unfinished rebuild (%s)", pending.Reason)
-			pending, err = nil, removeRebuildFile(rebuildFilePath(path))
-		case pending.Errored && !required:
-			log.Printf("duckdbsync: discarding the unfinished rebuild (%s); it ended with session errors and the mirror needs no rebuild",
-				pending.Reason)
 			pending, err = nil, removeRebuildFile(rebuildFilePath(path))
 		}
 	}
