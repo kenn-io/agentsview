@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,39 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// discoveryIncompleteFixtureProvider wraps processFixtureProvider to return a
-// parser.DiscoveryIncompleteError alongside its partial discovered sources,
-// mirroring what Aider (time/dir/file budget exceeded) and the raw-capture
-// providers already return from real discovery.
-type discoveryIncompleteFixtureProvider struct {
-	*processFixtureProvider
-	err error
-}
-
-func (p *discoveryIncompleteFixtureProvider) Discover(
-	context.Context,
-) ([]parser.SourceRef, error) {
-	return append([]parser.SourceRef(nil), p.discovered...), p.err
-}
-
-type discoveryIncompleteFixtureFactory struct {
-	provider *discoveryIncompleteFixtureProvider
-}
-
-func (f discoveryIncompleteFixtureFactory) Definition() parser.AgentDef {
-	return f.provider.Definition()
-}
-
-func (f discoveryIncompleteFixtureFactory) Capabilities() parser.Capabilities {
-	return f.provider.Capabilities()
-}
-
-func (f discoveryIncompleteFixtureFactory) NewProvider(
-	parser.ProviderConfig,
-) parser.Provider {
-	return f.provider
-}
-
 // TestDiscoverProviderSourcesDiscardsNonHermesIncompleteDiscovery proves
 // this PR's "use the partial sources on DiscoveryIncompleteError" branch in
 // discoverProviderSources stays scoped to Hermes and Augure Desktop. Every
@@ -52,6 +18,10 @@ func (f discoveryIncompleteFixtureFactory) NewProvider(
 // main -- must keep the prior behavior: any discovery error, including an
 // incomplete one, discards that pass's partial sources for the agent
 // entirely instead of writing them.
+//
+// Reuses changedPathPlanProvider/changedPathPlanFactory (changed_path_plan_test.go),
+// which already returns configurable sources alongside a discovery error,
+// instead of a second discovery-fixture provider.
 func TestDiscoverProviderSourcesDiscardsNonHermesIncompleteDiscovery(t *testing.T) {
 	root := t.TempDir()
 	path, fingerprint := writeProcessProviderSource(t, root, "fixture.jsonl")
@@ -65,15 +35,24 @@ func TestDiscoverProviderSourcesDiscardsNonHermesIncompleteDiscovery(t *testing.
 		}},
 		ResultSetComplete: true,
 	}
-	base := newProcessFixtureProvider(source, fingerprint, outcome)
-	base.discovered = []parser.SourceRef{source}
-	provider := &discoveryIncompleteFixtureProvider{
-		processFixtureProvider: base,
-		err: parser.DiscoveryIncompleteError{
-			Provider: parser.AgentCowork, Reason: "test budget exceeded",
-		},
+	factory := changedPathPlanFactory{
+		agent: parser.AgentCowork,
+		caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+		}},
 	}
-	factory := discoveryIncompleteFixtureFactory{provider: provider}
+	factory.provider = func(parser.ProviderConfig) *changedPathPlanProvider {
+		return &changedPathPlanProvider{
+			discovered: []parser.SourceRef{source},
+			discoverErr: parser.DiscoveryIncompleteError{
+				Provider: parser.AgentCowork, Reason: "test budget exceeded",
+			},
+			outcomes: map[string]parser.ParseOutcome{source.Key: outcome},
+			fingerprints: map[string]parser.SourceFingerprint{
+				source.Key: fingerprint,
+			},
+		}
+	}
 
 	database := dbtest.OpenTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{
