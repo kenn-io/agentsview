@@ -1607,6 +1607,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.Equal(t, 3, count)
 	trashed, err = store.ListTrashedSessions(ctx)
 	require.NoError(t, err, "ListTrashedSessions after empty trash")
+	assert.NotContains(t, sessionIDs(trashed), sessionID)
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
 	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
 }

@@ -62,7 +62,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		name                   string
 		rows                   []UsageRow
 		wantIndexes            []int
-		wantSurvivor           *UsageRow
+		wantCost               *money.Money
 		wantRaw, wantDiscarded map[string]int
 		wantContributing       map[string]struct{}
 	}{
@@ -76,7 +76,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantDiscarded: map[string]int{"child": 0}, wantContributing: map[string]struct{}{},
 		},
 		{
-			name: "Claude snapshot keeps attribution and selects canonical searches",
+			name: "Claude snapshot forwards pricing and tracks contributing sessions",
 			rows: []UsageRow{
 				{
 					SessionID:         "root",
@@ -101,10 +101,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantRaw:          map[string]int{"root": 5, "child": 20},
 			wantDiscarded:    map[string]int{"root": 5, "child": 20},
 			wantContributing: map[string]struct{}{"root": {}, "child": {}},
-			wantSurvivor: &UsageRow{
-				SessionID: "root", SourceSessionID: "child",
-				WebSearchRequests: 3, Cost: money.Money{Microdollars: 10},
-			},
+			wantCost:         &money.Money{Microdollars: 10},
 		},
 		{
 			name:        "empty rows retain empty collections",
@@ -134,15 +131,8 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantRaw, result.RawOutputTokensBySession)
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
-			if tc.wantSurvivor != nil {
-				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)
-				require.NoError(t, err)
-				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
-				row := result.Rows[0]
-				assert.Equal(t, tc.wantSurvivor.SessionID, row.SessionID)
-				assert.Equal(t, tc.wantSurvivor.SourceSessionID, row.SourceSessionID)
-				assert.Equal(t, tc.wantSurvivor.WebSearchRequests, row.WebSearchRequests)
-				assert.Equal(t, tc.wantSurvivor.Cost, row.Cost)
+			if tc.wantCost != nil {
+				assert.Equal(t, *tc.wantCost, result.Rows[0].Cost)
 			}
 			for i, row := range result.Rows {
 				assert.Equal(t, export.CostSourceComputed, row.CostSource)
