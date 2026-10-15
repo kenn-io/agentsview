@@ -422,7 +422,11 @@ func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value st
 func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
 	var models, projects []string
 	for _, total := range summary.ModelTotals {
-		if total.Model != "" {
+		// A model with only plan usage has no token data to compare, so the
+		// default pair skips it. Picking it explicitly still works.
+		planOnly := total.PlanOnlySessions > 0 && total.Cost.Microdollars == 0 &&
+			total.InputTokens+total.OutputTokens+total.CacheCreationTokens+total.CacheReadTokens == 0
+		if total.Model != "" && !planOnly {
 			models = append(models, total.Model)
 		}
 	}
