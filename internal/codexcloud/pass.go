@@ -431,6 +431,13 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		// A due retry off this pass's listing pages carries a newer record
 		// than the one stored when it first failed.
 		st.Listing = listing
+		// A chat's creation time never changes. Taking it from the listing
+		// here, not only in a fetch that succeeds, keeps a chat whose first
+		// history read fails from being sent to plan usage as created at
+		// the Unix epoch.
+		if created, ok := listingCreatedAt(listing); ok {
+			st.CreatedAt = created
+		}
 	}
 	switch {
 	case info.archived && st.ArchivedFirstSeen.IsZero():
@@ -620,6 +627,15 @@ func listingUpdatedAt(listing jsontext.Value) (int64, bool) {
 		return 0, false
 	}
 	return int64(math.Floor(*meta.UpdatedAt)), true
+}
+
+// listingCreatedAt reads the whole-second createdAt of a listing record.
+func listingCreatedAt(listing jsontext.Value) (int64, bool) {
+	var meta mirror.Thread
+	if err := json.Unmarshal(listing, &meta); err != nil || meta.CreatedAt == nil {
+		return 0, false
+	}
+	return int64(math.Floor(*meta.CreatedAt)), true
 }
 
 // mirrorLost reports a mirror file that is missing or shorter than the
