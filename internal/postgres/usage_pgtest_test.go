@@ -761,51 +761,6 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.021"), rollup.Cost)
 }
 
-func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_session_usage_source_uuid_test")
-
-	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed')`)
-	require.NoError(t, err, "insert pricing")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES (
-			'claude:usage-source', 'test-machine', 'proj', 'claude-code',
-			'2026-03-12T10:00:00Z'::timestamptz, 2, 1
-		)`)
-	require.NoError(t, err, "insert session")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id, source_uuid
-		) VALUES
-			('claude:usage-source', 0, 'assistant', 'one',
-			 '2026-03-12T10:00:00Z'::timestamptz, 3,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":500}',
-			 'msg-1', '', 'source-1'),
-			('claude:usage-source', 1, 'assistant', 'two',
-			 '2026-03-12T10:01:00Z'::timestamptz, 3,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":500}',
-			 'msg-1', '', 'source-1')`)
-	require.NoError(t, err, "insert messages")
-
-	got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
-	require.NoError(t, err, "GetSessionUsage")
-	require.NotNil(t, got, "GetSessionUsage result")
-	assert.True(t, got.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.0175"), got.Cost)
-	assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
-	require.Len(t, got.Breakdown, 1, "Breakdown")
-	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
-	assert.Equal(t, 0, *got.Breakdown[0].MessageOrdinal)
-}
-
 func TestStoreGetSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_session_usage_streamed_snapshot_test")

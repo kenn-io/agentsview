@@ -5030,7 +5030,7 @@ func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 		"breakdown cost should sum to total cost")
 }
 
-func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
+func TestGetSessionUsage_PricesCompleteClaudeSnapshot(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	seedOpusPricing(t, d)
