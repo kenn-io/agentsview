@@ -18849,13 +18849,14 @@ func (e *Engine) reconcileProviderHistoryContext(
 				switch {
 				case len(candidate.Messages) == 0 && stored.MessageCount > 0,
 					current && len(candidate.Messages) < stored.MessageCount:
-					reason = fmt.Sprintf("the mirror file has fewer messages (%d saved, %d in the file)",
+					reason = fmt.Sprintf("the downloaded chat has fewer messages (%d saved, %d downloaded)",
 						stored.MessageCount, len(candidate.Messages))
 				case current && stored.HasTotalOutputTokens && !candidate.Parsed.Session.HasTotalOutputTokens:
-					reason = "the mirror file has no token counts"
+					reason = "the downloaded chat has no token counts"
 				}
 				if reason != "" {
-					log.Printf("codex-cloud: kept the saved copy of %s: %s", candidate.Session.ID, reason)
+					log.Printf("codex-cloud: kept the saved copy of %s because %s; it stays until the chat is downloaded again",
+						candidate.Session.ID, reason)
 					return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
 				}
 			}
