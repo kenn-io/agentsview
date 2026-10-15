@@ -208,6 +208,27 @@ func TestCodexPlainRolloutWinsUntilCompressed(t *testing.T) {
 	assert.Equal(t, 1, countCodexSessions(t, database))
 }
 
+func TestCodexChangedPathPrefersPlainOverCompressed(t *testing.T) {
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "new answer")
+	root := t.TempDir()
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, compressedRolloutContent(one))
+	database := openTestDB(t)
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+	e.SyncAll(t.Context(), nil)
+	require.Equal(t, []string{"one", "new answer"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+
+	plan, err := e.PlanChangedPathsContext(t.Context(), []string{compressed})
+	require.NoError(t, err)
+	require.Len(t, plan.Files, 1)
+	assert.Equal(t, plain, plan.Files[0].Path)
+	_, err = e.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "new answer"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+}
+
 // TestCodexCompressionAfterSyncKeepsArchiveAndSkipsUnchangedFile: a rollout
 // synced while plain and then compressed by Codex keeps its archived rows,
 // follows the path change, and is not parsed again while it stays unchanged.
@@ -302,24 +323,82 @@ func TestCodexTruncatedCompressedRolloutKeepsArchive(t *testing.T) {
 	}
 }
 
-func TestCodexCompressedChangedPathKeepsNewerPlainMessages(t *testing.T) {
+func TestCodexReconciliationPrefersRestoredPlain(t *testing.T) {
 	root := t.TempDir()
-	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
-	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "two")
-	three := codexUserEntryJSON("2026-09-01T10:00:03Z", "three")
-	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, compressedRolloutContent(one, two, three))
+	content := compressedRolloutContent(codexUserEntryJSON("2026-09-01T10:00:01Z", "one"))
+	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, content)
 	database := openTestDB(t)
-	engine := newCompressedRolloutEngine(t, database, root, EngineConfig{})
-	engine.SyncAll(t.Context(), nil)
-	require.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+	e := newCompressedRolloutEngine(t, database, root, EngineConfig{})
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, compressed, sources[0].DisplayPath)
+	candidate, ok := e.reconciliationCandidate(t.Context(), provider, sources[0], []string{root}, nil)
+	require.True(t, ok)
+	plain := writeCodexRollout(t, root, "01", compressedRolloutPlain, content)
+	files, err := e.rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{candidate},
+		map[parser.AgentType]parser.Provider{parser.AgentCodex: provider}, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, plain, files[0].ProviderSource.DisplayPath)
+}
 
-	compressed := writeCompressedCodexRollout(t, root, "01", codexCompressedName, compressedRolloutContent(one, two))
-	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{compressed})
-	require.NoError(t, err)
-	_, err = engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"one", "two", "three"}, compressedRolloutTexts(t, database, compressedRolloutSession))
-	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+func TestCodexReconciliationDuplicatePreferenceAcrossRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		plainFlat      bool
+		compressedFlat bool
+		wantPlain      bool
+	}{
+		{name: "dated plain before compressed", wantPlain: true},
+		{name: "flat plain before compressed", plainFlat: true, compressedFlat: true, wantPlain: true},
+		{name: "dated compressed before flat plain", plainFlat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			compressedRoot := filepath.Join(base, "a-compressed")
+			plainRoot := filepath.Join(base, "z-plain")
+			one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+			two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "plain answer")
+			compressed := writeCompressedCodexRollout(t, compressedRoot, "01", codexCompressedName, compressedRolloutContent(one))
+			plain := writeCodexRollout(t, plainRoot, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+			if tc.compressedFlat {
+				flat := filepath.Join(compressedRoot, codexCompressedName)
+				require.NoError(t, os.Rename(compressed, flat))
+				compressed = flat
+			}
+			if tc.plainFlat {
+				flat := filepath.Join(plainRoot, compressedRolloutPlain)
+				require.NoError(t, os.Rename(plain, flat))
+				plain = flat
+			}
+			wantPath := compressed
+			wantTexts := []string{"one"}
+			if tc.wantPlain {
+				wantPath = plain
+				wantTexts = []string{"one", "plain answer"}
+			}
+			database := openTestDB(t)
+			roots := []string{compressedRoot, plainRoot}
+			e := NewEngine(t.Context(), database, EngineConfig{
+				Machine:   "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots},
+			})
+			t.Cleanup(e.Close)
+			require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+			require.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
+			require.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+
+			require.NoError(t, e.ReconcileWatchRoots(t.Context(), roots, false))
+			assert.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
+			assert.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+		})
+	}
 }
 
 func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {

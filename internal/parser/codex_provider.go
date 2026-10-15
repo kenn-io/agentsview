@@ -24,6 +24,7 @@ var (
 	_ RawCaptureProvider                = (*codexProvider)(nil)
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
 	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
+	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -146,6 +147,21 @@ func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) 
 	return p.sources.DiscoverEach(ctx, yield)
 }
 
+// SourceForReconciliation allows a rollout restored after discovery to use
+// its plain sibling while retaining the discovered session identity.
+// Only existing files qualify, including when checking for deleted sources.
+func (p *codexProvider) SourceForReconciliation(
+	ctx context.Context, path, _ string,
+) (SourceRef, bool, error) {
+	sources, err := p.sources.SourcesForChangedPath(ctx, ChangedPathRequest{
+		Path: path, EventKind: "write",
+	})
+	if err != nil || len(sources) == 0 || !IsRegularFile(sources[0].DisplayPath) {
+		return SourceRef{}, false, err
+	}
+	return sources[0], true, nil
+}
+
 func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 	ctx context.Context,
 	yield func(SourceRef) error,
@@ -160,6 +176,10 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			continue
 		}
 		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			if isCompressedCodexRolloutPath(source.DisplayPath) &&
+				IsRegularFile(codexPlainRolloutPath(source.DisplayPath)) {
+				return nil
+			}
 			// The first root accepting this layout owns the physical file for
 			// the whole pass, including across audit batches. Checking roots
 			// avoids retaining a set that grows with the transcript archive.
@@ -198,6 +218,12 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 	if p.sources.ownsCodexSidecars() &&
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return nil, nil
+	}
+	if isCompressedCodexRolloutPath(req.Path) {
+		plain := codexPlainRolloutPath(req.Path)
+		if IsRegularFile(plain) {
+			req.Path = plain
+		}
 	}
 	roots := p.sources.roots
 	if req.WatchRoot != "" {
@@ -1137,7 +1163,8 @@ func (s codexSourceSet) SourcesForChangedPath(
 		return s.sourcesForIndexPath(ctx, req.Path)
 	}
 	if isCompressedCodexRolloutPath(req.Path) {
-		if plain := codexPlainRolloutPath(req.Path); IsRegularFile(plain) {
+		plain := codexPlainRolloutPath(req.Path)
+		if IsRegularFile(plain) {
 			req.Path = plain
 		}
 	}

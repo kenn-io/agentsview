@@ -6564,8 +6564,12 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			}
 		}
 	}
-	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
-		preference1 = 1
+	if isCodexFormatAgent(agent) {
+		if codexLayoutForPath(path) == parser.CodexLayoutDated {
+			preference1 = 1
+		}
+		// Match discovery: dated layout, then plain rollout, then path.
+		preference2 = boolPreference(!strings.HasSuffix(path, ".jsonl.zst"))
 	}
 	if isOpenCodeFormatAgent(agent) && !claudeFormat {
 		if statPath == path {
