@@ -1487,7 +1487,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 		"reversed duration row must be excluded")
 }
 
-func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
+func TestStoreWriteSurface(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	store, err := NewStore(pgURL, testSchema, true)

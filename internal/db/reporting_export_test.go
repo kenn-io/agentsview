@@ -1039,6 +1039,7 @@ func TestFinalizeReportingUsageCopiesMetadataAndAddsWebSearchFee(t *testing.T) {
 	assert.Equal(t, "parent-project", survivors[0].Project)
 	assert.Equal(t, "parent-machine", survivors[0].Machine)
 	assert.Equal(t, money.MustParseDollars("0.52"), survivors[0].Cost)
+	assert.Equal(t, 2, survivors[0].WebSearchRequests)
 }
 
 func reportingUsageBreakdownKeys(

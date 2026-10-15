@@ -2220,37 +2220,38 @@ func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
 			assert.Equal(t, map[string]int{"claude": 2}, counts.ByAgent)
 		})
 	}
-	t.Run("missing dedup keys counted every time", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "missing-keys", "proj", func(s *Session) {
-			s.Agent = "claude"
-			s.StartedAt = new("2026-04-11T10:00:00Z")
-			s.EndedAt = new("2026-04-11T10:05:00Z")
-		})
-		missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
-		insertMessages(t, d,
-			Message{
-				SessionID: "missing-keys", Ordinal: 0,
-				Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-				Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-				HasOutputTokens: true,
-			},
-			Message{
-				SessionID: "missing-keys", Ordinal: 1,
-				Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
-				Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
-				HasOutputTokens: true,
-			},
-		)
-		result, err := d.GetDailyUsage(t.Context(), UsageFilter{
-			From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",
-		})
-		require.NoError(t, err, "GetDailyUsage")
-		require.Len(t, result.Daily, 1,
-			"output want 20 (both no-key rows counted): %v", result.Daily)
-		assert.Equal(t, 20, result.Daily[0].OutputTokens,
-			"output want 20 (both no-key rows counted): %v", result.Daily)
+}
+
+func TestGetDailyUsageCountsRowsWithoutDedupKeys(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "missing-keys", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-04-11T10:00:00Z")
+		s.EndedAt = new("2026-04-11T10:05:00Z")
 	})
+	missingKeysUsage := jsontext.Value(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
+	insertMessages(t, d,
+		Message{
+			SessionID: "missing-keys", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+			HasOutputTokens: true,
+		},
+		Message{
+			SessionID: "missing-keys", Ordinal: 1,
+			Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+			HasOutputTokens: true,
+		},
+	)
+	result, err := d.GetDailyUsage(t.Context(), UsageFilter{
+		From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, result.Daily, 1,
+		"output want 20 (both no-key rows counted): %v", result.Daily)
+	assert.Equal(t, 20, result.Daily[0].OutputTokens,
+		"output want 20 (both no-key rows counted): %v", result.Daily)
 }
 
 func TestGetDailyUsageLongLivedSession(t *testing.T) {
