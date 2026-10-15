@@ -569,14 +569,15 @@ fixtures retain this field; missing identities remain source-local.
   ([encoder](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L1011-L1018));
   Codex still reads older frames without it
   ([prefix reader](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
-  AgentsView treats both names as one session and prefers the plain file.
-  Full parses and replay-parent reads stream decoded bytes through an
-  `io.Reader` without a temporary decompressed copy. Compressed rollouts are
-  parsed in full, without resumable checkpoints or decoded-byte offsets.
-  Scheduling uses five times the compressed file size as a heuristic of
-  convenience, without a separate decode or sizing pass. Stored fingerprints
-  retain the original compressed file's size, modification time, identity and
-  hash. A decoding error prevents partial results from replacing the archive.
+  AgentsView treats both names as one session and prefers the plain file,
+  including raw-capture audits and watcher events. Full parses and
+  replay-parent reads stream decoded bytes through an `io.Reader` without a
+  temporary decompressed copy. Compressed rollouts are parsed in full, without
+  resumable checkpoints or decoded-byte offsets. Scheduling uses five times
+  the compressed file size as a heuristic of convenience, without a separate
+  decode or sizing pass. Stored fingerprints retain the original compressed
+  file's size, modification time, identity and hash. A decoding error prevents
+  partial results from replacing the archive.
 
 - **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
   `thread/revert` writes a rollout named

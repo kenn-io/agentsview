@@ -173,6 +173,10 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			continue
 		}
 		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			if isCompressedCodexRolloutPath(source.DisplayPath) &&
+				IsRegularFile(codexPlainRolloutPath(source.DisplayPath)) {
+				return nil
+			}
 			// The first root accepting this layout owns the physical file for
 			// the whole pass, including across audit batches. Checking roots
 			// avoids retaining a set that grows with the transcript archive.
@@ -211,6 +215,12 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 	if p.sources.ownsCodexSidecars() &&
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return nil, nil
+	}
+	if isCompressedCodexRolloutPath(req.Path) {
+		plain := codexPlainRolloutPath(req.Path)
+		if IsRegularFile(plain) {
+			req.Path = plain
+		}
 	}
 	roots := p.sources.roots
 	if req.WatchRoot != "" {
