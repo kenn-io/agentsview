@@ -206,6 +206,9 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 				v.Field(i).Len() == 0 {
 				continue
 			}
+			if v.Type() == reflect.TypeFor[db.Session]() && (f.Name == "TurnOpen" || f.Name == "TurnOpenUnknown" || f.Name == "LastReplyID") {
+				continue
+			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)
 			if err != nil {
 				return nil, err

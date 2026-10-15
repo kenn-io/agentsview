@@ -43,9 +43,14 @@ const legacyDeletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
+const sessionReplyIDCol = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), 'row:' || json_array(ordinal, timestamp, content)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id`
+
+const sessionReplyCols = `'' AS last_reply_id,
+	CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END`
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
-const sessionBaseCols = `id, project, machine, agent,
+const sessionCoreCols = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
@@ -87,6 +92,15 @@ const sessionLabelsSelectSQL = `(
 			WHERE sl.session_id = sessions.id ORDER BY sl.label
 		)
 	) AS labels`
+
+const sessionBaseCols = sessionCoreCols + ", " + sessionReplyCols
+
+func sessionColumns(includeLastReplyID bool) string {
+	if includeLastReplyID {
+		return sessionCoreCols + ", " + sessionReplyIDCol + ", CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END"
+	}
+	return sessionBaseCols
+}
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -165,7 +179,7 @@ const sessionFullColsAfterRelationship = `,
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
 	) AS project_assigned,
-	pr_links, ` + sessionLabelsSelectSQL
+	pr_links, ` + sessionLabelsSelectSQL + ", " + sessionReplyCols
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -222,6 +236,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 		prLinksColumn{&s.PRLinks},
 		labelsColumn{&s.Labels},
+		&s.LastReplyID, &s.TurnOpen,
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
@@ -408,6 +423,9 @@ type Session struct {
 	DeletionCause           *string `json:"-"`
 	SourceMissingAt         *string `json:"-"`
 	TerminationStatus       *string `json:"termination_status,omitempty"`
+	LastReplyID             string  `json:"last_reply_id,omitempty"`
+	TurnOpen                bool    `json:"turn_open,omitempty"`
+	TurnOpenUnknown         bool    `json:"-"`
 	FilePath                *string `json:"file_path,omitempty"`
 	FileSize                *int64  `json:"file_size,omitempty"`
 	FileMtime               *int64  `json:"file_mtime,omitempty"`
@@ -604,6 +622,7 @@ type SessionFilter struct {
 	ChildExemptOneShot bool
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
 	AutomatedScope     string   // "", "human", "all", or "automated"
+	EachRow            bool     // apply filters to each row, including children
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
@@ -780,7 +799,7 @@ func (db *DB) ListSessions(
 		)
 	}
 
-	columns := sessionBaseCols
+	columns := sessionColumns(f.EachRow)
 	if f.IncludeSource {
 		columns += ", file_path, file_size, local_modified_at"
 	}
@@ -800,6 +819,12 @@ func (db *DB) ListSessions(
 	sessions, err := scanSessionRowsWithSource(rows, f.IncludeSource)
 	if err != nil {
 		return SessionPage{}, err
+	}
+	for i := range sessions {
+		// UUID-less replies retain identity across reparses and change when their content changes.
+		if strings.HasPrefix(sessions[i].LastReplyID, "row:") {
+			sessions[i].LastReplyID = fmt.Sprintf("row:%x", sha256.Sum256([]byte(sessions[i].LastReplyID)))
+		}
 	}
 
 	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
@@ -1287,6 +1312,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.FileHash, &s.LocalModifiedAt,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 		prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
+		&s.LastReplyID, &s.TurnOpen,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1506,10 +1532,10 @@ const insertSessionSQL = `
 			is_truncated,
 			last_write_incremental,
 			file_path, file_size, file_mtime,
-			next_ordinal, last_entry_uuid, claude_linear_parse,
+			next_ordinal, last_entry_uuid, claude_linear_parse, turn_open,
 			file_inode, file_device, file_hash,
 			pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1570,6 +1596,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			-- upserts without one (e.g. non-parse session writers).
 			claude_linear_parse = COALESCE(
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
+			turn_open = COALESCE(excluded.turn_open, sessions.turn_open),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
@@ -1594,6 +1621,10 @@ func parserParentSessionID(s Session) *string {
 }
 
 func upsertSessionArgs(s Session) []any {
+	var turnOpen any
+	if s.Agent == "claude" && !s.TurnOpenUnknown {
+		turnOpen = s.TurnOpen
+	}
 	s.RelationshipType = SessionRelationship(s)
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
@@ -1615,7 +1646,7 @@ func upsertSessionArgs(s Session) []any {
 		// the stored messages; only a full message replacement clears it.
 		false,
 		s.FilePath, s.FileSize, s.FileMtime,
-		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
+		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse, turnOpen,
 		s.FileInode, s.FileDevice, s.FileHash,
 		EncodePRLinks(s.PRLinks),
 		s.RelationshipType,
@@ -1775,6 +1806,9 @@ func upsertSessionExec(
 	query := upsertSessionBaseSQL
 	if reviveSourceMissing {
 		query = upsertSessionSQL
+	}
+	if s.TurnOpenUnknown {
+		query = strings.Replace(query, "turn_open = COALESCE(excluded.turn_open, sessions.turn_open)", "turn_open = excluded.turn_open", 1)
 	}
 	_, err = exec(ctx,
 		query,
@@ -3030,6 +3064,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 // decide whether the Claude parser's skip-command path has left
 // the preview empty and a full parse should be forced.
 type IncrementalInfo struct {
+	TerminationStatus    *string
 	ID                   string
 	Project              string
 	SourceProject        string
@@ -3071,6 +3106,7 @@ type MessageTokenUsageUpdate struct {
 }
 
 type IncrementalSessionUpdate struct {
+	TurnOpen                 *bool
 	EndedAt                  *string
 	TerminationStatus        *string
 	MsgCount                 int
@@ -3161,7 +3197,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
 			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
 			file_size, file_mtime,
-			next_ordinal, last_entry_uuid, claude_linear_parse,
+			next_ordinal, last_entry_uuid, claude_linear_parse, termination_status,
 			file_inode, file_device,
 			message_count, user_message_count,
 			first_message,
@@ -3191,7 +3227,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
 		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
-		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
+		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse, &info.TerminationStatus,
 		&fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
 		&firstMsg,
@@ -3273,10 +3309,8 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // at insert; the incremental path never re-evaluates it).
 //
 // A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil clears the status for parsers such as Claude whose
-// incremental path only sees the new tail and needs the full message slice
-// to classify termination reliably. Clearing prevents a stale prior verdict
-// from remaining visible until the next full sync reclassifies the session.
+// is stored as-is. Claude reconstructs the relevant transcript suffix to
+// classify termination and turn completion. Nil clears an unavailable verdict.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
@@ -3299,6 +3333,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
 			termination_status = ?,
+			turn_open = COALESCE(?, turn_open),
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign
@@ -3311,7 +3346,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
-		update.TerminationStatus, id,
+		update.TerminationStatus, update.TurnOpen, id,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -3419,6 +3454,7 @@ func replaceSessionIncrementalTx(ctx context.Context,
 			next_ordinal = ?,
 			last_entry_uuid = ?,
 			termination_status = ?,
+			turn_open = COALESCE(?, turn_open),
 			last_write_incremental = 1
 		WHERE id = ?`,
 		update.EndedAt,
@@ -3429,7 +3465,7 @@ func replaceSessionIncrementalTx(ctx context.Context,
 		recomputePeak, id, added.peakContext,
 		recomputePeak, id, added.hasContext,
 		update.FileSize, update.FileMtime, update.FileHash,
-		update.NextOrdinal, lastEntryUUID, update.TerminationStatus, id,
+		update.NextOrdinal, lastEntryUUID, update.TerminationStatus, update.TurnOpen, id,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -6587,6 +6623,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
+			&s.LastReplyID, &s.TurnOpen,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
@@ -6697,6 +6734,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
+			&s.LastReplyID, &s.TurnOpen,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

@@ -1,0 +1,142 @@
+import {
+  SessionsService,
+  type DbSession,
+  type GetApiV1SessionsParams,
+} from "./api/generated/index.js";
+import { m } from "./i18n/index.js";
+import { events } from "./stores/events.svelte.js";
+
+type NotificationBridge = {
+  sendNotification: (options: { title: string; body: string }) => void;
+};
+
+function bridge() {
+  return (window as Window & { __TAURI__?: { notification?: NotificationBridge } }).__TAURI__
+    ?.notification;
+}
+
+export function notificationsAvailable(): boolean {
+  return !!bridge();
+}
+
+function finished(row: DbSession): boolean {
+  return row.termination_status === "awaiting_user" && !row.turn_open && !!row.last_reply_id;
+}
+
+const FRESHNESS_MS = 10 * 60_000;
+const SAFETY_NET_REFRESH_MS = 5 * 60_000;
+
+export function startNotificationWatcher(viewingId: () => string | null): () => void {
+  const seen = new Map<string, { replyId?: string }>();
+  const openTurns = new Set<string>();
+  const startedAt = Date.now();
+  let coveredSince = startedAt;
+  let stopped = false;
+  let running = false;
+  let pending = false;
+
+  function silent(row: DbSession): boolean {
+    return (
+      row.relationship_type === "subagent" ||
+      (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
+    );
+  }
+
+  function send(row: DbSession) {
+    if (silent(row)) return;
+    const name = row.display_name || row.project || row.agent;
+    bridge()?.sendNotification({
+      title: m.notification_turn_end_title_suffix({ name }),
+      body: m.notification_turn_end_body(),
+    });
+  }
+
+  async function readRows(params: GetApiV1SessionsParams): Promise<DbSession[]> {
+    const rows: DbSession[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = await SessionsService.getApiV1Sessions({ ...params, cursor });
+      rows.push(...result.sessions);
+      cursor = result.next_cursor;
+    } while (cursor && !stopped);
+    return rows;
+  }
+
+  async function refresh() {
+    if (running) {
+      pending = true;
+      return;
+    }
+    running = true;
+    try {
+      if (stopped) return;
+      const fetchedAt = Date.now();
+      const rows = await readRows({
+        active_since: new Date(Math.min(fetchedAt - FRESHNESS_MS, coveredSince)).toISOString(),
+        each_row: true,
+        include_one_shot: true,
+      });
+      // Closing an open turn need not advance ended_at, notably for Claude forks.
+      const recentIds = new Set(rows.map((row) => row.id));
+      const missing = [...openTurns].filter((id) => !recentIds.has(id));
+      for (let offset = 0; offset < missing.length && !stopped; offset += 100) {
+        const batch = missing.slice(offset, offset + 100);
+        const ids = batch.some((id) => /[,\r\n]/.test(id))
+          ? batch.map((id) => `"${id.replaceAll('"', '""')}"`).join(",")
+          : batch.join(",");
+        const pendingRows = await readRows({
+          ids,
+          each_row: true,
+          include_one_shot: true,
+          include_automated: false,
+        });
+        const found = new Set(pendingRows.map((row) => row.id));
+        for (const id of batch) {
+          if (!found.has(id)) openTurns.delete(id);
+        }
+        rows.push(...pendingRows);
+      }
+      if (stopped) return;
+      for (const row of rows) {
+        if (row.turn_open) openTurns.add(row.id);
+        else openTurns.delete(row.id);
+        let previous = seen.get(row.id);
+        if (!previous) {
+          previous = {
+            replyId:
+              Date.parse(row.ended_at || "") >= startedAt || !finished(row)
+                ? undefined
+                : row.last_reply_id,
+          };
+          seen.set(row.id, previous);
+        }
+        if (!finished(row) || previous.replyId === row.last_reply_id) continue;
+        try {
+          send(row);
+          previous.replyId = row.last_reply_id;
+        } catch (err) {
+          openTurns.add(row.id);
+          console.warn("notification delivery failed", err);
+        }
+      }
+      coveredSince = fetchedAt;
+    } catch (err) {
+      console.warn("notification session read failed", err);
+    } finally {
+      running = false;
+      if (pending && !stopped) {
+        pending = false;
+        void refresh();
+      }
+    }
+  }
+
+  const unsubscribe = events.subscribeDebounced(() => void refresh());
+  const interval = setInterval(() => void refresh(), SAFETY_NET_REFRESH_MS);
+  void refresh();
+  return () => {
+    stopped = true;
+    clearInterval(interval);
+    unsubscribe();
+  };
+}

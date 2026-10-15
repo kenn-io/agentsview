@@ -48,6 +48,20 @@ beforeEach(async () => {
   ({ settings } = await import("./settings.svelte.js"));
 });
 
+describe("notification defaults", () => {
+  it("restores disabled defaults when load and save responses omit notifications", async () => {
+    const response = { agent_dirs: {}, chart_palette: "agentsview", terminal: { mode: "auto" } };
+    settingsService.getApiV1Settings.mockResolvedValue(response);
+    settingsService.putApiV1Settings.mockResolvedValue(response);
+    settings.notifications = { enabled: true };
+    await settings.load();
+    expect(settings.notifications).toEqual({ enabled: false });
+    settings.notifications = { enabled: true };
+    expect(await settings.save({ notifications: settings.notifications })).toBe(true);
+    expect(settings.notifications).toEqual({ enabled: false });
+  });
+});
+
 describe("SettingsStore.load mode handling", () => {
   it("records read-only mode from the settings response", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({

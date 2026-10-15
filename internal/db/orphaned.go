@@ -2007,7 +2007,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "parser_relationship_type") {
 		cols = append(cols, "parser_relationship_type")
 	}
-	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
+	for _, c := range []string{"agent_label", "entrypoint", "session_kind", "turn_open"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
 		}

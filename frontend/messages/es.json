@@ -2861,5 +2861,13 @@
   "usage_all_projects": "Todos los proyectos",
   "usage_clear_selection": "Borrar selección",
   "usage_open_project": "Abrir",
-  "usage_loading": "Cargando..."
+  "usage_loading": "Cargando...",
+  "settings_notifications_title": "Notificaciones de escritorio",
+  "settings_notifications_description": "Recibe una notificación cuando un agente termine su turno",
+  "settings_notifications_keywords": "notificaciones escritorio alertas fin de turno",
+  "settings_notifications_unavailable": "Las notificaciones de escritorio no están disponibles en esta aplicación.",
+  "settings_notifications_enable": "Activar notificaciones de escritorio",
+  "settings_notifications_turn_end_hint": "Las notificaciones siguen los ajustes de notificaciones de tu sistema para AgentsView.",
+  "notification_turn_end_body": "El agente terminó este turno y espera tu entrada.",
+  "notification_turn_end_title_suffix": "{name}: turno terminado"
 }

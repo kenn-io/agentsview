@@ -42,6 +42,8 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	// Browser links belong to a client connection, not archived content.
 	reference.WebURL = ""
 	reference.ParentSessionIDs = nil
+	// Reply identity is derived for session lists, not archived content.
+	reference.LastReplyID = ""
 	type sessionAlias db.Session
 	artifactReference := func(s db.Session) ([]byte, error) {
 		data, err := canonicalJSON(sessionAlias(s))
@@ -56,6 +58,7 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 		// Labels are user-owned archive metadata, like stars; they stay with
 		// the archive that recorded them.
 		delete(fields, "labels")
+		delete(fields, "last_reply_id")
 		return canonicalJSON(fields)
 	}
 

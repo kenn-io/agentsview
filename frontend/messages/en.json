@@ -2837,5 +2837,13 @@
   "usage_all_projects": "All projects",
   "usage_clear_selection": "Clear selection",
   "usage_open_project": "Open",
-  "usage_loading": "Loading..."
+  "usage_loading": "Loading...",
+  "settings_notifications_title": "Desktop notifications",
+  "settings_notifications_description": "Get notified when an agent finishes its turn",
+  "settings_notifications_keywords": "notifications desktop alerts turn end",
+  "settings_notifications_unavailable": "Desktop notifications are unavailable in this app.",
+  "settings_notifications_enable": "Enable desktop notifications",
+  "settings_notifications_turn_end_hint": "Notifications follow your system's notification settings for AgentsView.",
+  "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
+  "notification_turn_end_title_suffix": "{name}: turn finished"
 }

@@ -2753,5 +2753,13 @@
   "usage_all_projects": "所有專案",
   "usage_clear_selection": "清除選擇",
   "usage_open_project": "開啟",
-  "usage_loading": "正在載入..."
+  "usage_loading": "正在載入...",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 結束回合時取得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回合 結束 notifications",
+  "settings_notifications_unavailable": "此應用程式無法使用桌面通知。",
+  "settings_notifications_enable": "啟用桌面通知",
+  "settings_notifications_turn_end_hint": "通知遵循系統中 AgentsView 的通知設定。",
+  "notification_turn_end_body": "Agent 已完成本回合，正在等待你的輸入。",
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

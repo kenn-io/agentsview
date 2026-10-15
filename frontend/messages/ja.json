@@ -2825,5 +2825,13 @@
   "usage_all_projects": "すべてのプロジェクト",
   "usage_clear_selection": "選択をクリア",
   "usage_open_project": "開く",
-  "usage_loading": "読み込み中..."
+  "usage_loading": "読み込み中...",
+  "settings_notifications_title": "デスクトップ通知",
+  "settings_notifications_description": "エージェントがターンを終えたときに通知を受け取る",
+  "settings_notifications_keywords": "通知 デスクトップ ターン 終了 notifications",
+  "settings_notifications_unavailable": "このアプリではデスクトップ通知を利用できません。",
+  "settings_notifications_enable": "デスクトップ通知を有効にする",
+  "settings_notifications_turn_end_hint": "通知はシステムの AgentsView の通知設定に従います。",
+  "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
+  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"
 }

@@ -2839,5 +2839,13 @@
   "usage_all_projects": "Bütün layihələr",
   "usage_clear_selection": "Seçimi təmizlə",
   "usage_open_project": "Aç",
-  "usage_loading": "Yüklənir..."
+  "usage_loading": "Yüklənir...",
+  "settings_notifications_title": "Masaüstü bildirişləri",
+  "settings_notifications_description": "Agent növbəsini bitirdikdə bildiriş alın",
+  "settings_notifications_keywords": "bildiriş xəbərdarlıq masaüstü növbə sonu",
+  "settings_notifications_unavailable": "Bu tətbiqdə masaüstü bildirişləri əlçatan deyil.",
+  "settings_notifications_enable": "Masaüstü bildirişlərini aktivləşdir",
+  "settings_notifications_turn_end_hint": "Bildirişlər sisteminizin AgentsView üçün bildiriş parametrlərinə uyğun göstərilir.",
+  "notification_turn_end_body": "Agent bu növbəni bitirib sizi gözləyir.",
+  "notification_turn_end_title_suffix": "{name}: növbə tamamlandı"
 }

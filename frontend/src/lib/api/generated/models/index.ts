@@ -26,6 +26,7 @@ export * from "./claudeAIChromeOutputBody.ts";
 export * from "./claudeAISyncResultInputBody.ts";
 export * from "./comparison.ts";
 export * from "./configDuckDBConfig.ts";
+export * from "./configNotificationsConfig.ts";
 export * from "./configRemoteHost.ts";
 export * from "./conversationExportInitializeResponse.ts";
 export * from "./daemonPushRequest.ts";

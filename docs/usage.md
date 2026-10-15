@@ -1313,6 +1313,7 @@ organized into sections:
 | Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
 | Tool-result images | Preview and remove images from stored tool results                                                       |
 | Terminal           | Default terminal emulator for session resume                                                             |
+| Notifications      | Desktop notifications when an agent finishes its turn and waits for you                                  |
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |
 | Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
@@ -1321,6 +1322,29 @@ Choose **Español** for Spanish. A browser set to Spanish selects it on first
 load; a saved language preference takes precedence.
 
 ![Settings with Spanish selected](/docs/assets/generated/screenshots/settings-spanish.png)
+
+Desktop notifications run only against writable SQLite servers. Read-only
+PostgreSQL, DuckDB and ClickHouse servers keep the watcher off.
+
+Desktop notifications alert you when the agent waits for you, including forks
+and continuations. Replies already completed before notifications were enabled
+stay silent on first sighting. A turn completed after enabling notifications can
+toast even if it finishes before the next refresh.
+Subagents, automated sessions, and the session in a focused window stay silent.
+Missed updates arrive within five minutes while the app runs. On macOS 13 and
+earlier, alerts may pause while the window is hidden.
+Completed reply IDs remain remembered while notifications stay enabled, so a
+session leaving and re-entering the recent-session list does not repeat an alert.
+An observed open turn remains watched even after ten minutes without a message.
+A new reply imported or restored from the trash can still notify.
+Toasts follow the OS notification settings for AgentsView.
+Claude Code transcripts that record `turn_duration` normally notify after Stop
+hooks finish, with no background agents or workflows pending. Older and headless
+transcripts use the assistant's `end_turn` signal. A deferred swarm duration
+arriving during a later turn's Stop hooks can close that turn a few seconds early.
+A held detached tool call can stay silent while another turn is active. Tracking
+these completions separately would require the producer to record which turn
+owns each duration. Apps without the notification bridge show unavailable.
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

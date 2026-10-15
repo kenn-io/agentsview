@@ -11,6 +11,14 @@ The latest release is
 
 **New features**
 
+- Get a native desktop toast when the turn really ends and the agent waits
+  for you, for providers that store a waiting state, including Claude Code. Enable
+  notifications in Settings.
+  New sessions can toast on their first finished turn. Previously completed
+  replies, subagents, automated sessions, and the focused session stay silent.
+  Observed open turns remain watched through long background work, and a session
+  leaving and re-entering the recent-session list does not repeat an alert. Missed
+  updates arrive within five minutes while the app runs.
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which
@@ -99,6 +107,7 @@ The latest release is
 
 **Bug fixes**
 
+- Claude Code's waiting indicator now updates during incremental sync.
 - The Usage page loads faster by starting model comparison alongside totals.
   The pairwise comparison API accepts both sides omitted and selects a default pair.
 - Codex pages from Desktop builds 0.148.0-alpha.15 through 0.154.0-alpha.6.2

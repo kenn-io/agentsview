@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -22,6 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/stringutil"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -156,6 +158,9 @@ func claudeParseFile(
 		subagentMap      = map[string]string{}
 		globalStart      time.Time
 		globalEnd        time.Time
+		turnOpen         *bool
+		branchTurnOpen   *bool
+		turnStates       = map[string]*bool{}
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -198,6 +203,21 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
+		turnOpen = foldClaudeTurnOpen(turnOpen, lineBytes, entryType)
+		if entryType == "user" || entryType == "assistant" && (gjson.GetBytes(lineBytes, "isCompactSummary").Bool() || gjson.GetBytes(lineBytes, "isMeta").Bool()) {
+			if parent, ok := turnStates[gjson.GetBytes(lineBytes, "parentUuid").Str]; ok {
+				branchTurnOpen = parent
+			}
+		}
+		state := foldClaudeTurnOpen(branchTurnOpen, lineBytes, entryType)
+		if entryType == "system" && branchTurnOpen != nil && state != nil {
+			*branchTurnOpen = *state
+		} else {
+			branchTurnOpen = state
+		}
+		if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" && (entryType == "user" || entryType == "assistant") {
+			turnStates[strings.Clone(uuid)] = branchTurnOpen
+		}
 		if opts.compatibleTitleEvents || opts.aiTitleFallback {
 			if opts.compatibleTitleEvents && compatibleName == "" {
 				compatibleName = strings.Clone(strings.TrimSpace(
@@ -463,6 +483,8 @@ func claudeParseFile(
 		prLinks:         prLinks.result(),
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
+		turnOpen:        turnOpen,
+		turnStates:      turnStates,
 	}
 
 	var (
@@ -514,6 +536,7 @@ func claudeParseFile(
 	// pulled from the last assistant message in each branch so
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
+
 	for i := range results {
 		results[i].Session.RelationshipType = PromoteParentlessWorker(
 			results[i].Session.ParentSessionID, results[i].Session.RelationshipType,
@@ -756,6 +779,38 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 	return ""
 }
 
+func claudeWritesTurnDuration(line []byte) bool {
+	return gjson.GetBytes(line, "entrypoint").Str == "cli" &&
+		semver.Compare("v"+gjson.GetBytes(line, "version").Str, "v2.1.259") >= 0
+}
+
+// shortcut: deferred swarm durations have no turn owner, so they can close a later turn until the producer adds an ID.
+func foldClaudeTurnOpen(open *bool, line []byte, entryType string) *bool {
+	switch entryType {
+	case "assistant":
+		if !gjson.GetBytes(line, "isSidechain").Bool() && !gjson.GetBytes(line, "isCompactSummary").Bool() && !gjson.GetBytes(line, "isMeta").Bool() {
+			return new(claudeWritesTurnDuration(line))
+		}
+	case "system":
+		if gjson.GetBytes(line, "subtype").Str == "turn_duration" {
+			return new(claudePendingCount(gjson.GetBytes(line, "pendingBackgroundAgentCount")) != 0 ||
+				claudePendingCount(gjson.GetBytes(line, "pendingWorkflowCount")) != 0)
+		}
+	}
+	return open
+}
+
+func claudePendingCount(count gjson.Result) int64 {
+	if !count.Exists() {
+		return 0
+	}
+	value, err := strconv.ParseInt(count.Raw, 10, 64)
+	if err != nil || value < 0 {
+		return -1
+	}
+	return value
+}
+
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
 // file starting at the given byte offset. Returns only the newly
 // parsed messages (with ordinals starting at startOrdinal) and the
@@ -798,9 +853,12 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
-	startOrdinal  int
-	lastEntryUUID string
-	stored        claudeStoredIdentity
+	termination       **TerminationStatus
+	storedTermination *TerminationStatus
+	turnOpen          **bool
+	startOrdinal      int
+	lastEntryUUID     string
+	stored            claudeStoredIdentity
 	// storedLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing (multi-root or unresolvable-parent DAG).
@@ -838,6 +896,7 @@ func claudeParseSessionFrom(
 	stored := scan.stored
 	var (
 		entries        []dagEntry
+		verdictLines   = make([]string, 0)
 		queuedCommands []claudeQueuedCommand
 		subagentMap    = make(map[string]string)
 		lineIndex      = startOrdinal
@@ -853,15 +912,24 @@ func claudeParseSessionFrom(
 		sawNewPRLink           bool
 	)
 
+	if scan.turnOpen != nil {
+		*scan.turnOpen = nil
+	}
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			entryType := gjson.Get(line, "type").Str
+			if scan.turnOpen != nil {
+				*scan.turnOpen = foldClaudeTurnOpen(*scan.turnOpen, []byte(line), entryType)
+			}
 			line = resolveClaudePersistedToolResults(path, line)
+			if scan.termination != nil && (entryType == "user" || entryType == "assistant" || entryType == "attachment" && gjson.Get(line, "attachment.type").Str == "queued_command") {
+				verdictLines = append(verdictLines, line)
+			}
 			if ts := extractTimestamp(line); !ts.IsZero() {
 				if ts.After(latestTS) {
 					latestTS = ts
 				}
 			}
-			entryType := gjson.Get(line, "type").Str
 			if claudeSessionIdentityUpdate(line, stored) {
 				sawSessionIdentityEdit = true
 			}
@@ -1010,6 +1078,9 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
+		if err := scan.setVerdicts(path, offset, verdictLines, nil, entries); err != nil {
+			return nil, nil, time.Time{}, 0, err
+		}
 		return nil, links, latestTS, consumed, nil
 	}
 
@@ -1082,7 +1153,95 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
+	if err := scan.setVerdicts(path, offset, verdictLines, msgs, entries); err != nil {
+		return nil, nil, time.Time{}, 0, err
+	}
+
 	return msgs, links, endedAt, consumed, nil
+}
+
+func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []string, msgs []ParsedMessage, entries []dagEntry) error {
+	if scan.termination == nil {
+		return nil
+	}
+	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil && *scan.storedTermination != "" && *scan.storedTermination != TerminationTruncated {
+		*scan.termination = scan.storedTermination
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	reader := claudeBackwardReader{f: f, pos: offset}
+	usedPrefix := false
+	var lines []string
+	var assistantID string
+	sawAssistant := false
+	for {
+		var line []byte
+		fromPrefix := len(tail) == 0
+		if fromPrefix {
+			var ok bool
+			line, _, ok, err = reader.prev()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
+		} else {
+			line = []byte(tail[len(tail)-1])
+			tail = tail[:len(tail)-1]
+		}
+		if fromPrefix && !gjson.ValidBytes(line) {
+			continue
+		}
+		typ := gjson.GetBytes(line, "type").Str
+		if typ != "user" && typ != "assistant" && (typ != "attachment" || gjson.GetBytes(line, "attachment.type").Str != "queued_command") {
+			continue
+		}
+		resolved := string(line)
+		if fromPrefix {
+			resolved = resolveClaudePersistedToolResults(path, resolved)
+		}
+		entry := dagEntry{entryType: typ, line: resolved}
+		msgs, _, _ := extractMessagesFrom([]dagEntry{entry}, 0)
+		isAssistant := slices.ContainsFunc(msgs, func(m ParsedMessage) bool { return !m.IsSystem && m.Role == RoleAssistant })
+		if sawAssistant && (typ == "user" || (isAssistant && (assistantID == "" || gjson.GetBytes(line, "message.id").Str != assistantID))) {
+			break
+		}
+		usedPrefix = usedPrefix || fromPrefix
+		lines = append(lines, entry.line)
+		if !sawAssistant && isAssistant {
+			sawAssistant = true
+			assistantID = gjson.GetBytes(line, "message.id").Str
+		}
+	}
+	if usedPrefix {
+		slices.Reverse(lines)
+		entries = nil
+		var queued []claudeQueuedCommand
+		for _, line := range lines {
+			typ := gjson.Get(line, "type").Str
+			switch typ {
+			case "user", "assistant":
+				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), timestamp: extractTimestamp(line), line: line})
+			case "attachment":
+				if qc, ok := extractQueuedCommand(line); ok {
+					queued = append(queued, qc)
+				}
+			}
+		}
+		entries = mergeClaudeAssistantMessageChunks(entries)
+		msgs, _, _ = extractMessagesFrom(entries, 0)
+		msgs = mergeQueuedCommands(msgs, queued, 0, queuedCommandMessage)
+	}
+	*scan.termination = nil
+	if status := Classify(msgs, lastAssistantStopReason(msgs), false); status != "" {
+		*scan.termination = new(status)
+	}
+	return nil
 }
 
 // claudeSessionIdentityUpdate reports whether an appended line carries an
@@ -1487,6 +1646,8 @@ type claudeSessionMeta struct {
 	prLinks         []PRLink
 	malformedLines  int
 	isTruncated     bool
+	turnOpen        *bool
+	turnStates      map[string]*bool
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
@@ -1548,6 +1709,7 @@ func parseLinear(
 		UserMessageCount:  userCount,
 		File:              fileInfo,
 		ClaudeLinearParse: &linear,
+		TurnOpen:          new(meta.turnOpen != nil && *meta.turnOpen),
 	}
 	meta.applyTo(&sess)
 	if err := accumulateMessageTokenUsageContext(ctx, &sess, messages); err != nil {
@@ -1743,6 +1905,7 @@ func parseDAG(
 		}
 
 		linear := false
+		state := meta.turnStates[branchEntries[len(branchEntries)-1].uuid]
 		sess := ParsedSession{
 			ID:                sid,
 			Project:           project,
@@ -1757,6 +1920,7 @@ func parseDAG(
 			UserMessageCount:  userCount,
 			File:              fileInfo,
 			ClaudeLinearParse: &linear,
+			TurnOpen:          new(state != nil && *state),
 		}
 		meta.applyTo(&sess)
 		if err := accumulateMessageTokenUsageContext(

@@ -2861,5 +2861,13 @@
   "usage_all_projects": "Tous les projets",
   "usage_clear_selection": "Effacer la sélection",
   "usage_open_project": "Ouvrir",
-  "usage_loading": "Chargement..."
+  "usage_loading": "Chargement...",
+  "settings_notifications_title": "Notifications de bureau",
+  "settings_notifications_description": "Être notifié quand un agent termine son tour",
+  "settings_notifications_keywords": "notifications bureau alertes fin de tour",
+  "settings_notifications_unavailable": "Les notifications de bureau sont indisponibles dans cette application.",
+  "settings_notifications_enable": "Activer les notifications de bureau",
+  "settings_notifications_turn_end_hint": "Les notifications suivent les paramètres de notification de votre système pour AgentsView.",
+  "notification_turn_end_body": "L'agent a terminé ce tour et vous attend.",
+  "notification_turn_end_title_suffix": "{name}: tour terminé"
 }

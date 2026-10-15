@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- those read-side stores, and any copy that drops it degrades to
     -- the conservative NULL verdict (full parse re-derives it).
     claude_linear_parse INTEGER,
+    -- SQLite-only notification state; NULL keeps legacy Claude replies open.
+    turn_open INTEGER,
     file_inode  INTEGER,
     file_device INTEGER,
     file_hash   TEXT,
