@@ -123,11 +123,12 @@ func parseToolResult(block gjson.Result) (ParsedToolResult, bool) {
 		status = "errored"
 	}
 	return ParsedToolResult{
-		ToolUseID:     tuid,
-		Source:        "tool_result",
-		Status:        status,
-		ContentLength: toolResultContentLength(rc),
-		ContentRaw:    rc.Raw,
+		ToolUseID:                 tuid,
+		Source:                    "tool_result",
+		Status:                    status,
+		ContentLength:             toolResultContentLength(rc),
+		ContentRaw:                rc.Raw,
+		PersistedOutputUnresolved: block.Get(persistedOutputUnresolvedKey).Bool(),
 	}, true
 }
 

@@ -132,26 +132,32 @@ the archive; S3 materializations do not record temporary paths.
 
 ### Claude persisted tool results
 
-Claude Code moves a large tool output to a side file in the session's
-`tool-results` folder and leaves a placeholder in the transcript. The parser
-inlines the side file while it exists, so the first sync archives the full
-output. Claude Code deletes the side file after its cleanup period, and a later
-full parse sees only the placeholder. When a parsed Claude result is a
-placeholder, sync keeps the archived result with the same `tool_use_id` instead
-of storing the placeholder over it
-(`internal/sync/claude_tool_result_splice.go`, called from
-`prepareSessionNormalizedContext`). The archived text is put back before
-`ingest.PrepareCandidate`, so blocked categories and the image policy treat it
-like parsed text; when a blocked category archived only a length, that length
-and the event's raw digest are kept. A side file that is present and differs
-still replaces the archived text, new messages and calls still land, and an
-output that only quotes the placeholder markers is not a placeholder
-(`parser.IsPersistedToolResultPlaceholder`). Rebuilds read the old archive, and
-S3 Claude sessions follow the same rule. The raw archive's scratch reparse
-(`EngineConfig.ArchiveReparse`) is left out, because it derives sessions only
-from verified captured inputs. iCodeMate CLI writes the same side files and
-placeholders but is not covered: its source fingerprints include the side files,
-so the next sync after one is deleted stores the placeholder.
+Claude Code (and iCodeMate CLI, which shares its transcript layout and parser)
+moves a large tool output to a side file in the session's `tool-results`
+folder and leaves a placeholder in the transcript. The parser inlines the side
+file while it exists, so the first sync archives the full output. Once Claude
+Code deletes the side file after its cleanup period, a later full parse sees
+only the placeholder. The parser marks exactly the tool_result block that
+genuinely tried and failed to resolve a `persistedOutputPath`
+(`parser.ParsedToolResult.PersistedOutputUnresolved`; never derived from the
+placeholder text's own shape). `ingest.ReconcileProviderHistory`
+(`internal/ingest/history.go`) restores each flagged current event from the
+one archived event whose `tool_use_id`, source, and timestamp all match —
+never by array position, so a dedup collapse or a retry/branch reorder can
+never pair the wrong occurrence; no unique match leaves the event untouched,
+and a later, unflagged occurrence of the same `tool_use_id` is never
+overwritten. When the archive held real text, that text, its length, and its
+raw digest are restored; when a blocked category archived only a length, only
+the length is restored and the text stays blank.
+
+This is the same provider-history dispatcher every other agent's archive
+preservation already goes through, gated by `ingest.IsClaudeFormatAgent`
+(covers both Claude Code and iCodeMate CLI), so hosted Postgres mirrors reach
+it with no separate wiring. `internal/sync/engine.go`'s
+`reconcileProviderHistoryContext` checks cheaply, over the parsed messages and
+before any store read, whether anything is flagged before loading the
+archived session. Rebuilds read the old archive, and S3 Claude sessions follow
+the same rule.
 
 ### Codex deletion scope
 

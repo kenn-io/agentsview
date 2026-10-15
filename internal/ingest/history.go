@@ -6,6 +6,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // HistoryAction describes how a candidate relates to its same-source prior
@@ -62,6 +63,15 @@ func ReconcileProviderHistory(
 	agent := candidate.Parsed.Session.Agent
 	if agent == "" {
 		agent = parser.AgentType(candidate.Session.Agent)
+	}
+	// Icodemate uses OpenCode storage for its VSCode-extension path and the
+	// shared Claude transcript layout for its CLI path, so an icodemate
+	// candidate can match both predicates; the file path (not the agent
+	// alone) decides which family this candidate belongs to.
+	if IsClaudeFormatTranscript(agent, candidate.Parsed.Session.File.Path) {
+		return reconcileClaudePersistedToolResults(
+			ctx, candidate, *prior, options, result,
+		)
 	}
 	if IsOpenCodeFormatStorageAgent(agent) {
 		if shouldPreserveOpenCodeFormatArchive(
@@ -121,4 +131,146 @@ func ReconcileProviderHistory(
 	default:
 		return result, ctx.Err()
 	}
+}
+
+// toolResultEventIdentity ties a current tool_result event to its archived
+// counterpart. ToolUseID alone can repeat across a resumed session's
+// retries and branch reorders, so Source and Timestamp must agree too.
+type toolResultEventIdentity struct {
+	toolUseID string
+	source    string
+	timestamp string
+}
+
+// reconcileClaudePersistedToolResults restores, from the archived session,
+// any current tool_result event whose persisted-output side file could not
+// be resolved while parsing (parser.ParsedToolResult.PersistedOutputUnresolved).
+// A flagged current event is matched to its one archived counterpart by
+// ToolUseID, Source, and Timestamp all agreeing — never by array position —
+// so an incremental dedup collapse or a retry/branch reorder that shifts
+// position can never pair the wrong occurrence; no unique match leaves the
+// event untouched. A later, unflagged occurrence of the same tool_use_id is
+// never touched, so a correction already in the transcript stays the one
+// the call's summary reflects.
+func reconcileClaudePersistedToolResults(
+	ctx context.Context, candidate Candidate, prior PriorSession,
+	options ContentOptions, result HistoryResult,
+) (HistoryResult, error) {
+	flagged := flaggedPersistedToolResultIdentities(candidate.Parsed.Messages)
+	if len(flagged) == 0 {
+		return result, ctx.Err()
+	}
+	archived := archivedToolResultEventsByIdentity(prior.Messages)
+	changed := false
+	for mi := range candidate.Messages {
+		for ci := range candidate.Messages[mi].ToolCalls {
+			call := &candidate.Messages[mi].ToolCalls[ci]
+			for ei := range call.ResultEvents {
+				if err := ctx.Err(); err != nil {
+					return HistoryResult{}, err
+				}
+				event := &call.ResultEvents[ei]
+				key := toolResultEventIdentity{
+					toolUseID: event.ToolUseID, source: event.Source,
+					timestamp: event.Timestamp,
+				}
+				if !flagged[key] {
+					continue
+				}
+				matches := archived[key]
+				if len(matches) != 1 {
+					continue
+				}
+				if restoreClaudeToolResultEvent(event, matches[0]) {
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return result, ctx.Err()
+	}
+	if err := PairToolResultEventSummariesContext(
+		ctx, candidate.Messages, options.BlockedResultCategories,
+	); err != nil {
+		return HistoryResult{}, err
+	}
+	result.Candidate = candidate
+	result.Action = HistoryMerge
+	result.PriorContributed = true
+	return result, ctx.Err()
+}
+
+// restoreClaudeToolResultEvent writes archived's content onto event when
+// archived held real text, or only its length (clearing event's own
+// placeholder content first) when archived held a length without text, so a
+// text-dropping archive policy's own later blanking can't disagree with what
+// is restored. It reports whether anything changed.
+func restoreClaudeToolResultEvent(
+	event *db.ToolResultEvent, archived db.ToolResultEvent,
+) bool {
+	if archived.Content != "" {
+		if event.Content == archived.Content &&
+			event.ContentLength == archived.ContentLength {
+			return false
+		}
+		event.Content = archived.Content
+		event.ContentLength = archived.ContentLength
+		event.RawContentDigest = archived.RawContentDigest
+		return true
+	}
+	if archived.ContentLength <= 0 {
+		return false
+	}
+	changed := event.Content != "" || event.ContentLength != archived.ContentLength
+	event.Content = ""
+	event.ContentLength = archived.ContentLength
+	return changed
+}
+
+// flaggedPersistedToolResultIdentities returns the identity of every
+// current tool_result whose parser flag is set.
+func flaggedPersistedToolResultIdentities(
+	messages []parser.ParsedMessage,
+) map[toolResultEventIdentity]bool {
+	var flagged map[toolResultEventIdentity]bool
+	for _, message := range messages {
+		for _, toolResult := range message.ToolResults {
+			if !toolResult.PersistedOutputUnresolved {
+				continue
+			}
+			if flagged == nil {
+				flagged = make(map[toolResultEventIdentity]bool)
+			}
+			flagged[toolResultEventIdentity{
+				toolUseID: toolResult.ToolUseID, source: toolResult.Source,
+				timestamp: timeutil.Format(message.Timestamp),
+			}] = true
+		}
+	}
+	return flagged
+}
+
+// archivedToolResultEventsByIdentity indexes every archived tool_result
+// event by identity. A repeated identity lists every match, so a caller can
+// require the match to be unique before restoring from it.
+func archivedToolResultEventsByIdentity(
+	messages []db.Message,
+) map[toolResultEventIdentity][]db.ToolResultEvent {
+	var archived map[toolResultEventIdentity][]db.ToolResultEvent
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			for _, event := range call.ResultEvents {
+				if archived == nil {
+					archived = make(map[toolResultEventIdentity][]db.ToolResultEvent)
+				}
+				key := toolResultEventIdentity{
+					toolUseID: event.ToolUseID, source: event.Source,
+					timestamp: event.Timestamp,
+				}
+				archived[key] = append(archived[key], event)
+			}
+		}
+	}
+	return archived
 }

@@ -118,11 +118,11 @@ The latest release is
   first sync after upgrading. Sessions started outside a repository or on a
   detached HEAD, and sessions whose source files are gone, keep an empty
   branch.
-- Large Claude tool output stays in the archive after Claude Code deletes its
-  saved copy, which it does after its cleanup period (30 days by default).
-  Before, a later full re-parse or rebuild replaced the output with Claude
-  Code's short placeholder. Output replaced before upgrading is not restored,
-  and iCodeMate CLI sessions still store the placeholder.
+- Large Claude Code and iCodeMate CLI tool output stays in the archive after
+  the side file holding it is deleted, which happens after Claude Code's
+  cleanup period (30 days by default). Before, a later full re-parse or
+  rebuild replaced the output with the provider's short placeholder. Output
+  replaced before upgrading is not restored.
 
 - Codex threads rewound with undo keep every message and every day's usage.
   Each extra rollout file Codex writes for the undo now shows as its own linked

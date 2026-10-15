@@ -305,13 +305,15 @@ fixtures retain this field; missing identities remain source-local.
   beside the session transcript itself. The cutoff applies to each file's own
   age, so a transcript that is still being written can outlive the side files
   its placeholders name. Evidence for the cleanup is `documentation`; the page
-  does not describe the placeholder text. Agentsview treats a parsed result as
-  a placeholder only in two shapes: content that opens with the
-  `<persisted-output>` tag, or a single `Full output saved to: <path>` line.
-  `TestIsPersistedToolResultPlaceholder` covers both and rejects outputs that
-  only quote either marker. Claude fingerprints hash only the transcript, so a
-  deleted side file shows only on a full parse; that parse keeps the archived
-  result instead of storing the placeholder over it.
+  does not describe the placeholder text. Agentsview marks a tool_result only
+  when it genuinely tried and failed to resolve a `persistedOutputPath` side
+  file, never from the placeholder text's own shape
+  (`parser.ParsedToolResult.PersistedOutputUnresolved`,
+  `TestParseClaudeSession_PersistedOutputUnresolvedFlagsOnlyMissingBlock`).
+  Claude fingerprints hash only the transcript, so a deleted side file shows
+  only on a full parse; `ingest.ReconcileProviderHistory` then restores the
+  archived result instead of storing the placeholder over it, for both Claude
+  Code and iCodeMate CLI.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD

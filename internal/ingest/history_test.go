@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -9,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 func TestReconcileProviderHistoryPreservesEmptyRooArchive(t *testing.T) {
@@ -262,6 +264,258 @@ func TestProviderHistorySourceClassifiers(t *testing.T) {
 				ingest.IsOpenCodeFormatSQLiteVirtualPath(test.agent, test.path))
 		})
 	}
+}
+
+func TestReconcileProviderHistoryRestoresUnresolvedClaudePersistedOutput(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	tsStr := timeutil.Format(ts)
+	placeholder := "<persisted-output>\nFull output saved to: /x/tool-results/a.txt\n</persisted-output>"
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: "full archived output", ContentLength: len("full archived output"),
+				}},
+			}},
+		}},
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: placeholder, ContentLength: len(placeholder),
+				}},
+			}},
+		}},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{{
+				Ordinal: 0, Timestamp: ts,
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID: "toolu_1", Source: "tool_result",
+					PersistedOutputUnresolved: true,
+				}},
+			}},
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, ingest.ContentOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryMerge, result.Action)
+	assert.True(t, result.PriorContributed)
+	require.Len(t, result.Candidate.Messages[0].ToolCalls, 1)
+	call := result.Candidate.Messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "full archived output", call.ResultEvents[0].Content)
+	assert.Equal(t, len("full archived output"), call.ResultEvents[0].ContentLength)
+	assert.Equal(t, "full archived output", call.ResultContent)
+	assert.Equal(t, len("full archived output"), call.ResultContentLength)
+}
+
+func TestReconcileProviderHistoryClaudeRestoresOnlyFlaggedOccurrence(t *testing.T) {
+	t1 := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 9, 11, 9, 5, 0, 0, time.UTC)
+	t1Str, t2Str := timeutil.Format(t1), timeutil.Format(t2)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: t1Str,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t1Str,
+					Content: "archived first occurrence", ContentLength: len("archived first occurrence"),
+				}},
+			}},
+		}},
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{
+			{
+				Ordinal: 0, Role: "user", Timestamp: t1Str,
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "toolu_1", Category: "bash",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t1Str,
+						Content: placeholder, ContentLength: len(placeholder),
+					}},
+				}},
+			},
+			{
+				Ordinal: 1, Role: "user", Timestamp: t2Str,
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "toolu_1", Category: "bash",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "toolu_1", Source: "tool_result", Timestamp: t2Str,
+						Content: "corrected retry output", ContentLength: len("corrected retry output"),
+					}},
+				}},
+			},
+		},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{
+				{
+					Ordinal: 0, Timestamp: t1,
+					ToolResults: []parser.ParsedToolResult{{
+						ToolUseID: "toolu_1", Source: "tool_result",
+						PersistedOutputUnresolved: true,
+					}},
+				},
+				{
+					Ordinal: 1, Timestamp: t2,
+					ToolResults: []parser.ParsedToolResult{{
+						ToolUseID: "toolu_1", Source: "tool_result",
+						PersistedOutputUnresolved: false,
+					}},
+				},
+			},
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, ingest.ContentOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryMerge, result.Action)
+	require.Len(t, result.Candidate.Messages, 2)
+	assert.Equal(t, "archived first occurrence",
+		result.Candidate.Messages[0].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "corrected retry output",
+		result.Candidate.Messages[1].ToolCalls[0].ResultEvents[0].Content)
+}
+
+func TestReconcileProviderHistoryClaudeRestoresLengthOnlyForBlockedCategory(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	tsStr := timeutil.Format(ts)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: "", ContentLength: 500,
+				}},
+			}},
+		}},
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: placeholder, ContentLength: len(placeholder),
+				}},
+			}},
+		}},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{{
+				Ordinal: 0, Timestamp: ts,
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID: "toolu_1", Source: "tool_result",
+					PersistedOutputUnresolved: true,
+				}},
+			}},
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, ingest.ContentOptions{
+			BlockedResultCategories: map[string]bool{"bash": true},
+			ArchiveContent:          config.ArchiveContentUsage,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryMerge, result.Action)
+	call := result.Candidate.Messages[0].ToolCalls[0]
+	assert.Equal(t, "", call.ResultEvents[0].Content)
+	assert.Equal(t, 500, call.ResultEvents[0].ContentLength)
+	assert.Equal(t, "", call.ResultContent)
+	assert.Equal(t, 500, call.ResultContentLength)
+}
+
+func TestReconcileProviderHistoryClaudeMismatchedIdentityLeavesEventUntouched(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	otherTs := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	tsStr, otherTsStr := timeutil.Format(ts), timeutil.Format(otherTs)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: otherTsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: otherTsStr,
+					Content:       "archived under a different timestamp",
+					ContentLength: len("archived under a different timestamp"),
+				}},
+			}},
+		}},
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: placeholder, ContentLength: len(placeholder),
+				}},
+			}},
+		}},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{{
+				Ordinal: 0, Timestamp: ts,
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID: "toolu_1", Source: "tool_result",
+					PersistedOutputUnresolved: true,
+				}},
+			}},
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, ingest.ContentOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryReplace, result.Action)
+	assert.False(t, result.PriorContributed)
+	assert.Equal(t, placeholder,
+		result.Candidate.Messages[0].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func openCodeHistoryCandidate(hash, content string) ingest.Candidate {

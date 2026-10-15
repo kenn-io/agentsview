@@ -32,11 +32,14 @@ var (
 	xmlCmdArgsRe              = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
 	xmlCmdStripRe             = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
 	persistedToolResultPathRe = regexp.MustCompile(`(?m)Full output saved to:\s*(.+)$`)
-	// persistedToolResultBareRe is the whole of the bare placeholder: one
-	// line naming the side file, whose path may contain spaces. Callers check
-	// that the content is a single line.
-	persistedToolResultBareRe = regexp.MustCompile(`^Full output saved to:\s*.+$`)
 )
+
+// persistedOutputUnresolvedKey marks a tool_result block, within the line
+// resolveClaudePersistedToolResultsContext rewrites, whose persistedOutputPath
+// side file genuinely failed to resolve. parseToolResult reads it to set
+// ParsedToolResult.PersistedOutputUnresolved and it never reaches ContentRaw,
+// since it sits beside "content" on the block, not inside it.
+const persistedOutputUnresolvedKey = "_persistedOutputUnresolved"
 
 const (
 	initialScanBufSize         = 64 * 1024        // 64KB
@@ -2433,6 +2436,13 @@ func resolveClaudePersistedToolResultsContext(
 			return "", err
 		}
 		if !ok {
+			block[persistedOutputUnresolvedKey] = jsontext.Value("true")
+			marked, err := json.Marshal(block, json.Deterministic(true))
+			if err != nil {
+				continue //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
+			}
+			blocks[i] = marked
+			changed = true
 			continue
 		}
 		contentData, err := json.Marshal(output)
@@ -2490,22 +2500,6 @@ func persistedOutputPathFromContent(content string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
-}
-
-// IsPersistedToolResultPlaceholder reports whether content is the
-// placeholder Claude Code leaves in place of a large tool result it
-// wrote to a side file: after trimming surrounding whitespace, the
-// content opens with the <persisted-output> tag (a line may follow the
-// closing tag, such as a shell cwd reset notice), or is exactly one
-// "Full output saved to: <path>" line. It matches that whole shape, not
-// the markers alone, because a real output may quote either marker.
-func IsPersistedToolResultPlaceholder(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if strings.HasPrefix(trimmed, "<persisted-output>") {
-		return true
-	}
-	return !strings.ContainsAny(trimmed, "\r\n") &&
-		persistedToolResultBareRe.MatchString(trimmed)
 }
 
 func readClaudePersistedToolResult(

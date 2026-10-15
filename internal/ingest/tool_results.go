@@ -96,13 +96,13 @@ func PairToolResultEventSummariesContext(
 			if len(call.ResultEvents) == 0 {
 				continue
 			}
-			summary, err := SummarizeToolResultEventsContext(
+			summary, length, err := SummarizeToolResultEventsContext(
 				ctx, call.ResultEvents,
 			)
 			if err != nil {
 				return err
 			}
-			call.ResultContentLength = len(summary)
+			call.ResultContentLength = length
 			if blocked[call.Category] {
 				call.ResultContent = ""
 				for k := range call.ResultEvents {
@@ -116,13 +116,19 @@ func PairToolResultEventSummariesContext(
 	return ctx.Err()
 }
 
-// SummarizeToolResultEventsContext returns the latest content per agent while
-// preserving first-seen agent order and the last anonymous update.
+// SummarizeToolResultEventsContext returns the latest content per agent
+// while preserving first-seen agent order and the last anonymous update, and
+// the length that content drives. When no event has real text but one is
+// withheld by content policy (empty Content, nonzero ContentLength), that
+// withheld event drives the length instead, so a call whose text an archive
+// policy blanks still reports the length the archive restored for it. This
+// is the one place that decides which event drives a call's summary and
+// length; callers never derive either independently.
 func SummarizeToolResultEventsContext(
 	ctx context.Context, events []db.ToolResultEvent,
-) (string, error) {
+) (string, int, error) {
 	if len(events) == 0 {
-		return "", ctx.Err()
+		return "", 0, ctx.Err()
 	}
 	type agentSummary struct {
 		content string
@@ -131,11 +137,15 @@ func SummarizeToolResultEventsContext(
 	orderedAgents := make([]string, 0, len(events))
 	lastAnonymous := ""
 	allHaveAgentID := true
+	withheldLength := 0
 	for _, event := range events {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return "", 0, err
 		}
 		if strings.TrimSpace(event.Content) == "" {
+			if event.ContentLength > 0 {
+				withheldLength = event.ContentLength
+			}
 			continue
 		}
 		agentID := strings.TrimSpace(event.AgentID)
@@ -149,22 +159,27 @@ func SummarizeToolResultEventsContext(
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
 	}
-	if len(latestByAgent) <= 1 {
-		if len(latestByAgent) == 1 {
-			summary := latestByAgent[orderedAgents[0]].content
-			if lastAnonymous != "" {
-				return summary + "\n\n" + lastAnonymous, ctx.Err()
-			}
-			return summary, ctx.Err()
+	summary := ""
+	switch {
+	case len(latestByAgent) == 1:
+		summary = latestByAgent[orderedAgents[0]].content
+		if lastAnonymous != "" {
+			summary += "\n\n" + lastAnonymous
 		}
-		return lastAnonymous, ctx.Err()
+	case len(latestByAgent) == 0:
+		summary = lastAnonymous
+	default:
+		parts := make([]string, 0, len(orderedAgents)+1)
+		for _, agentID := range orderedAgents {
+			parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+		}
+		if !allHaveAgentID && lastAnonymous != "" {
+			parts = append(parts, lastAnonymous)
+		}
+		summary = strings.Join(parts, "\n\n")
 	}
-	parts := make([]string, 0, len(orderedAgents)+1)
-	for _, agentID := range orderedAgents {
-		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+	if summary == "" && withheldLength > 0 {
+		return summary, withheldLength, ctx.Err()
 	}
-	if !allHaveAgentID && lastAnonymous != "" {
-		parts = append(parts, lastAnonymous)
-	}
-	return strings.Join(parts, "\n\n"), ctx.Err()
+	return summary, len(summary), ctx.Err()
 }
