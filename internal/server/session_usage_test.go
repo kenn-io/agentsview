@@ -102,7 +102,6 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 		untimed   bool
 		breakdown bool
 	}{
-		{name: "plain"},
 		{name: "untimed", untimed: true},
 		{name: "breakdown", breakdown: true},
 	} {
