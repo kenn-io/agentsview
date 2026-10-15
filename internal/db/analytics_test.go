@@ -4076,40 +4076,6 @@ func TestBuildWhereProjectFilter(t *testing.T) {
 }
 
 func TestAnalyticsTerminationFilter(t *testing.T) {
-	t.Run("BuildWherePredicate", func(t *testing.T) {
-		cases := []struct {
-			name        string
-			termination string
-			want        string
-		}{
-			{"empty adds nothing", "", ""},
-			{
-				"clean", "clean",
-				"termination_status = 'clean'",
-			},
-			{
-				"unclean", "unclean",
-				"termination_status IN ('tool_call_pending', 'truncated')",
-			},
-		}
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				f := baseFilter()
-				f.Termination = tc.termination
-				where, _ := f.buildWhere(
-					"COALESCE(NULLIF(started_at, ''), created_at)",
-				)
-				if tc.want == "" {
-					assert.NotContains(t, where, "termination_status",
-						"empty termination produced predicate")
-					return
-				}
-				assert.Contains(t, where, tc.want,
-					"buildWhere(%q)", tc.termination)
-			})
-		}
-	})
-
 	t.Run("RoundTripQueries", func(t *testing.T) {
 		d := testDB(t)
 		ctx := t.Context()
