@@ -38,13 +38,15 @@ const vectorCompleteMarker = ""
 // pass over the generation (first push, tables recreated, or an earlier
 // pass interrupted or deferred sessions), so a partial generation is always
 // completed by the next push rather than only when its sessions change.
-// full re-sends every session's vectors, repairing state rows that wrongly
-// report a session current; repair does the same for only the sessions it
-// names. failed names sessions whose session-phase push failed this run;
-// their vectors are deferred so vector rows never run ahead of the session
-// rows.
+// fullSince, when nonzero, marks a full push: every session's vectors are
+// re-sent, repairing state rows that wrongly report a session current, except
+// sessions whose state row this push already wrote (version fullSince or
+// later) with the current hash, so a resumed full push keeps its progress.
+// repair re-sends only the sessions it names. failed names sessions whose
+// session-phase push failed this run; their vectors are deferred so vector
+// rows never run ahead of the session rows.
 func (s *Sync) pushVectors(
-	ctx context.Context, full bool, repair []string, scope []string,
+	ctx context.Context, fullSince uint64, repair []string, scope []string,
 	failed map[string]struct{}, onProgress func(storage.PushProgress),
 ) (storage.VectorPushResult, error) {
 	var res storage.VectorPushResult
@@ -162,7 +164,8 @@ func (s *Sync) pushVectors(
 			}
 			continue
 		}
-		if !full && !slices.Contains(repair, sessionID) && hasState && prev == agg {
+		if hasState && prev.hash == agg && !slices.Contains(repair, sessionID) &&
+			(fullSince == 0 || prev.version >= fullSince) {
 			res.SessionsUnchanged++
 			continue
 		}
@@ -383,16 +386,22 @@ func (s *Sync) archiveVectorSessions(ctx context.Context) ([]archiveVectorSessio
 	return out, rows.Err()
 }
 
+// vectorSessionState is one session's vector_push_state row.
+type vectorSessionState struct {
+	hash    string
+	version uint64
+}
+
 // readVectorPushState returns this archive's per-session aggregate hashes
-// for the generation, limited to scope when non-nil. The completion marker
-// row is not a session and is excluded.
+// and their push versions for the generation, limited to scope when non-nil.
+// The completion marker row is not a session and is excluded.
 func (s *Sync) readVectorPushState(
 	ctx context.Context, fingerprint string, scope []string,
-) (map[string]string, error) {
-	state := map[string]string{}
+) (map[string]vectorSessionState, error) {
+	state := map[string]vectorSessionState{}
 	read := func(where string, args []any) error {
 		rows, err := s.conn.QueryContext(ctx, `
-			SELECT session_id, doc_agg_hash FROM vector_push_state
+			SELECT session_id, doc_agg_hash, push_version FROM vector_push_state
 			WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id <> ?`+where,
 			append([]any{s.archiveID, fingerprint, vectorCompleteMarker}, args...)...)
 		if err != nil {
@@ -400,11 +409,12 @@ func (s *Sync) readVectorPushState(
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, hash string
-			if err := rows.Scan(&id, &hash); err != nil {
+			var id string
+			var st vectorSessionState
+			if err := rows.Scan(&id, &st.hash, &st.version); err != nil {
 				return fmt.Errorf("scanning clickhouse vector push state: %w", err)
 			}
-			state[id] = hash
+			state[id] = st
 		}
 		return rows.Err()
 	}

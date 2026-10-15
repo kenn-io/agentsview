@@ -43,6 +43,9 @@ type fakeVectorSource struct {
 	// notReadyUnscoped makes a generation-wide export report the local index
 	// as not ready, the state a promoted scoped push can run into.
 	notReadyUnscoped bool
+	// onSessionDocs, when set, runs before a session's docs are exported and
+	// can fail the export.
+	onSessionDocs func(sessionID string) error
 }
 
 func (f *fakeVectorSource) BeginExport(
@@ -81,6 +84,11 @@ func (e *fakeVectorExport) SessionDocHashes(
 func (e *fakeVectorExport) SessionDocs(
 	_ context.Context, id string,
 ) ([]storage.VectorPushDoc, string, error) {
+	if e.source.onSessionDocs != nil {
+		if err := e.source.onSessionDocs(id); err != nil {
+			return nil, "", err
+		}
+	}
 	return e.source.docs[id], e.source.hashes[id], nil
 }
 

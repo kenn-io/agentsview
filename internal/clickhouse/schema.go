@@ -37,6 +37,7 @@ const (
 	usageSnapshotReadyKeyBase  = "agentsview_usage_snapshot_ready"
 	storedCountRepairKeyBase   = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase          = "agentsview_source_database_id"
+	fullPushRunKeyBase         = "agentsview_full_push_run"
 )
 
 // archiveMetadataKey scopes a sync_metadata key to one source archive so

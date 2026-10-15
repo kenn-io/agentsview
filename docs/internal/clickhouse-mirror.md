@@ -101,6 +101,18 @@ A crash before step 3 leaves the fingerprint stale, so the next push re-selects
 the session. A crash between 1 and 2 leaves extra old rows that step 2 removes
 on retry.
 
+**Full pushes resume.** A full push writes a run record under
+`agentsview_full_push_run:<archive>` in `sync_metadata` before its first batch
+and clears it with the cursor. The record holds the run's starting push version,
+the archive database ID, the scope, and the schema and data versions. A later
+push that finds the record with matching values resumes the run. It treats a
+session as done when this archive's mirror session row has the local fingerprint
+and a push version at or after the run's. The vector phase skips a session whose
+`vector_push_state` row has a matching hash and a version at or after the run's.
+Any mismatch starts a new full push. A resumed run skips the whole-mirror usage
+repricing that the run's first process already did. Pushes send sessions newest
+activity first (`ended_at`, then `started_at`, then `created_at`).
+
 **Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
 DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
 `IN (SELECT)` instead of correlated `EXISTS`,

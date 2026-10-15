@@ -129,6 +129,14 @@ to fan out across every configured target. `--all --watch` is rejected.
 Use `--full` to bypass fingerprints and re-push everything — for example after a
 schema reset or when message content was rewritten in place.
 
+Every push sends the most recently active sessions first, so recent activity
+reaches the mirror before older history. A full push that stops partway, for
+example because the process restarted, resumes on the next push: sessions it
+already pushed are skipped, and the push reports
+`resuming interrupted full push`. It starts over instead when the archive was
+rebuilt, the push scope changed, or the mirror format changed since it began. A
+pending full push takes precedence over `--full`.
+
 If any sessions fail to push, the cursor is not advanced so they are retried on
 the next run. The exit code is 1 when any errors occur, 0 otherwise.
 
