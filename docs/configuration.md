@@ -1278,8 +1278,9 @@ for each account. It says how many running chats AgentsView is listening in on,
 that it is listening in on none right now, that live tokens are off and why, or
 that live tokens stopped after a reply AgentsView could not read.
 
-While AgentsView is listening in on a chat, a detached daemon does not exit for
-being idle, for up to 6 hours per chat. A daemon that is shutting down does not
+A detached daemon normally exits once it has been idle for `daemon_idle_timeout`.
+While AgentsView is listening in on a running chat, the daemon stays up past that
+timeout, for at most 6 hours per chat. A daemon that is shutting down does not
 start listening in on new chats.
 
 Each token update carries the chat's running total, so an update also covers
