@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -1956,30 +1957,50 @@ func TestHermesSingleSessionSyncAfterStateDBDamage(t *testing.T) {
 // the row's own doomed member keeps surfacing its own decode error). An
 // unrelated sibling in the same state.db must stay unaffected.
 func TestHermesMalformedSessionRowFallsBackToReadableTranscript(t *testing.T) {
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	execHermesState(t, stateDB, `INSERT INTO sessions
-		(id, source, model, started_at, ended_at, message_count)
-		VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
-	execHermesState(t, stateDB, `INSERT INTO messages
-		(session_id, role, content, timestamp)
-		VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
-	execHermesState(t, stateDB, "UPDATE sessions SET started_at = 'not-a-number' WHERE id = 'child'")
-	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+	for _, test := range []struct {
+		name   string
+		damage string
+	}{
+		{
+			name:   "malformed started_at",
+			damage: "UPDATE sessions SET started_at = 'not-a-number' WHERE id = 'child'",
+		},
+		{
+			name:   "malformed ended_at with a valid started_at",
+			damage: "UPDATE sessions SET ended_at = 'not-a-number' WHERE id = 'child'",
+		},
+		{
+			name:   "a message that fails to decode",
+			damage: "UPDATE messages SET timestamp = 'not-a-number' WHERE session_id = 'child'",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			execHermesState(t, stateDB, `INSERT INTO sessions
+				(id, source, model, started_at, ended_at, message_count)
+				VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+			execHermesState(t, stateDB, `INSERT INTO messages
+				(session_id, role, content, timestamp)
+				VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+			execHermesState(t, stateDB, test.damage)
+			writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
 
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
-	})
-	t.Cleanup(engine.Close)
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
 
-	stats := engine.SyncAll(t.Context(), nil)
-	assert.Positive(t, stats.Failed,
-		"the malformed row's own member must still report a visible, observable decode failure")
-	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"),
-		"a session whose row can't fully decode must still sync from its readable transcript")
-	assert.Equal(t, []string{"sibling message"}, messageContents(t, database, "hermes:sibling"),
-		"an unrelated sibling must be unaffected by another row's malformed value")
+			stats := engine.SyncAll(t.Context(), nil)
+			assert.Positive(t, stats.Failed,
+				"the malformed row's own member must still report a visible, observable decode failure")
+			assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"),
+				"a session whose row or messages can't fully decode must still sync from its readable transcript")
+			assert.Equal(t, []string{"sibling message"}, messageContents(t, database, "hermes:sibling"),
+				"an unrelated sibling must be unaffected by another row's malformed value")
+		})
+	}
 }
 
 // TestHermesUnreadableJSONSnapshotFallsBackToOtherSources proves an
@@ -1994,6 +2015,13 @@ func TestHermesMalformedSessionRowFallsBackToReadableTranscript(t *testing.T) {
 // fingerprint and trigger a resync, so skipping an unreadable candidate
 // can't leave a stuck, stale fingerprint once the candidate is readable.
 func TestHermesUnreadableJSONSnapshotFallsBackToOtherSources(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod(0) does not prevent reads on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root can read mode-0 files")
+	}
+
 	root := t.TempDir()
 	writeHermesArchiveStateDB(t, root)
 	sessionsDir := filepath.Join(root, "sessions")

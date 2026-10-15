@@ -750,11 +750,11 @@ func (s hermesSourceSet) discoverTranscriptEach(
 	})
 }
 
-// hermesStateMembership answers "does state.db hold this session id" through
-// one read-only connection and prepared statement for a whole discovery pass.
+// hermesStateMembership answers "does state.db hold a readable member for
+// this session id" through one read-only connection reused for a whole
+// discovery pass.
 type hermesStateMembership struct {
 	conn *sql.DB
-	stmt *sql.Stmt
 }
 
 func openHermesStateMembership(
@@ -765,57 +765,16 @@ func openHermesStateMembership(
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
 	observeSharedContainerScan(ctx)
-	// started_at, not a bare "SELECT 1": a row that exists but can't
-	// decode (a malformed started_at, the same per-session parse
-	// failure this provider isolates elsewhere) must not count as
-	// membership here. Counting it anyway would suppress this session's
-	// transcript from the orphan-transcript fallback below, leaving the
-	// session with neither a usable database row nor a chance to sync
-	// from its readable transcript, even though the row's own virtual
-	// member still surfaces its decode failure as a visible parse error.
-	stmt, err := conn.PrepareContext(ctx, "SELECT started_at FROM sessions WHERE id = ? LIMIT 1")
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("prepare hermes session lookup: %w", err)
-	}
-	return &hermesStateMembership{conn: conn, stmt: stmt}, nil
+	return &hermesStateMembership{conn: conn}, nil
 }
 
+// Has defers to hermesStateDBHasReadableSession on this pass's shared
+// connection; see that function for what "has" means here.
 func (m *hermesStateMembership) Has(ctx context.Context, rawID string) (bool, error) {
-	var startedRaw any
-	err := m.stmt.QueryRowContext(ctx, rawID).Scan(&startedRaw)
-	if err == nil {
-		return hermesValueDecodesAsTime(startedRaw), nil
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
-}
-
-// hermesValueDecodesAsTime reports whether a scanned started_at value is
-// something readHermesStateSession's per-session query could actually
-// decode (a number, or a numeric string/bytes the driver type-coerced),
-// as opposed to a malformed value that would fail that query's strict
-// scan. A NULL value is treated as decodable: that's a legitimately
-// unset timestamp, not malformed data.
-func hermesValueDecodesAsTime(v any) bool {
-	switch n := v.(type) {
-	case nil, float64, int64:
-		return true
-	case []byte:
-		_, err := strconv.ParseFloat(string(n), 64)
-		return err == nil
-	case string:
-		_, err := strconv.ParseFloat(n, 64)
-		return err == nil
-	default:
-		return false
-	}
+	return hermesStateDBHasReadableSession(ctx, m.conn, rawID)
 }
 
 func (m *hermesStateMembership) Close() {
-	m.stmt.Close()
 	m.conn.Close()
 }
 
@@ -1410,20 +1369,42 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 	if err := checkHermesStateSchema(ctx, conn); err != nil {
 		return false, err
 	}
+	return hermesStateDBHasReadableSession(ctx, conn, rawID)
+}
 
-	var found int
-	err = conn.QueryRowContext(
-		ctx,
-		"SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
-		rawID,
-	).Scan(&found)
-	if err == nil {
-		return true, nil
+// hermesStateDBHasReadableSession reports whether conn's sessions table
+// holds a member for rawID that the real per-session reader
+// (readHermesStateSession, readHermesStateMessagesForSession -- the same
+// reader buildHermesStateResult and Fingerprint use) can actually read, not
+// just whether a row with this id exists. A row that exists but fails that
+// real read -- a malformed started_at or ended_at, or a message that fails
+// to decode, the same per-session parse failure this provider isolates
+// elsewhere -- must not count as membership: every caller of this check
+// (discovery's orphan-transcript fallback, a transcript-event's
+// stale-vs-database preference, FindSource's stored-hint and raw-ID
+// fallback, which single-session refresh also goes through) needs "is this
+// session's database row actually usable," not "does a row with this id
+// exist." Treating it as usable anyway would suppress the session's
+// transcript or hand a refresh a row it cannot read. The row's own virtual
+// member still surfaces the decode failure as its own visible parse error;
+// this check's only concern is whether something else should be preferred.
+func hermesStateDBHasReadableSession(
+	ctx context.Context, conn *sql.DB, rawID string,
+) (bool, error) {
+	_, found, err := readHermesStateSession(ctx, conn, rawID)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if err != nil || !found {
 		return false, nil
 	}
-	return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
+	if _, err := readHermesStateMessagesForSession(ctx, conn, rawID); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 func (s hermesSourceSet) Fingerprint(

@@ -568,6 +568,63 @@ func TestPreparedDeltaImportFinalCacheFailureRetainsJournal(t *testing.T) {
 	assert.Equal(t, JournalCachePersistFailed, stats.JournalOutcome)
 }
 
+// TestImporterHermesRoutineImportSkipsUnchangedMemberDespiteFileForceFullParse
+// proves a routine remote-mirror import's file-level ForceFullParse -- set
+// through the real production journal entry flag (MirrorChangeEntry.
+// ForceFullParse), not a test-only shortcut -- does not force-rewrite every
+// Hermes session derived from that file. A freshly fetched state.db is
+// marked ForceFullParse because the mirror layer can't incrementally diff a
+// binary SQLite file, but that flag means "look at this file," not "every
+// per-session member it fans out to must be rewritten." Before the fix, the
+// flag propagated into every member's incForceReplace and defeated this
+// provider's whole per-session freshness model on every routine import.
+func TestImporterHermesRoutineImportSkipsUnchangedMemberDespiteFileForceFullParse(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const remoteDir = "/srv/agent/sessions"
+			localDir := remappedRemotePath(root, remoteDir)
+			require.NoError(t, os.MkdirAll(localDir, 0o755))
+			stateDB := filepath.Join(filepath.Dir(localDir), "state.db")
+			writeHermesImportStateDB(t, stateDB)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,model,started_at,message_count) VALUES('sibling','cli','model',1778767200,1); INSERT INTO messages(session_id,role,content,timestamp) VALUES('sibling','user','sibling message',1778767210)`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {remoteDir}}}
+			importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
+			seed, err := importer.ImportExtracted(t.Context(), targets, root)
+			require.NoError(t, err)
+			require.Equal(t, 2, seed.SessionsSynced)
+			siblingID := "remote~" + string(agent) + ":sibling"
+			before, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+
+			path, err := mirrorRelativeLocalChangePath(root, stateDB)
+			require.NoError(t, err)
+			pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{
+				Journal: MirrorChangeJournal{
+					Version: mirrorJournalVersion,
+					Entries: []MirrorChangeEntry{{
+						Path: path, InvalidateCache: true, ForceFullParse: true,
+					}},
+				},
+			})
+			require.NoError(t, err)
+			stats, err := pending.Execute(t.Context())
+			require.NoError(t, err)
+			assert.Zero(t, stats.SessionsSynced,
+				"a routine import's file-level ForceFullParse must not rewrite an unchanged member")
+			after, err := database.GetSessionFull(t.Context(), siblingID)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
 func TestImporterHermesDatabaseDeltaBoundsSharedScans(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
 		t.Run(string(agent), func(t *testing.T) {

@@ -12643,8 +12643,22 @@ func (e *Engine) processProviderFile(
 	// An explicit full pass must replace the stored message stream after
 	// bypassing incremental append. Otherwise a complete parse can still be
 	// written with append semantics and leave stale earlier rows untouched.
+	//
+	// file.ForceFullParse means "this file was just fetched and must be
+	// looked at" (e.g. a routine remote-mirror import marking a
+	// freshly-synced state.db), not "every session this file fans out to
+	// must be rewritten." For Hermes/Augure Desktop, one state.db expands
+	// into many per-session members (usesPartialDiscovery's fan-out
+	// providers); folding the file-level flag into every member's
+	// incForceReplace would force-rewrite every session in the archive on
+	// every routine import, defeating this provider's whole per-session
+	// freshness model. Only a member-level force (sourceForceReplace,
+	// incRes.forceReplace, or the engine-wide e.forceFullParse) bypasses
+	// the member's own unchanged-skip below; every other provider keeps
+	// file.ForceFullParse's existing effect.
 	incForceReplace := sourceForceReplace || incRes.forceReplace ||
-		e.forceFullParse || file.ForceFullParse
+		e.forceFullParse ||
+		(file.ForceFullParse && !usesPartialDiscovery(file.Agent))
 
 	// DB-stored fingerprint skip. The provider has no database handle, so the
 	// engine reproduces the legacy DB-aware skip that single-session JSONL
@@ -12699,7 +12713,21 @@ func (e *Engine) processProviderFile(
 	// a provider whose fingerprint mtime differs from the stored value simply
 	// reparses, matching the prior behavior. Claude and Cowork have their own
 	// earlier freshness checks; this is the generic fallback for the rest.
-	if !forceSourceCwdParse && !incForceReplace && !e.forceParseRequested(file) &&
+	//
+	// This member's own check below (providerSourceUnchangedInDB) is a
+	// content-hash freshness decision that already rejects a genuinely
+	// changed member; forceParseRequested's file.ForceFullParse term exists
+	// for providers where one DiscoveredFile is one physical file, so
+	// "reparse this file" and "reparse this member" are the same thing. For
+	// Hermes/Augure Desktop's per-session fan-out (usesPartialDiscovery's
+	// providers), they are not: a routine remote-mirror import marks the
+	// shared state.db ForceFullParse because the mirror layer can't
+	// incrementally diff it, and that flag reaches every member it fans out
+	// to. Excluding it here, specifically for this skip, keeps that import
+	// from rewriting every unchanged session on every routine sync.
+	memberForceParseRequested := e.forceParse || e.forceFullParse || file.ForceParse ||
+		(file.ForceFullParse && !usesPartialDiscovery(file.Agent))
+	if !forceSourceCwdParse && !incForceReplace && !memberForceParseRequested &&
 		e.providerSourceUnchangedInDB(
 			ctx, source, fingerprint, providerSemantics, preParseStatHash,
 		) {
