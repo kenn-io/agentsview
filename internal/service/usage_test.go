@@ -682,7 +682,7 @@ func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.
 		IncludeOneShot:   true,
 		BranchBreakdowns: &branchBreakdowns,
 	}
-	summary, err := be.UsageSummary(context.Background(), base)
+	summary, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	require.Len(t, summary.BranchTotals, 2)
 
@@ -696,7 +696,7 @@ func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.
 	assert.Empty(t, selected.Project)
 
 	base.GitBranch = db.EncodeBranchFilterToken(selected.ProjectKey, selected.Branch)
-	filtered, err := be.UsageSummary(context.Background(), base)
+	filtered, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	require.Len(t, filtered.BranchTotals, 1)
 	assert.Equal(t, selected.ProjectKey, filtered.BranchTotals[0].ProjectKey)
@@ -710,7 +710,7 @@ func TestDirectBackend_UsageSummary_RejectsUnknownBranchProjectKey(t *testing.T)
 	seedCollidingBranchProjectFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
 	branchBreakdowns := true
-	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+	_, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot:   true,
 		BranchBreakdowns: &branchBreakdowns,

@@ -262,7 +262,7 @@ func TestBranchFilterToken(t *testing.T) {
 	assert.Empty(t, tok, "empty branch means no filter")
 
 	_, err = BranchFilterToken("", "main")
-	assert.ErrorIs(t, err, ErrBranchWithoutProject)
+	require.ErrorIs(t, err, ErrBranchWithoutProject)
 
 	tok, err = BranchFilterToken("proj", "main")
 	require.NoError(t, err)

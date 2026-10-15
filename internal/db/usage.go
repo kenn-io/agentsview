@@ -1843,10 +1843,8 @@ func SanitizeDailyUsageProjectLabelsWithCatalog(
 		}
 		for j := range result.Daily[i].BranchBreakdowns {
 			raw := result.Daily[i].BranchBreakdowns[j].Project
-			result.Daily[i].BranchBreakdowns[j].ProjectKey =
-				export.ProjectKeyForEntry(projects[raw])
-			result.Daily[i].BranchBreakdowns[j].Project =
-				export.SafeProjectDisplayLabel(raw)
+			result.Daily[i].BranchBreakdowns[j].ProjectKey = export.ProjectKeyForEntry(projects[raw])
+			result.Daily[i].BranchBreakdowns[j].Project = export.SafeProjectDisplayLabel(raw)
 		}
 	}
 	if result.SessionCounts.ByProject != nil {
