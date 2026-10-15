@@ -103,11 +103,11 @@ func TestFilterMatrixUsage(t *testing.T) {
 			assert.Empty(t, BuildUsageSourceFilter(UsageFilter{}, b, "ue.model"))
 			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{}, b, ""))
 			assert.Empty(t, b.Args())
-			f := UsageFilter{Model: " a, b, ", ExcludeModel: " c, ", Agent: " codex, claude, ", ProjectLabels: []string{"team,tools", "other"}, Machine: " laptop, ", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: " cursor, ", MinUserMessages: 2, ExcludeOneShot: true, ExcludeAutomated: true, ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
+			f := UsageFilter{Model: " a, b, ", ExcludeModel: " c, ", Agent: " codex, claude, ", ProjectLabels: []string{"team,tools", "other"}, Machine: " laptop, ", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: " cursor, ", MinUserMessages: 2, ExcludeAutomated: true, ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
 			source := BuildUsageSourceFilter(f, b, "ue.model")
 			assert.Equal(t, matrixSQL(d, "ue.model IN (?,?) AND ue.model != ?", 3), strings.Join(source, " AND "))
 			session := BuildUsageSessionFilter(f, b, "session-1")
-			want := "s.agent IN (?,?) AND s.project IN (?,?) AND s.machine = ? AND (s.project = ? AND s.git_branch = ?) AND s.project != ? AND s.agent != ? AND s.id = ? AND s.user_message_count >= ? AND s.user_message_count > 1 AND COALESCE(s.is_automated, " + d.falseSQL + ") = " + d.falseSQL + " AND " + d.activity + " AND (s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
+			want := "s.agent IN (?,?) AND s.project IN (?,?) AND s.machine = ? AND (s.project = ? AND s.git_branch = ?) AND s.project != ? AND s.agent != ? AND s.id = ? AND s.user_message_count >= ? AND COALESCE(s.is_automated, " + d.falseSQL + ") = " + d.falseSQL + " AND " + d.activity + " AND (s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
 			assert.Equal(t, matrixSQL(d, want, 6), strings.Join(session, " AND "))
 			assert.Equal(t, []any{"a", "b", "c", "codex", "claude", "team,tools", "other", "laptop", "team,tools", "topic", "excluded,tools", "cursor", "session-1", 2, f.ActiveSince}, b.Args())
 			for _, raw := range []string{" a, b, ", " , "} {
@@ -132,8 +132,12 @@ func TestFilterMatrixUsage(t *testing.T) {
 			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{AutomatedScope: "all", ExcludeAutomated: true}, b, ""))
 			assert.Empty(t, b.Args())
 			b = NewQueryBuilder(d.dialect, 0)
-			preds := BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "automated"}, b, "")
+			preds := BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "human"}, b, "")
 			automated := "COALESCE(s.is_automated, " + d.falseSQL + ")"
+			assert.Equal(t, "s.user_message_count > 1 AND "+automated+" = "+d.falseSQL, strings.Join(preds, " AND "))
+			assert.Empty(t, b.Args())
+			b = NewQueryBuilder(d.dialect, 0)
+			preds = BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "automated"}, b, "")
 			assert.Equal(t, "(s.user_message_count > 1 OR "+automated+" = "+d.trueSQL+") AND "+automated+" = "+d.trueSQL, strings.Join(preds, " AND "))
 		})
 	}

@@ -72,7 +72,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 			db.AnalyticsFilter{Model: model, Hour: &h, Timezone: "UTC"}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
-		assert.Zero(t, scope.StatsBySession()[sessionA].Messages, "hour 14 drops 09:00 rows")
+		assert.Empty(t, scope[sessionA], "hour 14 drops 09:00 rows")
 	})
 
 	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
