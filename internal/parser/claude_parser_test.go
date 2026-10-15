@@ -3150,41 +3150,6 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 	})
 }
 
-func TestParseClaudeSession_PersistedOutputUnresolvedFlagsOnlyMissingBlock(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "project", "parent-session")
-	missingPath := filepath.Join(sessionDir, "tool-results", "gone.txt")
-
-	require.NoError(t, os.MkdirAll(filepath.Dir(missingPath), 0o755))
-	placeholder := "<persisted-output>\n" +
-		"Output too large. Full output saved to: " + missingPath +
-		"\n\nPreview (first 2KB):\npreview only\n</persisted-output>"
-	placeholderJSON := mustJSONString(t, placeholder)
-	resultPathJSON := mustJSONString(t, missingPath)
-
-	content := strings.Join([]string{
-		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
-		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + placeholderJSON + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `,"persistedOutputSize":32}}`,
-	}, "\n")
-	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
-	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
-
-	results, err := parseClaudeSession(sessionPath, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 3)
-	require.Len(t, results[0].Messages[2].ToolResults, 1)
-
-	got := results[0].Messages[2].ToolResults[0]
-	assert.True(t, got.PersistedOutputUnresolved)
-	assert.Equal(t, placeholder, DecodeContent(got.ContentRaw))
-}
-
 func TestParseClaudeSession_PersistedOutputUnresolvedOnlyOnUnresolvedOccurrence(
 	t *testing.T,
 ) {

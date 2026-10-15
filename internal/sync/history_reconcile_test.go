@@ -20,20 +20,22 @@ type providerHistoryReadSpy struct {
 	db.Store
 	getSessionCalls int
 	getMessageCalls int
+	session         *db.Session
+	err             error
 }
 
 func (s *providerHistoryReadSpy) GetSessionFull(
 	context.Context, string,
 ) (*db.Session, error) {
 	s.getSessionCalls++
-	return nil, nil
+	return s.session, nil
 }
 
 func (s *providerHistoryReadSpy) GetAllMessages(
 	context.Context, string,
 ) ([]db.Message, error) {
 	s.getMessageCalls++
-	return nil, nil
+	return nil, s.err
 }
 
 func TestReconcileProviderHistorySkipsPriorReadForICodeMateCLI(t *testing.T) {
@@ -58,31 +60,13 @@ func TestReconcileProviderHistorySkipsPriorReadForICodeMateCLI(t *testing.T) {
 	assert.Zero(t, archive.getMessageCalls)
 }
 
-type erroringMessagesStore struct {
-	db.Store
-	session *db.Session
-	err     error
-}
-
-func (s *erroringMessagesStore) GetSessionFull(
-	context.Context, string,
-) (*db.Session, error) {
-	return s.session, nil
-}
-
-func (s *erroringMessagesStore) GetAllMessages(
-	context.Context, string,
-) ([]db.Message, error) {
-	return nil, s.err
-}
-
 // TestReconcileProviderHistoryPropagatesTransientArchiveReadError covers a
 // transient failure reading the archived session: it must stop the write
 // rather than silently proceeding as if no archived output existed, which
 // would let the current parse's placeholder overwrite it.
 func TestReconcileProviderHistoryPropagatesTransientArchiveReadError(t *testing.T) {
 	readErr := errors.New("transient read failure")
-	archive := &erroringMessagesStore{
+	archive := &providerHistoryReadSpy{
 		session: &db.Session{ID: "claude:session-1"}, err: readErr,
 	}
 	engine := &Engine{db: openTestDB(t), archiveStore: archive}
