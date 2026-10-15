@@ -3516,9 +3516,19 @@ func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	syncB.Host = "host-b"
 	syncB.URL = remoteB.ts.URL
 	syncB.DB = database
-	var requestOrder []string
-	remoteA.onManifest = func() { requestOrder = append(requestOrder, "host-a") }
-	remoteB.onManifest = func() { requestOrder = append(requestOrder, "host-b") }
+	var lockOrder []string
+	var lockOrderMu stdsync.Mutex
+	recordLock := func(ctx context.Context, root string) (*MirrorLockHandle, error) {
+		lock, err := AcquireMirrorLock(ctx, root)
+		if err == nil {
+			lockOrderMu.Lock()
+			lockOrder = append(lockOrder, filepath.Base(root))
+			lockOrderMu.Unlock()
+		}
+		return lock, err
+	}
+	syncA.acquireMirrorLock = recordLock
+	syncB.acquireMirrorLock = recordLock
 
 	syncs := []HTTPSync{syncB, syncA}
 	prepared, err := PrepareHTTPSyncs(t.Context(), syncs)
@@ -3527,7 +3537,10 @@ func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	assert.Equal(t, []string{"host-b", "host-a"}, []string{
 		syncs[0].Host, syncs[1].Host,
 	}, "preparation must not mutate caller ordering")
-	assert.Equal(t, []string{"host-a", "host-b"}, requestOrder)
+	assert.Equal(t, []string{
+		filepath.Base(MirrorDir(dataDir, "host-a")),
+		filepath.Base(MirrorDir(dataDir, "host-b")),
+	}, lockOrder)
 	var hostErr *HostError
 	require.ErrorAs(t, err, &hostErr)
 	assert.Equal(t, "host-b", hostErr.Host)
@@ -3586,13 +3599,6 @@ func TestPrepareHTTPSyncsLegacySourcesDoNotCreateWorkingDirectoryLocks(t *testin
 	t.Chdir(workingDir)
 	setPortableTempDir(t, t.TempDir())
 
-	var requestOrder []string
-	remoteA.onArchive = func(ArchiveRequest) {
-		requestOrder = append(requestOrder, "host-a")
-	}
-	remoteB.onArchive = func(ArchiveRequest) {
-		requestOrder = append(requestOrder, "host-b")
-	}
 	syncA := HTTPSync{Host: "host-a", URL: remoteA.ts.URL, Client: remoteA.ts.Client()}
 	syncB := HTTPSync{Host: "host-b", URL: remoteB.ts.URL, Client: remoteB.ts.Client()}
 	syncs := []HTTPSync{syncB, syncA}
@@ -3600,12 +3606,15 @@ func TestPrepareHTTPSyncsLegacySourcesDoNotCreateWorkingDirectoryLocks(t *testin
 	prepared, err := PrepareHTTPSyncs(t.Context(), syncs)
 	require.NoError(t, err)
 	require.NotNil(t, prepared)
+	require.Len(t, prepared.sources, 2)
+	assert.Equal(t, []string{"host-a", "host-b"}, []string{
+		prepared.sources[0].sync.Host, prepared.sources[1].sync.Host,
+	})
 	require.NoError(t, prepared.Close())
 
 	assert.Equal(t, []string{"host-b", "host-a"}, []string{
 		syncs[0].Host, syncs[1].Host,
 	}, "preparation must not mutate caller ordering")
-	assert.Equal(t, []string{"host-a", "host-b"}, requestOrder)
 	assert.NoDirExists(t, filepath.Join(workingDir, "remote-mirrors"),
 		"legacy sources have no persistent mirror lock identity")
 }
@@ -3642,7 +3651,6 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 	}
 	remoteA.onManifestRequest = func(r *http.Request) {
 		caller := r.Header.Get("Authorization")
-		record(caller, "mirror-a")
 		if caller == "Bearer caller-one" {
 			callerOneAtAOnce.Do(func() { close(callerOneAtA) })
 			select {
@@ -3651,9 +3659,6 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 			}
 		}
 	}
-	remoteB.onManifestRequest = func(r *http.Request) {
-		record(r.Header.Get("Authorization"), "mirror-b")
-	}
 
 	callerOne := []HTTPSync{syncB, syncA}
 	callerOne[0].Token = "caller-one"
@@ -3661,6 +3666,22 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 	callerTwo := []HTTPSync{syncA, syncB}
 	callerTwo[0].Token = "caller-two"
 	callerTwo[1].Token = "caller-two"
+	for _, syncs := range [][]HTTPSync{callerOne, callerTwo} {
+		for i := range syncs {
+			hs := syncs[i]
+			syncs[i].acquireMirrorLock = func(ctx context.Context, root string) (*MirrorLockHandle, error) {
+				lock, err := AcquireMirrorLock(ctx, root)
+				if err == nil {
+					mirror := "mirror-b"
+					if hs.DataDir == dataDirA {
+						mirror = "mirror-a"
+					}
+					record("Bearer "+hs.Token, mirror)
+				}
+				return lock, err
+			}
+		}
+	}
 	type result struct {
 		caller   string
 		prepared *PreparedHTTPSyncs
@@ -3984,6 +4005,13 @@ func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
 	removeCalls := 0
 	unlockCalls := 0
 	var ownedRoot string
+	firstPrepared := make(chan struct{})
+	remoteB.onManifestRequest = func(r *http.Request) {
+		select {
+		case <-firstPrepared:
+		case <-r.Context().Done():
+		}
+	}
 
 	prepared, err := prepareHTTPSyncs(
 		t.Context(), []HTTPSync{syncB, syncA},
@@ -4007,6 +4035,7 @@ func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
 				}
 				return lock.Close()
 			}
+			close(firstPrepared)
 			return source, nil
 		},
 	)

@@ -61,11 +61,12 @@ type PreparedHTTPSyncs struct {
 	borrows               int
 }
 
-// PrepareHTTPSyncs prepares HTTP hosts in deterministic order, using canonical
-// mirror-lock paths for persistent sources and host/URL keys for legacy
-// temporary sources. It copies the input so callers retain their original
-// ordering. When both the preparation and its unwind fail, the returned set is
-// nonnil and callers must retry Close even though err is also nonnil.
+// PrepareHTTPSyncs prepares up to four HTTP hosts concurrently. Persistent
+// mirror locks are acquired in canonical path order; results retain that order,
+// with legacy temporary sources ordered by host/URL. Callbacks are serialized.
+// It copies the input so callers retain their original ordering. When both the
+// preparation and its unwind fail, the returned set is nonnil and callers must
+// retry Close even though err is also nonnil.
 func PrepareHTTPSyncs(
 	ctx context.Context, syncs []HTTPSync,
 ) (*PreparedHTTPSyncs, error) {
@@ -111,6 +112,7 @@ func prepareHTTPSyncsWithUnavailable(
 	type orderedSync struct {
 		sync    HTTPSync
 		sortKey string
+		advance func()
 	}
 	ordered := make([]orderedSync, 0, len(syncs))
 	seenLocks := make(map[string]HTTPSync, len(syncs))
@@ -148,42 +150,171 @@ func prepareHTTPSyncsWithUnavailable(
 		return ordered[i].sortKey < ordered[j].sortKey
 	})
 
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var callbacks sync.Mutex
+	previous := make(chan struct{})
+	close(previous)
+	for i := range ordered {
+		hs := &ordered[i].sync
+		if report := hs.Progress; report != nil {
+			hs.Progress = func(progress syncpkg.Progress) {
+				callbacks.Lock()
+				defer callbacks.Unlock()
+				report(progress)
+			}
+		}
+		if hs.DataDir == "" {
+			continue
+		}
+		before, acquired := previous, make(chan struct{})
+		previous = acquired
+		var once sync.Once
+		advance := func() {
+			// A host that fails before locking must still wait its turn before
+			// admitting the next host, unless the whole group is stopping.
+			select {
+			case <-before:
+			case <-workCtx.Done():
+			}
+			once.Do(func() { close(acquired) })
+		}
+		ordered[i].advance = advance
+		acquire := hs.acquireMirrorLock
+		if acquire == nil {
+			acquire = AcquireMirrorLock
+		}
+		hs.acquireMirrorLock = func(ctx context.Context, root string) (*MirrorLockHandle, error) {
+			select {
+			case <-before:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			lock, err := acquire(ctx, root)
+			if err == nil {
+				advance()
+			}
+			return lock, err
+		}
+	}
+
+	type preparationResult struct {
+		source      *PreparedHTTP
+		err         *HostError
+		unavailable bool
+	}
+	results := make([]preparationResult, len(ordered))
+	var failureMu sync.Mutex
+	var primary *HostError
+	run := func(i int) {
+		input := ordered[i]
+		if input.advance != nil {
+			defer input.advance()
+		}
+		if workCtx.Err() != nil {
+			return
+		}
+		hs := input.sync
+		if hs.Lifecycle != nil && hs.Lifecycle.PrepareStarted != nil {
+			callbacks.Lock()
+			hs.Lifecycle.PrepareStarted()
+			callbacks.Unlock()
+		}
+		source, err := prepare(workCtx, hs)
+		result := preparationResult{source: source}
+		if err != nil {
+			result.err = &HostError{Host: hs.Host, Operation: "prepare", Err: err}
+			result.unavailable = skipUnavailable && source == nil &&
+				workCtx.Err() == nil && IsHostUnavailable(err)
+			if !result.unavailable {
+				failureMu.Lock()
+				if primary == nil {
+					primary = result.err
+					cancel()
+				}
+				failureMu.Unlock()
+			}
+		}
+		if hs.Lifecycle != nil && hs.Lifecycle.PrepareFinished != nil {
+			callbacks.Lock()
+			hs.Lifecycle.PrepareFinished(err)
+			callbacks.Unlock()
+		}
+		results[i] = result
+	}
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(4, len(ordered)) {
+		workers.Go(func() {
+			for i := range jobs {
+				run(i)
+			}
+		})
+	}
+dispatch:
+	for i := range ordered {
+		// Dispatch in lock order: later jobs must not occupy every worker
+		// while waiting for a predecessor that has not started yet.
+		select {
+		case jobs <- i:
+		case <-workCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	workers.Wait()
+
 	prepared := &PreparedHTTPSyncs{
 		sources: make([]*PreparedHTTP, 0, len(ordered)),
 	}
 	var unavailable []*HostError
-	for _, input := range ordered {
-		hs := input.sync
-		if hs.Lifecycle != nil && hs.Lifecycle.PrepareStarted != nil {
-			hs.Lifecycle.PrepareStarted()
+	var failure error
+	if primary != nil {
+		failure = primary
+	}
+	for i, result := range results {
+		if result.source != nil {
+			prepared.sources = append(prepared.sources, result.source)
 		}
-		source, err := prepare(ctx, hs)
-		if hs.Lifecycle != nil && hs.Lifecycle.PrepareFinished != nil {
-			hs.Lifecycle.PrepareFinished(err)
+		if result.unavailable {
+			hs := ordered[i].sync
+			unavailable = append(unavailable, result.err)
+			prepared.unavailableIDPrefixes = append(
+				prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
+			)
+			hs.reportProgressDetail("Skipped offline remote host " + hs.Host)
+			continue
 		}
-		if err != nil {
-			primary := &HostError{Host: hs.Host, Operation: "prepare", Err: err}
-			if skipUnavailable && source == nil && ctx.Err() == nil &&
-				IsHostUnavailable(err) {
-				unavailable = append(unavailable, primary)
-				prepared.unavailableIDPrefixes = append(
-					prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
-				)
-				hs.reportProgressDetail(
-					"Skipped offline remote host " + hs.Host,
-				)
-				continue
-			}
-			if source != nil {
-				prepared.sources = append(prepared.sources, source)
-			}
-			cleanupErr := prepared.Close()
-			if cleanupErr != nil {
-				return prepared, unavailable, errors.Join(primary, cleanupErr)
-			}
-			return nil, unavailable, primary
+		if result.err == nil || result.err == primary {
+			continue
 		}
-		prepared.sources = append(prepared.sources, source)
+		if ctx.Err() == nil && errors.Is(result.err, context.Canceled) {
+			// Sibling cancellation must not turn the original failure into a
+			// user cancellation. Spool cleanup can own resources without a
+			// PreparedHTTP, so retry and retain those owners independently.
+			for _, retrier := range cleanupRetriers(result.err) {
+				if cleanupErr := retrier.RetryCleanup(); cleanupErr != nil {
+					failure = errors.Join(failure, &retainedCleanupError{
+						cause:    &HostError{Host: ordered[i].sync.Host, Operation: "cleanup canceled preparation", Err: cleanupErr},
+						retriers: []cleanupRetrier{retrier},
+					})
+				}
+			}
+			continue
+		}
+		failure = errors.Join(failure, result.err)
+	}
+	if ctx.Err() != nil {
+		failure = errors.Join(failure, ctx.Err())
+	}
+	if failure != nil {
+		if cleanupErr := prepared.Close(); cleanupErr != nil {
+			return prepared, unavailable, errors.Join(failure, cleanupErr)
+		}
+		return nil, unavailable, failure
 	}
 	return prepared, unavailable, nil
 }
@@ -380,7 +511,11 @@ func (hs HTTPSync) prepare(
 		return nil, fmt.Errorf("make persistent mirror root absolute: %w", err)
 	}
 	mirrorRoot = filepath.Clean(mirrorRoot)
-	prepared.lock, err = AcquireMirrorLock(ctx, mirrorRoot)
+	acquire := hs.acquireMirrorLock
+	if acquire == nil {
+		acquire = AcquireMirrorLock
+	}
+	prepared.lock, err = acquire(ctx, mirrorRoot)
 	if err != nil {
 		return nil, err
 	}

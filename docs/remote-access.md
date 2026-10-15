@@ -205,7 +205,9 @@ time. Download time includes waiting for the remote response. The existing
 import log reports planning, processing, and cache persistence times.
 
 For a configured full sync that includes local sources, mirror preparation
-finishes before database work begins. The collector then ingests local sources
+finishes before database work begins. Up to four remote hosts prepare at once
+for this combined rebuild. Mirror locks keep the same acquisition order across
+collectors to avoid deadlocks. The collector then ingests local sources
 and every prepared HTTP mirror through the same batched temporary-database path,
 with FTS maintenance suspended during ingest and rebuilt once before an atomic
 swap. A preparation, parser, batch-write, or FTS failure leaves the active

@@ -67,7 +67,9 @@ func (r *CleanupRegistry) Run(
 }
 
 func retryCleanup(err error) error {
-	if retained, ok := errors.AsType[*retainedCleanupError](err); ok {
+	// Only a top-level aggregate owns the whole error. A nested aggregate may
+	// have joined siblings that also retain resources.
+	if retained, ok := err.(*retainedCleanupError); ok { //nolint:errorlint // Match the owner of the entire error tree, not an arbitrary nested owner.
 		if retained.RetryCleanup() != nil {
 			return retained
 		}

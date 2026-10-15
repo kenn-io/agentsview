@@ -44,6 +44,7 @@ type HTTPSync struct {
 	Lifecycle               *HTTPSyncLifecycle
 	runPrepare              func(context.Context) (*PreparedHTTP, error)
 	removeArchiveSpool      func(string) error
+	acquireMirrorLock       func(context.Context, string) (*MirrorLockHandle, error)
 }
 
 // forceParseRequested distinguishes an operator-requested full sync from a
