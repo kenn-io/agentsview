@@ -969,6 +969,30 @@ describe("UsageStore session filter params", () => {
     },
   );
 
+  it("keeps a recently active comparison visible through a later refresh", async () => {
+    const { usage } = await loadStore();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
+    const { sessions } = await import("./sessions.svelte.js");
+    sessions.filters.recentlyActive = true;
+    try {
+      await usage.fetchAll();
+      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+      vi.setSystemTime(new Date("2026-06-15T16:01:00Z"));
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockClear();
+      const refresh = usage.fetchAll();
+      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+      await refresh;
+      expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
+      const request = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0];
+      expect(request).toHaveProperty("active_since", "2026-06-14T16:01:00.000Z");
+      expect(request).not.toHaveProperty("fallback_to_default");
+    } finally {
+      sessions.filters.recentlyActive = false;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["ready totals", "pending totals"])(
     "waits for a selector replacement before completing the refresh, %s",
     async (scenario) => {

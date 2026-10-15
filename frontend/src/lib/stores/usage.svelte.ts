@@ -210,6 +210,11 @@ function selectionKey(params: UsageParams): string {
   return [params.project_key, params.model, params.agent].join("|");
 }
 
+// active_since follows the clock, so only whether it is set changes the scope.
+function refreshScopeKey(params: UsageParams): string {
+  return JSON.stringify({ ...params, active_since: params.active_since !== undefined });
+}
+
 function summaryForDateRange(
   summary: UsageSummaryResponse,
   from: string,
@@ -982,7 +987,7 @@ class UsageStore {
     });
     void this.fetchPairwise(
       params,
-      JSON.stringify(params) !== this.pairwiseScope || this.pairwiseComparison === null,
+      refreshScopeKey(params) !== this.pairwiseScope || this.pairwiseComparison === null,
     );
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
@@ -1339,7 +1344,7 @@ class UsageStore {
   }
 
   private fetchPairwise(params: UsageParams, fallbackToDefault = false): Promise<FetchResult> {
-    const scope = JSON.stringify(params);
+    const scope = refreshScopeKey(params);
     if (scope !== this.pairwiseScope) this.clearPairwiseComparisonState();
     this.pairwiseScope = scope;
     this.currentPairwisePromise = this.loadPairwise(params, fallbackToDefault);
@@ -1462,8 +1467,7 @@ class UsageStore {
       // token-type change, a refresh, or a remount keeps them, even if it fails,
       // unless the server cut the list at the limit: the new metric can pick
       // other rows out of the remainder.
-      // active_since moves on every call, so key on whether it is set.
-      const scope = JSON.stringify({ ...query, active_since: query.active_since !== undefined });
+      const scope = refreshScopeKey(query);
       const rankingKey = JSON.stringify(ranking);
       const cut = this.zoomRows?.some((row) => !row.groupKey && !row.sessionId) ?? false;
       if (scope !== this.zoomScope || (cut && rankingKey !== this.zoomRanking))
