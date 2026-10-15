@@ -2,7 +2,6 @@
 export const BRANCH_TOKEN_SEP = "\u001f";
 export const BRANCH_LIST_SEP = "\u001e";
 export const NO_BRANCH_FILTER_TOKEN = "\u001dno_branch";
-export const NO_BRANCH_MATCH_TOKEN = "\u001dno_branch_match";
 const OPAQUE_PROJECT_KEY_PREFIX = "pl1:sha256:";
 
 export function branchFilterToken(project: string, branch: string): string {
@@ -113,25 +112,4 @@ export function scopeBranchFilterValues(values: string[], project: string): stri
     const decoded = splitBranchFilterToken(value);
     return !decoded.project || decoded.project === project || isOpaqueProjectKey(decoded.project);
   });
-}
-
-export function intersectBranchFilterValues(
-  left: string[],
-  right: string[],
-  projectLabel?: ProjectLabelLookup,
-): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const leftValue of left) {
-    const leftToken = splitBranchFilterToken(leftValue);
-    for (const rightValue of right) {
-      if (!branchFilterValuesEqual(leftValue, rightValue, projectLabel)) continue;
-      const value = leftToken.project ? leftValue : rightValue;
-      if (!seen.has(value)) {
-        seen.add(value);
-        result.push(value);
-      }
-    }
-  }
-  return result;
 }

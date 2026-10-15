@@ -54,6 +54,7 @@ type UsageFilterInput struct {
 	Machine           string `query:"machine" doc:"Filter by machine"`
 	GitBranch         string `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	ExcludeGitBranch  string `query:"exclude_git_branch" doc:"Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
+	SelectedGitBranch string `query:"selected_git_branch" doc:"Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
 	ExcludeAgent      string `query:"exclude_agent" doc:"Exclude an agent"`
@@ -105,6 +106,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
 		ExcludeGitBranch:  in.ExcludeGitBranch,
+		SelectedGitBranch: in.SelectedGitBranch,
 		ExcludeProject:    in.ExcludeProject,
 		ExcludeProjectKey: in.ExcludeProjectKey,
 		ExcludeAgent:      in.ExcludeAgent,

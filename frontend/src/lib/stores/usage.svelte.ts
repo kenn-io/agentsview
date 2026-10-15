@@ -15,10 +15,8 @@ import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 import {
   BRANCH_LIST_SEP,
-  NO_BRANCH_MATCH_TOKEN,
   branchFilterToken,
   branchFilterValuesEqual,
-  intersectBranchFilterValues,
   isOpaqueProjectKey,
   portableBranchFilterValues,
   scopeBranchFilterValues,
@@ -226,7 +224,13 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
 export type UsageMode = "cost" | "token";
 
 function selectionKey(params: UsageParams): string {
-  return [params.project_key, params.model, params.agent, params.git_branch].join("|");
+  return [
+    params.project_key,
+    params.model,
+    params.agent,
+    params.git_branch,
+    params.selected_git_branch,
+  ].join("|");
 }
 
 function summaryForDateRange(
@@ -517,7 +521,8 @@ class UsageStore {
       timezone: this.timezone,
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
-      git_branch: this.effectiveGitBranch(sessionFilters.branch),
+      git_branch: sessionFilters.branch || undefined,
+      selected_git_branch: this.projectScopedLocalBranch() || undefined,
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
       min_user_messages:
@@ -556,7 +561,7 @@ class UsageStore {
     else if (by === "model") delete params.model;
     // The sidebar branch filter still scopes the panel; only the usage
     // page's own branch selection is lifted.
-    else if (by === "branch") params.git_branch = sessions.filters.branch || undefined;
+    else if (by === "branch") delete params.selected_git_branch;
     else delete params.agent;
     return params;
   }
@@ -581,21 +586,6 @@ class UsageStore {
     return scopeBranchFilterValues(local.split(BRANCH_LIST_SEP), sessions.filters.project).join(
       BRANCH_LIST_SEP,
     );
-  }
-
-  // The sidebar branch filter and the usage page's own selection are both
-  // include lists but share one git_branch API param, so AND them by branch
-  // name. This lets new plain names interoperate with legacy project-pair URLs.
-  private effectiveGitBranch(sidebarBranch: string): string | undefined {
-    const local = this.projectScopedLocalBranch();
-    if (!sidebarBranch) return local || undefined;
-    if (!local) return sidebarBranch;
-    const both = intersectBranchFilterValues(
-      local.split(BRANCH_LIST_SEP),
-      sidebarBranch.split(BRANCH_LIST_SEP),
-      this.projectLabelForKey,
-    );
-    return both.length > 0 ? both.join(BRANCH_LIST_SEP) : NO_BRANCH_MATCH_TOKEN;
   }
 
   get pairwiseModelOptions(): string[] {

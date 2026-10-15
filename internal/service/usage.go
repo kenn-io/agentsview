@@ -44,6 +44,11 @@ type UsageRequest struct {
 	Breakdowns        *bool  `json:"breakdowns,omitempty"`
 	BranchBreakdowns  *bool  `json:"branch_breakdowns,omitempty"`
 	SessionCounts     *bool  `json:"session_counts,omitempty"`
+	// SelectedGitBranch is a second branch include list, ANDed with
+	// GitBranch. The usage page sends its own branch selection here, apart
+	// from the shared branch filter, so the server can match the two after it
+	// resolves opaque project keys to the labels legacy values use.
+	SelectedGitBranch string `json:"selected_git_branch,omitempty"`
 	// ProjectLabels and ExcludeProjectLabels carry exact internal labels
 	// resolved from opaque keys. Unlike the public string fields, they are
 	// never parsed as comma-separated transport input.
@@ -63,7 +68,8 @@ func ResolveUsageProjectKeys(
 ) (UsageRequest, error) {
 	if req.ExcludeProjectKey == "" && req.ProjectKey == "" &&
 		!strings.Contains(req.GitBranch, "pl1:sha256:") &&
-		!strings.Contains(req.ExcludeGitBranch, "pl1:sha256:") {
+		!strings.Contains(req.ExcludeGitBranch, "pl1:sha256:") &&
+		!strings.Contains(req.SelectedGitBranch, "pl1:sha256:") {
 		return req, nil
 	}
 	byKey, err := usageProjectKeyCatalog(ctx, store)
@@ -103,6 +109,12 @@ func ResolveUsageProjectKeys(
 	}
 	req.ExcludeGitBranch, err = resolveUsageBranchProjectKeys(
 		req.ExcludeGitBranch, byKey,
+	)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	req.SelectedGitBranch, err = resolveUsageBranchProjectKeys(
+		req.SelectedGitBranch, byKey,
 	)
 	if err != nil {
 		return UsageRequest{}, err
@@ -249,8 +261,10 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		ProjectLabels: mergeResolvedProjectLabels(
 			req.Project, req.ProjectLabels,
 		),
-		Machine:          req.Machine,
-		GitBranch:        req.GitBranch,
+		Machine: req.Machine,
+		GitBranch: db.IntersectBranchFilterTokens(
+			req.GitBranch, req.SelectedGitBranch,
+		),
 		ExcludeGitBranch: req.ExcludeGitBranch,
 		ExcludeProject:   req.ExcludeProject,
 		ExcludeProjectLabels: mergeResolvedProjectLabels(

@@ -1111,10 +1111,10 @@ describe("UsageStore session filter params", () => {
     expect(usage.selectedGitBranch).toBe("main");
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
     expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ git_branch: staleBranch }),
+      expect.objectContaining({ selected_git_branch: staleBranch }),
     );
     expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ git_branch: "main" }),
+      expect.objectContaining({ selected_git_branch: "main" }),
     );
     expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
     expect(JSON.parse(storage.getItem("usage-filters") ?? "{}").selectedGitBranch).toBe("main");
@@ -1139,7 +1139,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.summary?.totals.totalCost).toEqual(testMoney(2));
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(summaryCalls + 2);
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: "main" }),
+      expect.objectContaining({ selected_git_branch: "main" }),
     );
   });
 
@@ -1160,7 +1160,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.selectedGitBranch).toBe(validBranch);
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: validBranch }),
+      expect.objectContaining({ selected_git_branch: validBranch }),
     );
   });
 
@@ -1184,7 +1184,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.selectedGitBranch).toBe("main");
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3);
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: "main" }),
+      expect.objectContaining({ selected_git_branch: "main" }),
     );
     expect(usage.summary).not.toBeNull();
   });
@@ -1198,50 +1198,30 @@ describe("UsageStore session filter params", () => {
 
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        selected_git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
       }),
     );
     expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        selected_git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
       }),
     );
   });
 
-  it("intersects plain local branch names with legacy sidebar tokens", async () => {
+  it("sends the sidebar branch filter and the local selection as separate params", async () => {
     const { usage } = await loadStore();
     const { sessions } = await import("./sessions.svelte.js");
 
-    sessions.filters.branch = "proj-amainproj-bdev";
-    usage.selectedGitBranch = "mainfeature";
-    await usage.fetchAll();
-
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: "proj-amain" }),
-    );
-  });
-
-  it("intersects the sidebar branch filter with the local selection", async () => {
-    const { usage } = await loadStore();
-    const { sessions } = await import("./sessions.svelte.js");
-    const tokenA = "proj-a\u001fmain";
-    const tokenB = "proj-b\u001fdev";
-
-    sessions.filters.branch = `${tokenA}\u001e${tokenB}`;
-    usage.selectedGitBranch = `${tokenB}\u001eproj-c\u001ffeat`;
-    await usage.fetchAll();
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: tokenB }),
-    );
-
-    // A stale local selection with no overlap stays active and
-    // sends a fail-closed branch token, so the charts show no data
-    // instead of ignoring the visible local selection.
+    sessions.filters.branch = "proj-a\u001fmain\u001eproj-b\u001fdev";
     usage.selectedGitBranch = "proj-c\u001ffeat";
     await usage.fetchAll();
+
+    // The server resolves project keys and intersects the two lists, so a
+    // selection with no overlap is not collapsed or dropped in the browser.
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        git_branch: "no_branch_match",
+        git_branch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        selected_git_branch: "proj-c\u001ffeat",
       }),
     );
   });
@@ -1257,7 +1237,7 @@ describe("UsageStore session filter params", () => {
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        git_branch: `main${tokenA}`,
+        selected_git_branch: `main\u001e${tokenA}`,
         project: "proj-a",
       }),
     );
@@ -1270,7 +1250,7 @@ describe("UsageStore session filter params", () => {
       expect.objectContaining({ project: "proj-c" }),
     );
     const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
-    expect(params?.git_branch).toBe("main");
+    expect(params?.selected_git_branch).toBe("main");
   });
 
   it("keeps a clicked branch matching the legacy sidebar token for its project", async () => {
@@ -1284,7 +1264,7 @@ describe("UsageStore session filter params", () => {
     usage.toggleBranch(clicked);
 
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: legacy }),
+      expect.objectContaining({ git_branch: legacy, selected_git_branch: legacy }),
     );
     expect(usage.isBranchSelected(clicked)).toBe(true);
     usage.cancelInFlightReads();
@@ -1296,37 +1276,27 @@ describe("UsageStore session filter params", () => {
     reloadedSessions.sessions.filters.branch = legacy;
     await reloaded.usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: legacy }),
+      expect.objectContaining({ git_branch: legacy, selected_git_branch: legacy }),
     );
   });
 
-  it("intersects a stored opaque branch key with the legacy sidebar token for its project", async () => {
+  // A path-like project has no label in usage rows, so the browser cannot
+  // tell which legacy sidebar token an opaque key stands for.
+  it("sends a stored opaque branch key beside a legacy sidebar token it cannot resolve", async () => {
     const { usage } = await loadStore();
     const { sessions } = await import("./sessions.svelte.js");
     const selected = "pl1:sha256:alpha\u001fmain";
-    sessions.filters.branch = "alpha\u001fmain";
+    sessions.filters.branch = "/repos/alpha\u001fmain";
     usage.selectedGitBranch = selected;
-    usage.summary = usageSummaryWithBranch();
 
     await usage.fetchAll();
 
     expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ git_branch: selected }),
+      expect.objectContaining({
+        git_branch: "/repos/alpha\u001fmain",
+        selected_git_branch: selected,
+      }),
     );
-  });
-
-  it("does not match a clicked branch to another project's legacy sidebar token", async () => {
-    const { usage } = await loadStore();
-    const { sessions } = await import("./sessions.svelte.js");
-    sessions.filters.branch = "beta\u001fmain";
-    usage.summary = usageSummaryWithBranch();
-
-    usage.toggleBranch("pl1:sha256:alpha\u001fmain");
-
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ git_branch: "\u001dno_branch_match" }),
-    );
-    usage.cancelInFlightReads();
   });
 
   it("preserves a legacy branch token when toggled by plain branch name", async () => {

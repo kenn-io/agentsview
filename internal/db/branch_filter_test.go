@@ -256,6 +256,33 @@ func TestSplitBranchFilterTokens(t *testing.T) {
 	}
 }
 
+func TestIntersectBranchFilterTokens(t *testing.T) {
+	tests := []struct {
+		name, left, right, want string
+	}{
+		{"empty left applies right", "", "main", "main"},
+		{"empty right applies left", "main\x1edev", "", "main\x1edev"},
+		{"plain names", "main\x1edev", "dev\x1efeature", "dev"},
+		{"plain name keeps the narrower pair", "main", "alpha\x1fmain", "alpha\x1fmain"},
+		{"pair keeps itself against a plain name", "alpha\x1fmain", "main", "alpha\x1fmain"},
+		{"same pair", "alpha\x1fmain", "alpha\x1fmain", "alpha\x1fmain"},
+		{"same branch in another project", "alpha\x1fmain", "beta\x1fmain", NoBranchMatchToken},
+		{
+			"plain name matches every project",
+			"main", "alpha\x1fmain\x1ebeta\x1fmain",
+			"alpha\x1fmain\x1ebeta\x1fmain",
+		},
+		{"no-branch token matches an empty pair", "\x1dno_branch", "alpha\x1f", "alpha\x1f"},
+		{"no overlap fails closed", "main", "dev", NoBranchMatchToken},
+		{"existing no-match stays closed", NoBranchMatchToken, "main", NoBranchMatchToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IntersectBranchFilterTokens(tt.left, tt.right))
+		})
+	}
+}
+
 func TestBranchFilterToken(t *testing.T) {
 	tok, err := BranchFilterToken("proj", "")
 	require.NoError(t, err)

@@ -432,11 +432,12 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 
 func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
 	t.Parallel()
-	var gitBranch, excludeGitBranch, branchBreakdowns string
+	var gitBranch, excludeGitBranch, selectedGitBranch, branchBreakdowns string
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			gitBranch = r.URL.Query().Get("git_branch")
 			excludeGitBranch = r.URL.Query().Get("exclude_git_branch")
+			selectedGitBranch = r.URL.Query().Get("selected_git_branch")
 			branchBreakdowns = r.URL.Query().Get("branch_breakdowns")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
@@ -446,15 +447,17 @@ func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
 	includeBranchBreakdowns := true
 
 	_, err := svc.UsageSummary(t.Context(), service.UsageRequest{
-		From:             "2024-06-01",
-		To:               "2024-06-02",
-		GitBranch:        "alpha\x1fmain",
-		ExcludeGitBranch: "alpha\x1fdev",
-		BranchBreakdowns: &includeBranchBreakdowns,
+		From:              "2024-06-01",
+		To:                "2024-06-02",
+		GitBranch:         "alpha\x1fmain",
+		ExcludeGitBranch:  "alpha\x1fdev",
+		SelectedGitBranch: "pl1:sha256:alpha\x1fmain",
+		BranchBreakdowns:  &includeBranchBreakdowns,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "alpha\x1fmain", gitBranch)
 	assert.Equal(t, "alpha\x1fdev", excludeGitBranch)
+	assert.Equal(t, "pl1:sha256:alpha\x1fmain", selectedGitBranch)
 	assert.Equal(t, "true", branchBreakdowns)
 }
 
@@ -750,6 +753,53 @@ func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.
 	require.Len(t, filtered.BranchTotals, 1)
 	assert.Equal(t, selected.ProjectKey, filtered.BranchTotals[0].ProjectKey)
 	assert.Equal(t, 20, filtered.Totals.InputTokens)
+}
+
+// The usage page names its branch selection by opaque project key, while an
+// older shared URL names the sidebar branch filter by raw project label. The
+// browser cannot see a path-like label, so only the server can match the two.
+func TestDirectBackend_UsageSummary_IntersectsSelectedBranchWithLegacyFilter(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCollidingBranchProjectFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	branchBreakdowns := true
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot:   true,
+		BranchBreakdowns: &branchBreakdowns,
+	}
+	summary, err := be.UsageSummary(t.Context(), base)
+	require.NoError(t, err)
+	var secondKey string
+	for _, branch := range summary.BranchTotals {
+		if branch.InputTokens == 20 {
+			secondKey = branch.ProjectKey
+		}
+	}
+	require.NotEmpty(t, secondKey)
+
+	for _, tc := range []struct {
+		name      string
+		sidebar   string
+		wantInput int
+	}{
+		{"legacy label of the same project", "/Users/example/two/private/repo\x1fmain", 20},
+		{"plain branch name", "main", 20},
+		{"legacy label of another project", "/Users/example/one/private/repo\x1fmain", 0},
+		{"another branch", "dev", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := base
+			req.GitBranch = tc.sidebar
+			req.SelectedGitBranch = db.EncodeBranchFilterToken(secondKey, "main")
+			got, err := be.UsageSummary(t.Context(), req)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInput, got.Totals.InputTokens)
+		})
+	}
 }
 
 func TestDirectBackend_UsageSummary_RejectsUnknownBranchProjectKey(t *testing.T) {

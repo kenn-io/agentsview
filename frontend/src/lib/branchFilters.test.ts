@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   NO_BRANCH_FILTER_TOKEN,
-  NO_BRANCH_MATCH_TOKEN,
   branchFilterValuesEqual,
   branchFilterToken,
   branchLabel,
   branchTokenLabel,
   branchPickerValues,
-  intersectBranchFilterValues,
   reconcileBranchFilterValues,
   scopeBranchFilterValues,
 } from "./branchFilters.js";
@@ -40,13 +38,6 @@ describe("branch filter compatibility", () => {
     expect(
       branchFilterValuesEqual(legacy, branchFilterToken("pl1:sha256:unknown", "main"), lookup),
     ).toBe(false);
-    expect(
-      intersectBranchFilterValues(
-        [branchFilterToken("pl1:sha256:alpha", "main")],
-        [legacy, branchFilterToken("beta", "main")],
-        lookup,
-      ),
-    ).toEqual([branchFilterToken("pl1:sha256:alpha", "main")]);
   });
 
   it("normalizes legacy picker values and preserves no-branch selections", () => {
@@ -57,38 +48,6 @@ describe("branch filter compatibility", () => {
         branchFilterToken("proj-a", ""),
       ]),
     ).toEqual(["main", NO_BRANCH_FILTER_TOKEN]);
-  });
-
-  it("intersects plain branch names with legacy project-pair tokens", () => {
-    expect(
-      intersectBranchFilterValues(
-        ["main", "dev"],
-        [branchFilterToken("proj-a", "main"), "feature"],
-      ),
-    ).toEqual([branchFilterToken("proj-a", "main")]);
-  });
-
-  it("does not intersect same-named legacy branches from different projects", () => {
-    expect(
-      intersectBranchFilterValues(
-        [branchFilterToken("proj-a", "main")],
-        [branchFilterToken("proj-b", "main")],
-      ),
-    ).toEqual([]);
-  });
-
-  it("preserves qualified identity regardless of intersection order", () => {
-    const qualified = branchFilterToken("proj-a", "main");
-    expect(intersectBranchFilterValues([qualified], ["main"])).toEqual([qualified]);
-    expect(intersectBranchFilterValues(["main"], [qualified])).toEqual([qualified]);
-  });
-
-  it("intersects a plain branch with every matching qualified branch", () => {
-    const first = branchFilterToken("proj-a", "main");
-    const second = branchFilterToken("proj-b", "main");
-
-    expect(intersectBranchFilterValues(["main"], [first, second])).toEqual([first, second]);
-    expect(intersectBranchFilterValues([first, second], ["main"])).toEqual([first, second]);
   });
 
   it("preserves existing legacy values while adding plain picker values", () => {
@@ -111,8 +70,6 @@ describe("branch filter compatibility", () => {
   it("uses sentinel values that cannot collide with legal Git branch names", () => {
     // oxlint-disable-next-line no-control-regex -- intentional: the sentinels must contain a control character
     expect(NO_BRANCH_FILTER_TOKEN).toMatch(/[\u0000-\u001f]/);
-    // oxlint-disable-next-line no-control-regex -- intentional: the sentinels must contain a control character
-    expect(NO_BRANCH_MATCH_TOKEN).toMatch(/[\u0000-\u001f]/);
     expect(
       branchPickerValues(["__agentsview_no_branch__", "__agentsview_no_branch_match__"]),
     ).toEqual(["__agentsview_no_branch__", "__agentsview_no_branch_match__"]);

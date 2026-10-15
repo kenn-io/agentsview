@@ -286,6 +286,20 @@ func TestUsageComparisonCopiesExcludeGitBranchFilterToPriorPeriod(t *testing.T) 
 	assert.Equal(t, branch, spy.filters[0].ExcludeGitBranch)
 }
 
+func TestUsageComparisonIntersectsSelectedGitBranch(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=3000000&git_branch=main"+
+			"&selected_git_branch="+url.QueryEscape("alpha\x1fmain\x1ealpha\x1fdev"))
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, "alpha\x1fmain", spy.filters[0].GitBranch)
+}
+
 func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)

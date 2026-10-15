@@ -40,6 +40,10 @@ export type GetApiV1UsagePairwiseComparisonParams = {
    */
   exclude_git_branch?: string;
   /**
+   * Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+   */
+  selected_git_branch?: string;
+  /**
    * Exclude a project
    */
   exclude_project?: string;

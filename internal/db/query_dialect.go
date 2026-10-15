@@ -1228,6 +1228,70 @@ func RewriteQualifiedBranchFilterProjects(
 	return strings.Join(parts, branchListSep), nil
 }
 
+// IntersectBranchFilterTokens ANDs two branch include lists. Two values match
+// when they name the same branch and do not name different projects; a value
+// without a project matches the branch in any project, and the
+// project-qualified value of a matching pair is kept because it is narrower.
+// Both lists must name projects the same way, so callers resolve opaque
+// project keys to labels first. An empty list applies no filter, and an empty
+// overlap returns NoBranchMatchToken so the query fails closed.
+func IntersectBranchFilterTokens(left, right string) string {
+	if left == "" {
+		return right
+	}
+	if right == "" {
+		return left
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for l := range strings.SplitSeq(left, branchListSep) {
+		for r := range strings.SplitSeq(right, branchListSep) {
+			value, ok := intersectBranchFilterValue(l, r)
+			if ok && !seen[value] {
+				seen[value] = true
+				out = append(out, value)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return NoBranchMatchToken
+	}
+	return strings.Join(out, branchListSep)
+}
+
+func intersectBranchFilterValue(left, right string) (string, bool) {
+	if left == "" || right == "" ||
+		left == NoBranchMatchToken || right == NoBranchMatchToken {
+		return "", false
+	}
+	leftProject, leftBranch := splitBranchFilterValue(left)
+	rightProject, rightBranch := splitBranchFilterValue(right)
+	if leftBranch != rightBranch {
+		return "", false
+	}
+	switch {
+	case leftProject != "" && rightProject != "":
+		return left, leftProject == rightProject
+	case rightProject != "":
+		return right, true
+	default:
+		return left, true
+	}
+}
+
+// splitBranchFilterValue returns the project and branch a filter value names.
+// The project is empty for plain branch names and the no-branch token.
+func splitBranchFilterValue(value string) (project, branch string) {
+	if value == NoBranchFilterToken {
+		return "", ""
+	}
+	project, branch, qualified := strings.Cut(value, branchFilterSep)
+	if !qualified {
+		return "", value
+	}
+	return project, branch
+}
+
 // BranchPairPredicate accepts current branch-name values and legacy
 // (project, branch) tokens. Plain branch names match across the separately
 // applied project filter; legacy tokens retain old shared URLs precisely.
