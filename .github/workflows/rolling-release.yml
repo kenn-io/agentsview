@@ -1,14 +1,17 @@
 name: Rolling Release
 
-# Build directly-usable Linux and Windows binaries on every push to main.
-# A manual run (workflow_dispatch) builds the current tip of main, for when a
-# push did not start a run. Manual runs on other branches fail before building.
+# Build directly-usable Linux and Windows binaries on every branch push.
+# A manual run (workflow_dispatch) builds the current tip of the chosen
+# branch, for when a push did not start a run.
 #
 # Each build is published as a permanent snapshot prerelease tagged
 # "build-YYYYMMDD-<sha8>", where the date is the commit's committer date in
 # UTC, so re-runs of a commit reuse its tag. A complete snapshot is never
-# modified. The rolling "latest" prerelease is then updated in place with
-# byte-identical copies of the snapshot's assets plus the installers.
+# modified, so a commit built on a branch and later fast-forwarded onto main
+# reuses its snapshot. Only builds of main then update the rolling "latest"
+# prerelease in place, with byte-identical copies of the snapshot's assets
+# plus the installers. Clients follow "latest", so a branch snapshot reaches
+# only someone who downloads it by its tag.
 #
 # Assets on both releases:
 #   agentsview-linux-amd64, agentsview-windows-amd64.exe, SHA256SUMS
@@ -21,21 +24,24 @@ name: Rolling Release
 # latest/<binary>.
 #
 # Job graph: metadata -> build-linux + build-windows -> snapshot -> latest
+# (main only)
 
 on:
   push:
+    # Branches only; tag pushes, including the ones this workflow creates,
+    # do not build.
     branches:
-      - main
+      - "**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# There is deliberately no workflow-level concurrency group. Every push to
-# main must build and get its own snapshot, even when newer pushes follow
-# quickly, so superseded runs are not cancelled. This spends more CI minutes
-# than cancelling them did. Only the update of "latest" is serialized; see
-# the latest job.
+# There is deliberately no workflow-level concurrency group. Every push must
+# build and get its own snapshot, even when newer pushes follow quickly, so
+# superseded runs are not cancelled. This spends more CI minutes than
+# cancelling them did. Only the update of "latest" is serialized; see the
+# latest job.
 
 jobs:
   metadata:
@@ -46,15 +52,6 @@ jobs:
       build_date: ${{ steps.meta.outputs.build_date }}
       subject: ${{ steps.meta.outputs.subject }}
     steps:
-      # A manual run can target any branch, and the latest job publishes a
-      # commit that diverged from latest, so only main may build.
-      - name: Require main
-        run: |
-          if [ "$GITHUB_REF" != refs/heads/main ]; then
-            echo "Rolling builds publish only from main, not $GITHUB_REF." >&2
-            exit 1
-          fi
-
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           # git describe needs the full history and tags.
@@ -354,7 +351,7 @@ jobs:
             absent)
               SUBJECT=$COMMIT_SUBJECT
               # shellcheck disable=SC2016 # Backticks are Markdown.
-              NOTES=$(printf 'Snapshot build of `%s`.\n\n> %s\n' "$GITHUB_SHA" "$SUBJECT")
+              NOTES=$(printf 'Snapshot build of `%s` from `%s`.\n\n> %s\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" "$SUBJECT")
               # gh keeps the release as a draft until every asset has
               # uploaded, so the snapshot never appears half-filled.
               gh release create "$BUILD_TAG" \
@@ -394,6 +391,9 @@ jobs:
 
   latest:
     needs: [metadata, snapshot]
+    # The guard below publishes a commit that diverged from latest, so
+    # builds of other branches must never reach it.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -403,7 +403,7 @@ jobs:
     # this job out of order, so the guard step below refuses to move
     # "latest" backwards. If an older commit's job replaces a newer one
     # while pending, "latest" stays one build behind until the next push
-    # or manual run.
+    # or manual run of main.
     concurrency:
       group: rolling-release-latest
       cancel-in-progress: false

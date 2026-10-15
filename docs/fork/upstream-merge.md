@@ -11,9 +11,10 @@ Claude 活分支选择、Codex rollback、会话关系树、input outline、roll
 - 每次合并只产生一个合并提交。它的 message 集中记录 fork 的每个功能是保留、重做
   还是丢弃，以及原因。
 - 先在单独的合并分支上完成合并和验证，再把 `main` fast-forward 到合并分支并推送。
-  推送 `main` 会立即发布 rolling release。fork 的 lint 和测试
-  （`fork-checks.yml`）只在 PR 上运行；想在发布前让 CI 跑一遍，可以先推送合并分支
-  并开 PR，CI 通过后再 fast-forward。
+  推送 `main` 会立即发布 rolling release。推送合并分支只构建一个 `build-*` 快照，
+  不更新 `latest`，可以先下载它的二进制测试；fast-forward 后，`main` 的构建会复用
+  这个快照。fork 的 lint 和测试（`fork-checks.yml`）只在 PR 上运行；想在发布前让
+  CI 跑一遍，可以先推送合并分支并开 PR，CI 通过后再 fast-forward。
 
 ## 步骤
 

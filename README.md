@@ -18,9 +18,7 @@ The latest release is **v0.44.0**. Check the
 ## Install
 
 These commands install the newest rolling build of this fork. A new rolling
-build is published on every push to `main`. If a push does not start a build, a
-maintainer can build the tip of `main` with
-`gh workflow run rolling-release.yml --ref main`. Replace `<owner>/<repo>` with this
+build is published on every push to `main`. Replace `<owner>/<repo>` with this
 repository, or copy the filled-in commands from the
 [rolling release notes](../../releases/tag/latest).
 
@@ -62,6 +60,21 @@ Every build stays available as a `build-YYYYMMDD-<commit>` entry on the
 `agentsview update` read the newest build's entry name from the rolling release
 and download everything from that entry, so a push in the middle of an install
 cannot mix two builds.
+
+Pushes to other branches build the same kind of entry, but only `main` updates
+the rolling release, so installs and updates never pick up a branch build. To
+try one, download its binary under another name, for example:
+
+```bash
+curl -fL -o agentsview-test \
+  https://github.com/<owner>/<repo>/releases/download/build-YYYYMMDD-<commit>/agentsview-linux-amd64
+chmod +x agentsview-test
+```
+
+Run it with a copy of your data directory, set through `AGENTSVIEW_DATA_DIR`,
+and another `--port`, so it leaves your installed daemon and archive alone. If
+a push does not start a build, a maintainer can build the tip of a branch with
+`gh workflow run rolling-release.yml --ref <branch>`.
 
 **Upstream stable release (macOS, Linux, Windows):**
 
