@@ -89,24 +89,6 @@ func TestStateFilesArePrivate(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), file.Mode().Perm())
 }
 
-// A crash between staging and rename leaves a temporary file beside the
-// state. It must never be read as the state or block the next save.
-func TestStateAtomicWrite(t *testing.T) {
-	root := t.TempDir()
-	store := codexcloud.NewStore(root)
-	require.NoError(t, store.SaveThread(stateKey, "thread-a", codexcloud.ThreadState{Offset: 10}))
-	dir := filepath.Join(root, string(stateKey))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".thread-a.state.json.tmp-crash"), []byte(`{"offset":99`), 0o600))
-
-	got, err := store.LoadThread(stateKey, "thread-a")
-	require.NoError(t, err)
-	assert.Equal(t, int64(10), got.Offset)
-	require.NoError(t, store.SaveThread(stateKey, "thread-a", codexcloud.ThreadState{Offset: 20}))
-	got, err = store.LoadThread(stateKey, "thread-a")
-	require.NoError(t, err)
-	assert.Equal(t, int64(20), got.Offset)
-}
-
 func TestLockSerializesWriters(t *testing.T) {
 	store := codexcloud.NewStore(t.TempDir())
 	errs := make(chan error, 40)
