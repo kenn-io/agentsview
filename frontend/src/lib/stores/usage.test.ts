@@ -3192,16 +3192,22 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("reports a failed summary after a selection change instead of keeping the old totals", async () => {
-    const { usage } = await loadStore();
-    await usage.fetchAll();
-    expect(usage.errors.summary).toBeNull();
-    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
-    usage.toggleSelection("project", "pl1:sha256:alpha");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.errors.summary).toBe("selection failed");
-    usage.cancelInFlightReads();
-  });
+  it.each([
+    ["project", "pl1:sha256:alpha"],
+    ["branch", "pl1:sha256:alpha\u001fmain"],
+  ] as const)(
+    "reports a failed summary after a %s selection change instead of keeping the old totals",
+    async (by, id) => {
+      const { usage } = await loadStore();
+      await usage.fetchAll();
+      expect(usage.errors.summary).toBeNull();
+      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
+      usage.toggleSelection(by, id);
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      expect(usage.errors.summary).toBe("selection failed");
+      usage.cancelInFlightReads();
+    },
+  );
 
   it("refetches the full window when a brush interrupts a selection refresh", async () => {
     const { usage } = await loadStore();
