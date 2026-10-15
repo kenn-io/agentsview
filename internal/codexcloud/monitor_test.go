@@ -612,6 +612,7 @@ func TestCompactedRecordsParseToTheSameUsage(t *testing.T) {
 	add("gpt-a", 300, 100)
 	add("gpt-a", 50, 50) // the counter went back down
 	add("gpt-a", 400, 100)
+	add("gpt-b", 450, 50) // covered by 500, and neither a peak nor its predecessor
 	add("gpt-b", 500, 100)
 	add("gpt-b", 600, 100)
 
@@ -633,9 +634,9 @@ func TestCompactedRecordsParseToTheSameUsage(t *testing.T) {
 	require.Equal(t, 900, wantPeak)
 
 	compacted := compactPending(slices.Clone(tokens))
-	// Nothing is dropped: gpt-b 500 is the record before its run's peak, kept so
-	// the peak stays priced as one call.
-	assert.Len(t, compacted, len(tokens))
+	// Only gpt-b 450 is dropped. gpt-b 500 stays as the record before its
+	// run's peak, so the peak stays priced as one call.
+	assert.Len(t, compacted, len(tokens)-1)
 	gotTokens, gotPeak := parse(compacted)
 
 	assert.Equal(t, wantTokens, gotTokens)
