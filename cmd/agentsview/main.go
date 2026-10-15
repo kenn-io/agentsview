@@ -534,7 +534,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
-	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger)
+	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
 	scheduler := poller.Start(ctx,
 		pricingRefreshJob(database, pricingRefreshRunner),
 		codexCloudSyncJob(codexCloudSync, idleTracker),

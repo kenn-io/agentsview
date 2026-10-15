@@ -53,8 +53,14 @@ type Monitor struct {
 	// Trigger queues one sync run after a joined turn completes, so its
 	// items are fetched soon. A trigger already queued counts as success.
 	Trigger func() error
-	Version string
-	Log     *log.Logger
+	// BeginWork takes a daemon work lease for each joined connection, so
+	// a daemon that exits when idle stays up while a join runs. done
+	// releases the lease once the join's last save is done. ok is false
+	// while the daemon shuts down, and the join is refused. A nil
+	// BeginWork takes no lease.
+	BeginWork func() (done func(), ok bool)
+	Version   string
+	Log       *log.Logger
 
 	// flushEvery and joinLimit default to the spec's values; tests shorten
 	// them.
@@ -105,6 +111,8 @@ type join struct {
 	handled  string
 	stop     chan struct{}
 	stopOnce sync.Once
+	// done releases the join's daemon work lease.
+	done func()
 }
 
 func (j *join) close() { j.stopOnce.Do(func() { close(j.stop) }) }
@@ -284,10 +292,11 @@ func (m *Monitor) release(key AccountKey, threadID string) {
 	delete(m.joins[key], threadID)
 }
 
-// start registers j and runs it. It refuses when the monitor closed,
-// capture stopped, or j's home began waiting for a fresh login while the
-// join was set up. ended records the home wait before it closes the
-// home's joins, so a join it misses is refused here.
+// start registers j and runs it, holding a daemon work lease until the
+// join leaves. It refuses when the monitor closed, capture stopped, j's
+// home began waiting for a fresh login while the join was set up, or the
+// daemon is shutting down. ended records the home wait before it closes
+// the home's joins, so a join it misses is refused here.
 func (m *Monitor) start(j *join) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -299,6 +308,14 @@ func (m *Monitor) start(j *join) bool {
 	if joins == nil {
 		return false
 	}
+	j.done = func() {}
+	if m.BeginWork != nil {
+		done, ok := m.BeginWork()
+		if !ok {
+			return false
+		}
+		j.done = done
+	}
 	joins[j.threadID] = j
 	m.wg.Go(func() { m.run(j) })
 	return true
@@ -307,6 +324,8 @@ func (m *Monitor) start(j *join) bool {
 // run reads one joined connection until its turn completes, the join
 // limit passes, the connection ends, or the monitor closes it.
 func (m *Monitor) run(j *join) {
+	// Deferred first, so it runs last: after the final save.
+	defer j.done()
 	defer m.updateLive(j.key)
 	defer m.release(j.key, j.threadID)
 	defer func() { _ = j.conn.Close() }() // leaving: the close error changes nothing
