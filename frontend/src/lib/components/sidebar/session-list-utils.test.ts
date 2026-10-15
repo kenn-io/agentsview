@@ -929,6 +929,30 @@ describe("selectPrimaryId", () => {
     expect(selectPrimaryId([sub, other], "missing")).toBe("sub");
   });
 
+  it("walks filtered-out ancestors to keep a fork's descendant off the main line", () => {
+    const root = makeSession({ id: "root", ended_at: "2025-01-01T00:00:00Z" });
+    const cont = makeSession({
+      id: "cont",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+      ended_at: "2025-01-02T00:00:00Z",
+    });
+    const fork = makeSession({
+      id: "fork",
+      parent_session_id: "root",
+      relationship_type: "fork",
+      ended_at: "2025-01-03T00:00:00Z",
+    });
+    const forkCont = makeSession({
+      id: "fork-cont",
+      parent_session_id: "fork",
+      relationship_type: "continuation",
+      ended_at: "2025-01-04T00:00:00Z",
+    });
+    // A starred-only filter kept cont and fork-cont but dropped the fork.
+    expect(selectPrimaryId([cont, forkCont], "root", [root, cont, fork, forkCont])).toBe("cont");
+  });
+
   it("uses started_at when ended_at is missing", () => {
     const a = makeSession({
       id: "a",

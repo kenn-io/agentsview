@@ -229,6 +229,11 @@ The latest published release is
 
 **Bug fixes**
 
+- The sidebar lists forked sessions under the session they branched from,
+  matching the session tree in the analysis panel. Before, the newest fork
+  took the original's place as the group's top row and the original appeared
+  as one of its children. Continuations still bring their newest session to
+  the top.
 - Oversized telemetry requests return HTTP 413.
 - Tool calls whose input is a raw script or patch, such as Codex `exec` and
   `apply_patch` calls, now show that input when expanded. Copy input, Copy

@@ -14,6 +14,7 @@ import { yokedDates } from "./yokedDates.svelte.js";
 import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
+import { selectPrimaryId } from "../utils/session-primary.js";
 
 type SidebarIndexParams = NonNullable<
   Parameters<typeof SessionsService.getApiV1SessionsSidebarIndex>[0]
@@ -1965,26 +1966,7 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
       });
     }
     group.firstMessage = group.sessions[0]?.first_message ?? null;
-
-    // For groups containing subagent children, the root session
-    // should always be the main entry (not the most recent child).
-    const hasSubagents = group.sessions.some((s) => s.relationship_type === "subagent");
-    if (hasSubagents) {
-      const rootIdx = group.sessions.findIndex((s) => s.id === group.key);
-      group.primarySessionId = rootIdx >= 0 ? group.sessions[rootIdx]!.id : group.sessions[0]!.id;
-    } else {
-      // For continuation chains, use the most recently active session.
-      let bestIdx = 0;
-      let bestKey = recencyKey(group.sessions[0]!);
-      for (let i = 1; i < group.sessions.length; i++) {
-        const k = recencyKey(group.sessions[i]!);
-        if (k > bestKey) {
-          bestKey = k;
-          bestIdx = i;
-        }
-      }
-      group.primarySessionId = group.sessions[bestIdx]!.id;
-    }
+    group.primarySessionId = selectPrimaryId(group.sessions, group.key);
   }
 
   const ordered = insertionOrder.filter((k) => !keysToRemove.has(k)).map((k) => groupMap.get(k)!);

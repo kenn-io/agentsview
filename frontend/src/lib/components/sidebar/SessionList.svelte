@@ -83,7 +83,7 @@
         );
         // Recompute primarySessionId so it points to a
         // session that survived the filter, using the same
-        // recency rule as buildSessionGroups.
+        // rule as buildSessionGroups.
         const primaryStillPresent = filtered.some(
           (s) => s.id === g.primarySessionId,
         );
@@ -95,7 +95,7 @@
           allSessions: g.sessions,
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
-            : selectPrimaryId(filtered, g.key),
+            : selectPrimaryId(filtered, g.key, g.sessions),
         };
       })
       .filter((g) => g.sessions.length > 0);

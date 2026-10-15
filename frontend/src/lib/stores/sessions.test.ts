@@ -3305,6 +3305,64 @@ describe("buildSessionGroups", () => {
     expect(groups[0]!.primarySessionId).toBe("s2");
   });
 
+  // Each row: [id, parent, relationship, ended_at]. Started times follow
+  // list order so the group sorts in the same order.
+  type ForkRow = [string, string | null, string | null, string];
+  it.each<{ name: string; rows: ForkRow[]; primary: string }>([
+    {
+      name: "newer forks do not replace the session they branched from",
+      rows: [
+        ["root", null, null, "2024-01-01T05:00:00Z"],
+        ["fork-a", "root", "fork", "2024-01-02T00:00:00Z"],
+        ["fork-b", "root", "fork", "2024-01-03T00:00:00Z"],
+        ["fork-c", "root", "fork", "2024-01-04T00:00:00Z"],
+      ],
+      primary: "root",
+    },
+    {
+      name: "a continuation on the main line beats a newer fork",
+      rows: [
+        ["root", null, null, "2024-01-01T00:00:00Z"],
+        ["cont", "root", "continuation", "2024-01-02T00:00:00Z"],
+        ["fork", "root", "fork", "2024-01-03T00:00:00Z"],
+      ],
+      primary: "cont",
+    },
+    {
+      name: "continuations of a fork stay off the main line",
+      rows: [
+        ["root", null, null, "2024-01-01T00:00:00Z"],
+        ["fork", "root", "fork", "2024-01-02T00:00:00Z"],
+        ["fork-cont", "fork", "continuation", "2024-01-04T00:00:00Z"],
+      ],
+      primary: "root",
+    },
+    {
+      name: "a fork whose parent is not loaded heads its own main line",
+      rows: [
+        ["orphan-fork", "unloaded", "fork", "2024-01-01T00:00:00Z"],
+        ["orphan-cont", "orphan-fork", "continuation", "2024-01-02T00:00:00Z"],
+        ["nested-fork", "orphan-fork", "fork", "2024-01-05T00:00:00Z"],
+      ],
+      primary: "orphan-cont",
+    },
+  ])("$name", ({ rows, primary }) => {
+    const sessions = rows.map(([id, parent, relationship, ended], i) =>
+      makeSession({
+        id,
+        project: "proj",
+        parent_session_id: parent ?? undefined,
+        relationship_type: relationship ?? undefined,
+        started_at: `2024-01-01T0${i}:00:00Z`,
+        ended_at: ended,
+      }),
+    );
+
+    const groups = buildSessionGroups(sessions);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.primarySessionId).toBe(primary);
+  });
+
   it("sorts sessions within group by startedAt asc", () => {
     const sessions = [
       makeSession({

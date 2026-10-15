@@ -570,6 +570,102 @@ describe("SessionList visible hydration", () => {
     expect(document.body.textContent).not.toContain("Unstarred");
   });
 
+  it("lists forks under the session they branched from", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "root",
+        display_name: "Fork root",
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: "2024-01-01T02:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "fork-a",
+        parent_session_id: "root",
+        relationship_type: "fork",
+        display_name: "Fork A",
+        started_at: "2024-01-01T03:00:00Z",
+        ended_at: "2024-01-01T04:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "fork-b",
+        parent_session_id: "root",
+        relationship_type: "fork",
+        display_name: "Fork B",
+        started_at: "2024-01-01T05:00:00Z",
+        ended_at: "2024-01-01T06:00:00Z",
+        is_index_only: true,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    // The collapsed group shows only its primary row.
+    expect(document.body.textContent).toContain("Fork root");
+    expect(document.body.textContent).not.toContain("Fork B");
+  });
+
+  it("keeps a starred fork's descendant off the main line", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "root",
+        display_name: "Root",
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: "2024-01-01T01:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "cont",
+        parent_session_id: "root",
+        relationship_type: "continuation",
+        display_name: "Main continuation",
+        started_at: "2024-01-01T02:00:00Z",
+        ended_at: "2024-01-01T03:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "fork",
+        parent_session_id: "root",
+        relationship_type: "fork",
+        display_name: "Branch",
+        started_at: "2024-01-01T04:00:00Z",
+        ended_at: "2024-01-01T05:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "fork-cont",
+        parent_session_id: "fork",
+        relationship_type: "continuation",
+        display_name: "Branch continuation",
+        started_at: "2024-01-01T06:00:00Z",
+        ended_at: "2024-01-01T07:00:00Z",
+        is_index_only: true,
+      }),
+      // The group's primary; it is not starred, so the filter picks again.
+      makeSession({
+        id: "latest",
+        parent_session_id: "cont",
+        relationship_type: "continuation",
+        display_name: "Latest continuation",
+        started_at: "2024-01-01T08:00:00Z",
+        ended_at: "2024-01-01T09:00:00Z",
+        is_index_only: true,
+      }),
+    ];
+    starred.filterOnly = true;
+    starred.ids = new Set(["cont", "fork-cont"]);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("Main continuation");
+    expect(document.body.textContent).not.toContain("Branch continuation");
+  });
+
   it("reloads the sidebar when starred-only is toggled", async () => {
     const load = vi.spyOn(sessions, "load").mockResolvedValue(undefined);
 
