@@ -186,5 +186,7 @@ func TestFailedListRebuildIsRetried(t *testing.T) {
 	kept, err := os.ReadFile(path + ".corrupt")
 	require.NoError(t, err)
 	assert.Equal(t, "{garbage", string(kept), "the damaged bytes are kept")
-	assert.Equal(t, []string{"c", "gc"}, descendants(t, s, "p"), "the rebuilt list is saved")
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.JSONEq(t, `["c","gc"]`, string(saved), "the rebuilt list is saved")
 }
