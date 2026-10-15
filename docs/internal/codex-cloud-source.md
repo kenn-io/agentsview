@@ -179,7 +179,8 @@ State lives beside the mirror files, outside SQLite, written atomically:
 - `<threadId>.state.json` per thread: the stored `updatedAt`, resume point,
   verified mirror offset, resolved parent, per-turn status and first-seen
   times, record digests for dedup, `createdAt`, the last plan usage record's
-  digest and kind, and the usage root the thread counts under.
+  digest and kind, the newest plan usage row and when it was fetched, and the
+  usage root the thread counts under.
 - `<rootId>.descendants.json` per usage root: its known descendants.
 - `<parentId>.waiting.json` per unmirrored parent: children waiting for it.
 - `account.json` per account: listing watermarks, waits, plan usage pauses, and
@@ -196,10 +197,23 @@ Lost state is recoverable. A state file that does not decode is moved to
 leaves offset zero, so the next append treats every complete frame as kept and
 rebuilds the digests from it. A mirror file that is missing or shorter than its
 stored offset resets the thread's resume point, so the thread is fetched in full
-again. A missing or corrupt `account.json` with thread files still present
-rebuilds the plan usage queue from the thread files: every unsettled root
-becomes pending again with its stored change time, so nothing is fetched again
-and old roots settle on their first answer.
+again.
+
+A missing or corrupt `account.json` with thread files still present makes
+AgentsView rebuild the plan usage queue from the thread files. The queue is the
+set of pending and refresh roots described in Scheduling; a usage root is the
+thread a group of sub-agent threads counts toward (see Usage roots). The rebuild
+reads only local files and fetches nothing. For each root:
+
+- A root whose newest plan usage record settled it after its group's newest
+  change stays settled.
+- A root whose newest row is complete and was fetched after that change goes
+  back on the refresh schedule.
+- Every other root is pending again, keeping its row if it has one.
+
+Each root keeps its group's stored change time, so a root that changed more than
+7 days ago settles on its first answer. A root whose files cannot be read is
+logged and left out until its chat changes again.
 
 ## Incremental sync
 
@@ -355,17 +369,20 @@ after 6 hours, on a refresh request, or when live capture turns off.
 
 Each joined thread holds a daemon work lease until its final save, so a detached
 daemon does not exit on idle while it is listening in, for up to the 6-hour join
-limit. A daemon that is shutting down refuses new joins.
+limit. A daemon that is shutting down does not start listening in on new chats.
 
 Records are buffered and appended at most once a minute, on turn completion, and
 on leaving. Totals are cumulative, so a crash loses only the buffer and the next
 update recovers the counts. If saving fails, records wait in memory and the
-status line warns. Past 256 waiting records a thread's queue is compacted to the
-records that still carry information, about three per turn. Compaction keeps the
-record before each run's peak, so the peak call is still priced as one request.
-Other calls in the run are merged and priced at base rates, so during a save
-outage a long turn's long-context calls other than its peak are underpriced;
-this keeps the queue bounded. A restart loses them.
+status line warns. Past 256 waiting records, compaction shrinks a thread's queue
+to the records that still carry information, about three per turn, which keeps
+the queue bounded. A run is a stretch of consecutive token records in one join,
+turn, and model whose totals only grow. Compaction drops most of a run but keeps
+its peak (the record with the largest last-call context) and the record before
+it, so the peak call is still priced as one request. The other calls in the run
+merge into one increase that is priced at base rates. During a save outage, a
+long turn's long-context calls other than its peak are therefore underpriced. A
+restart loses the waiting records.
 
 ### From totals to usage events
 
@@ -436,10 +453,11 @@ or a refresh request.
   of one day after the row's `data_as_of` and one day after its last attempt.
   Seven days after the root's last change it leaves the refresh set without
   another request, and its last row stays as it is.
-- **Change time.** A root's last change is the newest change of a thread in its
-  group: the later of its listing `updatedAt` and its last saved progress. A
-  refetch that finds nothing new does not move it, so a finished thread the
-  listing still shows as `active` keeps its schedule.
+- **Change time.** A root's last change is the newest change among the threads
+  in its group. A thread's change is the later of its listing `updatedAt` and
+  the last time a fetch saved new items for it, including items recovered
+  after a crash. A refetch that finds nothing new does not move it, so a
+  finished thread the listing still shows as `active` keeps its schedule.
 - **Settling.** Usage can change for 7 days after a root's last change. A
   pending root answered after that settles: a `partial` or `unavailable` row
   is stored as final; a root left out stores its last row again as final, or
