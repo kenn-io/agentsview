@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/codexcloud/codexcloudtest"
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 )
 
 type listingRow struct {
@@ -209,25 +210,43 @@ func TestUnchangedAccountOneCallPerListing(t *testing.T) {
 }
 
 // Each listing keeps its own watermark, so a newer archived thread never
-// hides an older update in the active listing.
+// hides an older update in the active listing. With one shared watermark
+// at the archived listing's newest, the active walk would stop after its
+// first page, whose thread is older than that, and miss the update.
 func TestActiveUpdateFoundWhileArchivedIsNewer(t *testing.T) {
-	host := codexcloudtest.NewHost(t)
-	servePages(host, map[ListingID][][]listingRow{
-		ListDefaultActive:   {{{"active-a", 200, "idle"}, {"active-b", 100, "idle"}}},
-		ListDefaultArchived: {{{"archived-a", 500, "idle"}}},
+	env := newPassEnv(t)
+	activeMark, archivedMark := ago(5*time.Hour), ago(time.Hour)
+	unchanged, updated := ago(2*time.Hour), ago(4*time.Hour)
+	servePages(env.host, map[ListingID][][]listingRow{
+		ListDefaultActive: {
+			{{"unchanged", unchanged, "idle"}},
+			{{"updated", updated, "idle"}},
+		},
+		ListDefaultArchived: {{{"archived", archivedMark, "idle"}}},
 	})
-	conn := listConn(t, host)
-	stored := map[string]int64{"active-b": 100, "archived-a": 500}
-	lookup := func(id string) (int64, bool, error) { v, ok := stored[id]; return v, ok, nil }
-	watermarks := map[ListingID]int64{ListDefaultActive: 100, ListDefaultArchived: 500}
+	env.threads.Set(finishedThread("updated", updated, message("m", "new")))
+	store := env.syncer.Store
+	require.NoError(t, store.SaveThread(passKey, "unchanged", ThreadState{UpdatedAt: unchanged}))
+	require.NoError(t, store.SaveThread(passKey, "archived", ThreadState{UpdatedAt: archivedMark}))
+	require.NoError(t, store.SaveThread(passKey, "updated", ThreadState{UpdatedAt: activeMark}))
+	backfilled := map[ListingID]bool{}
+	for _, id := range Listings {
+		backfilled[id] = true
+	}
+	require.NoError(t, store.SaveAccount(passKey, AccountState{
+		Watermarks: map[ListingID]int64{ListDefaultActive: activeMark, ListDefaultArchived: archivedMark},
+		Backfilled: backfilled,
+	}))
 
-	active, err := listChanged(t.Context(), conn, ListDefaultActive, watermarks[ListDefaultActive], lookup)
-	require.NoError(t, err)
-	archived, err := listChanged(t.Context(), conn, ListDefaultArchived, watermarks[ListDefaultArchived], lookup)
-	require.NoError(t, err)
+	env.run(t)
 
-	assert.Equal(t, []string{"active-a"}, changedIDs(active.Changed))
-	assert.Empty(t, archived.Changed)
+	assert.Equal(t, []string{"updated"}, env.fetchedThreads(0))
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "updated"))
+	require.NoError(t, err)
+	assert.Contains(t, recordedItemIDs(records), "m")
+	watermarks := env.account(t).Watermarks
+	assert.Equal(t, unchanged, watermarks[ListDefaultActive], "the active listing saves its own newest")
+	assert.Equal(t, archivedMark, watermarks[ListDefaultArchived])
 }
 
 func TestSelectionUnionOnce(t *testing.T) {
