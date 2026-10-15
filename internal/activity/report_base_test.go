@@ -145,6 +145,8 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 			require.ErrorIs(t, err, failure)
 			if stage == "candidates" {
 				require.EqualError(t, err, "aggregating example activity report: read failed")
+			} else {
+				require.EqualError(t, err, "read failed")
 			}
 			assert.False(t, done)
 			assert.Equal(t, Progress{}, completion)

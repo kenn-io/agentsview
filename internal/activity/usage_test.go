@@ -17,9 +17,13 @@ func mustStart(t *testing.T, s string) time.Time {
 	return ts.UTC()
 }
 
-func TestUsageSourceUUIDDedupAndRangeAggregation(t *testing.T) {
+func TestApplyUsageFiltersRangeBeforeSourceUUIDDedup(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{
+		{
+			SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
+			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+		},
 		{
 			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
 			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
@@ -28,17 +32,13 @@ func TestUsageSourceUUIDDedupAndRangeAggregation(t *testing.T) {
 			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:00:01Z",
 			InputTokens: 1000, OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
 		},
-		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
-			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out",
-		},
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
-	applyUsage(&r, p, windows, start, end, usage, nil)
+	require.NoError(t, applyUsage(&r, p, windows, start, end, usage, nil))
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
 	// A nil automated set classifies every session as interactive.
