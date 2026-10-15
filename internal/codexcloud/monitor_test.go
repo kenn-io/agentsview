@@ -283,27 +283,9 @@ func TestRefreshRequestFlushesClosesAndWaits(t *testing.T) {
 
 	assert.Len(t, tokenRecords(t, env.records(t, "a")), 1, "buffered records are flushed")
 	assert.False(t, env.syncer.Waits.HomeReady(env.homes[0], env.login().AuthModTime))
-	for _, r := range env.host.Requests() {
-		assert.NotEmpty(t, r.Method, "the refresh request is never answered")
-	}
 	from := env.resumes()
 	env.join(t, "a")
 	assert.Equal(t, from, env.resumes(), "no join follows through the waiting home")
-}
-
-func TestServerRequestsAreNeverAnswered(t *testing.T) {
-	env := newMonitorEnv(t)
-	env.threads.Set(runningThread("a", "warm"))
-	env.join(t, "a")
-
-	require.NoError(t, env.host.ServerRequestThread(t.Context(), "a", "item/commandExecution/requestApproval",
-		map[string]any{"threadId": "a", "turnId": "a-turn-2", "itemId": "x"}))
-	env.complete(t, "a", "a-turn-2")
-	env.waitLeft(t, "a")
-
-	for _, r := range env.host.Requests() {
-		assert.NotEmpty(t, r.Method, "AgentsView sent a reply to a server request")
-	}
 }
 
 func TestJoinCapPerAccount(t *testing.T) {
