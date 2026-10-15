@@ -272,47 +272,6 @@ func TestRestoreToolCallResultContent(t *testing.T) {
 			want: "",
 		},
 		{
-			// A later event deliberately withheld (blank content, a kept
-			// length) is not an empty timing event; refilling from the
-			// earlier real-content event would silently undo the
-			// withholding.
-			name: "withheld later event never refills from an earlier one",
-			call: ToolCall{
-				ResultContentLength: 22,
-				ResultEvents: []ToolResultEvent{
-					{Content: "earlier real content"},
-					{Content: "", ContentLength: 22, SummaryParticipates: new(true)},
-				},
-			},
-			want: "",
-		},
-		{
-			name: "an earlier withheld event never blocks a later, genuine dedup",
-			call: ToolCall{
-				ResultContentLength: len("later real content"),
-				ResultEvents: []ToolResultEvent{
-					{Content: "", ContentLength: 11, SummaryParticipates: new(true)},
-					{Content: "later real content"},
-				},
-			},
-			want: "later real content",
-		},
-		{
-			// roborev's exact repro, at the refill layer: a withheld
-			// correction trailed by a non-participating empty event must
-			// still never refill from the earlier real text.
-			name: "withheld correction with a trailing empty event never refills",
-			call: ToolCall{
-				ResultContentLength: 22,
-				ResultEvents: []ToolResultEvent{
-					{Content: "earlier real content"},
-					{Content: "", ContentLength: 22, SummaryParticipates: new(true)},
-					{Content: ""},
-				},
-			},
-			want: "",
-		},
-		{
 			name: "multiple events never refill",
 			call: ToolCall{
 				ResultContentLength: 5,

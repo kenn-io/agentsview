@@ -146,9 +146,16 @@ one archived event whose `tool_use_id`, source, and timestamp all match —
 never by array position, so a dedup collapse or a retry/branch reorder can
 never pair the wrong occurrence; no unique match leaves the event untouched,
 and a later, unflagged occurrence of the same `tool_use_id` is never
-overwritten. When the archive held real text, that text, its length, and its
-raw digest are restored; when a blocked category archived only a length, only
-the length is restored and the text stays blank.
+overwritten. Restoration only happens when the archive held real text; that
+text, its length, and its raw digest are restored. When the archive held
+only a length without text (the `transcripts`/`usage` archive-content
+policies, or a blocked category), the event is left alone: "blank content,
+kept length" already means something else to every reader of
+`tool_result_events` (a deduped summary, re-derived from its one
+content-bearing event), and restoring a bare length would reproduce that
+same shape for an unrelated reason with no way to tell the two apart later.
+Accepted limit: once such an event's side file ages out, its length cannot
+be recovered on a later reparse; it reads back as 0.
 
 This is the same provider-history dispatcher every other agent's archive
 preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`

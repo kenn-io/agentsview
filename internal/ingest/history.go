@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"bytes"
 	"context"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -202,41 +201,28 @@ func reconcileClaudePersistedToolResults(
 	return result, ctx.Err()
 }
 
-// restoreClaudeToolResultEvent writes archived's content onto event when
-// archived held real text, or only its length (clearing event's own
-// placeholder content first) when archived held a length without text, so a
-// text-dropping archive policy's own later blanking can't disagree with what
-// is restored. It reports whether anything changed.
+// restoreClaudeToolResultEvent writes archived's content onto event when the
+// archive held real text. When the archive held only a length without text
+// (an ArchiveContentTranscripts/ArchiveContentUsage policy, or a blocked
+// category), event is left alone: restoring a bare length would reproduce
+// the same "blank content, kept length" shape the read side already uses to
+// mean a deduped summary, and there is no way to tell the two apart later.
+// Accepted limit: once the side file for such an event ages out, its length
+// cannot be recovered on a later reparse; it reads back as 0.
 func restoreClaudeToolResultEvent(
 	event *db.ToolResultEvent, archived db.ToolResultEvent,
 ) bool {
-	if archived.Content != "" {
-		if event.Content == archived.Content &&
-			event.ContentLength == archived.ContentLength {
-			return false
-		}
-		event.Content = archived.Content
-		event.ContentLength = archived.ContentLength
-		event.RawContentDigest = archived.RawContentDigest
-		return true
-	}
-	if archived.ContentLength <= 0 {
+	if archived.Content == "" {
 		return false
 	}
-	participatesBefore := event.SummaryParticipates != nil && *event.SummaryParticipates
-	changed := event.Content != "" || event.ContentLength != archived.ContentLength ||
-		!bytes.Equal(event.RawContentDigest, archived.RawContentDigest) ||
-		!participatesBefore
-	event.Content = ""
+	if event.Content == archived.Content &&
+		event.ContentLength == archived.ContentLength {
+		return false
+	}
+	event.Content = archived.Content
 	event.ContentLength = archived.ContentLength
 	event.RawContentDigest = archived.RawContentDigest
-	// Mark this event as the authoritative latest state explicitly, even
-	// though it carries no text: every consumer that decides which event
-	// drives a call's summary checks this field, not the shape of Content,
-	// so a withheld correction is never mistaken for an ordinary empty
-	// event or confused with an unrelated event's own dedup eligibility.
-	event.SummaryParticipates = new(true)
-	return changed
+	return true
 }
 
 // flaggedPersistedToolResultIdentities returns the identity of every

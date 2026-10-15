@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"context"
-	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -97,13 +96,13 @@ func PairToolResultEventSummariesContext(
 			if len(call.ResultEvents) == 0 {
 				continue
 			}
-			summary, length, err := SummarizeToolResultEventsContext(
+			summary, err := SummarizeToolResultEventsContext(
 				ctx, call.ResultEvents,
 			)
 			if err != nil {
 				return err
 			}
-			call.ResultContentLength = length
+			call.ResultContentLength = len(summary)
 			if blocked[call.Category] {
 				call.ResultContent = ""
 				for k := range call.ResultEvents {
@@ -118,23 +117,12 @@ func PairToolResultEventSummariesContext(
 }
 
 // SummarizeToolResultEventsContext returns the latest content per agent
-// while preserving first-seen agent order and the last anonymous update, and
-// the length that content drives. Walking backward and skipping any event
-// that doesn't participate (db.ToolResultEventParticipates), the first
-// participating event found decides: when it has real text, the
-// per-agent/anonymous logic below picks the summary as usual; when it is a
-// deliberately withheld correction (participates, but blank, with a kept
-// ContentLength), the summary is blank and its length is that event's
-// ContentLength, even if an earlier event had real text. A trailing event
-// that never participated (an ordinary empty or timing update) is skipped
-// rather than treated as an authoritative correction. This is the one place
-// that decides which event drives a call's summary and length; callers
-// never derive either independently.
+// while preserving first-seen agent order and the last anonymous update.
 func SummarizeToolResultEventsContext(
 	ctx context.Context, events []db.ToolResultEvent,
-) (string, int, error) {
+) (string, error) {
 	if len(events) == 0 {
-		return "", 0, ctx.Err()
+		return "", ctx.Err()
 	}
 	type agentSummary struct {
 		content string
@@ -145,7 +133,7 @@ func SummarizeToolResultEventsContext(
 	allHaveAgentID := true
 	for _, event := range events {
 		if err := ctx.Err(); err != nil {
-			return "", 0, err
+			return "", err
 		}
 		if strings.TrimSpace(event.Content) == "" {
 			continue
@@ -160,18 +148,6 @@ func SummarizeToolResultEventsContext(
 			orderedAgents = append(orderedAgents, agentID)
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
-	}
-	for _, event := range slices.Backward(events) {
-		if err := ctx.Err(); err != nil {
-			return "", 0, err
-		}
-		if !db.ToolResultEventParticipates(event) {
-			continue
-		}
-		if event.Content == "" {
-			return "", event.ContentLength, ctx.Err()
-		}
-		break
 	}
 	var summary string
 	switch {
@@ -192,5 +168,5 @@ func SummarizeToolResultEventsContext(
 		}
 		summary = strings.Join(parts, "\n\n")
 	}
-	return summary, len(summary), ctx.Err()
+	return summary, ctx.Err()
 }
