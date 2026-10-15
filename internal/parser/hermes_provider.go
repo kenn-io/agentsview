@@ -1851,8 +1851,9 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 		Size:    stateInfo.Size(),
 		MTimeNS: stateInfo.ModTime().UnixNano(),
 	}
+	root := filepath.Dir(stateDB)
 	h := sha256.New()
-	if err := addHermesFingerprintPart(h, "state", stateDB, stateInfo); err != nil {
+	if err := addHermesFingerprintPart(h, root, "state", stateDB, stateInfo); err != nil {
 		return SourceFingerprint{}, err
 	}
 	walPath := stateDB + "-wal"
@@ -1870,7 +1871,7 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 			if mtime := walInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
 				fingerprint.MTimeNS = mtime
 			}
-			if err := addHermesFingerprintPart(h, "wal", walPath, walInfo); err != nil {
+			if err := addHermesFingerprintPart(h, root, "wal", walPath, walInfo); err != nil {
 				return SourceFingerprint{}, err
 			}
 		}
@@ -1887,7 +1888,7 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 		if mtime := info.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
 			fingerprint.MTimeNS = mtime
 		}
-		if err := addHermesFingerprintPart(h, "transcript", file.Path, info); err != nil {
+		if err := addHermesFingerprintPart(h, root, "transcript", file.Path, info); err != nil {
 			return SourceFingerprint{}, err
 		}
 	}
@@ -1959,6 +1960,7 @@ func hermesStateMemberFingerprintFinish(
 	if err == nil && SQLiteWALInfoHasFrames(walInfo) {
 		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
+	root := filepath.Dir(src.StateDB)
 	for _, path := range candidatePaths {
 		candidateInfo, statErr := os.Stat(path)
 		if statErr != nil {
@@ -1972,7 +1974,11 @@ func hermesStateMemberFingerprintFinish(
 			// candidate later becoming readable (or disappearing for
 			// good) still invalidates this fingerprint.
 			log.Printf("hermes: candidate transcript %s unreadable: %v", path, statErr)
-			if _, err := fmt.Fprintf(h, "candidate-transcript\x00%s\x00unreadable\x00", path); err != nil {
+			name, err := hermesFingerprintName(root, path)
+			if err != nil {
+				return SourceFingerprint{}, err
+			}
+			if _, err := fmt.Fprintf(h, "candidate-transcript\x00%s\x00unreadable\x00", name); err != nil {
 				return SourceFingerprint{}, err
 			}
 			continue
@@ -1982,7 +1988,7 @@ func hermesStateMemberFingerprintFinish(
 			fingerprint.MTimeNS, candidateInfo.ModTime().UnixNano(),
 		)
 		if err := addHermesFingerprintPart(
-			h, "candidate-transcript", path, candidateInfo,
+			h, root, "candidate-transcript", path, candidateInfo,
 		); err != nil {
 			// Stat succeeded but the read failed (e.g. permission denied
 			// between stat and open). Same tolerance as above: mark it
@@ -2233,17 +2239,37 @@ func hermesArchiveTranscriptFiles(sessionsDir string) []string {
 	return paths
 }
 
+// hermesFingerprintName names a file by its slash-separated path under the
+// Hermes root, the folder holding state.db and sessions/. Fingerprints hash
+// this name instead of the absolute path so the same files extracted under a
+// different local folder, as legacy HTTP remote imports do on every import,
+// keep the same fingerprint.
+func hermesFingerprintName(root, path string) (string, error) {
+	name, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", fmt.Errorf("name %s under hermes root %s: %w", path, root, err)
+	}
+	return filepath.ToSlash(name), nil
+}
+
+// addHermesFingerprintPart hashes one file's name under root, size, mtime,
+// and contents. The file is read from its absolute path.
 func addHermesFingerprintPart(
 	h hash.Hash,
+	root string,
 	label string,
 	path string,
 	info os.FileInfo,
 ) error {
+	name, err := hermesFingerprintName(root, path)
+	if err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(
 		h,
 		"%s\x00%s\x00%d\x00%d\x00",
 		label,
-		path,
+		name,
 		info.Size(),
 		info.ModTime().UnixNano(),
 	); err != nil {

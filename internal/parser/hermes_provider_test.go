@@ -615,6 +615,86 @@ func TestHermesStateMemberFingerprintIncludesSelectedTranscriptMetadata(t *testi
 	assert.Equal(t, transcriptInfo.ModTime().UnixNano(), fingerprint.MTimeNS)
 }
 
+// TestHermesFingerprintsIgnoreTheLocalFolder pins fingerprints to the files
+// under the Hermes root, not to where that root sits on disk. Legacy HTTP
+// remote imports unpack every archive into a fresh folder, so a folder-bound
+// fingerprint would resync identical sessions on every import. Renaming a
+// file or changing its bytes must still change the fingerprint.
+func TestHermesFingerprintsIgnoreTheLocalFolder(t *testing.T) {
+	seed := t.TempDir()
+	createHermesStateDB(t, seed)
+	stateBytes, err := os.ReadFile(filepath.Join(seed, "state.db"))
+	require.NoError(t, err)
+	mtime := time.Date(2026, 5, 14, 14, 0, 0, 0, time.UTC)
+	transcript := hermesProviderJSONFixture("transcript question")
+	writeRoot := func(transcriptName, content string) string {
+		t.Helper()
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
+		files := map[string]string{
+			filepath.Join(root, "state.db"):                 string(stateBytes),
+			filepath.Join(root, "sessions", transcriptName): content,
+		}
+		for path, content := range files {
+			writeSourceFile(t, path, content)
+			require.NoError(t, os.Chtimes(path, mtime, mtime))
+		}
+		return root
+	}
+	archiveHash := func(root string) string {
+		t.Helper()
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		source, found, err := provider.(ReconciliationSourceResolver).SourceForReconciliation(
+			t.Context(), filepath.Join(root, "state.db"), "",
+		)
+		require.NoError(t, err)
+		require.True(t, found)
+		fp, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		return fp.Hash
+	}
+	// memberHashes returns the child member's hash with its transcript
+	// present, then again after the transcript vanishes while a reconciliation
+	// cache still lists it, which hashes the unreadable-candidate marker.
+	memberHashes := func(root string) (string, string) {
+		t.Helper()
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "child"})
+		require.NoError(t, err)
+		require.True(t, found)
+		ctx, cleanup, err := WithReconciliationCache(t.Context())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, cleanup()) }()
+		present, err := provider.Fingerprint(ctx, source)
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(filepath.Join(root, "sessions", "session_child.json")))
+		vanished, err := provider.Fingerprint(ctx, source)
+		require.NoError(t, err)
+		require.NotEqual(t, present.Hash, vanished.Hash)
+		return present.Hash, vanished.Hash
+	}
+
+	first := writeRoot("session_child.json", transcript)
+	second := writeRoot("session_child.json", transcript)
+	assert.Equal(t, archiveHash(first), archiveHash(second),
+		"the archive fingerprint must not depend on the local folder")
+	renamed := writeRoot("session_other.json", transcript)
+	assert.NotEqual(t, archiveHash(first), archiveHash(renamed),
+		"renaming a transcript must change the archive fingerprint")
+	edited := writeRoot("session_child.json", strings.Replace(transcript, "question", "answers!", 1))
+	assert.NotEqual(t, archiveHash(first), archiveHash(edited),
+		"same-size content edits with the same mtime must change the archive fingerprint")
+
+	firstPresent, firstVanished := memberHashes(first)
+	secondPresent, secondVanished := memberHashes(second)
+	assert.Equal(t, firstPresent, secondPresent,
+		"the member fingerprint must not depend on the local folder")
+	assert.Equal(t, firstVanished, secondVanished,
+		"the unreadable-candidate marker must not depend on the local folder")
+}
+
 // TestHermesArchiveFingerprintIgnoresEmptyWAL pins fingerprint determinism
 // across a parse: opening state.db read-only creates a zero-length -wal as a
 // side effect, and if its mtime entered the fingerprint, the identity stored

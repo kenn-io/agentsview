@@ -156,6 +156,14 @@ The latest release is
   every unrelated write. The first sync after upgrading reparses every Hermes
   and Augure Desktop session once to record its new per-session source, and a
   configured PostgreSQL push updates each of them once.
+- Repeated remote imports no longer rewrite unchanged Hermes and Augure Desktop
+  sessions. An HTTP import that downloads a full archive, because the remote
+  host lacks incremental sync or no local mirror is set up, unpacks it into a
+  new temporary folder each time. That folder's location was part of each
+  session's change check, so every such import parsed and stored the same
+  sessions again. The check now uses each file's place inside the Hermes folder.
+  The first sync after upgrading reparses every Hermes and Augure Desktop
+  session once.
 
 **Acknowledgements**
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -771,6 +772,46 @@ func TestImporterHermesIncompleteDiscoveryProcessesHealthyDelta(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, other)
 			assert.Equal(t, new("healthy delta"), other.FirstMessage)
+		})
+	}
+}
+
+// TestImporterHermesSkipsUnchangedSessionFromNewExtractionRoot covers legacy
+// HTTP imports, which unpack every archive into a fresh temporary folder. The
+// same remote session arriving under a different local root must keep its
+// fingerprint, so the second import skips it instead of rewriting it.
+func TestImporterHermesSkipsUnchangedSessionFromNewExtractionRoot(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			const remoteDir = "/srv/agent/sessions"
+			mtime := time.Date(2026, 5, 14, 14, 0, 0, 0, time.UTC)
+			seedState := filepath.Join(t.TempDir(), "state.db")
+			writeHermesImportStateDB(t, seedState)
+			stateBytes, err := os.ReadFile(seedState)
+			require.NoError(t, err)
+			transcript := []byte(`{"role":"user","content":"database-only message","timestamp":"2026-05-14T14:00:10Z"}` + "\n")
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {remoteDir}}}
+			importFrom := func() int {
+				root := t.TempDir()
+				localDir := remappedRemotePath(root, remoteDir)
+				require.NoError(t, os.MkdirAll(localDir, 0o755))
+				files := map[string][]byte{
+					filepath.Join(filepath.Dir(localDir), "state.db"): stateBytes,
+					filepath.Join(localDir, "database-only.jsonl"):    transcript,
+				}
+				for path, content := range files {
+					require.NoError(t, os.WriteFile(path, content, 0o600))
+					require.NoError(t, os.Chtimes(path, mtime, mtime))
+				}
+				importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
+				stats, err := importer.ImportExtracted(t.Context(), targets, root)
+				require.NoError(t, err)
+				return stats.SessionsSynced
+			}
+			require.Equal(t, 1, importFrom())
+			assert.Zero(t, importFrom(),
+				"identical content from a new extraction root must not resync")
 		})
 	}
 }
