@@ -188,6 +188,41 @@ func TestChangeLostWithTheAccountSaveIsMarkedAgain(t *testing.T) {
 	assert.Equal(t, changed, env.account(t).Refresh["a"].LastChange, "with the committed change time")
 }
 
+// TestItemsAppendedBeforeACrashMarkTheRootAgain covers a crash after a
+// fetch appended new items to the mirror file but before it saved the
+// chat's state or the account. The listing time did not move, so only the
+// recovered items show the change, and they must mark the root again.
+func TestItemsAppendedBeforeACrashMarkTheRootAgain(t *testing.T) {
+	env := newUsageEnv(t)
+	thread := finishedThread("a", ago(time.Hour), message("m", "hi"))
+	thread.Status = "active"
+	env.threads.Set(thread)
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	require.Equal(t, fetchNow, env.account(t).Refresh["a"].LastChange)
+	before := env.account(t)
+	saved, err := env.syncer.Store.LoadThread(passKey, "a")
+	require.NoError(t, err)
+
+	env.clock.Advance(time.Hour)
+	appended := env.clock.Now()
+	env.threads.Update("a", func(th *codexcloudtest.Thread) {
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+	})
+	env.run(t)
+	// The crash: the new items stay in the mirror file, but the chat's
+	// state and the account are as they were before the fetch.
+	require.NoError(t, env.syncer.Store.SaveThread(passKey, "a", saved))
+	require.NoError(t, env.syncer.Store.SaveAccount(passKey, before))
+
+	env.clock.Advance(5 * time.Minute)
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "the root is asked about again")
+	assert.Equal(t, appended, env.account(t).Refresh["a"].LastChange, "with the recovered items' fetch time")
+}
+
 // TestLostAccountStateRestoresRefreshRoots covers a root whose newest
 // plan usage record is a complete row: after account.json is lost it
 // goes back on the refresh schedule, not the pending queue, so it is not
