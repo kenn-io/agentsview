@@ -568,7 +568,7 @@ func writeOneSessionBatchTx(
 		return 0, err
 	}
 	if err := replaceSessionPlanUsageTx(
-		queries, write.Session.ID, write.PlanUsage,
+		queries, write.Session.ID, write.PlanUsage, false,
 	); err != nil {
 		return 0, err
 	}

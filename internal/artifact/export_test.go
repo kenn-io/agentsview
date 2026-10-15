@@ -1486,7 +1486,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	usageA, err := first.GetUsageEvents(ctx, "session-a")
 	require.NoError(t, err)
 	manifestA, _, err := exportLoadedSessionToStore(
-		ctx, filesystem, contractOrigin, sessionA, messagesA, usageA, productionArtifactLimits(),
+		ctx, filesystem, contractOrigin, sessionA, messagesA, usageA, nil, productionArtifactLimits(),
 	)
 	require.NoError(t, err)
 	revisionA, changed, err := first.ApplyArtifactPublicationChanges(ctx, contractOrigin,
@@ -1512,7 +1512,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	usageB, err := second.GetUsageEvents(ctx, "session-b")
 	require.NoError(t, err)
 	manifestB, _, err := exportLoadedSessionToStore(
-		ctx, filesystem, contractOrigin, sessionB, messagesB, usageB, productionArtifactLimits(),
+		ctx, filesystem, contractOrigin, sessionB, messagesB, usageB, nil, productionArtifactLimits(),
 	)
 	require.NoError(t, err)
 	revisionB, changed, err := second.ApplyArtifactPublicationChanges(ctx, contractOrigin,

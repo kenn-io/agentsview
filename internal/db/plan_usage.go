@@ -185,7 +185,7 @@ func (db *DB) ReplaceSessionPlanUsage(
 		return fmt.Errorf("beginning plan usage tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := replaceSessionPlanUsageTx(tx, sessionID, p); err != nil {
+	if err := replaceSessionPlanUsageTx(tx, sessionID, p, true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -193,9 +193,12 @@ func (db *DB) ReplaceSessionPlanUsage(
 
 // replaceSessionPlanUsageTx writes or removes the row and, when either
 // changed the table, bumps local_modified_at so push targets re-select the
-// session, as a usage event replace does.
+// session, as a usage event replace does. With enqueueArtifact it also
+// queues the session for artifact export, since no sessions column the
+// export trigger watches changes; batch writes queue the session themselves.
 func replaceSessionPlanUsageTx(
 	tx transactionQueries, sessionID string, p *SessionPlanUsage,
+	enqueueArtifact bool,
 ) error {
 	if p == nil {
 		res, err := tx.Exec(
@@ -211,7 +214,7 @@ func replaceSessionPlanUsageTx(
 		if removed == 0 {
 			return nil
 		}
-		return bumpLocalModifiedTx(tx, sessionID, "plan usage replace")
+		return planUsageChangedTx(tx, sessionID, enqueueArtifact)
 	}
 	values, err := SessionPlanUsageValues(p)
 	if err != nil {
@@ -224,7 +227,17 @@ func replaceSessionPlanUsageTx(
 	); err != nil {
 		return fmt.Errorf("writing plan usage for %s: %w", sessionID, err)
 	}
-	return bumpLocalModifiedTx(tx, sessionID, "plan usage replace")
+	return planUsageChangedTx(tx, sessionID, enqueueArtifact)
+}
+
+func planUsageChangedTx(tx transactionQueries, sessionID string, enqueueArtifact bool) error {
+	if err := bumpLocalModifiedTx(tx, sessionID, "plan usage replace"); err != nil {
+		return err
+	}
+	if enqueueArtifact {
+		return enqueueArtifactExportTx(tx, sessionID)
+	}
+	return nil
 }
 
 func bumpLocalModifiedTx(tx transactionQueries, sessionID, after string) error {
