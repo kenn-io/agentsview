@@ -18843,6 +18843,34 @@ func (e *Engine) reconcileProviderHistoryContext(
 				)
 				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
 			}
+			if stored != nil && len(candidate.Parsed.UsageEvents) == 0 {
+				// Token counts reach the mirror only from live capture, so a
+				// refetched mirror has none. The archived ones stay until
+				// new live records arrive; the first of those carries the
+				// running total, so keeping both would count it twice.
+				archive, ok := store.(*db.DB)
+				if !ok {
+					return ingest.HistoryResult{}, fmt.Errorf(
+						"codex-cloud: archive store %T cannot read usage events", store,
+					)
+				}
+				events, err := archive.GetUsageEvents(ctx, candidate.Session.ID)
+				if err != nil {
+					return ingest.HistoryResult{}, err
+				}
+				for _, ev := range events {
+					candidate.Parsed.UsageEvents = append(candidate.Parsed.UsageEvents, parser.ParsedUsageEvent{
+						SessionID: ev.SessionID, MessageOrdinal: ev.MessageOrdinal,
+						Source: ev.Source, Model: ev.Model, ProviderID: ev.ProviderID,
+						InputTokens: ev.InputTokens, OutputTokens: ev.OutputTokens,
+						CacheCreationInputTokens: ev.CacheCreationInputTokens,
+						CacheReadInputTokens:     ev.CacheReadInputTokens,
+						ReasoningTokens:          ev.ReasoningTokens, Cost: ev.Cost,
+						CostStatus: ev.CostStatus, CostSource: ev.CostSource,
+						OccurredAt: ev.OccurredAt, DedupKey: ev.DedupKey,
+					})
+				}
+			}
 		case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 			if len(candidate.Messages) > 0 {
 				break
