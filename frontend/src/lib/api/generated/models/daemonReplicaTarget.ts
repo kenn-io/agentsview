@@ -5,6 +5,7 @@
 export interface DaemonReplicaTarget {
   allow_insecure?: boolean;
   machine_name: string;
+  push_batch_size?: number;
   push_vectors?: boolean;
   schema?: string;
   url: string;

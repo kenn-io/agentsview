@@ -92,6 +92,10 @@ The latest release is
 - Push semantic search vectors to ClickHouse faster. Each write now covers up to
   500 sessions instead of one. In testing, the vector part of a full push of
   1,360 sessions took about 2 seconds instead of about 5 minutes.
+- Speed up large ClickHouse pushes by setting `push_batch_size` on a
+  `[clickhouse]` target. Each batch of sessions makes ClickHouse rewrite its
+  session tables, so larger batches mean fewer rewrites, at the cost of more
+  memory during the push. The default stays at 100 sessions.
 
 **Bug fixes**
 

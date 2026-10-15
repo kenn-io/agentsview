@@ -195,6 +195,30 @@ CLI flags override config values. Use
 [`agentsview projects`](/docs/commands/#agentsview-projects) to list available
 project names.
 
+#### Push Batch Size
+
+`clickhouse push` writes changed sessions in batches of 100. Each batch ends
+with one delete per session table, and under ClickHouse's default
+`lightweight_delete_mode` each delete rewrites every active part of its table,
+even when no rows match. Fewer batches mean fewer rewrites, which matters most
+for full pushes and for servers on slow storage.
+
+Raise the batch size per target with `push_batch_size`:
+
+```toml
+[clickhouse]
+url = "clickhouse://localhost:9000/agentsview"
+push_batch_size = 500
+```
+
+Larger batches hold more session content in memory at once. On a test archive of
+about 46,800 sessions, a full push peaked at about 2.8 GB of memory with the
+default of 100, 3.4 GB at 500, 4.5 GB at 1,000, and 7.5 GB at 2,000, while the
+batch phase took 510 s, 206 s, 135 s, and 142 s. Peak memory depends on the
+largest sessions that land in one batch, so leave headroom. The value must be at
+least 1; remove the key to use the default. A delegated push sends the target's
+value to the daemon, so the setting applies there too.
+
 #### Vector Push
 
 When `[vector]` is enabled locally, `clickhouse push` runs a vector phase after
@@ -417,6 +441,7 @@ ______________________________________________________________________
 | `projects`           | Inclusive project filter                                              |
 | `exclude_projects`   | Exclusive project filter                                              |
 | `push_vectors`       | Run the vector phase on push; default `true`                          |
+| `push_batch_size`    | Sessions per push batch; default `100`                                |
 | `default_clickhouse` | Named target used when more than one `[clickhouse.NAME]` block exists |
 
 Environment overrides for the effective default target:

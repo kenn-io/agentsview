@@ -728,6 +728,9 @@ components:
           type: boolean
         machine_name:
           type: string
+        push_batch_size:
+          format: int64
+          type: integer
         push_vectors:
           type: boolean
         schema:

@@ -999,6 +999,29 @@ func TestReplicaPushTargetOmittedPushVectorsDefaultsOn(t *testing.T) {
 	}
 }
 
+// TestReplicaPushTargetCarriesPushBatchSize pins that a delegated push hands
+// the target's push_batch_size to the pusher, and that omitting it selects
+// the push default.
+func TestReplicaPushTargetCarriesPushBatchSize(t *testing.T) {
+	s := testServerWithConfig(config.Config{})
+	for _, tt := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "omitted", body: `{"url":"clickhouse://localhost/db","machine_name":"m"}`, want: 0},
+		{name: "set", body: `{"url":"clickhouse://localhost/db","machine_name":"m","push_batch_size":1000}`, want: 1000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var wire daemonReplicaTarget
+			require.NoError(t, json.Unmarshal([]byte(tt.body), &wire))
+			got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{Replica: &wire})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.PushBatchSize)
+		})
+	}
+}
+
 // TestClickHousePushRejectsPlaintextTargetBeforeStream pins that a ClickHouse
 // target the backend refuses (plaintext to a non-loopback host without
 // allow_insecure) fails with a 400 from the handler, before the stream opens

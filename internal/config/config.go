@@ -128,6 +128,11 @@ type ClickHouseConfig struct {
 	// PushVectors gates the vector phase of clickhouse push. A pointer so an
 	// omitted key keeps the default (enabled) while an explicit false opts out.
 	PushVectors *bool `toml:"push_vectors" json:"push_vectors,omitempty"`
+	// PushBatchSize sets how many sessions clickhouse push writes per batch.
+	// Each batch runs one lightweight DELETE per dependent table, so larger
+	// batches mean fewer part rewrites but more session payloads in memory
+	// at once. Nil keeps the push default.
+	PushBatchSize *int `toml:"push_batch_size" json:"push_batch_size,omitempty"`
 }
 
 // PushVectorsEnabled reports whether clickhouse push should run its vector
@@ -158,6 +163,7 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"projects":         {},
 	"exclude_projects": {},
 	"push_vectors":     {},
+	"push_batch_size":  {},
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
@@ -1848,6 +1854,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		if legacyCH.PushVectors != nil {
 			c.ClickHouse.PushVectors = legacyCH.PushVectors
 		}
+		if legacyCH.PushBatchSize != nil {
+			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
+		}
 	}
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -3305,8 +3314,18 @@ func (c *Config) RawClickHouseTarget(name string) (ClickHouseConfig, error) {
 }
 
 func (c *Config) resolveClickHouseConfig(
-	ch ClickHouseConfig, applyDefaultEnv bool,
+	name string, ch ClickHouseConfig, applyDefaultEnv bool,
 ) (ClickHouseConfig, error) {
+	if ch.PushBatchSize != nil && *ch.PushBatchSize < 1 {
+		section := "[clickhouse]"
+		if name != "" {
+			section = "[clickhouse." + name + "]"
+		}
+		return ch, fmt.Errorf(
+			"%s push_batch_size must be at least 1, got %d; remove the key to use the default",
+			section, *ch.PushBatchSize,
+		)
+	}
 	if applyDefaultEnv {
 		if c.clickHouseEnvOverrides.URL != "" {
 			ch.URL = c.clickHouseEnvOverrides.URL
@@ -3368,7 +3387,7 @@ func (c *Config) ResolveClickHouseTarget(name string) (ClickHouseConfig, error) 
 				name,
 			)
 		}
-		return c.resolveClickHouseConfig(c.ClickHouse, true)
+		return c.resolveClickHouseConfig("", c.ClickHouse, true)
 	}
 	defaultName, err := c.DefaultClickHouseTargetName()
 	if err != nil {
@@ -3384,7 +3403,7 @@ func (c *Config) ResolveClickHouseTarget(name string) (ClickHouseConfig, error) 
 			targetName,
 		)
 	}
-	return c.resolveClickHouseConfig(targetCfg, targetName == defaultName)
+	return c.resolveClickHouseConfig(targetName, targetCfg, targetName == defaultName)
 }
 
 func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) {
@@ -3392,7 +3411,7 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 		return nil, err
 	}
 	if len(c.ClickHouseTargets) == 0 {
-		ch, err := c.resolveClickHouseConfig(c.ClickHouse, true)
+		ch, err := c.resolveClickHouseConfig("", c.ClickHouse, true)
 		if err != nil {
 			return nil, err
 		}
@@ -3408,7 +3427,7 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 	targets := make([]ResolvedClickHouseTarget, 0, len(names))
 	for _, name := range names {
 		targetCfg, err := c.resolveClickHouseConfig(
-			c.ClickHouseTargets[name], name == defaultName,
+			name, c.ClickHouseTargets[name], name == defaultName,
 		)
 		if err != nil {
 			return nil, err

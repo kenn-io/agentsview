@@ -388,3 +388,39 @@ func TestEnsureSchemaUpgradesOlderMirrorInPlace(t *testing.T) {
 	assert.NoError(t, CheckSchemaCompat(ctx, conn))
 	assert.NoError(t, CheckDataVersionCompat(ctx, conn))
 }
+
+func TestPushHonorsTargetPushBatchSize(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	tests := []struct {
+		name      string
+		batchSize int
+		want      []int
+	}{
+		{"default fits the fixture in one batch", 0, []int{3}},
+		{"configured size splits the fixture", 2, []int{2, 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pusher, err := Backend{}.NewPusher(ctx, storage.ReplicaTarget{
+				URL:           target.URL,
+				Schema:        target.Database,
+				MachineName:   fixtureMachine,
+				PushBatchSize: tt.batchSize,
+			}, local, storage.PusherOptions{})
+			require.NoError(t, err)
+			s, ok := pusher.(*Sync)
+			require.True(t, ok)
+			t.Cleanup(func() { s.Close() })
+			var sizes []int
+			s.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+				sizes = append(sizes, len(batch))
+				return nil
+			}}
+			res, err := s.Push(ctx, true, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 3, res.SessionsPushed)
+			assert.Equal(t, tt.want, sizes)
+		})
+	}
+}

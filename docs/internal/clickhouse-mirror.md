@@ -86,7 +86,8 @@ on read. Timestamps are `DateTime64(6, 'UTC')`. `sessions.last_message_at` is
 computed at push time so date filters do not need a correlated `MAX`.
 
 **Push order is the consistency mechanism.** ClickHouse has no multi-statement
-transactions. Per batch of changed sessions, with `v` this push's version:
+transactions. Per batch of changed sessions (100 by default, set by the target's
+`push_batch_size`), with `v` this push's version:
 
 1. Insert dependent rows (messages, tool calls, result events, usage, findings,
    pins).

@@ -22587,6 +22587,7 @@ func (d DaemonPushRequest) Validate() error {
 type DaemonReplicaTarget struct {
 	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
 	MachineName   string  `json:"machine_name" validate:"required"`
+	PushBatchSize *int64  `json:"push_batch_size,omitempty"`
 	PushVectors   *bool   `json:"push_vectors,omitempty"`
 	Schema        *string `json:"schema,omitempty"`
 	URL           string  `json:"url" validate:"required"`

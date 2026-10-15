@@ -27,6 +27,9 @@ type Sync struct {
 	excludeProjects []string
 	// vectorSource, when non-nil, enables the vector push phase.
 	vectorSource storage.VectorPushSource
+	// sessionBatchSize is how many sessions share one set of insert blocks
+	// and delete statements. Zero selects sessionPushBatchSize.
+	sessionBatchSize int
 
 	connMu sync.Mutex
 	conn   *sql.DB

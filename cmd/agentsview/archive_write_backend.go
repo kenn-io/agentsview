@@ -519,6 +519,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 				MachineName:   target.Target.MachineName,
 				AllowInsecure: new(target.Target.AllowInsecure),
 				PushVectors:   new(target.Target.PushVectors),
+				PushBatchSize: new(int64(target.Target.PushBatchSize)),
 			},
 			SyncStateTarget:                new(target.SyncStateTarget()),
 			MigrateLegacySyncState:         new(target.MigrateLegacySyncState()),

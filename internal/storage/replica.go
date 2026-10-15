@@ -23,6 +23,9 @@ type ReplicaTarget struct {
 	AllowInsecure bool
 	// PushVectors reports whether the target accepts the vector push phase.
 	PushVectors bool
+	// PushBatchSize is how many sessions one push batch writes. Zero selects
+	// the backend default. Only ClickHouse reads it.
+	PushBatchSize int
 }
 
 // ReplicaTargetRef names one configured replica target before its settings

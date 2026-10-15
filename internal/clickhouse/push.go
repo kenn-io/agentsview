@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -16,8 +17,8 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// sessionPushBatchSize bounds how many sessions share one set of insert
-// blocks and delete statements.
+// sessionPushBatchSize is the default number of sessions that share one set
+// of insert blocks and delete statements. push_batch_size overrides it.
 const sessionPushBatchSize = 100
 
 // idBatchSize bounds IN (...) lists sent to ClickHouse.
@@ -172,8 +173,9 @@ func (s *Sync) PushWithOptions(
 	}
 
 	failed := map[string]struct{}{}
-	for offset := 0; offset < len(changed); offset += sessionPushBatchSize {
-		end := min(offset+sessionPushBatchSize, len(changed))
+	batchSize := cmp.Or(s.sessionBatchSize, sessionPushBatchSize)
+	for offset := 0; offset < len(changed); offset += batchSize {
+		end := min(offset+batchSize, len(changed))
 		if err := s.pushBatchWithRetry(
 			ctx, changed[offset:end], fingerprints, version,
 			offset, len(changed), &result, onProgress,
