@@ -50,6 +50,7 @@ type Host struct {
 
 	mu         sync.Mutex
 	handlers   map[string]Handler
+	held       map[string]bool
 	requests   []Request
 	handshakes []Handshake
 	conns      []*websocket.Conn
@@ -71,7 +72,7 @@ type refusal struct {
 // initialize. It stops when the test ends.
 func NewHost(t *testing.T) *Host {
 	t.Helper()
-	h := &Host{handlers: map[string]Handler{}, resumed: map[*websocket.Conn]string{}, selected: "codex-app-server"}
+	h := &Host{handlers: map[string]Handler{}, held: map[string]bool{}, resumed: map[*websocket.Conn]string{}, selected: "codex-app-server"}
 	h.Handle("initialize", func(jsontext.Value) (any, *Error) {
 		return map[string]string{"userAgent": "codexcloudtest"}, nil
 	})
@@ -100,6 +101,14 @@ func (h *Host) Handle(method string, fn Handler) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.handlers[method] = fn
+}
+
+// Hold records method but never answers it. The host goes on reading, so a
+// test can keep a call open and still see every later client message.
+func (h *Host) Hold(method string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.held[method] = true
 }
 
 // SelectSubprotocol makes later upgrades select p; "" selects none.
@@ -205,9 +214,9 @@ func (h *Host) ServerRequestThread(ctx context.Context, threadID, method string,
 }
 
 // OpenConnections counts the connections the host is still reading. A
-// connection leaves the count when its read loop ends: after the client's
-// close, once everything it sent before that is recorded, or early at a
-// message that is not valid JSON.
+// connection leaves the count when its read loop ends: at the client's
+// close, at a message that is not valid JSON, or when a reply cannot be
+// written.
 func (h *Host) OpenConnections() int {
 	return len(h.open())
 }
@@ -292,9 +301,6 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 	h.conns = append(h.conns, c)
 	h.mu.Unlock()
 	defer h.drop(c)
-	// After a reply cannot be written the client has gone, but the host
-	// still reads to the end, so every message the client sent is recorded.
-	writable := true
 	for {
 		_, data, err := c.Read(context.Background())
 		if err != nil {
@@ -310,7 +316,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.Lock()
 		h.requests = append(h.requests, Request{ID: msg.ID, Method: msg.Method, Params: msg.Params})
-		handler := h.handlers[msg.Method]
+		handler, held := h.handlers[msg.Method], h.held[msg.Method]
 		if msg.Method == "thread/resume" {
 			var resume struct {
 				ThreadID string `json:"threadId"`
@@ -320,7 +326,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.mu.Unlock()
-		if len(msg.ID) == 0 || msg.Method == "" || !writable {
+		if len(msg.ID) == 0 || msg.Method == "" || held {
 			continue
 		}
 		reply := map[string]any{"jsonrpc": "2.0", "id": msg.ID}
@@ -335,7 +341,9 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		writable = c.Write(context.Background(), websocket.MessageText, out) == nil
+		if c.Write(context.Background(), websocket.MessageText, out) != nil {
+			return
+		}
 	}
 }
 
