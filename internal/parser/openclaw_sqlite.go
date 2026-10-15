@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -690,10 +692,20 @@ func openClawSQLiteFingerprintsEachTx(
 	if err != nil {
 		return err
 	}
-	query := `SELECT e.session_id, e.seq, e.event_json, e.created_at, NULL
+	// OpenClaw stores an event either as event_json text or, with event_json
+	// NULL, as a zstd-compressed event_zstd blob.
+	columns, err := openClawSQLiteTableColumns(ctx, tx, "transcript_events")
+	if err != nil {
+		return err
+	}
+	zstdExpr := "NULL"
+	if columns["event_zstd"] {
+		zstdExpr = "e.event_zstd"
+	}
+	query := `SELECT e.session_id, e.seq, e.event_json, ` + zstdExpr + `, e.created_at, NULL
 		FROM transcript_events e`
 	if titleExpr != "" {
-		query = `SELECT e.session_id, e.seq, e.event_json, e.created_at, ` + titleExpr + `
+		query = `SELECT e.session_id, e.seq, e.event_json, ` + zstdExpr + `, e.created_at, ` + titleExpr + `
 		FROM transcript_events e
 		LEFT JOIN session_windows w ON w.session_id = e.session_id
 		LEFT JOIN session_nodes n ON n.session_key = w.session_key`
@@ -732,15 +744,26 @@ func openClawSQLiteFingerprintsEachTx(
 		var (
 			id        string
 			seq       int64
-			eventJSON string
+			eventText sql.NullString
+			eventZstd []byte
 			createdAt any
 			rowTitle  sql.NullString
 		)
-		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt, &rowTitle); err != nil {
+		if err := rows.Scan(&id, &seq, &eventText, &eventZstd, &createdAt, &rowTitle); err != nil {
 			return fmt.Errorf("scanning OpenClaw SQLite event: %w", err)
 		}
 		if !IsValidSessionID(id) {
 			continue
+		}
+		eventJSON := eventText.String
+		if !eventText.Valid {
+			decoded, err := openClawSQLiteDecodeZstd(eventZstd)
+			if err != nil {
+				return openClawSQLiteMalformedMemberError{
+					reason: fmt.Sprintf("event %d: %v", seq, err),
+				}
+			}
+			eventJSON = decoded
 		}
 		if id != memberID {
 			if err := finish(); err != nil {
@@ -769,6 +792,32 @@ func openClawSQLiteFingerprintsEachTx(
 		return fmt.Errorf("reading OpenClaw SQLite events: %w", err)
 	}
 	return finish()
+}
+
+// openClawSQLiteZstdMaxEventBytes bounds one decompressed event. OpenClaw
+// itself limits event_utf8_bytes to 4 MiB.
+const openClawSQLiteZstdMaxEventBytes = 4 << 20
+
+var openClawSQLiteZstdDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(0),
+		zstd.WithDecoderMaxMemory(openClawSQLiteZstdMaxEventBytes),
+	)
+})
+
+func openClawSQLiteDecodeZstd(blob []byte) (string, error) {
+	if len(blob) == 0 {
+		return "", errors.New("event has neither event_json nor event_zstd")
+	}
+	decoder, err := openClawSQLiteZstdDecoder()
+	if err != nil {
+		return "", fmt.Errorf("zstd decoder: %w", err)
+	}
+	out, err := decoder.DecodeAll(blob, nil)
+	if err != nil {
+		return "", fmt.Errorf("decompressing event_zstd: %w", err)
+	}
+	return string(out), nil
 }
 
 func openClawSQLiteHashField(hash interface{ Write([]byte) (int, error) }, value string) {
