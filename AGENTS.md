@@ -46,6 +46,16 @@ Before reviewing CI runner security, read the
    made.
 1. Keep commits focused and use clear conventional commit messages.
 1. Do not amend, squash, rebase, push, or pull unless the user asks.
+1. After every push, watch each GitHub Actions run it starts, such as CI
+   checks and the rolling release build, until all of them finish. Local
+   commits start no runs, so watching begins at the push; runs for a pull
+   request count too. Find the runs with
+   `gh run list --branch <branch> --commit <sha>`, which can take a few
+   seconds to list them, and wait on each with
+   `gh run watch <run-id> --exit-status` in the background instead of polling
+   in a loop. Report every run's result. When a run fails, read
+   `gh run view <run-id> --log-failed`, name the cause, and fix it when the
+   change caused it.
 1. Do not add generated-with lines, attribution blocks, validation footers, or
    command transcripts to commit messages.
 1. Deliver changes through pull requests from feature branches. Never merge a
@@ -160,9 +170,6 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - Pull requests must have a user-facing benefit or improve the developer
   experience, and the body must say which one.
-- Do not poll or watch GitHub Actions checks unless the developer explicitly
-  requests it.
-- Do not use `gh api` to watch CI jobs unless the user explicitly requests it.
 - Write summary-only pull request descriptions. Do not add test plans,
   checklists, command transcripts, or sections named Tests, Testing,
   Verification, or Test plan.

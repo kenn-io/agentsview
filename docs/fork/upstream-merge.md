@@ -99,6 +99,15 @@ upstream 的值上加一。
 fork 给共享接口加的方法（例如 `db.Store.GetInputOutline`）要在 upstream 新增的
 实现上补齐。编译失败会指出缺哪个，例如 `postgres.HostedStore`。
 
+### `AGENTS.md`
+
+保留 fork 自己加的规则：
+
+- 任务路由表里 "Merging upstream into this fork" 一行，它指向本文。
+- Git and Delivery 一节中"每次 push 后监控它触发的全部 workflow 运行"的规则。
+  upstream 的 Pull Requests 一节有"除非用户要求，不要监控 GitHub Actions"的两条
+  规则，与它相反，合并时不要把这两条加回来。
+
 ### 多语言文件
 
 `frontend/messages/*.json` 的 key 集合必须和 `en.json` 完全一致，包括 upstream
