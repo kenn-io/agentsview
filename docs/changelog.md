@@ -133,7 +133,9 @@ The latest release is
   reparse and rewrite every session in the same `state.db`. Full sync and
   file/WAL events now resolve to that one session's source, so an archive
   with many sessions in one database stops reprocessing all of them on
-  every unrelated write.
+  every unrelated write. The first sync after upgrading reparses every Hermes
+  and Augure Desktop session once to record its new per-session source, and a
+  configured PostgreSQL push updates each of them once.
 
 **Acknowledgements**
 
