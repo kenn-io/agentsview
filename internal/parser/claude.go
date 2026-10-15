@@ -2154,24 +2154,17 @@ func queuedCommandMessage(
 	}
 }
 
-// mergeClaudeAssistantMessageChunks merges consecutive assistant
+// mergeClaudeAssistantMessageChunksContext merges consecutive assistant
 // entries that share the same message.id. Claude Code uses this shape
 // both for cumulative streaming snapshots and for additive chunks of a
 // single response. The last entry owns metadata and token usage; the
 // merged message content keeps each distinct block in first-seen order.
-func mergeClaudeAssistantMessageChunks(entries []dagEntry) []dagEntry {
-	merged, _, _ := mergeClaudeAssistantMessageChunksContext(
-		context.Background(), entries,
-	)
-	return merged
-}
-
-// mergeClaudeAssistantMessageChunksContext also returns an alias map
-// recording each absorbed chunk uuid -> the merged entry's uuid. Chunks
-// in a run parent each other, so the merged entry adopts the first
-// chunk's parentUuid and any later entry whose parent points into the
-// middle of the run must be re-attached to the merged entry during DAG
-// resolution.
+//
+// It also returns an alias map recording each absorbed chunk uuid -> the
+// merged entry's uuid. Chunks in a run parent each other, so the merged
+// entry adopts the first chunk's parentUuid and any later entry whose
+// parent points into the middle of the run must be re-attached to the
+// merged entry during DAG resolution.
 func mergeClaudeAssistantMessageChunksContext(
 	ctx context.Context, entries []dagEntry,
 ) ([]dagEntry, map[string]string, error) {
