@@ -50,8 +50,9 @@ Before reviewing CI runner security, read the
    checks and the rolling release build, until all of them finish. Local
    commits start no runs, so watching begins at the push; runs for a pull
    request count too. Find the runs with
-   `gh run list --branch <branch> --commit <sha>`, which can take a few
-   seconds to list them, and wait on each with
+   `gh run list --branch <branch> --commit "$(git rev-parse HEAD)"`; the
+   filter needs the full SHA, and new runs can take a few seconds to appear.
+   Wait on each with
    `gh run watch <run-id> --exit-status` in the background instead of polling
    in a loop. Report every run's result. When a run fails, read
    `gh run view <run-id> --log-failed`, name the cause, and fix it when the
