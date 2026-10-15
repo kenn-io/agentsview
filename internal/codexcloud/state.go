@@ -321,7 +321,8 @@ func (s *Store) loadRebuiltList(key AccountKey, id, suffix string, match func(Th
 		return ids, nil
 	}
 	if ids, err = s.matchingThreads(key, id, match); err != nil {
-		return nil, fmt.Errorf("codex-cloud: rebuild %s, which could not be decoded: %w", path, err)
+		return nil, fmt.Errorf("codex-cloud: could not rebuild %s after it failed to decode; "+
+			"it stays in place and the next sync tries again: %w", path, err)
 	}
 	if err := atomicfile.WriteFile(path+".corrupt", data); err != nil {
 		return nil, fmt.Errorf("codex-cloud: set aside %s: %w", path, err)
@@ -329,7 +330,7 @@ func (s *Store) loadRebuiltList(key AccountKey, id, suffix string, match func(Th
 	if err := s.saveList(key, id, suffix, ids); err != nil {
 		return nil, err
 	}
-	s.Log.Printf("codex-cloud: %s could not be decoded (%v); rebuilt it from the saved chat state "+
+	s.Log.Printf("codex-cloud: %s could not be decoded (%v); rebuilt it from the saved chats "+
 		"and kept the damaged copy as %s.corrupt", path, decodeErr, filepath.Base(path))
 	return ids, nil
 }
