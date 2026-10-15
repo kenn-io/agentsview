@@ -41,6 +41,9 @@ func TestApplyUsageFiltersRangeBeforeSourceUUIDDedup(t *testing.T) {
 	require.NoError(t, applyUsage(&r, p, windows, start, end, usage, nil))
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {

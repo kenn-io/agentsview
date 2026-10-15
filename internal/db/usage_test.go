@@ -5066,6 +5066,34 @@ func TestGetSessionUsage_PricesCompleteClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
 }
 
+func TestGetSessionUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedOpusPricing(t, d)
+	insertSession(t, d, "claude:s7", "proj", func(s *Session) {
+		s.Agent = "claude-code"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "claude:s7", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", SourceUUID: "source-1",
+			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+		Message{
+			SessionID: "claude:s7", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", SourceUUID: "source-1",
+			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+	)
+	u, err := d.GetSessionUsage(ctx, "claude:s7", true)
+	requireNoError(t, err, "GetSessionUsage")
+	assert.Equal(t, money.MustParseDollars("0.0175"), u.Cost, "Cost want 0.0175 (deduped)")
+	assert.True(t, u.HasCost, "HasCost = false, want true")
+}
+
 func TestGetSessionUsage_NoTokenRowsKeepsMetadata(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
