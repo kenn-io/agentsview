@@ -91,6 +91,18 @@ func assertPlanOnlySummary(t *testing.T, be service.SessionService) {
 	assert.Nil(t, res.UnsupportedUsage)
 	assert.Zero(t, res.Totals.InputTokens)
 	assert.Equal(t, 1, res.PlanOnlySessions)
+
+	// The summary lists the plan-only model, so a comparison that picks it
+	// keeps it instead of falling back to the default pair.
+	cmp, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		From: "2026-09-10", To: "2026-09-10", Timezone: "UTC", IncludeOneShot: true,
+		LeftDimension: "model", LeftValue: "gpt-5-codex",
+		RightDimension: "model", RightValue: "claude-sonnet-4",
+		FallbackToDefault: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "gpt-5-codex", cmp.Left.Value)
+	assert.Equal(t, "claude-sonnet-4", cmp.Right.Value)
 }
 
 // TestSessionDetailIncludesPlanUsage checks that session details carry a

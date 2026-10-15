@@ -997,7 +997,11 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		summary, err := buildUsageSummary(rankingFilter, rankingResult, db.PlanUsageSessionCounts{})
+		rankingPlanUsage, err := b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := buildUsageSummary(rankingFilter, rankingResult, rankingPlanUsage)
 		if err != nil {
 			return nil, err
 		}
