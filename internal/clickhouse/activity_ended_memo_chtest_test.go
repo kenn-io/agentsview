@@ -120,7 +120,6 @@ func TestEndedActivityReportIsKeptOnDiskAcrossRestarts(t *testing.T) {
 	loaded, err := restarted.BuildActivityReportArtifacts(ctx, filter, q, func(p activity.Progress) { done = append(done, p) })
 	require.NoError(t, err)
 	require.Zero(t, restarted.activityUsageQueries.Load()+restarted.activityInputQueries.Load(), "the kept file answers")
-	require.Equal(t, activity.ProgressDone, done[len(done)-1].Phase)
 	require.Equal(t, builtProgress[len(builtProgress)-1], done[len(done)-1])
 	require.Equal(t, digest(built), digest(loaded))
 	requireFresh(loaded)

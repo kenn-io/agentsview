@@ -104,8 +104,8 @@ func TestBuildReportArtifacts(t *testing.T) {
 			)
 			require.NoError(t, err)
 			assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
+			assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 			if withProgress {
-				assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 				assert.Equal(t, []Progress{
 					{Phase: ProgressScanningActivity, SessionsTotal: 1},
 					{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
