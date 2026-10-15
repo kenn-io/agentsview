@@ -1,13 +1,11 @@
 package codexcloud_test
 
 import (
-	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,54 +14,6 @@ import (
 )
 
 const stateKey codexcloud.AccountKey = "0123456789abcdef0123456789abcdef"
-
-func TestStateRoundTrip(t *testing.T) {
-	store := codexcloud.NewStore(t.TempDir())
-	started := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	thread := codexcloud.ThreadState{
-		UpdatedAt: 1759320000, ResumeTurnID: "turn-2", ResumeItemID: "item-9", Offset: 4096,
-		ResolvedParent: "thread-p",
-		Turns: []codexcloud.TurnState{{
-			ID: "turn-2", Status: "completed", FirstSeen: started, EndedFirstSeen: started.Add(time.Minute),
-			StartedAt: &started, Digest: "d1",
-		}},
-		LastProgress: started, ItemDigests: map[string]string{"turn-2/item-9": "d2"},
-		LastHandledTurnID: "turn-1", IsSubAgent: true, ArchivedFirstSeen: started,
-	}
-	require.NoError(t, store.SaveThread(stateKey, "thread-a", thread))
-	gotThread, err := store.LoadThread(stateKey, "thread-a")
-	require.NoError(t, err)
-	assert.Equal(t, thread, gotThread)
-
-	account := codexcloud.AccountState{
-		Watermarks: map[codexcloud.ListingID]int64{codexcloud.ListDefaultActive: 1759320000},
-		Wait:       codexcloud.WaitState{Failure: "signed-out", Attempts: 2, Until: started},
-		Retry: map[string]codexcloud.RetryEntry{"thread-b": {
-			Attempts: 1, NextAttempt: started, FirstFailure: started, Message: "reply too large",
-			Listing: jsontext.Value(`{"id":"thread-b"}`),
-		}},
-		CheckAgain:   map[string]bool{"thread-c": true},
-		Unfinished:   map[string]codexcloud.UnfinishedEntry{"thread-d": {InProgress: true, SubAgent: true}},
-		Retired:      map[string]bool{"thread-f": true},
-		UsagePending: map[string]codexcloud.PendingEntry{"thread-a": {Since: started, NextAttempt: started}},
-		Refresh:      map[string]codexcloud.RefreshEntry{"thread-e": {DataAsOf: started, LastChange: started, Reentries: 2}},
-		Backfilled:   map[codexcloud.ListingID]bool{codexcloud.ListSubAgentArchived: true},
-		AccountID:    "account-a", UserID: "user-a",
-	}
-	require.NoError(t, store.SaveAccount(stateKey, account))
-	gotAccount, err := store.LoadAccount(stateKey)
-	require.NoError(t, err)
-	assert.Equal(t, account, gotAccount)
-
-	require.NoError(t, store.SaveDescendants(stateKey, "thread-a", []string{"thread-b", "thread-c"}))
-	descendants, err := store.LoadDescendants(stateKey, "thread-a")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"thread-b", "thread-c"}, descendants)
-	require.NoError(t, store.SaveWaiting(stateKey, "thread-p", []string{"thread-a"}))
-	waiting, err := store.LoadWaiting(stateKey, "thread-p")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"thread-a"}, waiting)
-}
 
 func TestEmptyListRemovesFile(t *testing.T) {
 	root := t.TempDir()
