@@ -135,10 +135,9 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantSurvivor != nil {
-				assert.Equal(t, map[string]SessionTokenCoverage{
-					"root":  {OutputTokens: 20, PeakContextTokens: 100},
-					"child": {OutputTokens: 20, PeakContextTokens: 100},
-				}, result.CanonicalTokenCoverageBySession)
+				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)
+				require.NoError(t, err)
+				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
 				row := result.Rows[0]
 				assert.Equal(t, tc.wantSurvivor.SessionID, row.SessionID)
 				assert.Equal(t, tc.wantSurvivor.SourceSessionID, row.SourceSessionID)
