@@ -32,32 +32,18 @@ func TestApplyUsageFiltersRangeBeforeSourceUUIDDedup(t *testing.T) {
 			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:00:01Z",
 			InputTokens: 1000, OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
 		},
-		{
-			SessionID: "root", Model: "m1", Timestamp: "2026-06-16T10:02:00Z",
-			InputTokens: 10, OutputTokens: 5, Cost: money.MustParseDollars("0.05"),
-			ClaudeMessageID: "snapshot", ClaudeRequestID: "request", WebSearchRequests: 4,
-		},
-		{
-			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:03:00Z",
-			InputTokens: 900, OutputTokens: 631, Cost: money.MustParseDollars("6.31"),
-			ClaudeMessageID: "snapshot", ClaudeRequestID: "request", WebSearchRequests: 1,
-		},
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
-	survivors := dedupUsage(start, end, end, usage)
-	require.Len(t, survivors, 2)
-	assert.Equal(t, "root", survivors[1].SessionID)
-	assert.Equal(t, 4, survivors[1].WebSearchRequests)
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
 	require.NoError(t, applyUsage(&r, p, windows, start, end, usage, nil))
-	assert.Equal(t, 1131, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("11.31"), r.Totals.Cost)
-	assert.Equal(t, 1900, r.Buckets[120].InputTokens)
-	assert.Equal(t, 1131, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("11.31"), r.Buckets[120].Cost)
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {

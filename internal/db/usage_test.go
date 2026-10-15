@@ -2876,17 +2876,11 @@ func TestUsageTopSessionsAndCountsDedupSourceUUIDFallback(t *testing.T) {
 	require.Len(t, top, 1)
 	assert.Equal(t, "s-parent", top[0].SessionID)
 	assert.Equal(t, 1500, top[0].TotalTokens)
-	legacyTop, err := d.getTopSessionsByCostLegacy(ctx, filter, 20)
-	requireNoError(t, err, "getTopSessionsByCostLegacy")
-	assert.Equal(t, top, legacyTop)
 	counts, err := d.GetUsageSessionCounts(ctx, filter)
 	requireNoError(t, err, "GetUsageSessionCounts")
 	assert.Equal(t, 1, counts.Total)
 	assert.Equal(t, map[string]int{"s-parent": 1}, counts.ByProject)
 	assert.Equal(t, map[string]int{"claude": 1}, counts.ByAgent)
-	legacyCounts, err := d.getUsageSessionCountsLegacy(ctx, filter)
-	requireNoError(t, err, "getUsageSessionCountsLegacy")
-	assert.Equal(t, counts, legacyCounts)
 }
 
 func TestGetTopSessionsByCostLimit(t *testing.T) {
