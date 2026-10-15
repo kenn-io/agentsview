@@ -2065,6 +2065,14 @@ func TestSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 			wantAttribut: "z-snapshot",
 			wantInput:    10,
 		},
+		{
+			name:         "equal instant with offset uses session ID",
+			zTimestamp:   "2026-05-20T05:30:00-05:00",
+			aTimestamp:   "2026-05-20T10:30:00Z",
+			wantSession:  "z-snapshot",
+			wantAttribut: "a-snapshot",
+			wantInput:    900,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
