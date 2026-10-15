@@ -74,8 +74,11 @@ func codexCloudSyncJob(sync *codexcloud.Syncer, idle *server.IdleTracker) poller
 // newCodexCloudMonitor builds the live token monitor. It shares the
 // syncer's state store, whose per-account lock keeps the two jobs' writes
 // apart, and its waits, which both jobs honor. trigger queues a sync run
-// after a joined turn completes.
-func newCodexCloudMonitor(sync *codexcloud.Syncer, trigger *codexCloudTrigger) *codexcloud.Monitor {
+// after a joined turn completes. Each joined thread holds an idle work
+// lease until it leaves, so an idle daemon does not exit mid-capture.
+func newCodexCloudMonitor(
+	sync *codexcloud.Syncer, trigger *codexCloudTrigger, idle *server.IdleTracker,
+) *codexcloud.Monitor {
 	return &codexcloud.Monitor{
 		Store:     sync.Store,
 		Waits:     sync.Waits,
@@ -86,13 +89,15 @@ func newCodexCloudMonitor(sync *codexcloud.Syncer, trigger *codexCloudTrigger) *
 		NoSync:    sync.NoSync,
 		ReadLogin: sync.ReadLogin,
 		Trigger:   trigger.Trigger,
+		BeginWork: idle.BeginWork,
 		Version:   sync.Version,
 		Log:       sync.Log,
 	}
 }
 
 // codexCloudLiveJob finds running threads for the monitor. Joined threads
-// stay open after a run returns; the monitor owns them.
+// stay open after a run returns; the monitor owns them and their work
+// leases.
 func codexCloudLiveJob(m *codexcloud.Monitor, idle *server.IdleTracker) poller.Job {
 	return poller.Job{
 		Name:       codexCloudLiveJobName,
