@@ -150,6 +150,7 @@ func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
 				session,
 				messages,
 				nil,
+				nil,
 				productionArtifactLimits(),
 			)
 			require.ErrorIs(t, err, ErrArtifactExportRejected)
@@ -532,7 +533,7 @@ func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *test
 			messages, err := database.GetAllMessages(ctx, "sess-1")
 			require.NoError(t, err)
 			_, _, err = exportLoadedSessionToStore(
-				ctx, store, origin, sess, messages, nil, limits,
+				ctx, store, origin, sess, messages, nil, nil, limits,
 			)
 			require.Error(t, err)
 			require.ErrorIs(t, err, ErrArtifactExportRejected)

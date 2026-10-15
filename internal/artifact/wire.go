@@ -41,8 +41,11 @@ const (
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session group_key,
-	// and v6 adds session pr_links. Older manifests decode with missing fields empty.
-	manifestFormatVersion    = 6
+	// v6 adds session pr_links, and v7 adds plan_usage and capture_coverage.
+	// Older manifests decode with missing fields empty. Export writes the
+	// lowest version that holds the session's fields.
+	manifestPRLinksVersion   = 6
+	manifestFormatVersion    = 7
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
@@ -137,6 +140,35 @@ type manifest struct {
 	SessionHasToolCalls   bool                    `json:"session_has_tool_calls,omitzero"`
 	SessionHasContextData bool                    `json:"session_has_context_data,omitzero"`
 	SessionQualitySignals *manifestQualitySignals `json:"session_quality_signals,omitempty"`
+	// PlanUsage and CaptureCoverage are the session's codex-cloud plan usage
+	// and live token capture coverage, nil when the session has none. They
+	// omit only when nil, so a present but empty value still round-trips.
+	PlanUsage       *artifactPlanUsage       `json:"plan_usage,omitzero"`
+	CaptureCoverage *artifactCaptureCoverage `json:"capture_coverage,omitzero"`
+}
+
+// artifactPlanUsage is the wire form of a session's plan usage report and
+// the newest outcome after it. Field names match db.PlanUsageView.
+// CountedUnder is the usage root's session ID on the exporting origin.
+type artifactPlanUsage struct {
+	DataAsOf        string                     `json:"data_as_of,omitempty"`
+	DataStatus      string                     `json:"data_status,omitempty"`
+	UsageSource     string                     `json:"usage_source,omitempty"`
+	WeeklyPercent   *float64                   `json:"weekly_percent,omitzero"`
+	FiveHourPercent *float64                   `json:"five_hour_percent,omitzero"`
+	Credits         *string                    `json:"credits,omitzero"`
+	Groups          []db.SessionPlanUsageGroup `json:"groups,omitempty"`
+	Final           bool                       `json:"final,omitzero"`
+	OutcomeKind     string                     `json:"outcome_kind,omitempty"`
+	OutcomeAt       string                     `json:"outcome_at,omitempty"`
+	CountedUnder    string                     `json:"counted_under,omitempty"`
+}
+
+// artifactCaptureCoverage is the wire form of a session's live token
+// capture coverage. Field names match db.CaptureCoverageView.
+type artifactCaptureCoverage struct {
+	LastCaptureAt   string `json:"last_capture_at,omitempty"`
+	UncapturedTurns int    `json:"uncaptured_turns,omitzero"`
 }
 
 type artifactUsageEvent struct {

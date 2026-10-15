@@ -58,7 +58,7 @@ func TestCanonicalManifestGolden(t *testing.T) {
 		Path:      "claude/session.jsonl",
 	}
 	m := manifest{
-		Version:         manifestFormatVersion,
+		Version:         manifestPRLinksVersion,
 		Origin:          "laptop-a1b2c3",
 		NativeSessionID: "sess-1",
 		Session: manifestSession{
