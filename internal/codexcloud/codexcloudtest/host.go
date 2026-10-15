@@ -205,8 +205,9 @@ func (h *Host) ServerRequestThread(ctx context.Context, threadID, method string,
 }
 
 // OpenConnections counts the connections the host is still reading. A
-// connection leaves the count only after the host has read everything the
-// client sent before closing it.
+// connection leaves the count when its read loop ends: after the client's
+// close, once everything it sent before that is recorded, or early at a
+// message that is not valid JSON.
 func (h *Host) OpenConnections() int {
 	return len(h.open())
 }
@@ -291,6 +292,9 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 	h.conns = append(h.conns, c)
 	h.mu.Unlock()
 	defer h.drop(c)
+	// After a reply cannot be written the client has gone, but the host
+	// still reads to the end, so every message the client sent is recorded.
+	writable := true
 	for {
 		_, data, err := c.Read(context.Background())
 		if err != nil {
@@ -316,7 +320,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.mu.Unlock()
-		if len(msg.ID) == 0 || msg.Method == "" {
+		if len(msg.ID) == 0 || msg.Method == "" || !writable {
 			continue
 		}
 		reply := map[string]any{"jsonrpc": "2.0", "id": msg.ID}
@@ -331,9 +335,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if c.Write(context.Background(), websocket.MessageText, out) != nil {
-			return
-		}
+		writable = c.Write(context.Background(), websocket.MessageText, out) == nil
 	}
 }
 
