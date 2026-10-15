@@ -1864,6 +1864,13 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 3)
+	assert.Equal(t, map[string]int{
+		"pg-sub-parent": 505, "agent-pg-a": 1500,
+		"agent-pg-b": 100, "agent-pg-dedup-only": 500,
+	}, rowSet.RawOutputTokensBySession)
+	assert.Equal(t, map[string]struct{}{
+		"pg-sub-parent": {}, "agent-pg-a": {}, "agent-pg-dedup-only": {},
+	}, rowSet.DiscardedContributingSessions)
 	assert.Equal(t, "pg-sub-parent", rowSet.Rows[2].SessionID)
 	assert.Equal(t, []string{
 		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
