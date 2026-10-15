@@ -106,6 +106,16 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	})
 }
 
+func TestFutureManifestWithOtherPlanUsageShapeWaits(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeManifestWithLimits(
+		fmt.Appendf(nil, `{"origin":"contract-a1b2c3","plan_usage":[],"v":%d}`, manifestFormatVersion+1),
+		productionArtifactLimits(),
+	)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+}
+
 func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	t.Parallel()
 
