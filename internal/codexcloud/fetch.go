@@ -464,6 +464,14 @@ func commitThread(
 		}
 		st.Offset = recovered.Offset
 		absorb(&st, recovered.Recovered)
+		// Items appended before a crash are progress the saved state never
+		// recorded; dedup drops their refetched copies, so the change time
+		// comes from the recovered frames.
+		for _, r := range recovered.Recovered {
+			if r.Kind == mirror.KindItem && r.FetchedAt.After(st.LastProgress) {
+				st.LastProgress = r.FetchedAt
+			}
+		}
 	}
 	kept := dedup(&st, records)
 	if len(kept) > 0 {

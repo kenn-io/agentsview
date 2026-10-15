@@ -351,9 +351,11 @@ func TestCrashBetweenAppendAndSave(t *testing.T) {
 	require.NoError(t, err)
 	afterCrash := env.mirrorBytes(t, "t")
 
-	_, _ = env.pass(t, "t", saved, ago(time.Hour), fetchNow.Add(2*time.Minute))
+	recovered, _ := env.pass(t, "t", saved, ago(time.Hour), fetchNow.Add(2*time.Minute))
 
 	assert.Equal(t, afterCrash, env.mirrorBytes(t, "t"), "recovered records are not appended again")
+	assert.Equal(t, fetchNow.Add(time.Minute), recovered.changedAt(),
+		"the recovered items are the chat's newest change, though the listing time did not move")
 	result, ok, err := parser.ParseCodexCloudFile(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.True(t, ok)
