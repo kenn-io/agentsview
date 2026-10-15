@@ -791,6 +791,19 @@ func TestWatchEventSinkRetainsConcurrentAuthoritativeLifecycleMarkers(t *testing
 		"separate lifecycle gates must not overwrite one another")
 }
 
+func TestWatchEventSinkFullSyncRetryKeepsFreshPathsQueued(t *testing.T) {
+	sink := newWatchEventSink(8, 1024)
+	sink.RetainRetry(WatchBatch{FullSync: true})
+	sink.Add(backendEvent{Path: "/outer/fresh.jsonl", Op: backendOpWrite})
+
+	batch, ok := sink.Take(nil)
+	require.True(t, ok)
+	assert.True(t, batch.FullSync)
+	batch, ok = sink.Take(nil)
+	require.True(t, ok, "a retried full sync must not discard fresh paths")
+	assert.Equal(t, []string{"/outer/fresh.jsonl"}, batch.Paths)
+}
+
 func TestWatchEventSinkDispatchConsumesImmediateWake(t *testing.T) {
 	sink := newWatchEventSink(8, 1024)
 	sink.RetainRetryImmediate(WatchBatch{Paths: []string{"/retry"}})
@@ -1586,6 +1599,58 @@ func TestWatcherNativeEventsDoNotWaitForFailedRetryBackoff(t *testing.T) {
 			assert.Equal(t, 5*time.Second, time.Since(writtenAt),
 				"a native event must use the debounce delay while discovery retries are capped")
 		})
+	})
+}
+
+func TestWatcherRecurringFreshFailuresDoNotPostponeOlderRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		root := t.TempDir()
+		olderPath := filepath.Join(root, "older.jsonl")
+		freshPath := filepath.Join(root, "active.jsonl")
+		backend := newFakeWatchBackend()
+		type call struct {
+			at    time.Duration
+			older bool
+		}
+		calls := make(chan call, 64)
+		start := time.Now()
+		attempt, olderFailures := 0, 0
+		w, err := newWatcherWithBackend(
+			0, 20*time.Millisecond,
+			func(_ context.Context, batch WatchBatch) error {
+				attempt++
+				older := slices.Contains(batch.Paths, olderPath)
+				calls <- call{at: time.Since(start), older: older}
+				if attempt >= 3 && attempt < 10 {
+					// The unbuffered send makes the loop consume this event before completion.
+					backend.sendEvent(t, freshPath)
+				}
+				if older && olderFailures < 3 {
+					olderFailures++
+					return retryScopedWatchError{retry: WatchBatch{Paths: []string{olderPath}}}
+				}
+				if slices.Contains(batch.Paths, freshPath) {
+					return retryScopedWatchError{retry: WatchBatch{Paths: []string{freshPath}}}
+				}
+				return nil
+			},
+			backend, 8, 100_000,
+		)
+		require.NoError(t, err)
+		w.Start()
+		defer w.Stop()
+		backend.sendEvent(t, olderPath)
+		var olderAt []time.Duration
+		for len(olderAt) < 4 {
+			c := requireReceiveWithin(t, calls, time.Minute)
+			if c.older {
+				olderAt = append(olderAt, c.at)
+			}
+		}
+		ms := time.Millisecond
+		// The older retry backs off 20, 40, 80ms. Fresh failures from 80ms on
+		// must not push its fourth attempt past 140ms.
+		assert.Equal(t, []time.Duration{0, 20 * ms, 60 * ms, 140 * ms}, olderAt)
 	})
 }
 

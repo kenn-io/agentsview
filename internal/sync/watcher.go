@@ -620,10 +620,17 @@ func (s *watchEventSink) take(
 	defer s.mu.Unlock()
 	s.absorbHandoff()
 	if includeRetry && !s.retry.Empty() {
-		s.pending.merge(s.retry)
-		// merge carries lostEvents only with a full sync; a scoped retry keeps it too.
-		s.pending.lostEvents = s.pending.lostEvents || s.retry.lostEvents
+		retry := s.retry
 		s.resetRetry()
+		if retry.fullSync {
+			// merge would clear fresh paths that a full sync may not cover, such
+			// as files under an outer root beside an unavailable nested root.
+			s.pending.retainFullSync()
+			retry.fullSync = false
+		}
+		s.pending.merge(retry)
+		// merge carries lostEvents only with a full sync; a scoped retry keeps it too.
+		s.pending.lostEvents = s.pending.lostEvents || retry.lostEvents
 	}
 	return s.pending.TakeWithRootAgents(agentsForRoot)
 }
@@ -1321,6 +1328,7 @@ func (w *Watcher) loop() {
 				consecutiveFailures++
 				log.Printf("watcher callback: %v", result.err)
 				wasEmpty := w.eventSink.PendingEmpty()
+				olderRetryWaiting := !w.eventSink.RetryEmpty()
 				retryRetained := false
 				if retry, ok := callbackRetryBatch(result.err); ok {
 					retry.lifecycleTokens = append(
@@ -1362,11 +1370,16 @@ func (w *Watcher) loop() {
 				case retryRetained:
 					immediatePending = immediatePending ||
 						w.eventSink.immediatePending()
-					retryDueAt = time.Now()
+					dueAt := time.Now()
 					if !immediatePending {
-						retryDueAt = retryDueAt.Add(watcherRetryDelay(
+						dueAt = dueAt.Add(watcherRetryDelay(
 							max(w.batchDelay, w.minInterval), consecutiveFailures,
 						))
+					}
+					// A failing fresh batch must not postpone older retained work,
+					// or a source that keeps failing would starve it.
+					if !olderRetryWaiting || dueAt.Before(retryDueAt) {
+						retryDueAt = dueAt
 					}
 				case wasEmpty && !w.eventSink.PendingEmpty():
 					firstPendingAt = time.Now()
