@@ -386,6 +386,85 @@ func TestReconcileProviderHistoryClaudeRestoresSingleOccurrence(t *testing.T) {
 	}
 }
 
+// TestReconcileProviderHistoryClaudeRestoresArchivedDigestForLengthOnly
+// covers a length-only restore under a blocked category: the event's
+// RawContentDigest must come from the archive, not stay the current parse's
+// placeholder digest, so a later reparse that again restores the same
+// archived length sees no change and never falsely advances a
+// digest-derived revision.
+func TestReconcileProviderHistoryClaudeRestoresArchivedDigestForLengthOnly(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	tsStr := timeutil.Format(ts)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+	archivedDigest := []byte("archived-content-digest")
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: "", ContentLength: 500, RawContentDigest: archivedDigest,
+				}},
+			}},
+		}},
+	}
+	parsedMessages := []parser.ParsedMessage{{
+		Ordinal: 0, Timestamp: ts,
+		ToolResults: []parser.ParsedToolResult{{
+			ToolUseID: "toolu_1", Source: "tool_result",
+			PersistedOutputUnresolved: true,
+		}},
+	}}
+	options := ingest.ContentOptions{
+		BlockedResultCategories: map[string]bool{"bash": true},
+		ArchiveContent:          config.ArchiveContentUsage,
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: placeholder, ContentLength: len(placeholder),
+					RawContentDigest: []byte("placeholder-content-digest"),
+				}},
+			}},
+		}},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: parsedMessages,
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, options,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryMerge, result.Action)
+	event := result.Candidate.Messages[0].ToolCalls[0].ResultEvents[0]
+	assert.Equal(t, archivedDigest, []byte(event.RawContentDigest))
+
+	// A later reparse that again sees only the placeholder, and again
+	// restores from the same unchanged archive, must find nothing left to
+	// change: the restored event already matches the archive in content,
+	// length, and digest.
+	second := result.Candidate
+	second.Parsed.Messages = parsedMessages
+	secondResult, err := ingest.ReconcileProviderHistory(
+		t.Context(), second, prior, options,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryReplace, secondResult.Action)
+	assert.False(t, secondResult.PriorContributed)
+}
+
 func TestReconcileProviderHistoryClaudeRestoresOnlyFlaggedOccurrence(t *testing.T) {
 	t1 := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 9, 11, 9, 5, 0, 0, time.UTC)

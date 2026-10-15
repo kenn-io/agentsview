@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -231,9 +232,11 @@ func restoreClaudeToolResultEvent(
 	if archived.ContentLength <= 0 {
 		return false
 	}
-	changed := event.Content != "" || event.ContentLength != archived.ContentLength
+	changed := event.Content != "" || event.ContentLength != archived.ContentLength ||
+		!bytes.Equal(event.RawContentDigest, archived.RawContentDigest)
 	event.Content = ""
 	event.ContentLength = archived.ContentLength
+	event.RawContentDigest = archived.RawContentDigest
 	return changed
 }
 

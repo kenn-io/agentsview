@@ -309,7 +309,7 @@ fixtures retain this field; missing identities remain source-local.
   when it genuinely tried and failed to resolve a `persistedOutputPath` side
   file, never from the placeholder text's own shape
   (`parser.ParsedToolResult.PersistedOutputUnresolved`,
-  `TestParseClaudeSession_PersistedOutputUnresolvedFlagsOnlyMissingBlock`).
+  `TestParseClaudeSession_PersistedOutputUnresolvedOnlyOnUnresolvedOccurrence`).
   Claude fingerprints hash only the transcript, so a deleted side file shows
   only on a full parse; `ingest.ReconcileProviderHistory` then restores the
   archived result instead of storing the placeholder over it, for both Claude
