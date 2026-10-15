@@ -204,6 +204,13 @@ func (h *Host) ServerRequestThread(ctx context.Context, threadID, method string,
 		map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
 
+// OpenConnections counts the connections the host is still reading. A
+// connection leaves the count only after the host has read everything the
+// client sent before closing it.
+func (h *Host) OpenConnections() int {
+	return len(h.open())
+}
+
 // Joined counts the open connections that sent thread/resume for threadID.
 func (h *Host) Joined(threadID string) int {
 	return len(h.joined(threadID))
