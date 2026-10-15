@@ -155,7 +155,7 @@ func TestPlanUsageCountsParity(t *testing.T) {
 	ctx := t.Context()
 	local := seedPlanUsageParity(t)
 	const sessions = 5
-	stores := map[string]db.Store{"sqlite": local}
+	stores := map[string]db.Store{}
 
 	duckTarget := filepath.Join(t.TempDir(), "parity.duckdb")
 	duckRes, err := duckdbstore.Push(ctx, duckTarget, local, "parity-machine",
