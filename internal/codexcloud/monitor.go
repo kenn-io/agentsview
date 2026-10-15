@@ -591,8 +591,12 @@ func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) erro
 // full; the last record before the join, turn, or model changes; and, in
 // each run of dropped records, the one with the largest last-call context,
 // which the parser reports as the peak; on a tie the later one, so a kept
-// record at the end of the run carries it. A chat whose saves keep failing
-// then holds about two token records per turn.
+// record at the end of the run carries it. The token record just before
+// that peak is kept too. The parser prices an increase as one request,
+// with the model's long-context bands, only when it equals the record's
+// last call; merged with dropped calls, the peak would become a base-rate
+// event. A chat whose saves keep failing then holds about three token
+// records per turn.
 func compactPending(records []mirror.Record) []mirror.Record {
 	tokens := make([]*mirror.TokenUsageData, len(records))
 	for i, rec := range records {
@@ -621,18 +625,24 @@ func compactPending(records []mirror.Record) []mirror.Record {
 		}
 		prev, prevStarts = i, p == nil || cur == nil || !cur.Total.AtLeast(p.Total)
 	}
-	peak := -1
-	for i, data := range tokens {
-		if data == nil {
+	peak, beforePeak, prev := -1, -1, -1
+	for i, rec := range records {
+		if rec.Kind != mirror.KindTokenUsage {
 			continue
 		}
-		if peak < 0 || lastContext(data) >= lastContext(tokens[peak]) {
-			peak = i
+		if data := tokens[i]; data != nil {
+			if peak < 0 || lastContext(data) >= lastContext(tokens[peak]) {
+				peak, beforePeak = i, prev
+			}
+			if !drop[i] {
+				drop[peak] = false
+				if beforePeak >= 0 {
+					drop[beforePeak] = false
+				}
+				peak = -1
+			}
 		}
-		if !drop[i] {
-			drop[peak] = false
-			peak = -1
-		}
+		prev = i
 	}
 	kept := records[:0:0]
 	for i, rec := range records {
