@@ -5037,67 +5037,33 @@ func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
 	insertSession(t, d, "claude:s6", "proj", func(s *Session) {
 		s.Agent = "claude-code"
 		s.StartedAt = new("2026-05-20T10:00:00Z")
+		s.TotalOutputTokens = 636
+		s.HasTotalOutputTokens = true
 	})
-	// Two rows sharing the same claude message+request id (a
-	// fork/replay) must be counted once, not doubled, with the latest copy
-	// supplying the surviving row.
+	// The complete Claude pair selects the fuller snapshot within the session.
 	insertMessages(t, d,
 		Message{
 			SessionID: "claude:s6", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
 			ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":5}`),
 		},
 		Message{
 			SessionID: "claude:s6", Ordinal: 1, Role: "assistant",
 			Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
 			ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":631}`),
 		},
 	)
 	u, err := d.GetSessionUsage(ctx, "claude:s6", true)
 	requireNoError(t, err, "GetSessionUsage")
-	// One row priced at 1000*5/1e6 + 500*25/1e6 = 0.0175; deduped, not 0.035.
-	assert.Equal(t, money.MustParseDollars("0.0175"), u.Cost, "Cost want 0.0175 (deduped)")
-	assert.True(t, u.HasCost, "HasCost = false, want true")
-	require.Len(t, u.Breakdown, 1, "Breakdown")
-	require.NotNil(t, u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
-	assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
-}
-
-func TestGetSessionUsage_PrefersCompleteClaudeSnapshotWithinSession(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	seedOpusPricing(t, d)
-	insertSession(t, d, "claude:streamed", "proj", func(s *Session) {
-		s.Agent = "claude-code"
-		s.StartedAt = new("2026-05-20T10:00:00Z")
-		s.TotalOutputTokens = 636
-		s.HasTotalOutputTokens = true
-	})
-	insertMessages(t, d,
-		Message{
-			SessionID: "claude:streamed", Ordinal: 0, Role: "assistant",
-			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":5}`),
-		},
-		Message{
-			SessionID: "claude:streamed", Ordinal: 1, Role: "assistant",
-			Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":631}`),
-		},
-	)
-
-	u, err := d.GetSessionUsage(ctx, "claude:streamed", true)
-	requireNoError(t, err, "GetSessionUsage")
 	assert.Equal(t, 631, u.TotalOutputTokens)
 	assert.Equal(t, money.MustParseDollars("0.020775"), u.Cost)
-	require.Len(t, u.Breakdown, 1)
+	assert.True(t, u.HasCost, "HasCost = false, want true")
+	require.Len(t, u.Breakdown, 1, "Breakdown")
 	assert.Equal(t, 631, u.Breakdown[0].OutputTokens)
-	require.NotNil(t, u.Breakdown[0].MessageOrdinal)
-	assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal)
+	require.NotNil(t, u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
+	assert.Equal(t, 1, *u.Breakdown[0].MessageOrdinal, "MessageOrdinal")
 }
 
 func TestGetSessionUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
