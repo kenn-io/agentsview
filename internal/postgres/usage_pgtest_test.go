@@ -528,7 +528,7 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 631, result.Totals.OutputTokens)
 }
 
-func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
+func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		aTimestamp      any

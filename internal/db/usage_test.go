@@ -2135,7 +2135,7 @@ func TestSnapshotRankedDailyUsageRowsRanksOnlyDuplicatedRequests(t *testing.T) {
 	}, got)
 }
 
-func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
+func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
 	for _, tc := range []struct{ name, requestID string }{
 		{"complete Claude pair", "req_dup"},
 		{"source UUID with incomplete pair", ""},
@@ -2201,25 +2201,23 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 			require.NoError(t, err, "GetDailyUsage")
 			require.Len(t, result.Daily, 1, "daily entries =")
 			day := result.Daily[0]
-			want := [4]int{120, 580, 1200, 55000}
-			wantSessions := 2
-			assert.Equal(t, want[0], day.InputTokens)
-			assert.Equal(t, want[1], day.OutputTokens)
-			assert.Equal(t, want[2], day.CacheCreationTokens)
-			assert.Equal(t, want[3], day.CacheReadTokens)
+			assert.Equal(t, 120, day.InputTokens)
+			assert.Equal(t, 580, day.OutputTokens)
+			assert.Equal(t, 1200, day.CacheCreationTokens)
+			assert.Equal(t, 55000, day.CacheReadTokens)
 			filter := UsageFilter{From: "2026-04-10", To: "2026-04-10", Timezone: "UTC"}
 			top, err := d.GetTopSessionsByCost(t.Context(), filter, 20)
 			require.NoError(t, err, "GetTopSessionsByCost")
-			require.Len(t, top, wantSessions)
+			require.Len(t, top, 2)
 			assert.Equal(t, "source-main", top[0].SessionID)
 			assert.Equal(t, 51600, top[0].TotalTokens)
 			assert.Equal(t, "unique-session", top[1].SessionID)
 			assert.Equal(t, 5300, top[1].TotalTokens)
 			counts, err := d.GetUsageSessionCounts(t.Context(), filter)
 			require.NoError(t, err, "GetUsageSessionCounts")
-			assert.Equal(t, wantSessions, counts.Total)
-			assert.Equal(t, map[string]int{"proj": wantSessions}, counts.ByProject)
-			assert.Equal(t, map[string]int{"claude": wantSessions}, counts.ByAgent)
+			assert.Equal(t, 2, counts.Total)
+			assert.Equal(t, map[string]int{"proj": 2}, counts.ByProject)
+			assert.Equal(t, map[string]int{"claude": 2}, counts.ByAgent)
 		})
 	}
 	t.Run("missing dedup keys counted every time", func(t *testing.T) {
