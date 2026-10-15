@@ -200,3 +200,21 @@ func TestLegacyCodexTrashedPageDropsStaleSubagentParentKeepsLauncher(t *testing.
 	assert.Equal(t, launcher, parent, "launcher override stays")
 	assert.Empty(t, parserParent)
 }
+
+func TestLegacyBareRolloutExclusionWithoutFileNameBlocksPage(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.getWriter().Exec(ctx,
+		`INSERT INTO excluded_sessions (id, file_path) VALUES (?, NULL)`,
+		"codex:"+legacyRoll1)
+	require.NoError(t, err)
+
+	page := Session{ID: "codex:" + legacyThread + "_" + legacyRoll1, Agent: "codex", Project: "sample", Machine: "local"}
+	assert.True(t, d.IsSessionExcluded(ctx, page.ID))
+	assert.False(t, d.IsSessionExcluded(ctx, "codex:"+legacyThread+"_"+legacyRoll2))
+	assert.False(t, d.IsSessionExcluded(ctx, "codex:"+legacyThread))
+	require.ErrorIs(t, d.UpsertSession(ctx, page), ErrSessionExcluded)
+	got, err := d.GetSession(ctx, page.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got, "the returned page is not re-admitted")
+}

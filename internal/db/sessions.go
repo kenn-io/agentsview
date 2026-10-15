@@ -1320,9 +1320,14 @@ func (db *DB) GetSessionName(
 
 // A pre-revert-page deletion covered the whole Codex thread. Keep that scope
 // even for page files absent during the upgrade. New deletions remain exact IDs.
+// A page <thread>_<rollout> is also excluded by its retired bare <rollout> ID,
+// which may have been recorded without a file name to derive the new ID from.
 const sessionExcludedQuery = `SELECT EXISTS (
 	SELECT 1 FROM excluded_sessions
 	WHERE id = ?1 OR (
+		substr(?1, -37, 1) = '_' AND length(?1) > 73
+		AND id = substr(?1, 1, length(?1) - 73) || substr(?1, -36)
+	) OR (
 		include_codex_pages = 1 AND substr(?1, -37, 1) = '_'
 		AND id = substr(?1, 1, length(?1) - 37)
 	)
@@ -1395,6 +1400,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	const excluded = `EXISTS (
 		SELECT 1 FROM excluded_sessions excluded
 		WHERE excluded.id = sessions.id OR (
+			substr(sessions.id, -37, 1) = '_' AND length(sessions.id) > 73
+			AND excluded.id = substr(sessions.id, 1, length(sessions.id) - 73) || substr(sessions.id, -36)
+		) OR (
 			excluded.include_codex_pages = 1 AND substr(sessions.id, -37, 1) = '_'
 			AND excluded.id = substr(sessions.id, 1, length(sessions.id) - 37)
 		)
