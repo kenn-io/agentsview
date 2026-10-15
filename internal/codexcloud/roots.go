@@ -199,9 +199,10 @@ func (s *Store) UsageGroupFor(key AccountKey, root string) (UsageGroup, error) {
 // rebuildUsageQueue refills acct's plan usage queue from the per-thread
 // state, for an account whose account.json was lost or set aside. Every
 // mirrored usage root goes back where its newest plan usage record and its
-// group's newest change put it; see restoreRoot. It reads only local files
-// and fetches nothing. It reports whether the account has any thread state
-// files.
+// group's newest change put it; see restoreRoot. A root whose files cannot
+// be read is logged and left out, so one damaged chat does not stop the
+// account from syncing. It reads only local files and fetches nothing. It
+// reports whether the account has any thread state files.
 func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, error) {
 	dir, err := s.accountDir(key)
 	if err != nil {
@@ -214,7 +215,7 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 	if err != nil {
 		return false, fmt.Errorf("codex-cloud: read account directory: %w", err)
 	}
-	threads := false
+	threads, skipped := false, 0
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), threadStateSuffix)
 		if !ok || entry.IsDir() || !plainName(id) {
@@ -222,12 +223,14 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 		}
 		threads = true
 		if err := s.restoreRoot(key, acct, id); err != nil {
-			return false, err
+			skipped++
+			s.Log.Printf("codex-cloud: chat %s: left out of the rebuilt plan usage queue: %v", id, err)
 		}
 	}
 	if threads {
 		s.Log.Printf("codex-cloud: account state was missing or unreadable; rebuilt the plan usage queue "+
-			"from the saved chat state: %d chats to check, %d to refresh", len(acct.UsagePending), len(acct.Refresh))
+			"from the saved chat state: %d chats to check, %d to refresh, %d left out",
+			len(acct.UsagePending), len(acct.Refresh), skipped)
 	}
 	return threads, nil
 }
