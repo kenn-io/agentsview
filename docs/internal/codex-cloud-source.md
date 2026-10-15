@@ -196,7 +196,10 @@ Lost state is recoverable. A state file that does not decode is moved to
 leaves offset zero, so the next append treats every complete frame as kept and
 rebuilds the digests from it. A mirror file that is missing or shorter than its
 stored offset resets the thread's resume point, so the thread is fetched in full
-again.
+again. A missing or corrupt `account.json` with thread files still present
+rebuilds the plan usage queue from the thread files: every unsettled root
+becomes pending again with its stored change time, so nothing is fetched again
+and old roots settle on their first answer.
 
 ## Incremental sync
 
@@ -350,11 +353,17 @@ that turn has already arrived, because one websocket delivers in order. The
 monitor writes a turn-completion record, flushes, and leaves. It also leaves
 after 6 hours, on a refresh request, or when live capture turns off.
 
+Each joined thread holds a daemon work lease until its final save, so a detached
+daemon does not exit on idle while it is listening in, for up to the 6-hour join
+limit. A daemon that is shutting down refuses new joins.
+
 Records are buffered and appended at most once a minute, on turn completion, and
 on leaving. Totals are cumulative, so a crash loses only the buffer and the next
 update recovers the counts. If saving fails, records wait in memory and the
 status line warns. Past 256 waiting records a thread's queue is compacted to the
-records that still carry information, about two per turn. A restart loses them.
+records that still carry information, about three per turn. Compaction keeps the
+record before each run's peak, so the peak call is still priced as one request.
+A restart loses them.
 
 ### From totals to usage events
 
@@ -425,6 +434,10 @@ or a refresh request.
   of one day after the row's `data_as_of` and one day after its last attempt.
   Seven days after the root's last change it leaves the refresh set without
   another request, and its last row stays as it is.
+- **Change time.** A root's last change is the newest change of a thread in its
+  group: the later of its listing `updatedAt` and its last saved progress. A
+  refetch that finds nothing new does not move it, so a finished thread the
+  listing still shows as `active` keeps its schedule.
 - **Settling.** Usage can change for 7 days after a root's last change. A
   pending root answered after that settles: a `partial` or `unavailable` row
   is stored as final; a root left out stores its last row again as final, or
