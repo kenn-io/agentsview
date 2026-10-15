@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
@@ -455,6 +456,36 @@ func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
 	assert.Equal(t, "alpha\x1fmain", gitBranch)
 	assert.Equal(t, "alpha\x1fdev", excludeGitBranch)
 	assert.Equal(t, "true", branchBreakdowns)
+}
+
+func TestHTTPBackend_UsageSummary_ReturnsBranchTotals(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"from":"2024-06-01","to":"2024-06-02",` +
+				`"branchTotals":[{"project_key":"pl1:sha256:alpha",` +
+				`"project":"alpha","branch":"main","inputTokens":120,` +
+				`"outputTokens":30,"cacheCreationTokens":4,` +
+				`"cacheReadTokens":9,"cost":{"microdollars":1250000}}]}`))
+		}))
+	t.Cleanup(srv.Close)
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
+
+	res, err := svc.UsageSummary(t.Context(), service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-02",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []service.BranchTotal{{
+		ProjectKey:          "pl1:sha256:alpha",
+		Project:             "alpha",
+		Branch:              "main",
+		InputTokens:         120,
+		OutputTokens:        30,
+		CacheCreationTokens: 4,
+		CacheReadTokens:     9,
+		Cost:                money.MustParseDollars("1.25"),
+	}}, res.BranchTotals)
 }
 
 // A read-only daemon (pg serve) returns 501 for usage; the HTTP backend

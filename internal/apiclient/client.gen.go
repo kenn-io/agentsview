@@ -22528,38 +22528,7 @@ func (a ArtifactSyncResult) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(a))
 }
 
-type BranchTotal struct {
-	Branch              string     `json:"branch" validate:"required"`
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	Cost                MoneyMoney `json:"cost"`
-	InputTokens         int64      `json:"inputTokens"`
-	OutputTokens        int64      `json:"outputTokens"`
-	Project             string     `json:"project" validate:"required"`
-	ProjectKey          string     `json:"project_key" validate:"required"`
-}
-
-func (b BranchTotal) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(b.Branch, "required"); err != nil {
-		errors = errors.Append("Branch", err)
-	}
-	if v, ok := any(b.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if err := typesValidator.Var(b.Project, "required"); err != nil {
-		errors = errors.Append("Project", err)
-	}
-	if err := typesValidator.Var(b.ProjectKey, "required"); err != nil {
-		errors = errors.Append("ProjectKey", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type BranchTotal = service.BranchTotal
 
 type CacheStats = service.CacheStats
 

@@ -165,6 +165,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/service
         name: service
+  - target: $.components.schemas.BranchTotal
+    update:
+      x-go-type: service.BranchTotal
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
   - target: $.components.schemas.CacheStats
     update:
       x-go-type: service.CacheStats
