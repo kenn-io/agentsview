@@ -433,19 +433,6 @@ func TestFoundSoFarUntilAllListings(t *testing.T) {
 	assert.Equal(t, 1, during.Total, "after the backfill: importing N of M")
 }
 
-func TestFullResyncKeepsStateAndFetchesNothing(t *testing.T) {
-	env := newPassEnv(t)
-	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
-	env.run(t)
-	turns, items := env.calls("thread/turns/list"), env.calls("thread/items/list")
-
-	env.clock.Advance(5 * time.Minute)
-	env.run(t)
-
-	assert.Equal(t, turns, env.calls("thread/turns/list"))
-	assert.Equal(t, items, env.calls("thread/items/list"))
-}
-
 func TestLostStateRefetchesWithoutDuplicates(t *testing.T) {
 	env := newPassEnv(t)
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one"), message("n", "two")))

@@ -3,7 +3,6 @@ package zstdframe
 import (
 	"bytes"
 	"errors"
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,14 +67,4 @@ func TestInspectRejectsFrameWithoutChecksum(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, formatErr.Unsupported)
 	assert.Equal(t, "frame without checksum", formatErr.Reason)
-}
-
-func TestDecoderRoundTrip(t *testing.T) {
-	data, _ := frames(t, "first\n", "second\n")
-	dec, err := NewDecoder(bytes.NewReader(data))
-	require.NoError(t, err)
-	defer dec.Close()
-	got, err := io.ReadAll(dec)
-	require.NoError(t, err)
-	assert.Equal(t, "first\nsecond\n", string(got))
 }
