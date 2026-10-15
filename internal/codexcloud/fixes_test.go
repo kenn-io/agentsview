@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud/codexcloudtest"
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestMalformedHistoryReplyEndsAccountAsProtocolChange(t *testing.T) {
@@ -335,6 +336,9 @@ func TestWriteToLostMirrorKeepsHistoryDue(t *testing.T) {
 			records, err := mirror.ReadAll(t.Context(), path)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"a", "b", "c"}, recordedItemIDs(records))
+			_, ok, err := parser.ParseCodexCloudFile(t.Context(), path, "m")
+			require.NoError(t, err)
+			assert.True(t, ok, "the rebuilt file imports")
 		})
 	}
 }

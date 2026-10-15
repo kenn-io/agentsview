@@ -510,6 +510,13 @@ func commitBesideHistory(
 	}
 	if lost {
 		st = forgetHistory(st)
+		// The rebuilt file needs the chat's metadata before the parser
+		// accepts it, and a later fetch from the unfinished or check-again
+		// lists has no listing to write.
+		if len(st.Listing) > 0 {
+			listing := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: st.Listing}
+			records = append([]mirror.Record{listing}, records...)
+		}
 	}
 	next, _, err := commitThread(store, key, threadID, st, records, now)
 	return next, err
