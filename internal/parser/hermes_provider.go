@@ -1314,6 +1314,17 @@ func (s hermesSourceSet) FindSource(
 			}
 		}
 		for _, root := range roots {
+			// A bare state.db hint is what pre-per-session syncs always
+			// stamped. Matching it here would hand a session-specific
+			// request the whole-archive source, which SyncSingleSessionContext
+			// then reparses and ForceReplaces in full -- undoing every
+			// sibling's per-session migration in the same archive. Fall
+			// through to the RawSessionID lookup below instead, which
+			// resolves this session's own member.
+			if stateDB, _, ok := hermesStatePaths(root); ok &&
+				req.RawSessionID != "" && samePath(filepath.Clean(path), filepath.Clean(stateDB)) {
+				continue
+			}
 			if source, ok := s.sourceRef(root, path); ok {
 				return source, true, nil
 			}

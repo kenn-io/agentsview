@@ -1483,6 +1483,73 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
+// TestHermesSingleSessionRefreshDoesNotUnmigrateLegacySibling proves
+// FindSource checks the requested session ID before matching a stored bare
+// "state.db" hint -- the FilePath every session got under the pre-PR,
+// whole-archive write. Without that check, refreshing one never-migrated
+// legacy session resolves to the whole-archive source (since its stored
+// hint is the bare archive path), and SyncSingleSessionContext then
+// reparses and ForceReplaces every session in state.db, undoing any
+// sibling that had already migrated to its own per-session path.
+func TestHermesSingleSessionRefreshDoesNotUnmigrateLegacySibling(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			execHermesState(t, stateDB, `INSERT INTO sessions
+				(id, source, model, started_at, ended_at, message_count)
+				VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+			execHermesState(t, stateDB, `INSERT INTO messages
+				(session_id, role, content, timestamp)
+				VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			// Seed both sessions the pre-PR way: one whole-archive parse,
+			// written with FilePath stamped as the bare state.db path for
+			// every session, not a per-session member path.
+			legacy := engine.processFile(t.Context(), parser.DiscoveredFile{Path: stateDB, Agent: agent})
+			require.NoError(t, legacy.err)
+			require.Len(t, legacy.results, 2)
+			writes := make([]pendingWrite, len(legacy.results))
+			for i, result := range legacy.results {
+				writes[i] = pendingWrite{sess: result.Session, msgs: result.Messages, usageEvents: result.UsageEvents}
+			}
+			written, _, failed, _ := engine.writeBatch(writes, syncWriteDefault, true)
+			require.Equal(t, len(legacy.results), written)
+			require.Zero(t, failed)
+			childID := string(agent) + ":child"
+			siblingID := string(agent) + ":sibling"
+			require.Equal(t, stateDB, database.GetSessionFilePath(t.Context(), childID))
+			require.Equal(t, stateDB, database.GetSessionFilePath(t.Context(), siblingID))
+
+			// Migrate the sibling to its own per-session path via its own
+			// transcript event, leaving "child" on the legacy bare path.
+			writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "sibling")
+			require.NoError(t, engine.syncPathsContext(
+				t.Context(), []string{filepath.Join(root, "sessions", "sibling.jsonl")}, false,
+			))
+			require.Equal(t, parser.VirtualSourcePath(stateDB, "sibling"),
+				database.GetSessionFilePath(t.Context(), siblingID),
+				"the sibling must migrate to its own per-session path")
+
+			// Refresh the still-legacy "child" session by ID.
+			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), childID))
+
+			assert.Equal(t, parser.VirtualSourcePath(stateDB, "child"),
+				database.GetSessionFilePath(t.Context(), childID),
+				"refreshing a legacy session must resolve its own member, not the whole archive")
+			assert.Equal(t, parser.VirtualSourcePath(stateDB, "sibling"),
+				database.GetSessionFilePath(t.Context(), siblingID),
+				"refreshing an unrelated legacy session must not undo a sibling's migration")
+		})
+	}
+}
+
 func TestHermesPartialDiscoverySyncsReadableTranscripts(t *testing.T) {
 	for _, test := range []struct {
 		damage string
