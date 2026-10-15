@@ -300,6 +300,44 @@ func TestLostMirrorAfterResumeRefetchesHistory(t *testing.T) {
 	}
 }
 
+// A plan usage record written to a lost mirror recreates the file. The
+// next fetch must still read the history before the resume point.
+func TestWriteToLostMirrorKeepsHistoryDue(t *testing.T) {
+	for _, damage := range []string{"deleted", "truncated"} {
+		t.Run(damage, func(t *testing.T) {
+			env := newPassEnv(t)
+			updated := ago(time.Hour)
+			env.threads.Set(codexcloudtest.Thread{
+				ID: "t", Name: "thread t", CreatedAt: updated - 3600, UpdatedAt: updated,
+				Turns: []codexcloudtest.Turn{{
+					ID: "turn-1", Status: "inProgress", StartedAt: updated - 3600,
+					Items: []codexcloudtest.Item{
+						command("a", "completed", agoMs(time.Hour)), command("b", "completed", agoMs(time.Hour)),
+						command("c", "inProgress", 0),
+					},
+				}},
+			})
+			env.run(t)
+			path := env.mirrorPath(t, "t")
+			if damage == "deleted" {
+				require.NoError(t, os.Remove(path))
+			} else {
+				require.NoError(t, os.Truncate(path, 0))
+			}
+			now := env.clock.Now()
+			require.NoError(t, env.syncer.appendPlan(passKey, "t", now, mirror.KindPlanUsageOutcome,
+				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
+
+			env.clock.Advance(5 * time.Minute)
+			env.run(t)
+
+			records, err := mirror.ReadAll(t.Context(), path)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"a", "b", "c"}, recordedItemIDs(records))
+		})
+	}
+}
+
 func TestDigestsDropTurnsBeforeResume(t *testing.T) {
 	env := newPassEnv(t)
 	updated := ago(time.Hour)
