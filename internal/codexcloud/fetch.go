@@ -23,14 +23,7 @@ import (
 // is never left out.
 type TurnView string
 
-const (
-	TurnViewNotLoaded TurnView = "notLoaded"
-	TurnViewSummary   TurnView = "summary"
-	TurnViewFull      TurnView = "full"
-)
-
-// turnView is the gate's answer for which view the server accepts.
-var turnView = TurnViewNotLoaded
+const TurnViewNotLoaded TurnView = "notLoaded"
 
 const (
 	turnPageSize = 50
@@ -197,7 +190,7 @@ func nextTurnState(old TurnState, turn mirror.Turn, now time.Time) TurnState {
 // newest first and stops at the resume turn, so the cost follows the
 // turns since the resume point, not the thread's length.
 func listTurns(ctx context.Context, c *Conn, threadID, resumeTurnID string) ([]jsontext.Value, error) {
-	params := turnsParams{ThreadID: threadID, Limit: turnPageSize, ItemsView: turnView}
+	params := turnsParams{ThreadID: threadID, Limit: turnPageSize, ItemsView: TurnViewNotLoaded}
 	var turns []jsontext.Value
 	for {
 		var page turnsPage
