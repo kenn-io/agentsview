@@ -196,8 +196,9 @@ func (s *Store) UsageGroupFor(key AccountKey, root string) (UsageGroup, error) {
 	return UsageGroup{ThreadID: root, CreatedAt: time.Unix(st.CreatedAt, 0), Descendants: descendants}, nil
 }
 
-// rebuildUsageQueue refills acct's plan usage queue from the per-thread
-// state, for an account whose account.json was lost or set aside. Every
+// rebuildUsageQueue refills acct's plan usage queue and the sets of chats
+// to fetch again from the per-thread state, for an account whose
+// account.json was lost or set aside; see restoreFollowUps. Every
 // mirrored usage root goes back where its newest plan usage record and its
 // group's newest change put it; see restoreRoot. A root whose files cannot
 // be read is logged and left out, so one damaged chat does not stop the
@@ -222,7 +223,11 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 			continue
 		}
 		threads = true
-		if err := s.restoreRoot(key, acct, id); err != nil {
+		err := s.restoreFollowUps(key, acct, id)
+		if err == nil {
+			err = s.restoreRoot(key, acct, id)
+		}
+		if err != nil {
 			skipped++
 			s.Log.Printf("codex-cloud: chat %s: %v; plan usage for this chat waits for its next change", id, err)
 		}
@@ -238,6 +243,31 @@ func (s *Store) rebuildUsageQueue(key AccountKey, acct *AccountState) (bool, err
 		s.Log.Print(summary)
 	}
 	return threads, nil
+}
+
+// restoreFollowUps puts a thread back in the sets that fetch it again
+// although its listing has not changed, by the rules a fetch uses: a
+// running turn or a newest turn still inside its save-lag margin makes it
+// unfinished, and an updatedAt inside checkAgainWindow marks it to check
+// again. Without them, a chat waiting for late items when account.json was
+// lost would keep an incomplete transcript until it changes again.
+func (s *Store) restoreFollowUps(key AccountKey, acct *AccountState, id string) error {
+	st, err := s.LoadThread(key, id)
+	if err != nil {
+		return err
+	}
+	now := s.Now()
+	if unfinished, inProgress := savedTurnsUnfinished(st.Turns, now); unfinished {
+		acct.Unfinished[id] = UnfinishedEntry{
+			InProgress: inProgress,
+			Stalled:    inProgress && !st.LastProgress.IsZero() && now.Sub(st.LastProgress) >= stallLimit,
+			SubAgent:   st.IsSubAgent,
+		}
+	}
+	if st.UpdatedAt != 0 && now.Sub(time.Unix(st.UpdatedAt, 0)) < checkAgainWindow {
+		acct.CheckAgain[id] = true
+	}
+	return nil
 }
 
 // restoreRoot puts one thread back in acct's plan usage queue if it is a

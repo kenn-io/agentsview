@@ -183,6 +183,8 @@ type Store struct {
 	root string
 	// Log records state files set aside because they could not be decoded.
 	Log *log.Logger
+	// Now is the clock the account state rebuild judges save-lag margins by.
+	Now func() time.Time
 
 	mu    sync.Mutex
 	locks map[AccountKey]*sync.Mutex
@@ -190,7 +192,7 @@ type Store struct {
 
 // NewStore opens the state under root, {dataDir}/sources/codex-cloud.
 func NewStore(root string) *Store {
-	return &Store{root: root, Log: log.Default(), locks: map[AccountKey]*sync.Mutex{}}
+	return &Store{root: root, Log: log.Default(), Now: time.Now, locks: map[AccountKey]*sync.Mutex{}}
 }
 
 // Lock serializes every state write for one account. The sync job and the

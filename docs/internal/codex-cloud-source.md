@@ -215,6 +215,12 @@ Each root keeps its group's stored change time, so a root that changed more than
 7 days ago settles on its first answer. A root whose files cannot be read is
 logged and left out until its chat changes again.
 
+The same rebuild restores the chats that a pass fetches again although their
+listing has not changed. A chat with a running turn, or whose newest turn ended
+within the save-lag margin, is unfinished again. A chat whose `updatedAt` is
+within 2 minutes is marked to check again. Without this, a chat waiting for late
+items would keep an incomplete transcript until it changes again.
+
 ## Incremental sync
 
 The protocol has no "items changed since" query. So for each thread the fetcher

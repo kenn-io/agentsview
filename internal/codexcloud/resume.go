@@ -105,12 +105,10 @@ func advanceResume(
 	return turnID, itemID
 }
 
-// threadUnfinished reports whether a thread must be fetched again next
-// pass: a turn still runs, an item after the resume point has not
-// finished, or the newest turn could still receive saved items.
-func threadUnfinished(
-	st ThreadState, turns []TurnState, items map[string][]mirror.ItemRecord, now time.Time,
-) (unfinished, inProgress bool) {
+// savedTurnsUnfinished is the part of threadUnfinished that needs only
+// the turns: a turn still runs, or the newest turn could still receive
+// saved items.
+func savedTurnsUnfinished(turns []TurnState, now time.Time) (unfinished, inProgress bool) {
 	for _, turn := range turns {
 		if turn.Status == "inProgress" {
 			inProgress = true
@@ -119,9 +117,17 @@ func threadUnfinished(
 	if len(turns) == 0 {
 		return inProgress, inProgress
 	}
-	last := turns[len(turns)-1]
-	if inProgress || !turnMarginPassed(last, nil, now) {
-		return true, inProgress
+	return inProgress || !turnMarginPassed(turns[len(turns)-1], nil, now), inProgress
+}
+
+// threadUnfinished reports whether a thread must be fetched again next
+// pass: a turn still runs, an item after the resume point has not
+// finished, or the newest turn could still receive saved items.
+func threadUnfinished(
+	st ThreadState, turns []TurnState, items map[string][]mirror.ItemRecord, now time.Time,
+) (unfinished, inProgress bool) {
+	if unfinished, inProgress = savedTurnsUnfinished(turns, now); unfinished || len(turns) == 0 {
+		return unfinished, inProgress
 	}
 	turnID, itemID := advanceResume(st, turns, items, now)
 	for _, turn := range slices.Backward(turns) {
