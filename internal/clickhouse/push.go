@@ -123,12 +123,12 @@ func (s *Sync) PushWithOptions(
 	// An unfinished full push stays full until one finishes. Resuming keeps
 	// the sessions it already wrote, so restarts converge.
 	run, pending, resumed := s.pendingFullPushRun(meta[s.archiveKey(fullPushRunKeyBase)], databaseID)
-	if resumed && run.Errored && !full {
+	if resumed && run.Errored && !run.MustFinish && !full {
 		// Before runs were recorded, the push after one that ended with
 		// session errors was incremental unless a trigger above persisted.
-		// Only a run that matches this push can be dropped: one with another
-		// scope may have deleted sessions this scope keeps, and only a full
-		// push writes back sessions older than the stored cutoff.
+		// A run that does not match this push, or that replaced one that did
+		// not, may have deleted sessions this scope keeps. Only a full push
+		// writes back sessions older than the stored cutoff, so such runs stay.
 		log.Printf("clickhouse push: dropping the unfinished full push (%s); it ended with session errors and nothing else requires a full push",
 			run.Reason)
 		if err := writeMetadata(ctx, conn, map[string]string{s.archiveKey(fullPushRunKeyBase): ""}); err != nil {
@@ -136,6 +136,9 @@ func (s *Sync) PushWithOptions(
 		}
 		pending, resumed = false, false
 	}
+	// A run that replaces one it cannot resume takes over that run's duty to
+	// finish without errors.
+	mustFinish := pending && (!resumed || run.MustFinish)
 	if resumed && opts.Full {
 		// --full asks for every session to be rewritten, including ones the
 		// unfinished run wrote; its fingerprints cannot see in-place edits.
@@ -171,6 +174,7 @@ func (s *Sync) PushWithOptions(
 	}
 	if full && !resumed {
 		run = s.newFullPushRun(version, databaseID, reason)
+		run.MustFinish = mustFinish
 		encoded, err := run.encode()
 		if err != nil {
 			return result, err

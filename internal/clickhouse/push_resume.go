@@ -35,6 +35,11 @@ type fullPushRun struct {
 	// Such a run resumes only while something else still forces a full
 	// push; otherwise the incremental push handles the failed sessions.
 	Errored bool `json:"errored,omitempty"`
+	// MustFinish reports that the run replaced an unfinished run it could
+	// not resume. That run may have deleted mirror sessions older than the
+	// stored cutoff, which only a full push writes back, so this run stays
+	// pending until it ends without errors.
+	MustFinish bool `json:"must_finish,omitempty"`
 }
 
 func (r fullPushRun) encode() (string, error) {
@@ -80,7 +85,7 @@ func (s *Sync) pendingFullPushRun(stored, databaseID string) (run fullPushRun, p
 		return fullPushRun{Reason: "unfinished full push"}, true, false
 	}
 	current := s.newFullPushRun(run.Version, databaseID, run.Reason)
-	current.Errored = run.Errored
+	current.Errored, current.MustFinish = run.Errored, run.MustFinish
 	if run.Version == 0 || run != current {
 		log.Printf("clickhouse push: starting over instead of resuming the unfinished full push (%s) because the archive, scope, or format changed since it began",
 			run.Reason)

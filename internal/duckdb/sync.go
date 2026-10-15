@@ -243,12 +243,19 @@ func Push(
 		case opts.Automatic:
 			return deferredHeldMirrorPush(), nil
 		}
-		if errored != nil {
-			resume(errored)
-		} else {
-			reason = "mirror is held open by reader processes; " +
-				"incremental write access unavailable"
+		const heldReason = "mirror is held open by reader processes; " +
+			"incremental write access unavailable"
+		switch {
+		case errored == nil:
+			reason = heldReason
 			run.Reason = reason
+		case errored.Reason == heldReason:
+			resume(errored)
+		default:
+			// Name the readers too, since closing them would allow an
+			// incremental update instead of the rebuild.
+			resume(errored)
+			reason += "; reader processes hold the mirror, so an incremental update is unavailable"
 		}
 		if lock == nil {
 			if err := claim(true); err != nil {

@@ -122,16 +122,18 @@ The latest release is
   interrupted by a restart continues where it stopped on the next push instead
   of starting over. Pushes to all three now send the most recently active
   sessions first, so a push that stops early has already delivered your newest
-  work. `--full` still starts over from scratch. A manual DuckDB push that
-  falls back to a rebuild because a reader holds the mirror also continues an
-  earlier such rebuild that ended with session errors.
+  work. `--full` still starts over from scratch. If another process has the
+  DuckDB mirror open, a manual push rebuilds the mirror. When an earlier rebuild
+  stopped with session errors, that push now continues it instead of starting
+  over.
 
 **Bug fixes**
 
 - A ClickHouse push that restores a wider project scope after a filtered push
-  ended with session errors now runs a full push, so sessions the filtered push
-  removed from the mirror come back. Before, the next push was incremental and
-  left those older sessions missing while reporting success.
+  stopped with session errors now runs a full push, and pushes stay full until
+  one finishes without errors. Sessions the filtered push removed from the
+  mirror come back. Before, the next push was incremental and left those older
+  sessions missing while reporting success.
 - Codex pages from Desktop builds 0.148.0-alpha.15 through 0.154.0-alpha.6.2
   now join their thread with its title instead of showing as separate untitled
   sessions. The upgrade rebuilds the archive once and keeps names, stars, pins,

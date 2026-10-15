@@ -290,3 +290,26 @@ func TestErroredRebuildResumesWhileMirrorHeld(t *testing.T) {
 		res.Diagnostics.RebuildReason)
 	assert.Equal(t, resumeSessionCount, res.Diagnostics.SkippedUnchangedSessions.Total)
 }
+
+// A resumed rebuild that a reader forced reports the readers as well as the
+// original reason, so the user knows closing them would avoid the rebuild.
+func TestHeldPushResumingErroredRebuildNamesReaders(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	writeFailingSession(t, local)
+	_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
+	require.ErrorContains(t, err, "session push errors")
+
+	held, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, held.Close()) }()
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.ErrorContains(t, err, "session push errors")
+	assert.Equal(t,
+		"resuming an unfinished rebuild, started because: --full requested; reader processes hold the mirror, so an incremental update is unavailable",
+		res.Diagnostics.RebuildReason)
+}

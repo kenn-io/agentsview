@@ -331,3 +331,54 @@ func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
 		"the out-of-scope session is back in the mirror")
 	assert.Equal(t, 3, chtest.Count(t, conn, "sessions", ""))
 }
+
+// The push that restores the wider scope after a failed filtered push can
+// fail too, on the very session the filtered push removed. Its run then
+// matches the wider scope, but it must not be dropped: the session is older
+// than the stored cutoff, so only a full push brings it back.
+func TestFailedScopeRecoveryKeepsNextPushFull(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	conn := chtest.Open(t, target.URL, target.Database)
+	first, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+
+	failSession := func(s *Sync, id string) {
+		s.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+			for _, sess := range batch {
+				if sess.ID == id {
+					return errors.New("simulated session failure")
+				}
+			}
+			return nil
+		}}
+	}
+	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
+	failSession(filtered, fixtureAlphaID)
+	errored, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NotZero(t, errored.Errors)
+	require.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID))
+
+	recovery := newTestSync(t, local, target, storage.PusherOptions{})
+	failSession(recovery, fixtureBetaID)
+	failed, err := recovery.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.True(t, failed.Full)
+	require.NotZero(t, failed.Errors)
+	require.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID),
+		"the failed recovery did not restore the removed session")
+
+	next, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.True(t, next.Full)
+	assert.Equal(t, "resuming an unfinished full push, started because: push scope changed", next.FullReason)
+	assert.Zero(t, next.Errors)
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID),
+		"the removed session is back in the mirror")
+
+	after, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.False(t, after.Full, "the clean push cleared the run")
+}
