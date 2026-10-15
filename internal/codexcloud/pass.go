@@ -111,8 +111,14 @@ func (s *Syncer) Run(ctx context.Context) error {
 			s.homeRow(gates, home, Message(FailEphemeral, time.Time{}))
 		case state == HomeSignedOut:
 			s.homeRow(gates, home, Message(FailSignedOut, time.Time{}))
-		case !s.Waits.HomeReady(home, login.AuthModTime):
 		default:
+			if f, waiting := s.Waits.HomeWait(home, login.AuthModTime); waiting {
+				// Live capture and discovery record a login wait without a
+				// status row. Without this one, an account with only this
+				// home would show nothing until the wait ends.
+				s.homeRow(gates, home, Message(f, time.Time{}))
+				break
+			}
 			// The home's row, if any, is stale; a failed dial sets it again.
 			s.Status.Delete(home)
 			usable = append(usable, login)

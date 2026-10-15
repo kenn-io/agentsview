@@ -26,3 +26,20 @@ func TestFailedFirstFetchSendsListedCreationTime(t *testing.T) {
 	assert.Equal(t, time.Unix(thread.CreatedAt, 0).UTC().Format(time.RFC3339), requests[0].Threads[0].CreatedAt,
 		"the chat's listed creation time, not the Unix epoch")
 }
+
+func TestHomeWaitingOnALiveRefreshRequestShowsItsRow(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	env.join(t, "a")
+	require.NoError(t, env.host.ServerRequestThread(t.Context(), "a", refreshMethod, map[string]any{"reason": "unauthorized"}))
+	env.waitLeft(t, "a")
+	home := env.homes[0]
+	require.False(t, env.syncer.Waits.HomeReady(home, env.login().AuthModTime), "live capture recorded the wait")
+
+	env.run(t)
+
+	row, ok := env.syncer.Status.Row(home)
+	require.True(t, ok, "the waiting home has a status row")
+	assert.Equal(t, StateError, row.State)
+	assert.Equal(t, Message(FailRefreshRequested, time.Time{}), row.Message)
+}
