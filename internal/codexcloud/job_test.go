@@ -102,7 +102,9 @@ func TestUnconfiguredSourceHasNoStatusRow(t *testing.T) {
 }
 
 func TestCodexCloudHandEditTakesEffect(t *testing.T) {
-	env := newPassEnv(t)
+	// DiscoverHomes cleans the home path, so the test home must already be
+	// in the OS form for its login to match.
+	env := newPassEnv(t, filepath.FromSlash("/homes/a"))
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
 	enabled := false
 	load := func() (config.Config, error) {
@@ -127,7 +129,7 @@ func TestCodexCloudHandEditTakesEffect(t *testing.T) {
 }
 
 func TestCodexCloudUnreadableConfigKeepsLastGood(t *testing.T) {
-	env := newPassEnv(t)
+	env := newPassEnv(t, filepath.FromSlash("/homes/a"))
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
 	var readErr error
 	load := func() (config.Config, error) {

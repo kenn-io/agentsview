@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -120,6 +121,9 @@ func TestAppendNothingOnlyRecovers(t *testing.T) {
 }
 
 func TestAppendCreatesPrivateFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not keep Unix permission bits")
+	}
 	path := mirrorPath(t)
 	appendOK(t, path, 0, rec(KindThread, `{"id":"t1"}`))
 	info, err := os.Stat(path)
