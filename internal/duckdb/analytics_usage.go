@@ -814,8 +814,9 @@ func duckUsageCTEFromRaw(
 			SELECT ranked.* EXCLUDE (
 				snapshot_rank, session_id, snapshot_attribution_session_id,
 				web_search_requests_norm, snapshot_web_search_requests,
-				project, agent, machine, user_message_count, is_automated,
-				display_name, started_at, activity_at, group_key, session_name
+				project, agent, machine, git_branch, user_message_count,
+				is_automated, display_name, started_at, activity_at, group_key,
+				session_name
 			),
 				ranked.snapshot_attribution_session_id AS session_id,
 				ranked.snapshot_web_search_requests AS web_search_requests_norm,
@@ -825,6 +826,8 @@ func duckUsageCTEFromRaw(
 					ELSE attributed.agent END AS agent,
 				CASE WHEN attributed.id IS NULL THEN ranked.machine
 					ELSE attributed.machine END AS machine,
+				CASE WHEN attributed.id IS NULL THEN ranked.git_branch
+					ELSE attributed.git_branch END AS git_branch,
 				CASE WHEN attributed.id IS NULL THEN ranked.user_message_count
 					ELSE attributed.user_message_count END AS user_message_count,
 				CASE WHEN attributed.id IS NULL THEN ranked.is_automated

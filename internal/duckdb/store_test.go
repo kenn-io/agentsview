@@ -2982,6 +2982,85 @@ func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T)
 		"the source child metadata must not override parent attribution")
 }
 
+func TestUsageBranchBreakdownsUseAttributedSnapshotBranch(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  money.MustParseDollars("5"),
+		OutputPerMTok: money.MustParseDollars("25"),
+	}}))
+
+	first := syncMessage(
+		"duck-branch-parent", 0, "assistant", "partial",
+		"2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "msg-branch"
+	first.ClaudeRequestID = "req-branch"
+	first.TokenUsage = jsontext.Value(
+		`{"input_tokens":1000,"output_tokens":5}`)
+	first.OutputTokens = 5
+	second := syncMessage(
+		"duck-branch-child", 0, "assistant", "complete",
+		"2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "msg-branch"
+	second.ClaudeRequestID = "req-branch"
+	second.TokenUsage = jsontext.Value(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	second.OutputTokens = 631
+
+	parent := syncSession(
+		"duck-branch-parent", "alpha", "parent first message",
+		"2026-01-13T00:00:00.000Z", 1)
+	parent.GitBranch = "main"
+	child := syncSession(
+		"duck-branch-child", "alpha", "child first message",
+		"2026-01-13T00:01:00.000Z", 1)
+	child.GitBranch = "feature"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{
+			Session:         parent,
+			Messages:        []db.Message{first},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         child,
+			Messages:        []db.Message{second},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		BranchBreakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	require.Len(t, result.Daily[0].BranchBreakdowns, 1)
+	assert.Equal(t, "main", result.Daily[0].BranchBreakdowns[0].Branch,
+		"the complete child snapshot is charged to the attributed parent branch")
+	assert.Equal(t, 631, result.Daily[0].BranchBreakdowns[0].OutputTokens)
+
+	mainOnly, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		GitBranch:        db.EncodeBranchFilterToken("alpha", "main"),
+		BranchBreakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, mainOnly.Daily, 1)
+	require.Len(t, mainOnly.Daily[0].BranchBreakdowns, 1)
+	assert.Equal(t, "main", mainOnly.Daily[0].BranchBreakdowns[0].Branch,
+		"usage kept by the main filter must not be labeled with the excluded branch")
+}
+
 func TestUsageSessionCountsFilterAfterCrossSessionSnapshotSelection(
 	t *testing.T,
 ) {
