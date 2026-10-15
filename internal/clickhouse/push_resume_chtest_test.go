@@ -204,8 +204,8 @@ func killSecondSessionBatch(t *testing.T, s *Sync, full bool) {
 	killCtx, kill := context.WithCancel(t.Context())
 	defer kill()
 	batches := 0
+	s.sessionBatchSize = 1
 	s.hooks = &pushHooks{
-		sessionBatchSize: 1,
 		beforeSessionRows: func([]db.Session) error {
 			batches++
 			if batches == 2 {
