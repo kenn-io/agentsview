@@ -273,18 +273,48 @@ func TestOversizedReplyRetriedOnceThenRetrySet(t *testing.T) {
 	assert.Len(t, env.host.Handshakes(), 4, "one redial per overflow")
 }
 
-func TestOversizedTurnListingUnderFullFailsAtOnce(t *testing.T) {
-	turnView = TurnViewFull
-	t.Cleanup(func() { turnView = TurnViewNotLoaded })
+func TestOversizedTurnListingFailsAtOnce(t *testing.T) {
 	env := newPassEnv(t)
 	env.syncer.Dial = smallLimitDial
-	env.threads.Set(finishedThread("huge", ago(time.Hour), bigItem("h", 70<<10)))
+	env.threads.Set(finishedThread("huge", ago(time.Hour), message("m", "one")))
+	var views []TurnView
+	var mu sync.Mutex
+	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		var req turnsParams
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, &codexcloudtest.Error{Code: -32602, Message: err.Error()}
+		}
+		mu.Lock()
+		views = append(views, req.ItemsView)
+		mu.Unlock()
+		reply, rpcErr := env.threads.TurnsList(params)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		// Pad the listing past the read limit, as a server could for a
+		// thread with very many turns.
+		raw, err := json.Marshal(reply)
+		if err != nil {
+			return nil, &codexcloudtest.Error{Code: -32603, Message: err.Error()}
+		}
+		var page map[string]any
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, &codexcloudtest.Error{Code: -32603, Message: err.Error()}
+		}
+		page["padding"] = strings.Repeat("x", 70<<10)
+		return page, nil
+	})
 
 	env.run(t)
 
-	assert.Contains(t, env.account(t).Retry, "huge")
+	acct := env.account(t)
+	require.Contains(t, acct.Retry, "huge")
+	assert.Equal(t, Message(FailTooLarge, time.Time{}), acct.Retry["huge"].Message)
 	assert.Equal(t, 1, env.calls("thread/turns/list"), "an oversized turn listing is not retried")
 	assert.Zero(t, env.calls("thread/items/list"))
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []TurnView{TurnViewNotLoaded}, views)
 }
 
 func TestRefreshRequestEndsPassEarly(t *testing.T) {
