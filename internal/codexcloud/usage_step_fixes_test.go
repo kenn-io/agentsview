@@ -265,6 +265,40 @@ func TestLostAccountStateRestoresRefreshRoots(t *testing.T) {
 	assert.False(t, last.Final)
 }
 
+// TestLostAccountStateKeepsAnOutstandingCheck covers a root with a
+// complete row that changed after the row was fetched, whose request for
+// that change failed before account.json was lost. The rebuild must keep
+// the check outstanding, so a restart more than 7 days after the change
+// still asks once, where the refresh schedule would drop it unasked.
+func TestLostAccountStateKeepsAnOutstandingCheck(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	require.Contains(t, env.account(t).Refresh, "a")
+
+	env.clock.Advance(time.Hour)
+	changed := env.clock.Now()
+	env.threads.Update("a", func(th *codexcloudtest.Thread) {
+		th.UpdatedAt = changed.Unix()
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+	})
+	env.usage.Refuse(http.StatusInternalServerError, nil, "")
+	env.run(t)
+	require.Contains(t, env.account(t).UsagePending, "a")
+
+	env.usage.Accept()
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(2), nil))
+	rows := len(env.plan(t, "a").rows)
+	env.loseAccount(t, false)
+	env.clock.Set(changed.Add(settleAfter + time.Hour))
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	assert.Equal(t, [][]string{{"a"}}, env.requestedRoots(from), "the outstanding check is sent")
+	assert.Len(t, env.plan(t, "a").rows, rows+1, "the answer is stored")
+}
+
 // TestLostAccountStateRequeuesRootsChangedAfterSettling covers roots that
 // settled and then changed, on the root itself or on a sub-agent chat,
 // with the pending mark for that change lost along with account.json:

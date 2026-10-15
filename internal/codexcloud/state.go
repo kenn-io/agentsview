@@ -65,8 +65,11 @@ type ThreadState struct {
 	CountedUnder         string `json:"counted_under,omitzero"`
 	// LastPlanRow is the newest plan usage row body in the file, kept so a
 	// root that settles after being left out can store it again as final.
-	LastPlanRow       jsontext.Value `json:"last_plan_row,omitzero"`
-	LastHandledTurnID string         `json:"last_handled_turn_id,omitzero"`
+	LastPlanRow jsontext.Value `json:"last_plan_row,omitzero"`
+	// LastPlanRowAt is when LastPlanRow was fetched, so a rebuilt plan usage
+	// queue can tell whether the row covers the chat's newest change.
+	LastPlanRowAt     time.Time `json:"last_plan_row_at,omitzero"`
+	LastHandledTurnID string    `json:"last_handled_turn_id,omitzero"`
 	// UsageChange, on a usage root, is the newest change that marked it
 	// pending in a saved account state. Once the root has no pending or
 	// refresh entry, a fetch whose change is not later than this does not
