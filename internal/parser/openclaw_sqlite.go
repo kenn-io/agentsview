@@ -756,14 +756,19 @@ func openClawSQLiteFingerprintsEachTx(
 			continue
 		}
 		eventJSON := eventText.String
+		var decodeErr error
 		if !eventText.Valid {
 			decoded, err := openClawSQLiteDecodeZstd(eventZstd)
 			if err != nil {
-				return openClawSQLiteMalformedMemberError{
-					reason: fmt.Sprintf("event %d: %v", seq, err),
-				}
+				// A corrupt event belongs to one session. Discovery
+				// (builder == nil) must still enumerate every other
+				// session, so fingerprint the raw blob and let parsing
+				// that member report the error.
+				decodeErr = err
+				eventJSON = "undecodable event_zstd:" + string(eventZstd)
+			} else {
+				eventJSON = decoded
 			}
-			eventJSON = decoded
 		}
 		if id != memberID {
 			if err := finish(); err != nil {
@@ -783,6 +788,11 @@ func openClawSQLiteFingerprintsEachTx(
 		fingerprint.Size += int64(len(eventJSON))
 		fingerprint.MTimeNS = max(fingerprint.MTimeNS, openClawSQLiteCreatedAtMTimeNS(createdAt))
 		if builder != nil {
+			if decodeErr != nil {
+				return openClawSQLiteMalformedMemberError{
+					reason: fmt.Sprintf("event %d: %v", seq, decodeErr),
+				}
+			}
 			if err := builder.consume(eventJSON, true); err != nil {
 				return openClawSQLiteMalformedMemberError{reason: err.Error()}
 			}
