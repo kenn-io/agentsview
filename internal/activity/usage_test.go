@@ -40,9 +40,16 @@ func TestAggregateUsageTotalsAndBuckets(t *testing.T) {
 	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 	require.Len(t, r.BySession, 2)
-	assert.Equal(t, "root", r.BySession[1].SessionID)
-	assert.Equal(t, 500, r.BySession[1].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.BySession[1].Cost)
+	var root SessionRow
+	for _, row := range r.BySession {
+		if row.SessionID == "root" {
+			root = row
+			break
+		}
+	}
+	require.Equal(t, "root", root.SessionID)
+	assert.Equal(t, 500, root.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), root.Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {

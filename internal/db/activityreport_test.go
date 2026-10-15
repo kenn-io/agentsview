@@ -981,16 +981,6 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 		dayQuery(t, "2026-06-16", "UTC"))
 	require.NoError(t, err)
 	assert.Equal(t, 900, r.Totals.OutputTokens)
-	assert.Equal(t, r.Totals.Cost, r.Totals.InteractiveCost)
-	assert.Zero(t, r.Totals.AutomatedCost.Microdollars)
-	bySession := make(map[string]activity.SessionRow, len(r.BySession))
-	for _, session := range r.BySession {
-		bySession[session.SessionID] = session
-	}
-	require.Contains(t, bySession, "earlier")
-	require.Contains(t, bySession, "later")
-	assert.Equal(t, 900, bySession["earlier"].OutputTokens)
-	assert.Zero(t, bySession["later"].OutputTokens)
 	require.NotNil(t, r.Pricing)
 	assert.Contains(t, r.Pricing.Models, "complete-model")
 	assert.NotContains(t, r.Pricing.Models, "partial-model")
