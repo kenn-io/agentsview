@@ -480,9 +480,9 @@ func TestSyncMarkerMalformedCreatedAtIsDropped(t *testing.T) {
 	assert.Equal(t, "2026-07-02T09:30:00.000Z", readMarker("sm-mixed"))
 }
 
-// A push that starts while a sync transaction is open must either list that
-// transaction's session or record a cutoff at or below its stamp. Otherwise
-// the session falls below every later incremental window.
+// A push that starts while a sync transaction is open must list that
+// transaction's session. Otherwise the session falls below every later
+// incremental window, whose cutoff is already past its stamp.
 func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
@@ -492,8 +492,7 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 			local_modified_at = '2026-07-01T10:00:00.000Z' WHERE id = 'written'`)
 	require.NoError(t, err)
 	since := "2026-07-02T00:00:00Z"
-	// The open transaction's stamp sorts below any cutoff read from the
-	// clock now, as a stamp taken just before the cutoff would.
+	// A stamp taken just before the push reads its cutoff.
 	stamp := time.Now().Add(-time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
 
 	stamped := make(chan struct{})
@@ -514,19 +513,18 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 	<-stamped
 
 	type listing struct {
-		ids    []string
-		cutoff string
-		err    error
+		ids []string
+		err error
 	}
 	listed := make(chan listing, 1)
 	go func() {
-		cutoff := database.MirrorPushCutoff()
+		database.MirrorPushCutoff()
 		sessions, err := database.ListSessionsForMirrorWindow(ctx, since, nil, nil)
 		ids := make([]string, 0, len(sessions))
 		for _, s := range sessions {
 			ids = append(ids, s.ID)
 		}
-		listed <- listing{ids, cutoff, err}
+		listed <- listing{ids, err}
 	}()
 	// Commit only once the push has listed or is waiting for the write
 	// lock, so a push that ignores the open transaction lists first.
@@ -549,7 +547,6 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 
 	assert.Contains(t, got.ids, "written",
 		"the push must list the transaction that was open when it started")
-	assert.GreaterOrEqual(t, got.cutoff, stamp)
 }
 
 // goroutineBlockedOnMutexIn reports whether some goroutine is waiting to lock

@@ -401,7 +401,7 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 				localDuckDB.watchHooks = hooks
 				return localDuckDB.DuckDBPushWatch(
 					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-					time.Hour, time.Hour,
+					localPushWatchTestDebounce, time.Hour,
 				)
 			},
 		},
@@ -411,7 +411,7 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 				localPostgreSQL.watchHooks = hooks
 				return localPostgreSQL.ReplicaPushWatch(
 					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
-					time.Hour, time.Hour,
+					localPushWatchTestDebounce, time.Hour,
 				)
 			},
 		},
@@ -765,6 +765,10 @@ func daemonPushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	}
 	return daemon
 }
+
+// localPushWatchTestDebounce is shorter than the floor interval so tests can
+// tell the local sync retry apart from the periodic sync.
+const localPushWatchTestDebounce = time.Minute
 
 func localPushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	t.Helper()

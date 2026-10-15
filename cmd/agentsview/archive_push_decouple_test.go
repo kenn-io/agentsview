@@ -251,8 +251,9 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 				default:
 				}
 
-				// The local sync lane runs on the interval.
-				time.Sleep(time.Hour)
+				// The local sync lane retries on the debounce, well before the
+				// floor interval.
+				time.Sleep(localPushWatchTestDebounce)
 				synctest.Wait()
 				receiveArchiveTest(t, h.opened)
 

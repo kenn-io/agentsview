@@ -33,6 +33,7 @@ func (w localPushWatch) run(ctx context.Context) error {
 	lane := &archiveSyncLane{
 		label:    w.label,
 		engine:   w.engine,
+		retry:    w.debounce,
 		requests: make(chan struct{}, 1),
 	}
 	loop, stopLoop := newArchivePushLoop(
@@ -70,8 +71,9 @@ func (w localPushWatch) run(ctx context.Context) error {
 	lane.fullPending.Store(didResync)
 	if startupErr != nil {
 		log.Printf(
-			"%s: startup sync failed: %v; retrying every %s before pushing",
-			w.label, startupErr, w.interval,
+			"%s: startup sync failed: %v; remote pushes stay paused until a "+
+				"local sync completes; retrying every %s",
+			w.label, startupErr, w.debounce,
 		)
 	} else if ctx.Err() == nil {
 		lane.markReady()
@@ -106,9 +108,12 @@ func (w localPushWatch) run(ctx context.Context) error {
 // watcher loses coverage. A sync that writes the archive marks the push loop
 // dirty.
 type archiveSyncLane struct {
-	label        string
-	engine       *syncpkg.Engine
-	loop         *pushLoop
+	label  string
+	engine *syncpkg.Engine
+	loop   *pushLoop
+	// retry spaces syncs while no complete local sync has run, so a failed
+	// startup sync does not pause remote pushes for a whole floor interval.
+	retry        time.Duration
 	openDispatch func()
 	requests     chan struct{}
 	// ready is set once a complete local sync has run. Watcher dispatch
@@ -141,7 +146,7 @@ func (l *archiveSyncLane) push(
 	if !l.ready.Load() {
 		// Skipping instead of failing keeps the loop from retrying on its
 		// debounce. The sync that sets ready queues a push.
-		log.Printf("%s: push (%s) skipped: waiting for a complete local sync",
+		log.Printf("%s: push (%s) paused until a local sync completes",
 			l.label, reason)
 		return nil
 	}
@@ -181,18 +186,37 @@ func (l *archiveSyncLane) run(
 	ctx context.Context, tick <-chan time.Time, wake <-chan struct{},
 ) {
 	for {
+		if !l.wait(ctx, tick, &wake) {
+			return
+		}
+		l.syncAll(ctx)
+	}
+}
+
+// wait blocks until the next sync is due and reports false when ctx ends.
+func (l *archiveSyncLane) wait(
+	ctx context.Context, tick <-chan time.Time, wake *<-chan struct{},
+) bool {
+	var retry <-chan time.Time
+	if !l.ready.Load() {
+		timer := time.NewTimer(l.retry)
+		defer timer.Stop()
+		retry = timer.C
+	}
+	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
+		case <-retry:
 		case <-tick:
 		case <-l.requests:
-		case _, ok := <-wake:
+		case _, ok := <-*wake:
 			if !ok {
-				wake = nil
+				*wake = nil
 				continue
 			}
 		}
-		l.syncAll(ctx)
+		return true
 	}
 }
 

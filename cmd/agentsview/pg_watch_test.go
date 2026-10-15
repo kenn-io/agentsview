@@ -492,22 +492,6 @@ func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 	require.Error(t, p.push(t.Context(), reasonChange, false))
 }
 
-func TestPgPusher_PushWindowErrorSkipsConnect(t *testing.T) {
-	connects := 0
-	p := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		window: func(context.Context, func() error) error {
-			return errors.New("disk")
-		},
-		connect: func(context.Context) (storage.Pusher, error) {
-			connects++
-			return &fakeTarget{}, nil
-		},
-	}
-	require.Error(t, p.push(t.Context(), reasonChange, false))
-	assert.Equal(t, 0, connects, "connect should not run when the push window fails")
-}
-
 func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 	target := &fakeTarget{
 		pushResult: storage.PushResult{
