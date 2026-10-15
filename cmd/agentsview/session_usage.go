@@ -479,7 +479,10 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 // planUsageLine describes a session's plan usage in one line, "" for a
 // session that is not a codex-cloud chat and has no plan usage.
 func planUsageLine(agent string, plan *db.PlanUsageView) string {
-	if plan == nil {
+	// A codex-cloud chat with nothing recorded yet has an empty row, so it
+	// counts as plan usage; it reads the same as having no row.
+	if plan == nil || (!hasPlanFigures(plan) && plan.OutcomeKind == "" &&
+		plan.OutcomeAt == "" && plan.DataAsOf == "" && !plan.Final) {
 		if agent == string(parser.AgentCodexCloud) {
 			return "not checked yet; a sync checks it when Codex cloud import is on"
 		}
