@@ -66,7 +66,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Empty(t, scope[sessionA], "hour 14 drops 09:00 rows")
 	})
 
-	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
+	t.Run("includeContent=false omits content and excludes other models", func(t *testing.T) {
 		scope, err := store.analytics().ResolveMessageScope(
 			t.Context(), []string{sessionA, sessionB}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)

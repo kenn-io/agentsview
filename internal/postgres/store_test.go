@@ -1582,6 +1582,18 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 
 	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
 		"SoftDeleteSession trashedID")
+	_, err = store.DB().Exec(`UPDATE sessions SET data_version = $1 WHERE id = $2`, db.CurrentDataVersion(), trashedID)
+	require.NoError(t, err, "marking restore target current")
+	restored, err = store.RestoreSession(t.Context(), trashedID)
+	require.NoError(t, err, "RestoreSession trashedID")
+	assert.EqualValues(t, 1, restored)
+	sess, err = store.GetSession(ctx, trashedID)
+	require.NoError(t, err, "GetSession after restore")
+	require.NotNil(t, sess)
+	assert.Less(t, sess.DataVersion, db.CurrentDataVersion(),
+		"restoring a session must force a source reparse")
+	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
+		"SoftDeleteSession restored trashedID")
 	deleted, err := store.DeleteSessionIfTrashed(t.Context(), trashedID)
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, deleted)
