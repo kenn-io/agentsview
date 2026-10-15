@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -255,6 +256,46 @@ func TestFailingHistoryKeepsTheRootsChangeTime(t *testing.T) {
 	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.UpdatedAt = relisted.Unix() })
 	env.run(t)
 	assert.WithinDuration(t, relisted, env.account(t).UsagePending["a"].LastChange, 0, "a newer listing time marks the root again")
+}
+
+// TestLostAccountStateRestoresFollowUpFetches covers chats that were due
+// to be fetched again when account.json was lost: one with a turn still
+// running, and one updated seconds ago whose late items may not be saved
+// yet. Neither has a newer listing time, so only the rebuild brings them
+// back.
+func TestLostAccountStateRestoresFollowUpFetches(t *testing.T) {
+	env := newUsageEnv(t)
+	running := finishedThread("running", ago(time.Hour), message("r", "hi"))
+	running.Turns[0].Status = "inProgress"
+	env.threads.Set(running)
+	recent := finishedThread("recent", ago(30*time.Second), message("n", "hi"))
+	recent.Turns[0].CompletedAt = ago(time.Hour)
+	env.threads.Set(recent)
+	env.threads.Set(finishedThread("settled", ago(time.Hour), message("s", "hi")))
+	env.run(t)
+	acct := env.account(t)
+	require.Contains(t, acct.Unfinished, "running")
+	require.True(t, acct.CheckAgain["recent"])
+
+	env.loseAccount(t, false)
+	env.clock.Advance(30 * time.Second)
+	from := len(env.host.Requests())
+	env.run(t)
+
+	var fetched []string
+	for _, r := range env.host.Requests()[from:] {
+		if r.Method != "thread/turns/list" {
+			continue
+		}
+		for _, id := range []string{"running", "recent", "settled"} {
+			if strings.Contains(string(r.Params), `"`+id+`"`) {
+				fetched = append(fetched, id)
+			}
+		}
+	}
+	slices.Sort(fetched)
+	assert.Equal(t, []string{"recent", "running"}, slices.Compact(fetched),
+		"both waiting chats are fetched again; the settled one is not")
 }
 
 // TestLostAccountStateRestoresRefreshRoots covers a root whose newest

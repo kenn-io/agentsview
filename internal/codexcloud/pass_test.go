@@ -90,6 +90,7 @@ func newPassEnv(t *testing.T, homes ...string) *passEnv {
 		Version:   "test",
 		Log:       log.New(io.Discard, "", 0),
 	}
+	env.syncer.Store.Now = clock.Now
 	return env
 }
 
