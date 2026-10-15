@@ -772,6 +772,7 @@ describe("UsageStore lazy branch breakdowns", () => {
     const { usage } = await loadStore();
     const refresh = usage.fetchAll();
     await vi.waitFor(() => {
+      expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(1);
       expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
     });
     const comparisonSignal = (
