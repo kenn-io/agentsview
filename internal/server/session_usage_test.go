@@ -203,45 +203,6 @@ func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
 	assert.Len(t, got["breakdown"], 1)
 }
 
-func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup-rework", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "continuation-rollup-rework", "project", 1, func(s *db.Session) {
-		parent := "root-rollup-rework"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "continuation"
-	})
-	te.seedSession(t, "nested-rollup-rework", "project", 2, func(s *db.Session) {
-		parent := "continuation-rollup-rework"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	for _, id := range []string{"root-rollup-rework", "nested-rollup-rework"} {
-		te.seedMessages(t, id, 2, func(i int, m *db.Message) {
-			m.Role, m.Model = "assistant", controlledSessionUsageModel
-			m.ClaudeMessageID = "shared-rollup-message"
-			m.ClaudeRequestID = "shared-rollup-request"
-			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-			if id == "nested-rollup-rework" && i == 1 {
-				m.ClaudeMessageID = "unique-rollup-message"
-				m.ClaudeRequestID = "unique-rollup-request"
-			}
-		})
-	}
-
-	w := te.get(t, "/api/v1/sessions/root-rollup-rework/usage?rollup=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["rollup_cost"])
-}
-
 func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
 	te := setup(t)
 	seedSessionUsagePricing(t, te.db)

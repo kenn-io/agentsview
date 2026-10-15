@@ -2185,13 +2185,8 @@ func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
 					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: sourceUUID,
 				},
 			)
-
-			insertSession(t, d, "unique-session", "proj", func(s *Session) {
-				s.Agent = "claude"
-				s.StartedAt = new("2026-04-10T10:03:00Z")
-			})
 			insertMessages(t, d, Message{
-				SessionID: "unique-session", Ordinal: 0, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
+				SessionID: "source-fork", Ordinal: 1, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
 				Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
 				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: uniqueSourceUUID,
 			})
@@ -2211,7 +2206,7 @@ func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
 			require.Len(t, top, 2)
 			assert.Equal(t, "source-main", top[0].SessionID)
 			assert.Equal(t, 51600, top[0].TotalTokens)
-			assert.Equal(t, "unique-session", top[1].SessionID)
+			assert.Equal(t, "source-fork", top[1].SessionID)
 			assert.Equal(t, 5300, top[1].TotalTokens)
 			counts, err := d.GetUsageSessionCounts(t.Context(), filter)
 			require.NoError(t, err, "GetUsageSessionCounts")

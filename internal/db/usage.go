@@ -261,7 +261,7 @@ func LoadLocationOr(name string, fallback *time.Location) *time.Location {
 // identity when the pair is incomplete. That is more precise than
 // a blanket exclusion: a fork session can legitimately contribute
 // unique-keyed messages that should still be counted (see
-// TestGetDailyUsage_DedupesByClaudeMessageAndRequestID).
+// TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants).
 const usageMessageEligibility = `
     m.token_usage != ''
     AND m.model != ''

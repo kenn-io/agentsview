@@ -1049,7 +1049,7 @@ func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T
 // second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
 // already sorts on the parsed time (not the formatted text), so this locks in
 // that cross-backend behavior, matching the SQLite
-// TestGetActivityReport_UsageDedupSubSecondOrder.
+// TestGetActivityReport_UsageDedupOrdering.
 func TestDuckActivityReportSourceUUIDFallbackUsesSubSecondOrder(t *testing.T) {
 	ctx := t.Context()
 	pricing := []db.ModelPricing{{

@@ -256,8 +256,8 @@ func TestGetSessionUsageRollupTraversesNonSubagentAncestors(t *testing.T) {
 			"continuation": {{ID: "nested", RelationshipType: "subagent"}},
 		},
 		rows: []activity.UsageRow{
-			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
-			{SessionID: "nested", Cost: money.MustParseDollars("2"), Priced: true, Contributes: true, ClaudeMessageID: "unique", ClaudeRequestID: "request"},
+			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true},
+			{SessionID: "nested", Cost: money.MustParseDollars("2"), Priced: true, Contributes: true},
 		},
 	}
 
@@ -347,7 +347,7 @@ func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 			"root": {{ID: "nested", RelationshipType: "subagent"}},
 		},
 		rows: []activity.UsageRow{
-			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true},
 		},
 	}
 

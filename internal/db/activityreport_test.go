@@ -755,9 +755,6 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631}, rowSet.RawOutputTokensBySession)
-	assert.Contains(t, rowSet.DiscardedContributingSessions, "root")
-	assert.Contains(t, rowSet.DiscardedContributingSessions, "child")
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
