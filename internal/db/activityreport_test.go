@@ -1293,53 +1293,54 @@ func TestGetActivityReport_HourlyRange(t *testing.T) {
 	assert.True(t, found, "the 2026-06-17T10:00 hourly bucket must be present")
 }
 
-// TestGetActivityReport_UsageDedupSubSecondOrder confirms the SQLite usage
-// stream is ordered by the PARSED instant, not the RFC3339 text. A
-// resumed/forked pair shares one source UUID fallback dedup
-// key in the same second: one whole-second instant ("...00Z", 500 output
-// tokens) and one fractional ("...00.123Z", 9000). Lexically "...00.123Z"
-// sorts before "...00Z" ('.' < 'Z'), so a TEXT sort would keep the 9000 row;
-// chronologically the whole-second row is first. First-seen-wins dedup must
-// keep the 500 row, matching PostgreSQL/DuckDB which order on the parsed time.
+// TestGetActivityReport_UsageDedupSubSecondOrder checks parsed timestamp
+// ordering and session-ID tie-breaking before source UUID deduplication.
 func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
+	for _, tc := range []struct{ name, firstID, secondID, secondTimestamp string }{
+		{"sub-second order", "earlier", "later", "2026-06-16T10:30:00.123Z"},
+		{"equal instant uses session order", "a-session", "z-session", "2026-06-16T05:30:00-05:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+				ModelPattern:  "claude-sonnet-4-20250514",
+				InputPerMTok:  money.MustParseDollars("3.0"),
+				OutputPerMTok: money.MustParseDollars("15.0"),
+			}}), "UpsertModelPricing")
 
-	insertSession(t, d, "earlier", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "earlier", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "later", "proj2", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00.123Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
-	})
+			insertSession(t, d, tc.firstID, "proj1", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.firstID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       "2026-06-16T10:30:00Z",
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+			})
+			insertSession(t, d, tc.secondID, "proj2", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.secondID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       tc.secondTimestamp,
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
+			})
 
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"first-seen dedup keeps the chronologically earlier whole-second row")
+			r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+				dayQuery(t, "2026-06-16", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, 500, r.Totals.OutputTokens,
+				"first-seen dedup follows parsed time, then session ID")
+		})
+	}
 }
 
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback

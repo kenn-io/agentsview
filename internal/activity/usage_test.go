@@ -177,72 +177,52 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 		},
 	}
 
-	mask, attribution, webSearchRequests := ClaudeSnapshotSurvivorSelection(usage)
-	assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
-	assert.Equal(t, []string{"", "", "e", "x", "a", ""}, attribution)
-	assert.Equal(t, []int{0, 0, 2, 4, 3, 0}, webSearchRequests)
+	for _, tc := range []struct {
+		name            string
+		ranged          bool
+		wantAttribution []string
+		wantSearches    []int
+	}{
+		{"all rows", false, []string{"", "", "e", "x", "a", ""}, []int{0, 0, 2, 4, 3, 0}},
+		{"ineligible row excluded", true, []string{"", "", "c", "x", "a", ""}, []int{0, 0, 1, 4, 3, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mask []bool
+			var attribution []string
+			var searches []int
+			if tc.ranged {
+				mask, attribution, searches = UsageSurvivorSelection(
+					mustStart(t, "2026-06-16T10:00:00Z"),
+					mustStart(t, "2026-06-17T00:00:00Z"),
+					mustStart(t, "2026-06-17T00:00:00Z"), usage,
+				)
+			} else {
+				mask, attribution, searches = ClaudeSnapshotSurvivorSelection(usage)
+			}
+			assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
+			assert.Equal(t, tc.wantAttribution, attribution)
+			assert.Equal(t, tc.wantSearches, searches)
+		})
+	}
 }
 
-func TestUsageSurvivorSelectionFiltersRangeBeforeIdentityClaim(t *testing.T) {
-	t.Run("ineligible row excluded", func(t *testing.T) {
-		usage := []UsageRow{
-			{
-				SessionID: "b", Timestamp: "2026-06-16T10:00:02Z",
-				OutputTokens: 10, ClaudeMessageID: "msg-a", ClaudeRequestID: "req",
-			},
-			{
-				SessionID: "a", Timestamp: "2026-06-16T10:00:00Z",
-				OutputTokens: 5, WebSearchRequests: 3,
-				ClaudeMessageID: "msg-b", ClaudeRequestID: "req",
-			},
-			{
-				SessionID: "c", Timestamp: "2026-06-16T10:00:01Z",
-				OutputTokens: 50, WebSearchRequests: 1,
-				ClaudeMessageID: "msg-a", ClaudeRequestID: "req",
-			},
-			{
-				SessionID: "x", Timestamp: "2026-06-16T10:00:04Z",
-				OutputTokens: 7, WebSearchRequests: 4,
-				ClaudeMessageID: "msg-a",
-			},
-			{
-				SessionID: "d", Timestamp: "2026-06-16T10:00:03Z",
-				OutputTokens: 20, ClaudeMessageID: "msg-b", ClaudeRequestID: "req",
-			},
-			{
-				SessionID: "e", Timestamp: "2026-06-16T09:59:59Z",
-				OutputTokens: 1, WebSearchRequests: 2,
-				ClaudeMessageID: "msg-a", ClaudeRequestID: "req",
-			},
-		}
-		mask, attribution, webSearchRequests := UsageSurvivorSelection(
-			mustStart(t, "2026-06-16T10:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"),
-			usage,
-		)
-		assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
-		assert.Equal(t, []string{"", "", "c", "x", "a", ""}, attribution)
-		assert.Equal(t, []int{0, 0, 1, 4, 3, 0}, webSearchRequests)
-	})
-	t.Run("range excludes source UUID before claiming identity", func(t *testing.T) {
-		rows := []UsageRow{
-			{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
-			{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
-			{SessionID: "b", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 50, WebSearchRequests: 1},
-		}
-		for i := range rows {
-			rows[i].Agent = "claude"
-			rows[i].ClaudeMessageID = "msg"
-			rows[i].SourceUUID = "source"
-		}
-		mask, attribution, searches := UsageSurvivorSelection(
-			mustStart(t, "2026-06-16T00:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"), rows,
-		)
-		assert.Equal(t, []bool{false, true, false}, mask)
-		assert.Equal(t, "a", attribution[1])
-		assert.Equal(t, 2, searches[1])
-	})
+func TestUsageSurvivorSelectionFiltersRangeBeforeSourceUUIDClaim(t *testing.T) {
+	rows := []UsageRow{
+		{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
+		{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
+		{SessionID: "b", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 50, WebSearchRequests: 1},
+	}
+	for i := range rows {
+		rows[i].Agent = "claude"
+		rows[i].ClaudeMessageID = "msg"
+		rows[i].SourceUUID = "source"
+	}
+	mask, attribution, searches := UsageSurvivorSelection(
+		mustStart(t, "2026-06-16T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"), rows,
+	)
+	assert.Equal(t, []bool{false, true, false}, mask)
+	assert.Equal(t, "a", attribution[1])
+	assert.Equal(t, 2, searches[1])
 }

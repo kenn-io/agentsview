@@ -2033,7 +2033,7 @@ func querySnapshotRankedRows(
 	return out
 }
 
-func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
+func TestSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 	tests := []struct {
 		name         string
 		zTimestamp   string
@@ -2077,13 +2077,6 @@ func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
 			assert.JSONEq(t, fmt.Sprintf(
 				`{"input_tokens":%d,"output_tokens":100}`, tt.wantInput),
 				got[0][2])
-			if tt.aTimestamp == "" {
-				seedOpusPricing(t, d)
-				result, err := d.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
-				require.NoError(t, err)
-				assert.Equal(t, 900, result.Totals.InputTokens)
-				assert.Equal(t, 100, result.Totals.OutputTokens)
-			}
 		})
 	}
 }

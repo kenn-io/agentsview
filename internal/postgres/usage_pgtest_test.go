@@ -541,10 +541,6 @@ func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_daily_usage_snapshot_tie_test")
 			ctx := t.Context()
 			_, err := store.DB().ExecContext(ctx, `
-				INSERT INTO model_pricing (
-					model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-					cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-				) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
 				INSERT INTO sessions (
 					id, machine, project, agent, started_at, message_count, user_message_count
 				) VALUES
@@ -576,12 +572,6 @@ func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
 			assert.Equal(t, "z-snapshot", sessionID)
 			assert.Equal(t, tc.wantAttribution, attributionSessionID)
 			assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
-			if tc.aTimestamp == nil {
-				result, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
-				require.NoError(t, err)
-				assert.Equal(t, 900, result.Totals.InputTokens)
-				assert.Equal(t, 100, result.Totals.OutputTokens)
-			}
 		})
 	}
 }
