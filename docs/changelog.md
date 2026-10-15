@@ -92,10 +92,11 @@ The latest release is
   `agentsview export sessions` now reports schema version 7, because
   `model_usage` is `null` for a Codex cloud chat whose token counts are unknown;
   update consumers that expect an object there.
-  [Artifact folder sync](/docs/artifact-sync/) carries each chat's plan usage
-  and live capture coverage, so the receiving archive shows the same plan
-  shares and left-out chat counts. Upgrade importers to accept manifest v7
-  exports; older importers hold them.
+  [Artifact folder sync](/docs/artifact-sync/) now carries each Codex cloud
+  chat's plan usage, so the receiving archive shows the same plan shares and the
+  same count of chats left out of usage totals. Upgrade the receiving AgentsView
+  too: an older version keeps these chats waiting and imports them once
+  upgraded.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
