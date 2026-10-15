@@ -16,7 +16,9 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var _ Provider = (*hermesProvider)(nil)
@@ -618,7 +620,9 @@ func (s hermesSourceSet) discoverStateEach(
 	if err := checkHermesStateSchema(ctx, conn); err != nil {
 		return false, err
 	}
-	rows, err := conn.QueryContext(ctx, "SELECT id FROM sessions ORDER BY id")
+	rows, err := conn.QueryContext(ctx,
+		"SELECT id, started_at, ended_at FROM sessions ORDER BY id",
+	)
 	if err != nil {
 		return false, fmt.Errorf("query hermes sessions: %w", err)
 	}
@@ -626,7 +630,13 @@ func (s hermesSourceSet) discoverStateEach(
 	yieldedAny := false
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		// started_at/ended_at scan into `any` rather than float64: a
+		// malformed value in one session's row (the per-session parse
+		// error this discovery pass must stay isolated from) must not
+		// fail rows.Scan and abort the whole streaming pass over every
+		// sibling. hermesRowRecency tolerates whatever comes back.
+		var startedAtRaw, endedAtRaw any
+		if err := rows.Scan(&id, &startedAtRaw, &endedAtRaw); err != nil {
 			return yieldedAny, fmt.Errorf("scan hermes session id: %w", err)
 		}
 		if !isValidHermesSessionID(id) {
@@ -634,11 +644,54 @@ func (s hermesSourceSet) discoverStateEach(
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		yieldedAny = true
-		if err := yield(s.stateMemberSourceRef(root, stateDB, id)); err != nil {
+		source := s.stateMemberSourceRef(root, stateDB, id)
+		// parse-diff's --limit sampling orders discovered files by this
+		// recency when a path has no on-disk existence to stat (true for
+		// every state.db#<id> member). The row's own timestamps are a
+		// cheap, already-fetched substitute for a full fingerprint, which
+		// a streaming discovery pass can't afford to compute per member.
+		if recency := hermesRowRecency(startedAtRaw, endedAtRaw); !recency.IsZero() {
+			source.DiscoveryMTimeNS = recency.UnixNano()
+		}
+		if err := yield(source); err != nil {
 			return yieldedAny, discoveryYieldError{cause: err}
 		}
 	}
 	return yieldedAny, rows.Err()
+}
+
+// hermesRowRecency converts a sessions row's started_at/ended_at values,
+// scanned as `any` so a malformed value can't fail the row scan, into the
+// later of the two as a time. A value that isn't a usable number is
+// ignored rather than treated as an error: this is a best-effort ordering
+// hint for parse-diff's --limit sampling, not a correctness signal.
+func hermesRowRecency(startedAtRaw, endedAtRaw any) time.Time {
+	started := hermesAnyToUnixSeconds(startedAtRaw)
+	ended := hermesAnyToUnixSeconds(endedAtRaw)
+	return hermesUnixTime(max(started, ended))
+}
+
+func hermesAnyToUnixSeconds(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int64:
+		return float64(n)
+	case []byte:
+		f, err := strconv.ParseFloat(string(n), 64)
+		if err != nil {
+			return 0
+		}
+		return f
+	case string:
+		f, err := strconv.ParseFloat(n, 64)
+		if err != nil {
+			return 0
+		}
+		return f
+	default:
+		return 0
+	}
 }
 
 func (s hermesSourceSet) discoverTranscriptEach(

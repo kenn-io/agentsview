@@ -2023,6 +2023,64 @@ func TestParseDiffHermesLimitScopesPerSession(t *testing.T) {
 		"cut sibling must read as not-sampled, not as 'database-backed agent'")
 }
 
+// TestParseDiffHermesLimitOrdersByMemberRecency proves a --limit sample
+// orders a Hermes database member by its own real freshness instead of an
+// arbitrary zero: discoveredFileMtime's os.Stat fallback can't see a
+// virtual "state.db#<id>" member path's on-disk existence, so every
+// member used to land on mtime zero, and --limit could cut a just-changed
+// session in favor of an old standalone transcript. The database member's
+// row timestamp (stamped onto SourceRef.DiscoveryMTimeNS during discovery)
+// now gives it a real recency to order by.
+func TestParseDiffHermesLimitOrdersByMemberRecency(t *testing.T) {
+	root := t.TempDir()
+	writeHermesArchiveStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	// A standalone transcript with an old file mtime: no database row, so
+	// its ordering value still comes from discoveredFileMtime's os.Stat.
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "old")
+	oldPath := filepath.Join(root, "sessions", "old.jsonl")
+	oldTime := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(oldPath, oldTime, oldTime))
+
+	// A database member just "changed": its row timestamp is real wall
+	// time, always newer than the standalone transcript's 2020 mtime.
+	fresh := time.Now()
+	execHermesState(t, stateDB, fmt.Sprintf(`INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('fresh', 'cli', 'model', %d, %d, 1)`,
+		fresh.Unix(), fresh.Unix()))
+	execHermesState(t, stateDB, `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('fresh', 'user', 'fresh message', 1778767210)`)
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	diffEngine := NewDiffEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(diffEngine.Close)
+	report, err := diffEngine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentHermes},
+		Limit:  1,
+	})
+	require.NoError(t, err)
+	require.True(t, report.FilesLimited, "files limited")
+
+	var skipped []string
+	for _, s := range report.Sessions {
+		if s.Class == DiffSkipped {
+			skipped = append(skipped, s.SessionID)
+		}
+	}
+	assert.NotContains(t, skipped, "hermes:fresh",
+		"the just-changed database member must be the one sampled, not cut")
+}
+
 // TestParseDiffHermesPerSessionParseErrorStaysScoped proves a malformed
 // session inside a shared state.db surfaces as DiffParseError attributed to
 // its own "state.db#<sessionID>" virtual path, leaving an unrelated sibling
