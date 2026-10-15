@@ -816,7 +816,7 @@ func TestLeavingWithAQueuedCompletionQueuesASync(t *testing.T) {
 func TestLeavingWithAQueuedUnreadableNoteStopsCapture(t *testing.T) {
 	env := newMonitorEnv(t)
 
-	env.leaveWith(t, Notification{Method: tokenUsageMethod, Params: jsontext.Value(`{"threadId":`)})
+	env.leaveWith(t, Notification{Method: tokenUsageMethod, Params: jsontext.Value(`{"threadId":1}`)})
 
 	assert.Contains(t, env.live(t), "Live tokens: stopped.")
 }
