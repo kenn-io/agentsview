@@ -1643,6 +1643,62 @@
   "session_input_tree_jump_to": "跳轉到輸入：{preview}",
   "session_input_tree_open": "在所屬會話中開啟：{preview}",
   "session_input_tree_current": "目前",
+  "session_input_graph_open": "開啟詳細輸入樹",
+  "session_input_graph_title": "輸入樹",
+  "session_input_graph_close": "關閉",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 個工作階段"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 則輸入"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 個分支"
+      }
+    }
+  ],
+  "session_input_graph_fold": "摺疊無分岔的連續輸入",
+  "session_input_graph_zoom_in": "放大",
+  "session_input_graph_zoom_out": "縮小",
+  "session_input_graph_zoom_fit": "符合視窗",
+  "session_input_graph_zoom_reset": "將縮放重設為 100%",
+  "session_input_graph_open_session": "開啟工作階段：{title}",
+  "session_input_graph_canvas": "輸入樹圖",
+  "session_input_graph_hint": "拖曳以平移，按住 Ctrl 或 Cmd 捲動以縮放。",
   "code_block_copy": "複製代碼塊",
   "code_block_copy_title": "複製代碼",
   "code_block_copy": "複製程式碼區塊",

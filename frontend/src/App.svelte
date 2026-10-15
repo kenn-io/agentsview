@@ -58,6 +58,7 @@
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
   import UpdateModal from "./lib/components/modals/UpdateModal.svelte";
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
+  import InputTreeModal from "./lib/components/modals/InputTreeModal.svelte";
   import PerfDebugPanel from "./lib/components/debug/PerfDebugPanel.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
@@ -1000,6 +1001,10 @@
 
 {#if ui.activeModal === "confirmDelete"}
   <ConfirmDeleteModal />
+{/if}
+
+{#if ui.activeModal === "inputTree" && sessions.activeSessionId}
+  <InputTreeModal sessionId={sessions.activeSessionId} />
 {/if}
 
 {/if}

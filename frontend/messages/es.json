@@ -1896,6 +1896,65 @@
   "session_input_tree_jump_to": "Ir a la entrada: {preview}",
   "session_input_tree_open": "Abrir en su sesión: {preview}",
   "session_input_tree_current": "actual",
+  "session_input_graph_open": "Abrir el árbol detallado de entradas",
+  "session_input_graph_title": "Árbol de entradas",
+  "session_input_graph_close": "Cerrar",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} sesión",
+        "countPlural=other": "{countLabel} sesiones"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} entrada",
+        "countPlural=other": "{countLabel} entradas"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} rama",
+        "countPlural=other": "{countLabel} ramas"
+      }
+    }
+  ],
+  "session_input_graph_fold": "Plegar tramos sin ramificaciones",
+  "session_input_graph_zoom_in": "Acercar",
+  "session_input_graph_zoom_out": "Alejar",
+  "session_input_graph_zoom_fit": "Ajustar a la ventana",
+  "session_input_graph_zoom_reset": "Restablecer el zoom al 100 %",
+  "session_input_graph_open_session": "Abrir sesión: {title}",
+  "session_input_graph_canvas": "Diagrama del árbol de entradas",
+  "session_input_graph_hint": "Arrastra para desplazarte. Mantén Ctrl o Cmd y desplázate para hacer zoom.",
   "code_block_copy": "Copiar bloque de código",
   "code_block_copy_title": "Copiar código",
   "common_copied": "¡Copiado!",

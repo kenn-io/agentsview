@@ -44,6 +44,7 @@ type ModalType =
   | "resync"
   | "update"
   | "confirmDelete"
+  | "inputTree"
   | null;
 
 /** A tool call a jump expects at its target message; a rewrite can renumber messages, so the jump checks it. */

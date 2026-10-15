@@ -1849,6 +1849,65 @@
   "session_input_tree_jump_to": "입력으로 이동: {preview}",
   "session_input_tree_open": "해당 세션에서 열기: {preview}",
   "session_input_tree_current": "현재",
+  "session_input_graph_open": "자세한 입력 트리 열기",
+  "session_input_graph_title": "입력 트리",
+  "session_input_graph_close": "닫기",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "세션 {countLabel}개",
+        "countPlural=other": "세션 {countLabel}개"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "입력 {countLabel}개",
+        "countPlural=other": "입력 {countLabel}개"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "분기 {countLabel}개",
+        "countPlural=other": "분기 {countLabel}개"
+      }
+    }
+  ],
+  "session_input_graph_fold": "분기 없는 연속 입력 접기",
+  "session_input_graph_zoom_in": "확대",
+  "session_input_graph_zoom_out": "축소",
+  "session_input_graph_zoom_fit": "창에 맞추기",
+  "session_input_graph_zoom_reset": "확대/축소를 100%로 재설정",
+  "session_input_graph_open_session": "세션 열기: {title}",
+  "session_input_graph_canvas": "입력 트리 다이어그램",
+  "session_input_graph_hint": "드래그하여 이동하고, Ctrl 또는 Cmd를 누른 채 스크롤하여 확대/축소합니다.",
   "code_block_copy": "코드 블록 복사",
   "code_block_copy_title": "코드 복사",
   "common_copied": "복사됨!",

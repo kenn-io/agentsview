@@ -1627,6 +1627,62 @@
   "session_input_tree_jump_to": "跳转到输入：{preview}",
   "session_input_tree_open": "在所属会话中打开：{preview}",
   "session_input_tree_current": "当前",
+  "session_input_graph_open": "打开详细输入树",
+  "session_input_graph_title": "输入树",
+  "session_input_graph_close": "关闭",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 个会话"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 条输入"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 个分支"
+      }
+    }
+  ],
+  "session_input_graph_fold": "折叠无分叉的连续输入",
+  "session_input_graph_zoom_in": "放大",
+  "session_input_graph_zoom_out": "缩小",
+  "session_input_graph_zoom_fit": "适应窗口",
+  "session_input_graph_zoom_reset": "将缩放重置为 100%",
+  "session_input_graph_open_session": "打开会话：{title}",
+  "session_input_graph_canvas": "输入树图",
+  "session_input_graph_hint": "拖动以平移，按住 Ctrl 或 Cmd 滚动以缩放。",
   "code_block_copy": "复制代码块",
   "code_block_copy_title": "复制代码",
   "common_copied": "已复制！",
