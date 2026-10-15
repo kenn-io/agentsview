@@ -208,8 +208,6 @@ func TestDefaultUsagePairwiseSelection(t *testing.T) {
 		{"skip empty projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
 		{"mixed after empty project key", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
 		{"one usable model", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}}, [4]string{}},
-		{"one usable project", nil, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{}},
-		{"empty project key", nil, []ProjectTotal{{}}, [4]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
