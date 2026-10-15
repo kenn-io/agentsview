@@ -17,22 +17,12 @@ func mustStart(t *testing.T, s string) time.Time {
 	return ts.UTC()
 }
 
-func TestApplyUsageFiltersRangeBeforeSourceUUIDDedup(t *testing.T) {
+func TestApplyUsageAggregatesRowAndDefaultsToInteractive(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
-	usage := []UsageRow{
-		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
-			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
-		},
-		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
-		},
-		{
-			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:00:01Z",
-			InputTokens: 1000, OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
-		},
-	}
+	usage := []UsageRow{{
+		SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+		InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
+	}}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
@@ -211,4 +201,28 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 		assert.Equal(t, []string{"", "", "c", "x", "a", ""}, attribution)
 		assert.Equal(t, []int{0, 0, 1, 4, 3, 0}, webSearchRequests)
 	})
+	t.Run("range excludes source UUID before claiming identity", func(t *testing.T) {
+		usage := []UsageRow{
+			{
+				SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
+				InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+			},
+			{
+				SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+				InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+			},
+			{
+				SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:00:01Z",
+				InputTokens: 1000, OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude", ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+			},
+		}
+		mask, _, _ := UsageSurvivorSelection(
+			mustStart(t, "2026-06-16T00:00:00Z"),
+			mustStart(t, "2026-06-17T00:00:00Z"),
+			mustStart(t, "2026-06-17T00:00:00Z"),
+			usage,
+		)
+		assert.Equal(t, []bool{false, true, false}, mask)
+	})
+
 }

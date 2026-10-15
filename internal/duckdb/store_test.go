@@ -2796,20 +2796,16 @@ func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
 			require.Len(t, sessionUsage.Breakdown, 1)
 			require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
 			assert.Equal(t, 0, *sessionUsage.Breakdown[0].MessageOrdinal)
-			if tc.requestID != "" {
-				entry := sessionUsage.Breakdown[0]
-				assert.Equal(t, 1, entry.Ordinal)
-				require.NotNil(t, entry.MessageOrdinal)
-				assert.Equal(t, 0, *entry.MessageOrdinal)
-				assert.Equal(t, "message", entry.Source)
-				assert.Equal(t, "Prompt 1", entry.Label)
-				assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
-				assert.Equal(t, "claude-test", entry.Model)
-				assert.Equal(t, 1, entry.InputTokens)
-				assert.Equal(t, 2, entry.OutputTokens)
-				assert.True(t, entry.HasCost)
-				assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
-			}
+			entry := sessionUsage.Breakdown[0]
+			assert.Equal(t, 1, entry.Ordinal)
+			assert.Equal(t, "message", entry.Source)
+			assert.Equal(t, "Prompt 1", entry.Label)
+			assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
+			assert.Equal(t, "claude-test", entry.Model)
+			assert.Equal(t, 1, entry.InputTokens)
+			assert.Equal(t, 2, entry.OutputTokens)
+			assert.True(t, entry.HasCost)
+			assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
 		})
 	}
 }

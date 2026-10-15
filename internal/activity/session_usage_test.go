@@ -63,6 +63,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		name                   string
 		rows                   []UsageRow
 		wantIndexes            []int
+		wantSearches           []int
 		wantCost               *money.Money
 		wantRaw, wantDiscarded map[string]int
 		wantContributing       map[string]struct{}
@@ -74,6 +75,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				{SessionID: "child", UsageSource: "message", Agent: "codex", SourceUUID: "u"},
 			},
 			wantIndexes: []int{0}, wantRaw: map[string]int{"root": 0, "child": 0},
+			wantSearches:  []int{0},
 			wantDiscarded: map[string]int{"child": 0}, wantContributing: map[string]struct{}{},
 		},
 		{
@@ -88,23 +90,26 @@ func TestSelectSessionUsageRows(t *testing.T) {
 					ClaudeRequestID: "r",
 				},
 				{
-					SessionID:       "child",
-					Timestamp:       "2026-06-16T10:00:01Z",
-					InputTokens:     100,
-					OutputTokens:    20,
-					ClaudeMessageID: "m",
-					ClaudeRequestID: "r",
+					SessionID:         "child",
+					WebSearchRequests: 2,
+					Timestamp:         "2026-06-16T10:00:01Z",
+					InputTokens:       100,
+					OutputTokens:      20,
+					ClaudeMessageID:   "m",
+					ClaudeRequestID:   "r",
 				},
 			},
 			wantIndexes:      []int{1},
+			wantSearches:     []int{2},
 			wantRaw:          map[string]int{"root": 5, "child": 20},
 			wantDiscarded:    map[string]int{"root": 5, "child": 20},
 			wantContributing: map[string]struct{}{"root": {}, "child": {}},
-			wantCost:         &money.Money{Microdollars: 7},
+			wantCost:         &money.Money{Microdollars: 9},
 		},
 		{
-			name:        "empty rows retain empty collections",
-			wantIndexes: []int{}, wantRaw: map[string]int{}, wantDiscarded: map[string]int{}, wantContributing: map[string]struct{}{},
+			name:         "empty rows retain empty collections",
+			wantSearches: []int{},
+			wantIndexes:  []int{}, wantRaw: map[string]int{}, wantDiscarded: map[string]int{}, wantContributing: map[string]struct{}{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,8 +117,10 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				tc.rows[i].Contributes = row.OutputTokens > 0
 			}
 			pricedIndexes := []int{}
+			pricedSearches := []int{}
 			result, err := SelectSessionUsageRows(t.Context(), tc.rows, func(i, searches int) (UsagePrice, error) {
 				pricedIndexes = append(pricedIndexes, i)
+				pricedSearches = append(pricedSearches, searches)
 				cost := money.Money{}
 				if tc.rows[i].Contributes {
 					cost.Microdollars = int64(searches + 7)
@@ -127,11 +134,13 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			require.Len(t, result.Rows, len(tc.wantIndexes))
 			require.NotNil(t, result.Rows)
 			assert.Equal(t, tc.wantIndexes, pricedIndexes)
+			assert.Equal(t, tc.wantSearches, pricedSearches)
 			assert.Equal(t, tc.wantRaw, result.RawOutputTokensBySession)
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantCost != nil {
 				assert.Equal(t, *tc.wantCost, result.Rows[0].Cost)
+				assert.Equal(t, 2, result.Rows[0].WebSearchRequests)
 				assert.Equal(t, "root", result.Rows[0].SessionID)
 				assert.Equal(t, "child", result.Rows[0].SourceSessionID)
 				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)

@@ -3354,14 +3354,6 @@ func TestNewUsageSessionCounts(t *testing.T) {
 	}, counts.ByAgent, "ByAgent")
 }
 
-// TestGetUsageSessionCounts_DedupesByClaudeMessageAndRequestID
-// mirrors the dedup regression coverage on the other two usage
-// queries. A fork session whose only qualifying messages are
-// replays of its parent's (same claude_message_id +
-// claude_request_id) contributes zero cost after dedup in
-// GetDailyUsage, so it must also NOT be counted in
-// GetUsageSessionCounts — otherwise the summary cards disagree
-// with the charts.
 // TestUsageQueryEligibilityParity seeds messages that fail each
 // disqualification predicate and asserts all three usage queries
 // ignore them. Guardrail against drift between usage queries.
