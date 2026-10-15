@@ -765,7 +765,15 @@ func openHermesStateMembership(
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
 	observeSharedContainerScan(ctx)
-	stmt, err := conn.PrepareContext(ctx, "SELECT 1 FROM sessions WHERE id = ? LIMIT 1")
+	// started_at, not a bare "SELECT 1": a row that exists but can't
+	// decode (a malformed started_at, the same per-session parse
+	// failure this provider isolates elsewhere) must not count as
+	// membership here. Counting it anyway would suppress this session's
+	// transcript from the orphan-transcript fallback below, leaving the
+	// session with neither a usable database row nor a chance to sync
+	// from its readable transcript, even though the row's own virtual
+	// member still surfaces its decode failure as a visible parse error.
+	stmt, err := conn.PrepareContext(ctx, "SELECT started_at FROM sessions WHERE id = ? LIMIT 1")
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("prepare hermes session lookup: %w", err)
@@ -774,15 +782,36 @@ func openHermesStateMembership(
 }
 
 func (m *hermesStateMembership) Has(ctx context.Context, rawID string) (bool, error) {
-	var found int
-	err := m.stmt.QueryRowContext(ctx, rawID).Scan(&found)
+	var startedRaw any
+	err := m.stmt.QueryRowContext(ctx, rawID).Scan(&startedRaw)
 	if err == nil {
-		return true, nil
+		return hermesValueDecodesAsTime(startedRaw), nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
+}
+
+// hermesValueDecodesAsTime reports whether a scanned started_at value is
+// something readHermesStateSession's per-session query could actually
+// decode (a number, or a numeric string/bytes the driver type-coerced),
+// as opposed to a malformed value that would fail that query's strict
+// scan. A NULL value is treated as decodable: that's a legitimately
+// unset timestamp, not malformed data.
+func hermesValueDecodesAsTime(v any) bool {
+	switch n := v.(type) {
+	case nil, float64, int64:
+		return true
+	case []byte:
+		_, err := strconv.ParseFloat(string(n), 64)
+		return err == nil
+	case string:
+		_, err := strconv.ParseFloat(n, 64)
+		return err == nil
+	default:
+		return false
+	}
 }
 
 func (m *hermesStateMembership) Close() {
@@ -1853,9 +1882,22 @@ func hermesStateMemberFingerprintFinish(
 		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
 	for _, path := range candidatePaths {
-		candidateInfo, err := os.Stat(path)
-		if err != nil {
-			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
+		candidateInfo, statErr := os.Stat(path)
+		if statErr != nil {
+			// The candidate existed when discovered but is gone or
+			// unreadable now (a transient race, a permission change, or
+			// corruption). session_<id>.json in particular is an
+			// optional legacy snapshot; a session with a fine state.db
+			// row and/or a fine .jsonl transcript must still sync, not
+			// fail its whole fingerprint over one bad candidate. Fold a
+			// marker into the hash instead of skipping silently, so the
+			// candidate later becoming readable (or disappearing for
+			// good) still invalidates this fingerprint.
+			log.Printf("hermes: candidate transcript %s unreadable: %v", path, statErr)
+			if _, err := fmt.Fprintf(h, "candidate-transcript\x00%s\x00unreadable\x00", path); err != nil {
+				return SourceFingerprint{}, err
+			}
+			continue
 		}
 		fingerprint.Size += candidateInfo.Size()
 		fingerprint.MTimeNS = max(
@@ -1864,7 +1906,15 @@ func hermesStateMemberFingerprintFinish(
 		if err := addHermesFingerprintPart(
 			h, "candidate-transcript", path, candidateInfo,
 		); err != nil {
-			return SourceFingerprint{}, err
+			// Stat succeeded but the read failed (e.g. permission denied
+			// between stat and open). Same tolerance as above: mark it
+			// unreadable rather than failing every other source this
+			// session might have.
+			log.Printf("hermes: candidate transcript %s unreadable: %v", path, err)
+			if _, ferr := io.WriteString(h, "unreadable\x00"); ferr != nil {
+				return SourceFingerprint{}, ferr
+			}
+			continue
 		}
 	}
 	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))

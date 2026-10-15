@@ -1651,7 +1651,7 @@ func TestHermesSingleSessionRefreshOfDeletedLegacySessionIsNoOp(t *testing.T) {
 			execHermesState(t, stateDB, "DELETE FROM sessions WHERE id = 'child'")
 
 			err = engine.SyncSingleSessionContext(t.Context(), childID)
-			assert.Error(t, err, "refreshing a session with no row and no transcript must not succeed")
+			require.Error(t, err, "refreshing a session with no row and no transcript must not succeed")
 
 			siblingAfter, err := database.GetSessionFull(t.Context(), siblingID)
 			require.NoError(t, err)
@@ -1942,6 +1942,83 @@ func TestHermesSingleSessionSyncAfterStateDBDamage(t *testing.T) {
 			assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"))
 		})
 	}
+}
+
+// TestHermesMalformedSessionRowFallsBackToReadableTranscript proves a
+// session whose own state.db row can't be fully decoded (a malformed
+// started_at value, not merely a missing one) still syncs, using its
+// readable transcript, instead of silently losing that transcript --
+// the same per-session isolation this provider already guarantees for a
+// parse failure. The malformed row's own virtual member still reports a
+// visible, observable parse failure (hermesStateMembership.Has, used by
+// the orphan-transcript fallback, no longer counts an undecodable row as
+// membership, so it stopped suppressing this session's transcript, but
+// the row's own doomed member keeps surfacing its own decode error). An
+// unrelated sibling in the same state.db must stay unaffected.
+func TestHermesMalformedSessionRowFallsBackToReadableTranscript(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	execHermesState(t, stateDB, `INSERT INTO sessions
+		(id, source, model, started_at, ended_at, message_count)
+		VALUES ('sibling', 'cli', 'model', 1778767300, 1778767900, 1)`)
+	execHermesState(t, stateDB, `INSERT INTO messages
+		(session_id, role, content, timestamp)
+		VALUES ('sibling', 'user', 'sibling message', 1778767310)`)
+	execHermesState(t, stateDB, "UPDATE sessions SET started_at = 'not-a-number' WHERE id = 'child'")
+	writeHermesTranscriptFile(t, filepath.Join(root, "sessions"), "child")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Positive(t, stats.Failed,
+		"the malformed row's own member must still report a visible, observable decode failure")
+	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"),
+		"a session whose row can't fully decode must still sync from its readable transcript")
+	assert.Equal(t, []string{"sibling message"}, messageContents(t, database, "hermes:sibling"),
+		"an unrelated sibling must be unaffected by another row's malformed value")
+}
+
+// TestHermesUnreadableJSONSnapshotFallsBackToOtherSources proves an
+// unreadable session_<id>.json -- an optional legacy snapshot candidate --
+// does not block a session whose state.db row and .jsonl transcript are
+// both fine. Before this, readHermesStateSessionFingerprintInputs listed
+// every existing candidate including one that can't be read, and
+// hermesStateMemberFingerprintFinish failed the whole fingerprint the
+// moment it couldn't open that one candidate, blocking the session from
+// syncing at all even though its other sources were perfectly usable.
+// Fixing the file's permissions afterward must still invalidate the
+// fingerprint and trigger a resync, so skipping an unreadable candidate
+// can't leave a stuck, stale fingerprint once the candidate is readable.
+func TestHermesUnreadableJSONSnapshotFallsBackToOtherSources(t *testing.T) {
+	root := t.TempDir()
+	writeHermesArchiveStateDB(t, root)
+	sessionsDir := filepath.Join(root, "sessions")
+	writeHermesTranscriptFile(t, sessionsDir, "child")
+	jsonPath := writeHermesSessionsFile(t, root, "session_child.json",
+		`{"role":"session_meta","timestamp":"2026-05-14T09:00:00Z"}`+"\n")
+	require.NoError(t, os.Chmod(jsonPath, 0o000))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(jsonPath, 0o600)) })
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Failed, "an unreadable optional snapshot must not fail the session's fingerprint")
+	assert.Equal(t, []string{"hello", "Done."}, messageContents(t, database, "hermes:child"),
+		"the session must still sync from its readable sources")
+
+	require.NoError(t, os.Chmod(jsonPath, 0o600))
+	stats = engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Failed)
+	assert.Equal(t, 1, stats.Synced,
+		"a candidate becoming readable must still invalidate the fingerprint and resync")
 }
 
 // TestHermesStateEventSurfacesTranscriptAfterRowRemoved proves a state.db
