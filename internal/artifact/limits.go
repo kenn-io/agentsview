@@ -33,6 +33,13 @@ const (
 	maxSessionMessages     = 32_768
 	maxSessionDecodedBytes = int64(256 << 20)
 
+	// A Codex cloud plan usage report has one group per model, reasoning
+	// effort, speed, and product experience that the chat's usage root
+	// spent on, so a real chat has a handful. 1,024 stays far above every
+	// combination of current models and settings while keeping millions of
+	// empty group objects in a small manifest from reaching the decoder.
+	maxManifestPlanUsageGroups = 1_024
+
 	// Nested collections need independent caps because compact empty objects can
 	// amplify far beyond the decoded byte budget when unmarshaled. A message may
 	// still describe unusually wide tool fan-out, and one tool may retain a long
@@ -58,6 +65,7 @@ const (
 type artifactLimits struct {
 	manifestSegments    int
 	manifestUsageEvents int
+	planUsageGroups     int
 	segmentMessages     int
 	sessionMessages     int
 	sessionDecodedBytes int64
@@ -73,6 +81,7 @@ func productionArtifactLimits() artifactLimits {
 	return artifactLimits{
 		manifestSegments:    maxManifestSegments,
 		manifestUsageEvents: maxManifestUsageEvents,
+		planUsageGroups:     maxManifestPlanUsageGroups,
 		segmentMessages:     maxSegmentMessages,
 		sessionMessages:     maxSessionMessages,
 		sessionDecodedBytes: maxSessionDecodedBytes,
