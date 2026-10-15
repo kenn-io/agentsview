@@ -449,8 +449,8 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 
 // TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput: a sidecar that
 // has gone from the bucket leaves only the placeholder in the re-parse, which
-// must not replace the hydrated output the archive holds
-// (spliceArchivedClaudeToolResults).
+// must not replace the hydrated output the archive holds (the Claude-format
+// branch of ingest.ReconcileProviderHistory, internal/ingest/history.go).
 func TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput(
 	t *testing.T,
 ) {

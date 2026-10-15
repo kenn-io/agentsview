@@ -2,10 +2,12 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +56,56 @@ func TestReconcileProviderHistorySkipsPriorReadForICodeMateCLI(t *testing.T) {
 	assert.Equal(t, ingest.HistoryReplace, result.Action)
 	assert.Zero(t, archive.getSessionCalls)
 	assert.Zero(t, archive.getMessageCalls)
+}
+
+type erroringMessagesStore struct {
+	db.Store
+	session *db.Session
+	err     error
+}
+
+func (s *erroringMessagesStore) GetSessionFull(
+	context.Context, string,
+) (*db.Session, error) {
+	return s.session, nil
+}
+
+func (s *erroringMessagesStore) GetAllMessages(
+	context.Context, string,
+) ([]db.Message, error) {
+	return nil, s.err
+}
+
+// TestReconcileProviderHistoryPropagatesTransientArchiveReadError covers a
+// transient failure reading the archived session: it must stop the write
+// rather than silently proceeding as if no archived output existed, which
+// would let the current parse's placeholder overwrite it.
+func TestReconcileProviderHistoryPropagatesTransientArchiveReadError(t *testing.T) {
+	readErr := errors.New("transient read failure")
+	archive := &erroringMessagesStore{
+		session: &db.Session{ID: "claude:session-1"}, err: readErr,
+	}
+	engine := &Engine{db: openTestDB(t), archiveStore: archive}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{{
+				Ordinal: 0, Timestamp: time.Now(),
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID: "toolu_1", Source: "tool_result",
+					PersistedOutputUnresolved: true,
+				}},
+			}},
+		},
+	}
+
+	_, err := engine.reconcileProviderHistoryContext(t.Context(), candidate)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, readErr)
 }
 
 // TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted covers a

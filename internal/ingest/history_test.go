@@ -518,6 +518,67 @@ func TestReconcileProviderHistoryClaudeMismatchedIdentityLeavesEventUntouched(t 
 		result.Candidate.Messages[0].ToolCalls[0].ResultEvents[0].Content)
 }
 
+func TestReconcileProviderHistoryClaudeDropsImagesReintroducedByRestore(t *testing.T) {
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	tsStr := timeutil.Format(ts)
+	placeholder := "Full output saved to: /x/tool-results/a.txt"
+	// Captured under a "keep" policy before this session's archive was
+	// written under the live "drop" policy below.
+	withImage := `[{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]`
+
+	prior := &ingest.PriorSession{
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: withImage, ContentLength: len(withImage),
+				}},
+			}},
+		}},
+	}
+	candidate := ingest.Candidate{
+		Session: db.Session{ID: "claude:session-1", Agent: string(parser.AgentClaude)},
+		Messages: []db.Message{{
+			Ordinal: 0, Role: "user", Timestamp: tsStr,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "toolu_1", Category: "bash",
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "toolu_1", Source: "tool_result", Timestamp: tsStr,
+					Content: placeholder, ContentLength: len(placeholder),
+				}},
+			}},
+		}},
+		Parsed: parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: "session-1", Agent: parser.AgentClaude,
+				File: parser.FileInfo{Path: "/synthetic/project/session-1.jsonl"},
+			},
+			Messages: []parser.ParsedMessage{{
+				Ordinal: 0, Timestamp: ts,
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID: "toolu_1", Source: "tool_result",
+					PersistedOutputUnresolved: true,
+				}},
+			}},
+		},
+	}
+
+	result, err := ingest.ReconcileProviderHistory(
+		t.Context(), candidate, prior, ingest.ContentOptions{
+			ToolResultImages: config.ToolResultImagesDrop,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ingest.HistoryMerge, result.Action)
+	call := result.Candidate.Messages[0].ToolCalls[0]
+	assert.NotContains(t, call.ResultEvents[0].Content, "input_image")
+	assert.NotContains(t, call.ResultEvents[0].Content, "aGVsbG8")
+	assert.NotContains(t, call.ResultContent, "input_image")
+	assert.NotContains(t, call.ResultContent, "aGVsbG8")
+}
+
 func openCodeHistoryCandidate(hash, content string) ingest.Candidate {
 	return ingest.Candidate{
 		Session: db.Session{

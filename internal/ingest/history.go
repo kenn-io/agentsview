@@ -190,6 +190,15 @@ func reconcileClaudePersistedToolResults(
 	if !changed {
 		return result, ctx.Err()
 	}
+	// A restored event can reintroduce image bytes the live policy drops, the
+	// same risk VSCopilot's own merge above guards against, so reapply the
+	// policy here too before anything downstream reads the restored content.
+	if options.ToolResultImages == config.ToolResultImagesDrop &&
+		!options.ArchiveContent.OmitsToolContent() {
+		candidate.Messages, _ = db.ProjectToolResultImagesWithoutWriting(
+			candidate.Messages, options.ToolResultImages, "",
+		)
+	}
 	if err := PairToolResultEventSummariesContext(
 		ctx, candidate.Messages, options.BlockedResultCategories,
 	); err != nil {

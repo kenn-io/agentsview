@@ -18603,7 +18603,10 @@ func (e *Engine) reconcileProviderHistoryContext(
 				messages, messagesErr := store.GetAllMessages(
 					ctx, candidate.Session.ID,
 				)
-				if messagesErr == nil && len(messages) > 0 {
+				if messagesErr != nil {
+					return ingest.HistoryResult{}, messagesErr
+				}
+				if len(messages) > 0 {
 					prior = &ingest.PriorSession{
 						Session: *stored, Messages: messages,
 					}

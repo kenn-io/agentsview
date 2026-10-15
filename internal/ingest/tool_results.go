@@ -178,8 +178,5 @@ func SummarizeToolResultEventsContext(
 		}
 		summary = strings.Join(parts, "\n\n")
 	}
-	if summary == "" && withheldLength > 0 {
-		return summary, withheldLength, ctx.Err()
-	}
-	return summary, len(summary), ctx.Err()
+	return summary, db.ResolveResultContentLength(summary, withheldLength), ctx.Err()
 }
