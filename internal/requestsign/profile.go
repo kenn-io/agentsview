@@ -78,14 +78,32 @@ func fresh(created, expires int64, now time.Time) bool {
 
 func externalBase(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
 		return nil, errors.New("signing requires an explicit HTTPS base URL")
 	}
+	u.Host = canonicalHost(u.Scheme, u.Host)
 	u.Path = strings.TrimRight(u.Path, "/")
 	if u.Path != "" && (path.Clean(u.Path) != u.Path || strings.Contains(u.Path, "//")) {
 		return nil, ErrInvalid
 	}
 	return u, nil
+}
+
+// canonicalHost lowercases the hostname and drops the scheme's default port,
+// so equivalent spellings of one origin sign and verify identically.
+func canonicalHost(scheme, host string) string {
+	u := url.URL{Host: host}
+	hostname, port := strings.ToLower(u.Hostname()), u.Port()
+	if scheme == "https" && port == "443" || scheme == "http" && port == "80" {
+		port = ""
+	}
+	if strings.Contains(hostname, ":") {
+		hostname = "[" + hostname + "]"
+	}
+	if port == "" {
+		return hostname
+	}
+	return hostname + ":" + port
 }
 
 func validateTarget(u *url.URL) error {
@@ -105,8 +123,19 @@ func validateTarget(u *url.URL) error {
 	return nil
 }
 
+// withinBase reports whether u is on base's origin, compared canonically,
+// and under its path prefix.
 func withinBase(u, base *url.URL) bool {
-	return u.Scheme == base.Scheme && u.Host == base.Host && (base.Path == "" || strings.HasPrefix(u.Path, base.Path+"/"))
+	return u.Scheme == base.Scheme && canonicalHost(u.Scheme, u.Host) == base.Host &&
+		(base.Path == "" || strings.HasPrefix(u.Path, base.Path+"/"))
+}
+
+// canonicalTarget is the signed @target-uri: the configured origin with the
+// request's path and query, however the caller spelled the origin.
+func canonicalTarget(u, base *url.URL) string {
+	target := *u
+	target.Scheme, target.Host = base.Scheme, base.Host
+	return target.String()
 }
 
 func validateHeaders(r *http.Request, requirePresent bool) error {

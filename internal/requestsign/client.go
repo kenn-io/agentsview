@@ -33,7 +33,8 @@ func NewSigner(baseURL string, key Key) (*Signer, error) {
 }
 
 func (s *Signer) Sign(r *http.Request) error {
-	if !withinBase(r.URL, s.base) || r.Host != "" && r.Host != s.base.Host || validateTarget(r.URL) != nil || validateHeaders(r, false) != nil {
+	if !withinBase(r.URL, s.base) || r.Host != "" && canonicalHost(s.base.Scheme, r.Host) != s.base.Host ||
+		validateTarget(r.URL) != nil || validateHeaders(r, false) != nil {
 		return ErrInvalid
 	}
 	if r.ContentLength > MaxBodyBytes {
@@ -79,7 +80,7 @@ func (s *Signer) Sign(r *http.Request) error {
 	created := time.Now().Unix()
 	params := fmt.Sprintf(`%s;created=%d;expires=%d;nonce="%s";keyid="%s";alg="hmac-sha256"`, components, created, created+30, base64.RawURLEncoding.EncodeToString(nonce), s.key.ID)
 	r.Header.Set("Signature-Input", "sig1="+params)
-	r.Header.Set("Signature", "sig1=:"+base64.StdEncoding.EncodeToString(macValue(s.key.Secret, signatureBase(r, r.URL.String(), params)))+":")
+	r.Header.Set("Signature", "sig1=:"+base64.StdEncoding.EncodeToString(macValue(s.key.Secret, signatureBase(r, canonicalTarget(r.URL, s.base), params)))+":")
 	return nil
 }
 
@@ -130,8 +131,11 @@ func (s *Signer) Client(client *http.Client) (*http.Client, error) {
 // the signing host and a different prefix on the signing origin fail closed.
 func ClientFromEnvironment(baseURL string, client *http.Client) (*http.Client, error) {
 	target, signed, err := environmentTarget(baseURL)
-	if err != nil || !signed {
-		return client, err
+	if err != nil {
+		return nil, err
+	}
+	if !signed {
+		return client, nil
 	}
 	secret, err := ReadSecret(os.Getenv("AGENTSVIEW_SIGNING_KEY_FILE"))
 	if err != nil {
@@ -169,11 +173,15 @@ func environmentTarget(baseURL string) (string, bool, error) {
 	if err != nil {
 		return "", false, ErrInvalid
 	}
-	if requested.Host != base.Host {
+	// Credentials for the signing host never travel over plain HTTP, on any port.
+	if !strings.EqualFold(requested.Hostname(), base.Hostname()) {
 		return "", false, nil
 	}
 	if requested.Scheme != base.Scheme {
 		return "", false, errors.New("HTTP target cannot downgrade the HTTPS signing origin")
+	}
+	if canonicalHost(requested.Scheme, requested.Host) != base.Host {
+		return "", false, nil
 	}
 	if requested.Path != base.Path {
 		return "", false, errors.New("HTTP target differs from configured signing prefix")

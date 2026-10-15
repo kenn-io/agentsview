@@ -2,6 +2,7 @@ package requestsign
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -110,26 +112,84 @@ func TestSignerPinsDestinationAndRejectsAmbiguity(t *testing.T) {
 	assert.Empty(t, req.Header.Get("Signature"))
 }
 
-func TestClientFromEnvironmentLeavesOtherOriginsUnsigned(t *testing.T) {
+func TestClientFromEnvironmentSelectsSigningByOrigin(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "key")
+	require.NoError(t, GenerateSecretFile(file))
 	t.Setenv("AGENTSVIEW_SIGNING_URL", "https://history.example.com/native")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader-key")
-	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", "unused-key-file")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", file)
 
-	// A local daemon and an HTTP remote-sync host keep their own transport.
-	for _, target := range []string{"http://127.0.0.2:8080/api", "https://peer.example.com:8443"} {
+	// Equivalent spellings of the signing origin are signed.
+	for _, target := range []string{"https://history.example.com/native/", "https://History.Example.COM/native", "https://history.example.com:443/native"} {
+		original := &http.Client{}
+		got, err := ClientFromEnvironment(target, original)
+		require.NoError(t, err, target)
+		assert.NotSame(t, original, got, target)
+		assert.IsType(t, signedTransport{}, got.Transport, target)
+		assert.True(t, SignsFromEnvironment(target), target)
+	}
+	// A local daemon, a remote-sync peer and another port on the signing host
+	// are different origins and keep their own transport.
+	for _, target := range []string{"http://127.0.0.2:8080/api", "https://peer.example.com:8443", "https://history.example.com:8443/native"} {
 		original := &http.Client{}
 		got, err := ClientFromEnvironment(target, original)
 		require.NoError(t, err, target)
 		assert.Same(t, original, got, target)
 		assert.False(t, SignsFromEnvironment(target), target)
 	}
-	// The signing host never receives credentials over plain HTTP or outside
-	// its configured prefix.
-	for _, target := range []string{"http://history.example.com/native", "https://history.example.com/other"} {
-		_, err := ClientFromEnvironment(target, &http.Client{})
-		require.Error(t, err, target)
+	// The signing host never receives credentials over plain HTTP, on any port
+	// or spelling, or outside its configured prefix.
+	for target, want := range map[string]string{
+		"http://history.example.com/native":      "downgrade",
+		"http://HISTORY.example.com/native":      "downgrade",
+		"http://history.example.com:80/native":   "downgrade",
+		"http://history.example.com:8080/native": "downgrade",
+		"https://history.example.com/other":      "prefix",
+		"https://History.example.com:443/other":  "prefix",
+	} {
+		got, err := ClientFromEnvironment(target, &http.Client{})
+		require.ErrorContains(t, err, want, target)
+		assert.Nil(t, got, target)
+		assert.False(t, SignsFromEnvironment(target), target)
 	}
-	assert.True(t, SignsFromEnvironment("https://history.example.com/native/"))
+}
+
+func TestSignerCanonicalizesOriginSpelling(t *testing.T) {
+	key := signingKey(t)
+	state := filepath.Join(t.TempDir(), "replay.db")
+	require.NoError(t, InitReplay(state))
+	replay, err := OpenReplay(state)
+	require.NoError(t, err)
+	defer replay.Close()
+	var verifier *Verifier
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }), nil, nil).ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+	// The verifier and the signer configure the origin with different spellings.
+	verifier, err = NewVerifier(VerifyConfig{ExternalURL: "https://example.com", Replay: replay, Keys: func() (map[string]Key, error) { return map[string]Key{key.ID: key}, nil }})
+	require.NoError(t, err)
+	signer, err := NewSigner("https://EXAMPLE.com:443", key)
+	require.NoError(t, err)
+	transport := ts.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, ts.Listener.Addr().String())
+	}
+	client, err := signer.Client(&http.Client{Transport: transport})
+	require.NoError(t, err)
+	for _, target := range []string{"https://example.com/api/v1/ping", "https://Example.COM:443/api/v1/ping"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test")
+		resp, err := client.Do(req)
+		require.NoError(t, err, target)
+		require.NoError(t, resp.Body.Close())
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode, target)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com:8443/api/v1/ping", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer test")
+	assert.ErrorIs(t, signer.Sign(req), ErrInvalid, "another port is another origin")
 }
 
 func TestSignerDoesNotFollowRedirects(t *testing.T) {

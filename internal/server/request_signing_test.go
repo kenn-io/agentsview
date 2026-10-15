@@ -66,9 +66,15 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 		resp, err := client.Do(req)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
-		line, err := bufio.NewReader(resp.Body).ReadString('\n')
-		require.NoError(t, err)
-		assert.Contains(t, line, "session.timing")
+		// The stream may announce readiness before its first timing event.
+		stream := bufio.NewReader(resp.Body)
+		var received strings.Builder
+		for line := 0; !strings.Contains(received.String(), "session.timing"); line++ {
+			require.Less(t, line, 10, "stream sent no timing event: %q", received.String())
+			text, err := stream.ReadString('\n')
+			require.NoError(t, err)
+			received.WriteString(text)
+		}
 		require.NoError(t, resp.Body.Close())
 	}
 	for _, tc := range []struct {
