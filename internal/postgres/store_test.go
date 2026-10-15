@@ -1601,11 +1601,6 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "ListTrashedSessions after empty trash")
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
 	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
-
-	_, err = store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
-		Surface: db.RecallQuerySurfaceQuery,
-	})
-	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
 func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {

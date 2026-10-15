@@ -252,14 +252,6 @@ const pgRootSessionFilter = `message_count > 0
 	AND relationship_type NOT IN ('subagent', 'fork')
 	AND deleted_at IS NULL`
 
-// buildPGSessionFilter returns a WHERE clause with $N
-// placeholders and the corresponding args.
-func buildPGSessionFilter(
-	f db.SessionFilter,
-) (string, []any) {
-	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
-}
-
 func buildPGSessionBaseFilter(
 	f db.SessionFilter,
 ) (string, []any) {

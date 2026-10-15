@@ -96,16 +96,6 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 	}
 }
 
-func TestFilterMatrixSessionAutomatedScope(t *testing.T) {
-	for _, d := range filterMatrixDialects {
-		t.Run(d.name, func(t *testing.T) {
-			sql, args := BuildSessionFilterSQL(SessionFilter{AutomatedScope: "automated"}, d.dialect)
-			assert.Contains(t, sql, "is_automated = "+d.trueSQL)
-			assert.Empty(t, args)
-		})
-	}
-}
-
 func TestFilterMatrixUsage(t *testing.T) {
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {

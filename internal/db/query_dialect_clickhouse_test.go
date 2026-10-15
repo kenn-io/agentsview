@@ -22,11 +22,13 @@ func TestClickHouseDialectRendersUncorrelatedFilters(t *testing.T) {
 	filter := SessionFilter{
 		Starred: true, IncludeChildren: true, IncludeOrphans: true,
 		Project: "p", DateTo: "2026-06-30", Timezone: "UTC",
+		AutomatedScope: "automated",
 	}
 	got, args := BuildSessionFilterSQL(filter, ClickHouseQueryDialect())
 	normalized := normalizeSQL(got)
 
 	assert.Contains(t, normalized, ") UNION ALL SELECT s.id FROM sessions s")
+	assert.Contains(t, normalized, "AND root_session.is_automated = true")
 	assert.NotContains(t, normalized, ") UNION SELECT")
 	assert.Contains(t, normalized,
 		"root_session.id IN (SELECT session_id FROM starred_sessions)")
