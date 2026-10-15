@@ -608,6 +608,11 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	assert.Equal(t, "dup-a", shared[0].SessionID,
 		"earlier-timestamp row sorts first")
 	assert.Equal(t, 500, shared[0].OutputTokens, "dup-a survives first-seen")
+
+	report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, q)
+	require.NoError(t, err)
+	assert.Equal(t, 500, report.Totals.OutputTokens,
+		"incomplete Claude pairs fall back to source UUID dedup through the report entry point")
 }
 
 func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(

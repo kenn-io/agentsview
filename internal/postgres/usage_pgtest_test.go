@@ -371,6 +371,18 @@ func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testin
 	require.Len(t, result.Daily, 1)
 	assert.Equal(t, 1000000, result.Daily[0].InputTokens)
 	assert.Equal(t, 500000, result.Daily[0].OutputTokens)
+
+	filter := db.UsageFilter{From: "2026-03-12", To: "2026-03-12", Timezone: "UTC"}
+	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err, "GetTopSessionsByCost")
+	require.Len(t, top, 1)
+	assert.Equal(t, "usage-source-daily-001", top[0].SessionID)
+
+	counts, err := store.GetUsageSessionCounts(ctx, filter)
+	require.NoError(t, err, "GetUsageSessionCounts")
+	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, 1, counts.ByProject["proj-a"])
+	assert.NotContains(t, counts.ByProject, "proj-b")
 }
 
 func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
