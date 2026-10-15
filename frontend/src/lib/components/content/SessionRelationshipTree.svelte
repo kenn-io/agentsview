@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    IconButton,
     SegmentedControl,
     SplitResizeHandle,
     type SegmentedControlOption,
@@ -13,6 +14,7 @@
     SessionTreeResponse,
   } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
+  import { Maximize2Icon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui, type SessionTreeView } from "../../stores/ui.svelte.js";
   import { formatNumber } from "../../utils/format.js";
@@ -240,6 +242,16 @@
             onchange={(next) => ui.setSessionTreeView(next as SessionTreeView)}
           />
         </span>
+        <span class="tree-open-graph">
+          <IconButton
+            size="sm"
+            ariaLabel={m.session_input_graph_open()}
+            ariaHaspopup="dialog"
+            onclick={() => (ui.activeModal = "inputTree")}
+          >
+            <Maximize2Icon size={12} aria-hidden="true" />
+          </IconButton>
+        </span>
       {/if}
     </header>
 
@@ -324,6 +336,14 @@
     flex-shrink: 0;
     --kit-control-height: 20px;
     --kit-control-font-size: 10px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .tree-open-graph {
+    flex-shrink: 0;
+    display: inline-flex;
+    margin-left: -4px;
     letter-spacing: 0;
     text-transform: none;
   }

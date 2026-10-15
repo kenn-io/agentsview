@@ -1896,6 +1896,65 @@
   "session_input_tree_jump_to": "Girişə keç: {preview}",
   "session_input_tree_open": "Öz sessiyasında aç: {preview}",
   "session_input_tree_current": "cari",
+  "session_input_graph_open": "Ətraflı giriş ağacını aç",
+  "session_input_graph_title": "Giriş ağacı",
+  "session_input_graph_close": "Bağla",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} sessiya",
+        "countPlural=other": "{countLabel} sessiya"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} giriş",
+        "countPlural=other": "{countLabel} giriş"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} budaq",
+        "countPlural=other": "{countLabel} budaq"
+      }
+    }
+  ],
+  "session_input_graph_fold": "Budaqlanmayan ardıcıl girişləri qatla",
+  "session_input_graph_zoom_in": "Böyüt",
+  "session_input_graph_zoom_out": "Kiçilt",
+  "session_input_graph_zoom_fit": "Pəncərəyə sığdır",
+  "session_input_graph_zoom_reset": "Miqyası 100%-ə qaytar",
+  "session_input_graph_open_session": "Sessiyanı aç: {title}",
+  "session_input_graph_canvas": "Giriş ağacı diaqramı",
+  "session_input_graph_hint": "Hərəkət etdirmək üçün sürüşdürün. Miqyas üçün Ctrl və ya Cmd basılı saxlayıb fırladın.",
   "code_block_copy": "Kod blokunu kopyala",
   "code_block_copy_title": "Kodu kopyala",
   "common_copied": "Kopyalandı!",

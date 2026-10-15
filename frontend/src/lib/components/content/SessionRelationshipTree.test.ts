@@ -230,6 +230,7 @@ describe("SessionRelationshipTree", () => {
     }
     ui.setSessionTreeHeight(280);
     ui.setSessionTreeView("sessions");
+    ui.activeModal = null;
     ui.clearScrollState();
     vi.restoreAllMocks();
     document.body.innerHTML = "";
@@ -356,6 +357,9 @@ describe("SessionRelationshipTree", () => {
 
       expect(document.querySelector('[role="radiogroup"]')).toBeNull();
       expect(radio(m.session_tree_view_inputs())).toBeUndefined();
+      expect(
+        document.querySelector(`[aria-label="${m.session_input_graph_open()}"]`),
+      ).toBeNull();
       expect(mocks.fetchSessionInputTree).not.toHaveBeenCalled();
       expect(document.querySelector('a[href="/sessions/sibling"]')).not.toBeNull();
     });
@@ -387,6 +391,23 @@ describe("SessionRelationshipTree", () => {
       expect(inputRow("root follow-up")?.textContent).toContain(
         m.session_tree_relationship_root(),
       );
+    });
+
+    it("opens the detailed input tree from the header", async () => {
+      mocks.fetchSessionTree.mockResolvedValue(makeTree());
+      component = mount(SessionRelationshipTree, {
+        target: document.body,
+        props: { sessionId: "child" },
+      });
+      await flush();
+
+      const open = document.querySelector<HTMLButtonElement>(
+        `[aria-label="${m.session_input_graph_open()}"]`,
+      );
+      expect(open).not.toBeNull();
+      open!.click();
+
+      expect(ui.activeModal).toBe("inputTree");
     });
 
     it("jumps within the open session to an input on its path", async () => {

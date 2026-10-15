@@ -1708,6 +1708,65 @@
   "session_input_tree_jump_to": "Jump to input: {preview}",
   "session_input_tree_open": "Open in its session: {preview}",
   "session_input_tree_current": "current",
+  "session_input_graph_open": "Open the detailed input tree",
+  "session_input_graph_title": "Input tree",
+  "session_input_graph_close": "Close",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} session",
+        "countPlural=other": "{countLabel} sessions"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} input",
+        "countPlural=other": "{countLabel} inputs"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} branch",
+        "countPlural=other": "{countLabel} branches"
+      }
+    }
+  ],
+  "session_input_graph_fold": "Fold unbranched runs",
+  "session_input_graph_zoom_in": "Zoom in",
+  "session_input_graph_zoom_out": "Zoom out",
+  "session_input_graph_zoom_fit": "Fit to window",
+  "session_input_graph_zoom_reset": "Reset zoom to 100%",
+  "session_input_graph_open_session": "Open session: {title}",
+  "session_input_graph_canvas": "Input tree diagram",
+  "session_input_graph_hint": "Drag to pan. Hold Ctrl or Cmd and scroll to zoom.",
   "code_block_copy": "Copy code block",
   "code_block_copy_title": "Copy code",
   "common_copied": "Copied!",

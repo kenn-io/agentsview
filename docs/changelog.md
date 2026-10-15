@@ -18,6 +18,12 @@ The latest published release is
   its session. Click a prompt on the open session's path to jump to it, or any
   other prompt to open the session that holds it. Long runs of prompts without
   a split fold into one row.
+- Study a fork family's prompts in a full diagram. The expand button beside the
+  session tree's **Sessions**/**Inputs** switch opens a large view that draws
+  every prompt as a card on a top-down tree and ends each branch with a card for
+  its session. Click a prompt to jump to it or a session card to open it. Pan,
+  zoom, and fit the tree to the window, hover a card to trace its path, and fold
+  or unfold runs of prompts without a split.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

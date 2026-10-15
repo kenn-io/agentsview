@@ -1892,6 +1892,65 @@
   "session_input_tree_jump_to": "入力へ移動: {preview}",
   "session_input_tree_open": "所属するセッションで開く: {preview}",
   "session_input_tree_current": "現在",
+  "session_input_graph_open": "詳細な入力ツリーを開く",
+  "session_input_graph_title": "入力ツリー",
+  "session_input_graph_close": "閉じる",
+  "session_input_graph_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} 件のセッション",
+        "countPlural=other": "{countLabel} 件のセッション"
+      }
+    }
+  ],
+  "session_input_graph_inputs": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} 件の入力",
+        "countPlural=other": "{countLabel} 件の入力"
+      }
+    }
+  ],
+  "session_input_graph_branches": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} 本の分岐",
+        "countPlural=other": "{countLabel} 本の分岐"
+      }
+    }
+  ],
+  "session_input_graph_fold": "分岐のない連続入力を折りたたむ",
+  "session_input_graph_zoom_in": "拡大",
+  "session_input_graph_zoom_out": "縮小",
+  "session_input_graph_zoom_fit": "ウィンドウに合わせる",
+  "session_input_graph_zoom_reset": "ズームを 100% に戻す",
+  "session_input_graph_open_session": "セッションを開く: {title}",
+  "session_input_graph_canvas": "入力ツリー図",
+  "session_input_graph_hint": "ドラッグで移動、Ctrl または Cmd を押しながらスクロールでズームします。",
   "code_block_copy": "コードブロックをコピーする",
   "code_block_copy_title": "コードをコピーする",
   "common_copied": "コピーしました！",

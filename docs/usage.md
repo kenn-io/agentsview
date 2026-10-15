@@ -443,6 +443,20 @@ tree to **Inputs** to see the prompts of the session and its forks as one tree:
 - Runs of prompts without a split fold into one row. Click the row to show
     them.
 
+For a closer look, click the expand button beside the **Sessions**/**Inputs**
+switch. It opens the same family as a full diagram:
+
+- Each prompt is a card with its time and first lines. A colored stripe shows
+    which session holds it.
+- Every branch ends in a card for its session, with its relationship, agent,
+    and message count. Click it to open that session.
+- Click a prompt to go to it, as in the side panel; the diagram closes. Hover
+    a card to trace its path back to the first prompt.
+- Drag the background to pan. Hold Ctrl or Cmd and scroll, or use the zoom
+    buttons, to zoom. **Fit to window** shows the whole tree.
+- **Fold unbranched runs** folds long runs of prompts into one card. Turn it
+    off to see every prompt.
+
 Subagent sessions spawned by the Task tool are organized under their parent in
 the sidebar's [sub-agent tree](#sub-agent-tree) and are also viewable inline
 through the parent session's tool blocks (see
