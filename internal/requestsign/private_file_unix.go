@@ -12,7 +12,7 @@ func isPrivateRegularFile(file *os.File) bool {
 	if err != nil || info == nil {
 		return false
 	}
-	return info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0
+	return info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && hasPrivateFileACL(file)
 }
 
 func createPrivateFile(path string) (*os.File, error) {

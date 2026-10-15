@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/requestsign"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 type locationCaptureTransport struct {
@@ -48,7 +49,7 @@ func TestSignedRawSyncTLSRewritingPrefix(t *testing.T) {
 		machine.ServeHTTP(w, r)
 	}))
 	defer ts.Close()
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	file := filepath.Join(dir, "key")
 	require.NoError(t, requestsign.GenerateSecretFile(file))
 	secret, err := requestsign.ReadSecret(file)

@@ -124,7 +124,7 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 		if r.URL.Path == "/api/v1/version" && service.SupportsRecallQueries(s.sessions) {
 			w.Header().Set("X-Agentsview-Recall-Queries", "non-recording")
 		}
-		gzipMiddleware(s.mux).ServeHTTP(w, r)
+		gzipMiddleware(s.archiveStaleMiddleware(s.mux)).ServeHTTP(w, r)
 	})
 	h := machineRequestLogMiddleware(externalPrefix, verifier.Wrap(dispatch, authenticate, authorize))
 	return s.idle.Wrap(h), replay.Close, nil

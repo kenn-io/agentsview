@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/requestsign"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestRestrictedListenerLogsServeError(t *testing.T) {
@@ -209,7 +210,7 @@ func TestRestrictedListenerRequiresAuthTokenForReaderGrant(t *testing.T) {
 	srv.cfg.AuthToken = ""
 	srv.mu.Unlock()
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	secretFile := filepath.Join(dir, "secret")
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
 	replayPath := filepath.Join(dir, "replay.db")
@@ -236,7 +237,7 @@ func TestRestrictedListenerRequiresAuthTokenForReaderGrant(t *testing.T) {
 func TestRestrictedListenerRejectsPublicBinding(t *testing.T) {
 	srv := testServer(t, 30*time.Second)
 	srv.cfg.AuthToken = "test-bearer"
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	secretFile := filepath.Join(dir, "secret")
 	// A key generated at runtime avoids committing secret fixtures.
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
@@ -270,7 +271,7 @@ func TestRestrictedListenerDefaultAvoidsOccupiedHTTPPort(t *testing.T) {
 
 	srv := testServer(t, 30*time.Second)
 	srv.cfg.AuthToken = "test-bearer"
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	secretFile := filepath.Join(dir, "secret")
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
 	state := filepath.Join(dir, "replay.db")

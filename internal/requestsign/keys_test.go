@@ -11,10 +11,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestPrivateKeyPolicyRotationAndRevocation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	file := filepath.Join(dir, "secret")
 	key := signingKey(t)
 	require.NoError(t, os.WriteFile(file, []byte(base64.StdEncoding.EncodeToString(key.Secret)), 0o600))
@@ -51,7 +52,7 @@ func TestPrivateKeyPolicyRotationAndRevocation(t *testing.T) {
 }
 
 func TestReadPolicyRejectsDuplicateJSONMembers(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	secretFile := filepath.Join(dir, "secret")
 	key := signingKey(t)
 	require.NoError(t, os.WriteFile(secretFile, []byte(base64.StdEncoding.EncodeToString(key.Secret)), 0o600))

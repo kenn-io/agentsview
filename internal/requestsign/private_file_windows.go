@@ -5,6 +5,7 @@ package requestsign
 import (
 	"errors"
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -15,15 +16,24 @@ func createPrivateFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
+	sd, err := signingFileSecurityDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	attributes := windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: sd,
+	}
 	handle, err := windows.CreateFile(
 		pathPtr,
 		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.READ_CONTROL|windows.WRITE_DAC,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
+		&attributes,
 		windows.CREATE_NEW,
 		windows.FILE_ATTRIBUTE_NORMAL,
 		0,
 	)
+	runtime.KeepAlive(sd)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -91,15 +101,7 @@ func ensurePrivateFile(file *os.File) error {
 	if file == nil {
 		return errors.New("file is not private")
 	}
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil || user.User.Sid == nil {
-		return errors.New("reading signing file ACL failed")
-	}
-	userSID := user.User.Sid.String()
-	if userSID == "" {
-		return errors.New("reading signing file ACL failed")
-	}
-	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + userSID + ")")
+	sd, err := signingFileSecurityDescriptor()
 	if err != nil {
 		return errors.New("creating signing file ACL failed")
 	}
@@ -107,17 +109,31 @@ func ensurePrivateFile(file *os.File) error {
 	if err != nil || dacl == nil {
 		return errors.New("creating signing file ACL failed")
 	}
-	if err = windows.SetSecurityInfo(
+	err = windows.SetSecurityInfo(
 		windows.Handle(file.Fd()), windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		nil, nil, dacl, nil,
-	); err != nil {
+	)
+	runtime.KeepAlive(sd)
+	if err != nil {
 		return errors.New("restricting signing file ACL failed")
 	}
 	if !isPrivateRegularFile(file) {
 		return errors.New("signing file ACL is not private")
 	}
 	return nil
+}
+
+func signingFileSecurityDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil || user.User.Sid == nil {
+		return nil, errors.New("reading signing file ACL failed")
+	}
+	userSID := user.User.Sid.String()
+	if userSID == "" {
+		return nil, errors.New("reading signing file ACL failed")
+	}
+	return windows.SecurityDescriptorFromString("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + userSID + ")")
 }
 
 func trustedSigningSIDs() ([]*windows.SID, error) {

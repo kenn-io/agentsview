@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestSignedReaderDiscoversNonRecordingRecall(t *testing.T) {
@@ -23,7 +24,7 @@ func TestSignedReaderDiscoversNonRecordingRecall(t *testing.T) {
 	secret := make([]byte, 64)
 	_, err := rand.Read(secret)
 	require.NoError(t, err)
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	keyFile := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(secret)), 0o600))
 	state := filepath.Join(dir, "replay.db")

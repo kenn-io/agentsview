@@ -661,9 +661,12 @@ agentsview signing init-replay ./request-replay.db
 These commands create new files exclusively. They never overwrite a key or
 replay database and never print the key. A key contains 64 random bytes encoded
 as base64. Key and policy files must be private regular files. Unix-like systems
-reject group and other access. Windows accepts ACL entries for the current user,
-SYSTEM, and built-in Administrators. Do not pass secret values as command
-arguments or place them in ordinary AgentsView configuration.
+reject group and other access. macOS also rejects extended ACL grants to anyone
+other than the current user or root. If a new file inherits an untrusted grant,
+creation fails before writing any key or replay data. Windows applies a private
+ACL when creating the file and accepts grants only for the current user, SYSTEM,
+and built-in Administrators. Do not pass secret values as command arguments or
+place them in ordinary AgentsView configuration.
 
 An operator supplies a private JSON policy file. This neutral example
 illustrates a contributor grant; use an enrolled immutable device ID:

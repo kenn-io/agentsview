@@ -21,10 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/requestsign"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
-	srv := testServer(t, 30*time.Second)
+	fixture := newSyncRouteFixture(t, withStaleDB())
+	require.True(t, fixture.db.NeedsResync())
+	srv := fixture.srv
 	srv.cfg.AuthToken = "test-bearer"
 	// Main stays unsigned; the machine listener must independently require auth.
 	srv.cfg.RequireAuth = false
@@ -34,7 +37,7 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	key := make([]byte, 64)
 	_, err := rand.Read(key)
 	require.NoError(t, err)
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	keyFile := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(key)), 0o600))
 	replayPath := filepath.Join(dir, "replay.db")
@@ -100,6 +103,10 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 			assert.Equal(t, tc.status, resp.StatusCode, string(body))
 			if tc.path == "/api/v1/version" && tc.status == 200 {
 				assert.Contains(t, string(body), `"read_only":true`)
+				assert.Empty(t, resp.Header.Get("X-Agentsview-Archive-Stale"))
+			}
+			if tc.path == "/api/v1/sessions" && tc.status == 200 {
+				assert.Equal(t, "true", resp.Header.Get("X-Agentsview-Archive-Stale"))
 			}
 		})
 	}
@@ -178,7 +185,7 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	defer ts.Close()
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	keyFile := filepath.Join(dir, "key")
 	require.NoError(t, requestsign.GenerateSecretFile(keyFile))
 	key, err := requestsign.ReadSecret(keyFile)

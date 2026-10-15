@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/requestsign"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestNativeHTTPAndRawClientsSignFromEnvironment(t *testing.T) {
@@ -27,7 +28,7 @@ func TestNativeHTTPAndRawClientsSignFromEnvironment(t *testing.T) {
 	secret := make([]byte, 64)
 	_, err := rand.Read(secret)
 	require.NoError(t, err)
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	file := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(file, []byte(base64.StdEncoding.EncodeToString(secret)), 0o600))
 	state := filepath.Join(dir, "replay.db")
