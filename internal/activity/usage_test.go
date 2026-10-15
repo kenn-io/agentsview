@@ -19,10 +19,18 @@ func mustStart(t *testing.T, s string) time.Time {
 
 func TestApplyUsageAggregatesRowAndDefaultsToInteractive(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
-	usage := []UsageRow{{
-		SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-		InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
-	}}
+	usage := []UsageRow{
+		{
+			SessionID: "root", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+		{
+			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
+			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)

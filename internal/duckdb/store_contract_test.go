@@ -182,7 +182,6 @@ func TestDuckDBStoreContract(t *testing.T) {
 		{"messages_search_and_secrets", duckContractMessagesSearchAndSecrets},
 		{"starred_and_pinned_reads", duckContractStarredAndPinnedReads},
 		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
-		{"local_only_methods_read_only", duckContractLocalOnlyMethodsReadOnly},
 		{"data_inventory_rules_candidates", duckContractDataInventoryRulesCandidates},
 	}
 	for _, tt := range tests {
@@ -356,6 +355,7 @@ func duckContractSessionsCursorsAndMetadata(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
+	require.True(t, store.ReadOnly())
 
 	ctx := t.Context()
 
@@ -607,13 +607,6 @@ func duckContractAnalyticsTrendsAndUsage(
 	assert.InDelta(t,
 		float64(sessionUsage.Cost.Microdollars)/1e6,
 		*sessionUsage.CostUSD, 1e-9)
-}
-
-func duckContractLocalOnlyMethodsReadOnly(
-	t *testing.T, store *Store, _ syncFixture,
-) {
-	t.Helper()
-	require.True(t, store.ReadOnly())
 }
 
 // duckContractDataInventoryRulesCandidates exercises the three Data reads

@@ -2166,6 +2166,12 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 		{"source UUID with incomplete pair", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			sourceUUID := ""
+			uniqueSourceUUID := ""
+			if tc.requestID == "" {
+				sourceUUID = "source-1"
+				uniqueSourceUUID = "source-unique"
+			}
 			d := testDB(t)
 			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 				ModelPattern:         "claude-opus-4-6",
@@ -2195,13 +2201,13 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 					SessionID: "source-main", Ordinal: 0,
 					Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
 					Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
-					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: "source_dup",
+					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: sourceUUID,
 				},
 				Message{
 					SessionID: "source-fork", Ordinal: 0,
 					Role: "assistant", Timestamp: "2026-04-10T10:02:01Z",
 					Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
-					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: "source_dup",
+					ClaudeMessageID: "msg_dup", ClaudeRequestID: tc.requestID, SourceUUID: sourceUUID,
 				},
 			)
 
@@ -2212,7 +2218,7 @@ func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 			insertMessages(t, d, Message{
 				SessionID: "unique-session", Ordinal: 0, Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
 				Model: "claude-opus-4-6", TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`),
-				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: "source_uniq",
+				ClaudeMessageID: "msg_uniq", ClaudeRequestID: tc.requestID, SourceUUID: uniqueSourceUUID,
 			})
 			t.Run("daily top and counts", func(t *testing.T) {
 				result, err := d.GetDailyUsage(t.Context(), UsageFilter{
@@ -4845,6 +4851,10 @@ func TestGetSessionUsage_PricesClaudeKeyVariants(t *testing.T) {
 		{"incomplete pair source UUID", "", "0.0175", 500, 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			sourceUUID := ""
+			if tc.requestID == "" {
+				sourceUUID = "source-1"
+			}
 			d := testDB(t)
 			ctx := t.Context()
 			seedOpusPricing(t, d)
@@ -4860,13 +4870,13 @@ func TestGetSessionUsage_PricesClaudeKeyVariants(t *testing.T) {
 				Message{
 					SessionID: "claude:s6", Ordinal: 0, Role: "assistant",
 					Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
-					ClaudeMessageID: "msg-1", ClaudeRequestID: tc.requestID, SourceUUID: "source-1",
+					ClaudeMessageID: "msg-1", ClaudeRequestID: tc.requestID, SourceUUID: sourceUUID,
 					TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput)),
 				},
 				Message{
 					SessionID: "claude:s6", Ordinal: 1, Role: "assistant",
 					Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
-					ClaudeMessageID: "msg-1", ClaudeRequestID: tc.requestID, SourceUUID: "source-1",
+					ClaudeMessageID: "msg-1", ClaudeRequestID: tc.requestID, SourceUUID: sourceUUID,
 					TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput)),
 				},
 			)

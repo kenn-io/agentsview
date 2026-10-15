@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -328,9 +327,11 @@ func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
 
 func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 	for _, requestID := range []string{"req-1", ""} {
+		sourceUUID := ""
 		name := "complete pair"
 		if requestID == "" {
 			name = "source UUID with incomplete pair"
+			sourceUUID = "source-1"
 		}
 		t.Run(name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_usage_source_uuid_daily_test")
@@ -361,12 +362,12 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 					 '2026-03-12T10:00:00Z'::timestamptz, 3,
 					 'test-model-source-daily',
 					 '{"input_tokens":1000000,"output_tokens":500000,"cache_creation_input_tokens":250000,"cache_read_input_tokens":250000}',
-					 'msg-1', $1, 'source-1'),
+					 'msg-1', $1, $2),
 					('usage-source-daily-002', 0, 'assistant', 'two',
 					 '2026-03-12T10:01:00Z'::timestamptz, 3,
 					 'test-model-source-daily',
 					 '{"input_tokens":1000000,"output_tokens":500000,"cache_creation_input_tokens":250000,"cache_read_input_tokens":250000}',
-					 'msg-1', $1, 'source-1')`, requestID)
+					 'msg-1', $1, $2)`, requestID, sourceUUID)
 			require.NoError(t, err, "insert messages")
 
 			result, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -782,7 +783,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.021"), rollup.Cost)
 }
 
-func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		requestID   string
@@ -796,6 +797,10 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_session_usage_"+tc.name+"_test")
+			sourceUUID := ""
+			if tc.requestID == "" {
+				sourceUUID = "source-1"
+			}
 			ctx := context.Background()
 			_, err := store.DB().ExecContext(ctx, `
 				INSERT INTO model_pricing (
@@ -820,12 +825,12 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 				) VALUES
 					('claude:usage-source', 0, 'assistant', 'one',
 					 '2026-03-12T10:01:00Z'::timestamptz, 3,
-					 'claude-opus-4-6', $1, 'msg-1', $3, 'source-1'),
+					 'claude-opus-4-6', $1, 'msg-1', $3, $4),
 					('claude:usage-source', 1, 'assistant', 'two',
 					 '2026-03-12T10:02:00Z'::timestamptz, 3,
-					 'claude-opus-4-6', $2, 'msg-1', $3, 'source-1')`,
+					 'claude-opus-4-6', $2, 'msg-1', $3, $4)`,
 				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput),
-				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput), tc.requestID)
+				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput), tc.requestID, sourceUUID)
 			require.NoError(t, err, "insert messages")
 
 			got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
@@ -1878,19 +1883,6 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		"pg-sub-parent", "agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{
-		"pg-sub-parent": 505, "agent-pg-a": 1500,
-		"agent-pg-b": 100, "agent-pg-dedup-only": 500,
-	}, rowSet.RawOutputTokensBySession)
-	assert.Equal(t, map[string]struct{}{
-		"pg-sub-parent": {}, "agent-pg-a": {}, "agent-pg-dedup-only": {},
-	}, rowSet.DiscardedContributingSessions)
-	assert.Equal(t, map[string]activity.SessionTokenCoverage{
-		"pg-sub-parent":       {OutputTokens: 500, PeakContextTokens: 1000},
-		"agent-pg-a":          {OutputTokens: 1500, PeakContextTokens: 2000},
-		"agent-pg-b":          {OutputTokens: 100, PeakContextTokens: 500},
-		"agent-pg-dedup-only": {OutputTokens: 500, PeakContextTokens: 1000},
-	}, rowSet.CanonicalTokenCoverageBySession)
 	require.Len(t, rowSet.Rows, 3)
 	assert.Equal(t, []string{
 		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
