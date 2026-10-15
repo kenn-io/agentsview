@@ -138,7 +138,8 @@ func verifyUsageRollupQuery(
 		}
 	}
 	current := make(map[int64]usageRollupInstall, len(installIDs))
-	// maxSQLVars IDs plus one timezone stay below SQLite's 999-variable limit.
+	// Each statement binds at most maxSQLVars IDs plus the timezone, within the repo's bind limit.
+	// SQLite's INTEGER column affinity matches the text binds to the id column.
 	err := queryChunked(installIDs, func(chunk []string) error {
 		placeholders, args := InPlaceholders(chunk)
 		args = append(args, timezoneID)

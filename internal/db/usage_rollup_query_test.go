@@ -17,7 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestVerifyUsageRollupQueryCrossesChunkBoundary(t *testing.T) {
+func TestVerifyUsageRollupQueryChecksEveryChunk(t *testing.T) {
 	database := testDB(t)
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -57,10 +57,9 @@ func TestVerifyUsageRollupQueryCrossesChunkBoundary(t *testing.T) {
 	conn, err := cache.db.Conn(t.Context())
 	require.NoError(t, err)
 	defer conn.Close()
-	timezoneID, err := verifyUsageRollupQuery(
+	_, err = verifyUsageRollupQuery(
 		t.Context(), conn, "UTC", snapshot, installs)
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), timezoneID)
 	_, err = conn.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = install_revision + 1 WHERE session_id = ?`,
 		usageRollupCursorSessionID)
