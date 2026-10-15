@@ -113,11 +113,7 @@ func (c *usageFillCoordinator) Ensure(
 	results := make(map[string]usageFillResult, len(versions))
 	waiting := make(map[string]*usageFillCall)
 	owned := make([]usageSourceVersion, 0, len(versions))
-	sessionIDs := make([]string, len(versions))
-	for i, version := range versions {
-		sessionIDs[i] = version.SessionID
-	}
-	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +171,14 @@ func usageFillCallKey(version usageSourceVersion) string {
 		version.SessionID, version.SyncMarker, version.TranscriptRevision,
 		version.UsageEventFingerprint,
 	}, "\x00")
+}
+
+func usageSourceVersionIDs(versions []usageSourceVersion) []string {
+	ids := make([]string, len(versions))
+	for i, version := range versions {
+		ids[i] = version.SessionID
+	}
+	return ids
 }
 
 func readUsageCachedSessions(
@@ -314,11 +318,7 @@ func (c *usageFillCoordinator) captureFillInstallExpectations(ctx context.Contex
 	versions []usageSourceVersion,
 ) (map[string]usageFillInstallExpectation, error) {
 	expected := make(map[string]usageFillInstallExpectation, len(versions))
-	sessionIDs := make([]string, len(versions))
-	for i, version := range versions {
-		sessionIDs[i] = version.SessionID
-	}
-	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
 	if err != nil {
 		return nil, err
 	}
@@ -341,11 +341,7 @@ func (c *usageFillCoordinator) FillBackground(
 ) (map[string]usageFillResult, error) {
 	results := make(map[string]usageFillResult, len(versions))
 	pending := make([]usageSourceVersion, 0, len(versions))
-	sessionIDs := make([]string, len(versions))
-	for i, version := range versions {
-		sessionIDs[i] = version.SessionID
-	}
-	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, sessionIDs)
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
 	if err != nil {
 		return nil, err
 	}
@@ -827,28 +823,25 @@ func (c *usageFillCoordinator) installSpoolBatch(
 		}
 	}()
 
+	sessionIDs := append(usageSourceVersionIDs(stable), deleted...)
+	cachedSessions, err := readUsageCachedSessions(ctx, conn, sessionIDs)
+	if err != nil {
+		return nil, nil, err
+	}
 	eligibleStable := make([]usageSourceVersion, 0, len(stable))
 	eligibleDeleted := make([]string, 0, len(deleted))
 	var lost []string
 	for _, version := range stable {
-		matches, matchErr := fillInstallExpectationMatches(
-			ctx, conn, version.SessionID, expected[version.SessionID])
-		if matchErr != nil {
-			return nil, nil, matchErr
-		}
-		if matches {
+		cached, exists := cachedSessions[version.SessionID]
+		if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
 			eligibleStable = append(eligibleStable, version)
 		} else {
 			lost = append(lost, version.SessionID)
 		}
 	}
 	for _, sessionID := range deleted {
-		matches, matchErr := fillInstallExpectationMatches(
-			ctx, conn, sessionID, expected[sessionID])
-		if matchErr != nil {
-			return nil, nil, matchErr
-		}
-		if matches {
+		cached, exists := cachedSessions[sessionID]
+		if fillInstallExpectationMatches(cached, exists, expected[sessionID]) {
 			eligibleDeleted = append(eligibleDeleted, sessionID)
 		} else {
 			lost = append(lost, sessionID)
@@ -897,19 +890,13 @@ func (c *usageFillCoordinator) installSpoolBatch(
 }
 
 func fillInstallExpectationMatches(
-	ctx context.Context, conn *sql.Conn, sessionID string,
+	cached usageFillResult, exists bool,
 	expected usageFillInstallExpectation,
-) (bool, error) {
-	var revision int64
-	err := conn.QueryRowContext(ctx, `SELECT install_revision
-		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(&revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return !expected.Exists, nil
+) bool {
+	if !exists {
+		return !expected.Exists
 	}
-	if err != nil {
-		return false, err
-	}
-	return expected.Exists && revision == expected.InstallRevision, nil
+	return expected.Exists && cached.InstallRevision == expected.InstallRevision
 }
 
 // invalidateChangedIdentitySharers compares the dedup identities a fill

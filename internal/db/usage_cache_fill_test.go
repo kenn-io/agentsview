@@ -4,6 +4,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -397,6 +398,16 @@ func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 		"idx_usage_events_session")
 }
 
+type countingUsageCacheStatementRunner struct {
+	usageCacheStatementRunner
+	queryArgCounts []int
+}
+
+func (r *countingUsageCacheStatementRunner) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	r.queryArgCounts = append(r.queryArgCounts, len(args))
+	return r.usageCacheStatementRunner.QueryContext(ctx, query, args...)
+}
+
 func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 	database := testDB(t)
 	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -429,9 +440,19 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit())
 	ids = append(ids, "absent-1", "absent-2", "absent-3")
-	got, err := readUsageCachedSessions(t.Context(), cache.db, ids)
+	runner := &countingUsageCacheStatementRunner{usageCacheStatementRunner: cache.db}
+	empty, err := readUsageCachedSessions(t.Context(), runner, nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+	assert.Empty(t, runner.queryArgCounts)
+	got, err := readUsageCachedSessions(t.Context(), runner, ids)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+	assert.Len(t, runner.queryArgCounts, 2)
+	for _, count := range runner.queryArgCounts {
+		assert.LessOrEqual(t, count, maxSQLVars)
+	}
+	assert.Equal(t, []int{500, 5}, runner.queryArgCounts)
 }
 
 func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {

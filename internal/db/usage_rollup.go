@@ -419,11 +419,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 func readCurrentUsageFillResults(
 	ctx context.Context, conn *sql.Conn, versions []usageSourceVersion,
 ) (map[string]usageFillResult, error) {
-	sessionIDs := make([]string, len(versions))
-	for i, version := range versions {
-		sessionIDs[i] = version.SessionID
-	}
-	results, err := readUsageCachedSessions(ctx, conn, sessionIDs)
+	results, err := readUsageCachedSessions(ctx, conn, usageSourceVersionIDs(versions))
 	if err != nil {
 		return nil, err
 	}

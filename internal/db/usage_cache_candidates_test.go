@@ -211,14 +211,6 @@ func usageQuerySessionIDs(sessions []usageQuerySession) []string {
 	return ids
 }
 
-func usageSourceVersionIDs(versions []usageSourceVersion) []string {
-	ids := make([]string, len(versions))
-	for i, version := range versions {
-		ids[i] = version.SessionID
-	}
-	return ids
-}
-
 func explainUsageCandidatePlan(
 	t *testing.T, database *DB, query string, args []any,
 ) string {
