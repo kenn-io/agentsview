@@ -2602,17 +2602,20 @@ func providerChangedPathForceParse(
 		// A Hermes/Augure Desktop state.db event's orphan-transcript
 		// fallback surfaces every transcript whose session currently has
 		// no row, including one that was never a member and so is
-		// unrelated to this event. Its plain transcript path (no "#"
-		// member suffix) isn't backed by the event, so without this
+		// unrelated to this event. Its plain transcript path (not a
+		// state.db#<id> member) isn't backed by the event, so without this
 		// carve-out it would force-reparse and rewrite every
 		// always-standalone sibling on every unrelated state.db write.
 		// Let the normal freshness gates decide, the same way full sync
 		// does for the identical source; keep the force on a remove
 		// event so a deletion still re-emits.
 		if eventKind != "remove" &&
-			(agent == parser.AgentHermes || agent == parser.AgentAugureDesktop) &&
-			!strings.Contains(sourcePath, "#") {
-			return false
+			(agent == parser.AgentHermes || agent == parser.AgentAugureDesktop) {
+			// A "#" in a parent directory name does not make a transcript
+			// path a member.
+			if _, _, member := parser.ParseVirtualSourcePathForBase(sourcePath, "state.db"); !member {
+				return false
+			}
 		}
 		return true
 	}
