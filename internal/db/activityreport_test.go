@@ -1283,46 +1283,56 @@ func TestGetActivityReport_HourlyRange(t *testing.T) {
 	assert.True(t, found, "the 2026-06-17T10:00 hourly bucket must be present")
 }
 
-// TestGetActivityReport_UsageDedupSubSecondOrder checks parsed timestamp ordering before source UUID deduplication.
+// TestGetActivityReport_UsageDedupSubSecondOrder checks parsed time and session-ID ordering before source UUID deduplication.
 func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
+	for _, tc := range []struct {
+		name, firstID, secondID, secondTimestamp string
+		firstOutput, secondOutput, wantOutput    int
+	}{
+		{"parsed time", "earlier", "later", "2026-06-16T10:30:00.123Z", 500, 9000, 500},
+		{"equal instant uses session ID before token payload", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 500, 9000, 9000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+				ModelPattern:  "claude-sonnet-4-20250514",
+				InputPerMTok:  money.MustParseDollars("3.0"),
+				OutputPerMTok: money.MustParseDollars("15.0"),
+			}}), "UpsertModelPricing")
 
-	insertSession(t, d, "earlier", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "earlier", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "later", "proj2", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00.123Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
-	})
+			insertSession(t, d, tc.firstID, "proj1", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.firstID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       "2026-06-16T10:30:00Z",
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput)),
+			})
+			insertSession(t, d, tc.secondID, "proj2", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.secondID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       tc.secondTimestamp,
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.secondOutput)),
+			})
 
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"first-seen dedup follows parsed time")
+			r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+				dayQuery(t, "2026-06-16", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantOutput, r.Totals.OutputTokens,
+				"first-seen dedup follows parsed time, then session ID")
+		})
+	}
 }
 
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback
