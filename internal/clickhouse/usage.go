@@ -1501,6 +1501,9 @@ var errUsagePriceContextChanged = errors.New("usage price context changed during
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
+	if f.BranchBreakdowns {
+		return db.DailyUsageResult{}, db.ErrBranchBreakdownsUnsupported
+	}
 	// One parts snapshot names the prepared state and the kept read alike,
 	// so a push that lands during the read makes the next request miss.
 	ctx, err := s.withPartsSnapshot(ctx)

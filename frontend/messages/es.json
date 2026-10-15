@@ -2868,6 +2868,7 @@
   "shared_active_filters_remove_branch": "Quitar el filtro {branch}",
   "usage_branch": "Rama",
   "usage_unattributed": "Sin atribuir",
+  "usage_branch_breakdowns_unsupported": "La agrupación por rama no está disponible para esta fuente de datos.",
   "activity_filter_by_branch": "Filtrar por rama",
   "activity_all_branches": "Todas las ramas",
   "activity_branch": "Rama",

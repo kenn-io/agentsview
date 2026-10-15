@@ -2846,6 +2846,7 @@
   "shared_active_filters_remove_branch": "{branch} süzgəcini çıxar",
   "usage_branch": "Budaq",
   "usage_unattributed": "Aid edilməyib",
+  "usage_branch_breakdowns_unsupported": "Bu məlumat mənbəyi üçün budaq üzrə qruplaşdırma mövcud deyil.",
   "activity_filter_by_branch": "Budağa görə süz",
   "activity_all_branches": "Bütün budaqlar",
   "activity_branch": "Budaq",

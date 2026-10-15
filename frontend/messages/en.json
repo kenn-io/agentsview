@@ -836,6 +836,7 @@
   "usage_cost_over_time_title": "Cost Over Time",
   "usage_tokens_over_time_title": "Tokens Over Time",
   "usage_unattributed": "Unattributed",
+  "usage_branch_breakdowns_unsupported": "Branch grouping is not available for this data source.",
   "usage_cost_attribution_title": "Cost Attribution",
   "usage_tokens_attribution_title": "Token Attribution",
   "usage_attribution_treemap": "Treemap",

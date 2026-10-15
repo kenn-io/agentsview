@@ -809,6 +809,7 @@
   "usage_cost_over_time_title": "成本趋势",
   "usage_tokens_over_time_title": "Token 趋势",
   "usage_unattributed": "未归属",
+  "usage_branch_breakdowns_unsupported": "此数据源不支持按分支分组。",
   "usage_cost_attribution_title": "成本归因",
   "usage_tokens_attribution_title": "Token 归因",
   "usage_attribution_treemap": "矩形树图",

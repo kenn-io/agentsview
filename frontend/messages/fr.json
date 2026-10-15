@@ -2886,5 +2886,6 @@
   "usage_open_project": "Ouvrir",
   "usage_loading": "Chargement...",
   "usage_unattributed": "Sans attribution",
+  "usage_branch_breakdowns_unsupported": "Le regroupement par branche n'est pas disponible pour cette source de données.",
   "shared_branch_clear_search": "Effacer la recherche de branches"
 }

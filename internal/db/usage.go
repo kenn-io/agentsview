@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1820,6 +1821,13 @@ type UsageTotals struct {
 	// Sonnet proxy.
 	CacheSavings money.Money `json:"cacheSavings"`
 }
+
+// ErrBranchBreakdownsUnsupported reports that a store cannot attribute
+// usage to branches. Returning it keeps Branch grouping from showing all
+// cost as unattributed.
+var ErrBranchBreakdownsUnsupported = errors.New(
+	"branch breakdowns are not supported by this backend",
+)
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {

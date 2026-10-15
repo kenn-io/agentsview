@@ -744,8 +744,22 @@ describe("AttributionPanel branch mode", () => {
     usage.attributionSummary = null;
     usage.toggles.attribution.groupBy = "project";
     usage.selectedGitBranch = "";
+    usage.branchBreakdownError = null;
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+  });
+
+  it("shows a branch loading failure instead of unattributed rows", async () => {
+    usage.summary!.branchTotals = [];
+    usage.branchBreakdownError = "Branch grouping is not available for this data source.";
+    const component = mountPanel();
+    await tick();
+
+    expect(document.querySelector(".empty")?.textContent).toBe(
+      "Branch grouping is not available for this data source.",
+    );
+    expect(document.querySelector(".list-row")).toBeNull();
+    unmount(component);
   });
 
   it("shows fully unattributed usage instead of an empty branch panel", async () => {

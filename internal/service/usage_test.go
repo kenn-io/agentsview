@@ -344,6 +344,24 @@ func TestDirectBackend_UsageSummary_ResolvesProjectKeys(t *testing.T) {
 	require.ErrorAs(t, err, &inputErr)
 }
 
+type noBranchBreakdownStore struct{ db.Store }
+
+func (noBranchBreakdownStore) GetDailyUsage(
+	context.Context, db.UsageFilter,
+) (db.DailyUsageResult, error) {
+	return db.DailyUsageResult{}, db.ErrBranchBreakdownsUnsupported
+}
+
+func TestDirectBackend_UsageSummary_ReportsUnsupportedBranchBreakdowns(t *testing.T) {
+	t.Parallel()
+	be := service.NewReadOnlyBackend(noBranchBreakdownStore{dbtest.OpenTestDB(t)})
+
+	_, err := be.UsageSummary(t.Context(), service.UsageRequest{BranchBreakdowns: new(true)})
+	var inputErr *service.UsageInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Equal(t, service.UsageErrorCodeBranchBreakdownsUnsupported, inputErr.Code)
+}
+
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)

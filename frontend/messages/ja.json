@@ -2832,6 +2832,7 @@
   "shared_active_filters_remove_branch": "{branch} フィルターを削除します",
   "usage_branch": "ブランチ",
   "usage_unattributed": "未分類",
+  "usage_branch_breakdowns_unsupported": "このデータソースではブランチ別のグループ化を利用できません。",
   "activity_filter_by_branch": "ブランチで絞り込み",
   "activity_all_branches": "すべてのブランチ",
   "activity_branch": "ブランチ",

@@ -188,6 +188,8 @@ func resolvePairwiseProjectLabels(
 // db.SearchInputError so handlers can errors.As it.
 const UsageErrorCodeUnknownProjectKey = "unknown_project_key"
 
+const UsageErrorCodeBranchBreakdownsUnsupported = "branch_breakdowns_unsupported"
+
 type UsageInputError struct {
 	Code string
 	Msg  string

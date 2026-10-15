@@ -2719,6 +2719,28 @@ describe("UsageStore time-series range selection", () => {
     usage.cancelInFlightReads();
   });
 
+  it("reports a data source that cannot group usage by branch", async () => {
+    const { usage } = await loadStore();
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (!params.branch_breakdowns) return usageSummary(4);
+      throw new apiRuntimeMocks.ApiError(
+        400,
+        "branch breakdowns are not supported by this backend",
+        "branch_breakdowns_unsupported",
+      );
+    });
+    await usage.fetchSummary();
+    expect(usage.branchBreakdownError).toBeNull();
+
+    usage.setAttributionGroupBy("branch");
+
+    await vi.waitFor(() =>
+      expect(usage.branchBreakdownError).toBe(
+        "Branch grouping is not available for this data source.",
+      ),
+    );
+  });
+
   it("loads branch breakdowns for the chart window when Branch is chosen under a brush", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");

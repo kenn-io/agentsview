@@ -811,6 +811,7 @@
   "usage_cost_over_time_title": "시간대별 비용",
   "usage_tokens_over_time_title": "시간대별 토큰",
   "usage_unattributed": "미귀속",
+  "usage_branch_breakdowns_unsupported": "이 데이터 소스에서는 브랜치별 그룹화를 사용할 수 없습니다.",
   "usage_cost_attribution_title": "비용 배분",
   "usage_tokens_attribution_title": "토큰 배분",
   "usage_attribution_treemap": "트리맵",
