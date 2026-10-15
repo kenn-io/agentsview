@@ -68,9 +68,10 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 
 	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
 		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
+			t.Context(), []string{sessionA, sessionB}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
+		assert.Empty(t, scope[sessionB], "non-selected model contributes nothing")
 		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		for _, r := range rows {
