@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 type harnessTimer struct {
@@ -644,6 +645,8 @@ func TestSettleForPushStopsWaitingWhenContextEnds(t *testing.T) {
 	fx := newEngineFixture(t)
 	held := make(chan struct{})
 	release := make(chan struct{})
+	releaseLock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseLock)
 	exclusive := make(chan error, 1)
 	go func() {
 		exclusive <- fx.engine.RunExclusive(func() error {
@@ -655,12 +658,18 @@ func TestSettleForPushStopsWaitingWhenContextEnds(t *testing.T) {
 	<-held
 
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	settled := make(chan error, 1)
 	go func() { settled <- fx.engine.SettleForPush(ctx) }()
+	// Cancel only once SettleForPush waits for the lock, so the test covers
+	// abandoning a wait and not the context check before it.
+	require.Eventually(t, func() bool {
+		return testutil.GoroutineBlockedOnMutexIn("(*Engine).SettleForPush")
+	}, 10*time.Second, 5*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-settled, context.Canceled)
 
-	close(release)
+	releaseLock()
 	require.NoError(t, <-exclusive)
 	require.NoError(t, fx.engine.SettleForPush(t.Context()),
 		"the abandoned wait must release the lock")

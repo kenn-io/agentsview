@@ -44,6 +44,9 @@ type pushLoop struct {
 	// flushTimeout bounds the final shutdown-flush push. Zero means
 	// no bound (used in tests that inject a fake pusher).
 	flushTimeout time.Duration
+	// onIdle, when set, is called each time Run starts waiting for work.
+	// Tests use it to act only once no push is running.
+	onIdle func()
 }
 
 // queuedPushTask is one unit of work owned by the push loop. Producers enqueue
@@ -195,6 +198,9 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 	var armed bool
 	var fire <-chan time.Time
 	for {
+		if l.onIdle != nil {
+			l.onIdle()
+		}
 		select {
 		case <-ctx.Done():
 			// Final best-effort flush with a fresh context so the

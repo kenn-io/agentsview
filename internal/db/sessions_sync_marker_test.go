@@ -6,12 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 type usageVersion struct {
@@ -530,7 +531,7 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 	// lock, so a push that ignores the open transaction lists first.
 	var got listing
 	received := false
-	for !received && !goroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
+	for !received && !testutil.GoroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
 		select {
 		case got = <-listed:
 			received = true
@@ -547,17 +548,4 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 
 	assert.Contains(t, got.ids, "written",
 		"the push must list the transaction that was open when it started")
-}
-
-// goroutineBlockedOnMutexIn reports whether some goroutine is waiting to lock
-// a sync.Mutex inside a function whose name contains fn.
-func goroutineBlockedOnMutexIn(fn string) bool {
-	buf := make([]byte, 1<<20)
-	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-		header, _, _ := strings.Cut(g, "\n")
-		if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
-			return true
-		}
-	}
-	return false
 }

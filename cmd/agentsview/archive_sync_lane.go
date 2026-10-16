@@ -89,9 +89,10 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		if startupErr != nil && errors.Is(startupErr, context.Canceled) {
 			return nil
 		}
-		// A resync rebuilt the archive, so the first push that runs resends
-		// every session, even when a failed startup sync delays it.
-		lane.fullPending.Store(didResync)
+		// The first push that runs resends every session when the user asked
+		// for --full or startup rebuilt the archive. A failed startup sync
+		// reports no rebuild, so --full survives it only through w.full.
+		lane.fullPending.Store(w.full || didResync)
 		if startupErr != nil {
 			log.Printf(
 				"%s: startup sync failed: %v; remote pushes stay paused until a "+
@@ -183,8 +184,8 @@ func (l *archiveSyncLane) push(
 	if !l.canPush() {
 		// Skipping instead of failing keeps the loop from retrying on its
 		// debounce. The sync that sets ready queues a push.
-		log.Printf("%s: push (%s) paused until a local sync completes",
-			l.label, reason)
+		log.Printf("%s: push (%s) skipped: remote pushes stay paused until a "+
+			"local sync finishes without errors", l.label, reason)
 		return nil
 	}
 	if l.engine != nil {
@@ -277,12 +278,18 @@ func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	// Before the first complete sync, an incomplete one keeps remote pushes
+	// paused. After it, pushes continue and the next sync retries.
+	next := "the next sync retries"
+	if !l.ready.Load() {
+		next = fmt.Sprintf("remote pushes stay paused; retrying in %s", l.retry)
+	}
 	opened := false
 	switch {
 	case !stats.AuthoritativeDiscoveryComplete():
-		log.Printf("%s: local sync discovery incomplete", l.label)
+		log.Printf("%s: local sync could not list every session; %s", l.label, next)
 	case !stats.ProcessingComplete():
-		log.Printf("%s: local sync processing incomplete", l.label)
+		log.Printf("%s: local sync failed to process some sessions; %s", l.label, next)
 	default:
 		opened = l.markReady()
 	}

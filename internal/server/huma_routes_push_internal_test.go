@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -694,6 +695,77 @@ func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
 		})
 
 	require.NoError(t, err, "a sync must be able to run while the push runs")
+}
+
+// Daemon pushes take turns, so an older push can never overwrite what a newer
+// push to the same destination wrote.
+func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	waiting := make(chan struct{}, 1)
+	f.srv.pushTurn.onWait = func() { waiting <- struct{}{} }
+
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+			func(bool) error {
+				close(firstStarted)
+				<-releaseFirst
+				record("first done")
+				return nil
+			})
+	}()
+	<-firstStarted
+	second := make(chan error, 1)
+	go func() {
+		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+			func(bool) error {
+				record("second start")
+				return nil
+			})
+	}()
+
+	<-waiting
+	close(releaseFirst)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+	assert.Equal(t, []string{"first done", "second start"}, events)
+}
+
+// A push waiting for its turn stops when its request ends.
+func TestSyncThenRunForPushStopsWaitingForTurnWhenContextEnds(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	waiting := make(chan struct{}, 1)
+	f.srv.pushTurn.onWait = func() { waiting <- struct{}{} }
+	endTurn, err := f.srv.pushTurn.take(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(endTurn)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- f.srv.syncThenRunForPush(ctx, engine, f.db, false, nil, nil,
+			func(bool) error {
+				assert.Fail(t, "a push must not run while another push holds the turn")
+				return nil
+			})
+	}()
+	<-waiting
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {

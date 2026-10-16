@@ -39,7 +39,18 @@ func (p *replicaPusher) push(
 	return p.vectors.push(
 		p.label, p.displayName, reason, full,
 		func(opts storage.PushOptions) (storage.PushResult, error) {
-			return p.session.Push(ctx, opts, nil)
+			// Name the step that failed: a connect error needs a different
+			// fix than an error partway through the copy.
+			var stage archivepush.Stage
+			p.session.OnStage = func(s archivepush.Stage) func() {
+				stage = s
+				return nil
+			}
+			res, err := p.session.Push(ctx, opts, nil)
+			if err != nil && (stage == archivepush.StageConnect || stage == archivepush.StagePush) {
+				err = fmt.Errorf("%s: %w", stage, err)
+			}
+			return res, err
 		},
 	)
 }

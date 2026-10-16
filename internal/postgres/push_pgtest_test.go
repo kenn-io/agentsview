@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
@@ -3767,7 +3767,7 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 	// finished without waiting.
 	var pushErr error
 	finished := false
-	for !finished && !goroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
+	for !finished && !testutil.GoroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
 		select {
 		case pushErr = <-pushed:
 			finished = true
@@ -3787,17 +3787,4 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 		`SELECT COUNT(*) FROM sessions WHERE id = $1`, sessionID,
 	).Scan(&count))
 	assert.Zero(t, count, "a session moved out of scope during the push must leave the remote")
-}
-
-// goroutineBlockedOnMutexIn reports whether some goroutine is waiting to lock
-// a sync.Mutex inside a function whose name contains fn.
-func goroutineBlockedOnMutexIn(fn string) bool {
-	buf := make([]byte, 1<<20)
-	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-		header, _, _ := strings.Cut(g, "\n")
-		if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
-			return true
-		}
-	}
-	return false
 }

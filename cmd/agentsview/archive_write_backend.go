@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -187,6 +188,7 @@ func completeReplicaWatchPush(
 ) error {
 	logReplicaWatchPushResult(label, displayName, res, reason)
 	if res.Errors > 0 {
+		log.Printf("%s: %d session(s) failed to push; will retry", label, res.Errors)
 		return fmt.Errorf("%d session(s) failed to push", res.Errors)
 	}
 	return nil
@@ -524,6 +526,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		return err
 	}
 	debounce, interval = watchTimings(debounce, interval)
+	pushWriter := b.watchPushWriter()
 	push := func(
 		pctx context.Context, reason pushReason, full bool,
 		_ *syncpkg.WatchBatch,
@@ -540,7 +543,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		if b.watchHooks != nil && b.watchHooks.duckDBPush != nil {
 			res, err = b.watchHooks.duckDBPush(pctx, reason, full)
 		} else {
-			writer, cleanup, werr := b.watchPushWriter(pctx, reason)
+			writer, cleanup, werr := pushWriter(pctx)
 			if werr != nil {
 				return werr
 			}
@@ -630,6 +633,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 		return err
 	}
 	debounce, interval = watchTimings(debounce, interval)
+	pushWriter := b.watchPushWriter()
 	label := backend.Name() + " watch"
 	vectors := newVectorReconcile()
 	push := func(
@@ -648,7 +652,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 				if b.watchHooks != nil && b.watchHooks.replicaPush != nil {
 					return b.watchHooks.replicaPush(pctx, reason, pushCfg)
 				}
-				writer, cleanup, err := b.watchPushWriter(pctx, reason)
+				writer, cleanup, err := pushWriter(pctx)
 				if err != nil {
 					return storage.PushResult{}, err
 				}
@@ -671,15 +675,20 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 	}.run(ctx)
 }
 
-// watchPushWriter returns the writer for one daemon watch push. The startup
-// push uses this backend; each later push resolves the archive owner again.
-func (b daemonArchiveWriteBackend) watchPushWriter(
-	ctx context.Context, reason pushReason,
+// watchPushWriter returns the writer source for one daemon watch. The first
+// push reuses the connection the watch started with. Every later push,
+// including a retry of a failed startup push, resolves the archive owner
+// again, because the daemon may have restarted on another address.
+func (b daemonArchiveWriteBackend) watchPushWriter() func(
+	context.Context,
 ) (archiveWriteBackend, func(), error) {
-	if reason == reasonStartup {
-		return b, func() {}, nil
+	var used atomic.Bool
+	return func(ctx context.Context) (archiveWriteBackend, func(), error) {
+		if used.CompareAndSwap(false, true) {
+			return b, func() {}, nil
+		}
+		return resolveArchiveWriteBackend(ctx, b.appCfg, transportIntentLongLived)
 	}
-	return resolveArchiveWriteBackend(ctx, b.appCfg, transportIntentLongLived)
 }
 
 // watchTimings applies the default debounce and floor interval.

@@ -368,6 +368,8 @@ func TestLocalArchiveWriteBackendPGPushWatchCanceledStartupIsClean(t *testing.T)
 type pushWatchOwnerCase struct {
 	name string
 	run  func(context.Context, *archivePushWatchHooks) error
+	// runFull runs the watch with --full. Set for local owners only.
+	runFull func(context.Context, *archivePushWatchHooks) error
 }
 
 func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
@@ -395,27 +397,36 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 				)
 			},
 		},
-		{
-			name: "local DuckDB",
-			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				localDuckDB.watchHooks = hooks
-				return localDuckDB.DuckDBPushWatch(
-					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-					localPushWatchTestDebounce, time.Hour,
-				)
-			},
-		},
-		{
-			name: "local PostgreSQL",
-			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				localPostgreSQL.watchHooks = hooks
-				return localPostgreSQL.ReplicaPushWatch(
-					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
-					localPushWatchTestDebounce, time.Hour,
-				)
-			},
-		},
+		localDuckDBCase(localDuckDB),
+		localPostgreSQLCase(localPostgreSQL),
 	}
+}
+
+func localDuckDBCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
+	run := func(full bool) func(context.Context, *archivePushWatchHooks) error {
+		return func(ctx context.Context, hooks *archivePushWatchHooks) error {
+			backend.watchHooks = hooks
+			return backend.DuckDBPushWatch(
+				ctx, config.DuckDBConfig{}, DuckDBPushConfig{Full: full}, nil, nil,
+				localPushWatchTestDebounce, time.Hour,
+			)
+		}
+	}
+	return pushWatchOwnerCase{name: "local DuckDB", run: run(false), runFull: run(true)}
+}
+
+func localPostgreSQLCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
+	run := func(full bool) func(context.Context, *archivePushWatchHooks) error {
+		return func(ctx context.Context, hooks *archivePushWatchHooks) error {
+			backend.watchHooks = hooks
+			return backend.ReplicaPushWatch(
+				ctx, pgReplica{}, storage.ConfiguredReplica{},
+				ReplicaPushConfig{Full: full}, nil, nil,
+				localPushWatchTestDebounce, time.Hour,
+			)
+		}
+	}
+	return pushWatchOwnerCase{name: "local PostgreSQL", run: run(false), runFull: run(true)}
 }
 
 func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {

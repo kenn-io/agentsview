@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -463,12 +464,46 @@ func watchPathWithinRoots(path string, roots []string) bool {
 	return false
 }
 
+// pushTurn lets one daemon push run at a time. Without it, two pushes to the
+// same destination could overlap: the slower one could write an older copy of
+// a session after the newer one recorded its cutoff, and later incremental
+// pushes would skip that session. The zero value is ready to use.
+type pushTurn struct {
+	once gosync.Once
+	turn chan struct{}
+	// onWait, when set, is called when a push must wait for another push.
+	// Tests use it.
+	onWait func()
+}
+
+// take waits for this push's turn and returns the func that ends it. It
+// returns ctx's error if ctx ends first.
+func (p *pushTurn) take(ctx context.Context) (func(), error) {
+	p.once.Do(func() { p.turn = make(chan struct{}, 1) })
+	end := func() { <-p.turn }
+	select {
+	case p.turn <- struct{}{}:
+		return end, nil
+	default:
+	}
+	if p.onWait != nil {
+		p.onWait()
+	}
+	select {
+	case p.turn <- struct{}{}:
+		return end, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // syncThenRunForPush brings the local archive current and then runs the push
 // work. The push runs after the sync, not under its lock: watcher and periodic
 // syncs keep writing the archive while a long push copies it, and each push
 // takes its cutoff under the archive write lock so later pushes pick those
-// writes up. Before the work it waits for any running sync and flushes
-// deferred signal recomputes, so the push copies settled sessions.
+// writes up. Pushes still take turns (see pushTurn). Before the work it waits
+// for any running sync and flushes deferred signal recomputes, so the push
+// copies settled sessions.
 //
 // Full and stale-archive pushes are archive-scale: with the worker-backed
 // resync runner wired they route the rebuild through the worker (matching
@@ -492,6 +527,11 @@ func (s *Server) syncThenRunForPush(
 	if err != nil {
 		return err
 	}
+	endTurn, err := s.pushTurn.take(ctx)
+	if err != nil {
+		return err
+	}
+	defer endTurn()
 	if err := engine.SettleForPush(ctx); err != nil {
 		return err
 	}

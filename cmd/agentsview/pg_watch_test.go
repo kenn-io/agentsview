@@ -198,6 +198,58 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
+// TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon checks that
+// a failed startup push retries against the daemon the runtime file names now.
+// A daemon that restarts on a new address must not leave the watch retrying the
+// address it launched with.
+func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	setTestVersion(t, "v1.1.0-2-g123456")
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		cancel()
+		return nil, context.Canceled
+	})
+	var launchPushes int
+	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		launchPushes++
+		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
+	})
+	var resolvedPushes int
+	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		resolvedPushes++
+		cancel()
+		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
+	})
+	host, port := splitTestServerURL(t, resolved.URL)
+	writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{DataDir: dataDir}, launch.URL,
+	)
+	err := backend.ReplicaPushWatch(
+		ctx, pgReplica{},
+		storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+			URL: "postgres://user:pass@host/db",
+		}},
+		ReplicaPushConfig{},
+		nil,
+		nil,
+		time.Millisecond,
+		time.Hour,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
+	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
+}
+
 // fakeTarget is a test double for storage.Pusher.
 type fakeTarget struct {
 	ensureErr  error
@@ -454,6 +506,27 @@ func requireReconnectAfterTargetError(t *testing.T, first *fakeTarget) {
 	require.Equal(t, 2, rec.connects, "should reconnect after error")
 }
 
+// TestPgPusherErrorsNameTheFailedStep checks that a watch push error says
+// whether the connection or the copy failed.
+func TestPgPusherErrorsNameTheFailedStep(t *testing.T) {
+	connectErr := errors.New("connection refused")
+	p := testReplicaPusher(archivepush.ReplicaSession{
+		EnsurePricing: func(context.Context) error { return nil },
+		Connect: func(context.Context) (storage.Pusher, error) {
+			return nil, connectErr
+		},
+	})
+	err := p.push(t.Context(), reasonChange, false)
+	require.ErrorIs(t, err, connectErr)
+	assert.Equal(t, "connect: connection refused", err.Error())
+
+	pushErr := errors.New("conn reset")
+	p, _ = newTestReplicaPusher(&fakeTarget{pushErr: pushErr})
+	err = p.push(t.Context(), reasonChange, false)
+	require.ErrorIs(t, err, pushErr)
+	assert.Equal(t, "push: conn reset", err.Error())
+}
+
 func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
 	target := &fakeTarget{}
 	p, rec := newTestReplicaPusher(target)
@@ -497,6 +570,7 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 	got := logs.String()
 	assert.Contains(t, got, "pushed 3 sessions, 9 messages, 2 errors")
 	assert.Contains(t, got, "change")
+	assert.Contains(t, got, "2 session(s) failed to push; will retry")
 }
 
 func TestPgPusher_LogsSkippedConflicts(t *testing.T) {

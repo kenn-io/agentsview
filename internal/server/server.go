@@ -91,6 +91,8 @@ type Server struct {
 	settingsApplyMu   gosync.Mutex
 	// onDemandReconfigureMu serializes source updates to onDemandEngine.
 	onDemandReconfigureMu gosync.Mutex
+	// pushTurn lets one archive push run at a time.
+	pushTurn              pushTurn
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache

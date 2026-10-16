@@ -5,8 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // blockedRemotePush stands in for an hour-long full push: it reports that it
@@ -225,25 +224,29 @@ func TestLocalPushWatchOpensDispatchBeforeStartupPush(t *testing.T) {
 }
 
 // When startup sync fails, local owners keep dispatch closed and skip pushes
-// until a periodic local sync completes. The first pushes after that resend
-// every session when startup rebuilt the archive, until one succeeds.
+// until a periodic local sync completes. The --full request survives the
+// failure: the first push after that resends every session, and later pushes
+// do not.
 func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 	for _, owner := range localPushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(1)
 				hooks := h.hooks()
+				// The real startup sync reports a rebuild only when it
+				// finished, so a failure always reports none.
 				failedStartup := func(
-					context.Context, *syncpkg.Engine, bool,
+					_ context.Context, _ *syncpkg.Engine, full bool,
 				) (bool, error) {
 					h.record("startup-sync")
-					return true, errors.New("startup sync discovery incomplete")
+					assert.True(t, full, "startup sync must get the --full request")
+					return false, errors.New("startup sync discovery incomplete")
 				}
 				hooks.startupSync = failedStartup
 				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
-				go func() { done <- owner.run(ctx, hooks) }()
+				go func() { done <- owner.runFull(ctx, hooks) }()
 
 				synctest.Wait()
 				h.floor <- time.Now()
@@ -265,7 +268,7 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 
 				h.fire <- time.Now()
 				first := receiveArchiveTest(t, h.attempts)
-				assert.True(t, first.full, "the startup resync makes the first push full")
+				assert.True(t, first.full, "--full makes the first push full")
 				synctest.Wait()
 
 				h.floor <- time.Now()
@@ -364,7 +367,7 @@ func TestArchiveSyncLaneSettlesBeforePush(t *testing.T) {
 		})
 	}()
 	require.Eventually(t, func() bool {
-		return pushed.Load() || goroutineBlockedIn("sync.Mutex.Lock", "(*Engine).SettleForPush")
+		return pushed.Load() || testutil.GoroutineBlockedOnMutexIn("(*Engine).SettleForPush")
 	}, 10*time.Second, 5*time.Millisecond)
 	require.False(t, pushed.Load(), "a push must wait for an in-progress sync")
 
@@ -390,6 +393,7 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 	t.Cleanup(stopCallbacks)
 	engines := make(chan *syncpkg.Engine, 1)
 	pushed := make(chan struct{}, 2)
+	idle := make(chan struct{}, 1)
 	target := &fakeTarget{onPush: func() {
 		record("push")
 		pushed <- struct{}{}
@@ -420,6 +424,19 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 				vectors: newVectorReconcile(),
 			}
 		},
+		newLoop: func(
+			label string, debounce, interval time.Duration,
+			push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
+		) (*pushLoop, func()) {
+			loop, ticker := newPushLoopWithLabel(label, debounce, interval, push)
+			loop.onIdle = func() {
+				select {
+				case idle <- struct{}{}:
+				default:
+				}
+			}
+			return loop, ticker.Stop
+		},
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -435,9 +452,7 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 	<-pushed
 	// Cancelling during the startup push skips the final push, so wait for
 	// the loop to start waiting for work.
-	require.Eventually(t, func() bool {
-		return goroutineBlockedIn("select", "(*pushLoop).run")
-	}, 10*time.Second, 10*time.Millisecond)
+	<-idle
 
 	// Stand in for a watcher batch that syncs until the watcher stops it.
 	held := make(chan struct{})
@@ -458,17 +473,4 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 	defer mu.Unlock()
 	assert.Equal(t, []string{"push", "watcher stopped", "push"}, events,
 		"the final push runs after the watcher stops")
-}
-
-// goroutineBlockedIn reports whether a goroutine whose stack includes fn is
-// blocked in state, such as "sync.Mutex.Lock" or "select".
-func goroutineBlockedIn(state, fn string) bool {
-	buf := make([]byte, 1<<20)
-	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-		header, _, _ := strings.Cut(g, "\n")
-		if strings.Contains(header, "["+state) && strings.Contains(g, fn) {
-			return true
-		}
-	}
-	return false
 }
