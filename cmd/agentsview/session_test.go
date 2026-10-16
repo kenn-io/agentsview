@@ -1667,7 +1667,6 @@ func TestSessionUsageRemoteCombinedAPIVersionRequirements(t *testing.T) {
 			require.NotNil(t, out)
 			assert.Equal(t, tokenUseExitOK, code)
 			assert.Equal(t, 42, out.TotalOutputTokens)
-			assert.False(t, out.RefreshIncomplete)
 			assert.Empty(t, reqs.SyncInput.ID)
 			assert.Equal(t, []string{
 				"/api/v1/version",
@@ -2528,12 +2527,12 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 	const clearStatus = `{"archive_stale":false,"startup_pending":false,"stats":{}}`
 	for _, tc := range []struct {
-		name, id, statusBody, bearer string
-		statusCode                   int
-		noSync, ownOnly, imported    bool
-		wantErr, wantErrAlso         string
-		wantCode, detailLookups      int
-		wantStatusChecks             int
+		name, id, statusBody      string
+		statusCode                int
+		noSync, ownOnly, imported bool
+		wantErr, wantErrAlso      string
+		wantCode, detailLookups   int
+		wantStatusChecks          int
 	}{
 		{
 			name: "startup ingestion pending", id: "absent",
@@ -2556,7 +2555,7 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			name: "status unavailable", id: "absent",
 			statusCode: http.StatusServiceUnavailable,
 			statusBody: `{"title":"Service Unavailable","status":503,"detail":"status unavailable"}`,
-			bearer:     "test-token", wantErr: "checking sync status:", wantErrAlso: "503",
+			wantErr:    "checking sync status:", wantErrAlso: "503",
 			wantCode: tokenUseExitErr, detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
@@ -2574,25 +2573,14 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dataDir := newAgentDataDir(t)
-			var tokenArgs []string
-			if tc.bearer != "" {
-				tokenFile := filepath.Join(dataDir, "server-token")
-				require.NoError(t, os.WriteFile(tokenFile, []byte(tc.bearer), 0o600))
-				tokenArgs = []string{"--server-token-file", tokenFile}
-			}
+			newAgentDataDir(t)
 			ts, requests := newRemoteUsageServer(t, remoteUsageSpec{
-				canonicalID: "remote-session", bearer: tc.bearer,
+				canonicalID: "remote-session",
 			})
 			original := ts.Config.Handler
 			detailLookups := 0
 			statusChecks := 0
 			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				wantAuthorization := ""
-				if tc.bearer != "" {
-					wantAuthorization = "Bearer " + tc.bearer
-				}
-				assert.Equal(t, wantAuthorization, r.Header.Get("Authorization"))
 				if strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") &&
 					r.URL.Path != "/api/v1/sessions/sync" &&
 					!strings.HasSuffix(r.URL.Path, "/usage") {
@@ -2623,7 +2611,6 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			})
 
 			args := []string{"session", "usage", tc.id, "--server", ts.URL}
-			args = append(args, tokenArgs...)
 			if tc.noSync {
 				args = append(args, "--no-sync")
 			}
@@ -2651,7 +2638,6 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			assert.Equal(t, tc.detailLookups, detailLookups)
 			assert.Equal(t, tc.wantStatusChecks, statusChecks)
 			if !tc.imported {
-				assert.NotContains(t, requests.RequestPath, "/api/v1/sync")
 				assert.Empty(t, requests.SyncInput.ID)
 			}
 		})

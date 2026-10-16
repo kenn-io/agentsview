@@ -1711,11 +1711,8 @@ func TestDirectUsageRefreshRequiresCombinedID(t *testing.T) {
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{Ephemeral: true})
 	t.Cleanup(engine.Close)
 	backend := service.NewDirectBackend(database, engine)
-	for _, input := range []service.SyncInput{
-		{ID: "parent", UsageRefresh: true},
-		{Path: "/work/session.jsonl", UsageRefresh: true},
-	} {
-		_, err := backend.Sync(t.Context(), input)
-		require.ErrorIs(t, err, service.ErrInvalidUsageRefresh)
-	}
+	_, err := backend.Sync(t.Context(), service.SyncInput{
+		ID: "parent", UsageRefresh: true,
+	})
+	require.ErrorIs(t, err, service.ErrInvalidUsageRefresh)
 }

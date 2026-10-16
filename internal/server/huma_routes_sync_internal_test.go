@@ -1830,6 +1830,7 @@ func TestHumaSyncSessionRejectsStaleDB(t *testing.T) {
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl",
 		"stale session sync route")
 	require.True(t, f.db.NeedsResync())
+	require.NoError(t, f.db.CloseWriter())
 	w := postSessionSync(t, f.handler, sessionPath)
 
 	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -2599,43 +2600,40 @@ func TestUsageRefreshRoute(t *testing.T) {
 
 				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			},
+		},
+		{
+			name: "returns conflict while another sync owns the engine",
+			run: func(t *testing.T) {
+				f := newSyncRouteFixture(t)
+				dbtest.SeedSessionWithMessages(t, f.db, "retained", "project",
+					[]db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})
+				engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+				f.srv.engine = engine
+				f.srv.sessions = service.NewDirectBackend(f.db, engine)
+				engine.RecordStartupReconciled(syncpkg.SyncStats{}, nil)
+				locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				go func() {
+					done <- engine.RunExclusive(func() error {
+						close(locked)
+						<-release
+						return nil
+					})
+				}()
+				<-locked
+				t.Cleanup(func() {
+					close(release)
+					require.NoError(t, <-done)
+				})
+
+				w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
+					"id": "retained", "subagents": true, "usage_refresh": true,
+				})
+				require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 			},
 		},
 	} {
 		t.Run(tc.name, tc.run)
-	}
-}
-
-func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})
-	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-	f.srv.engine = engine
-	f.srv.sessions = service.NewDirectBackend(f.db, engine)
-	engine.RecordStartupReconciled(syncpkg.SyncStats{}, nil)
-	locked, release, unlocked := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	go func() { unlocked <- engine.RunExclusive(func() error { close(locked); <-release; return nil }) }()
-	<-locked
-	response := make(chan *httptest.ResponseRecorder, 1)
-	received := false
-	t.Cleanup(func() {
-		close(release)
-		require.NoError(t, <-unlocked)
-		if !received {
-			<-response
-		}
-	})
-	go func() {
-		response <- serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "retained", "subagents": true, "usage_refresh": true})
-	}()
-	select {
-	case w := <-response:
-		received = true
-		assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-	case <-time.After(5 * time.Second):
-		t.Error("usage refresh waited for the ingestion lock")
 	}
 }
 

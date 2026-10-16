@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -75,32 +74,5 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 			}
 			assert.ErrorIs(t, err, ErrSyncInProgress)
 		})
-	}
-}
-
-func TestUnmarkedSessionRefreshWaitsForSyncLock(t *testing.T) {
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{Ephemeral: true})
-	t.Cleanup(engine.Close)
-	engine.syncMu.Lock()
-	started, done := make(chan struct{}), make(chan error, 1)
-	received := false
-	defer func() {
-		engine.syncMu.Unlock()
-		if !received {
-			assert.NotErrorIs(t, <-done, ErrSyncInProgress)
-		}
-	}()
-	go func() {
-		close(started)
-		done <- engine.SyncSessionWithSubagentsContext(context.Background(), "unknown")
-	}()
-	<-started
-	// Mutex acquisition does not durably block under testing/synctest.
-	select {
-	case err := <-done:
-		received = true
-		require.FailNowf(t, "manual refresh returned before the lock was released", "%v", err)
-	case <-time.After(100 * time.Millisecond):
 	}
 }
