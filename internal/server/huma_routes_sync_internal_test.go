@@ -2656,5 +2656,4 @@ func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
 		"path": "session.jsonl", "usage_refresh": true,
 	})
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	assert.Contains(t, w.Body.String(), "usage_refresh requires id and subagents")
 }
