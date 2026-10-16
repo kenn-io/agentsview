@@ -3149,3 +3149,73 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 		assert.Equal(t, "follow-up", sess.FirstMessage)
 	})
 }
+
+func TestParseClaudeSession_PersistedOutputUnresolvedOnlyOnUnresolvedOccurrence(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "project", "parent-session")
+	resolvedPath := filepath.Join(sessionDir, "tool-results", "resolved.txt")
+	missingPath := filepath.Join(sessionDir, "tool-results", "gone.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resolvedPath), 0o755))
+	fullOutput := "full persisted output\n"
+	require.NoError(t, os.WriteFile(resolvedPath, []byte(fullOutput), 0o644))
+
+	resolvedPlaceholder := "Full output saved to: " + resolvedPath
+	missingPlaceholder := "Full output saved to: " + missingPath
+
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + mustJSONString(t, resolvedPlaceholder) + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + mustJSONString(t, resolvedPath) + `}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:03Z","uuid":"a2","parentUuid":"u2","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:04Z","uuid":"u3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + mustJSONString(t, missingPlaceholder) + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + mustJSONString(t, missingPath) + `}}`,
+	}, "\n")
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	results, err := parseClaudeSession(sessionPath, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 5)
+	require.Len(t, results[0].Messages[2].ToolResults, 1)
+	require.Len(t, results[0].Messages[4].ToolResults, 1)
+
+	resolved := results[0].Messages[2].ToolResults[0]
+	assert.False(t, resolved.PersistedOutputUnresolved)
+	assert.Equal(t, fullOutput, DecodeContent(resolved.ContentRaw))
+
+	unresolved := results[0].Messages[4].ToolResults[0]
+	assert.True(t, unresolved.PersistedOutputUnresolved)
+	assert.Equal(t, missingPlaceholder, DecodeContent(unresolved.ContentRaw))
+}
+
+func TestParseClaudeSession_GenuineOutputMatchingTagShapeStaysUnflagged(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	genuine := "<persisted-output>\nfound this tag while grepping transcripts\n</persisted-output>"
+
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}},{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"README.md"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + mustJSONString(t, genuine) + `,"is_error":false},{"type":"tool_result","tool_use_id":"toolu_2","content":"other result","is_error":false}]}}`,
+	}, "\n")
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	results, err := parseClaudeSession(sessionPath, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 3)
+	require.Len(t, results[0].Messages[2].ToolResults, 2)
+
+	got := results[0].Messages[2].ToolResults[0]
+	assert.False(t, got.PersistedOutputUnresolved)
+	assert.Equal(t, genuine, DecodeContent(got.ContentRaw))
+}

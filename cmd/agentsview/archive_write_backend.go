@@ -168,18 +168,7 @@ func archivePushWatchWatcherOptions(
 			return loop.NotifyCoverageDegraded(roots)
 		},
 		OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
-			scopes := make([]pollingScope, 0, len(obligation.Scopes))
-			for _, s := range obligation.Scopes {
-				scopes = append(scopes, pollingScope{
-					Agent: parser.AgentType(s.Agent),
-					Root:  s.Root,
-				})
-			}
-			return poller.AddObligation(pollingObligation{
-				Key:    obligation.Key,
-				Scopes: scopes,
-				Probe:  obligation.Probe,
-			})
+			return poller.AddObligation(syncObligationToPoller(obligation))
 		},
 		OnPollingReleased: poller.RemoveObligation,
 	}
@@ -510,6 +499,9 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 	projects []string,
 	excludeProjects []string,
 ) (storage.PushResult, error) {
+	if cfg.Embed {
+		return storage.PushResult{}, errEmbedNeedsLocalArchive
+	}
 	operation, err := replicaPushOperation(backend.Name())
 	if err != nil {
 		return storage.PushResult{}, err
@@ -530,6 +522,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 				MachineName:   target.Target.MachineName,
 				AllowInsecure: new(target.Target.AllowInsecure),
 				PushVectors:   new(target.Target.PushVectors),
+				PushBatchSize: new(int64(target.Target.PushBatchSize)),
 			},
 			SyncStateTarget:                new(target.SyncStateTarget()),
 			MigrateLegacySyncState:         new(target.MigrateLegacySyncState()),
@@ -700,6 +693,9 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if cfg.Embed {
+		return errEmbedNeedsLocalArchive
+	}
 	if err := requireDaemonSourceSync(ctx, b.appCfg); err != nil {
 		return err
 	}
@@ -836,11 +832,29 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		return storage.PushResult{}, err
 	}
 	display := backend.DisplayName()
+	var embedder *replicaEmbedder
+	if cfg.Embed {
+		var err error
+		if embedder, err = newReplicaEmbedder(b.appCfg, backend, target, b.database); err != nil {
+			return storage.PushResult{}, err
+		}
+		embedder.buildOnPrepare = true
+		embedder.out = os.Stdout
+		defer closeVectorPushSource(embedder)
+		// Adopt the published recipe before the local sync, so a missing
+		// or ambiguous recipe fails before any session work.
+		if err := embedder.resolve(ctx); err != nil {
+			return storage.PushResult{}, err
+		}
+	}
 	didResync, err := runLocalSyncAuthoritative(
 		ctx, b.appCfg, b.database, cfg.Full,
 	)
 	if err != nil {
 		return storage.PushResult{}, err
+	}
+	if storage.StoresFriction(backend) {
+		backfillFrictionBeforePush(ctx, b.appCfg, b.database)
 	}
 	if err := ctx.Err(); err != nil {
 		return storage.PushResult{}, err
@@ -856,11 +870,17 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	}
 	forceFull := cfg.Full || didResync
 
+	var vectorSource storage.VectorPushSource
+	if embedder != nil {
+		vectorSource = embedder
+	} else {
+		vectorSource = replicaVectorPushSource(b.appCfg, target, cfg)
+		defer closeVectorPushSource(vectorSource)
+	}
+
 	fmt.Printf("Connecting to %s...\n", display)
 	connectStart := time.Now()
 	applyClassifierConfig(b.appCfg)
-	vectorSource := replicaVectorPushSource(b.appCfg, target, cfg)
-	defer closeVectorPushSource(vectorSource)
 	ps, err := backend.NewPusher(
 		ctx, target.Target, b.database,
 		replicaPusherOptions(target, projects, excludeProjects, vectorSource),
@@ -892,10 +912,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 			LastReconciledVectorGeneration,
 	}, newReplicaPushProgressPrinter())
 	fmt.Print("\r\033[K")
-	if err != nil {
-		return storage.PushResult{}, err
-	}
-	return result, nil
+	return result, err
 }
 
 func (b *localArchiveWriteBackend) DuckDBPush(
@@ -1040,6 +1057,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
+		FrictionEnabled:         b.appCfg.Friction.Enabled,
 	})
 	defer engine.Close()
 
@@ -1170,7 +1188,19 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	}
 	cleanResyncTemp(b.appCfg.DBPath)
 
+	var embedder *replicaEmbedder
+	var emitter syncpkg.Emitter
+	if cfg.Embed {
+		var err error
+		if embedder, err = newReplicaEmbedder(b.appCfg, backend, target, b.database); err != nil {
+			return err
+		}
+		embedder.resolveRetry = interval
+		emitter = embedder
+	}
+
 	engine := syncpkg.NewEngine(ctx, b.database, syncpkg.EngineConfig{
+		Emitter:                 emitter,
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		ProviderMetadata:        b.appCfg.ProviderMetadata,
@@ -1180,6 +1210,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
+		FrictionEnabled:         b.appCfg.Friction.Enabled,
 	})
 	defer engine.Close()
 
@@ -1187,13 +1218,21 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	var pusher *replicaPusher
 	if b.watchHooks != nil && b.watchHooks.newReplicaPusher != nil {
 		pusher = b.watchHooks.newReplicaPusher(engine)
+		if embedder != nil {
+			defer closeVectorPushSource(embedder)
+		}
 	} else {
 		// One vectors.db adapter for the watch loop's lifetime: connect runs on
 		// every reconnect, and a fresh source per reconnect would leak the
 		// previous one's memoized read-only handle (the pusher never closes
 		// its source). The adapter is designed for reuse — it reopens lazily
 		// after transient failures.
-		vectorSource := replicaVectorPushSource(b.appCfg, target, cfg)
+		var vectorSource storage.VectorPushSource
+		if embedder != nil {
+			vectorSource = embedder
+		} else {
+			vectorSource = replicaVectorPushSource(b.appCfg, target, cfg)
+		}
 		defer closeVectorPushSource(vectorSource)
 		pusher = b.newReplicaPusher(
 			backend,
@@ -1209,9 +1248,12 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 					return errors.New("local sync processing incomplete")
 				}
 				// The push scans SQLite rows right after this returns;
-				// flush deferred signal recomputes so pushed sessions
-				// carry current signal/secret fields.
+				// flush deferred signal recomputes and stale friction so
+				// pushed sessions carry current derived fields.
 				engine.FlushSignals()
+				if storage.StoresFriction(backend) {
+					drainStaleFriction(c, engine)
+				}
 				return nil
 			},
 			func(c context.Context) (storage.Pusher, error) {
@@ -1229,9 +1271,17 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		recovery *syncpkg.WatchRecoveryScope,
 		work func() error,
 	) error {
-		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
+		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, func() error {
+			if storage.StoresFriction(backend) {
+				if err := engine.DrainStaleFrictionLocked(c); err != nil {
+					return err
+				}
+			}
+			return work()
+		})
 		return err
 	}
+	pusher.fullVectorsPending = cfg.Full
 	defer pusher.reset()
 
 	fmt.Printf(
@@ -1243,9 +1293,13 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	loop, stopLoop := newArchivePushLoop(
 		b.watchHooks, name+" watch", debounce, interval,
 		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
-			return pusher.pushBatch(
+			err := pusher.pushBatch(
 				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
 			)
+			if embedder != nil && r != reasonShutdown {
+				embedder.ensureScheduler(ctx)
+			}
+			return err
 		},
 	)
 	defer stopLoop()
@@ -1275,6 +1329,9 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		return nil
 	}
 	initialErr := startupErr
+	if embedder != nil {
+		embedder.ensureScheduler(ctx)
+	}
 	if initialErr == nil {
 		initialErr = pusher.push(ctx, reasonStartup, didResync)
 	}

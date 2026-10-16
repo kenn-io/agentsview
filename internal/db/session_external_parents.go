@@ -152,6 +152,7 @@ func (db *DB) ClearSessionExternalParent(
 		UPDATE sessions
 		SET parent_session_id = NULL,
 			relationship_type = `+parserRelationshipSQL+`,
+			friction_rules_version = '',
 			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ? AND parent_session_id = ? AND relationship_type = 'subagent'
 		AND COALESCE(parser_parent_session_id, '') = ''
@@ -275,6 +276,8 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	UPDATE sessions
 	SET parent_session_id = IIF(l.blocked, NULL, l.parent_session_id),
 		relationship_type = IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent'),
+		-- Friction review reads the hierarchy; a moved session needs a new one.
+		friction_rules_version = '',
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	FROM (
 		SELECT ep.session_id, ep.parent_session_id,

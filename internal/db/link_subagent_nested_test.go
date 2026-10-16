@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -78,6 +79,10 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 		},
 	)
 
+	require.NoError(t, d.replaceSessionFriction(t.Context(), grandchildID,
+		nil, friction.RulesVersion,
+		FrictionHash(nil, friction.RulesVersion)))
+
 	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
 
 	// Orchestrator stays under main.
@@ -95,6 +100,8 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 	requireNoError(t, err, "GetSession grandchild")
 	assert.Equal(t, "subagent", gc.RelationshipType,
 		"grandchild relationship_type")
+	assert.Empty(t, gc.FrictionRulesVersion,
+		"re-parenting must mark the stored friction snapshot stale")
 	if assert.NotNil(t, gc.ParentSessionID, "grandchild parent") {
 		assert.Equal(t, orchestratorID, *gc.ParentSessionID,
 			"grandchild.parent_session_id must be the orchestrator, "+

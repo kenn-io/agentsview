@@ -403,6 +403,11 @@ type StreamingDiscoverer interface {
 	DiscoverEach(context.Context, func(SourceRef) error) error
 }
 
+// ScopedStreamingDiscoverer limits filesystem discovery to provider-issued proofs while preserving configured source identities.
+type ScopedStreamingDiscoverer interface {
+	DiscoverScopesEach(context.Context, []ReconciliationScope, func(SourceRef) error) error
+}
+
 func collectDiscoveredSources(
 	ctx context.Context,
 	discover func(context.Context, func(SourceRef) error) error,

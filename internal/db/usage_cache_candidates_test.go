@@ -4,7 +4,7 @@ package db
 
 import (
 	"encoding/json"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -101,17 +101,52 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 	bounds := usageBoundsForFilter(UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	})
+	type rangeSearch struct {
+		alias, index, bounds string
+		covering             bool
+	}
 
-	tokenSQL, tokenArgs := usageCandidateDiscoverySQL(bounds, usageQueryKindToken)
-	tokenPlan := explainUsageCandidatePlan(t, database, tokenSQL, tokenArgs)
-	assert.Contains(t, tokenPlan, "idx_messages_usage_timestamp")
-
-	activitySQL, activityArgs := usageCandidateDiscoverySQL(
-		bounds, usageQueryKindActivity,
-	)
-	activityPlan := explainUsageCandidatePlan(t, database, activitySQL, activityArgs)
-	assert.Contains(t, activityPlan,
-		"SEARCH m USING COVERING INDEX idx_messages_activity_timestamp (timestamp>")
+	for _, tc := range []struct {
+		name     string
+		kind     usageQueryKind
+		searches []rangeSearch
+	}{
+		{"token", usageQueryKindToken, []rangeSearch{
+			{"m", "idx_messages_usage_timestamp", "(timestamp>? AND timestamp<?)", false},
+			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
+		}},
+		{"activity", usageQueryKindActivity, []rangeSearch{
+			{"m", "idx_messages_activity_timestamp", "(timestamp>? AND timestamp<?)", true},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query, args := usageCandidateDiscoverySQL(bounds, tc.kind)
+			plan := explainUsageCandidatePlan(t, database, query, args)
+			for _, search := range tc.searches {
+				rangeIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return strings.HasPrefix(row.detail, "SEARCH "+search.alias+" ") &&
+						strings.Contains(row.detail, search.index) && strings.Contains(row.detail, search.bounds)
+				})
+				require.GreaterOrEqual(t, rangeIndex, 0, "missing bounded index seek %q: %+v", search.index, plan)
+				if search.covering {
+					assert.Contains(t, plan[rangeIndex].detail, "USING COVERING INDEX")
+				}
+				rangeParent := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.id == plan[rangeIndex].parent
+				})
+				require.GreaterOrEqual(t, rangeParent, 0, "missing range subtree: %+v", plan)
+				distinctIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.parent == plan[rangeParent].id && row.detail == "USE TEMP B-TREE FOR DISTINCT"
+				})
+				assert.GreaterOrEqual(t, distinctIndex, 0, "range rows must be deduplicated within the subtree: %+v", plan)
+				sessionIndex := slices.IndexFunc(plan, func(row usageCandidatePlanRow) bool {
+					return row.parent == plan[rangeParent].parent &&
+						strings.HasPrefix(row.detail, "SEARCH s ") && strings.Contains(row.detail, "(id=?)")
+				})
+				require.GreaterOrEqual(t, sessionIndex, 0, "sessions must be reached by id outside the range subtree: %+v", plan)
+			}
+		})
+	}
 }
 
 func TestUsageCandidateDiscoveryCoversOppositeDateLineOffsets(t *testing.T) {
@@ -211,30 +246,26 @@ func usageQuerySessionIDs(sessions []usageQuerySession) []string {
 	return ids
 }
 
-func usageSourceVersionIDs(versions []usageSourceVersion) []string {
-	ids := make([]string, len(versions))
-	for i, version := range versions {
-		ids[i] = version.SessionID
-	}
-	return ids
+type usageCandidatePlanRow struct {
+	id, parent int
+	detail     string
 }
 
 func explainUsageCandidatePlan(
 	t *testing.T, database *DB, query string, args []any,
-) string {
+) []usageCandidatePlanRow {
 	t.Helper()
 
 	rows, err := database.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
-	var details []string
+	var plan []usageCandidatePlanRow
 	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
+		var row usageCandidatePlanRow
+		var unused int
+		require.NoError(t, rows.Scan(&row.id, &row.parent, &unused, &row.detail))
+		plan = append(plan, row)
 	}
 	require.NoError(t, rows.Err())
-	sort.Strings(details)
-	return strings.Join(details, "\n")
+	return plan
 }

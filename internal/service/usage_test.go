@@ -2,10 +2,12 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -377,68 +379,47 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 		"501 should map to db.ErrReadOnly, got %v", err)
 }
 
-func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
-	t.Parallel()
-
-	_, _, _, _, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From: "2024-06-01", To: "2024-06-02",
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "machine",
-			RightValue:     "host-a",
-		},
-	)
-	require.Error(t, err)
-	var ue *service.UsageInputError
-	require.ErrorAs(t, err, &ue)
-	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
+type pairwiseErrorStore struct {
+	db.Store
+	leftStarted  chan struct{}
+	rightStarted chan struct{}
+	canceled     chan error
+	err          error
 }
 
-func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
-	t.Parallel()
-
-	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-03",
-			Timezone:       "UTC",
-			Model:          "model-a,model-b",
-			Project:        "alpha,beta",
-			LeftDimension:  "model",
-			LeftValue:      "model-b",
-			RightDimension: "project",
-			RightValue:     "beta",
-		},
-	)
-	require.NoError(t, err)
-	assert.False(t, leftEmpty)
-	assert.False(t, rightEmpty)
-	assert.Equal(t, "model-b", left.Model)
-	assert.Equal(t, "alpha,beta", left.Project)
-	assert.Equal(t, "model-a,model-b", right.Model)
-	assert.Equal(t, "beta", right.Project)
+func (s *pairwiseErrorStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	if f.Model == "claude-sonnet-4-20250514" {
+		close(s.leftStarted)
+		select {
+		case <-s.rightStarted:
+		case <-ctx.Done():
+			return db.DailyUsageResult{}, ctx.Err()
+		}
+		return db.DailyUsageResult{}, s.err
+	}
+	close(s.rightStarted)
+	<-s.leftStarted
+	<-ctx.Done()
+	s.canceled <- ctx.Err()
+	return db.DailyUsageResult{}, ctx.Err()
 }
 
-func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
+func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *testing.T) {
 	t.Parallel()
-
-	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-03",
-			Model:          "gpt-4o",
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, leftEmpty)
-	assert.False(t, rightEmpty)
-	assert.Empty(t, left.Model)
-	assert.Equal(t, "gpt-4o", right.Model)
+	d := dbtest.OpenTestDB(t)
+	readErr := errors.New("daily usage read failed")
+	store := &pairwiseErrorStore{Store: d, leftStarted: make(chan struct{}), rightStarted: make(chan struct{}), canceled: make(chan error, 1), err: readErr}
+	be := service.NewReadOnlyBackend(store)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := be.UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		LeftDimension: "model", LeftValue: "claude-sonnet-4-20250514",
+		RightDimension: "model", RightValue: "gpt-4o",
+	})
+	require.ErrorIs(t, err, readErr)
+	assert.Nil(t, res)
+	assert.ErrorIs(t, <-store.canceled, context.Canceled)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
@@ -448,28 +429,60 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, 2, res.Left.SessionCount)
-	assert.Equal(t, 285, res.Left.TotalTokens)
-	assert.Equal(t, 1, res.Right.SessionCount)
-	assert.Equal(t, 50, res.Right.TotalTokens)
-	assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
-	require.NotNil(t, res.Left.CostPerSession)
-	require.NotNil(t, res.Right.CostPerSession)
+	for _, tc := range []struct {
+		name          string
+		defaultPair   bool
+		fallback      bool
+		leftValue     string
+		rightValue    string
+		wantLeft      string
+		wantRight     string
+		leftSessions  int
+		rightSessions int
+		leftTokens    int
+		rightTokens   int
+	}{
+		{name: "explicit", leftValue: "claude-sonnet-4-20250514", rightValue: "gpt-4o", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+		{name: "default", defaultPair: true, wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+		{name: "fallback kept", fallback: true, leftValue: "gpt-4o", rightValue: "claude-sonnet-4-20250514", wantLeft: "gpt-4o", wantRight: "claude-sonnet-4-20250514", leftSessions: 1, rightSessions: 2, leftTokens: 50, rightTokens: 285},
+		{name: "fallback replaced", fallback: true, leftValue: "missing-model", rightValue: "gpt-4o", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := service.UsagePairwiseComparisonRequest{
+				From:              "2024-06-01",
+				To:                "2024-06-01",
+				Timezone:          "UTC",
+				IncludeOneShot:    true,
+				LeftDimension:     "model",
+				LeftValue:         tc.leftValue,
+				RightDimension:    "model",
+				RightValue:        tc.rightValue,
+				FallbackToDefault: tc.fallback,
+			}
+			if tc.defaultPair {
+				req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = "", "", "", ""
+			}
+
+			res, err := be.UsagePairwiseComparison(
+				t.Context(),
+				req,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			assert.Equal(t, tc.leftSessions, res.Left.SessionCount)
+			assert.Equal(t, tc.leftTokens, res.Left.TotalTokens)
+			assert.Equal(t, tc.rightSessions, res.Right.SessionCount)
+			assert.Equal(t, tc.rightTokens, res.Right.TotalTokens)
+			assert.Equal(t, tc.rightTokens-tc.leftTokens, res.Deltas.TotalTokensDelta)
+			require.NotNil(t, res.Left.CostPerSession)
+			require.NotNil(t, res.Right.CostPerSession)
+			assert.Equal(t, "model", res.Left.Dimension)
+			assert.Equal(t, tc.wantLeft, res.Left.Value)
+			assert.Equal(t, "model", res.Right.Dimension)
+			assert.Equal(t, tc.wantRight, res.Right.Value)
+		})
+	}
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
@@ -681,35 +694,6 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 	assert.Nil(t, res.Deltas.TotalCostDeltaRatio)
 }
 
-func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroData(t *testing.T) {
-	t.Parallel()
-
-	d := dbtest.OpenTestDB(t)
-	seedPairwiseUsageFixture(t, d)
-	be := service.NewDirectBackend(d, nil)
-
-	res, err := be.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			Model:          "gpt-4o",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Zero(t, res.Left.SessionCount)
-	assert.Zero(t, res.Left.TotalTokens)
-	assert.Equal(t, 1, res.Right.SessionCount)
-	assert.Equal(t, 50, res.Right.TotalTokens)
-}
-
 func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t *testing.T) {
 	t.Parallel()
 
@@ -781,23 +765,28 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	seedPairwiseUsageFixture(t, env.DB)
 	svc := env.Backend("", false)
 
+	req := service.UsagePairwiseComparisonRequest{
+		From:           "2024-06-01",
+		To:             "2024-06-01",
+		Timezone:       "UTC",
+		IncludeOneShot: true,
+		LeftDimension:  "model",
+		LeftValue:      "claude-sonnet-4-20250514",
+		RightDimension: "model",
+		RightValue:     "gpt-4o",
+	}
 	res, err := svc.UsagePairwiseComparison(
 		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:           "2024-06-01",
-			To:             "2024-06-01",
-			Timezone:       "UTC",
-			IncludeOneShot: true,
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
-		},
+		req,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, 2, res.Left.SessionCount)
 	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, "model", res.Left.Dimension)
+	assert.Equal(t, "claude-sonnet-4-20250514", res.Left.Value)
+	assert.Equal(t, "model", res.Right.Dimension)
+	assert.Equal(t, "gpt-4o", res.Right.Value)
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
@@ -819,6 +808,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 				"left_value":          r.URL.Query().Get("left_value"),
 				"right_dimension":     r.URL.Query().Get("right_dimension"),
 				"right_value":         r.URL.Query().Get("right_value"),
+				"fallback_to_default": r.URL.Query().Get("fallback_to_default"),
 				"git_branch":          r.URL.Query().Get("git_branch"),
 				"project_key":         r.URL.Query().Get("project_key"),
 				"exclude_project_key": r.URL.Query().Get("exclude_project_key"),
@@ -846,6 +836,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 			LeftValue:         "alpha",
 			RightDimension:    "model",
 			RightValue:        "gpt-4o",
+			FallbackToDefault: true,
 		},
 	)
 	require.NoError(t, err)
@@ -862,8 +853,94 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "alpha", queryValues["left_value"])
 	assert.Equal(t, "model", queryValues["right_dimension"])
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
+	assert.Equal(t, "true", queryValues["fallback_to_default"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
 	assert.Equal(t, "pl1:sha256:alpha", queryValues["project_key"])
 	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
+}
+
+type pairwiseRankingStore struct {
+	db.Store
+	filters chan db.UsageFilter
+	ranking db.DailyUsageResult
+}
+
+func (s *pairwiseRankingStore) GetDailyUsage(_ context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	s.filters <- f
+	if f.Breakdowns {
+		return s.ranking, nil
+	}
+	return db.DailyUsageResult{}, nil
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
+	t.Parallel()
+	for _, emptyProject := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty project %t", emptyProject), func(t *testing.T) {
+			t.Parallel()
+			d := dbtest.OpenTestDB(t)
+			seedCommaProjectUsageFixture(t, d)
+			if emptyProject {
+				started := "2024-06-01T09:00:00Z"
+				msg := dbtest.AsstMsg("usage-empty-project", 1, "done")
+				msg.Timestamp = started
+				msg.Model = "test-model"
+				msg.TokenUsage = []byte(`{"input_tokens":1000}`)
+				dbtest.SeedSessionWithMessages(t, d, "usage-empty-project", "", []db.Message{
+					dbtest.UserMsg("usage-empty-project", 0, "compare usage"), msg,
+				}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
+					s.Agent = "claude"
+					s.StartedAt = &started
+					s.EndedAt = &started
+				})
+			}
+			catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"team,core", "other"})
+			require.NoError(t, err)
+			be := service.NewDirectBackend(d, nil)
+			res, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: new(false), IncludeOneShot: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "project", res.Left.Dimension)
+			assert.Equal(t, "project", res.Right.Dimension)
+			assert.NotEqual(t, res.Left.Value, res.Right.Value)
+			assert.Equal(t, map[string]int{
+				catalog["team,core"].ProjectKey: 100,
+				catalog["other"].ProjectKey:     25,
+			}, map[string]int{res.Left.Value: res.Left.InputTokens, res.Right.Value: res.Right.InputTokens})
+			assert.Equal(t, 1, res.Left.SessionCount)
+			assert.Equal(t, 1, res.Right.SessionCount)
+		})
+	}
+	t.Run("resolved dates", func(t *testing.T) {
+		t.Parallel()
+		d := dbtest.OpenTestDB(t)
+		seedCommaProjectUsageFixture(t, d)
+		ranking, err := d.GetDailyUsage(t.Context(), db.UsageFilter{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: true,
+		})
+		require.NoError(t, err)
+		store := &pairwiseRankingStore{Store: d, filters: make(chan db.UsageFilter, 3), ranking: ranking}
+		res, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+			Timezone: "UTC", Breakdowns: new(false), IncludeOneShot: true,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "project", res.Left.Dimension)
+		assert.Equal(t, "project", res.Right.Dimension)
+		require.Len(t, store.filters, 3)
+		rankingFilter := <-store.filters
+		assert.True(t, rankingFilter.Breakdowns)
+		assert.True(t, rankingFilter.SkipSessionCounts)
+		require.NotEmpty(t, rankingFilter.From)
+		require.NotEmpty(t, rankingFilter.To)
+		for range 2 {
+			sideFilter := <-store.filters
+			assert.False(t, sideFilter.Breakdowns)
+			assert.False(t, sideFilter.SkipSessionCounts)
+			assert.Equal(t, rankingFilter.From, sideFilter.From)
+			assert.Equal(t, rankingFilter.To, sideFilter.To)
+		}
+	})
 }

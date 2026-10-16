@@ -217,7 +217,7 @@ zoom_level = 120
 | `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                                                                                                                                                                                                                                       |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                                                                                                                                                                                                                                           |
 | `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                                                                                                                                                                                                                                            |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; overridden by `AGENTSVIEW_AUTH_TOKEN`, or by `AGENTSVIEW_AUTH_TOKEN_FILE` under a [container deployment](#container-deployment)                                                                                                                                                                                                                                                                                           |
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -233,6 +233,7 @@ zoom_level = 120
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
+| `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log) |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
@@ -262,7 +263,10 @@ endpoint settings such as `max_batch_tokens` under
 When `require_auth` is enabled, the browser login prompt accepts the configured
 `auth_token`. The value can come from `~/.agentsview/config.toml` or from the
 `AGENTSVIEW_AUTH_TOKEN` environment variable; the environment variable wins when
-both are set.
+both are set. Under a [container deployment](#container-deployment),
+`AGENTSVIEW_AUTH_TOKEN_FILE` can supply it from a mounted secret file instead.
+When authentication needs a token and none is configured, AgentsView generates
+one and saves it as `auth_token` in `config.toml`.
 
 !!! note
 
@@ -270,12 +274,67 @@ both are set.
     that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
 
+### Container deployment
+
+The published image sets `AGENTSVIEW_MODE`, which turns on a small set of
+deployment environment variables. They apply only when `AGENTSVIEW_MODE` is set
+to a non-blank value, so a desktop or native install ignores them, including
+invalid values and missing files. You can also set `AGENTSVIEW_MODE` yourself to
+use them with the native binary.
+
+| Variable                             | Behavior                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENTSVIEW_MODE`                    | `serve` or `pg-serve`. When the command line is empty or starts with a flag other than `--help` or `--version`, the image runs `agentsview serve` or `agentsview pg serve` with those flags |
+| `PG_SERVE`                           | `1`, `true`, `yes`, or `on` selects `pg serve` when `AGENTSVIEW_MODE=serve`; kept for older deployments                                                                                     |
+| `AGENTSVIEW_HOST`                    | Listener address. A non-loopback value needs `AGENTSVIEW_REQUIRE_AUTH=true` or `require_auth = true`                                                                                        |
+| `AGENTSVIEW_REQUIRE_AUTH`            | Require bearer authentication for API access                                                                                                                                                |
+| `AGENTSVIEW_NO_BROWSER`              | Do not open a browser on start                                                                                                                                                              |
+| `AGENTSVIEW_AUTH_TOKEN_FILE`         | File holding the bearer token; overrides `auth_token` in `config.toml`. `~/` expands to the home directory. Cannot be combined with `AGENTSVIEW_AUTH_TOKEN`                                 |
+| `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                    |
+| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint for recipe adoption in `pg push --embed` and `pg serve`; local `serve` ignores it. See [semantic search on PostgreSQL](/docs/semantic-search/)        |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                 |
+
+The image sets `AGENTSVIEW_MODE=serve`, `AGENTSVIEW_HOST=0.0.0.0`,
+`AGENTSVIEW_REQUIRE_AUTH=true`, and `AGENTSVIEW_NO_BROWSER=true`. An explicit
+subcommand such as `pg push --watch` or `mcp` runs as given.
+
+Precedence, highest first: command flags, deployment variables, `config.toml`,
+built-in defaults. A host set through `AGENTSVIEW_HOST` counts as persistent
+configuration, so a non-loopback value without authentication stops `serve`;
+only the `--host` flag allows a one-off unauthenticated bind. `pg serve` and
+`duckdb serve` ignore network settings in `config.toml` but apply these
+variables.
+
+These rules fail closed:
+
+- Boolean variables accept `true`, `false`, `1`, `0`, and the other values Go's
+  `strconv.ParseBool` accepts. Any other value, an unknown `AGENTSVIEW_MODE`, or
+  a blank `AGENTSVIEW_HOST` stops startup with an error naming the variable.
+- A missing, unreadable, or empty `AGENTSVIEW_AUTH_TOKEN_FILE` or
+  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup. AgentsView never falls
+  back to another secret source.
+- Any `AGENTSVIEW_EMBEDDINGS_*` variable together with a `[vector]` section
+  stops startup, so one place owns the embedding recipe.
+
+The image's API requires a bearer token, so an unauthenticated
+`GET /api/ping` returns 401. Use a TCP check on the listener port as the
+container health check, or treat 401 as alive.
+
+To keep the PostgreSQL password out of the URL, mount a
+[passfile](https://www.postgresql.org/docs/current/libpq-pgpass.html) and set
+`PGPASSFILE` to its path, or add `?passfile=/run/secrets/pgpass` to
+`AGENTSVIEW_PG_URL`. A file containing the single line `*:*:*:*:<password>`
+matches every connection. The PostgreSQL driver ignores a missing passfile, so a
+missing mount shows up as a PostgreSQL authentication error rather than an error
+naming the file.
+
 ## Remote Hosts
 
 Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw
-session files from other machines. HTTP is the only remote sync transport and
-the default when `transport` is omitted. Run an AgentsView daemon on the remote
-host and secure reachability with a private network such as Tailscale:
+session files from other machines. `transport` is `"http"` (the default when
+omitted) or `"ssh"`. An HTTP entry needs an AgentsView daemon on the remote host
+and a private network such as Tailscale to reach it:
 
 ```toml
 [[remote_hosts]]
@@ -286,32 +345,62 @@ token = "remote-token"
 interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
-Each host requires a `url` and a `token`. Other transport values, including
-`"ssh"`, are rejected. HTTP remote sync calls the remote daemon's archive
-endpoints and always uses a bearer token, even when the rest of that daemon has
-`require_auth = false`. The per-host `token` must match the remote daemon's
-`auth_token`. Do not reuse the collector daemon's own `auth_token` for untrusted
-remote endpoints. HTTP transfers use a persistent per-host mirror and request
-file deltas when fewer than half of the manifest files need fetching; see
+An SSH entry needs no daemon and no install on the remote host. It runs your
+`ssh` client. The SSH transport is newer than the latest release and is
+available on `main`:
+
+```toml
+[[remote_hosts]]
+host = "devbox2"
+transport = "ssh"
+destination = "user@devbox.example.com" # optional; defaults to host
+interval = "15m" # optional; zero or omitted means manual sync only
+```
+
+`destination` is the argument passed to `ssh`: a `~/.ssh/config` alias or
+`user@hostname`. When omitted, `host` is used. Set the port, user, identity, and
+`ProxyJump` in `~/.ssh/config`. Setup, the files placed on the remote, and
+limits are in
+[Remote Access — SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
+
+Configuration is rejected when:
+
+- `transport` is anything other than `http` or `ssh`.
+- An HTTP entry, including one with `transport` omitted, has no `url` or no
+  `token`, or sets `destination`.
+- An SSH entry sets `url` or `token`.
+- An SSH entry's destination starts with `-`. The destination is `destination`,
+  or `host` when `destination` is omitted.
+
+HTTP remote sync calls the remote daemon's archive endpoints and always uses a
+bearer token, even when the rest of that daemon has `require_auth = false`. The
+per-host `token` must match the remote daemon's `auth_token`. Do not reuse the
+collector daemon's own `auth_token` for untrusted remote endpoints. HTTP and
+SSH transfers use a persistent per-host mirror and fetch only changed files. A
+full archive is used only when every manifest file needs fetching or a delta
+request is refused; see
 [Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured
-HTTP hosts join the same temporary-database bulk ingest and atomic swap.
-`--full` reparses the complete local and remote corpus without retransferring
-unchanged files from manifest-capable spokes. HTTP remote sync requires the
-collector and remote daemon to use the same remote-sync protocol version. After
-upgrading either host, upgrade the other before syncing again; incompatible
-peers fail before targets or archive data are exchanged.
+remote hosts, HTTP and SSH, join the same temporary-database bulk ingest and
+atomic swap. `--full` reparses the complete local and remote corpus without
+retransferring unchanged files from manifest-capable spokes. HTTP remote sync
+requires the collector and remote daemon to use the same remote-sync protocol
+version. After upgrading either host, upgrade the other before syncing again;
+incompatible peers fail before targets or archive data are exchanged. SSH hosts
+need no manual upgrade: AgentsView places a matching binary on the remote; see
+[SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
 
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
 the same machine can duplicate sessions, while reusing it for another machine
 can reuse stale state. Select a configured host with
 `agentsview sync --host <name>`, including for direct sync with
-`AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are not
-supported. HTTP failures are summarized with actionable messages for common
-cases such as token rejection, missing remote archive
-endpoints, connection refusal, DNS failures, and timeouts.
+`AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are
+not supported. HTTP failures are summarized with actionable messages for common
+cases such as token rejection, missing remote archive endpoints, connection
+refusal, DNS failures, and timeouts. For how SSH failures are reported, see
+[Offline Hosts](/docs/remote-access/#offline-hosts).
 
 Set `interval` to a positive duration such as `"5m"` to have a running collector
 daemon sync that host periodically. Zero or omitted disables the per-host
@@ -1644,6 +1733,37 @@ HTTP readiness. Their startup output prints phase and completion lines, and
 `agentsview daemon status` shows the starting PID, elapsed time, current phase,
 progress detail, and log path while the daemon holds the start lock.
 
+### Friction Log
+
+The Friction Log records moments a session went wrong: corrections, failed
+commands, workarounds, deferrals, repeated patterns, frustration, and
+interruptions. Review is off by default because it reads every changed
+transcript a second time.
+
+```toml
+[friction]
+enabled = true
+```
+
+Restart the daemon after changing this setting. When enabled:
+
+- Sync stays as fast as with review off. It marks changed sessions as needing
+  review, and the daemon reviews them in the background after each sync.
+- Turning review on for an existing archive reviews every session in the
+  background. Sync keeps running while it catches up.
+- A PostgreSQL push first reviews every session still waiting, so the mirror
+  receives current findings. It holds sync until that finishes.
+- Sessions above 2,000 message, tool-call, and result-event rows or 4 MiB of
+  stored text are marked skipped rather than reviewed.
+- A daemon without automatic sync does not review in the background. That
+  includes a daemon started with `--no-sync` and one serving a seeded or
+  restored archive-only database. Its sessions are reviewed before a
+  PostgreSQL push. A `--no-sync` daemon also catches up after it restarts with
+  automatic sync.
+
+Hosted raw sync reviews sessions as it projects them, whatever this setting
+says. See [Hosted Raw Sync](/docs/hosted-raw-sync/).
+
 ### Restricting Ingestion by Working Directory
 
 By default every discovered session is ingested. To limit the archive to
@@ -1742,13 +1862,31 @@ against the budget. The Antigravity IDE watcher also watches
 This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
 has no per-directory budget.
 
+Runtime folder watch failures keep healthy folders on native watches. Claude
+polling covers the affected project folder. Other providers poll the root's
+configured scopes so changes to companion files reach their owning sessions.
+Retries start after 10 seconds and back off to two minutes. The next shared poll
+pass batches recovered folders and reconciles their original provider root
+scopes before releasing polling. A failed reconciliation keeps polling active
+for the next retry. A deferred folder keeps polling until its whole subtree is
+watched or the directory disappears.
+New native events sync on the normal interval, apart from failed discovery,
+which keeps backing off up to two minutes.
+A regular file replacing the directory or an ancestor releases polling.
+A directory symlink keeps polling. Removing a root from the watch plan releases
+its polling obligations. Budget or native watch resource exhaustion keeps
+root-level polling. Event-buffer overflow puts every recursive root on polling.
+
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
 - a new 2-minute fallback sync loop that runs whenever any roots are unwatched
-    (it re-syncs all configured roots, not just the unwatched ones)
+    (it reconciles the affected scopes)
 
-Startup logs make degradation explicit. Per-root and summary lines look like:
+The startup polling summary counts roots handed to fallback polling. It excludes
+folders already covered by separate polling obligations. Runtime
+`polling N unwatched root(s)` logs count distinct polling scopes, including
+Claude project folders. Per-root and startup summary lines look like:
 
 ```
 Couldn't watch 12500 directories under /home/me/.claude/projects, will poll every 2m0s

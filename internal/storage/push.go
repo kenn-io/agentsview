@@ -14,10 +14,17 @@ type PushOptions struct {
 	// Full bypasses unchanged-fingerprint and unchanged-hash skips so
 	// every session is resent.
 	Full bool
+	// FullVectors bypasses unchanged-hash skips in the vector phase while
+	// sessions stay incremental.
+	FullVectors bool
+	// FullVectorSessions bypasses unchanged-hash skips for these sessions
+	// only, so a --full repair that a session deferred finishes once the
+	// session can be pushed.
+	FullVectorSessions []string
 	// ScopeVectorsToChangedSessions limits the vector phase's local
 	// hash read and replica state read to this push's changed relational
 	// sessions, instead of reconciling the whole generation. Ignored
-	// when the push runs (or is internally promoted to run) full, so
+	// when FullVectors is set or the push runs (or is promoted to run) full, so
 	// reset recovery and backfills keep generation-wide reconciliation.
 	ScopeVectorsToChangedSessions bool
 	// LastReconciledVectorGeneration is the replica generation id the
@@ -61,6 +68,9 @@ type PushResult struct {
 	// SkippedUnchanged counts in-scope sessions whose fingerprint already
 	// matched the replica. Backends that skip silently leave it zero.
 	SkippedUnchanged int
+	// SkippedResumed counts sessions a resumed full push left alone because
+	// the unfinished run it continues already pushed them as they are now.
+	SkippedResumed int
 	// DeletedStale counts replica sessions removed because they no longer
 	// exist locally or left the push scope.
 	DeletedStale int
@@ -113,11 +123,13 @@ type VectorPushResult struct {
 	// generation changed. The delta state is untouched, so the next
 	// generation-wide reconciliation sends them.
 	SessionsDeferred int
-	DocsPushed       int
-	ChunksPushed     int
-	DocsDeleted      int
-	SessionsEvicted  int
-	Conflicts        int
+	// DeferredSessionIDs names the sessions counted in SessionsDeferred.
+	DeferredSessionIDs []string
+	DocsPushed         int
+	ChunksPushed       int
+	DocsDeleted        int
+	SessionsEvicted    int
+	Conflicts          int
 	// GenerationID is the replica id of the generation this phase
 	// reconciled, zero when the phase was skipped or found no active
 	// generation. The watch orchestrator records it after a clean
@@ -134,4 +146,10 @@ func ValidateProjectFilters(projects, excludeProjects []string) error {
 		return errors.New("projects and exclude_projects are mutually exclusive")
 	}
 	return nil
+}
+
+// DeferSession records that sessionID's vector reconciliation was deferred.
+func (r *VectorPushResult) DeferSession(sessionID string) {
+	r.SessionsDeferred++
+	r.DeferredSessionIDs = append(r.DeferredSessionIDs, sessionID)
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,8 +23,8 @@ import (
 
 var (
 	ErrDuplicateMirrorLock = errors.New("duplicate mirror lock identity")
-	ErrPreparedInUse       = errors.New("prepared HTTP sources are in use")
-	ErrPreparedClosed      = errors.New("prepared HTTP sources are closing or closed")
+	ErrPreparedInUse       = errors.New("prepared remote sources are in use")
+	ErrPreparedClosed      = errors.New("prepared remote sources are closing or closed")
 )
 
 type rebuildCachePersistError struct{ err error }
@@ -33,7 +32,7 @@ type rebuildCachePersistError struct{ err error }
 func (e *rebuildCachePersistError) Error() string { return e.err.Error() }
 func (e *rebuildCachePersistError) Unwrap() error { return e.err }
 
-// HostError attributes an HTTP preparation failure to its configured host.
+// HostError attributes a remote preparation failure to its configured host.
 // The cause remains available to errors.Is and errors.As callers.
 type HostError struct {
 	Host      string
@@ -43,84 +42,86 @@ type HostError struct {
 
 func (e *HostError) Error() string {
 	if e.Operation == "" {
-		return fmt.Sprintf("HTTP host %q: %v", e.Host, e.Err)
+		return fmt.Sprintf("remote host %q: %v", e.Host, e.Err)
 	}
-	return fmt.Sprintf("HTTP host %q %s: %v", e.Host, e.Operation, e.Err)
+	return fmt.Sprintf("remote host %q %s: %v", e.Host, e.Operation, e.Err)
 }
 
 func (e *HostError) Unwrap() error { return e.Err }
 
-// PreparedHTTPSyncs owns a deterministically prepared group of HTTP sources.
+// PreparedRemoteSyncs owns a deterministically prepared group of remote sources.
 // Source ownership stays internal so locks and temporary roots can only be
 // released as a group.
-type PreparedHTTPSyncs struct {
+type PreparedRemoteSyncs struct {
 	mu                    sync.Mutex
-	sources               []*PreparedHTTP
+	sources               []*PreparedRemote
 	unavailableIDPrefixes []string
 	closing               bool
 	borrows               int
 }
 
-// PrepareHTTPSyncs prepares HTTP hosts in deterministic order, using canonical
-// mirror-lock paths for persistent sources and host/URL keys for legacy
-// temporary sources. It copies the input so callers retain their original
-// ordering. When both the preparation and its unwind fail, the returned set is
-// nonnil and callers must retry Close even though err is also nonnil.
-func PrepareHTTPSyncs(
-	ctx context.Context, syncs []HTTPSync,
-) (*PreparedHTTPSyncs, error) {
-	prepared, _, err := prepareHTTPSyncsWithUnavailable(ctx, syncs, false, func(
-		ctx context.Context, hs HTTPSync,
-	) (*PreparedHTTP, error) {
+// PrepareRemoteSyncs prepares up to four remote hosts concurrently. Persistent
+// mirror locks are acquired in canonical path order; results retain that order,
+// with legacy temporary sources ordered by host/URL. Callbacks are serialized.
+// It copies the input so callers retain their original ordering. When both the
+// preparation and its unwind fail, the returned set is nonnil and callers must
+// retry Close even though err is also nonnil.
+func PrepareRemoteSyncs(
+	ctx context.Context, syncs []RemoteSync,
+) (*PreparedRemoteSyncs, error) {
+	prepared, _, err := prepareRemoteSyncsWithUnavailable(ctx, syncs, false, func(
+		ctx context.Context, hs RemoteSync,
+	) (*PreparedRemote, error) {
 		return hs.Prepare(ctx)
 	})
 	return prepared, err
 }
 
-// PrepareAvailableHTTPSyncs prepares every reachable HTTP host. Unavailable
+// PrepareAvailableRemoteSyncs prepares every reachable remote host. Unavailable
 // hosts are omitted; other failures retain the all-or-nothing cleanup behavior
-// of PrepareHTTPSyncs.
-func PrepareAvailableHTTPSyncs(
-	ctx context.Context, syncs []HTTPSync,
-) (*PreparedHTTPSyncs, error) {
-	prepared, _, err := prepareHTTPSyncsWithUnavailable(ctx, syncs, true, func(
-		ctx context.Context, hs HTTPSync,
-	) (*PreparedHTTP, error) {
+// of PrepareRemoteSyncs.
+func PrepareAvailableRemoteSyncs(
+	ctx context.Context, syncs []RemoteSync,
+) (*PreparedRemoteSyncs, error) {
+	prepared, _, err := prepareRemoteSyncsWithUnavailable(ctx, syncs, true, func(
+		ctx context.Context, hs RemoteSync,
+	) (*PreparedRemote, error) {
 		return hs.Prepare(ctx)
 	})
 	return prepared, err
 }
 
-func prepareHTTPSyncs(
+func prepareRemoteSyncs(
 	ctx context.Context,
-	syncs []HTTPSync,
-	prepare func(context.Context, HTTPSync) (*PreparedHTTP, error),
-) (*PreparedHTTPSyncs, error) {
-	prepared, _, err := prepareHTTPSyncsWithUnavailable(
+	syncs []RemoteSync,
+	prepare func(context.Context, RemoteSync) (*PreparedRemote, error),
+) (*PreparedRemoteSyncs, error) {
+	prepared, _, err := prepareRemoteSyncsWithUnavailable(
 		ctx, syncs, false, prepare,
 	)
 	return prepared, err
 }
 
-func prepareHTTPSyncsWithUnavailable(
+func prepareRemoteSyncsWithUnavailable(
 	ctx context.Context,
-	syncs []HTTPSync,
+	syncs []RemoteSync,
 	skipUnavailable bool,
-	prepare func(context.Context, HTTPSync) (*PreparedHTTP, error),
-) (*PreparedHTTPSyncs, []*HostError, error) {
+	prepare func(context.Context, RemoteSync) (*PreparedRemote, error),
+) (*PreparedRemoteSyncs, []*HostError, error) {
 	type orderedSync struct {
-		sync    HTTPSync
+		sync    RemoteSync
 		sortKey string
+		advance func()
 	}
 	ordered := make([]orderedSync, 0, len(syncs))
-	seenLocks := make(map[string]HTTPSync, len(syncs))
+	seenLocks := make(map[string]RemoteSync, len(syncs))
 	for _, hs := range syncs {
 		if hs.DataDir == "" {
 			// Legacy sources use isolated temporary roots and never acquire a
 			// mirror lock. Give them a stable ordering without resolving a
 			// nonexistent lock path (which would create cwd artifacts).
 			ordered = append(ordered, orderedSync{
-				sync: hs, sortKey: "legacy\x00" + hs.Host + "\x00" + hs.URL,
+				sync: hs, sortKey: legacySortKey(hs),
 			})
 			continue
 		}
@@ -148,42 +149,171 @@ func prepareHTTPSyncsWithUnavailable(
 		return ordered[i].sortKey < ordered[j].sortKey
 	})
 
-	prepared := &PreparedHTTPSyncs{
-		sources: make([]*PreparedHTTP, 0, len(ordered)),
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var callbacks sync.Mutex
+	previous := make(chan struct{})
+	close(previous)
+	for i := range ordered {
+		hs := &ordered[i].sync
+		if report := hs.Progress; report != nil {
+			hs.Progress = func(progress syncpkg.Progress) {
+				callbacks.Lock()
+				defer callbacks.Unlock()
+				report(progress)
+			}
+		}
+		if hs.DataDir == "" {
+			continue
+		}
+		before, acquired := previous, make(chan struct{})
+		previous = acquired
+		var once sync.Once
+		advance := func() {
+			// A host that fails before locking must still wait its turn before
+			// admitting the next host, unless the whole group is stopping.
+			select {
+			case <-before:
+			case <-workCtx.Done():
+			}
+			once.Do(func() { close(acquired) })
+		}
+		ordered[i].advance = advance
+		acquire := hs.acquireMirrorLock
+		if acquire == nil {
+			acquire = AcquireMirrorLock
+		}
+		hs.acquireMirrorLock = func(ctx context.Context, root string) (*MirrorLockHandle, error) {
+			select {
+			case <-before:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			lock, err := acquire(ctx, root)
+			if err == nil {
+				advance()
+			}
+			return lock, err
+		}
 	}
-	var unavailable []*HostError
-	for _, input := range ordered {
+
+	type preparationResult struct {
+		source      *PreparedRemote
+		err         *HostError
+		unavailable bool
+	}
+	results := make([]preparationResult, len(ordered))
+	var failureMu sync.Mutex
+	var primary *HostError
+	run := func(i int) {
+		input := ordered[i]
+		if input.advance != nil {
+			defer input.advance()
+		}
+		if workCtx.Err() != nil {
+			return
+		}
 		hs := input.sync
 		if hs.Lifecycle != nil && hs.Lifecycle.PrepareStarted != nil {
+			callbacks.Lock()
 			hs.Lifecycle.PrepareStarted()
+			callbacks.Unlock()
 		}
-		source, err := prepare(ctx, hs)
-		if hs.Lifecycle != nil && hs.Lifecycle.PrepareFinished != nil {
-			hs.Lifecycle.PrepareFinished(err)
-		}
+		source, err := prepare(workCtx, hs)
+		result := preparationResult{source: source}
 		if err != nil {
-			primary := &HostError{Host: hs.Host, Operation: "prepare", Err: err}
-			if skipUnavailable && source == nil && ctx.Err() == nil &&
-				IsHostUnavailable(err) {
-				unavailable = append(unavailable, primary)
-				prepared.unavailableIDPrefixes = append(
-					prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
-				)
-				hs.reportProgressDetail(
-					"Skipped offline remote host " + hs.Host,
-				)
-				continue
+			result.err = &HostError{Host: hs.Host, Operation: "prepare", Err: err}
+			result.unavailable = skipUnavailable && source == nil &&
+				workCtx.Err() == nil && IsHostUnavailable(err)
+			if !result.unavailable {
+				failureMu.Lock()
+				if primary == nil {
+					primary = result.err
+					cancel()
+				}
+				failureMu.Unlock()
 			}
-			if source != nil {
-				prepared.sources = append(prepared.sources, source)
-			}
-			cleanupErr := prepared.Close()
-			if cleanupErr != nil {
-				return prepared, unavailable, errors.Join(primary, cleanupErr)
-			}
-			return nil, unavailable, primary
 		}
-		prepared.sources = append(prepared.sources, source)
+		if hs.Lifecycle != nil && hs.Lifecycle.PrepareFinished != nil {
+			callbacks.Lock()
+			hs.Lifecycle.PrepareFinished(err)
+			callbacks.Unlock()
+		}
+		results[i] = result
+	}
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(4, len(ordered)) {
+		workers.Go(func() {
+			for i := range jobs {
+				run(i)
+			}
+		})
+	}
+dispatch:
+	for i := range ordered {
+		// Dispatch in lock order: later jobs must not occupy every worker
+		// while waiting for a predecessor that has not started yet.
+		select {
+		case jobs <- i:
+		case <-workCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	workers.Wait()
+
+	prepared := &PreparedRemoteSyncs{
+		sources: make([]*PreparedRemote, 0, len(ordered)),
+	}
+	var unavailable []*HostError
+	var failure error
+	if primary != nil {
+		failure = primary
+	}
+	for i, result := range results {
+		if result.source != nil {
+			prepared.sources = append(prepared.sources, result.source)
+		}
+		if result.unavailable {
+			hs := ordered[i].sync
+			unavailable = append(unavailable, result.err)
+			prepared.unavailableIDPrefixes = append(
+				prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
+			)
+			hs.reportProgressDetail("Skipped offline remote host " + hs.Host)
+			continue
+		}
+		if result.err == nil || result.err == primary {
+			continue
+		}
+		if ctx.Err() == nil && errors.Is(result.err, context.Canceled) {
+			// Sibling cancellation must not turn the original failure into a
+			// user cancellation. Spool cleanup can own resources without a
+			// PreparedRemote, so retry and retain those owners independently.
+			for _, retrier := range cleanupRetriers(result.err) {
+				if cleanupErr := retrier.RetryCleanup(); cleanupErr != nil {
+					failure = errors.Join(failure, &retainedCleanupError{
+						cause:    &HostError{Host: ordered[i].sync.Host, Operation: "cleanup canceled preparation", Err: cleanupErr},
+						retriers: []cleanupRetrier{retrier},
+					})
+				}
+			}
+			continue
+		}
+		failure = errors.Join(failure, result.err)
+	}
+	if ctx.Err() != nil {
+		failure = errors.Join(failure, ctx.Err())
+	}
+	if failure != nil {
+		if cleanupErr := prepared.Close(); cleanupErr != nil {
+			return prepared, unavailable, errors.Join(failure, cleanupErr)
+		}
+		return nil, unavailable, failure
 	}
 	return prepared, unavailable, nil
 }
@@ -192,7 +322,7 @@ func prepareHTTPSyncsWithUnavailable(
 // namespaces while the prepared set retains cleanup ownership. Callers must
 // invoke the idempotent release function after the rebuild stops using the
 // options. Close refuses to release any source while a borrow remains active.
-func (p *PreparedHTTPSyncs) BorrowRebuildOptions(ctx context.Context) (
+func (p *PreparedRemoteSyncs) BorrowRebuildOptions(ctx context.Context) (
 	options syncpkg.RebuildOptions,
 	release func(),
 	err error,
@@ -237,7 +367,7 @@ func (p *PreparedHTTPSyncs) BorrowRebuildOptions(ctx context.Context) (
 
 // Close releases prepared sources in reverse order. Successfully closed
 // sources are forgotten; failed sources remain owned so cleanup can be retried.
-func (p *PreparedHTTPSyncs) Close() error {
+func (p *PreparedRemoteSyncs) Close() error {
 	if p == nil {
 		return nil
 	}
@@ -266,7 +396,7 @@ func (p *PreparedHTTPSyncs) Close() error {
 
 // Commit finalizes each successfully rebuilt persistent source. It is
 // idempotent; a failure leaves every uncommitted source owned for retry.
-func (p *PreparedHTTPSyncs) Commit() error {
+func (p *PreparedRemoteSyncs) Commit() error {
 	if p == nil {
 		return nil
 	}
@@ -283,11 +413,11 @@ func (p *PreparedHTTPSyncs) Commit() error {
 	return nil
 }
 
-// PreparedHTTP is a downloaded remote source ready for active import. A
+// PreparedRemote is a downloaded remote source ready for active import. A
 // persistent mirror remains locked until Close so another process cannot mutate
 // files while the importer reads them. Legacy sources own their temporary root.
-type PreparedHTTP struct {
-	sync                      HTTPSync
+type PreparedRemote struct {
+	sync                      RemoteSync
 	targets                   TargetSet
 	root                      string
 	lock                      *MirrorLockHandle
@@ -321,27 +451,30 @@ type preparedMirrorImport struct {
 // When preparation and automatic cleanup both fail, it returns a nonnil source
 // with the error; callers must retry Close on every nonnil result. If cleanup
 // succeeds, preparation failures retain the ordinary (nil, err) shape.
-func (hs HTTPSync) Prepare(ctx context.Context) (*PreparedHTTP, error) {
+func (hs RemoteSync) Prepare(ctx context.Context) (*PreparedRemote, error) {
 	return hs.prepare(ctx, nil)
 }
 
-func (hs HTTPSync) prepare(
-	ctx context.Context, configure func(*PreparedHTTP),
-) (result *PreparedHTTP, err error) {
-	client := hs.Client
-	if client == nil {
-		// Archive responses can stream for hours; ctx governs their lifetime.
-		client = &http.Client{Timeout: 0}
+func (hs RemoteSync) prepare(
+	ctx context.Context, configure func(*PreparedRemote),
+) (result *PreparedRemote, err error) {
+	if hs.Source == nil {
+		return nil, errors.New("remote sync source is required")
+	}
+	if reporter, ok := hs.Source.(ProgressReporter); ok {
+		reporter.ReportProgress(hs.report)
 	}
 	hs.reportProgressResolvingTargets()
-	targets, err := hs.fetchTargets(ctx, client)
+	targetsStarted := time.Now()
+	targets, err := hs.Source.Targets(ctx)
+	logRemotePhase(hs.Host, "targets", targetsStarted)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateTargetSetPaths(targets); err != nil {
 		return nil, err
 	}
-	prepared := &PreparedHTTP{
+	prepared := &PreparedRemote{
 		sync:                      hs,
 		targets:                   targets,
 		removeRoot:                os.RemoveAll,
@@ -364,7 +497,7 @@ func (hs HTTPSync) prepare(
 	}()
 
 	if hs.DataDir == "" {
-		prepared.root, err = hs.downloadAndExtract(ctx, client, targets)
+		prepared.root, err = hs.downloadAndExtract(ctx, targets)
 		if err != nil {
 			return nil, err
 		}
@@ -378,19 +511,25 @@ func (hs HTTPSync) prepare(
 		return nil, fmt.Errorf("make persistent mirror root absolute: %w", err)
 	}
 	mirrorRoot = filepath.Clean(mirrorRoot)
-	prepared.lock, err = AcquireMirrorLock(ctx, mirrorRoot)
+	acquire := hs.acquireMirrorLock
+	if acquire == nil {
+		acquire = AcquireMirrorLock
+	}
+	prepared.lock, err = acquire(ctx, mirrorRoot)
 	if err != nil {
 		return nil, err
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
 	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
-	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
+	manifestStarted := time.Now()
+	manifest, supported, err := hs.Source.Manifest(ctx, dirScoped)
+	logRemotePhase(hs.Host, "manifest", manifestStarted)
 	if err != nil {
 		return nil, err
 	}
 	if !supported {
 		hs.reportLegacyFallback()
-		prepared.root, err = hs.downloadAndExtract(ctx, client, targets)
+		prepared.root, err = hs.downloadAndExtract(ctx, targets)
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +539,7 @@ func (hs HTTPSync) prepare(
 	}
 
 	prepared.root = mirrorRoot
-	prepared.mirrorImport, err = hs.prepareMirror(ctx, client, splitTargets{
+	prepared.mirrorImport, err = hs.prepareMirror(ctx, splitTargets{
 		dirScoped:  dirScoped,
 		fileScoped: fileScoped,
 	}, manifest, mirrorRoot, prepared)
@@ -410,16 +549,22 @@ func (hs HTTPSync) prepare(
 	return prepared, nil
 }
 
+// logRemotePhase records how long one preparation phase took for host.
+func logRemotePhase(host, phase string, started time.Time) {
+	log.Printf("remote sync: host=%s phase=%s duration=%s",
+		host, phase, time.Since(started).Round(time.Millisecond))
+}
+
 // Root returns the prepared source root.
-func (p *PreparedHTTP) Root() string { return p.root }
+func (p *PreparedRemote) Root() string { return p.root }
 
 // Targets returns the target set represented by Root.
-func (p *PreparedHTTP) Targets() TargetSet { return p.targets }
+func (p *PreparedRemote) Targets() TargetSet { return p.targets }
 
 // ImportActive imports the prepared source into the active database.
-func (p *PreparedHTTP) ImportActive(ctx context.Context) (SyncStats, error) {
+func (p *PreparedRemote) ImportActive(ctx context.Context) (SyncStats, error) {
 	if p == nil || p.closing || p.closed {
-		return SyncStats{}, errors.New("prepared HTTP source is closed")
+		return SyncStats{}, errors.New("prepared remote source is closed")
 	}
 	if p.mirrorImport == nil {
 		if p.legacy {
@@ -457,7 +602,7 @@ func (p *PreparedHTTP) ImportActive(ctx context.Context) (SyncStats, error) {
 	return stats, nil
 }
 
-func (p *PreparedHTTP) reportDeltaImport(stats SyncStats) {
+func (p *PreparedRemote) reportDeltaImport(stats SyncStats) {
 	if p.mirrorImport != nil {
 		p.mirrorImport.reported = true
 	}
@@ -488,11 +633,13 @@ func (p *PreparedHTTP) reportDeltaImport(stats SyncStats) {
 }
 
 // RebuildContributor converts this prepared source into an atomic rebuild
-// contributor. PreparedHTTP retains ownership of its root and mirror lock;
+// contributor. PreparedRemote retains ownership of its root and mirror lock;
 // callers must Close it after the rebuild finishes.
-func (p *PreparedHTTP) RebuildContributor(ctx context.Context) (syncpkg.RebuildContributor, error) {
+func (p *PreparedRemote) RebuildContributor(
+	ctx context.Context,
+) (syncpkg.RebuildContributor, error) {
 	if p == nil || p.closing || p.closed {
-		return syncpkg.RebuildContributor{}, errors.New("prepared HTTP source is closed")
+		return syncpkg.RebuildContributor{}, errors.New("prepared remote source is closed")
 	}
 	layout, config, err := newImportInputs(
 		p.sync.Host, p.sync.BlockedResultCategories, p.targets, p.root,
@@ -600,12 +747,12 @@ func (p *PreparedHTTP) RebuildContributor(ctx context.Context) (syncpkg.RebuildC
 }
 
 // Commit retires a processed persistent journal after an atomic rebuild swap.
-func (p *PreparedHTTP) Commit() error {
+func (p *PreparedRemote) Commit() error {
 	if p == nil || p.mirrorImport == nil || p.committed {
 		return nil
 	}
 	if !p.commitReady {
-		return errors.New("prepared HTTP journal is not ready to commit")
+		return errors.New("prepared remote journal is not ready to commit")
 	}
 	start := time.Now()
 	if err := p.persistAntigravityTitleStates(); err != nil {
@@ -628,7 +775,7 @@ func (p *PreparedHTTP) Commit() error {
 
 // Close releases the mirror lock and removes an owned legacy root. It is safe
 // to call more than once.
-func (p *PreparedHTTP) Close() error {
+func (p *PreparedRemote) Close() error {
 	if p == nil || p.closed {
 		return nil
 	}
@@ -642,7 +789,7 @@ func (p *PreparedHTTP) Close() error {
 	var cleanupErr, lockErr error
 	if p.cleanupRoot && p.root != "" {
 		if err := p.removeRoot(p.root); err != nil {
-			cleanupErr = fmt.Errorf("remove prepared HTTP root: %w", err)
+			cleanupErr = fmt.Errorf("remove prepared remote root: %w", err)
 		} else {
 			p.cleanupRoot = false
 		}
@@ -658,11 +805,11 @@ func (p *PreparedHTTP) Close() error {
 	return errors.Join(cleanupErr, lockErr)
 }
 
-func (hs HTTPSync) reportProgressResolvingTargets() {
+func (hs RemoteSync) reportProgressResolvingTargets() {
 	hs.reportProgressDetail("Resolving agent directories on " + hs.Host)
 }
 
-func (hs HTTPSync) reportLegacyFallback() {
+func (hs RemoteSync) reportLegacyFallback() {
 	hs.reportProgressDetail(fmt.Sprintf(
 		"Remote %s does not support incremental sync; downloading full archive",
 		hs.Host,
@@ -740,13 +887,12 @@ func mirrorFileScopedRoots(
 // prepareMirror applies the manifest delta to the persistent mirror. The
 // caller holds the mirror lock from before the manifest fetch until the
 // prepared source is closed.
-func (hs HTTPSync) prepareMirror(
+func (hs RemoteSync) prepareMirror(
 	ctx context.Context,
-	client *http.Client,
 	targets splitTargets,
 	manifest Manifest,
 	mirrorRoot string,
-	prepared *PreparedHTTP,
+	prepared *PreparedRemote,
 ) (result *preparedMirrorImport, retErr error) {
 	fullReason := hs.FullReason
 	if hs.Full && fullReason == "" {
@@ -782,7 +928,9 @@ func (hs HTTPSync) prepareMirror(
 	}
 	_, mirrorStatErr := os.Stat(mirrorRoot)
 	bootstrap := errors.Is(mirrorStatErr, os.ErrNotExist)
+	compareStarted := time.Now()
 	delta, err := MirrorDiff(mirrorRoot, manifest)
+	logRemotePhase(hs.Host, "compare", compareStarted)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,14 +1158,13 @@ func (hs HTTPSync) prepareMirror(
 		return nil, err
 	}
 	if len(delta.Fetch) > 0 {
-		full := len(delta.Fetch)*2 >= delta.Total
+		full := len(delta.Fetch) == delta.Total
 		err := hs.downloadIntoMirror(
-			ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot,
+			ctx, targets.dirScoped, delta.Fetch, full, mirrorRoot,
 		)
-		_, hasStatusErr := errors.AsType[*StatusError](err)
-		if err != nil && !full && hasStatusErr {
+		if err != nil && !full && isRemoteRefusal(err) {
 			err = hs.downloadIntoMirror(
-				ctx, client, targets.dirScoped, delta.Fetch, true, mirrorRoot,
+				ctx, targets.dirScoped, delta.Fetch, true, mirrorRoot,
 			)
 		}
 		if err != nil {
@@ -1026,7 +1173,7 @@ func (hs HTTPSync) prepareMirror(
 	}
 	if refreshFileScoped {
 		if err := hs.downloadIntoMirror(
-			ctx, client, targets.fileScoped, nil, true, mirrorRoot,
+			ctx, targets.fileScoped, nil, true, mirrorRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -1098,7 +1245,7 @@ func loadAntigravityTitleVerification(root string) antigravityTitleVerification 
 	return applied
 }
 
-func (p *PreparedHTTP) antigravityTitlesPending() (bool, error) {
+func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
 	if len(p.targets.Dirs[parser.AgentAntigravity]) == 0 || p.sync.DB.ArchiveContent().UsageOnly() {
 		return false, nil
 	}
@@ -1120,7 +1267,7 @@ func (p *PreparedHTTP) antigravityTitlesPending() (bool, error) {
 	return !maps.Equal(current, applied.States), nil
 }
 
-func (p *PreparedHTTP) persistAntigravityTitleStates() error {
+func (p *PreparedRemote) persistAntigravityTitleStates() error {
 	if len(p.targets.Dirs[parser.AgentAntigravity]) == 0 || p.sync.DB.ArchiveContent().UsageOnly() {
 		return nil
 	}
@@ -1154,4 +1301,12 @@ func requireMirrorDataVersionImport(
 		RequiredDataVersion: version,
 		FileScopedDirs:      journal.FileScopedDirs,
 	}
+}
+
+func legacySortKey(hs RemoteSync) string {
+	key := "legacy\x00" + hs.Host
+	if source, ok := hs.Source.(HTTPSource); ok {
+		key += "\x00" + source.URL
+	}
+	return key
 }

@@ -55,7 +55,7 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	require.NoError(t, err)
 
 	_, err = rebuildMirror(
-		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, nil,
+		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil,
 	)
 	require.NoError(t, err)
 }

@@ -12123,6 +12123,51 @@ func TestProviderChangedPathForceParseGeminiMetadata(t *testing.T) {
 	}
 }
 
+func TestProviderChangedPathForceParseHermesStateEvent(t *testing.T) {
+	home := filepath.Join("root", "profile#one")
+	stateDB := filepath.Join(home, "state.db")
+	tests := []struct {
+		name       string
+		sourcePath string
+		eventPath  string
+		eventKind  string
+		want       bool
+	}{
+		{
+			name:       "orphan transcript under a directory named with # is not forced",
+			sourcePath: filepath.Join(home, "sessions", "orphan.jsonl"),
+			eventPath:  stateDB,
+			eventKind:  "write",
+			want:       false,
+		},
+		{
+			// A transcript event resolves to the session's state.db member
+			// when the database owns that session.
+			name:       "transcript event resolving to its state.db member stays forced",
+			sourcePath: stateDB + "#member",
+			eventPath:  filepath.Join(home, "sessions", "member.jsonl"),
+			eventKind:  "write",
+			want:       true,
+		},
+		{
+			name:       "orphan transcript remove keeps the force",
+			sourcePath: filepath.Join(home, "sessions", "orphan.jsonl"),
+			eventPath:  stateDB,
+			eventKind:  "remove",
+			want:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := providerChangedPathForceParse(
+				parser.AgentHermes, tt.sourcePath, tt.eventPath, tt.eventKind,
+				parser.ProviderMigrationProviderAuthoritative,
+			)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestOpenCodeUsageOnlyArchiveRejectsOrdinalReuse(t *testing.T) {
 	// A source that lost a message and gained a later one can present a new
 	// row at the vanished ordinal with larger token counts. Identity comes

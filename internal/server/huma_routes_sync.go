@@ -13,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotesource"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -78,29 +79,28 @@ type remoteSyncResponse struct {
 	ErrorCode  string              `json:"error_code,omitempty"`
 }
 
-var runHTTPRemoteSync = func(
+var runRemoteHostSync = func(
 	ctx context.Context,
 	cfg config.Config,
+	version string,
 	local *db.DB,
 	rh config.RemoteHost,
 	full bool,
 	progress func(syncpkg.Progress),
 ) (remotesync.SyncStats, error) {
-	token := rh.Token
-	if token == "" {
-		return remotesync.SyncStats{}, fmt.Errorf(
-			"http remote sync token is required for host %q",
-			rh.Host,
-		)
+	source, err := remotesource.For(rh, remotesource.Options{
+		Version: version, DataDir: cfg.DataDir,
+	})
+	if err != nil {
+		return remotesync.SyncStats{}, err
 	}
 	fullReason := remotesync.FullImportReason("")
 	if full {
 		fullReason = remotesync.FullImportExplicit
 	}
-	return remotesync.HTTPSync{
+	return remotesync.RemoteSync{
 		Host:                    rh.Host,
-		URL:                     rh.URL,
-		Token:                   token,
+		Source:                  source,
 		Full:                    full,
 		FullReason:              fullReason,
 		DataDir:                 cfg.DataDir,
@@ -117,9 +117,9 @@ type preparedHTTPRebuild interface {
 
 var prepareHTTPRebuild = func(
 	ctx context.Context,
-	syncs []remotesync.HTTPSync,
+	syncs []remotesync.RemoteSync,
 ) (preparedHTTPRebuild, error) {
-	return remotesync.PrepareAvailableHTTPSyncs(ctx, syncs)
+	return remotesync.PrepareAvailableRemoteSyncs(ctx, syncs)
 }
 
 type preparedHTTPRebuildLease struct {
@@ -251,6 +251,7 @@ func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.
 		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		ArchiveContent:          cfg.ArchiveContent,
+		FrictionEnabled:         cfg.Friction.Enabled,
 		Emitter:                 emitter,
 	})
 	return s.onDemandEngine
@@ -580,11 +581,12 @@ func (s *Server) runRemoteSyncRequest(
 				) {
 					httpContributorsStarted = time.Now()
 					log.Printf(
-						"remote sync HTTP contributors started: hosts=%d mode=unified_rebuild",
+						"remote sync contributors started: hosts=%d mode=unified_rebuild",
 						len(req.Hosts),
 					)
-					prepared, err := prepareHTTPHosts(
-						ctx, ingestionCfg, local, req.Hosts, fullReason, progress,
+					prepared, err := prepareRemoteHosts(
+						ctx, ingestionCfg, s.version.Version, local, req.Hosts,
+						fullReason, progress,
 					)
 					if err != nil {
 						return syncpkg.RebuildOptions{}, prepared, err
@@ -707,7 +709,7 @@ func logRemoteHTTPContributorsFinished(
 		outcome = "failed"
 	}
 	log.Printf(
-		"remote sync HTTP contributors finished: hosts=%d mode=unified_rebuild duration=%s aggregate_synced=%d aggregate_total=%d aggregate_skipped=%d aggregate_failed=%d outcome=%s",
+		"remote sync contributors finished: hosts=%d mode=unified_rebuild duration=%s aggregate_synced=%d aggregate_total=%d aggregate_skipped=%d aggregate_failed=%d outcome=%s",
 		hosts, time.Since(started).Round(time.Millisecond),
 		stats.Synced, stats.TotalSessions, stats.Skipped, stats.Failed, outcome,
 	)
@@ -716,14 +718,14 @@ func logRemoteHTTPContributorsFinished(
 func newUnifiedHTTPHostLifecycle(
 	ctx context.Context,
 	host config.RemoteHost,
-) *remotesync.HTTPSyncLifecycle {
+) *remotesync.RemoteSyncLifecycle {
 	var preparationStarted time.Time
 	var rebuildStarted time.Time
-	return &remotesync.HTTPSyncLifecycle{
+	return &remotesync.RemoteSyncLifecycle{
 		PrepareStarted: func() {
 			preparationStarted = time.Now()
 			log.Printf(
-				"remote sync HTTP host preparation started: host=%s",
+				"remote sync host preparation started: host=%s",
 				host.Host,
 			)
 		},
@@ -733,29 +735,29 @@ func newUnifiedHTTPHostLifecycle(
 			if err != nil && ctx.Err() == nil &&
 				remotesync.IsHostUnavailable(err) {
 				log.Printf(
-					"remote sync HTTP host preparation finished: host=%s duration=%s outcome=skipped",
+					"remote sync host preparation finished: host=%s duration=%s outcome=skipped",
 					host.Host, duration,
 				)
 				return
 			}
 			if err != nil {
 				log.Printf(
-					"remote sync HTTP host preparation finished: host=%s duration=%s outcome=%s error=%q",
+					"remote sync host preparation finished: host=%s duration=%s outcome=%s error=%q",
 					host.Host, duration, outcome,
 					remoteSyncLifecycleError(ctx, err),
 				)
 				return
 			}
 			log.Printf(
-				"remote sync HTTP host preparation finished: host=%s duration=%s outcome=%s",
+				"remote sync host preparation finished: host=%s duration=%s outcome=%s",
 				host.Host, duration, outcome,
 			)
 		},
 		RebuildStarted: func() {
 			rebuildStarted = time.Now()
 			log.Printf(
-				"remote sync host started: host=%s transport=http full=true mode=unified_rebuild",
-				host.Host,
+				"remote sync host started: host=%s transport=%s full=true mode=unified_rebuild",
+				host.Host, remoteTransportLabel(host),
 			)
 		},
 		RebuildFinished: func(stats syncpkg.SyncStats, err error) {
@@ -766,20 +768,27 @@ func newUnifiedHTTPHostLifecycle(
 			duration := time.Since(rebuildStarted).Round(time.Millisecond)
 			if err != nil {
 				log.Printf(
-					"remote sync host finished: host=%s transport=http mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s error=%q",
-					host.Host, duration, stats.Synced, stats.TotalSessions,
+					"remote sync host finished: host=%s transport=%s mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s error=%q",
+					host.Host, remoteTransportLabel(host), duration, stats.Synced, stats.TotalSessions,
 					stats.Skipped, stats.Failed, outcome,
 					remoteSyncLifecycleError(ctx, err),
 				)
 				return
 			}
 			log.Printf(
-				"remote sync host finished: host=%s transport=http mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s",
-				host.Host, duration, stats.Synced, stats.TotalSessions,
+				"remote sync host finished: host=%s transport=%s mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s",
+				host.Host, remoteTransportLabel(host), duration, stats.Synced, stats.TotalSessions,
 				stats.Skipped, stats.Failed, outcome,
 			)
 		},
 	}
+}
+
+func remoteTransportLabel(rh config.RemoteHost) string {
+	if rh.Transport == "" {
+		return string(config.RemoteTransportHTTP)
+	}
+	return string(rh.Transport)
 }
 
 func remoteSyncTopLevelError(err error) string {
@@ -801,9 +810,10 @@ func remoteSyncTopLevelError(err error) string {
 	return "local sync failed"
 }
 
-func prepareHTTPHosts(
+func prepareRemoteHosts(
 	ctx context.Context,
 	cfg config.Config,
+	version string,
 	local *db.DB,
 	hosts []config.RemoteHost,
 	fullReason remotesync.FullImportReason,
@@ -812,19 +822,17 @@ func prepareHTTPHosts(
 	if len(hosts) == 0 {
 		return nil, nil
 	}
-	syncs := make([]remotesync.HTTPSync, 0, len(hosts))
+	syncs := make([]remotesync.RemoteSync, 0, len(hosts))
 	for _, host := range hosts {
-		if host.Token == "" {
-			return nil, &remotesync.HostError{
-				Host:      host.Host,
-				Operation: "authenticate",
-				Err:       errors.New("HTTP remote sync token is required"),
-			}
+		source, err := remotesource.For(host, remotesource.Options{
+			Version: version, DataDir: cfg.DataDir,
+		})
+		if err != nil {
+			return nil, &remotesync.HostError{Host: host.Host, Operation: "configure", Err: err}
 		}
-		syncs = append(syncs, remotesync.HTTPSync{
+		syncs = append(syncs, remotesync.RemoteSync{
 			Host:                    host.Host,
-			URL:                     host.URL,
-			Token:                   host.Token,
+			Source:                  source,
 			Full:                    true,
 			FullReason:              fullReason,
 			DataDir:                 cfg.DataDir,
@@ -934,11 +942,11 @@ func (s *Server) runRemoteSyncHosts(
 	for _, rh := range hosts {
 		started := time.Now()
 		log.Printf(
-			"remote sync host started: host=%s transport=http full=%t",
-			rh.Host, full,
+			"remote sync host started: host=%s transport=%s full=%t",
+			rh.Host, remoteTransportLabel(rh), full,
 		)
-		stats, err := runHTTPRemoteSync(
-			ctx, ingestionCfg, local, rh, full, progress,
+		stats, err := runRemoteHostSync(
+			ctx, ingestionCfg, s.version.Version, local, rh, full, progress,
 		)
 		totals.SessionsSynced += stats.SessionsSynced
 		totals.SessionsTotal += stats.SessionsTotal
@@ -948,8 +956,8 @@ func (s *Server) runRemoteSyncHosts(
 			ctx.Err() == nil && remotesync.IsHostUnavailable(err)
 		if unavailable {
 			log.Printf(
-				"remote sync host finished: host=%s transport=http duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=skipped",
-				rh.Host, time.Since(started).Round(time.Millisecond),
+				"remote sync host finished: host=%s transport=%s duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=skipped",
+				rh.Host, remoteTransportLabel(rh), time.Since(started).Round(time.Millisecond),
 				stats.SessionsSynced, stats.SessionsTotal, stats.Skipped,
 				stats.Failed,
 			)
@@ -966,15 +974,15 @@ func (s *Server) runRemoteSyncHosts(
 		outcome := remoteSyncLifecycleOutcome(ctx, err)
 		if err != nil {
 			log.Printf(
-				"remote sync host finished: host=%s transport=http duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s error=%q",
-				rh.Host, time.Since(started).Round(time.Millisecond),
+				"remote sync host finished: host=%s transport=%s duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s error=%q",
+				rh.Host, remoteTransportLabel(rh), time.Since(started).Round(time.Millisecond),
 				stats.SessionsSynced, stats.SessionsTotal, stats.Skipped,
 				stats.Failed, outcome, remoteSyncLifecycleError(ctx, err),
 			)
 		} else {
 			log.Printf(
-				"remote sync host finished: host=%s transport=http duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s",
-				rh.Host, time.Since(started).Round(time.Millisecond),
+				"remote sync host finished: host=%s transport=%s duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s",
+				rh.Host, remoteTransportLabel(rh), time.Since(started).Round(time.Millisecond),
 				stats.SessionsSynced, stats.SessionsTotal, stats.Skipped,
 				stats.Failed, outcome,
 			)

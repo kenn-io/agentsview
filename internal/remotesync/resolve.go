@@ -966,9 +966,9 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		}
 	}
 	for agent, files := range requested.Files {
-		allowedFiles := allowed.Files[agent]
+		allowedFiles := newAllowedStringLookup(allowed.Files[agent], len(files))
 		for _, file := range files {
-			selectedFile, ok := selectAllowedString(allowedFiles, file)
+			selectedFile, ok := allowedFiles.selectString(file)
 			if !ok {
 				if !authorizedStaleCuratedFile(allowed, forbidden, agent, file, files) {
 					return TargetSet{}, false
@@ -987,8 +987,9 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			selected.Files[agent] = append(selected.Files[agent], selectedFile)
 		}
 	}
+	allowedExtraFiles := newAllowedStringLookup(allowed.ExtraFiles, len(requested.ExtraFiles))
 	for _, file := range requested.ExtraFiles {
-		selectedFile, ok := selectAllowedString(allowed.ExtraFiles, file)
+		selectedFile, ok := allowedExtraFiles.selectString(file)
 		if !ok {
 			return TargetSet{}, false
 		}
@@ -1002,8 +1003,9 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		if !ok {
 			return TargetSet{}, false
 		}
+		allowedFileIndex := newAllowedStringLookup(allowedFiles, len(files))
 		for _, file := range files {
-			selectedFile, ok := selectAllowedString(allowedFiles, file)
+			selectedFile, ok := allowedFileIndex.selectString(file)
 			if !ok || forbidden.within(selectedFile) {
 				return TargetSet{}, false
 			}
@@ -1026,6 +1028,32 @@ func selectAllowedString(allowed []string, requested string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+type allowedStringLookup struct {
+	values []string
+	index  map[string]string
+}
+
+func newAllowedStringLookup(allowed []string, requests int) allowedStringLookup {
+	lookup := allowedStringLookup{values: allowed}
+	// A single lookup costs less than building an index of the entire scope.
+	if requests <= 1 {
+		return lookup
+	}
+	lookup.index = make(map[string]string, len(allowed))
+	for _, value := range allowed {
+		lookup.index[value] = value
+	}
+	return lookup
+}
+
+func (lookup allowedStringLookup) selectString(requested string) (string, bool) {
+	if lookup.index != nil {
+		value, ok := lookup.index[requested]
+		return value, ok
+	}
+	return selectAllowedString(lookup.values, requested)
 }
 
 // rooCodeSessionFileShape reports whether rel — a slash-separated path
@@ -1347,9 +1375,16 @@ func isAiderUnsafeRoot(dir string) bool {
 // symlinked ancestors that would escape the allowed root.
 func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
+	extraFiles := newAllowedStringLookup(allowed.AllExtraFiles(), len(files))
+	curatedFiles := make(map[parser.AgentType]allowedStringLookup, len(allowed.Files))
+	for agent, allowedFiles := range allowed.Files {
+		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
+			curatedFiles[agent] = newAllowedStringLookup(allowedFiles, len(files))
+		}
+	}
 	selected := make([]string, 0, len(files))
 	for _, file := range files {
-		canonical, ok := selectAllowedFile(allowed, forbidden, file, files)
+		canonical, ok := selectAllowedFile(allowed, forbidden, file, files, extraFiles, curatedFiles)
 		if !ok {
 			return nil, false
 		}
@@ -1371,12 +1406,13 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 // file is omitted from the delta (a stale curated reference).
 func selectAllowedFile(
 	allowed TargetSet, forbidden forbiddenRootMatcher, file string,
-	requestedFiles []string,
+	requestedFiles []string, extraFiles allowedStringLookup,
+	curatedFiles map[parser.AgentType]allowedStringLookup,
 ) (string, bool) {
-	if canonical, ok := selectAllowedString(allowed.AllExtraFiles(), file); ok {
+	if canonical, ok := extraFiles.selectString(file); ok {
 		return canonical, !forbidden.within(canonical)
 	}
-	for agent, files := range allowed.Files {
+	for agent := range allowed.Files {
 		if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			continue
 		}
@@ -1386,7 +1422,7 @@ func selectAllowedFile(
 		// session-shaped file missing from the fresh resolution is
 		// still authorized (deletion race) but omitted, so the delta
 		// archive and manifest agree that the file no longer exists.
-		if canonical, ok := selectAllowedString(files, file); ok {
+		if canonical, ok := curatedFiles[agent].selectString(file); ok {
 			return canonical, !forbidden.within(canonical)
 		}
 		if authorizedStaleCuratedFile(allowed, forbidden, agent, file, requestedFiles) {

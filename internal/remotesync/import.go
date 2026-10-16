@@ -83,7 +83,7 @@ func requireCompleteProcessing(stats syncpkg.SyncStats) error {
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping
-// this mapping independent from Importer lets prepared HTTP imports and future
+// this mapping independent from Importer lets prepared remote imports and future
 // rebuild contributors share the exact engine inputs and cache translation.
 type importLayout struct {
 	engineDirs   map[parser.AgentType][]string
@@ -189,6 +189,7 @@ func (p remotePathMap) storedPathResolver() func(string) (string, bool) {
 		) {
 			return "", false
 		}
+		remotePath, memberSuffix := splitHermesMemberPath(remotePath)
 		for _, forbiddenRoot := range p.forbiddenRoots {
 			if _, forbidden := remoteArchiveRel(forbiddenRoot, remotePath); forbidden {
 				return "", false
@@ -203,7 +204,7 @@ func (p remotePathMap) storedPathResolver() func(string) (string, bool) {
 			if err != nil {
 				return "", false
 			}
-			return local, true
+			return local + memberSuffix, true
 		}
 		return "", false
 	}
@@ -289,13 +290,14 @@ func translateRemoteCacheToTemp(
 	translated := make(map[string]int64, len(remoteCache))
 	for remoteKey, mtime := range remoteCache {
 		remotePath, suffix := syncpkg.SplitProviderSkipCachePath(remoteKey)
+		remotePath, memberSuffix := splitHermesMemberPath(remotePath)
 		for i, rd := range remoteDirs {
 			if rel, ok := remoteArchiveRel(rd, remotePath); ok {
 				local, err := safeLocalArchivePath(tempDirs[i], rel)
 				if err != nil {
 					break
 				}
-				translated[local+suffix] = mtime
+				translated[local+memberSuffix+suffix] = mtime
 				break
 			}
 		}

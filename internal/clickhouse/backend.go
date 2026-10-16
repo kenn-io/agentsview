@@ -77,7 +77,15 @@ func ReplicaTarget(ch config.ClickHouseConfig) storage.ReplicaTarget {
 		MachineName:   ch.MachineName,
 		AllowInsecure: ch.AllowInsecure,
 		PushVectors:   ch.PushVectorsEnabled(),
+		PushBatchSize: pushBatchSize(ch),
 	}
+}
+
+func pushBatchSize(ch config.ClickHouseConfig) int {
+	if ch.PushBatchSize == nil {
+		return 0
+	}
+	return *ch.PushBatchSize
 }
 
 func target(t storage.ReplicaTarget) Target {
@@ -99,10 +107,16 @@ func (Backend) NewPusher(
 	if err := CheckTransportSecurity(t.URL, t.AllowInsecure); err != nil {
 		return nil, err
 	}
+	if t.PushBatchSize < 0 {
+		return nil, fmt.Errorf(
+			"clickhouse push_batch_size must be at least 1, got %d", t.PushBatchSize,
+		)
+	}
 	s, err := New(ctx, target(t), local, t.MachineName, opts)
 	if err != nil {
 		return nil, err
 	}
+	s.sessionBatchSize = t.PushBatchSize
 	return s, nil
 }
 

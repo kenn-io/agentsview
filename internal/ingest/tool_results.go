@@ -92,32 +92,42 @@ func PairToolResultEventSummariesContext(
 			return err
 		}
 		for j := range messages[i].ToolCalls {
-			call := &messages[i].ToolCalls[j]
-			if len(call.ResultEvents) == 0 {
-				continue
-			}
-			summary, err := SummarizeToolResultEventsContext(
-				ctx, call.ResultEvents,
-			)
-			if err != nil {
+			if err := pairToolCallResultSummaryContext(
+				ctx, &messages[i].ToolCalls[j], blocked,
+			); err != nil {
 				return err
 			}
-			call.ResultContentLength = len(summary)
-			if blocked[call.Category] {
-				call.ResultContent = ""
-				for k := range call.ResultEvents {
-					call.ResultEvents[k].Content = ""
-				}
-				continue
-			}
-			call.ResultContent = summary
 		}
 	}
 	return ctx.Err()
 }
 
-// SummarizeToolResultEventsContext returns the latest content per agent while
-// preserving first-seen agent order and the last anonymous update.
+// pairToolCallResultSummaryContext derives one call's summary from its
+// structured result events, clearing the content of a blocked category.
+func pairToolCallResultSummaryContext(
+	ctx context.Context, call *db.ToolCall, blocked map[string]bool,
+) error {
+	if len(call.ResultEvents) == 0 {
+		return nil
+	}
+	summary, err := SummarizeToolResultEventsContext(ctx, call.ResultEvents)
+	if err != nil {
+		return err
+	}
+	call.ResultContentLength = len(summary)
+	if blocked[call.Category] {
+		call.ResultContent = ""
+		for k := range call.ResultEvents {
+			call.ResultEvents[k].Content = ""
+		}
+		return nil
+	}
+	call.ResultContent = summary
+	return nil
+}
+
+// SummarizeToolResultEventsContext returns the latest content per agent
+// while preserving first-seen agent order and the last anonymous update.
 func SummarizeToolResultEventsContext(
 	ctx context.Context, events []db.ToolResultEvent,
 ) (string, error) {
@@ -149,22 +159,24 @@ func SummarizeToolResultEventsContext(
 		}
 		latestByAgent[agentID] = agentSummary{content: event.Content}
 	}
-	if len(latestByAgent) <= 1 {
-		if len(latestByAgent) == 1 {
-			summary := latestByAgent[orderedAgents[0]].content
-			if lastAnonymous != "" {
-				return summary + "\n\n" + lastAnonymous, ctx.Err()
-			}
-			return summary, ctx.Err()
+	var summary string
+	switch {
+	case len(latestByAgent) == 1:
+		summary = latestByAgent[orderedAgents[0]].content
+		if lastAnonymous != "" {
+			summary += "\n\n" + lastAnonymous
 		}
-		return lastAnonymous, ctx.Err()
+	case len(latestByAgent) == 0:
+		summary = lastAnonymous
+	default:
+		parts := make([]string, 0, len(orderedAgents)+1)
+		for _, agentID := range orderedAgents {
+			parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+		}
+		if !allHaveAgentID && lastAnonymous != "" {
+			parts = append(parts, lastAnonymous)
+		}
+		summary = strings.Join(parts, "\n\n")
 	}
-	parts := make([]string, 0, len(orderedAgents)+1)
-	for _, agentID := range orderedAgents {
-		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
-	}
-	if !allHaveAgentID && lastAnonymous != "" {
-		parts = append(parts, lastAnonymous)
-	}
-	return strings.Join(parts, "\n\n"), ctx.Err()
+	return summary, ctx.Err()
 }

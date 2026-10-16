@@ -214,7 +214,12 @@ fixtures retain this field; missing identities remain source-local.
   continuations and their companions into one source. Reparse preserves either
   seed transcript's stored path and refuses replacement if a recorded
   contributor is absent. Hosted capture plans and watcher discovery are
-  unchanged.
+  unchanged. Scoped discovery covers each affected project under its
+  configured root so companion transcripts remain in scope. Rechecked
+  2026-10-14 with discovery fixtures: a project that vanishes or becomes a
+  file during raw-capture enumeration makes discovery incomplete even if it
+  returns before enumeration ends. Scoped reconciliation accepts missing paths
+  as absence.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
@@ -297,6 +302,24 @@ fixtures retain this field; missing identities remain source-local.
   observations, not a documented producer contract; a bounded local corpus
   check did not independently reproduce those replies. The completed-empty
   rule above is separate analyzer policy.
+
+- **Persisted tool output cleanup (2026-10-14):** The
+  [`.claude` directory documentation](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically),
+  section "Cleaned up automatically", checked 2026-10-14, lists
+  `projects/<project>/<session>/tool-results/` among the paths Claude Code
+  deletes once they are older than `cleanupPeriodDays` (30 days by default),
+  beside the session transcript itself. The cutoff applies to each file's own
+  age, so a transcript that is still being written can outlive the side files
+  its placeholders name. Evidence for the cleanup is `documentation`; the page
+  does not describe the placeholder text. Agentsview marks a tool_result only
+  when it genuinely tried and failed to resolve a `persistedOutputPath` side
+  file, never from the placeholder text's own shape
+  (`parser.ParsedToolResult.PersistedOutputUnresolved`,
+  `TestParseClaudeSession_PersistedOutputUnresolvedOnlyOnUnresolvedOccurrence`).
+  Claude fingerprints hash only the transcript, so a deleted side file shows
+  only on a full parse; `ingest.ReconcileProviderHistory` then restores the
+  archived result instead of storing the placeholder over it, for both Claude
+  Code and iCodeMate CLI.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
@@ -733,8 +756,27 @@ fixtures retain this field; missing identities remain source-local.
   rebuilds keep metadata scoped to each file. Activity hints still find the
   newest surviving page without an original thread row. Reverified these
   archive and activity paths on 2026-10-02. Other Codex versions may differ.
-  Tests: `TestCodexRevertPageSessionsThroughAPI`,
-  `TestCodexRevertPagesFormATree`, `TestCodexRevertPagesRetainDailyUsage`,
+  Earlier builds, `0.148.0-alpha.15` through `0.154.0-alpha.6.2`, wrote the
+  header the other way round: the page's own rollout id in `session_meta.id`
+  and the thread id in `session_meta.session_id`. The writer at
+  [recorder.rs](https://github.com/openai/codex/blob/rust-v0.148.0-alpha.15/codex-rs/rollout/src/recorder.rs#L818-L820)
+  (rust-v0.148.0-alpha.15, checked 2026-10-04) only writes the thread id as
+  `conversation_id`. It does not produce this reversed header, so the reversed
+  shape and its version range come from local files and are
+  `no-public-source`. The `id` rule in the entry above describes rust-v0.154.0
+  and later. AgentsView accepts the older header only when the file name is
+  `<session_id>_<id>`, and stores the page under the file-name key like any
+  other revert page. Data version 134 rebuilds archives that stored such pages
+  as `codex:<rollout>`, moving curation, trash, and deletions to the canonical
+  page whether its file is present or gone. Tests:
+  `TestCodexOlderHeaderRevertPageUpgradeMovesCuration`,
+  `TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing`,
+  `TestCodexOlderHeaderRevertPageTitleAndSubagent`,
+  `TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow`,
+  `TestCodexPurgedRolloutExclusionBlocksCanonicalPage`,
+  `TestPGSessionTombstoneIDsIncludeRetiredCodexRollout`,
+  `TestCodexRevertPageSessionsThroughAPI`, `TestCodexRevertPagesFormATree`,
+  `TestCodexRevertPagesRetainDailyUsage`,
   `TestCodexRevertPageUpgradeReplacesStaleThreadRow`,
   `TestCopySessionMetadataFrom_CodexPagePins`,
   `TestCodexPageUpgradePreservesPostgresPins`,
@@ -3292,6 +3334,18 @@ schemas keep their existing ordering behavior.
   transcript or recorded end time and advances it when a state message is
   newer than both that value and `started_at`. The aggregate usage event still
   uses the recorded `ended_at`, falling back to `started_at`.
+- **Incremental sync check (2026-10-14):** Reverified the pinned
+  `hermes_state.py`: the `sessions` table has no modification timestamp, and
+  message contents, titles and usage can change without updating `ended_at`.
+  Agentsview therefore syncs each session as a virtual `state.db#<session ID>`
+  source and compares that session's content fingerprint before parsing it.
+  Hermes opens `state.db` in WAL mode and falls back to a rollback journal on
+  filesystems without WAL support. In WAL mode a commit can change only
+  `state.db-wal`, so session freshness includes the WAL file's modification
+  time while the WAL contains frames. Fingerprints name each file by its path
+  under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
+  rather than its absolute local path, so an archive unpacked into a fresh
+  folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
@@ -3306,13 +3360,13 @@ schemas keep their existing ordering behavior.
   job name. Agentsview treats that generated title as unnamed and stores
   `group_key` as the job ID plus a hash of the source home path. Usage groups
   by project, machine, home and job ID. The pinned recognizer's legacy `job-1`
-  example was reverified on 2026-10-09. `TestHermesCronGroupsScopeHomes`
-  verifies that rewritten Windows paths keep distinct homes separate by
-  accepting both path separators. Names derive from the recorded
-  `session_name` at read time; usage-only archives show job IDs because their
-  titles are discarded. Resync copies preserve stored job IDs, including
-  imported sessions. Archived runs whose sources were gone before upgrading
-  stay individual sessions unless they already have a stored job ID.
+  example was reverified on 2026-10-09. The `home scopes` subtest of
+  `TestHermesCronStateGroups` verifies that rewritten Windows paths keep
+  distinct homes separate by accepting both path separators. Names derive from
+  the recorded `session_name` at read time; usage-only archives show job IDs
+  because their titles are discarded. Resync copies preserve stored job IDs,
+  including imported sessions. Archived runs whose sources were gone before
+  upgrading stay individual sessions unless they already have a stored job ID.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. A non-empty `state.db`

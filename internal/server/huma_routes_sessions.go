@@ -1232,6 +1232,9 @@ func (s *Server) humaWatchSession(
 		}
 		streamCtx := hctx.Context()
 		updates := s.sessionMonitor(streamCtx, in.ID)
+		if !stream.Send("session_ready", in.ID) {
+			return
+		}
 		heartbeat := time.NewTicker(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)
@@ -1292,6 +1295,9 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		if !stream.SendJSON("events_ready", struct{}{}) {
+			return
+		}
 		heartbeat := time.NewTicker(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)

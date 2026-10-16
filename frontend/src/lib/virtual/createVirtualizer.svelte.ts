@@ -109,6 +109,15 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
   };
 }
 
+function scrollReconcileState(v: Virtualizer<HTMLElement, HTMLElement>) {
+  // Public cancelScroll() arrives in @tanstack/virtual-core 3.18.0; switch to it on upgrade.
+  return v as unknown as { scrollState: { index: number | null } | null };
+}
+
+export function cancelScrollReconcile(v: Virtualizer<HTMLElement, HTMLElement> | undefined) {
+  if (v) scrollReconcileState(v).scrollState = null;
+}
+
 export function createVirtualizer(optsFn: () => ElementOpts) {
   return createBaseVirtualizer<HTMLElement, HTMLElement>(
     () => {
@@ -124,6 +133,7 @@ export function createVirtualizer(optsFn: () => ElementOpts) {
     },
     (instance, opts, reset) => {
       const scrollEl = opts.getScrollElement?.() ?? null;
+      if (reset) cancelScrollReconcile(instance);
       if (!scrollEl) return;
       if (reset) {
         scrollEl.scrollTop = 0;
@@ -136,9 +146,7 @@ export function createVirtualizer(optsFn: () => ElementOpts) {
       // leaving the viewport at the wrong position (observed as
       // pinned-message navigation stopping mid-scroll in ascending
       // sort when the target item is not yet rendered).
-      // scrollState is typed private but is a plain public field at runtime.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((instance as any).scrollState?.index != null) return;
+      if (scrollReconcileState(instance).scrollState?.index != null) return;
       if (scrollEl.scrollTop > 0) {
         instance.scrollToOffset(scrollEl.scrollTop);
       }

@@ -435,18 +435,36 @@ func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
 	assert.Equal(t, 1, resp.Right.SessionCount)
 }
 
+func TestHandleUsagePairwiseComparisonEmptyDefault(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, buildPathURL("/api/v1/usage/pairwise-comparison", map[string]string{
+		"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC",
+	}))
+	assertStatus(t, w, http.StatusOK)
+	var raw struct {
+		Left  map[string]jsontext.Value `json:"left"`
+		Right map[string]jsontext.Value `json:"right"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	assert.NotContains(t, raw.Left, "dimension")
+	assert.NotContains(t, raw.Left, "value")
+	assert.NotContains(t, raw.Right, "dimension")
+	assert.NotContains(t, raw.Right, "value")
+}
+
 func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {
 	te := setup(t)
 
 	cases := []map[string]string{
 		{
-			"from":            "2024-06-01",
-			"to":              "2024-06-01",
-			"timezone":        "UTC",
-			"left_dimension":  "model",
-			"left_value":      "claude-sonnet-4-20250514",
-			"right_dimension": "machine",
-			"right_value":     "beta",
+			"from":                "2024-06-01",
+			"to":                  "2024-06-01",
+			"timezone":            "UTC",
+			"left_dimension":      "model",
+			"left_value":          "claude-sonnet-4-20250514",
+			"right_dimension":     "machine",
+			"right_value":         "beta",
+			"fallback_to_default": "true",
 		},
 		{
 			"from":            "2024-06-01",

@@ -208,7 +208,7 @@ func TestIcodemateCLISourceMtimeIncludesPersistedToolResults(t *testing.T) {
 		engine.SourceMtime(t.Context(), "icodemate:mtime"))
 }
 
-func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
+func TestIcodemateCLISyncAllSinceKeepsArchivedToolResultAfterSidecarDeleted(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	sessionPath := filepath.Join(projectDir, "sidecar.jsonl")
@@ -262,7 +262,8 @@ func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, placeholder, messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "full persisted output\n",
+		messages[1].ToolCalls[0].ResultContent)
 }
 
 func TestIcodemateCLIResyncAllAbortsOnEmptyDiscovery(t *testing.T) {

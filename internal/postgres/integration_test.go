@@ -4,6 +4,9 @@ package postgres
 
 import (
 	"context"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -232,6 +235,34 @@ func TestPGConnectivity(t *testing.T) {
 	require.NoError(t, err, "get status")
 
 	t.Logf("PG Sync Status: %+v", status)
+}
+
+// TestPGPassfileConnects verifies that the passfile URL parameter survives
+// the connection settings Open adds.
+func TestPGPassfileConnects(t *testing.T) {
+	pgURL := testPGURL(t)
+	u, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	password, ok := u.User.Password()
+	if !ok || password == "" {
+		t.Skip("TEST_PG_URL carries no password to move into a passfile")
+	}
+	u.User = url.User(u.User.Username())
+	t.Setenv("PGPASSWORD", "")
+	passfile := filepath.Join(t.TempDir(), "pgpass")
+	require.NoError(t, os.WriteFile(passfile,
+		[]byte("*:*:*:*:"+password+"\n"), 0o600))
+
+	t.Run("passfile parameter", func(t *testing.T) {
+		t.Setenv("PGPASSFILE", "")
+		q := u.Query()
+		q.Set("passfile", passfile)
+		withParam := *u
+		withParam.RawQuery = q.Encode()
+		pg, err := Open(withParam.String(), "agentsview", true)
+		require.NoError(t, err)
+		assert.NoError(t, pg.Close())
+	})
 }
 
 func TestPGPushCycle(t *testing.T) {

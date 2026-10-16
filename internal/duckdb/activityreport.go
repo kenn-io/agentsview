@@ -35,9 +35,30 @@ func (s *Store) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	artifacts.Report.BySession = artifacts.Sessions
-	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
-	return artifacts.Report, nil
+	return activity.ReportWithSessions(artifacts), nil
+}
+
+type activityReportBackend struct {
+	*Store
+	filter                 db.AnalyticsFilter
+	rangeStartUTC          string
+	rangeEndUTC            string
+	lowerBound, upperBound string
+}
+
+func (b activityReportBackend) ActivityReportUsage(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.activityReportUsage(
+		ctx, ids, b.filter, b.rangeStartUTC, b.rangeEndUTC,
+		b.lowerBound, b.upperBound, q,
+	)
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -46,7 +67,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	db.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
@@ -58,68 +79,18 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	db.ReportProgress(onProgress, activity.Progress{
+	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	usage, pricing, err := s.activityReportUsage(
-		ctx, ids, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, q)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	backend := activityReportBackend{
+		Store: s, filter: f,
+		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC,
+		lowerBound: lowerBound, upperBound: upperBound,
 	}
-
-	rowsProcessed := int64(0)
-	source := s.activityReportCandidateSource(ids, q)
-	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(activity.IntervalCandidate) error,
-	) error {
-		db.ReportProgress(onProgress, activity.Progress{
-			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
-		})
-		return source(ctx, func(candidate activity.IntervalCandidate) error {
-			rowsProcessed++
-			db.ReportProgress(onProgress, activity.Progress{
-				Phase:         activity.ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
-		})
-	}, usage)
-	if err != nil {
-		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating duckdb activity report: %w", err)
-	}
-	if err := s.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	db.ReportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
-	artifacts.Report.Pricing = pricing
-	projects, err := s.BuildProjectIdentityMap(ctx,
-		db.ActivityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	activity.SanitizeProjectLabels(&artifacts.Report, projects)
-	artifacts.Sessions = artifacts.Report.BySession
-	artifacts.Report.BySession = []activity.SessionRow{}
-	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	db.ReportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	return artifacts, nil
+	artifacts, _, err := activity.BuildReportArtifacts(
+		ctx, backend, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	return artifacts, err
 }
 
 func (s *Store) activityReportMessageCounts(
@@ -280,10 +251,9 @@ func (s *Store) GetSessionUsageRows(
 		return duckSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
-	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
 			MessageOrdinal:      o.ordinal,
@@ -300,108 +270,23 @@ func (s *Store) GetSessionUsageRows(
 			SourceUUID:          o.scan.sourceUUID,
 			UsageDedupKey:       o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost != nil, o.scan.inputTok, o.scan.outputTok,
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
-		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
 	}
-	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
-	if err != nil {
-		return nil, err
-	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	seen := make(map[string]struct{})
-	deduplicatedOutputTokens := make(map[string]int)
-	discardedContributingSessions := make(map[string]struct{})
-	out := make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
-		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
-			if rowContributes[i] {
-				discardedContributingSessions[o.scan.sessionID] = struct{}{}
-			}
-			continue
-		}
-		r := o.scan
-		r.webSearchRequests = snapshotWebSearchRequests[i]
-		attributionSessionID := snapshotAttribution[i]
-		if attributionSessionID != r.sessionID {
-			deduplicatedOutputTokens[r.sessionID] += r.outputTok
-			if rowContributes[i] {
-				discardedContributingSessions[r.sessionID] = struct{}{}
-			}
-		}
-		if key, ok := duckSessionUsageDedupKey(r); ok {
-			if _, dup := seen[key]; dup {
-				deduplicatedOutputTokens[r.sessionID] += r.outputTok
-				if rowContributes[i] {
-					discardedContributingSessions[r.sessionID] = struct{}{}
-				}
-				continue
-			}
-			seen[key] = struct{}{}
-		}
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
+		r := rowsAcc[i].scan
+		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := duckActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
-			return nil, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
-		out = append(out, activity.UsageRow{
-			SessionID:       attributionSessionID,
-			SourceSessionID: r.sessionID,
-			Model:           r.model,
-			Timestamp:       r.ts,
-			OutputTokens:    r.outputTok,
-			Cost:            cost,
-			CostSource:      costSource,
-			SessionCost:     sessionCost,
-			Priced:          priced,
-			Contributes:     contributes,
-			Agent:           r.agent,
-			ProviderID:      r.providerID,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID,
-			UsageDedupKey:   r.usageDedupKey,
-
-			UsageSource:         r.source,
-			MessageOrdinal:      duckUsageOrdinalOrNeg(r.messageOrdinal),
-			InputTokens:         r.inputTok,
-			CacheCreationTokens: r.cacheCr,
-			CacheReadTokens:     r.cacheRd,
-			WebSearchRequests:   r.webSearchRequests,
-		})
-	}
-	return &activity.SessionUsageRows{
-		Rows:                            out,
-		RawOutputTokensBySession:        rawOutputTokensBySession,
-		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
-		DiscardedContributingSessions:   discardedContributingSessions,
-		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
-	}, nil
-}
-
-// duckUsageOrdinalOrNeg renders a nullable message ordinal in
-// activity.UsageRow's COALESCE(message_ordinal, -1) convention.
-func duckUsageOrdinalOrNeg(v any) int64 {
-	o, ok := duckUsageOrdinal(v)
-	if !ok {
-		return -1
-	}
-	return o
-}
-
-func duckSessionUsageDedupKey(r duckActivityReportUsageRow) (string, bool) {
-	if r.claudeMessageID != "" && r.claudeRequestID != "" {
-		return "claude:" + r.claudeMessageID + ":" + r.claudeRequestID, true
-	}
-	if r.source == "message" && r.agent != "" && r.sourceUUID != "" {
-		return "source:" + r.agent + ":" + r.sourceUUID, true
-	}
-	if r.usageDedupKey != "" {
-		return "usage:" + r.usageDedupKey, true
-	}
-	return "", false
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
+	})
 }
 
 func duckSessionUsageRowLess(

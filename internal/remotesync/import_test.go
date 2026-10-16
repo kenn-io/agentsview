@@ -99,8 +99,8 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), "devbox", map[string]int64{
 		remoteFile: mtime.UnixNano(),
 	}))
-	hs := HTTPSync{
-		Host: "devbox", URL: server.URL, DataDir: t.TempDir(), DB: database,
+	hs := RemoteSync{
+		Host: "devbox", Source: HTTPSource{URL: server.URL}, DataDir: t.TempDir(), DB: database,
 	}
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
@@ -685,9 +685,10 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
+	const root = "/srv/hermes/profile"
 	extracted := t.TempDir()
-	remoteSessionsDir := "/home/remote/.hermes/profiles/research/sessions"
-	remoteStateDB := "/home/remote/.hermes/profiles/research/state.db"
+	remoteSessionsDir := root + "/sessions"
+	remoteStateDB := root + "/state.db"
 	localStateDB := remappedRemotePath(extracted, remoteStateDB)
 	require.NoError(t, os.MkdirAll(filepath.Dir(localStateDB), 0o755))
 	require.NoError(t, os.MkdirAll(
@@ -717,7 +718,7 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, full)
 	require.NotNil(t, full.FilePath)
-	assert.Equal(t, "devbox:"+remoteStateDB, *full.FilePath,
+	assert.Equal(t, "devbox:"+remoteStateDB+"#database-only", *full.FilePath,
 		"state.db extra file must map to its original remote path")
 	assert.NotContains(t, *full.FilePath, extracted,
 		"the import must not leak the local extraction dir into FilePath")
@@ -739,7 +740,7 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	require.NoError(t, err)
 	require.NotEmpty(t, remoteCache,
 		"the state.db skip entry must survive the import, not be discarded")
-	_, ok := remoteCache[remoteStateDB+"?agent=hermes"]
+	_, ok := remoteCache[remoteStateDB+"#database-only?agent=hermes"]
 	assert.True(t, ok,
 		"skip cache must key the state.db entry by its remote path, got %v",
 		remoteCache)
@@ -907,4 +908,25 @@ func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int64{qualified: 123}, remoteCache,
 		"temporary translation must restore the identical remote cache key")
+}
+
+func TestRemoteHermesMemberPathsRoundTrip(t *testing.T) {
+	for _, remoteDB := range []string{"/srv/hermes/state.db", `C:\Users\remote\.hermes\state.db`, `\\server\share\.hermes\state.db`} {
+		t.Run(remoteDB, func(t *testing.T) {
+			root := t.TempDir()
+			localDB := remappedRemotePath(root, remoteDB)
+			remoteMember := remoteDB + "#cron_job.daily_20261012_120000"
+			localMember := localDB + "#cron_job.daily_20261012_120000"
+			paths := remotePathMap{host: "devbox", root: root, remoteDirs: []string{remoteDB}, localDirs: []string{localDB}}
+			assert.Equal(t, "devbox:"+remoteMember, paths.pathRewriter()(localMember))
+			resolved, ok := paths.storedPathResolver()("devbox:" + remoteMember)
+			require.True(t, ok)
+			assert.Equal(t, localMember, resolved)
+			remoteCache := map[string]int64{remoteMember + "?agent=hermes": 123}
+			localCache := translateRemoteCacheToTemp(remoteCache, paths.remoteDirs, paths.localDirs)
+			assert.Equal(t, map[string]int64{localMember + "?agent=hermes": 123}, localCache)
+			assert.Equal(t, remoteCache, remoteTempSkipCache(localCache, paths))
+			assert.True(t, remotePathWithinAnyRoot(remoteMember, []string{remoteDB}))
+		})
+	}
 }

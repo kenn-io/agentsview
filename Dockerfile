@@ -58,14 +58,17 @@ FROM debian:bookworm-slim
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN mkdir -p /data /agents
 
-ENV AGENTSVIEW_DATA_DIR=/data
+ENV AGENTSVIEW_DATA_DIR=/data \
+    AGENTSVIEW_MODE=serve \
+    AGENTSVIEW_HOST=0.0.0.0 \
+    AGENTSVIEW_REQUIRE_AUTH=true \
+    AGENTSVIEW_NO_BROWSER=true
 
 COPY --from=build /out/agentsview /usr/local/bin/agentsview
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/agentsview /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/agentsview
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["--host", "0.0.0.0", "--no-browser"]
+ENTRYPOINT ["/usr/local/bin/agentsview"]
+CMD []

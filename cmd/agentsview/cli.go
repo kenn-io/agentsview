@@ -139,9 +139,11 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newSkillsCommand())
 	root.AddCommand(newMemoryCommand())
+	root.AddCommand(newSigningCommand())
 	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newOpenAPICommand())
+	root.AddCommand(newRemoteSyncCommand())
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -374,11 +376,13 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
-			"syncing each over HTTP. A failure on one\n" +
+			"syncing each over its transport, HTTP or SSH. A failure on one\n" +
 			"configured host is logged and the run continues; the command\n" +
 			"exits non-zero if any configured host failed.\n\n" +
 			"With --host, syncs only the matching configured remote_hosts entry.\n" +
-			"Each remote requires an HTTP URL and its daemon's auth token.",
+			"An HTTP entry (the default) requires a url and its daemon's auth token.\n" +
+			"An entry with transport = \"ssh\" runs over your ssh client and needs\n" +
+			"no daemon on the remote; its optional destination defaults to host.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -398,7 +402,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
-		"Configured HTTP host name",
+		"Configured remote host name",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Target,
@@ -934,6 +938,11 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  transport = \"http\"")
 	fmt.Fprintln(w, "  url = \"http://devbox1.tailnet.ts.net:8080\"")
 	fmt.Fprintln(w, "  token = \"remote-token\" # required; remote daemon auth_token")
+	fmt.Fprintln(w, "  For a host you reach with ssh, with no agentsview running there:")
+	fmt.Fprintln(w, "  [[remote_hosts]]")
+	fmt.Fprintln(w, "  host = \"devbox2\"")
+	fmt.Fprintln(w, "  transport = \"ssh\"")
+	fmt.Fprintln(w, "  destination = \"user@devbox.example.com\" # optional; defaults to host")
 	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")

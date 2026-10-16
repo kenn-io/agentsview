@@ -56,29 +56,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Nil(t, scope)
 	})
 
-	t.Run("selected model pairs user+assistant; other model yields none", func(t *testing.T) {
-		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA, sessionB},
-			db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-		stats := scope.StatsBySession()
-		sA, ok := stats[sessionA]
-		require.True(t, ok)
-		assert.Equal(t, 1, sA.UserMessages)
-		assert.Equal(t, 1, sA.AssistantMessages)
-		assert.Equal(t, 2, sA.Messages)
-		assert.Zero(t, stats[sessionB].Messages, "non-selected model contributes nothing")
-	})
-
-	t.Run("TimingBySession returns one entry per matched row", func(t *testing.T) {
-		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-		assert.Len(t, scope.TimingBySession()[sessionA], 2)
-	})
-
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {
 		h := 14 // rows are at 09:00 UTC
 		scope, err := store.analytics().ResolveMessageScope(
@@ -86,10 +63,10 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 			db.AnalyticsFilter{Model: model, Hour: &h, Timezone: "UTC"}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
-		assert.Zero(t, scope.StatsBySession()[sessionA].Messages, "hour 14 drops 09:00 rows")
+		assert.Empty(t, scope[sessionA], "hour 14 drops 09:00 rows")
 	})
 
-	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
+	t.Run("includeContent=false omits content", func(t *testing.T) {
 		scope, err := store.analytics().ResolveMessageScope(
 			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
@@ -101,11 +78,12 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		}
 	})
 
-	t.Run("includeContent=true populates content", func(t *testing.T) {
+	t.Run("includeContent=true populates content and excludes other models", func(t *testing.T) {
 		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
+			t.Context(), []string{sessionA, sessionB}, db.AnalyticsFilter{Model: model}, true)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
+		assert.Empty(t, scope[sessionB], "non-selected model contributes nothing")
 		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		assert.Equal(t, "hello", rows[0].Content)

@@ -27,7 +27,8 @@ import (
 // PGPush, at loop exit in the watch path (which reuses one adapter across
 // reconnects) — since the pusher never closes its source.
 type vectorPushSource struct {
-	cfg config.Config
+	cfg     config.Config
+	adopted bool
 
 	mu sync.Mutex
 	ix *vector.Index
@@ -117,14 +118,43 @@ func (s *vectorPushSource) BeginExport(
 	if !ok {
 		return nil, false, nil
 	}
-	return &vectorPushExport{export: exp}, true, nil
+	// Publish the recipe only for the generation the configured recipe
+	// produces: params must rebuild the fingerprint they are stored with.
+	out := &vectorPushExport{export: exp}
+	if configured := s.configuredGeneration(); exp.Generation().Fingerprint ==
+		configured.Fingerprint {
+		out.params = configured.Params
+	}
+	return out, true, nil
 }
 
-type vectorPushExport struct{ export *vector.Export }
+// configuredGeneration is the generation the configured recipe builds. It
+// carries the recipe for publication unless the recipe was adopted from the
+// replica.
+func (s *vectorPushSource) configuredGeneration() storage.VectorGenerationInfo {
+	gen := vectorGeneration(s.cfg.Vector.Embeddings)
+	info := storage.VectorGenerationInfo{
+		Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions,
+	}
+	if !s.adopted {
+		info.Params = gen.Params
+	}
+	return info
+}
+
+type vectorPushExport struct {
+	export *vector.Export
+	// params is the configured recipe when it produced the exported
+	// generation, else nil.
+	params map[string]string
+}
 
 func (e *vectorPushExport) Generation() storage.VectorGenerationInfo {
 	exp := e.export.Generation()
-	return storage.VectorGenerationInfo{Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension}
+	return storage.VectorGenerationInfo{
+		Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension,
+		Params: e.params,
+	}
 }
 
 func (e *vectorPushExport) SessionDocHashes(ctx context.Context, ids []string) (map[string]string, error) {

@@ -576,7 +576,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (133: Codex-format sessions store git_branch from session_meta git.branch.
 // Re-parse unchanged Codex-format sources in place so existing sessions gain
 // the branch they started on.)
-const dataVersion = 133
+// (134: a Codex revert page written by Codex Desktop 0.148.0-alpha.15 through
+// 0.154.0-alpha.6.2 keeps its own rollout id in session_meta.id and the thread
+// id in session_meta.session_id. It is now stored as codex:<thread>_<rollout>,
+// linked to its thread, instead of codex:<rollout>. This changes session ids,
+// so it is a full rebuild; the resync's curation copy moves the old row's
+// state to the new id.)
+const dataVersion = 134
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2672,6 +2678,18 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "friction_count",
+			"ALTER TABLE sessions ADD COLUMN friction_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "friction_rules_version",
+			"ALTER TABLE sessions ADD COLUMN friction_rules_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "friction_hash",
+			"ALTER TABLE sessions ADD COLUMN friction_hash TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"recall_extract_progress", "content_stamped_at",
 			"ALTER TABLE recall_extract_progress ADD COLUMN content_stamped_at TEXT NOT NULL DEFAULT ''",
 		},
@@ -3773,6 +3791,8 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		   AND claude_request_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
+		 ON sessions(friction_rules_version)`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ctx, ddl); err != nil {

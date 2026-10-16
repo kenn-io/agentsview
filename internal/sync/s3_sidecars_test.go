@@ -447,7 +447,11 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 	assert.Equal(t, sidecarContent, msgs[1].ToolCalls[0].ResultContent)
 }
 
-func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
+// TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput: a sidecar that
+// has gone from the bucket leaves only the placeholder in the re-parse, which
+// must not replace the hydrated output the archive holds (the Claude-format
+// branch of ingest.ReconcileProviderHistory, internal/ingest/history.go).
+func TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput(
 	t *testing.T,
 ) {
 	database := openTestDB(t)
@@ -527,7 +531,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, persistedContent, msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, sidecarContent, msgs[1].ToolCalls[0].ResultContent)
 }
 
 func TestProcessS3ClaudeFetchesSidecarFromCustomProjectsRoot(t *testing.T) {

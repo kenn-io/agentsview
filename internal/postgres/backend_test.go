@@ -72,3 +72,14 @@ func TestBackendNewPusherRejectsReservedMachine(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `machine name "local" is reserved`)
 }
+
+func TestBackendNewPusherRejectsPushBatchSize(t *testing.T) {
+	_, err := Backend{}.NewPusher(
+		t.Context(), storage.ReplicaTarget{
+			URL: "postgres://x", MachineName: "m", PushBatchSize: 250,
+		},
+		nil, storage.PusherOptions{},
+	)
+	require.EqualError(t, err,
+		"push_batch_size is a ClickHouse setting; PostgreSQL push does not accept it (got 250)")
+}

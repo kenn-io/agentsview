@@ -659,6 +659,8 @@ components:
     ConfigRemoteHost:
       additionalProperties: false
       properties:
+        destination:
+          type: string
         host:
           type: string
         interval:
@@ -728,6 +730,9 @@ components:
           type: boolean
         machine_name:
           type: string
+        push_batch_size:
+          format: int64
+          type: integer
         push_vectors:
           type: boolean
         schema:
@@ -6928,6 +6933,8 @@ components:
           type: integer
         costPerSession:
           $ref: "#/components/schemas/MoneyMoney"
+        dimension:
+          type: string
         inputTokens:
           format: int64
           type: integer
@@ -6945,6 +6952,8 @@ components:
         totalTokens:
           format: int64
           type: integer
+        value:
+          type: string
       required:
         - totalCost
         - inputTokens
@@ -23634,19 +23643,17 @@ paths:
             default: true
             description: Include distinct session counts
             type: boolean
-        - description: Left-side comparison dimension
+        - description: Left-side comparison dimension; omit all four sides for the default pair
           explode: false
           in: query
           name: left_dimension
-          required: true
           schema:
-            description: Left-side comparison dimension
+            description: Left-side comparison dimension; omit all four sides for the default pair
             type: string
         - description: Left-side comparison value; opaque project key for the project dimension
           explode: false
           in: query
           name: left_value
-          required: true
           schema:
             description: Left-side comparison value; opaque project key for the project dimension
             type: string
@@ -23654,7 +23661,6 @@ paths:
           explode: false
           in: query
           name: right_dimension
-          required: true
           schema:
             description: Right-side comparison dimension
             type: string
@@ -23662,10 +23668,16 @@ paths:
           explode: false
           in: query
           name: right_value
-          required: true
           schema:
             description: Right-side comparison value; opaque project key for the project dimension
             type: string
+        - description: Use the default pair if either supplied side is absent from the scope's cost ranking
+          explode: false
+          in: query
+          name: fallback_to_default
+          schema:
+            description: Use the default pair if either supplied side is absent from the scope's cost ranking
+            type: boolean
       responses:
         "200":
           content:

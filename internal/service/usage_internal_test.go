@@ -126,3 +126,94 @@ func TestUnsupportedUsageKindForAgentFilter(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, err := buildUsagePairwiseFilters(
+		UsagePairwiseComparisonRequest{
+			From: "2024-06-01", To: "2024-06-02",
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "machine",
+			RightValue:     "host-a",
+		},
+		db.UsageFilter{},
+	)
+	require.Error(t, err)
+	var ue *UsageInputError
+	require.ErrorAs(t, err, &ue)
+	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
+}
+
+func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
+	t.Parallel()
+
+	left, leftEmpty, right, rightEmpty, err := buildUsagePairwiseFilters(
+		UsagePairwiseComparisonRequest{
+			From:           "2024-06-01",
+			To:             "2024-06-03",
+			Timezone:       "UTC",
+			Model:          "model-a,model-b",
+			Project:        "alpha,beta",
+			LeftDimension:  "model",
+			LeftValue:      "model-b",
+			RightDimension: "project",
+			RightValue:     "beta",
+		},
+		db.UsageFilter{Model: "model-a,model-b", Project: "alpha,beta"},
+	)
+	require.NoError(t, err)
+	assert.False(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Equal(t, "model-b", left.Model)
+	assert.Equal(t, "alpha,beta", left.Project)
+	assert.Equal(t, "model-a,model-b", right.Model)
+	assert.Equal(t, "beta", right.Project)
+}
+
+func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
+	t.Parallel()
+
+	left, leftEmpty, right, rightEmpty, err := buildUsagePairwiseFilters(
+		UsagePairwiseComparisonRequest{
+			From:           "2024-06-01",
+			To:             "2024-06-03",
+			Model:          "gpt-4o",
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+		db.UsageFilter{Model: "gpt-4o"},
+	)
+	require.NoError(t, err)
+	assert.True(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Empty(t, left.Model)
+	assert.Equal(t, "gpt-4o", right.Model)
+}
+
+func TestDefaultUsagePairwiseSelection(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		models   []ModelTotal
+		projects []ProjectTotal
+		want     [4]string
+	}{
+		{"models", []ModelTotal{{Model: "second-by-name"}, {Model: "first-by-name"}}, []ProjectTotal{{ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"model", "second-by-name", "model", "first-by-name"}},
+		{"projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{ProjectKey: "key-b", Project: "label-b"}, {ProjectKey: "key-a", Project: "label-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
+		{"mixed", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{ProjectKey: "key-a", Project: "label-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
+		{"skip empty projects", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-b"}, {ProjectKey: "key-a"}}, [4]string{"project", "key-b", "project", "key-a"}},
+		{"mixed after empty project key", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}, {ProjectKey: "key-a"}}, [4]string{"model", "only-model", "project", "key-a"}},
+		{"one usable model", []ModelTotal{{Model: "only-model"}}, []ProjectTotal{{}}, [4]string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ld, lv, rd, rv := defaultUsagePairwiseSelection(&UsageSummaryResult{ModelTotals: tc.models, ProjectTotals: tc.projects})
+			assert.Equal(t, tc.want, [4]string{ld, lv, rd, rv})
+		})
+	}
+}

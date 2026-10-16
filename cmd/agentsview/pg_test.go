@@ -396,6 +396,21 @@ func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {
 		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
 }
 
+// A resumed full push reports the sessions the unfinished run already
+// pushed apart from sessions that were simply unchanged.
+func TestWritePGPushSummaryReportsResumedSessions(t *testing.T) {
+	var out bytes.Buffer
+
+	writeReplicaPushSummary(&out, "PostgreSQL", storage.PushResult{
+		SessionsPushed: 1,
+		SkippedResumed: 7,
+		Duration:       time.Second,
+	})
+
+	assert.Contains(t, out.String(),
+		"Skipped 7 session(s) already pushed by the unfinished full push")
+}
+
 func TestWritePGPushSummaryVectorPhase(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -108,8 +108,9 @@ func TestIssue1492AuthenticatedHTTPMirrorImportUsesCuratedTargets(t *testing.T) 
 	clientDB, err := db.Open(t.Context(), filepath.Join(dataDir, "client.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
-	stats, err := (remotesync.HTTPSync{
-		Host: "authenticated-host", URL: ts.URL, Token: "remote-token",
+	stats, err := (remotesync.RemoteSync{
+		Host:    "authenticated-host",
+		Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
 		DataDir: dataDir, DB: clientDB,
 	}).Run(t.Context())
 	require.NoError(t, err)
@@ -228,8 +229,9 @@ func TestIssue1492AuthenticatedVSCodeWorkspacePresentChatMissingEvictsMirror(t *
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
 	sync := func() {
-		_, err := (remotesync.HTTPSync{
-			Host: "vscode-host", URL: ts.URL, Token: "remote-token",
+		_, err := (remotesync.RemoteSync{
+			Host:    "vscode-host",
+			Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
 			DataDir: dataDir, DB: clientDB,
 		}).Run(t.Context())
 		require.NoError(t, err)
@@ -328,8 +330,9 @@ func TestIssue1492AuthenticatedEmptyCuratedCredentialDecoys(t *testing.T) {
 	clientDB, err := db.Open(get.Context(), filepath.Join(dataDir, "client.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
-	stats, err := (remotesync.HTTPSync{
-		Host: "empty-host", URL: ts.URL, Token: "remote-token",
+	stats, err := (remotesync.RemoteSync{
+		Host:    "empty-host",
+		Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
 		DataDir: dataDir, DB: clientDB,
 	}).Run(t.Context())
 	require.NoError(t, err)

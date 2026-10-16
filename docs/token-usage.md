@@ -284,7 +284,16 @@ GET /api/v1/usage/pairwise-comparison
 
 Pass the normal usage filters plus `left_dimension`, `left_value`,
 `right_dimension`, and `right_value`. Supported dimensions are `project` and
-`model`. Branch-scoped comparisons use the shared `git_branch` usage filter with
+`model`. Supply all four side parameters together, or omit all four to use the
+server's default pair. The default uses the two models with the highest cost,
+then two projects, then a model and a project. Each response side includes its
+`dimension` and `value`. With too few options, both sides have zero totals and
+omit `dimension` and `value`.
+
+Set `fallback_to_default=true` with a full pair to use the default if either
+side is absent from the scope's cost ranking. The response echoes the pair used.
+
+Branch-scoped comparisons use the shared `git_branch` usage filter with
 an opaque token from `GET /api/v1/branches`.
 
 ### Top Sessions by Cost

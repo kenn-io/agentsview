@@ -89,9 +89,40 @@ func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions,
 	onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
+	result, err := s.pushWithOptions(ctx, opts, onProgress)
+	if run := s.fullRun; run != nil {
+		s.fullRun = nil
+		if err != nil {
+			// Keep what the run committed since its last checkpoint. The
+			// push may have failed because ctx ended, so save without it.
+			err = errors.Join(err, run.save(context.WithoutCancel(ctx)))
+		}
+	}
+	return result, err
+}
+
+func (s *Sync) pushWithOptions(
+	ctx context.Context, opts storage.PushOptions,
+	onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
 	full := opts.Full
+	fullReason := ""
+	if full {
+		fullReason = "requested"
+	}
+	// noteFull records why the push became full; the first reason wins.
+	noteFull := func(reason string) {
+		if fullReason == "" {
+			fullReason = reason
+		}
+	}
 	start := time.Now()
 	var result storage.PushResult
+	s.fullVectorSessions = make(map[string]struct{}, len(opts.FullVectorSessions))
+	for _, id := range opts.FullVectorSessions {
+		s.fullVectorSessions[id] = struct{}{}
+	}
+	defer func() { s.fullVectorSessions = nil }()
 	state := s.effectiveSyncState()
 	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
 
@@ -151,6 +182,7 @@ func (s *Sync) PushWithOptions(
 		}
 		lastPush = ""
 		full = true
+		noteFull(reason)
 		pushStateCleared = true
 	}
 	archiveID, err := s.local.GetArchiveID(ctx)
@@ -179,6 +211,7 @@ func (s *Sync) PushWithOptions(
 		lastPush = ""
 		boundaryState = ""
 		full = true
+		noteFull("source archive identity changed")
 		pushStateCleared = true
 	}
 	databaseGeneration, err := s.local.GetDatabaseID(ctx)
@@ -213,6 +246,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: session alias backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling session aliases")
 	}
 	provenanceBackfillState := aliasBackfillState
 	if s.isFiltered() {
@@ -232,6 +266,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: session provenance backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling session provenance")
 	}
 	var transcriptRevisionBackfillNeeded bool
 	full, transcriptRevisionBackfillNeeded, err = applyTranscriptRevisionBackfillRequirement(ctx, state, full)
@@ -242,6 +277,7 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
+		noteFull("backfilling transcript revisions")
 	}
 	var timestampNormalizationBackfillNeeded bool
 	full, timestampNormalizationBackfillNeeded, err = applyTimestampNormalizationBackfillRequirement(ctx, state, full)
@@ -252,6 +288,49 @@ func (s *Sync) PushWithOptions(
 		log.Printf(
 			"pgsync: timestamp normalization backfill marker missing; forcing full push",
 		)
+		noteFull("normalizing timestamps")
+	}
+	var backfills []string
+	for key, needed := range map[string]bool{
+		sessionAliasBackfillStateKey:           aliasBackfillNeeded,
+		sessionProvenanceBackfillStateKey:      provenanceBackfillNeeded,
+		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
+		timestampNormalizationBackfillStateKey: timestampNormalizationBackfillNeeded,
+	} {
+		if needed {
+			backfills = append(backfills, key)
+		}
+	}
+	slices.Sort(backfills)
+	pendingRun, runPending, resumed, err := s.pendingFullPushRun(
+		ctx, state, s.newFullPushRun("", markerID, backfills),
+	)
+	if err != nil {
+		return result, err
+	}
+	if runPending && pendingRun.Errored && !full {
+		// Before runs were recorded, the push after one that ended with
+		// session errors was incremental unless a trigger above persisted.
+		log.Printf("pgsync: dropping the unfinished full push (%s); it ended with session errors and nothing else requires a full push",
+			pendingRun.Reason)
+		if err := state.SetSyncState(ctx, fullPushRunStateKey, ""); err != nil {
+			return result, fmt.Errorf("clearing %s: %w", fullPushRunStateKey, err)
+		}
+		runPending, resumed = false, false
+	}
+	if resumed && opts.Full {
+		// --full asks for every session to be rewritten, including ones the
+		// unfinished run wrote; its fingerprints cannot see in-place edits.
+		log.Printf("pgsync: full push requested; starting over instead of resuming the unfinished full push (%s)", pendingRun.Reason)
+		resumed = false
+	}
+	switch {
+	case resumed:
+		full = true
+		fullReason = "resuming an unfinished full push, started because: " + pendingRun.Reason
+	case runPending:
+		full = true
+		noteFull(pendingRun.Reason)
 	}
 	if full {
 		lastPush = ""
@@ -291,6 +370,7 @@ func (s *Sync) PushWithOptions(
 			)
 			lastPush = ""
 			full = true
+			noteFull("PG push marker missing")
 			if len(legacyMarkerMachines) == 0 {
 				legacyMarkerMachines = nil
 			}
@@ -312,6 +392,26 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
+	result.Full = full
+	if full && fullReason != "requested" {
+		result.FullReason = fullReason
+	}
+	var run *fullPushRunTracker
+	if full {
+		log.Printf("pgsync: full push (%s)", fullReason)
+		current := s.newFullPushRun(fullReason, markerID, backfills)
+		if resumed {
+			current = pendingRun
+			current.Errored = false
+			if err := s.dropMissingRunSessions(ctx, &current); err != nil {
+				return result, err
+			}
+		}
+		if run, err = s.startFullPushRun(ctx, state, current); err != nil {
+			return result, err
+		}
+	}
+	s.fullRun = run
 	if s.isFiltered() {
 		scopeMoveCandidates, scopeErr := listPGProjectScopeMoveCandidates(
 			ctx, s.local, lastPush,
@@ -394,8 +494,8 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 
-	usageFingerprints, err := s.local.UsageEventFingerprints(
-		mapKeys(sessionByID),
+	usageFingerprints, err := s.local.SortedUsageEventFingerprints(
+		ctx, mapKeys(sessionByID), pgUsageEventTimestampFingerprintText,
 	)
 	if err != nil {
 		return result, fmt.Errorf(
@@ -431,7 +531,7 @@ func (s *Sync) PushWithOptions(
 		for _, id := range chunk {
 			usageFP, usageKnown := usageFingerprints[id]
 			dependencyFP, err := depState.dependencyFingerprint(
-				s.local, id, usageFP, usageKnown,
+				ctx, s.local, id, usageFP, usageKnown,
 			)
 			if err != nil {
 				return result, fmt.Errorf(
@@ -461,21 +561,26 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
-
-	var sessions []db.Session
-	for _, sess := range sessionByID {
-		sessions = append(sessions, sess)
+	// Sessions the interrupted run committed still belong in the boundary
+	// state this push records, since PG holds them at these fingerprints.
+	var runCommitted []db.Session
+	for id, sess := range sessionByID {
+		if run.sessionDone(id, sessionFingerprints[id]) {
+			delete(sessionByID, id)
+			runCommitted = append(runCommitted, sess)
+		}
 	}
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ID < sessions[j].ID
-	})
+	result.SkippedResumed = len(runCommitted)
+
+	sessions := slices.Collect(maps.Values(sessionByID))
+	db.SortSessionsNewestFirst(sessions)
 
 	// Non-nil only for change-scoped pushes: sessionByID now holds
 	// exactly this push's changed relational sessions, and the vector
 	// phase reads state only for them. full is the effective value —
 	// a promoted full push keeps generation-wide reconciliation.
 	var vectorScope []string
-	if opts.ScopeVectorsToChangedSessions && !full {
+	if opts.ScopeVectorsToChangedSessions && !full && !opts.FullVectors {
 		vectorScope = mapKeys(sessionByID)
 	}
 
@@ -485,7 +590,7 @@ func (s *Sync) PushWithOptions(
 			// they can advance their own watermark without
 			// moving the unfiltered/global cursor.
 			if err := finalizeFilteredPushState(ctx,
-				state, lastPush, cutoff, sessions,
+				state, lastPush, cutoff, runCommitted,
 				priorFingerprints, sessionFingerprints,
 				result.Errors,
 			); err != nil {
@@ -493,7 +598,7 @@ func (s *Sync) PushWithOptions(
 			}
 		} else {
 			if err := finalizeUnfilteredPushState(ctx,
-				state, lastPush, cutoff, sessions,
+				state, lastPush, cutoff, runCommitted,
 				priorFingerprints, sessionFingerprints,
 				result.Errors,
 			); err != nil {
@@ -544,25 +649,32 @@ func (s *Sync) PushWithOptions(
 			return result, err
 		}
 		result.Vectors, err = s.runVectorPushPhase(
-			ctx, full, vectorScope,
+			ctx, full || opts.FullVectors, vectorScope,
 			opts.LastReconciledVectorGeneration, nil, onProgress,
 		)
 		if err != nil {
+			return result, err
+		}
+		if err := run.complete(ctx, result.Errors); err != nil {
 			return result, err
 		}
 		result.Duration = time.Since(start)
 		return result, nil
 	}
 
-	var pushed []db.Session
+	pushed := make([]db.Session, 0, len(sessions))
 	// Sessions whose individual retry also failed: their PG sessions/messages
 	// rows are stale or absent, so the vector phase must not push their newer
 	// local vectors ahead of them.
 	var failedSessions map[string]struct{}
-	const batchSize = 50
+	batchSize := 50
+	if s.pushBatchSize > 0 {
+		batchSize = s.pushBatchSize
+	}
 	for i := 0; i < len(sessions); i += batchSize {
 		end := min(i+batchSize, len(sessions))
 		batch := sessions[i:end]
+		committedBefore := len(pushed)
 
 		batchResult, err := s.pushBatch(
 			ctx, batch, full, markerID, legacyMarkerMachines,
@@ -600,6 +712,11 @@ func (s *Sync) PushWithOptions(
 				}
 			}
 		}
+		if err := run.recordSessions(
+			ctx, pushed[committedBefore:], sessionFingerprints,
+		); err != nil {
+			return result, err
+		}
 		if onProgress != nil {
 			onProgress(storage.PushProgress{
 				SessionsDone:     end,
@@ -609,6 +726,9 @@ func (s *Sync) PushWithOptions(
 				Errors:           result.Errors,
 			})
 		}
+		if s.afterPushBatch != nil {
+			s.afterPushBatch()
+		}
 	}
 
 	if s.isFiltered() {
@@ -616,7 +736,7 @@ func (s *Sync) PushWithOptions(
 		// they can advance their own watermark without moving
 		// the unfiltered/global cursor.
 		if err := finalizeFilteredPushState(ctx,
-			state, lastPush, cutoff, pushed,
+			state, lastPush, cutoff, append(pushed, runCommitted...),
 			priorFingerprints, sessionFingerprints,
 			result.Errors,
 		); err != nil {
@@ -624,7 +744,7 @@ func (s *Sync) PushWithOptions(
 		}
 	} else {
 		if err := finalizeUnfilteredPushState(ctx,
-			state, lastPush, cutoff, pushed,
+			state, lastPush, cutoff, append(pushed, runCommitted...),
 			priorFingerprints, sessionFingerprints,
 			result.Errors,
 		); err != nil {
@@ -686,10 +806,13 @@ func (s *Sync) PushWithOptions(
 		)
 	}
 	result.Vectors, err = s.runVectorPushPhase(
-		ctx, full, vectorScope,
+		ctx, full || opts.FullVectors, vectorScope,
 		opts.LastReconciledVectorGeneration, failedSessions, onProgress,
 	)
 	if err != nil {
+		return result, err
+	}
+	if err := run.complete(ctx, result.Errors); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)
@@ -1236,6 +1359,16 @@ func (s *Sync) pushBatchAttempt(
 	}
 
 	for _, sess := range batch {
+		frictionUnchanged := false
+		if !full {
+			frictionUnchanged, err = sessionFrictionUnchanged(ctx, tx, sess, comparisons)
+			if err != nil {
+				log.Printf("pgsync: friction metadata %s: %v", sess.ID, err)
+				_ = tx.Rollback()
+				*pushed = (*pushed)[:len(*pushed)-n]
+				return batchResult{}, nil
+			}
+		}
 		if err := s.pushSession(
 			ctx, tx, sess, markerID, legacyMarkerMachines,
 		); err != nil {
@@ -1279,12 +1412,22 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
+		frictionChanged := false
+		if !frictionUnchanged {
+			frictionChanged, err = s.pushFrictionFindings(ctx, tx, sess.ID)
+			if err != nil {
+				log.Printf("pgsync: friction findings %s: %v", sess.ID, err)
+				_ = tx.Rollback()
+				*pushed = (*pushed)[:len(*pushed)-n]
+				return batchResult{}, nil
+			}
+		}
 
-		// Bump updated_at when messages or secret findings were
+		// Bump updated_at when messages, secret findings, or friction were
 		// rewritten but pushSession was a metadata no-op (its
 		// WHERE clause skips unchanged rows). PG read-mode session
-		// watchers rely on updated_at to surface secret-only changes.
-		if msgCount > 0 || findingsChanged {
+		// watchers rely on updated_at to surface finding-only changes.
+		if msgCount > 0 || findingsChanged || frictionChanged {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -2117,8 +2260,18 @@ func sessionPushFingerprint(
 		stringValue(sess.TerminationStatus),
 		strconv.Itoa(sess.SecretLeakCount),
 		sess.SecretsRulesVersion,
-		usageEventFingerprint,
 	}
+	// A session the Friction Log never reviewed keeps the fingerprint it had
+	// before friction existed, so upgrading with the setting off does not
+	// re-push the archive. Length prefixes keep the two shapes distinct.
+	if sess.FrictionCount != 0 || sess.FrictionRulesVersion != "" || sess.FrictionHash != "" {
+		fields = append(fields,
+			strconv.Itoa(sess.FrictionCount),
+			sess.FrictionRulesVersion,
+			sess.FrictionHash,
+		)
+	}
+	fields = append(fields, usageEventFingerprint)
 	fields = append(fields, sess.Labels...)
 	var b strings.Builder
 	for _, f := range fields {
@@ -2320,7 +2473,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			source_archive_id, source_database_generation, file_path,
 			project_assigned, prompt_evidence_discarded, group_key,
 			trash_includes_codex_pages, source_trash_includes_codex_pages,
-			pr_links, labels, updated_at
+			pr_links, labels,
+			friction_count, friction_rules_version, friction_hash,
+			updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2339,7 +2494,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, $71, $72, $72, $73, $74::text[], NOW()
+				$70, $71, $72, $72, $73, $74::text[], $75, $76, $77, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_session
 			)
@@ -2434,6 +2589,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			has_context_data = EXCLUDED.has_context_data,
 			secret_leak_count = EXCLUDED.secret_leak_count,
 			secrets_rules_version = EXCLUDED.secrets_rules_version,
+			friction_count = EXCLUDED.friction_count,
+			friction_rules_version = EXCLUDED.friction_rules_version,
+			friction_hash = EXCLUDED.friction_hash,
 			quality_signal_version = EXCLUDED.quality_signal_version,
 			short_prompt_count = EXCLUDED.short_prompt_count,
 			unstructured_start = EXCLUDED.unstructured_start,
@@ -2526,6 +2684,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
 			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version
+			OR sessions.friction_count IS DISTINCT FROM EXCLUDED.friction_count
+			OR sessions.friction_rules_version IS DISTINCT FROM EXCLUDED.friction_rules_version
+			OR sessions.friction_hash IS DISTINCT FROM EXCLUDED.friction_hash
 			OR sessions.quality_signal_version IS DISTINCT FROM EXCLUDED.quality_signal_version
 			OR sessions.short_prompt_count IS DISTINCT FROM EXCLUDED.short_prompt_count
 			OR sessions.unstructured_start IS DISTINCT FROM EXCLUDED.unstructured_start
@@ -2589,6 +2750,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		sess.TrashIncludesCodexPages,
 		db.EncodePRLinks(sess.PRLinks),
 		db.LabelsArg(sess.Labels),
+		sess.FrictionCount, sess.FrictionRulesVersion, sess.FrictionHash,
 	)
 	if err != nil {
 		return err
@@ -2839,7 +3001,7 @@ func (s *Sync) pushMessages(
 			usageFromMap = ok
 		}
 		if !usageFromMap {
-			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
+			localFP.UsageEventFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
 					"computing local usage event fingerprint: %w",
@@ -3710,66 +3872,11 @@ func pgToolCallFingerprint(
 func pgUsageEventFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_ordinal, source, model, provider_id,
-			input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		 FROM usage_events
-		 WHERE session_id = $1
-		 ORDER BY occurred_at NULLS FIRST, id`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushUsageEventFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal sql.NullInt64
-		var source, model, providerID, costStatus, costSource string
-		var inputTokens, outputTokens int
-		var cacheCreationInputTokens, cacheReadInputTokens int
-		var reasoningTokens int
-		var cost sql.NullInt64
-		var occurredAt sql.NullTime
-		var dedupKey sql.NullString
-		if err := rows.Scan(
-			&ordinal, &source, &model, &providerID,
-			&inputTokens, &outputTokens,
-			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &costStatus, &costSource,
-			&occurredAt, &dedupKey,
-		); err != nil {
-			return "", err
-		}
-		occurred := ""
-		if occurredAt.Valid {
-			occurred = FormatISO8601(occurredAt.Time)
-		}
-		fmt.Fprintf(&b,
-			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
-			ordinal.Valid,
-			ordinal.Int64,
-			len(source), source,
-			len(model), model,
-			len(providerID), providerID,
-			inputTokens,
-			outputTokens,
-			cacheCreationInputTokens,
-			cacheReadInputTokens,
-			reasoningTokens,
-			cost.Valid,
-			cost.Int64,
-			len(costStatus), costStatus,
-			len(costSource), costSource,
-			len(occurred), occurred,
-			len(dedupKey.String), dedupKey.String,
-		)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 const msgInsertBatch = 100

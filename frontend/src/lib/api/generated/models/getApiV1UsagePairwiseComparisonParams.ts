@@ -89,19 +89,23 @@ export type GetApiV1UsagePairwiseComparisonParams = {
    */
   session_counts?: boolean;
   /**
-   * Left-side comparison dimension
+   * Left-side comparison dimension; omit all four sides for the default pair
    */
-  left_dimension: string;
+  left_dimension?: string;
   /**
    * Left-side comparison value; opaque project key for the project dimension
    */
-  left_value: string;
+  left_value?: string;
   /**
    * Right-side comparison dimension
    */
-  right_dimension: string;
+  right_dimension?: string;
   /**
    * Right-side comparison value; opaque project key for the project dimension
    */
-  right_value: string;
+  right_value?: string;
+  /**
+   * Use the default pair if either supplied side is absent from the scope's cost ranking
+   */
+  fallback_to_default?: boolean;
 };

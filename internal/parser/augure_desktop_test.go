@@ -123,7 +123,7 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentAugureDesktop, sources[0].Provider)
-	assert.Equal(t, stateDB, sources[0].DisplayPath)
+	assert.Equal(t, VirtualSourcePath(stateDB, "20260910_075655_ca54ab"), sources[0].DisplayPath)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],

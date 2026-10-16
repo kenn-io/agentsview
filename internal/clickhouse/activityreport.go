@@ -54,9 +54,31 @@ func (s *Store) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	artifacts.Report.BySession = artifacts.Sessions
-	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
-	return artifacts.Report, nil
+	return activity.ReportWithSessions(artifacts), nil
+}
+
+type activityReportBackend struct {
+	*Store
+	candidates    chSessionSet
+	rangeStartUTC string
+	rangeEndUTC   string
+	pairing       *activityReportPairing
+}
+
+func (b activityReportBackend) ActivityReportUsage(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource([]string, activity.Query) activity.CandidateSource {
+	return b.pairing.candidateSource()
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	return b.pairing.countMessages(ctx, ids, q, artifacts)
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -65,7 +87,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	db.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	ctx, err := s.withPartsSnapshot(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -89,7 +111,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, key, kept)
 			}
-			db.ReportProgress(onProgress, kept.done)
+			activity.ReportProgress(onProgress, kept.done)
 			return kept.artifacts, nil
 		}
 	}
@@ -112,7 +134,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, memoKey, kept[0])
 			}
-			db.ReportProgress(onProgress, kept[0].done)
+			activity.ReportProgress(onProgress, kept[0].done)
 			return kept[0].artifacts, nil
 		}
 		if onDisk {
@@ -120,7 +142,7 @@ func (s *Store) BuildActivityReportArtifacts(
 				s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{kept})
 				s.markActivityReportChecked(selection, fingerprint, memoKey)
 				s.touchActivityReport(selection, memoKey, kept)
-				db.ReportProgress(onProgress, kept.done)
+				activity.ReportProgress(onProgress, kept.done)
 				return kept.artifacts, nil
 			}
 		}
@@ -143,7 +165,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
 	candidates := chSessionSet{body: "SELECT id FROM activity_candidate_ids"}
-	db.ReportProgress(onProgress, activity.Progress{
+	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
@@ -152,63 +174,16 @@ func (s *Store) BuildActivityReportArtifacts(
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
-	usage, pricing, err := s.activityReportUsage(
-		ctx, candidates, ids, rangeStartUTC, rangeEndUTC, q)
+	backend := activityReportBackend{
+		Store: s, candidates: candidates,
+		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
+	}
+	artifacts, done, err := activity.BuildReportArtifacts(
+		ctx, backend, sessions, ids, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
 
-	rowsProcessed := int64(0)
-	source := pairs.candidateSource()
-	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(activity.IntervalCandidate) error,
-	) error {
-		db.ReportProgress(onProgress, activity.Progress{
-			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
-		})
-		return source(ctx, func(candidate activity.IntervalCandidate) error {
-			rowsProcessed++
-			db.ReportProgress(onProgress, activity.Progress{
-				Phase:         activity.ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
-		})
-	}, usage)
-	if err != nil {
-		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating clickhouse activity report: %w", err)
-	}
-	if err := pairs.countMessages(ctx, ids, q, &artifacts); err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	db.ReportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
-	artifacts.Report.Pricing = pricing
-	projects, err := s.BuildProjectIdentityMap(ctx, db.ActivityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	activity.SanitizeProjectLabels(&artifacts.Report, projects)
-	artifacts.Sessions = artifacts.Report.BySession
-	artifacts.Report.BySession = []activity.SessionRow{}
-	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	done := activity.Progress{
-		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	}
-	db.ReportProgress(onProgress, done)
 	if memoKey != "" {
 		entry := activityReportEntry{artifacts: artifacts, done: done}
 		s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{entry})
@@ -674,10 +649,9 @@ func (s *Store) GetSessionUsageRows(
 		return clickSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
-	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
 			MessageOrdinal:      db.UsageRowMessageOrdinal(o.scan.messageOrdinal),
@@ -694,85 +668,23 @@ func (s *Store) GetSessionUsageRows(
 			SourceUUID:          o.scan.sourceUUID,
 			UsageDedupKey:       o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, o.scan.inputTok, o.scan.outputTok,
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
-		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
 	}
-	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
-	if err != nil {
-		return nil, err
-	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	seen := make(map[string]struct{})
-	deduplicatedOutputTokens := make(map[string]int)
-	discardedContributingSessions := make(map[string]struct{})
-	out := make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
-		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
-			if rowContributes[i] {
-				discardedContributingSessions[o.scan.sessionID] = struct{}{}
-			}
-			continue
-		}
-		r := o.scan
-		r.webSearchRequests = snapshotWebSearchRequests[i]
-		attributionSessionID := snapshotAttribution[i]
-		if attributionSessionID != r.sessionID {
-			deduplicatedOutputTokens[r.sessionID] += r.outputTok
-			if rowContributes[i] {
-				discardedContributingSessions[r.sessionID] = struct{}{}
-			}
-		}
-		if key, ok := clickSessionUsageDedupKey(r); ok {
-			if _, dup := seen[key]; dup {
-				deduplicatedOutputTokens[r.sessionID] += r.outputTok
-				if rowContributes[i] {
-					discardedContributingSessions[r.sessionID] = struct{}{}
-				}
-				continue
-			}
-			seen[key] = struct{}{}
-		}
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
+		r := rowsAcc[i].scan
+		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
-			return nil, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
-		out = append(out, activity.UsageRow{
-			SessionID:       attributionSessionID,
-			SourceSessionID: r.sessionID,
-			Model:           r.model,
-			Timestamp:       r.ts,
-			OutputTokens:    r.outputTok,
-			Cost:            cost,
-			CostSource:      costSource,
-			SessionCost:     sessionCost,
-			Priced:          priced,
-			Contributes:     contributes,
-			Agent:           r.agent,
-			ProviderID:      r.providerID,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID,
-			UsageDedupKey:   r.usageDedupKey,
-
-			UsageSource:         r.source,
-			MessageOrdinal:      db.UsageRowMessageOrdinal(r.messageOrdinal),
-			InputTokens:         r.inputTok,
-			CacheCreationTokens: r.cacheCr,
-			CacheReadTokens:     r.cacheRd,
-			WebSearchRequests:   r.webSearchRequests,
-		})
-	}
-	return &activity.SessionUsageRows{
-		Rows:                            out,
-		RawOutputTokensBySession:        rawOutputTokensBySession,
-		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
-		DiscardedContributingSessions:   discardedContributingSessions,
-		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
-	}, nil
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
+	})
 }
 
 // activityReportUsage loads the usage rows of the candidate sessions plus the
@@ -1306,19 +1218,6 @@ func (s *Store) scanActivityUsageRows(
 		rowsAcc = append(rowsAcc, c...)
 	}
 	return append(rowsAcc, chunk...), nil
-}
-
-func clickSessionUsageDedupKey(r clickActivityReportUsageRow) (string, bool) {
-	if r.claudeMessageID != "" && r.claudeRequestID != "" {
-		return "claude:" + r.claudeMessageID + ":" + r.claudeRequestID, true
-	}
-	if r.source == "message" && r.agent != "" && r.sourceUUID != "" {
-		return "source:" + r.agent + ":" + r.sourceUUID, true
-	}
-	if r.usageDedupKey != "" {
-		return "usage:" + r.usageDedupKey, true
-	}
-	return "", false
 }
 
 func clickSessionUsageRowLess(

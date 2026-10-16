@@ -654,7 +654,7 @@
         <Button
           size="sm"
           surface="soft"
-          label={m.sidebar_clear_selection()}
+          label={m.usage_clear_selection()}
           onclick={() => usage.clearTimeRange()}
         />
       {/if}

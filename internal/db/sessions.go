@@ -63,6 +63,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -108,6 +109,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -146,6 +148,7 @@ const sessionFullColsAfterRelationship = `,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -208,6 +211,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -370,23 +374,27 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	// QualitySignals mirrors the scalar persistence fields below for API
 	// schema and JSON transport.
-	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
-	HasToolCalls                bool            `json:"-"`
-	HasContextData              bool            `json:"-"`
-	SecretLeakCount             int             `json:"secret_leak_count"`
-	SecretsRulesVersion         string          `json:"-"`
-	QualitySignalVersion        int             `json:"-"`
-	ShortPromptCount            int             `json:"-"`
-	UnstructuredStart           bool            `json:"-"`
-	MissingSuccessCriteriaCount int             `json:"-"`
-	MissingVerificationCount    int             `json:"-"`
-	DuplicatePromptCount        int             `json:"-"`
-	NoCodeContextCount          int             `json:"-"`
-	RunawayToolLoopCount        int             `json:"-"`
-	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
+	QualitySignals      *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls        bool            `json:"-"`
+	HasContextData      bool            `json:"-"`
+	SecretLeakCount     int             `json:"secret_leak_count"`
+	SecretsRulesVersion string          `json:"-"`
+	// Friction summary columns stay out of the session API payload.
+	FrictionCount               int    `json:"-"`
+	FrictionRulesVersion        string `json:"-"`
+	FrictionHash                string `json:"-"`
+	QualitySignalVersion        int    `json:"-"`
+	ShortPromptCount            int    `json:"-"`
+	UnstructuredStart           bool   `json:"-"`
+	MissingSuccessCriteriaCount int    `json:"-"`
+	MissingVerificationCount    int    `json:"-"`
+	DuplicatePromptCount        int    `json:"-"`
+	NoCodeContextCount          int    `json:"-"`
+	RunawayToolLoopCount        int    `json:"-"`
+	DataVersion                 int    `json:"-"`
+	Cwd                         string `json:"cwd,omitempty"`
+	GitBranch                   string `json:"git_branch,omitempty"`
+	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
 	// PRLinks lists the pull or merge requests the source transcript
 	// associated with the session. Parser-owned: a full reparse replaces it.
 	// Always serialized, as [] when empty, so a client merging a fresh
@@ -1269,6 +1277,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -1320,9 +1329,14 @@ func (db *DB) GetSessionName(
 
 // A pre-revert-page deletion covered the whole Codex thread. Keep that scope
 // even for page files absent during the upgrade. New deletions remain exact IDs.
+// A page <thread>_<rollout> is also excluded by its retired bare <rollout> ID,
+// which may have been recorded without a file name to derive the new ID from.
 const sessionExcludedQuery = `SELECT EXISTS (
 	SELECT 1 FROM excluded_sessions
 	WHERE id = ?1 OR (
+		substr(?1, -37, 1) = '_' AND length(?1) > 73
+		AND id = substr(?1, 1, length(?1) - 73) || substr(?1, -36)
+	) OR (
 		include_codex_pages = 1 AND substr(?1, -37, 1) = '_'
 		AND id = substr(?1, 1, length(?1) - 37)
 	)
@@ -1395,6 +1409,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	const excluded = `EXISTS (
 		SELECT 1 FROM excluded_sessions excluded
 		WHERE excluded.id = sessions.id OR (
+			substr(sessions.id, -37, 1) = '_' AND length(sessions.id) > 73
+			AND excluded.id = substr(sessions.id, 1, length(sessions.id) - 73) || substr(sessions.id, -36)
+		) OR (
 			excluded.include_codex_pages = 1 AND substr(sessions.id, -37, 1) = '_'
 			AND excluded.id = substr(sessions.id, 1, length(sessions.id) - 37)
 		)
@@ -1530,6 +1547,11 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
 			parser_relationship_type = excluded.parser_relationship_type,
+			friction_rules_version = CASE
+				WHEN sessions.parent_session_id IS NOT excluded.parent_session_id
+				  OR sessions.relationship_type IS NOT excluded.relationship_type
+				  OR sessions.agent IS NOT excluded.agent
+				THEN '' ELSE sessions.friction_rules_version END,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -1952,6 +1974,7 @@ const linkSubagentSessionsQuery = `
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	-- The tool_calls edge (from toolUseResult.agentId) records the actual
 	-- spawn, authoritative over the path-derived parent set at parse time.
@@ -2060,6 +2083,7 @@ const selfParentRepairStateKey = "subagent_self_parent_repair_v1"
 const clearSelfParentedSessionsSQL = `
 	UPDATE sessions
 	SET parent_session_id = NULLIF(parser_parent_session_id, id),
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE parent_session_id IS id`
 
@@ -2123,6 +2147,7 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
@@ -2156,6 +2181,7 @@ func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
 	SET parent_session_id = NULL,
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
 	AND s.relationship_type = 'subagent'
@@ -6176,6 +6202,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6561,6 +6588,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6671,6 +6699,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6845,7 +6874,7 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		return nil, err
 	}
 	usage := make(map[string]string, 1)
-	if err := appendUsageEventFingerprints(ctx, tx, usage, []string{id}); err != nil {
+	if err := appendUsageEventFingerprints(ctx, tx, usage, []string{id}, nil, false); err != nil {
 		return nil, err
 	}
 	result.UsageFingerprint = usage[id]

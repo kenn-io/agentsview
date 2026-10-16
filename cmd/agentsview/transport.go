@@ -227,6 +227,9 @@ func ensureTransportContext(
 	if err := ctx.Err(); err != nil {
 		return transport{}, err
 	}
+	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
+	// invocation only, without touching the process environment.
+	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
@@ -264,7 +267,7 @@ func ensureTransportContext(
 		if allowReplacement && (intent == transportIntentRead ||
 			intent == transportIntentArchiveWrite) &&
 			shouldReplaceDaemonRuntime(tr.Runtime, version) {
-			if daemonAutostartDisabled() {
+			if autostartDisabled {
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
@@ -291,7 +294,7 @@ func ensureTransportContext(
 		return transport{}, longLivedDaemonCompatibilityError(errors.New(tr.DirectReason))
 	}
 	if allowReplacement && (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
-		!daemonAutostartDisabled() {
+		!autostartDisabled {
 		if rt, err := FindIncompatibleDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil && rt != nil &&
@@ -310,7 +313,7 @@ func ensureTransportContext(
 		}
 	}
 	if intent == transportIntentRead {
-		if daemonAutostartDisabled() {
+		if autostartDisabled {
 			return transport{}, errors.New(
 				"daemon autostart is disabled; direct SQLite reads are " +
 					"not supported for this command. Start a daemon with " +
@@ -338,7 +341,7 @@ func ensureTransportContext(
 		}
 		return transportFromRuntime(rt), nil
 	}
-	if daemonAutostartDisabled() {
+	if autostartDisabled {
 		if tr.DirectIncompatible {
 			// AGENTSVIEW_NO_DAEMON never replaces a live daemon, so a
 			// client that cannot talk to the one it found has no path

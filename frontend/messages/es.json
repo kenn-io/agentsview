@@ -2857,5 +2857,9 @@
   "analytics_tool_history_note": "Las tasas excluyen las llamadas de sesiones que aún se están recalculando o que se guardaron sin resultados de herramientas.",
   "analytics_tool_rate_button_label": "{tool} {rate}: {value}",
   "analytics_tool_latest_matching_call": "Última llamada coincidente: {date}",
-  "analytics_tool_matching_calls": "Llamadas coincidentes: {count}"
+  "analytics_tool_matching_calls": "Llamadas coincidentes: {count}",
+  "usage_all_projects": "Todos los proyectos",
+  "usage_clear_selection": "Borrar selección",
+  "usage_open_project": "Abrir",
+  "usage_loading": "Cargando..."
 }

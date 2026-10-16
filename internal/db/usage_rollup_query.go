@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -123,17 +124,47 @@ func verifyUsageRollupQuery(
 		WHERE timezone_key = ?`, timezoneKey).Scan(&timezoneID); err != nil {
 		return 0, err
 	}
+	sessionIDs := make([]string, 0, len(snapshot.Sessions)+1)
 	for _, session := range snapshot.Sessions {
-		if err := verifyUsageRollupInstall(
-			ctx, conn, timezoneID, session.ID, installs,
-		); err != nil {
-			return 0, err
-		}
+		sessionIDs = append(sessionIDs, session.ID)
 	}
 	if snapshot.CursorHighWater > 0 {
-		if err := verifyUsageRollupInstall(
-			ctx, conn, timezoneID, usageRollupCursorSessionID, installs,
-		); err != nil {
+		sessionIDs = append(sessionIDs, usageRollupCursorSessionID)
+	}
+	installIDs := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if required, ok := installs[sessionID]; ok {
+			installIDs = append(installIDs, strconv.FormatInt(required.ID, 10))
+		}
+	}
+	current := make(map[int64]usageRollupInstall, len(installIDs))
+	// Each statement binds at most maxSQLVars IDs plus the timezone, within the repo's bind limit.
+	// SQLite's INTEGER column affinity matches the text binds to the id column.
+	err := queryChunked(installIDs, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		args = append(args, timezoneID)
+		rows, err := conn.QueryContext(ctx, `SELECT id, install_revision, pricing_hash
+			FROM usage_rollup_installs
+			WHERE id IN `+placeholders+` AND timezone_id = ?`, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var install usageRollupInstall
+			if err := rows.Scan(
+				&install.ID, &install.InstallRevision, &install.PricingHash); err != nil {
+				return err
+			}
+			current[install.ID] = install
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, sessionID := range sessionIDs {
+		if err := verifyUsageRollupInstall(sessionID, installs, current); err != nil {
 			return 0, err
 		}
 	}
@@ -141,27 +172,22 @@ func verifyUsageRollupQuery(
 }
 
 func verifyUsageRollupInstall(
-	ctx context.Context, conn *sql.Conn, timezoneID int64, sessionID string,
-	installs map[string]usageRollupInstall,
+	sessionID string, installs map[string]usageRollupInstall,
+	current map[int64]usageRollupInstall,
 ) error {
 	required, ok := installs[sessionID]
 	if !ok {
 		return &usageCacheMissingSessionError{SessionID: sessionID}
 	}
-	var revision int64
-	var pricingHash string
-	if err := conn.QueryRowContext(ctx, `SELECT install_revision, pricing_hash
-		FROM usage_rollup_installs WHERE id = ? AND timezone_id = ?`,
-		required.ID, timezoneID).Scan(&revision, &pricingHash); err != nil {
-		if err == sql.ErrNoRows {
-			return &usageCacheMissingSessionError{SessionID: sessionID}
-		}
-		return err
+	install, ok := current[required.ID]
+	if !ok {
+		return &usageCacheMissingSessionError{SessionID: sessionID}
 	}
 	// The write sequence identifies the exact rows whose source and baked
 	// metadata Ensure checked. A different sequence can belong to a build from
 	// an older archive snapshot, even when its number is higher.
-	if revision != required.InstallRevision || pricingHash != required.PricingHash {
+	if install.InstallRevision != required.InstallRevision ||
+		install.PricingHash != required.PricingHash {
 		return fmt.Errorf("%w: usage rollup session %s changed before read",
 			errUsageCacheSourceChanged, sessionID)
 	}

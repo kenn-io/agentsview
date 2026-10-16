@@ -384,10 +384,8 @@ func firstSubstantivePrompt(prompts []promptInfo) (promptInfo, bool) {
 func isCodeTask(prompts []promptInfo) bool {
 	for _, p := range prompts {
 		text := p.Normalized
-		if hasFileRef(p.Content) && hasCodeAction(p.Tokens) {
-			return true
-		}
-		if hasCodeAction(p.Tokens) && hasCodeObject(p.Tokens) {
+		// Check tokens before scanning the whole prompt for file references.
+		if hasCodeAction(p.Tokens) && (hasCodeObject(p.Tokens) || hasFileRef(p.Content)) {
 			return true
 		}
 		if strings.Contains(text, "failing test") ||

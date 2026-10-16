@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,11 @@ func startServerWithOptionalCaddy(
 	srv *server.Server,
 	opts serveRuntimeOptions,
 ) (*serveRuntime, error) {
+	if policyFile := os.Getenv("AGENTSVIEW_MACHINE_SIGNING_POLICY"); policyFile != "" {
+		if _, err := srv.StartRestrictedListener(ctx, policyFile); err != nil {
+			return nil, err
+		}
+	}
 	if opts.Mode == "serve" {
 		socket, err := chromehost.SocketPath(cfg.DataDir)
 		if err == nil {

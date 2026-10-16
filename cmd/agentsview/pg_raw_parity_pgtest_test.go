@@ -208,7 +208,7 @@ func TestHostedRuntimeCapturedParity(t *testing.T) {
 				ids = []string{"codex:" + rawtest.CodexToolsID}
 			}
 			oracle, engine := rawtest.Oracle(t, tc.agent, root, tc.policy, "")
-			require.Equal(t, len(ids), engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(t, len(ids), rawtest.SyncOracle(t, engine))
 			client := newHostedCaptureClient(t, startup, store, tc.agent, root)
 			receipt := client.capture(t)
 			waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
@@ -219,6 +219,7 @@ func TestHostedRuntimeCapturedParity(t *testing.T) {
 				resolved, err := core.Resolve(t.Context(), id)
 				require.NoError(t, err)
 				rawtest.EqualUsageEvents(t, t.Context(), oracle, store.DB(), id, resolved.SessionID)
+				rawtest.EqualFriction(t, t.Context(), oracle, store.DB(), id, resolved.SessionID)
 			}
 			if tc.agent == parser.AgentCodex {
 				return
@@ -369,7 +370,7 @@ func TestHostedRuntimeCapturedPartialRetryExhaustion(t *testing.T) {
 	require.Greater(t, len(client.last.Entries), 1, "the parent must be captured as a companion")
 	waitCaptureJob(t, admin, recovered.ManifestID, "complete", 1)
 	oracle, engine := rawtest.Oracle(t, parser.AgentCodex, root, "", "")
-	require.Positive(t, engine.SyncAll(t.Context(), nil).Synced)
+	require.Positive(t, rawtest.SyncOracle(t, engine))
 	require.NoError(t, oracle.RenameSession(t.Context(), id, new("Partial curation")))
 	rawtest.EqualStored(t, t.Context(), oracle, store, id)
 }
@@ -386,7 +387,7 @@ func TestHostedRuntimeCapturedRelationships(t *testing.T) {
 			rawtest.Claude(t, root)
 			rawtest.ClaudeChild(t, root)
 			oracle, engine := rawtest.Oracle(t, parser.AgentClaude, root, "", "")
-			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(t, 2, rawtest.SyncOracle(t, engine))
 			client := newHostedCaptureClient(t, startup, store, parser.AgentClaude, root)
 			sources, err := parser.DiscoverRawCaptureSources(t.Context(), client.provider)
 			require.NoError(t, err)

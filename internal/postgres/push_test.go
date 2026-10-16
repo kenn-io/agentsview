@@ -1257,6 +1257,13 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 				return s
 			},
 		},
+		{
+			name: "first friction review",
+			modify: func(s db.Session) db.Session {
+				s.FrictionRulesVersion = "friction-v1"
+				return s
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1270,6 +1277,28 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 
 	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", "", "", ""),
 		"identical sessions should produce identical fingerprints")
+}
+
+// A reviewed session's fingerprint must follow every friction summary field,
+// or a changed review would never reach PostgreSQL.
+func TestSessionPushFingerprintTracksReviewedFriction(t *testing.T) {
+	reviewed := db.Session{
+		ID: "s1", Project: "proj", Machine: "laptop", Agent: "claude",
+		FrictionCount: 1, FrictionRulesVersion: "friction-v1", FrictionHash: "h1",
+	}
+	before := sessionPushFingerprint(reviewed, reviewed.Machine, "", "", "", "")
+	for name, modify := range map[string]func(*db.Session){
+		"count":         func(s *db.Session) { s.FrictionCount = 2 },
+		"rules version": func(s *db.Session) { s.FrictionRulesVersion = "friction-v2" },
+		"hash":          func(s *db.Session) { s.FrictionHash = "h2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := reviewed
+			modify(&changed)
+			assert.NotEqual(t, before,
+				sessionPushFingerprint(changed, changed.Machine, "", "", "", ""))
+		})
+	}
 }
 
 func TestSessionPushFingerprintIgnoresVolatileStatFields(t *testing.T) {

@@ -1173,84 +1173,51 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 }
 
 func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T) {
-	setStartProbeTickForTest(t, 300*time.Millisecond)
-	dir := runtimeTestDir(t)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	updatedAt := time.Now()
-	writeState := func(detail string, update time.Time) {
-		data, err := json.Marshal(startupState{
-			PID:       321,
-			StartedAt: updatedAt,
-			Phase:     "initial sync",
-			Detail:    detail,
-			UpdatedAt: update,
-		})
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
-	}
-	writeState("1/2 sessions", updatedAt)
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	host, port := testPingServer(t)
+	synctest.Test(t, func(t *testing.T) {
+		setStartProbeTickForTest(t, 300*time.Millisecond)
+		dir := runtimeTestDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		startedAt := time.Now()
+		writeState := func(detail string) {
+			data, err := json.Marshal(startupState{
+				PID:       321,
+				StartedAt: startedAt,
+				Phase:     "initial sync",
+				Detail:    detail,
+				UpdatedAt: time.Now(),
+			})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+		}
+		writeState("1/2 sessions")
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
-	initialObserved := make(chan struct{}, 1)
-	updatedObserved := make(chan struct{}, 1)
-	resultCh := make(chan *DaemonRuntime, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+		rt, err := waitForBackgroundServeReadyWithPolicy(
 			t.Context(), dir, "", make(chan error), 500*time.Millisecond,
 			backgroundServeReadyWaitPolicy{
-				Observe: func(st *startupState, _ time.Duration) {
-					if st == nil {
-						return
+				Observe: func(st *startupState, elapsed time.Duration) {
+					require.NotNil(t, st)
+					if elapsed == 300*time.Millisecond {
+						// Publish after the last poll so the timeout must discover new progress.
+						assert.Equal(t, "1/2 sessions", st.Detail)
+						writeState("2/2 sessions")
 					}
-					select {
-					case initialObserved <- struct{}{}:
-					default:
-					}
-					if st.Detail == "2/2 sessions" {
-						select {
-						case updatedObserved <- struct{}{}:
-						default:
-						}
+					if elapsed == 500*time.Millisecond {
+						assert.Equal(t, "2/2 sessions", st.Detail)
+						_, err := WriteDaemonRuntime(dir, host, port, version, false)
+						require.NoError(t, err)
+						t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 					}
 				},
 			},
 		)
-		resultCh <- rt
-		errCh <- waitErr
-	}()
-
-	select {
-	case <-initialObserved:
-	case <-time.After(time.Second):
-		require.FailNow(t, "readiness wait did not observe initial startup state")
-	}
-	select {
-	case <-initialObserved:
-	case <-time.After(time.Second):
-		require.FailNow(t, "readiness wait did not reach its final poll before timeout")
-	}
-	writeState("2/2 sessions", updatedAt.Add(time.Second))
-	select {
-	case <-updatedObserved:
-	case <-time.After(time.Second):
-		require.FailNow(t, "readiness wait did not observe updated startup state")
-	}
-	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntime(dir, host, port, version, false)
-	require.NoError(t, err)
-	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
-
-	select {
-	case err := <-errCh:
 		require.NoError(t, err)
-		rt := <-resultCh
 		require.NotNil(t, rt)
 		assert.Equal(t, port, rt.Port)
-	case <-time.After(time.Second):
-		require.FailNow(t, "readiness wait did not return authoritative runtime")
-	}
+		assert.Equal(t, 600*time.Millisecond, time.Since(startedAt))
+	})
 }
 
 func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -319,4 +320,71 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An archive can split a legacy Codex thread in place, so the next push is
+// incremental. That push publishes the page row inside the migration, and
+// the later friction comparison then sees current metadata. The migration
+// must also carry the findings that metadata describes.
+func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
+	const threadUUID = "11111111-1111-4111-8111-111111111111"
+	const thread = "codex:" + threadUUID
+	const page = thread + "_22222222-2222-4222-8222-222222222222"
+	const schema = "agentsview_codex_page_friction_test"
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	local := testDB(t)
+	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
+	headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: thread, Agent: "codex", Project: "sample", Machine: "machine",
+		FilePath: &pagePath, MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+	}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: thread, Role: "assistant", Content: "answer saved only on page", SourceUUID: "page-answer",
+	}}))
+	require.NoError(t, local.SetSessionDataVersion(ctx, thread, 130))
+	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	pushed, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, pushed.Errors)
+	// A remote pin makes the push publish the page before replacing the thread.
+	store := &Store{pg: syncer.pg}
+	_, err = store.PinMessage(ctx, thread, 0, new("saved remotely"))
+	require.NoError(t, err)
+
+	for _, row := range []struct{ id, path, content, uuid string }{
+		{thread, headPath, "original answer", "head-answer"},
+		{page, pagePath, "answer saved only on page", "page-answer"},
+	} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{
+			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
+			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+		}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, row.id, []db.Message{{
+			SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
+		}}))
+		require.NoError(t, local.SetSessionDataVersion(ctx, row.id, db.CurrentDataVersion()))
+	}
+	findings := []db.FrictionFinding{{
+		Kind: "deferral", Detector: "deferral", Label: "come back later",
+		Title: "[friction/deferral] " + page + ": come back later", Fingerprint: "fl1:page", Seq: 0,
+	}}
+	require.NoError(t, local.UpdateSessionSignals(ctx, page, db.SessionSignalUpdate{
+		Friction: &db.SessionFrictionUpdate{
+			Findings: findings, RulesVersion: friction.RulesVersion,
+			Hash: db.FrictionHash(findings, friction.RulesVersion),
+		},
+	}))
+
+	pushed, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, pushed.Errors)
+	got := pgFrictionFindings(t, syncer, page)
+	require.Len(t, got, 1)
+	assert.Equal(t, "come back later", got[0].Label)
 }

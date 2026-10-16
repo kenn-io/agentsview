@@ -186,6 +186,19 @@ func TestCompareUsage_MapsBothSidesToOneDimension(t *testing.T) {
 
 	_, _, err = ts.compareUsage(t.Context(), nil, compareUsageIn{Dimension: "agent", Left: "a", Right: "b"})
 	require.ErrorContains(t, err, "model or project")
+	ts.svc = service.NewDirectBackend(dbtest.OpenTestDB(t), nil)
+	for _, sides := range []compareUsageIn{
+		{Dimension: "model"},
+		{Dimension: "model", Right: "opus"},
+		{Dimension: "project", Left: "alpha"},
+	} {
+		_, _, err = ts.compareUsage(t.Context(), nil, sides)
+		if sides.Left == "" {
+			require.EqualError(t, err, "left_value is required")
+		} else {
+			require.EqualError(t, err, "right_value is required")
+		}
+	}
 }
 
 // The comparison's ratios are null when a side is empty; the reply must still

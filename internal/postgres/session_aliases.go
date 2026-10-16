@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func replacePGSessionAliases(
@@ -48,7 +49,26 @@ func pgSessionAliasIDs(sess db.Session) []string {
 
 func pgSessionTombstoneIDs(sess db.Session) []string {
 	ids := append([]string{sess.ID}, pgSessionAliasIDs(sess)...)
+	ids = append(ids, pgRetiredCodexRolloutIDs(sess)...)
 	return uniqueNonEmptyStrings(ids)
+}
+
+// pgRetiredCodexRolloutIDs returns the bare rollout id a canonical Codex page
+// held before data version 134. A permanent purge of that old row leaves only
+// its exclusion, so the canonical page must honor an exclusion recorded there.
+func pgRetiredCodexRolloutIDs(sess db.Session) []string {
+	switch sess.Agent {
+	case "codex", "traex", "augure-code":
+	default:
+		return nil
+	}
+	prefixEnd := strings.LastIndex(sess.ID, ":") + 1
+	key := sess.ID[prefixEnd:]
+	thread := parser.CodexThreadIDFromSessionKey(key)
+	if thread == key {
+		return nil
+	}
+	return []string{sess.ID[:prefixEnd] + key[len(thread)+1:]}
 }
 
 func pgVibeFallbackAliasID(id, agent, filePath string) string {

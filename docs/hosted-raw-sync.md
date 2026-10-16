@@ -24,10 +24,10 @@ flowchart LR
 The server can now parse accepted generations directly into PostgreSQL. Enable
 `raw_derivation` on an explicitly provisioned hosted tenant to make uploaded
 sessions browsable. Hosted processing uses no SQLite archive intermediary;
-SQLite databases captured from providers remain valid source artifacts.
-Hosted raw sync carries no archive labels or launcher parent links. Label
-filters on hosted sessions match nothing.
-Embedding work is durably queued, but its consumer is not implemented.
+SQLite databases captured from providers remain valid source artifacts. Hosted
+raw sync carries no archive labels or launcher parent links. Label filters on
+hosted sessions match nothing. Embedding work is durably queued, but its
+consumer is not implemented.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
@@ -135,6 +135,7 @@ GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.raw_pins TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
+GRANT INSERT, DELETE ON hosted_sessions.friction_findings TO hosted_runtime;
 
 GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   hosted_sessions.tool_calls_id_seq, hosted_sessions.tool_result_events_id_seq,
@@ -260,8 +261,8 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version, schedule current
-heads explicitly in bounded batches:
+After an executable upgrade changes the parser data version or the Friction Log
+rules, schedule current heads explicitly in bounded batches:
 
 ```bash
 agentsview pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -471,6 +472,17 @@ schema owner, grant the additional privileges and restart `pg serve`:
 GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
 ```
 
+Upgrading also adds the `friction_findings` table, which the runtime role
+rewrites when it projects a session. Grant it as the schema owner before
+restarting `pg serve`:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON agentsview.friction_findings TO raw_sync_runtime;
+```
+
+Then run the rollout in [Reparse and rollback](#reparse-and-rollback) so
+sessions projected before the upgrade get findings.
+
 Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
 Until these grants are applied, the normal session UI continues to work, but
 raw-sync HTTP routes are omitted.
@@ -643,3 +655,187 @@ device, provider, and configured root, and only to one eligible content cohort.
 Conflicting candidates remain unresolved. Fresh session, timing, and sidebar
 reads use this rule. A target-only graph change does not necessarily notify an
 unchanged owner's session stream; graph-only live refresh is not guaranteed.
+
+## Native HTTP request signing
+
+Native signing is development functionality. A deployment needs a release that
+includes the `signing` command and the restricted machine listener before these
+settings can be used. Signing adds an independent HMAC key to existing device or
+reader authentication. Browsers continue using the normal viewer listener.
+
+Create private key and replay files in an isolated operator-owned directory:
+
+```sh
+agentsview signing keygen /srv/agentsview-signing/device-signing.key
+agentsview signing init-replay /srv/agentsview-signing/request-replay.db
+```
+
+These commands create new files exclusively. They never overwrite a key or
+replay database and never print the key. A key contains 64 random bytes encoded
+as base64. Key and policy files must be private regular files. Unix-like systems
+reject group and other access. macOS also rejects extended ACL grants to anyone
+other than the current user or root. If a new file inherits an untrusted grant,
+creation fails before writing any key or replay data. Windows applies a private
+ACL when creating the file and accepts grants only for the current user, SYSTEM,
+and built-in Administrators. Do not pass secret values as command arguments or
+place them in ordinary AgentsView configuration.
+
+An operator supplies a private JSON policy file. This neutral example
+illustrates a contributor grant; use an enrolled immutable device ID. Use
+absolute paths: relative paths resolve against the server's working directory,
+not the policy file's directory.
+
+```json
+{
+  "external_url": "https://history.example.com/native",
+  "listen": "127.0.0.1:18081",
+  "replay_db": "/srv/agentsview-signing/request-replay.db",
+  "keys": [
+    {
+      "id": "device-1",
+      "key_file": "/srv/agentsview-signing/device-signing.key",
+      "grant": "contributor",
+      "device_id": "enrolled-device-id"
+    }
+  ]
+}
+```
+
+Set `AGENTSVIEW_MACHINE_SIGNING_POLICY` to this file when starting `serve` or
+`pg serve`. The optional machine listener defaults to `127.0.0.1:18081` and
+rejects non-loopback bindings. It is separate from managed browser proxy setup
+and never opens a public route. It serves plain HTTP to a trusted TLS terminator
+on the same host, and accepts connections only from loopback addresses. The
+terminator must remove exactly the external prefix and preserve the remaining
+path and raw query. Forwarded headers never determine the signature authority or
+grant localhost privileges. Only requests that pass signature verification are
+written to the request log.
+
+Native clients enable signing with these environment variables:
+
+```sh
+export AGENTSVIEW_SIGNING_URL=https://history.example.com/native
+export AGENTSVIEW_SIGNING_KEY_ID=device-1
+export AGENTSVIEW_SIGNING_KEY_FILE=/srv/agentsview-signing/device-signing.key
+```
+
+Keep using the existing device credential for raw sync, or the existing bearer
+token for reader commands and MCP HTTP access. A reader policy entry uses
+`"grant": "reader"` and omits `device_id`. The reader bearer is the server's
+main `auth_token`, so a reader machine also holds full access to the main
+listener wherever that listener is reachable.
+
+Clients sign only requests to the origin in `AGENTSVIEW_SIGNING_URL`. Requests
+to any other host, such as a local daemon or an HTTP remote-sync peer, keep
+their existing unsigned transport. On the signing host, plain HTTP and paths
+outside the configured prefix fail before credentials are sent. Signed clients
+never follow redirects, and signing never falls back after rejection. MCP
+results from a signed server omit browser session links, because the machine
+listener serves no browser UI.
+
+| Grant       | Supported operations                                                                                                                                                                                                                                                                                           |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contributor | Device token exchange, missing-object negotiation, resumable upload initiation/PATCH/HEAD, manifest commit, raw status and health                                                                                                                                                                              |
+| Reader      | Version/ping, session lists and stored session/message/tool/activity/timing/usage reads, usage summaries and pairwise comparisons, recent edits, tool and signal analytics, activity reports, projects/machines/agents/branches, search, recall reads and queries, memory status, session/server event streams |
+
+Reader memory queries always skip usage recording on the server. The machine
+version response advertises read-only capabilities and non-recording recall
+through `X-Agentsview-Recall-Queries: non-recording`. Reader bearer
+authentication is required even if the main listener does not require it.
+Contributor grants bind one device; native tokens still determine the tenant,
+expiry and operation scopes. Valid signing never admits configuration/credential
+management, shutdown, sync, publishing, resume/execution, directory opening,
+arbitrary filesystem reads, profiling or other unlisted operations.
+Localhost-only search reveal is denied.
+
+### Wire and resource limits
+
+The strict [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421.html) profile uses
+`sig1` and `hmac-sha256`. Ordered covered components are `@method`,
+`@target-uri`, `content-digest`, `content-type`, `authorization`,
+`x-agentsview-device-id`, `upload-offset` and `x-agentsview-search-intent`.
+Optional fields are explicitly present with empty values. The final
+signature-base line is `@signature-params`; there is no trailing newline.
+Parameters are ordered `created`, `expires`, `nonce`, `keyid`, `alg`. Signatures
+last at most 30 seconds, allow five seconds of future clock skew, and use a
+fresh 24-byte random base64url nonce per explicit transport attempt. Expiry is
+exclusive and is checked when the request headers arrive, so a slow body may
+finish after the signature expires. Key IDs use 1–128 ASCII letters, digits,
+periods, underscores or hyphens. The MAC must be exactly 32 bytes.
+
+[RFC 9530](https://www.rfc-editor.org/rfc/rfc9530.html) `Content-Digest` covers
+the exact body bytes, including empty bodies. The signer supplies
+`application/octet-stream` when no content type is set. Signed bodies are
+bounded to 4 MiB in memory; existing smaller control-route limits still apply.
+The listener serves at most 32 concurrent signed requests, including at most
+eight event or session streams, and returns `503` with `request_signing_busy`
+when either limit is full. Header verification and body transfers each run at
+most eight at a time; further requests wait for a slot instead of failing, and
+requests without a body never wait for uploads. Headers and targets are limited
+to 16 KiB, header reads to five seconds, and each body transfer to two minutes,
+so a 4 MiB upload chunk needs about 280 kbit/s. The verifier authenticates
+headers before reading a body, checks its digest, then rechecks policy and
+native credentials before durable replay admission. Admission must finish within
+150 seconds after the signature expires.
+
+Only canonical origin-form paths are supported: encoded path aliases, percent
+encoded path segments, dot segments, repeated slashes and backslashes are
+rejected. Raw query order and encoding, including a trailing `?`, remain signed.
+Duplicate covered fields or signature parameters, alternate signature syntax,
+trailers and content encoding are rejected. A prefix change requires restarting
+the listener and updating clients. Opaque retries inside Go's HTTP transport may
+replay a signature and be rejected; explicit token-refresh, upload recovery and
+stream reconnect attempts receive fresh signatures.
+
+### Rotation, recovery and deployment prerequisites
+
+The server rereads the policy and key files for each request, and again after
+the body arrives and before nonce admission. Add a new key ID, provision its
+private file to the native client, switch the client, then remove the old policy
+entry. Removal or an unreadable or invalid policy fails closed; already admitted
+requests may finish. Listener URL, prefix, state or binding changes require
+restart. Revoking a device remains the independent way to revoke native upload
+credentials and tokens.
+
+The dedicated SQLite replay database is separate from the session archive.
+[EXTRA durability](https://www.sqlite.org/pragma.html#pragma_synchronous)
+flushes database and journal writes before dispatch. Unix-like systems also sync
+the containing directory after initial creation and journal deletion. SQLite's
+Windows VFS does not sync directories. Transactions admit hashed nonces, retain
+each nonce until 150 seconds after its signature expires, bound live state to
+100,000 entries, and retain a wall-clock watermark. Concurrent processes
+accepting the same keys must share this database on a supported local
+filesystem. Separate hosts require disjoint keys; copying independent replay
+files is unsafe. Clock rollback, exhausted state, lock timeout, missing/corrupt
+state or failed persistence denies requests. Never delete or restore older
+replay state to clear an error. If state is lost, revoke and rotate every
+accepted key before explicitly initializing a new file. The session archive is
+never changed by replay recovery. A handler failure still consumes its nonce;
+retry with a fresh signature and the existing idempotent upload/receipt
+protocol.
+
+If `signing init-replay` fails after creating its file, it retains that file and
+will not overwrite it on retry. Stop the machine listener, retain the failed
+file, revoke and rotate every accepted signing key, then initialize a different
+private path with `agentsview signing init-replay ./request-replay-new.db`.
+Update `replay_db` in the policy and restart the listener. This recovery also
+applies to missing or corrupt state. Retaining the failed file avoids deleting
+state another process might have opened during initialization.
+
+Raw capture still needs local provider discovery, consistent source snapshots,
+bounded spool space and durable upload checkpoints. Signing does not create a
+second ingestion pipeline or provide missing hosted embedding, quota, retention
+or backfill features. Direct `pg push` and PostgreSQL reads use database
+protocols; HTTP signing does not protect them. HTTP reader/search/memory/MCP
+functionality is limited by the hosted server's independently available
+projection and indexes. Storage objects continue through the native upload
+route; this change introduces no presigned object-storage URL transport or
+forwarding of API credentials to storage origins.
+
+Before exposing any route, verify the supporting release, enroll least-privilege
+credentials, select an external prefix, verify TLS certificates and trusted
+rewriting, and probe allowed/denied/unsigned/tampered/replayed requests from
+outside the network. Plan rollback by removing the machine route and stopping
+its listener while retaining replay state; revoke signing keys and native device
+credentials separately. No public routing or deployment is performed by this
+feature.

@@ -314,3 +314,63 @@ database = "archivedb"
 	assert.Equal(t, "clickhouse://archive", archive.URL)
 	assert.Equal(t, "archivedb", archive.Database)
 }
+
+func TestResolveClickHouse_PushBatchSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  map[string]any
+		target  string
+		want    *int
+		wantErr string
+	}{
+		{
+			name:   "unset",
+			config: map[string]any{"clickhouse": map[string]any{"url": "clickhouse://h"}},
+		},
+		{
+			name: "legacy block",
+			config: map[string]any{"clickhouse": map[string]any{
+				"url": "clickhouse://h", "push_batch_size": 1000,
+			}},
+			want: new(1000),
+		},
+		{
+			name: "named target",
+			config: map[string]any{"clickhouse": map[string]any{
+				"work": map[string]any{"url": "clickhouse://h", "push_batch_size": 500},
+			}},
+			target: "work",
+			want:   new(500),
+		},
+		{
+			name: "zero in legacy block",
+			config: map[string]any{"clickhouse": map[string]any{
+				"url": "clickhouse://h", "push_batch_size": 0,
+			}},
+			wantErr: "[clickhouse] push_batch_size must be at least 1, got 0; remove the key to use the default",
+		},
+		{
+			name: "negative in named target",
+			config: map[string]any{"clickhouse": map[string]any{
+				"work": map[string]any{"url": "clickhouse://h", "push_batch_size": -5},
+			}},
+			target:  "work",
+			wantErr: "[clickhouse.work] push_batch_size must be at least 1, got -5; remove the key to use the default",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteTOML(t, tt.config)
+			cfg := f.LoadMinimal(t)
+
+			resolved, err := cfg.ResolveClickHouseTarget(tt.target)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, resolved.PushBatchSize)
+		})
+	}
+}

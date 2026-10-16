@@ -63,6 +63,7 @@ class SyncStore {
   }
 
   private watchEventSource: EventSource | null = null;
+  private watchVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
     include_one_shot?: boolean;
@@ -313,10 +314,40 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
-    this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+    const open = () => {
+      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+      const es = this.watchEventSource;
+      es.addEventListener("session_ready", () => {
+        if (this.watchEventSource !== es) return;
+        onUpdate();
+      });
+    };
+    if (typeof document === "undefined") {
+      open();
+      return;
+    }
+    this.watchVisibilityHandler = () => {
+      if (document.hidden) {
+        this.closeSessionStream();
+      } else if (!this.watchEventSource || this.watchEventSource.readyState === 2) {
+        open();
+        // A rejected reconnect, such as a deleted session's 404, never sends session_ready.
+        onUpdate();
+      }
+    };
+    document.addEventListener("visibilitychange", this.watchVisibilityHandler);
+    if (!document.hidden) open();
   }
 
   unwatchSession() {
+    if (this.watchVisibilityHandler) {
+      document.removeEventListener("visibilitychange", this.watchVisibilityHandler);
+      this.watchVisibilityHandler = null;
+    }
+    this.closeSessionStream();
+  }
+
+  private closeSessionStream() {
     if (this.watchEventSource) {
       this.watchEventSource.close();
       this.watchEventSource = null;

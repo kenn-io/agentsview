@@ -37,7 +37,8 @@ remote skip-cache persistence complete.
 For a proven changed source, classification, fingerprinting, parsing, and
 database writes are independent of unrelated mirror cardinality. An unproven
 path may widen work only to its owning provider's configured roots. Full archive
-transfer caused by the half-manifest heuristic does not widen this import scope.
+transfers do not widen this import scope. Transfer selection requests changed
+files unless every manifest file needs fetching or the server rejects a delta.
 
 ## Codex append cursor contract
 
@@ -144,12 +145,12 @@ The maintained behavioral gate inventory is in
 
 `agentsview pg push --watch` preserves the watcher batch that triggered a push
 instead of discarding it. Before this, a daemon-delegated push always ran an
-unscoped sync first, rediscovering every configured session provider and
-walking the existing archive even when only a few sessions changed.
+unscoped sync first, rediscovering every configured session provider and walking
+the existing archive even when only a few sessions changed.
 
 - `WatchBatchAccumulator` (`internal/sync/watch_batch_accumulator.go`) coalesces
-  public watcher work — paths, renames, reconciliation roots, `LostEvents`, and
-  `FullSync` — under the same entry-count and byte bounds as the watcher
+  public watcher work — paths, renames, reconciliation roots, `LostEvents`,
+  and `FullSync` — under the same entry-count and byte bounds as the watcher
   itself. Backend lifecycle tokens never enter the accumulated or transported
   batch. Exceeding a bound promotes the pending batch to `FullSync` with
   `LostEvents: true`, logged with a `WatchBatchPromotionReason` (`entry_limit`
@@ -172,9 +173,9 @@ walking the existing archive even when only a few sessions changed.
   full/rename cases, a probed `WatchRecoveryScope` of available/deferred
   provider roots) so the daemon performs the same scoped operation.
 - The daemon's push route accepts the batch as an optional field
-  (`internal/server/huma_routes_push.go`). An older daemon that predates scoped
-  batches is detected by its reported API version; a newer client retries the
-  push without the optional fields rather than wedging watch mode.
+  (`internal/server/huma_routes_push.go`). An older daemon that predates
+  scoped batches is detected by its reported API version; a newer client
+  retries the push without the optional fields rather than wedging watch mode.
 
 [PostgreSQL Sync](../pg-sync.md#automatic-push-watcher) documents the resulting
 user-visible behavior: ordinary changes carry a bounded path set, while
@@ -183,14 +184,14 @@ reconciliation.
 
 ## Local session-provider disabling
 
-`disabled_agents` (`internal/config/config.go`) excludes named session
-providers from local filesystem ingestion only: discovery, targeted local file
-sync, watch plans, and polling. The local sync engine (`internal/sync/engine.go`)
-omits a disabled provider's factory once while building its provider-factory
-set; watcher coverage and polling derive from that same selection. HTTP and SSH
+`disabled_agents` (`internal/config/config.go`) excludes named session providers
+from local filesystem ingestion only: discovery, targeted local file sync, watch
+plans, and polling. The local sync engine (`internal/sync/engine.go`) omits a
+disabled provider's factory once while building its provider-factory set;
+watcher coverage and polling derive from that same selection. HTTP and SSH
 remote import, and every export path (HTTP/SSH source export, PostgreSQL,
-DuckDB, archive export), stay independent of this setting and are never passed
-a disabled-provider list, so archived sessions from a disabled provider remain
+DuckDB, archive export), stay independent of this setting and are never passed a
+disabled-provider list, so archived sessions from a disabled provider remain
 visible, exportable, and unaffected by rebuilds. `RemoteSyncExcluded` remains
 the separate, permanent capability that keeps unsafe source trees out of remote
 export; disabling a provider does not change it.
@@ -199,28 +200,29 @@ A change saved through the Settings API applies to the running daemon's file
 watching and polling immediately. A separate `pg push --watch`,
 `clickhouse push --watch`, or `duckdb push --watch` process still needs a
 restart to pick up the new selection, because it owns its own engine instance.
-See [Disabling Session Providers](../configuration.md#disabling-session-providers)
+See
+[Disabling Session Providers](../configuration.md#disabling-session-providers)
 for the user-facing contract.
 
 ## Gemini zero-session fast path
 
-Both slice-based (`geminiSourceSet.discoverRoot`) and streaming Gemini
-discovery in `internal/parser/gemini_provider.go` enumerate session file paths
-under a root before resolving project metadata, and return immediately when no
-session file is found. An existing Gemini root, project metadata, or project
-directory without a matching session file therefore costs no `projects.json`
-hash, no missing-Git-root resolution, and no sibling-worktree scan. When
-sessions do exist, the project map is still built once per root (or lazy
-discovery map) and reused for every source in that pass; no persistent
-cross-sync cache is added, since correct invalidation would span project
-metadata, repository layout, and worktree changes.
+Both slice-based (`geminiSourceSet.discoverRoot`) and streaming Gemini discovery
+in `internal/parser/gemini_provider.go` enumerate session file paths under a
+root before resolving project metadata, and return immediately when no session
+file is found. An existing Gemini root, project metadata, or project directory
+without a matching session file therefore costs no `projects.json` hash, no
+missing-Git-root resolution, and no sibling-worktree scan. When sessions do
+exist, the project map is still built once per root (or lazy discovery map) and
+reused for every source in that pass; no persistent cross-sync cache is added,
+since correct invalidation would span project metadata, repository layout, and
+worktree changes.
 
 ## Adding a cardinality-scaling regression
 
-When fixing a bug in this area, prefer a deterministic work-count assertion
-over a wall-clock benchmark: compare the recorded work (`SyncStats`,
-`PhaseStats`, a discovery call counter) at a small and a large unrelated
-cardinality and assert it stays equal. See
-[Performance Gates](performance-gates.md) for the maintained inventory and
-`internal/sync/watch_batch_sync_test.go` for the scoped-batch cardinality
-tests (one changed source against one versus 10,000 unrelated stored sessions).
+When fixing a bug in this area, prefer a deterministic work-count assertion over
+a wall-clock benchmark: compare the recorded work (`SyncStats`, `PhaseStats`, a
+discovery call counter) at a small and a large unrelated cardinality and assert
+it stays equal. See [Performance Gates](performance-gates.md) for the maintained
+inventory and `internal/sync/watch_batch_sync_test.go` for the scoped-batch
+cardinality tests (one changed source against one versus 10,000 unrelated stored
+sessions).

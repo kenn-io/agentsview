@@ -479,6 +479,73 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 	assert.Equal(t, []string{"/srv/.codex/session_index.jsonl"}, selected.ExtraFiles)
 }
 
+func TestSelectAllowedTargetsPreservesCuratedSelectionOrder(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/editor/a/state.vscdb", "/srv/editor/b/state.vscdb"},
+		},
+		ExtraFiles: []string{"/srv/shared/a.json", "/srv/shared/b.json"},
+		ProviderExtraFiles: map[parser.AgentType][]string{
+			parser.AgentCodex: {"/srv/codex/a.jsonl", "/srv/codex/b.jsonl"},
+		},
+	}
+	requested := remotesync.TargetSet{
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/editor/b/state.vscdb", "/srv/editor/a/state.vscdb", "/srv/editor/b/state.vscdb"},
+		},
+		ExtraFiles: []string{"/srv/shared/b.json", "/srv/shared/a.json", "/srv/shared/b.json"},
+		ProviderExtraFiles: map[parser.AgentType][]string{
+			parser.AgentCodex: {"/srv/codex/b.jsonl", "/srv/codex/a.jsonl", "/srv/codex/b.jsonl"},
+		},
+	}
+
+	selected, ok := remotesync.SelectAllowedTargets(allowed, requested)
+
+	require.True(t, ok)
+	assert.Equal(t, []string{"/srv/editor/b/state.vscdb", "/srv/editor/a/state.vscdb", "/srv/editor/b/state.vscdb"}, selected.Files[parser.AgentWindsurf])
+	assert.Equal(t, []string{"/srv/shared/b.json", "/srv/shared/a.json", "/srv/shared/b.json"}, selected.ExtraFiles)
+	assert.Equal(t, []string{"/srv/codex/b.jsonl", "/srv/codex/a.jsonl", "/srv/codex/b.jsonl"}, selected.ProviderExtraFiles[parser.AgentCodex])
+}
+
+func TestSelectAllowedTargetsRequiresExactProviderFile(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/editor/state.vscdb"},
+		},
+		ProviderExtraFiles: map[parser.AgentType][]string{
+			parser.AgentCodex: {"/srv/codex/index.jsonl"},
+		},
+	}
+	for _, tt := range []struct {
+		name      string
+		requested remotesync.TargetSet
+	}{
+		{
+			name: "normalized spelling",
+			requested: remotesync.TargetSet{Files: map[parser.AgentType][]string{
+				parser.AgentWindsurf: {"/srv/editor/state.vscdb", "/srv/editor/./state.vscdb"},
+			}},
+		},
+		{
+			name: "other provider file",
+			requested: remotesync.TargetSet{Files: map[parser.AgentType][]string{
+				parser.AgentClaude: {"/srv/editor/state.vscdb"},
+			}},
+		},
+		{
+			name: "other provider extra file",
+			requested: remotesync.TargetSet{ProviderExtraFiles: map[parser.AgentType][]string{
+				parser.AgentClaude: {"/srv/codex/index.jsonl"},
+			}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := remotesync.SelectAllowedTargets(allowed, tt.requested)
+			assert.False(t, ok)
+		})
+	}
+}
+
 func TestSelectAllowedTargetsRetainsForbiddenRootsAndRejectsForbiddenDelta(t *testing.T) {
 	root := t.TempDir()
 	allowedRoot := filepath.Join(root, "sessions")
@@ -597,6 +664,49 @@ func TestSelectAllowedFiles(t *testing.T) {
 			} else {
 				assert.Nil(t, selected)
 			}
+		})
+	}
+}
+
+func TestSelectAllowedFilesCuratedSelection(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Files: map[parser.AgentType][]string{
+			parser.AgentRooCode:  {"/srv/roo/tasks/session-a/ui_messages.json"},
+			parser.AgentZed:      {"/srv/zed/threads/threads.db"},
+			parser.AgentWindsurf: {"/srv/editor/state.vscdb"},
+		},
+		ExtraFiles: []string{"/srv/shared/index.json"},
+		ProviderExtraFiles: map[parser.AgentType][]string{
+			parser.AgentCodex: {"/srv/codex/session_index.jsonl"},
+		},
+	}
+	for _, tt := range []struct {
+		name  string
+		files []string
+		want  []string
+		ok    bool
+	}{
+		{
+			name: "verbatim snapshot and extra files keep request order",
+			files: []string{
+				"/srv/codex/session_index.jsonl", "/srv/zed/threads/threads.db",
+				"/srv/shared/index.json", "/srv/roo/tasks/session-a/ui_messages.json",
+				"/srv/zed/threads/threads.db",
+			},
+			want: []string{
+				"/srv/codex/session_index.jsonl", "/srv/zed/threads/threads.db",
+				"/srv/shared/index.json", "/srv/roo/tasks/session-a/ui_messages.json",
+				"/srv/zed/threads/threads.db",
+			},
+			ok: true,
+		},
+		{name: "normalized spelling", files: []string{"/srv/zed/threads/threads.db", "/srv/zed/threads/./threads.db"}},
+		{name: "sanitized file", files: []string{"/srv/zed/threads/threads.db", "/srv/editor/state.vscdb"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			selected, ok := remotesync.SelectAllowedFiles(allowed, tt.files)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, selected)
 		})
 	}
 }

@@ -10,11 +10,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
-	tw := tar.NewWriter(w)
+	tw := tar.NewWriter(ctxio.Writer{Context: ctx, Writer: w})
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	snapshotSQLite := make(map[string]string)
 	for stateDB := range sqliteSnapshotTargets(targets) {
@@ -101,7 +102,10 @@ func writeSQLiteStateDBSnapshot(ctx context.Context, tw *tar.Writer, stateDB str
 	}
 	defer os.RemoveAll(tmpDir)
 	snapshotPath := filepath.Join(tmpDir, "state.db")
-	if err := writeSQLiteSnapshotFile(snapshotPath, stateDB); err != nil {
+	if err := writeSQLiteSnapshotFile(ctx, snapshotPath, stateDB); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		// The source can vanish or turn unreadable between the identity
 		// probe above and the online backup. Re-probe it: an unusable
 		// source is an omitted archive entry, exactly as if the probe
@@ -378,7 +382,7 @@ func writeArchiveHeader(
 // escape the resolved targets, even if a future caller forgets to
 // validate.
 func WriteArchiveFiles(ctx context.Context, w io.Writer, allowed TargetSet, files []string) error {
-	tw := tar.NewWriter(w)
+	tw := tar.NewWriter(ctxio.Writer{Context: ctx, Writer: w})
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
 	snapshotDBs := sqliteSnapshotTargets(allowed)

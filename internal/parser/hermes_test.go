@@ -58,7 +58,13 @@ func parseHermesTestArchive(
 // DiscoverHermesSessions entrypoint.
 func discoverHermesTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
-	return discoverHermesSessions(root)
+	sources, err := newHermesTestProvider(t, root).Discover(t.Context())
+	require.NoError(t, err)
+	var files []DiscoveredFile
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{Path: source.DisplayPath, Agent: source.Provider})
+	}
+	return files
 }
 
 // findHermesTestSourceFile resolves a Hermes session ID to a transcript path
@@ -2186,5 +2192,53 @@ func TestHermesCronRecordedNames(t *testing.T) {
 		{"cron job-a · Oct 08", ""},
 	} {
 		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, HermesCronJobName("job-a", tc.title)) })
+	}
+}
+
+// TestHermesStoredPathIsAggregateArchive pins the distinction between a
+// bare state.db archive path and a "state.db#<id>" virtual member, even
+// when a literal "#" appears elsewhere in the path (e.g. inside a profile
+// directory's name) rather than as the virtual-path separator. A bare
+// ParseVirtualSourcePath split only checks that something exists on both
+// sides of the last "#" in the whole path, so a container like
+// "/archive/profile#one/state.db" -- a real bare archive path that just
+// happens to have "#one" in an ancestor directory's name -- misread as a
+// virtual member and skipped the legacy-aggregate-path protection
+// HermesStoredPathIsAggregateArchive exists to provide.
+func TestHermesStoredPathIsAggregateArchive(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{
+			name: "bare archive path",
+			path: "/archive/state.db",
+			want: true,
+		},
+		{
+			name: "real virtual member path",
+			path: "/archive/state.db#child",
+			want: false,
+		},
+		{
+			name: "bare archive path with an incidental # in an ancestor directory",
+			path: "/archive/profile#one/state.db",
+			want: true,
+		},
+		{
+			name: "real virtual member path under a directory with an incidental #",
+			path: "/archive/profile#one/state.db#child",
+			want: false,
+		},
+		{
+			name: "non-state.db path",
+			path: "/archive/sessions/child.jsonl",
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, HermesStoredPathIsAggregateArchive(tc.path))
+		})
 	}
 }

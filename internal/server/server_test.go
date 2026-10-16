@@ -4861,7 +4861,7 @@ func TestWatchSession_Events(t *testing.T) {
 		close(done)
 	}()
 
-	w.WaitForWrite(t)
+	te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
 
 	updated := content + testjsonl.NewSessionBuilder().
 		AddClaudeAssistant(tsZeroS5, "response").
@@ -5527,9 +5527,9 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 		close(done)
 	}()
 
-	// Emit directly via the broadcaster to isolate the handler
-	// from sync engine timing.
-	te.emitUntilSSEEvent(t, w, "messages", "data_changed", 3*time.Second)
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	te.broadcaster.Emit("messages")
+	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 	cancel()
 	<-done
 }

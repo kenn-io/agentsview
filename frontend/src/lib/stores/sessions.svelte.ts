@@ -354,6 +354,7 @@ class SessionsStore {
   private sidebarConsumers = 0;
   private sidebarLoadPromise: Promise<void> | null = null;
   private sidebarLoadSignature: string | null = null;
+  private sidebarRefreshQueued = false;
   private sidebarAbort: AbortController | null = null;
   private routeAbort: AbortController | null = null;
   private navigateRead = new LatestRead();
@@ -523,6 +524,7 @@ class SessionsStore {
       return this.sidebarLoadPromise;
     }
 
+    this.sidebarRefreshQueued = false;
     this.sidebarAbort?.abort();
     const controller = new AbortController();
     this.sidebarAbort = controller;
@@ -537,6 +539,10 @@ class SessionsStore {
         this.sidebarLoadSignature = null;
         if (this.sidebarAbort === controller) {
           this.sidebarAbort = null;
+        }
+        if (this.sidebarRefreshQueued) {
+          this.sidebarRefreshQueued = false;
+          this.refreshSidebarIfAttached();
         }
       }
     }
@@ -1588,6 +1594,7 @@ class SessionsStore {
   }
 
   private handleLiveRefreshEvent(event: DataChangedEvent) {
+    if (event.scope === "sync") this.invalidateHydratedSessionDetails();
     if (event.scope === "messages") {
       this.invalidateHydratedSessionDetails();
       this.bumpActiveSessionUsageVersion();
@@ -1610,7 +1617,11 @@ class SessionsStore {
     }
     this.liveRefreshTimer = setTimeout(() => {
       this.liveRefreshTimer = null;
-      void this.load();
+      if (this.sidebarLoadPromise !== null) {
+        this.sidebarRefreshQueued = true;
+      } else {
+        void this.load();
+      }
     }, LIVE_REFRESH_DEBOUNCE_MS);
   }
 
@@ -1633,6 +1644,7 @@ class SessionsStore {
   }
 
   cancelRouteReads(): void {
+    this.sidebarRefreshQueued = false;
     this.sidebarAbort?.abort();
     this.sidebarAbort = null;
     this.sidebarLoadPromise = null;

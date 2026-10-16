@@ -17,162 +17,110 @@ func mustStart(t *testing.T, s string) time.Time {
 	return ts.UTC()
 }
 
-func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
+func TestAggregateUsageTotalsIncludeOnlySelectedSnapshot(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
-	// Same logical usage from message source and usage_events source share
-	// no claude IDs but share a dedup key -> must count once. A row outside
-	// the range is dropped without claiming a key.
 	usage := []UsageRow{
 		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r",
+			SessionID: "root", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 100, OutputTokens: 5, Cost: money.MustParseDollars("1.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
 		},
 		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r",
-		},
-		{
-			SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
-			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out",
+			SessionID: "child", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
+			InputTokens: 1000, OutputTokens: 500, Cost: money.MustParseDollars("5.0"),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
 		},
 	}
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
+	sessions := []SessionMeta{{SessionID: "root"}, {SessionID: "child", IsAutomated: true}}
+	r, err := Aggregate(p, sessions, nil, usage)
 	require.NoError(t, err)
-	r := Report{Buckets: make([]Bucket, len(windows))}
-	applyUsage(&r, p, windows, start, end, usage, nil)
-	assert.Equal(t, 100, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.Cost)
-	// A nil automated set classifies every session as interactive.
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.InteractiveCost)
-	assert.Equal(t, money.MustParseDollars("0.0"), r.Totals.AutomatedCost)
-	// 10:00 UTC -> bucket 120 (10*12).
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(t, "2026-06-16T10:00:00Z", r.Buckets[120].Start)
 	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
-	assert.Equal(t, 100, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Buckets[120].Cost)
-}
-
-func TestApplyUsage_PrefersCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	usage := []UsageRow{
-		{
-			SessionID: "root", Model: "m1",
-			Timestamp:    "2026-06-16T10:00:00Z",
-			OutputTokens: 5, Cost: money.MustParseDollars("0.05"),
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-		},
-		{
-			SessionID: "child", Model: "m1",
-			Timestamp:    "2026-06-16T10:00:01Z",
-			OutputTokens: 631, Cost: money.MustParseDollars("6.31"),
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-		},
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.InteractiveCost)
+	assert.Zero(t, r.Totals.AutomatedCost.Microdollars)
+	bySession := make(map[string]SessionRow, len(r.BySession))
+	for _, row := range r.BySession {
+		bySession[row.SessionID] = row
 	}
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
-	require.NoError(t, err)
-	r := Report{Buckets: make([]Bucket, len(windows))}
-	deduped := dedupUsage(start, end, p.EffectiveEnd, usage)
-	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID)
-	assert.Equal(t, 631, deduped[0].OutputTokens)
-
-	applyUsage(&r, p, windows, start, end, usage, nil)
-
-	assert.Equal(t, 631, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("6.31"), r.Totals.Cost)
+	require.Contains(t, bySession, "root")
+	require.Contains(t, bySession, "child")
+	assert.Equal(t, 500, bySession["root"].OutputTokens)
+	assert.Equal(t, money.MustParseDollars("5.0"), bySession["root"].Cost)
+	assert.Zero(t, bySession["child"].OutputTokens)
+	assert.Zero(t, bySession["child"].Cost.Microdollars)
 }
 
-func TestDedupUsagePrefersLatestEqualOutputClaudeSnapshot(t *testing.T) {
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	usage := []UsageRow{
+func TestCanonicalSessionTokenCoverageCreditsDuplicateCategories(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage []UsageRow
+		want  SessionTokenCoverage
+	}{
 		{
-			SessionID: "root", Model: "m1",
-			Timestamp:       "2026-06-16T10:00:00Z",
-			InputTokens:     10,
-			OutputTokens:    100,
-			Cost:            money.MustParseDollars("1"),
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+			name: "claude snapshot",
+			usage: []UsageRow{
+				{
+					SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
+					InputTokens: 100, OutputTokens: 5,
+					ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+				},
+				{
+					SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
+					InputTokens: 900, OutputTokens: 100,
+					CacheCreationTokens: 200, CacheReadTokens: 300,
+					ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+				},
+			},
+			want: SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400},
 		},
 		{
-			SessionID: "child", Model: "m1",
-			Timestamp:           "2026-06-16T10:01:00Z",
-			InputTokens:         900,
-			OutputTokens:        100,
-			CacheCreationTokens: 200,
-			CacheReadTokens:     300,
-			WebSearchRequests:   2,
-			Cost:                money.MustParseDollars("9"),
-			ClaudeMessageID:     "msg-stream", ClaudeRequestID: "req-stream",
+			name: "generic duplicate",
+			usage: []UsageRow{
+				{
+					SessionID: "root", InputTokens: 700, OutputTokens: 80,
+					CacheReadTokens: 100, UsageDedupKey: "shared-usage",
+				},
+				{
+					SessionID: "child", OutputTokens: 80,
+					UsageDedupKey: "shared-usage",
+				},
+			},
+			want: SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800},
 		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.usage)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, coverage["root"])
+			assert.Equal(t, tc.want, coverage["child"])
+		})
 	}
-
-	deduped := dedupUsage(start, end, end, usage)
-	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID,
-		"the earliest session retains attribution")
-	assert.Equal(t, 900, deduped[0].InputTokens)
-	assert.Equal(t, 100, deduped[0].OutputTokens)
-	assert.Equal(t, 200, deduped[0].CacheCreationTokens)
-	assert.Equal(t, 300, deduped[0].CacheReadTokens)
-	assert.Equal(t, 2, deduped[0].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("9"), deduped[0].Cost)
 }
 
-func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
-	usage := []UsageRow{
-		{
-			SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 100, OutputTokens: 5,
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-		},
-		{
-			SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
-			InputTokens: 900, OutputTokens: 100,
-			CacheCreationTokens: 200, CacheReadTokens: 300,
-			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
-		},
-	}
-
-	coverage, err := CanonicalSessionTokenCoverageContext(
-		t.Context(), usage)
-	require.NoError(t, err)
-
-	want := SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400}
-	assert.Equal(t, want, coverage["root"])
-	assert.Equal(t, want, coverage["child"])
-}
-
-func TestCanonicalSessionTokenCoverageCreditsGenericDuplicateCategories(t *testing.T) {
-	usage := []UsageRow{
-		{
-			SessionID: "root", InputTokens: 700, OutputTokens: 80,
-			CacheReadTokens: 100, UsageDedupKey: "shared-usage",
-		},
-		{
-			SessionID: "child", OutputTokens: 80,
-			UsageDedupKey: "shared-usage",
-		},
-	}
-
-	coverage, err := CanonicalSessionTokenCoverageContext(
-		t.Context(), usage)
-	require.NoError(t, err)
-
-	want := SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800}
-	assert.Equal(t, want, coverage["root"])
-	assert.Equal(t, want, coverage["child"])
-}
-
-func TestClaudeSnapshotEquivalentInstantUsesSemanticTieBreakers(t *testing.T) {
+func TestClaudeSnapshotPrefersLaterTimestampThenSemanticTieBreakers(t *testing.T) {
 	tests := []struct {
 		name  string
 		usage []UsageRow
 		want  int
 	}{
+		{
+			name: "later instant",
+			usage: []UsageRow{
+				{
+					SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
+					OutputTokens: 100, ClaudeMessageID: "msg", ClaudeRequestID: "req",
+				},
+				{
+					SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
+					OutputTokens: 100, ClaudeMessageID: "msg", ClaudeRequestID: "req",
+				},
+			},
+			want: 1,
+		},
 		{
 			name: "session ID",
 			usage: []UsageRow{
@@ -218,33 +166,6 @@ func TestClaudeSnapshotEquivalentInstantUsesSemanticTieBreakers(t *testing.T) {
 	}
 }
 
-func TestDedupUsagePreservesWebSearchesFromEarlierClaudeSnapshot(t *testing.T) {
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	usage := []UsageRow{
-		{
-			SessionID: "root", Model: "m1",
-			Timestamp:         "2026-06-16T10:00:00Z",
-			OutputTokens:      100,
-			WebSearchRequests: 2,
-			ClaudeMessageID:   "msg-stream", ClaudeRequestID: "req-stream",
-		},
-		{
-			SessionID: "child", Model: "m1",
-			Timestamp:         "2026-06-16T10:01:00Z",
-			OutputTokens:      200,
-			WebSearchRequests: 0,
-			ClaudeMessageID:   "msg-stream", ClaudeRequestID: "req-stream",
-		},
-	}
-
-	deduped := dedupUsage(start, end, end, usage)
-	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID)
-	assert.Equal(t, 200, deduped[0].OutputTokens)
-	assert.Equal(t, 2, deduped[0].WebSearchRequests)
-}
-
 // Two interleaved snapshot identities each take their winner, attribution
 // and web-search count from three different rows, so a decision leaking
 // across identities or rows changes the result.
@@ -280,48 +201,53 @@ func TestClaudeSnapshotSurvivorSelectionKeepsDecisionsPerIdentity(t *testing.T) 
 		},
 	}
 
-	t.Run("all rows", func(t *testing.T) {
-		mask, attribution, webSearchRequests := ClaudeSnapshotSurvivorSelection(usage)
-		assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
-		assert.Equal(t, []string{"", "", "e", "x", "a", ""}, attribution)
-		assert.Equal(t, []int{0, 0, 2, 4, 3, 0}, webSearchRequests)
-	})
-
-	t.Run("ineligible row excluded", func(t *testing.T) {
-		mask, attribution, webSearchRequests := UsageSurvivorSelection(
-			mustStart(t, "2026-06-16T10:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"),
-			mustStart(t, "2026-06-17T00:00:00Z"),
-			usage,
-		)
-		assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
-		assert.Equal(t, []string{"", "", "c", "x", "a", ""}, attribution)
-		assert.Equal(t, []int{0, 0, 1, 4, 3, 0}, webSearchRequests)
-	})
+	for _, tc := range []struct {
+		name            string
+		ranged          bool
+		wantAttribution []string
+		wantSearches    []int
+	}{
+		{"all rows", false, []string{"", "", "e", "x", "a", ""}, []int{0, 0, 2, 4, 3, 0}},
+		{"ineligible row excluded", true, []string{"", "", "c", "x", "a", ""}, []int{0, 0, 1, 4, 3, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mask []bool
+			var attribution []string
+			var searches []int
+			if tc.ranged {
+				mask, attribution, searches = UsageSurvivorSelection(
+					mustStart(t, "2026-06-16T10:00:00Z"),
+					mustStart(t, "2026-06-17T00:00:00Z"),
+					mustStart(t, "2026-06-17T00:00:00Z"), usage,
+				)
+			} else {
+				mask, attribution, searches = ClaudeSnapshotSurvivorSelection(usage)
+			}
+			assert.Equal(t, []bool{false, false, true, true, true, false}, mask)
+			assert.Equal(t, tc.wantAttribution, attribution)
+			assert.Equal(t, tc.wantSearches, searches)
+		})
+	}
 }
 
-func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	usage := []UsageRow{
-		{
-			SessionID: "earlier", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 500, Cost: money.MustParseDollars("5.0"), Agent: "claude",
-			ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
-		},
-		{
-			SessionID: "later", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
-			OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude",
-			ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
-		},
+// Agent and source UUID deduplicate rows with an empty UsageSource after range filtering.
+func TestUsageSurvivorSelectionFiltersRangeBeforeUngatedAgentSourceUUIDDedup(t *testing.T) {
+	rows := []UsageRow{
+		{SessionID: "out", Timestamp: "2026-06-15T23:00:00Z", OutputTokens: 1000, WebSearchRequests: 9},
+		{SessionID: "a", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, WebSearchRequests: 2},
+		{SessionID: "b", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 50, WebSearchRequests: 1},
 	}
-	start := mustStart(t, "2026-06-16T00:00:00Z")
-	end := mustStart(t, "2026-06-17T00:00:00Z")
-	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
-	require.NoError(t, err)
-	r := Report{Buckets: make([]Bucket, len(windows))}
-	applyUsage(&r, p, windows, start, end, usage, nil)
-	assert.Equal(t, 500, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
-	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
+	for i := range rows {
+		rows[i].Agent = "claude"
+		rows[i].ClaudeMessageID = "msg"
+		rows[i].SourceUUID = "source"
+	}
+	mask, attribution, searches := UsageSurvivorSelection(
+		mustStart(t, "2026-06-16T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"),
+		mustStart(t, "2026-06-17T00:00:00Z"), rows,
+	)
+	assert.Equal(t, []bool{false, true, false}, mask)
+	assert.Equal(t, "a", attribution[1])
+	assert.Equal(t, 2, searches[1])
 }

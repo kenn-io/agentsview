@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -40,6 +42,11 @@ type replicaPusher struct {
 	// on the interval floor unnecessarily; while false, change pushes
 	// scope their vector reads to the changed relational sessions.
 	vectorReconcileNeeded bool
+	// fullVectorsPending keeps a full watch's generation-wide vector repair
+	// until a vector phase runs. vectorRepairSessions then keeps the repair
+	// for each session that phase deferred until the session's vectors push.
+	fullVectorsPending   bool
+	vectorRepairSessions map[string]struct{}
 	// lastReconciledVectorGeneration is the replica generation id of the
 	// last clean generation-wide reconciliation in this process. A scoped
 	// push carrying it lets the vector phase promote itself to
@@ -102,9 +109,12 @@ func (p *replicaPusher) pushAfterSync(
 		p.reset()
 		return fmt.Errorf("ensure schema: %w", err)
 	}
-	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
+	repairPending := p.fullVectorsPending || len(p.vectorRepairSessions) > 0
+	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded || repairPending)
 	res, err := p.target.PushWithOptions(ctx, storage.PushOptions{
 		Full:                           full,
+		FullVectors:                    p.fullVectorsPending,
+		FullVectorSessions:             slices.Sorted(maps.Keys(p.vectorRepairSessions)),
 		ScopeVectorsToChangedSessions:  scoped,
 		LastReconciledVectorGeneration: p.lastReconciledVectorGeneration,
 	}, nil)
@@ -112,6 +122,13 @@ func (p *replicaPusher) pushAfterSync(
 		p.vectorReconcileNeeded = true
 		p.reset()
 		return fmt.Errorf("push: %w", err)
+	}
+	if !res.Vectors.Skipped {
+		p.vectorRepairSessions = nextVectorRepair(
+			p.fullVectorsPending, p.vectorRepairSessions,
+			res.Vectors.DeferredSessionIDs,
+		)
+		p.fullVectorsPending = false
 	}
 	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration = nextVectorReconcile(
 		p.vectorReconcileNeeded,
@@ -162,6 +179,22 @@ func scopedVectorPush(
 // phase cannot promote if the generation was recreated meanwhile. Current
 // servers report a nonzero id on every clean unskipped phase, so scoping
 // resumes with the first response that carries one.
+// nextVectorRepair returns the sessions whose --full vector repair is still
+// owed after a vector phase that ran: every deferred session when the phase
+// was the generation-wide repair, else the owed sessions it deferred again.
+// A persistently failing session therefore keeps only its own repair open.
+func nextVectorRepair(
+	generationWide bool, owed map[string]struct{}, deferred []string,
+) map[string]struct{} {
+	next := make(map[string]struct{})
+	for _, id := range deferred {
+		if _, ok := owed[id]; generationWide || ok {
+			next[id] = struct{}{}
+		}
+	}
+	return next
+}
+
 func nextVectorReconcile(
 	current bool, lastGeneration int64,
 	scoped bool, res storage.PushResult,
@@ -325,6 +358,9 @@ func runReplicaPushWatch(
 		name, target.Target.MachineName, debounce, interval,
 	)
 
+	// --embed builds in this process, so it never auto-starts a daemon; a
+	// live daemon still wins the writer and rejects the request.
+	appCfg.NoDaemonAutostart = cfg.Embed
 	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)

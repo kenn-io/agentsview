@@ -180,7 +180,7 @@ type sessionExportUsageAccum struct {
 	authoritativeCost        *money.Money
 	contributing             bool
 	allPriced                bool
-	seen                     map[UsageDedupToken]struct{}
+	seen                     map[activity.UsageDedupToken]struct{}
 }
 
 type sessionExportModelUsageAccum struct {
@@ -977,14 +977,8 @@ func (db *DB) attachSessionExportUsage(
 		if a == nil {
 			continue
 		}
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := a.seen[key]; dup {
-				continue
-			}
-			a.seen[key] = struct{}{}
+		if !activity.KeepSessionUsageRow(a.seen, r.UsageIdentity()) {
+			continue
 		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sessionExportUsageTokens(r)
 		costRow := r
@@ -1477,7 +1471,7 @@ func newSessionExportUsageAccum() *sessionExportUsageAccum {
 		models:    make(map[string]struct{}),
 		byModel:   make(map[string]*sessionExportModelUsageAccum),
 		allPriced: true,
-		seen:      make(map[UsageDedupToken]struct{}),
+		seen:      make(map[activity.UsageDedupToken]struct{}),
 	}
 }
 

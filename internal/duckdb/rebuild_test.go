@@ -3,6 +3,8 @@
 package duckdb
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,13 +42,35 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	return ids
 }
 
+// rebuildMirror claims the mirror and rebuilds it the way Push does when a
+// rebuild is required, continuing an unfinished rebuild if one matches.
+func rebuildMirror(
+	ctx context.Context, path string, local *db.DB, machine string,
+	opts storage.MirrorPushOptions, reason string,
+	onProgress func(storage.MirrorPushProgress),
+) (result storage.MirrorPushResult, err error) {
+	run, err := newRebuildRun(ctx, local, machine, opts, reason)
+	if err != nil {
+		return result, err
+	}
+	lock, pending, err := claimRebuild(ctx, path, run, false, true)
+	if err != nil {
+		return result, err
+	}
+	defer func() { err = errors.Join(err, unlockRebuild(lock)) }()
+	if pending != nil {
+		run.Reason = pending.Reason
+	}
+	return buildMirror(ctx, path, local, machine, opts, run, onProgress)
+}
+
 func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
+	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, len(ids), result.SessionsPushed)
@@ -121,7 +145,7 @@ func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
 
 	seedRebuildFixture(t, local)
 
-	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
+	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.SessionsPushed)
 
@@ -132,30 +156,31 @@ func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
 	assertDuckDBCount(t, conn, "sessions", 3)
 }
 
-func TestRebuildMirrorLeavesNoTempFilesOnSwapFailure(t *testing.T) {
+// A rebuild whose final swap fails keeps its rebuild file, so the retry
+// swaps it in without pushing the sessions again.
+func TestRebuildMirrorKeepsRebuildFileOnSwapFailure(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	seedRebuildFixture(t, local)
-	dir := t.TempDir()
 	// A directory in place of the destination file makes the final
 	// rename fail deterministically on every platform, simulating a swap
 	// failure (e.g. Windows sharing violation) without needing to inject a
 	// fake rename.
-	path := filepath.Join(dir, "mirror-as-dir.duckdb")
+	path := filepath.Join(t.TempDir(), "mirror-as-dir.duckdb")
 	require.NoError(t, os.Mkdir(path, 0o755))
 
-	_, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
-
+	_, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
 	require.Error(t, err)
 	assert.DirExists(t, path, "swap failure must leave the destination untouched")
-	for _, checkDir := range []string{dir, mirrorWorkDirPath(path)} {
-		entries, err := os.ReadDir(checkDir)
-		require.NoError(t, err)
-		for _, entry := range entries {
-			assert.NotContains(t, entry.Name(), ".tmp-",
-				"failed rebuild must not leave a temp mirror file behind in %s", checkDir)
-		}
-	}
+	assert.FileExists(t, rebuildFilePath(path))
+
+	require.NoError(t, os.Remove(path))
+	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.SessionsPushed)
+	assert.Equal(t, 3, result.Diagnostics.SkippedUnchangedSessions.Total)
+	assert.FileExists(t, path)
+	assert.NoFileExists(t, rebuildFilePath(path))
 }
 
 func TestSwapMirrorFileRetriesThenFailsWithActionableError(t *testing.T) {
@@ -196,7 +221,7 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "scoped.duckdb")
 
 	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
-	result, err := rebuildMirror(ctx, path, local, "test-machine", opts, nil)
+	result, err := rebuildMirror(ctx, path, local, "test-machine", opts, "test", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
 

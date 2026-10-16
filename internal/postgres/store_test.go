@@ -1487,7 +1487,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 		"reversed duration row must be excluded")
 }
 
-func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
+func TestStoreWriteSurface(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	store, err := NewStore(pgURL, testSchema, true)
@@ -1576,12 +1576,20 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "ListTrashedSessions")
 	assert.Contains(t, sessionIDs(trashed), sessionID)
 
-	restored, err := store.RestoreSession(t.Context(), sessionID)
-	require.NoError(t, err, "RestoreSession")
-	assert.EqualValues(t, 1, restored)
-
 	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
 		"SoftDeleteSession trashedID")
+	_, err = store.DB().Exec(`UPDATE sessions SET data_version = $1 WHERE id = $2`, db.CurrentDataVersion(), trashedID)
+	require.NoError(t, err, "marking restore target current")
+	restored, err := store.RestoreSession(t.Context(), trashedID)
+	require.NoError(t, err, "RestoreSession trashedID")
+	assert.EqualValues(t, 1, restored)
+	sess, err = store.GetSession(ctx, trashedID)
+	require.NoError(t, err, "GetSession after restore")
+	require.NotNil(t, sess)
+	assert.Less(t, sess.DataVersion, db.CurrentDataVersion(),
+		"restoring a session must force a source reparse")
+	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
+		"SoftDeleteSession restored trashedID")
 	deleted, err := store.DeleteSessionIfTrashed(t.Context(), trashedID)
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, deleted)
@@ -1596,21 +1604,12 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.Equal(t, 2, deletedCount)
 	count, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err, "EmptyTrash")
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 3, count)
 	trashed, err = store.ListTrashedSessions(ctx)
 	require.NoError(t, err, "ListTrashedSessions after empty trash")
+	assert.NotContains(t, sessionIDs(trashed), sessionID)
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
 	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
-
-	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(ctx, db.Session{}))
-	assert.Equal(t, db.ErrReadOnly,
-		store.ReplaceSessionMessages(ctx, "x", nil))
-	_, err = store.WriteSessionBatchAtomic(ctx, nil)
-	assert.ErrorIs(t, err, db.ErrReadOnly)
-	_, err = store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
-		Surface: db.RecallQuerySurfaceQuery,
-	})
-	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
 func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {

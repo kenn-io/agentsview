@@ -187,6 +187,11 @@ func (s *Server) humaGetVersion(
 	}
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	_, version.SessionStatsAvailable = s.db.(*db.DB)
+	if restrictedIngress(ctx) {
+		version.ReadOnly = true
+		version.InsightGenerationAvailable = false
+		version.SessionStatsAvailable = false
+	}
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 

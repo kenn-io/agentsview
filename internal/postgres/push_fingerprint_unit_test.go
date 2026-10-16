@@ -69,28 +69,48 @@ func TestBatchedDependencyFingerprintMatchesPerSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, pinID)
 
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "dep-a",
+		[]db.UsageEvent{
+			{
+				SessionID: "dep-a", Source: "session", Model: "claude-test",
+				InputTokens: 4, OccurredAt: "2026-07-01T12:00:00.000Z",
+			},
+			{
+				SessionID: "dep-a", Source: "session", Model: "claude-test",
+				InputTokens: 3, OccurredAt: "2026-07-01T12:00:00.123456789Z",
+			},
+		}))
+
 	ids := []string{"dep-a", "dep-empty", "dep-missing"}
-	usageFPs, err := local.UsageEventFingerprints(ids)
+	usageFPs, err := local.SortedUsageEventFingerprints(
+		ctx, ids, pgUsageEventTimestampFingerprintText,
+	)
 	require.NoError(t, err)
 
 	state, err := readLocalPushDependencyState(ctx, local, ids)
 	require.NoError(t, err)
 
 	for _, id := range ids {
+		byUsageKnown := map[bool]string{}
 		for _, usageKnown := range []bool{true, false} {
 			want, err := localSessionDependencyPushFingerprint(
 				ctx, local, id, usageFPs[id], usageKnown,
 			)
 			require.NoError(t, err, id)
 			got, err := state.dependencyFingerprint(
-				local, id, usageFPs[id], usageKnown,
+				ctx, local, id, usageFPs[id], usageKnown,
 			)
 			require.NoError(t, err, id)
 			assert.Equal(t, want, got,
 				"dependency fingerprint %s (usageKnown=%t)", id, usageKnown)
+			byUsageKnown[usageKnown] = got
 		}
+		assert.Equal(t, byUsageKnown[true], byUsageKnown[false],
+			"usage fallback must match the prefetched fingerprint for %s", id)
 	}
 
 	assert.NotEmpty(t, state.contentHashFP["dep-a"],
 		"fixture must exercise the message fingerprint maps")
+	assert.NotEmpty(t, usageFPs["dep-a"],
+		"fixture must exercise the usage fingerprint")
 }

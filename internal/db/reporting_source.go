@@ -158,7 +158,7 @@ func (db *DB) loadReportingExportSource(
 	}
 
 	allSessions := mergeReportingSessions(sessions, usageSessions)
-	labels := ActivityReportProjectLabels(allSessions)
+	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
 	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
@@ -260,7 +260,7 @@ func (src reportingExportSource) forDate(
 	}
 
 	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
-	labels := ActivityReportProjectLabels(allSessions)
+	labels := activity.ProjectLabels(allSessions)
 	labelSet := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
 		labelSet[label] = struct{}{}

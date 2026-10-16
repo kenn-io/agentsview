@@ -13,6 +13,10 @@ import (
 // detector's output can change for the same input.
 const RulesVersion = "friction-v1"
 
+// SkippedRulesVersion marks a session over the review budget: current, so
+// backfill leaves it alone, but never reviewed.
+const SkippedRulesVersion = RulesVersion + ":skipped"
+
 // Kind is a friction signal kind (jilog signal.rs:60-68).
 type Kind string
 

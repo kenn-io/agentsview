@@ -21,6 +21,10 @@ func executeCLIWithLegacyFlagCompat(args []string, stdout, stderr io.Writer) err
 	if len(rewrites) > 0 {
 		fmt.Fprint(stderr, legacyLongFlagWarning(rewrites))
 	}
+	normalized, err := deploymentArgs(normalized)
+	if err != nil {
+		return err
+	}
 	cmd.SetArgs(normalized)
 	ctx, _ := apiclient.TrackArchiveFreshness(context.Background(), func() {
 		fmt.Fprintln(stderr, apiclient.ArchiveStaleWarning)

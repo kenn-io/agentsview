@@ -74,12 +74,17 @@ func main() {
 	secrets.EnableFixtureDeny()
 
 	if err := executeCLI(); err != nil {
-		code := exitCodeFromError(err)
-		if !isSilentExitError(err) {
-			fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
-		}
-		os.Exit(code)
+		os.Exit(reportCLIError(err, os.Stderr))
 	}
+}
+
+// reportCLIError prints a failed command's error unless the command already
+// reported it, and returns the process exit code.
+func reportCLIError(err error, stderr io.Writer) int {
+	if !isSilentExitError(err) {
+		fmt.Fprintf(stderr, "fatal: %v\n", err)
+	}
+	return exitCodeFromError(err)
 }
 
 // warnMissingDirs prints a warning to stderr for each
@@ -342,6 +347,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
+	var frictionReviews *frictionReviewer
+	if cfg.Friction.Enabled {
+		frictionReviews = newFrictionReviewer()
+		emitter = notifyTeeEmitter{primary: emitter, notify: frictionReviews.Notify}
+	}
+
 	var engine *sync.Engine
 	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
@@ -358,6 +369,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			Machine:                 cfg.InstallationID,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			ArchiveContent:          cfg.ArchiveContent,
+			FrictionEnabled:         cfg.Friction.Enabled,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
 				opts.SkipInitialSync || startupRebuild, workerSyncDone,
@@ -367,6 +379,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			},
 		})
 		defer engine.Close()
+		if frictionReviews != nil {
+			frictionReviews.start(ctx, engine, idleTracker)
+			defer frictionReviews.stop()
+			// Review sessions left stale before this start, such as an
+			// archive that has just enabled the setting.
+			frictionReviews.Notify()
+		}
 		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
@@ -1053,7 +1072,11 @@ func syncObligationToPoller(o sync.PollingObligation) pollingObligation {
 	for _, s := range o.Scopes {
 		scopes = append(scopes, pollingScope{Agent: parser.AgentType(s.Agent), Root: s.Root})
 	}
-	return pollingObligation{Key: o.Key, Scopes: scopes, Probe: o.Probe}
+	releaseScopes := make([]pollingScope, 0, len(o.ReleaseScopes))
+	for _, s := range o.ReleaseScopes {
+		releaseScopes = append(releaseScopes, pollingScope{Agent: parser.AgentType(s.Agent), Root: s.Root})
+	}
+	return pollingObligation{Key: o.Key, Scopes: scopes, ReleaseScopes: releaseScopes, Probe: o.Probe}
 }
 
 // absRootPath mirrors the engine's cleanRootPath so daemon-side scope-overlap
@@ -3018,6 +3041,7 @@ func startPeriodicSync(
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
 			recomputePendingSessions(engine, database)
+			recomputeStaleFriction(ctx, engine)
 		})
 	}
 }
@@ -3408,4 +3432,74 @@ func recomputePendingSessions(
 		// pass will retry any that failed.
 		_ = engine.RecomputeSignals(context.Background(), id)
 	}
+}
+
+// recomputeStaleFriction retries the guarded friction backfill on the
+// scheduled reconcile tick. A current archive or disabled setting is a cheap
+// no-op.
+func recomputeStaleFriction(ctx context.Context, engine *sync.Engine) {
+	if _, err := engine.BackfillFriction(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("friction backfill: %v", err)
+	}
+}
+
+// frictionReviewer reviews stale sessions in the background after each sync,
+// so enabling the Friction Log never delays a sync. Notify never blocks.
+type frictionReviewer struct {
+	kick   chan struct{}
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func newFrictionReviewer() *frictionReviewer {
+	return &frictionReviewer{kick: make(chan struct{}, 1), done: make(chan struct{})}
+}
+
+// Notify requests a review pass. Requests made during a pass coalesce into
+// one more pass.
+func (r *frictionReviewer) Notify() {
+	select {
+	case r.kick <- struct{}{}:
+	default:
+	}
+}
+
+// start runs reviews for engine. Each drain holds an idle work lease, so a
+// detached daemon does not shut down partway through a review backlog.
+func (r *frictionReviewer) start(
+	ctx context.Context, engine *sync.Engine, idle *server.IdleTracker,
+) {
+	ctx, r.cancel = context.WithCancel(ctx)
+	go func() {
+		defer close(r.done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.kick:
+			}
+			idle.Do(func() { drainFrictionReviews(ctx, engine) })
+		}
+	}()
+}
+
+// drainFrictionReviews repeats time-bounded passes while they make progress,
+// so a newly enabled archive catches up without waiting for reconcile ticks.
+// Each pass takes the sync lock once per session.
+func drainFrictionReviews(ctx context.Context, engine *sync.Engine) {
+	for ctx.Err() == nil {
+		processed, err := engine.BackfillFriction(ctx)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("friction review: %v", err)
+		}
+		if processed == 0 {
+			return
+		}
+	}
+}
+
+// stop cancels any running pass and waits for it, so the engine can close.
+func (r *frictionReviewer) stop() {
+	r.cancel()
+	<-r.done
 }

@@ -204,22 +204,15 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
   };
 }
 
-function samePairwiseSelection(
-  left: UsagePairwiseSelection,
-  right: UsagePairwiseSelection,
-): boolean {
-  return (
-    left.left.dimension === right.left.dimension &&
-    left.left.value === right.left.value &&
-    left.right.dimension === right.right.dimension &&
-    left.right.value === right.right.value
-  );
-}
-
 export type UsageMode = "cost" | "token";
 
 function selectionKey(params: UsageParams): string {
   return [params.project_key, params.model, params.agent].join("|");
+}
+
+// active_since follows the clock, so only whether it is set changes the scope.
+function refreshScopeKey(params: UsageParams): string {
+  return JSON.stringify({ ...params, active_since: params.active_since !== undefined });
 }
 
 function summaryForDateRange(
@@ -390,6 +383,10 @@ class UsageStore {
     );
   }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
+  // The zoom query the current rows (or the request filling them) belong to.
+  private zoomScope = "";
+  // The sort metric and token types the current rows were ranked by.
+  private zoomRanking = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -435,6 +432,9 @@ class UsageStore {
     zoom: 0,
   };
   private fetchAllVersion = 0;
+  private currentPairwisePromise: Promise<FetchResult> = Promise.resolve("ok");
+  private pairwiseScope = "";
+  private pairwiseNeedsValidation = false;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
@@ -502,11 +502,10 @@ class UsageStore {
   }
 
   // Chart colors and legend rank from this, so selecting never recolors or reorders series.
+  // The reference stays until a refresh without a selection lands, so clearing a
+  // selection, or failing to refresh after clearing, keeps them still too.
   get colorSummary(): UsageSummaryResponse | null {
-    return (
-      (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) ||
-      this.timeSeriesSummary
-    );
+    return this.referenceSummary ?? this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -553,48 +552,21 @@ class UsageStore {
   }
 
   private preferredPairwiseValue(dimension: UsagePairwiseDimension, fallback: string): string {
-    const options = this.pairwiseOptionsFor(dimension);
+    // Usage without a known project has an empty key, which the server cannot compare.
+    const options = this.pairwiseOptionsFor(dimension).filter(Boolean);
     for (const option of options) {
       if (option !== fallback) return option;
     }
     return options[0] ?? "";
   }
 
-  private ensurePairwiseSelection(): boolean {
-    const current = this.pairwiseSelection;
-    const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
-    const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
-    const leftValid = current.left.value !== "" && currentLeftOptions.includes(current.left.value);
-    const rightValid =
-      current.right.value !== "" && currentRightOptions.includes(current.right.value);
-    if (leftValid && rightValid) return false;
-
-    const modelOptions = this.pairwiseModelOptions;
-    const projectOptions = this.pairwiseProjectOptions;
-    let next = emptyPairwiseSelection();
-    if (modelOptions.length >= 2) {
-      next = {
-        left: { dimension: "model", value: modelOptions[0] ?? "" },
-        right: { dimension: "model", value: modelOptions[1] ?? "" },
-      };
-    } else if (projectOptions.length >= 2) {
-      next = {
-        left: { dimension: "project", value: projectOptions[0] ?? "" },
-        right: { dimension: "project", value: projectOptions[1] ?? "" },
-      };
-    } else if (modelOptions.length > 0 && projectOptions.length > 0) {
-      next = {
-        left: { dimension: "model", value: modelOptions[0] ?? "" },
-        right: { dimension: "project", value: projectOptions[0] ?? "" },
-      };
-    } else {
-      next = emptyPairwiseSelection();
-    }
-    if (samePairwiseSelection(current, next)) {
-      return false;
-    }
-    this.pairwiseSelection = next;
-    return true;
+  private pairwiseSelectionUnavailable(): boolean {
+    const { left, right } = this.pairwiseSelection;
+    return (
+      !!left.value &&
+      !!right.value &&
+      [left, right].some((side) => !this.pairwiseOptionsFor(side.dimension).includes(side.value))
+    );
   }
 
   private clearPairwiseComparisonState(): void {
@@ -682,19 +654,29 @@ class UsageStore {
       right: { ...this.pairwiseSelection.right },
     };
     const prev = next[side];
+    const otherSide = side === "left" ? "right" : "left";
+    const other = next[otherSide];
     const dimension = updates.dimension ?? prev.dimension;
     const options = this.pairwiseOptionsFor(dimension);
     const value =
       updates.value ??
       (options.includes(prev.value) && prev.dimension === dimension
         ? prev.value
-        : this.preferredPairwiseValue(dimension, next[side === "left" ? "right" : "left"].value));
+        : this.preferredPairwiseValue(dimension, other.value));
 
     next[side] = { dimension, value };
+    // A picker change can cancel the default-pair recovery, so replace a side
+    // that left the current choices instead of resending it.
+    if (other.value && !this.pairwiseOptionsFor(other.dimension).includes(other.value)) {
+      next[otherSide] = {
+        dimension: other.dimension,
+        value: this.preferredPairwiseValue(other.dimension, value),
+      };
+    }
     this.pairwiseSelection = next;
     if (this.summary) {
       this.clearPairwiseComparisonState();
-      void this.fetchPairwise(this.versions.summary, this.baseParams());
+      void this.fetchPairwise(this.baseParams());
     }
   }
 
@@ -977,7 +959,7 @@ class UsageStore {
   }
 
   private async fetchAllSteps(startedAt: number, options: FetchAllOptions): Promise<FetchResult> {
-    const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
+    const hadSelectedRange = this.selectedTimeRange !== null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
       if (this.timeSeriesContextSummary) {
@@ -994,9 +976,7 @@ class UsageStore {
     saveUsageFilters(this);
     const params = this.baseParams();
     const contextParams =
-      options.preserveTimeRange &&
-      options.refreshTimeSeriesContext !== false &&
-      selectedRangeAtStart !== null
+      options.preserveTimeRange && options.refreshTimeSeriesContext !== false && hadSelectedRange
         ? { ...params, from: this.from, to: this.to }
         : undefined;
     if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
@@ -1005,6 +985,10 @@ class UsageStore {
       params,
       contextParams,
     });
+    void this.fetchPairwise(
+      params,
+      refreshScopeKey(params) !== this.pairwiseScope || this.pairwiseComparison === null,
+    );
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
@@ -1012,22 +996,38 @@ class UsageStore {
       await Promise.all([topSessionsPromise, zoomPromise]);
       return "aborted";
     }
+    const rangeRestored = options.preserveTimeRange && hadSelectedRange && !this.selectedTimeRange;
+    const scopeRecovered =
+      loadedSummary?.projectScopeRecovered ||
+      rangeRestored ||
+      (params.project_key && !this.selectedProjectKey) ||
+      (params.exclude_project_key && !this.excludedProjectKeys);
+    const recoveredParams = loadedSummary?.params ?? (scopeRecovered ? this.baseParams() : params);
+    if (scopeRecovered) void this.fetchPairwise(recoveredParams, true);
+    if (loadedSummary) {
+      const selection = this.pairwiseSelection;
+      if (!!selection.left.value !== !!selection.right.value) {
+        const side = selection.left.value ? "right" : "left";
+        const value = this.preferredPairwiseValue(
+          selection[side].dimension,
+          selection[side === "left" ? "right" : "left"].value,
+        );
+        if (value) this.setPairwiseSide(side, { value });
+      }
+    }
     if (!loadedSummary) {
       await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
-      if (
-        selectedRangeAtStart !== null &&
-        this.selectedTimeRange === null &&
-        fetchVersion === this.fetchAllVersion
-      ) {
+      if (rangeRestored) {
         this.invalidatePanel("topSessions");
         this.topSessions = null;
         this.errors.topSessions = null;
         await Promise.all([
-          this.fetchTopSessions(this.baseParams()),
-          this.fetchZoom(this.baseParams()),
+          this.fetchTopSessions(recoveredParams),
+          this.fetchZoom(recoveredParams),
         ]);
       }
+      await this.awaitPairwise();
       return "error";
     }
     const currentTopSessionsPromise = loadedSummary.projectScopeRecovered
@@ -1042,13 +1042,21 @@ class UsageStore {
           return this.fetchZoom(loadedSummary.params);
         })
       : zoomPromise;
-    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
-      await Promise.all([
-        currentTopSessionsPromise,
-        currentZoomPromise,
-        this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
-        this.fetchPairwise(loadedSummary.version, loadedSummary.params),
-      ]);
+    const [topSessionsResult, loadedZoomResult, comparisonResult] = await Promise.all([
+      currentTopSessionsPromise,
+      currentZoomPromise,
+      this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
+    ]);
+    let pairwiseResult = await this.awaitPairwise();
+    if (
+      fetchVersion === this.fetchAllVersion &&
+      this.pairwiseNeedsValidation &&
+      this.pairwiseSelectionUnavailable()
+    ) {
+      this.clearPairwiseComparisonState();
+      void this.fetchPairwise(loadedSummary.params, true);
+      pairwiseResult = await this.awaitPairwise();
+    }
     const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
@@ -1085,7 +1093,6 @@ class UsageStore {
     const attributionParams = this.attributionParams();
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
-    this.abortPanel("pairwise");
     const signal = this.nextAbortSignal("summary");
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
@@ -1173,8 +1180,6 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
-        this.ensurePairwiseSelection();
-        this.clearPairwiseComparisonState();
         const loaded = {
           version: v,
           summary: data,
@@ -1183,7 +1188,7 @@ class UsageStore {
         };
         if (loadComparison) {
           void this.fetchComparison(v, data, params);
-          void this.fetchPairwise(v, params);
+          void this.fetchPairwise(params, this.pairwiseSelectionUnavailable());
         }
         return loaded;
       }
@@ -1205,6 +1210,7 @@ class UsageStore {
           this.selectedProjectKey = "";
           this.backToProjects();
         }
+        this.invalidatePanel("pairwise");
         this.abortPanel("topSessions");
         const recoveredParams = this.baseParams();
         const loaded = await this.fetchSummary({
@@ -1222,21 +1228,18 @@ class UsageStore {
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
       if (this.versions.summary === v) {
-        // A selected-range summary is synthesized from daily data while the
-        // request is in flight. If that request fails, restore the parent
-        // window rather than leaving provisional values under an active brush.
-        // Other cached refetch failures keep their existing values visible.
+        // Restore the parent window when the provisional brushed summary fails.
         if (
           this.isTimeRangeSummaryProvisional &&
           this.selectedTimeRange !== null &&
           this.timeSeriesContextSummary !== null
         ) {
+          this.invalidatePanel("pairwise");
           this.summary = this.timeSeriesContextSummary;
           this.selectedTimeRange = null;
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
-          // The reference already holds this scope's full-window attribution.
           this.attributionSummary = this.referenceSummary;
           const restoredAttributionParams = this.attributionSummary
             ? undefined
@@ -1334,11 +1337,30 @@ class UsageStore {
     };
   }
 
-  private async fetchPairwise(summaryVersion: number, params: UsageParams): Promise<FetchResult> {
-    if (this.versions.summary !== summaryVersion) return "aborted";
+  private async awaitPairwise(): Promise<FetchResult> {
+    const current = this.currentPairwisePromise;
+    const result = await current;
+    return current === this.currentPairwisePromise ? result : this.awaitPairwise();
+  }
+
+  private fetchPairwise(params: UsageParams, fallbackToDefault = false): Promise<FetchResult> {
+    const scope = refreshScopeKey(params);
+    if (scope !== this.pairwiseScope) this.clearPairwiseComparisonState();
+    this.pairwiseScope = scope;
+    this.currentPairwisePromise = this.loadPairwise(params, fallbackToDefault);
+    return this.currentPairwisePromise;
+  }
+
+  private async loadPairwise(
+    params: UsageParams,
+    fallbackToDefault: boolean,
+  ): Promise<FetchResult> {
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
-    if (!request) {
+    this.pairwiseNeedsValidation = !!request && !fallbackToDefault;
+    if (request && fallbackToDefault) request.fallback_to_default = true;
+    const useDefault = !this.pairwiseSelection.left.value && !this.pairwiseSelection.right.value;
+    if (!request && !useDefault) {
       this.pairwiseComparison = null;
       this.errors.pairwise = null;
       this.loading.pairwise = false;
@@ -1353,8 +1375,21 @@ class UsageStore {
     const liveStep = this.liveQuery.start("pairwise", started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await UsageService.getApiV1UsagePairwiseComparison(request, { signal });
-      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
+      const comparison = await UsageService.getApiV1UsagePairwiseComparison(request ?? params, {
+        signal,
+      });
+      if (this.versions.pairwise === pairwiseVersion) {
+        if (
+          (comparison.left.dimension === "model" || comparison.left.dimension === "project") &&
+          (comparison.right.dimension === "model" || comparison.right.dimension === "project")
+        ) {
+          this.pairwiseSelection = {
+            left: { dimension: comparison.left.dimension, value: comparison.left.value ?? "" },
+            right: { dimension: comparison.right.dimension, value: comparison.right.value ?? "" },
+          };
+        } else if (!request || fallbackToDefault) {
+          this.pairwiseSelection = emptyPairwiseSelection();
+        }
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
         this.noteStep("pairwise", liveStep, started, comparison);
@@ -1367,7 +1402,7 @@ class UsageStore {
         return "aborted";
       }
       status = "error";
-      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
+      if (this.versions.pairwise === pairwiseVersion) {
         if (this.pairwiseComparison === null) {
           this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
@@ -1379,7 +1414,7 @@ class UsageStore {
       this.recordStep("pairwise", started, status);
       this.liveQuery.abandon(liveStep);
       this.clearAbortSignal("pairwise", signal);
-      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
+      if (this.versions.pairwise === pairwiseVersion) {
         this.loading.pairwise = false;
       }
     }
@@ -1420,7 +1455,26 @@ class UsageStore {
   ): Promise<FetchResult> {
     const version = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
-    if (panel === "zoom") this.zoomRows = null;
+    const ranking = {
+      sort: this.mode === "token" ? "tokens" : "cost",
+      token_types:
+        this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+          ? this.selectedTokenTypes.join(",")
+          : undefined,
+    } as const;
+    if (panel === "zoom") {
+      // Rows from another range or scope are wrong, so clear them. A metric or
+      // token-type change, a refresh, or a remount keeps them, even if it fails,
+      // unless the server cut the list at the limit: the new metric can pick
+      // other rows out of the remainder.
+      const scope = refreshScopeKey(query);
+      const rankingKey = JSON.stringify(ranking);
+      const cut = this.zoomRows?.some((row) => !row.groupKey && !row.sessionId) ?? false;
+      if (scope !== this.zoomScope || (cut && rankingKey !== this.zoomRanking))
+        this.zoomRows = null;
+      this.zoomScope = scope;
+      this.zoomRanking = rankingKey;
+    }
     const isFirstLoad = (panel === "zoom" ? this.zoomRows : this.topSessions) === null;
     if (isFirstLoad) {
       this.loading[panel] = true;
@@ -1431,14 +1485,7 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
-        {
-          ...query,
-          sort: this.mode === "token" ? "tokens" : "cost",
-          token_types:
-            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-              ? this.selectedTokenTypes.join(",")
-              : undefined,
-        },
+        { ...query, ...ranking },
         { signal },
       );
       if (this.versions[panel] !== version) return "aborted";

@@ -27,6 +27,9 @@ type Sync struct {
 	excludeProjects []string
 	// vectorSource, when non-nil, enables the vector push phase.
 	vectorSource storage.VectorPushSource
+	// sessionBatchSize is how many sessions share one set of insert blocks
+	// and delete statements. Zero selects sessionPushBatchSize.
+	sessionBatchSize int
 
 	connMu sync.Mutex
 	conn   *sql.DB
@@ -48,6 +51,9 @@ type Sync struct {
 
 	// hooks is nil in production; tests inject failures at push boundaries.
 	hooks *pushHooks
+	// vectorBatchSessions overrides the vector flush session bound when
+	// positive; tests lower it to cover several flushes in one push.
+	vectorBatchSessions int
 
 	closeOnce sync.Once
 	closeErr  error
@@ -60,6 +66,9 @@ type pushHooks struct {
 	// its stale rows deleted, before the session rows (and fingerprints)
 	// land.
 	beforeSessionRows func(batch []db.Session) error
+	// beforeVectorState runs after a vector batch's documents and chunks are
+	// written and its stale rows deleted, before its push state rows land.
+	beforeVectorState func(sessionIDs []string) error
 }
 
 // SyncStatus summarizes a mirror from its own metadata.
