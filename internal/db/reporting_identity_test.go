@@ -203,7 +203,7 @@ func TestReportingProjectEvidenceIsIndependentOfMapOrder(t *testing.T) {
 		entry := evidence["pl1:project"]
 		require.NotNil(t, entry.Identity)
 		assert.Equal(t, export.ProjectResolutionResolved, entry.Resolution)
-		assert.Equal(t, "r1:first", entry.Identity.RootKey)
+		assert.Empty(t, entry.Identity.RootKey, "different worktrees have no shared root")
 		assert.Equal(t, "api", entry.DisplayLabel)
 	}
 }
