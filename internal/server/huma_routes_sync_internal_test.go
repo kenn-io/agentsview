@@ -202,16 +202,16 @@ func (f *syncRouteFixture) writeClaudeSession(
 	firstMessage string,
 ) string {
 	t.Helper()
-	sessionPath := filepath.Join(f.claudeDir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(t, os.WriteFile(
-		sessionPath,
-		[]byte(testjsonl.NewSessionBuilder().
-			AddClaudeUser("2024-01-01T00:00:00Z", firstMessage).
-			String()),
-		0o644,
-	))
-	return sessionPath
+	return f.writeClaudeTranscript(t, relPath, testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", firstMessage).String())
+}
+
+func (f *syncRouteFixture) writeClaudeTranscript(t *testing.T, relPath, content string) string {
+	t.Helper()
+	path := filepath.Join(f.claudeDir, relPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
 }
 
 func markDBStale(t *testing.T, dbPath string) {
@@ -2562,11 +2562,9 @@ func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
 func TestUsageRefreshImportsSessionOnNoSyncDaemon(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	require.Nil(t, f.srv.engine)
-	path := filepath.Join(f.claudeDir, "project", "fresh.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+	f.writeClaudeTranscript(t, "project/fresh.jsonl", testjsonl.NewSessionBuilder().
 		AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "fresh").
-		AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).String()), 0o600))
+		AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).String())
 	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
 		"id": "fresh", "subagents": true, "usage_refresh": true,
 	})
@@ -2620,22 +2618,20 @@ func TestUsageRefreshWaitsForScheduledStartupCoverage(t *testing.T) {
 				`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
 				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
 			)
-			parentPath := filepath.Join(f.claudeDir, "project", "parent.jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(parentPath), 0o755))
-			require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
+			f.writeClaudeTranscript(t, "project/parent.jsonl", parent)
 			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+			f.srv.engine = engine
+			f.srv.sessions = service.NewDirectBackend(f.db, engine)
 			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
 			fork := strings.ReplaceAll(strings.ReplaceAll(parent, `"sessionId":"parent"`, `"sessionId":"continuation"`), `"message":`, `"sessionKind":"bg","message":`)
 			fork += testjsonl.JoinJSONL(
 				`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T11:00:00Z","sessionId":"continuation","sessionKind":"bg","message":{"content":"continue"}}`,
 				`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-01-01T11:00:05Z","sessionId":"continuation","sessionKind":"bg","message":{"id":"msg-2","content":[{"type":"text","text":"continued"}],"usage":{"input_tokens":10,"output_tokens":7}}}`,
 			)
-			require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(parentPath), "continuation.jsonl"), []byte(fork), 0o600))
-			childPath := filepath.Join(f.claudeDir, "project", "continuation", "subagents", "agent-child.jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(childPath), 0o755))
-			require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.NewSessionBuilder().
+			f.writeClaudeTranscript(t, "project/continuation.jsonl", fork)
+			f.writeClaudeTranscript(t, "project/continuation/subagents/agent-child.jsonl", testjsonl.NewSessionBuilder().
 				AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "continuation").
-				AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String()), 0o600))
+				AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String())
 			if state == "failed" {
 				engine.RecordStartupReconciled(syncpkg.SyncStats{}, errors.New("ingestion failed"))
 			} else if state == "incomplete" {
@@ -2651,7 +2647,7 @@ func TestUsageRefreshWaitsForScheduledStartupCoverage(t *testing.T) {
 			child, err := f.db.GetSession(t.Context(), "agent-child")
 			require.NoError(t, err)
 			assert.Nil(t, child)
-			// The explicit full pass reuses the cached engine of a no-sync daemon.
+			// An explicit full pass completes the scheduled startup coverage.
 			w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.True(t, engine.StartupReconciled())

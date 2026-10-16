@@ -37,7 +37,9 @@ func newSessionUsageCommand() *cobra.Command {
 			"Totals include archived subagent usage. Source refresh can find " +
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
-			"Missing daemon IDs return exit 2 until scheduled ingestion imports them. " +
+			"Combined refresh can import an unarchived canonical ID from its source. " +
+			"If startup ingestion blocks it, retry after scheduled ingestion. " +
+			"Absent IDs return exit 2; --no-sync reads only the archive. " +
 			"Pending ingestion, a busy sync engine, or a stale archive returns stored usage with a warning.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
@@ -157,7 +159,11 @@ func requireRemoteSubagentUsageSupport(
 		)
 	}
 	if refresh && capabilities.APIVersion < server.UsageRefreshAPIVersion {
-		return fmt.Errorf("server API version %d does not support usage refresh without waiting for ingestion; upgrade or restart the server, or pass --no-sync", capabilities.APIVersion)
+		return fmt.Errorf(
+			"server API version %d does not support usage refresh without waiting for ingestion; "+
+				"upgrade or restart the server, or pass --no-sync",
+			capabilities.APIVersion,
+		)
 	}
 	return nil
 }
@@ -181,23 +187,39 @@ func httpSessionUsageData(
 		ctx = context.Background()
 	}
 	sessionID := query.SessionID
-	resolvedID, err := resolveServiceSessionID(
-		ctx, servicehttp.NewHTTPBackend(baseURL, token, false, ""), sessionID,
-	)
-	if err != nil {
-		if errors.Is(err, errSessionNotFound) {
-			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-			return nil, tokenUseExitNotFound, nil
-		}
-		return nil, tokenUseExitErr, err
+	backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
+	resolvedID, resolveErr := resolveServiceSessionID(ctx, backend, sessionID)
+	missing := errors.Is(resolveErr, errSessionNotFound)
+	if resolveErr != nil && !missing {
+		return nil, tokenUseExitErr, resolveErr
+	}
+	if missing {
+		resolvedID = sessionID
 	}
 	if !query.OwnOnly && !query.NoSync {
-		backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
-		if _, syncErr := backend.Sync(ctx, service.SyncInput{
+		_, syncErr := backend.Sync(ctx, service.SyncInput{
 			ID: resolvedID, Subagents: true, UsageRefresh: true,
-		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
-			fmt.Fprintf(os.Stderr, "warning: sync failed; showing stored usage: %v\n", syncErr)
+		})
+		if missing {
+			resolvedID, resolveErr = resolveServiceSessionID(ctx, backend, sessionID)
+			missing = errors.Is(resolveErr, errSessionNotFound)
+			if resolveErr != nil && !missing {
+				return nil, tokenUseExitErr, resolveErr
+			}
+			if missing && syncErr != nil && !errors.Is(syncErr, os.ErrNotExist) {
+				return nil, tokenUseExitErr, fmt.Errorf(
+					"session usage is not yet available; retry after ingestion: %w", syncErr,
+				)
+			}
 		}
+		if !missing && syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
+			fmt.Fprintf(os.Stderr,
+				"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
+		}
+	}
+	if missing {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		return nil, tokenUseExitNotFound, nil
 	}
 	// Request the full breakdown so the remote path matches the
 	// shape returned by the direct store paths, and the same subagent

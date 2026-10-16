@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -1078,8 +1079,8 @@ func (s *Server) humaSyncSession(
 	if in.Body.Subagents && in.Body.ID == "" {
 		return nil, apiError(http.StatusBadRequest, "'subagents' requires 'id'")
 	}
-	if in.Body.UsageRefresh && (in.Body.ID == "" || !in.Body.Subagents) {
-		return nil, apiError(http.StatusBadRequest, "'usage_refresh' requires 'id' and 'subagents'")
+	if err := in.Body.ValidateUsageRefresh(); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
@@ -1088,10 +1089,9 @@ func (s *Server) humaSyncSession(
 			http.Header{ResyncRequiredHeader: []string{"true"}},
 		)
 	}
-	if in.Body.UsageRefresh {
-		if local, ok := s.db.(*db.DB); ok && !s.syncEngineForLocal(ctx, local).StartupReconciled() {
-			return nil, apiError(http.StatusConflict, "startup ingestion is incomplete; wait for scheduled ingestion or run 'agentsview sync'")
-		}
+	if in.Body.UsageRefresh && s.engine != nil && !s.engine.StartupReconciled() {
+		return nil, apiError(http.StatusConflict,
+			"startup ingestion is incomplete; wait for scheduled ingestion or run 'agentsview sync'")
 	}
 	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {
@@ -1103,6 +1103,9 @@ func (s *Server) humaSyncSession(
 		}
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
+		}
+		if in.Body.UsageRefresh && errors.Is(err, os.ErrNotExist) {
+			return nil, apiError(http.StatusNotFound, err.Error())
 		}
 		if errors.Is(err, syncpkg.ErrSyncInProgress) ||
 			errors.Is(err, db.ErrSessionExcluded) ||

@@ -446,7 +446,7 @@ func (e *Engine) syncS3SubagentTranscriptsContext(ctx context.Context, parentSes
 	if !isClaudeFormatAgent(parentAgent) {
 		return fmt.Errorf("sync s3 subagent transcripts: unsupported parent agent %q", parentAgent)
 	}
-	if err := e.lockSessionRefresh(try); err != nil {
+	if err := e.lockSync(try); err != nil {
 		return err
 	}
 	synced := false

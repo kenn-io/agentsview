@@ -1054,12 +1054,14 @@ The codes classify the reported document, so a session whose only token data
 lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
-Combined usage refreshes an archived session and its Claude subagent transcripts
+Combined usage refreshes the named session and its Claude subagent transcripts
 without waiting for startup ingestion. Totals include archived descendants.
 While startup ingestion is incomplete, another sync owns the engine, or the
-archive needs a rebuild, the command shows stored usage with a warning. Missing
-daemon IDs return exit 2 until scheduled ingestion imports them. Direct mode
-keeps its targeted lookup of the named local transcript.
+archive needs a rebuild, the command shows available stored usage with a
+warning. Combined refresh can import an unarchived canonical ID from its
+source. If startup ingestion blocks it, the command reports that usage is not
+yet available; retry after scheduled ingestion. Absent IDs return exit 2.
+Direct mode keeps its targeted lookup of the named local transcript.
 
 HTTP `--own-only` reads archived usage without refreshing sources. Direct mode
 still refreshes the named transcript. Combined HTTP refresh requires daemon API

@@ -329,7 +329,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 		}
 		if syncErr != nil {
 			fmt.Fprintf(os.Stderr,
-				"warning: sync failed: %v\n", syncErr)
+				"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
 		}
 		// Flush pending debounced signal recomputes before the
 		// usage query reads the session.

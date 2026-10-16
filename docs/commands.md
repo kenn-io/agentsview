@@ -1160,11 +1160,12 @@ use IDs like `agent-a86574e`, and some other agents use prefixes such as
 accepted when AgentsView can resolve them back to the canonical stored session.
 
 The command uses a compatible local daemon, starting one if needed. It
-refreshes archived sessions without waiting for startup ingestion. Pending
-ingestion, a busy engine, or a stale archive returns stored usage with a
-warning. Missing daemon IDs return exit 2 until scheduled ingestion imports
-them. With daemon autostart disabled, direct mode can import the named local
-transcript.
+refreshes sessions without waiting for startup ingestion and can import an
+unarchived canonical ID from its source. Pending ingestion, a busy engine, or
+a stale archive returns available stored usage with a warning. If startup
+ingestion blocks an unarchived ID, the command returns a retry error; wait
+for scheduled ingestion. Absent IDs return exit 2. With daemon autostart disabled, direct mode can import the
+named local transcript.
 
 Totals include archived subagent spend. `token-use` has no opt-out; use
 `agentsview session usage <id> --own-only` for own-session numbers.
@@ -1738,10 +1739,12 @@ agentsview session parent <id> <parent>  # record the launching session
 `session usage` includes archived subagent spend in the parent total. Combined
 usage refreshes the named session and Claude subagent transcripts without
 waiting for startup ingestion. Pending ingestion, a busy engine, or a stale
-archive returns stored usage with a warning. Missing daemon IDs return exit 2
-until scheduled ingestion imports them. Direct mode can import the named local
-transcript. HTTP `--own-only` reads stored usage; direct `--own-only` refreshes
-the named transcript. Combined HTTP refresh requires API 12; `--no-sync`
+archive returns available stored usage with a warning. Combined refresh can
+import an unarchived canonical ID from its source. If startup ingestion blocks
+it, the command returns a retry error; wait for scheduled ingestion. Absent
+IDs return exit 2; `--no-sync` reads only the archive. Direct mode can import the named local transcript.
+HTTP `--own-only` reads stored usage; direct `--own-only` refreshes the named
+transcript. Combined HTTP refresh requires API 12; `--no-sync`
 combined reads require API 6.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,

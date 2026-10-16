@@ -1097,11 +1097,13 @@ daemon's file watcher handles later source changes.
 During a full parser rebuild, statusline skips startup ingestion and reads the
 retained archive with a stale warning.
 
-`session usage` and its `token-use` alias refresh archived sessions without
+`session usage` and its `token-use` alias refresh sessions without
 waiting for startup ingestion. Combined totals include archived descendants.
 Pending ingestion, a busy engine, or a stale archive returns stored usage with
-a warning. Missing daemon IDs return exit 2 until scheduled ingestion imports
-them. Direct mode can import the named local transcript. HTTP `--own-only`
+a warning. Combined refresh can import an unarchived canonical ID from its
+source. If startup ingestion blocks it, the command returns a retry error;
+wait for scheduled ingestion. Absent IDs return exit 2; `--no-sync` reads only the archive. Direct mode can
+import the named local transcript. HTTP `--own-only`
 reads stored usage; direct `--own-only` refreshes the named transcript. Combined
 HTTP refresh requires API 12, while `--no-sync` combined reads require API 6.
 

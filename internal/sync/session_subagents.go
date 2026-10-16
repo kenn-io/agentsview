@@ -26,17 +26,6 @@ func (e *Engine) TrySyncSessionWithSubagentsContext(ctx context.Context, session
 	return e.syncSessionWithSubagentsContext(ctx, sessionID, true)
 }
 
-func (e *Engine) lockSessionRefresh(try bool) error {
-	if try {
-		if !e.syncMu.TryLock() {
-			return ErrSyncInProgress
-		}
-	} else {
-		e.syncMu.Lock()
-	}
-	return nil
-}
-
 func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID string, try bool) error {
 	parentErr := e.syncSingleSessionContext(ctx, sessionID, try)
 	if errors.Is(parentErr, ErrSyncInProgress) {

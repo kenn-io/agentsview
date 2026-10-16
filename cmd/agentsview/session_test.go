@@ -2562,8 +2562,16 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 }
 
 func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
-	for _, pending := range []bool{false, true} {
-		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, id        string
+		pending, noSync bool
+	}{
+		{name: "targeted", id: "fresh"},
+		{name: "pending", id: "fresh", pending: true},
+		{name: "absent", id: "absent"},
+		{name: "archive-only", id: "fresh", noSync: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
 			database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 			claudeDir := filepath.Join(dataDir, "claude")
@@ -2580,7 +2588,7 @@ func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
 				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeDir}},
 			}
 			var engine *agentsync.Engine
-			if pending {
+			if tc.pending {
 				engine = agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Ephemeral: true})
 				t.Cleanup(engine.Close)
 			}
@@ -2588,15 +2596,27 @@ func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
 			ts.Listener = ln
 			ts.Start()
 			t.Cleanup(ts.Close)
-			cmd := sessionUsageCommand(t, "session", "usage", "fresh", "--server", ts.URL)
-			out, code, err := sessionUsageDataForCommand(cmd, "fresh")
-			if pending {
+			args := []string{"session", "usage", tc.id, "--server", ts.URL}
+			if tc.noSync {
+				args = append(args, "--no-sync")
+			}
+			cmd := sessionUsageCommand(t, args...)
+			out, code, err := sessionUsageDataForCommand(cmd, tc.id)
+			if tc.pending {
 				require.ErrorContains(t, err, "scheduled ingestion")
 				assert.Equal(t, tokenUseExitErr, code)
 				assert.Nil(t, out)
 				return
 			}
 			require.NoError(t, err)
+			if tc.noSync || tc.id == "absent" {
+				assert.Equal(t, tokenUseExitNotFound, code)
+				assert.Nil(t, out)
+				stored, err := database.GetSession(t.Context(), "fresh")
+				require.NoError(t, err)
+				assert.Nil(t, stored)
+				return
+			}
 			require.NotNil(t, out)
 			assert.Equal(t, tokenUseExitOK, code)
 			assert.Equal(t, 42, out.TotalOutputTokens)
@@ -2604,15 +2624,19 @@ func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
 	}
 }
 
-func TestSessionUsageRefusedRefreshReturnsStoredUsage(t *testing.T) {
-	for _, reason := range []string{"archive is stale", "sync already in progress", "startup ingestion is incomplete"} {
+func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
+	for _, reason := range []string{"archive is stale", "sync already in progress", "startup ingestion is incomplete", "child refresh failed after parent refresh"} {
 		t.Run(reason, func(t *testing.T) {
 			newAgentDataDir(t)
 			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 			original := ts.Config.Handler
 			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/sessions/sync" {
-					http.Error(w, reason, http.StatusConflict)
+					status := http.StatusConflict
+					if reason == "child refresh failed after parent refresh" {
+						status = http.StatusInternalServerError
+					}
+					http.Error(w, reason, status)
 					return
 				}
 				original.ServeHTTP(w, r)
@@ -2625,7 +2649,7 @@ func TestSessionUsageRefusedRefreshReturnsStoredUsage(t *testing.T) {
 				assert.Equal(t, 42, out.TotalOutputTokens)
 				assert.Equal(t, tokenUseExitOK, code)
 			})
-			assert.Contains(t, stderr, "showing stored usage")
+			assert.Contains(t, stderr, "warning: usage refresh incomplete; showing usage currently stored in the archive")
 			assert.Contains(t, stderr, reason)
 		})
 	}

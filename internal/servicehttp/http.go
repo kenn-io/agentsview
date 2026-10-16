@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"strings"
@@ -629,9 +630,18 @@ func (b *httpBackend) Sync(
 	if err != nil {
 		return nil, err
 	}
-	response, err := api.PostAPIV1SessionsSyncWithResponse(ctx, &apiclient.PostAPIV1SessionsSyncRequestOptions{Body: &apiclient.PostAPIV1SessionsSyncBody{ID: new(in.ID), Path: new(in.Path), Subagents: new(in.Subagents), UsageRefresh: new(in.UsageRefresh)}})
+	response, err := api.PostAPIV1SessionsSyncWithResponse(ctx,
+		&apiclient.PostAPIV1SessionsSyncRequestOptions{
+			Body: &apiclient.PostAPIV1SessionsSyncBody{
+				ID: new(in.ID), Path: new(in.Path),
+				Subagents: new(in.Subagents), UsageRefresh: new(in.UsageRefresh),
+			},
+		})
 	if response == nil {
 		return nil, err
+	}
+	if in.UsageRefresh && response.StatusCode == http.StatusNotFound {
+		return nil, fs.ErrNotExist
 	}
 	detail := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {

@@ -2036,7 +2036,7 @@ func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, f
 	}
 	ctx = e.parsePolicyContext(ctx)
 	stats, tombstoned, err := func() (SyncStats, int, error) {
-		if err := e.lockSessionRefresh(try); err != nil {
+		if err := e.lockSync(try); err != nil {
 			return SyncStats{}, 0, err
 		}
 		defer e.syncMu.Unlock()
@@ -4981,6 +4981,17 @@ func (e *Engine) RunExclusive(work func() error) error {
 // found another sync or maintenance pass holding the exclusive engine lock.
 var ErrSyncInProgress = errors.New("sync already in progress")
 
+func (e *Engine) lockSync(try bool) error {
+	if try {
+		if !e.syncMu.TryLock() {
+			return ErrSyncInProgress
+		}
+	} else {
+		e.syncMu.Lock()
+	}
+	return nil
+}
+
 // TryRunExclusive is the non-blocking foreground counterpart to RunExclusive.
 // Background work keeps using RunExclusive so scheduled obligations are not
 // lost; user-triggered sync requests use this method to fail promptly instead
@@ -4991,8 +5002,8 @@ func (e *Engine) TryRunExclusive(work func() error) error {
 			"TryRunExclusive refused on report-only parse-diff engine",
 		)
 	}
-	if !e.syncMu.TryLock() {
-		return ErrSyncInProgress
+	if err := e.lockSync(true); err != nil {
+		return err
 	}
 	defer e.syncMu.Unlock()
 	return work()
@@ -21045,7 +21056,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 		)
 	}
 	ctx = e.parsePolicyContext(ctx)
-	if err := e.lockSessionRefresh(try); err != nil {
+	if err := e.lockSync(try); err != nil {
 		return err
 	}
 	preserved := false
@@ -21093,7 +21104,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	path := e.FindSourceFile(ctx, sessionID)
 	if path == "" {
 		return fmt.Errorf(
-			"source file not found for %s", sessionID,
+			"source file not found for %s: %w", sessionID, os.ErrNotExist,
 		)
 	}
 	// OpenCode-format agents (OpenCode, Kilo, MiMoCode) are
