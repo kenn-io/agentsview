@@ -18711,7 +18711,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 		)
 	}
 	if candidate.Parsed.Session.Agent == parser.AgentCodexCloud {
-		if err := e.keepCodexCloudTokens(ctx, &prepared); err != nil {
+		if err := e.keepCodexCloudUsage(ctx, &prepared); err != nil {
 			return ingest.PreparedSession{}, sessionWritePreserved, err
 		}
 	}
@@ -18757,22 +18757,14 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 	return false
 }
 
-// keepCodexCloudTokens copies the saved chat's token counts, usage events,
-// and capture coverage onto a downloaded copy that has none. Token counts
-// reach the mirror only from live capture, so a copy without them where
-// the saved chat has some was rebuilt from server history after the mirror
-// was lost. The history guard keeps the saved chat when the copy has no
-// new messages; this keeps the counts when it does. Turns that arrived
-// while the mirror was missing are not counted as uncaptured.
-func (e *Engine) keepCodexCloudTokens(
+// keepCodexCloudUsage copies onto prepared the token counts and plan usage
+// its mirror file lost; see ingest.CarryCodexCloudUsage.
+func (e *Engine) keepCodexCloudUsage(
 	ctx context.Context, prepared *ingest.PreparedSession,
 ) error {
-	if prepared.Session.HasTotalOutputTokens {
-		return nil
-	}
 	store := e.historyStore()
 	stored, err := store.GetSessionFull(ctx, prepared.Session.ID)
-	if err != nil || stored == nil || !stored.HasTotalOutputTokens {
+	if err != nil || stored == nil {
 		return err
 	}
 	reader, ok := store.(interface {
@@ -18785,26 +18777,16 @@ func (e *Engine) keepCodexCloudTokens(
 	if err != nil {
 		return err
 	}
-	saved, err := store.GetSessionPlanUsage(ctx, prepared.Session.ID)
+	plan, err := store.GetSessionPlanUsage(ctx, prepared.Session.ID)
 	if err != nil {
 		return err
 	}
-	prepared.UsageEvents = events
-	prepared.Session.TotalOutputTokens = stored.TotalOutputTokens
-	prepared.Session.HasTotalOutputTokens = true
-	prepared.Session.PeakContextTokens = stored.PeakContextTokens
-	prepared.Session.HasPeakContextTokens = stored.HasPeakContextTokens
-	switch {
-	case saved == nil:
-	case prepared.PlanUsage == nil:
-		// The lost mirror took the plan usage records with it.
-		prepared.PlanUsage = saved
-	default:
-		prepared.PlanUsage.HasCoverage = saved.HasCoverage
-		prepared.PlanUsage.LastCaptureAt = saved.LastCaptureAt
-		prepared.PlanUsage.UncapturedTurns = saved.UncapturedTurns
+	if ingest.CarryCodexCloudUsage(prepared, ingest.CodexCloudPrior{
+		Session: *stored, UsageEvents: events, PlanUsage: plan,
+		Current: stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud),
+	}) {
+		log.Printf("codex-cloud: kept the token counts of %s because the local copy of the chat has none", prepared.Session.ID)
 	}
-	log.Printf("codex-cloud: kept the token counts of %s because the local copy of the chat has none", prepared.Session.ID)
 	return nil
 }
 
@@ -18880,37 +18862,20 @@ func (e *Engine) reconcileProviderHistoryContext(
 				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
 			}
 		case parser.AgentCodexCloud:
-			store := e.historyStore()
-			stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
+			stored, err := e.historyStore().GetSessionFull(ctx, candidate.Session.ID)
 			if err != nil {
 				return ingest.HistoryResult{}, err
 			}
-			// A chat's history only grows, and token counts reach the
-			// mirror only from live capture. So a mirror with fewer
-			// messages lost part of the chat, and one with no token counts
-			// where the archive has some was refetched from server history.
-			// Either way the archived chat stays as it is until the mirror
-			// holds new messages or new live counts. An archive row from an
-			// older parser version is replaced, so a parser change can still
-			// reparse it, unless the mirror holds no messages at all: no
-			// parser change empties a chat, but a deleted mirror rebuilt
-			// around a usage record does.
-			if stored != nil && len(candidate.Messages) <= stored.MessageCount {
-				current := stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud)
-				var reason string
-				switch {
-				case len(candidate.Messages) == 0 && stored.MessageCount > 0,
-					current && len(candidate.Messages) < stored.MessageCount:
-					reason = fmt.Sprintf("the local copy of the chat has fewer messages (%d saved, %d found)",
-						stored.MessageCount, len(candidate.Messages))
-				case current && stored.HasTotalOutputTokens && !candidate.Parsed.Session.HasTotalOutputTokens:
-					reason = "the local copy of the chat has no token counts"
-				}
-				if reason != "" {
-					log.Printf("codex-cloud: kept the saved copy of %s because %s; the saved copy stays until a copy with more messages or token counts replaces it",
-						candidate.Session.ID, reason)
-					return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
-				}
+			if stored == nil {
+				break
+			}
+			if reason := ingest.CodexCloudKeepReason(len(candidate.Messages), ingest.CodexCloudPrior{
+				Session: *stored,
+				Current: stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud),
+			}); reason != "" {
+				log.Printf("codex-cloud: kept the saved copy of %s because %s; the saved copy stays until a copy with as many messages replaces it",
+					candidate.Session.ID, reason)
+				return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
 			}
 		case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 			if len(candidate.Messages) > 0 {
