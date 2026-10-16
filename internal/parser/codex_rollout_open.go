@@ -32,12 +32,6 @@ import (
 const (
 	codexRolloutSuffix           = ".jsonl"
 	codexCompressedRolloutSuffix = ".jsonl.zst"
-
-	// codexRolloutDecoderMaxWindow bounds the zstd window a rollout may ask
-	// for. Codex encodes at level 3, whose window is far smaller; the bound
-	// only keeps a corrupt header from reserving memory.
-	codexRolloutDecoderMaxWindow = 64 << 20
-	codexRolloutDecoderMemory    = 128 << 20
 )
 
 // hasCodexRolloutSuffix reports whether path names a rollout in either of
@@ -101,7 +95,7 @@ func openCodexRollout(ctx context.Context, path string) (*codexRolloutSnapshot, 
 		snapshot.Compressed = true
 		snapshot.hash = sha256.New()
 		snapshot.raw = io.TeeReader(snapshot.Reader, snapshot.hash)
-		snapshot.decoder, err = newCodexRolloutDecoder(ctxio.Reader{Context: ctx, Reader: snapshot.raw})
+		snapshot.decoder, err = newZstdStreamDecoder(ctxio.Reader{Context: ctx, Reader: snapshot.raw})
 		if err != nil {
 			snapshot.Close()
 			return nil, fmt.Errorf("decode %s: %w", path, err)
@@ -132,12 +126,6 @@ func (s *codexRolloutSnapshot) sourceHash(ctx context.Context) (string, error) {
 	return hex.EncodeToString(s.hash.Sum(nil)), nil
 }
 
-// newCodexRolloutDecoder returns a sequential, memory-bounded zstd decoder
-// over a compressed rollout.
-func newCodexRolloutDecoder(src io.Reader) (*zstd.Decoder, error) {
-	return newBoundedZstdDecoder(src, codexRolloutDecoderMaxWindow, codexRolloutDecoderMemory)
-}
-
 // openCodexRolloutLines opens a rollout for a forward line scan, plain or
 // compressed, without a temporary copy.
 func openCodexRolloutLines(path string) (io.ReadCloser, error) {
@@ -148,7 +136,7 @@ func openCodexRolloutLines(path string) (io.ReadCloser, error) {
 	if !isCompressedCodexRolloutPath(path) {
 		return f, nil
 	}
-	decoder, err := newCodexRolloutDecoder(f)
+	decoder, err := newZstdStreamDecoder(f)
 	if err != nil {
 		f.Close()
 		return nil, err

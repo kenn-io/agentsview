@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"testing"
 
@@ -10,57 +11,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewBoundedZstdDecoderEnforcesLimits(t *testing.T) {
-	const limit = 64 << 10
-	encode := func(t *testing.T, size int, opts ...zstd.EOption) []byte {
-		t.Helper()
-		encoder, err := zstd.NewWriter(nil, opts...)
-		require.NoError(t, err)
-		defer encoder.Close()
-		return encoder.EncodeAll(bytes.Repeat([]byte("x"), size), nil)
+// zstdCorruptHeader builds a frame whose header declares the given window log
+// and, when contentSize is non-zero, an 8-byte content size, followed by one
+// empty last block. The declared sizes pass klauspost's default limits.
+func zstdCorruptHeader(windowLog byte, contentSize uint64) []byte {
+	frame := []byte{0x28, 0xb5, 0x2f, 0xfd}
+	if contentSize == 0 {
+		frame = append(frame, 0x00, (windowLog-10)<<3)
+	} else {
+		frame = append(frame, 0xc0, (windowLog-10)<<3)
+		frame = binary.LittleEndian.AppendUint64(frame, contentSize)
 	}
+	return append(frame, 0x01, 0x00, 0x00)
+}
 
-	windowed := []zstd.EOption{zstd.WithSingleSegment(false), zstd.WithWindowSize(limit)}
+func TestZstdDecodersRejectCorruptHeaders(t *testing.T) {
 	tests := []struct {
 		name    string
-		size    int
-		opts    []zstd.EOption
+		frame   []byte
 		stream  bool
-		wantErr bool
+		wantErr error
 	}{
-		{name: "blob at the memory limit decodes", size: limit},
-		{name: "blob above the memory limit is rejected", size: limit + 1, wantErr: true},
-		{name: "stream within the window limit decodes", size: limit, opts: windowed, stream: true},
 		{
-			name:    "stream asking for a larger window is rejected",
-			size:    4 * limit,
-			opts:    []zstd.EOption{zstd.WithSingleSegment(false), zstd.WithWindowSize(4 * limit)},
+			name:    "blob declaring 32 GiB of content",
+			frame:   zstdCorruptHeader(20, 32<<30),
+			wantErr: zstd.ErrDecoderSizeExceeded,
+		},
+		{
+			name:    "blob asking for a 256 MiB window",
+			frame:   zstdCorruptHeader(28, 0),
+			wantErr: zstd.ErrWindowSizeExceeded,
+		},
+		{
+			name:    "stream asking for a 256 MiB window",
+			frame:   zstdCorruptHeader(28, 0),
 			stream:  true,
-			wantErr: true,
+			wantErr: zstd.ErrWindowSizeExceeded,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := encode(t, tt.size, tt.opts...)
 			var err error
 			if tt.stream {
-				var decoder *zstd.Decoder
-				decoder, err = newBoundedZstdDecoder(bytes.NewReader(frame), limit, 2*limit)
-				require.NoError(t, err)
+				decoder, newErr := newZstdStreamDecoder(bytes.NewReader(tt.frame))
+				require.NoError(t, newErr)
 				defer decoder.Close()
 				_, err = io.Copy(io.Discard, decoder)
 			} else {
-				var decoder *zstd.Decoder
-				decoder, err = newBoundedZstdDecoder(nil, limit, limit)
-				require.NoError(t, err)
-				defer decoder.Close()
-				_, err = decoder.DecodeAll(frame, nil)
+				decoder, newErr := zstdBlobDecoder()
+				require.NoError(t, newErr)
+				_, err = decoder.DecodeAll(tt.frame, nil)
 			}
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
+			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }

@@ -12,10 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -804,22 +802,11 @@ func openClawSQLiteFingerprintsEachTx(
 	return finish()
 }
 
-// openClawSQLiteZstdMaxEventBytes bounds one decompressed event. OpenClaw
-// itself limits event_utf8_bytes to 4 MiB.
-const openClawSQLiteZstdMaxEventBytes = 4 << 20
-
-var openClawSQLiteZstdDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
-	return newBoundedZstdDecoder(nil,
-		openClawSQLiteZstdMaxEventBytes,
-		openClawSQLiteZstdMaxEventBytes,
-	)
-})
-
 func openClawSQLiteDecodeZstd(blob []byte) (string, error) {
 	if len(blob) == 0 {
 		return "", errors.New("event has neither event_json nor event_zstd")
 	}
-	decoder, err := openClawSQLiteZstdDecoder()
+	decoder, err := zstdBlobDecoder()
 	if err != nil {
 		return "", fmt.Errorf("zstd decoder: %w", err)
 	}
