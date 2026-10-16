@@ -668,6 +668,10 @@ func ParseCodexSessionStreaming(
 	source SourceRef,
 	sink CodexSessionSink,
 ) (*ParsedSession, []ParsedMessage, []byte, []byte, string, string, error) {
+	// Materialized roots disappear before the enclosing sync batch completes.
+	if _, materialized := source.Opaque.(MaterializedFileSource); materialized {
+		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
+	}
 	provider, ok := NewProvider(AgentCodex, cfg)
 	if !ok {
 		return nil, nil, nil, nil, "", "",
@@ -1162,7 +1166,8 @@ func (s codexSourceSet) SourcesForChangedPath(
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return s.sourcesForIndexPath(ctx, req.Path)
 	}
-	if isCompressedCodexRolloutPath(req.Path) {
+	compressed := isCompressedCodexRolloutPath(req.Path)
+	if compressed {
 		plain := codexPlainRolloutPath(req.Path)
 		if IsRegularFile(plain) {
 			req.Path = plain
@@ -1173,17 +1178,20 @@ func (s codexSourceSet) SourcesForChangedPath(
 		if !ok {
 			source, ok = s.directPathSource(root, req.Path, true)
 		}
-		if ok {
-			return []SourceRef{source}, nil
-		}
-		if !jsonlMissingPathFallbackAllowed(req) {
-			continue
-		}
-		source, ok = s.sourceRef(root, req.Path, false)
-		if !ok {
-			source, ok = s.directPathSource(root, req.Path, false)
+		if !ok && jsonlMissingPathFallbackAllowed(req) {
+			source, ok = s.sourceRef(root, req.Path, false)
+			if !ok {
+				source, ok = s.directPathSource(root, req.Path, false)
+			}
 		}
 		if ok {
+			if compressed {
+				preferred, _, err := s.canonicalSource(ctx, source)
+				if err != nil {
+					return nil, err
+				}
+				source = preferred
+			}
 			return []SourceRef{source}, nil
 		}
 	}

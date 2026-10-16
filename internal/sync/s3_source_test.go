@@ -1934,7 +1934,7 @@ func TestParseMaterializedS3SourcePreservesExclusionsWithoutResults(t *testing.T
 		Machine: "laptop",
 	}
 	res, err := e.parseMaterializedS3Source(
-		t.Context(), file, dir, tempPath,
+		t.Context(), file, dir, tempPath, int64(len(content)),
 	)
 	require.NoError(t, err)
 	assert.Empty(t, res.results, "a /usage probe yields no live sessions")
