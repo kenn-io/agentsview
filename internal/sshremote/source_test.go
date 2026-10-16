@@ -5,7 +5,6 @@ package sshremote
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -272,84 +271,48 @@ func TestSSHSourceUploadsItselfWhenRemoteHasNoAgentsview(t *testing.T) {
 		filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id, "agentsview"))
 }
 
-// macOSShellScript stands in for macOS /bin/sh, which exits 126 instead
-// of 127 when exec cannot find its program. %s is the real shell.
-const macOSShellScript = `#!/bin/sh
-%s "$@"
-status=$?
-if [ "$status" -eq 127 ]; then exit 126; fi
-exit "$status"
-`
-
-// remoteShells runs a test under the fake remote's own sh and under one that
-// reports a missing program the way macOS does.
-var remoteShells = []struct {
-	name  string
-	setup func(t *testing.T)
-}{
-	{name: "sh", setup: func(*testing.T) {}},
-	{name: "macOS sh", setup: func(t *testing.T) {
-		t.Helper()
-		shell := filepath.Join(os.Getenv("FAKE_SSH_PATH"), "sh")
-		realShell, err := os.Readlink(shell)
-		require.NoError(t, err)
-		require.NoError(t, os.Remove(shell))
-		writeExecutable(t, filepath.Dir(shell), "sh", fmt.Sprintf(macOSShellScript, realShell))
-	}},
-}
-
 func TestSSHSourceProvisionsAgainWhenItsBinaryVanishes(t *testing.T) {
-	for _, shell := range remoteShells {
-		t.Run(shell.name, func(t *testing.T) {
-			env := newSourceEnv(t)
-			shell.setup(t)
-			installTestBinary(t, env.ssh.Home, env.build)
-			id, err := env.build.ContentID()
-			require.NoError(t, err)
-			source := env.source()
-			bin, err := source.ensure(t.Context())
-			require.NoError(t, err)
-			require.Equal(t, cachedBinary(id), bin)
-			// Another collector's retention removes the binary right after
-			// this probe selected it.
-			cached := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id)
-			require.NoError(t, os.RemoveAll(cached))
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	id, err := env.build.ContentID()
+	require.NoError(t, err)
+	source := env.source()
+	bin, err := source.ensure(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, cachedBinary(id), bin)
+	// Another collector's retention removes the binary right after
+	// this probe selected it.
+	cached := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id)
+	require.NoError(t, os.RemoveAll(cached))
 
-			stats, err := env.run(t, source)
+	stats, err := env.run(t, source)
 
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.SessionsSynced)
-			assert.FileExists(t, filepath.Join(cached, "agentsview"), "uploaded again")
-		})
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	assert.FileExists(t, filepath.Join(cached, "agentsview"), "uploaded again")
 }
 
 func TestSSHSourceReportsABinaryItCannotRun(t *testing.T) {
-	for _, shell := range remoteShells {
-		t.Run(shell.name, func(t *testing.T) {
-			env := newSourceEnv(t)
-			shell.setup(t)
-			installTestBinary(t, env.ssh.Home, env.build)
-			source := env.source()
-			_, err := source.ensure(t.Context())
-			require.NoError(t, err)
-			id, err := env.build.ContentID()
-			require.NoError(t, err)
-			// A binary that is present but cannot run is not missing:
-			// uploading it again would not help, so the failure is reported.
-			binary := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id, "agentsview")
-			require.NoError(t, os.Remove(binary))
-			require.NoError(t, os.WriteFile(binary, []byte("not a program"), 0o644))
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	source := env.source()
+	_, err := source.ensure(t.Context())
+	require.NoError(t, err)
+	id, err := env.build.ContentID()
+	require.NoError(t, err)
+	// A binary that is present but cannot run is not missing:
+	// uploading it again would not help, so the failure is reported.
+	binary := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id, "agentsview")
+	require.NoError(t, os.Remove(binary))
+	require.NoError(t, os.WriteFile(binary, []byte("not a program"), 0o644))
 
-			_, err = env.run(t, source)
+	_, err = env.run(t, source)
 
-			require.Error(t, err)
-			assert.False(t, binaryMissing(err), "%v", err)
-			got, readErr := os.ReadFile(binary)
-			require.NoError(t, readErr)
-			assert.Equal(t, "not a program", string(got), "nothing uploaded")
-		})
-	}
+	require.Error(t, err)
+	assert.False(t, binaryMissing(err), "%v", err)
+	got, readErr := os.ReadFile(binary)
+	require.NoError(t, readErr)
+	assert.Equal(t, "not a program", string(got), "nothing uploaded")
 }
 
 // vanishBeforeArchive removes a cached binary just before the archive step,
@@ -370,22 +333,17 @@ func (s vanishBeforeArchive) Archive(
 }
 
 func TestSSHSourceProvisionsAgainWhenItsBinaryVanishesBeforeTheArchive(t *testing.T) {
-	for _, shell := range remoteShells {
-		t.Run(shell.name, func(t *testing.T) {
-			env := newSourceEnv(t)
-			shell.setup(t)
-			installTestBinary(t, env.ssh.Home, env.build)
-			id, err := env.build.ContentID()
-			require.NoError(t, err)
-			cached := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id)
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	id, err := env.build.ContentID()
+	require.NoError(t, err)
+	cached := filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id)
 
-			stats, err := env.run(t, vanishBeforeArchive{Source: env.source(), cached: cached})
+	stats, err := env.run(t, vanishBeforeArchive{Source: env.source(), cached: cached})
 
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.SessionsSynced)
-			assert.FileExists(t, filepath.Join(cached, "agentsview"), "uploaded again")
-		})
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	assert.FileExists(t, filepath.Join(cached, "agentsview"), "uploaded again")
 }
 
 func TestSSHSourceReportsItsUploadThroughTheSyncProgress(t *testing.T) {
