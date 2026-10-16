@@ -63,7 +63,7 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	section(&b, "Errors", "_No errors detected._", errs, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s / %s: %s\n",
 			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.ToolName),
-			code(TruncateWithMarker(sig.Text, MaxErrorMessageLength)))
+			code(sig.Text))
 	})
 	section(&b, "Workarounds", "_No workarounds detected._", workarounds, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s pattern=%s: %s\n",
@@ -142,7 +142,25 @@ func dimsPrefix(d Dims) string {
 	return b.String()
 }
 
-func code(s string) string { return "`" + SanitizeDisplay(s) + "`" }
+func code(s string) string {
+	s = SanitizeDisplay(s)
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	// Separate boundary backticks and preserve spaces that Markdown would strip.
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") ||
+		(strings.HasPrefix(s, " ") && strings.HasSuffix(s, " ") && strings.Trim(s, " ") != "") {
+		s = " " + s + " "
+	}
+	return fence + s + fence
+}
 
 func groupByKind(sigs []Signal) map[Kind][]Signal {
 	groups := make(map[Kind][]Signal)

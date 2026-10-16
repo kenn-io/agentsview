@@ -164,11 +164,9 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
   Interruptions group by session in first-appearance order.
 - Personas, spend, issue links and recurrence costs await the slices that supply
   them. Timezone handling belongs to daily digest scheduling.
-- Archived text renders inside code spans, with control characters replaced by
-  spaces and backticks by apostrophes. Markdown and HTML render literally.
-- Pattern evidence is plain text, unlike jilog's backticked names; the digest
-  wraps it in a code span. Fingerprints remain unchanged. `friction-v2`
-  recomputes stored findings that carry the old evidence format.
+- Archived text renders in code spans that preserve backticks and boundary
+  spaces. Control characters become spaces. Markdown and HTML render literally.
+  Stored pattern evidence and the detector rules version stay unchanged.
 - The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 

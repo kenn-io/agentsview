@@ -51,14 +51,10 @@ func PythonRepr(s string) string {
 	return b.String()
 }
 
-// SanitizeDisplay makes a free-form dimension safe for a one-line Markdown
-// code span: backticks become apostrophes and Unicode control runes become
-// spaces.
+// SanitizeDisplay replaces Unicode control runes with spaces for one-line display.
 func SanitizeDisplay(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
-		case r == '`':
-			return '\''
 		case unicode.IsControl(r):
 			return ' '
 		default:

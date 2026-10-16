@@ -11,7 +11,7 @@ import (
 
 // RulesVersion identifies the detector rule set. Bump it whenever a
 // detector's output can change for the same input.
-const RulesVersion = "friction-v2"
+const RulesVersion = "friction-v1"
 
 // SkippedRulesVersion marks a session over the review budget: current, so
 // backfill leaves it alone, but never reviewed.
@@ -86,7 +86,7 @@ type Signal struct {
 	Text        string // correction context, error message, or pattern description
 	ToolName    string
 	Label       string // workaround pattern, deferral item, or pattern kind
-	Evidence    string // plain text; renderers add the code span
+	Evidence    string
 	Ordinal     *int
 	CallIndex   *int
 	OccurredAt  time.Time

@@ -73,9 +73,9 @@ func TestSanitizeDisplay(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"backtick and newline", "general`\ninjected", "general' injected"},
-		{"backtick tab newline", "seat`\t\n01", "seat'  01"},
-		{"machine label", "mac`1\n", "mac'1 "},
+		{"backtick and newline", "general`\ninjected", "general` injected"},
+		{"backtick tab newline", "seat`\t\n01", "seat`  01"},
+		{"machine label", "mac`1\n", "mac`1 "},
 		{"c1 control", "a\u0085b", "a b"},
 		{"nbsp", "a\u00a0b", "a\u00a0b"},
 		{"plain", "helper", "helper"},
