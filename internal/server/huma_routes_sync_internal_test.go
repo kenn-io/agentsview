@@ -2552,6 +2552,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 		{
 			name: "nil engine allows refresh when startup sync is disabled",
 			run: func(t *testing.T) {
+				t.Helper()
 				f := newSyncRouteFixture(t)
 				require.Nil(t, f.srv.engine)
 				content := testjsonl.NewSessionBuilder().
@@ -2571,6 +2572,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 		{
 			name: "defers a known session until startup finishes",
 			run: func(t *testing.T) {
+				t.Helper()
 				f := newSyncRouteFixture(t)
 				content := testjsonl.NewSessionBuilder().
 					AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "parent").
@@ -2606,6 +2608,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 		{
 			name: "returns conflict while another sync owns the engine",
 			run: func(t *testing.T) {
+				t.Helper()
 				f := newSyncRouteFixture(t)
 				dbtest.SeedSessionWithMessages(t, f.db, "retained", "project",
 					[]db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})

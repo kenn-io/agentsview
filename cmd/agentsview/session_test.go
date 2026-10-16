@@ -1658,7 +1658,7 @@ func TestSessionUsageRemoteCombinedAPIVersionRequirements(t *testing.T) {
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 				if tc.wantErrorAlso != "" {
-					assert.ErrorContains(t, err, tc.wantErrorAlso)
+					assert.Contains(t, err.Error(), tc.wantErrorAlso)
 				}
 				assert.Nil(t, out)
 				assert.Equal(t, tokenUseExitErr, code)
@@ -2556,7 +2556,7 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				if tc.wantErrAlso != "" {
-					assert.ErrorContains(t, err, tc.wantErrAlso)
+					assert.Contains(t, err.Error(), tc.wantErrAlso)
 				}
 				assert.Nil(t, out)
 			} else {
