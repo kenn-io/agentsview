@@ -309,7 +309,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	)
 
 	if !b.skipFreshData && !query.NoSync && b.database.NeedsResync() {
-		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the daemon rebuilds the archive")
+		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
 	} else if known && !b.skipFreshData && !query.NoSync {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,

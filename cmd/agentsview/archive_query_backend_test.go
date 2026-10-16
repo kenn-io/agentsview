@@ -303,7 +303,7 @@ func TestLocalSessionUsageStaleAndNewSource(t *testing.T) {
 			})
 			if stale {
 				assert.True(t, database.NeedsResync())
-				assert.Contains(t, stderr, "warning: archive data version changed")
+				assert.Contains(t, stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
 			} else {
 				session, err := database.GetSession(t.Context(), "saved")
 				require.NoError(t, err)
