@@ -704,6 +704,9 @@ and descendants, including matching trash. A descendant outside any supplied
 filter protects all its ancestors. Without `--agent`, prune excludes trash
 and parents.
 
+To stop scanning the agent's source files too, add it to
+[`disabled_agents`](/docs/configuration/#disabling-session-providers).
+
 **Examples:**
 
 ```bash
