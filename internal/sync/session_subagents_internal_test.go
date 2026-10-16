@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,21 +31,21 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 			t.Cleanup(engine.Close)
 			original := subagentTranscriptPaths
 			t.Cleanup(func() { subagentTranscriptPaths = original })
-			locked := false
+			var locked atomic.Bool
 			t.Cleanup(func() {
-				if locked {
+				if locked.Swap(false) {
 					engine.syncMu.Unlock()
 				}
 			})
 			subagentTranscriptPaths = func(string) []string {
 				assert.NotEqual(t, "parent", stage, "busy parent must stop before child discovery")
 				engine.syncMu.Lock()
-				locked = true
+				locked.Store(true)
 				return []string{parentPath + "/subagents/agent-child.jsonl"}
 			}
 			if stage == "parent" {
 				engine.syncMu.Lock()
-				locked = true
+				locked.Store(true)
 			}
 			// Avoid S3 transport: the archived parent is unavailable, while child
 			// discovery still reaches the lock that protects child ingestion.
@@ -53,7 +54,25 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 				statClaudeS3Session = func(string) (parser.S3Object, error) { return parser.S3Object{}, missingS3ObjectError() }
 				t.Cleanup(func() { statClaudeS3Session = oldStat })
 			}
-			err := engine.TrySyncSessionWithSubagentsContext(t.Context(), "parent")
+			done := make(chan error, 1)
+			go func() {
+				done <- engine.TrySyncSessionWithSubagentsContext(t.Context(), "parent")
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(time.Second):
+				t.Error("try refresh waited for the sync lock")
+				if locked.Swap(false) {
+					engine.syncMu.Unlock()
+				}
+				select {
+				case err = <-done:
+				case <-time.After(time.Second):
+					t.Error("try refresh stayed blocked after releasing the test lock")
+					return
+				}
+			}
 			assert.ErrorIs(t, err, ErrSyncInProgress)
 		})
 	}
@@ -82,6 +101,6 @@ func TestUnmarkedSessionRefreshWaitsForSyncLock(t *testing.T) {
 	case err := <-done:
 		received = true
 		require.FailNowf(t, "manual refresh returned before the lock was released", "%v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 	}
 }

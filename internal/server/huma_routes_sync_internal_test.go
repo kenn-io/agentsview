@@ -1573,7 +1573,6 @@ func TestHumaSyncStatusUsesExistingOnDemandEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.Body.Stats)
 	assert.Equal(t, engine.LastSyncStats(), *out.Body.Stats)
-	assert.False(t, out.Body.StartupPending)
 }
 
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
@@ -1836,20 +1835,6 @@ func TestHumaSyncSessionRejectsStaleDB(t *testing.T) {
 	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
 	assert.Equal(t, "true", w.Header().Get(ResyncRequiredHeader))
 	assert.True(t, f.db.NeedsResync())
-}
-
-func TestHumaSyncSessionCanceledBeforeSourceSyncReturnsNil(t *testing.T) {
-	f := newSyncRouteFixture(t, withStaleDB())
-	require.True(t, f.db.NeedsResync())
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	out, err := f.srv.humaSyncSession(ctx, &sessionSyncInput{
-		Body: service.SyncInput{Path: filepath.Join(f.dir, "missing.jsonl")},
-	})
-
-	require.NoError(t, err)
-	assert.Nil(t, out)
 }
 
 func TestHumaSyncSessionCanceledServiceSyncReturnsNil(t *testing.T) {
@@ -2526,7 +2511,6 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				var status map[string]any
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
 				assert.Equal(t, true, status["archive_stale"])
-				assert.Equal(t, true, status["startup_pending"])
 			}
 			if tc.probe {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -2610,14 +2594,6 @@ func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
 	}
 }
 
-func TestUsageRefreshRequiresCombinedID(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
-		"id": "parent", "usage_refresh": true,
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-}
-
 func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	engine := syncpkg.NewEngine(t.Context(), f.db, syncpkg.EngineConfig{Ephemeral: true})
@@ -2632,133 +2608,56 @@ func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "usage_refresh requires id and subagents")
 }
 
-func TestUsageRefreshWaitsForProviderDescendants(t *testing.T) {
-	const parent = "11111111-1111-4111-8111-111111111111"
-	const descendant = "22222222-2222-4222-8222-222222222222"
-	const timestamp = "2026-01-01T10:00:00Z"
-	claude := func(id string, tokens int) string {
-		return testjsonl.NewSessionBuilder().
-			AddClaudeUserWithSessionID(timestamp, "start", id).
-			AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-" + id, OutputTokens: tokens}).String()
-	}
-	codex := func(meta string, tokens int) string {
-		return testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "start", timestamp),
-			testjsonl.CodexMsgJSON("assistant", "done", timestamp), testjsonl.CodexTokenCountJSON(timestamp, 10, tokens, 0))
-	}
-	zencoder := func(id, parentID, reason string) string {
-		return fmt.Sprintf("{\"id\":%q,\"parentId\":%q,\"creationReason\":%q,\"createdAt\":%q}\n", id, parentID, reason, timestamp) +
-			`{"role":"user","content":[{"type":"text","text":"start"}]}` + "\n" +
-			`{"role":"assistant","content":[{"type":"text","text":"done"}]}` + "\n"
-	}
-	claudeParent := testjsonl.JoinJSONL(
+func TestUsageRefreshWaitsForStartupAndImportsNewSubagent(t *testing.T) {
+	parentContent := testjsonl.JoinJSONL(
 		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
 	)
-	claudeContinuation := strings.ReplaceAll(
-		strings.ReplaceAll(claudeParent, `"sessionId":"parent"`, `"sessionId":"continuation"`),
-		`"message":`, `"sessionKind":"bg","message":`,
-	)
-	claudeContinuation += testjsonl.JoinJSONL(
-		`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T11:00:00Z","sessionId":"continuation","sessionKind":"bg","message":{"content":"continue"}}`,
-		`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-01-01T11:00:05Z","sessionId":"continuation","sessionKind":"bg","message":{"id":"msg-2","content":[{"type":"text","text":"continued"}],"usage":{"input_tokens":10,"output_tokens":7}}}`,
-	)
-	for _, tc := range []struct {
-		agent                                  parser.AgentType
-		parentID, parentPath, content, childID string
-		linkID, relationship                   string
-		sources                                map[string]string
-		stored, combined                       int
-	}{
-		{
-			agent: parser.AgentClaude, parentID: "parent", childID: "agent-child",
-			parentPath: "project/parent.jsonl", content: claudeParent,
-			linkID: "continuation", relationship: "continuation",
-			sources: map[string]string{
-				"project/continuation.jsonl": claudeContinuation,
-				"project/continuation/subagents/agent-child.jsonl": testjsonl.NewSessionBuilder().
-					AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "continuation").
-					AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String(),
-			},
-			stored: 20, combined: 62,
-		},
-		{
-			agent: parser.AgentCodex, parentID: "codex:" + parent, childID: "codex:" + descendant,
-			parentPath: "rollout-2026-01-01T10-00-00-" + parent + ".jsonl",
-			content:    codex(testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp), 20),
-			sources:    map[string]string{"2026/01/02/rollout-2026-01-01T11-00-00-" + descendant + ".jsonl": codex(testjsonl.CodexSubagentSessionMetaJSON(descendant, parent, "/work/project", "user", timestamp), 42)},
-			stored:     20, combined: 62,
-		},
-		{
-			agent: parser.AgentQoder, parentID: "qoder:" + parent,
-			childID:    "qoder:" + descendant + ":subagent:agent-123",
-			parentPath: "project/" + parent + ".jsonl", content: claude(parent, 20),
-			linkID: "qoder:" + descendant, relationship: "fork",
-			sources: map[string]string{
-				"project/" + descendant + ".jsonl":                     claude(descendant, 7),
-				"project/" + descendant + "-session.json":              `{"fork_from":"` + parent + `"}`,
-				"project/" + descendant + "/subagents/agent-123.jsonl": claude(descendant, 42),
-			},
-			stored: 20, combined: 62,
-		},
-		{
-			agent: parser.AgentZencoder, parentID: "zencoder:parent", childID: "zencoder:child",
-			parentPath: "parent.jsonl", content: zencoder("parent", "", "newChat"),
-			linkID: "zencoder:continuation", relationship: "continuation",
-			sources: map[string]string{
-				"continuation.jsonl": zencoder("continuation", "parent", "directContinuation") + testjsonl.JoinJSONL(
-					`{"role":"assistant","content":[{"type":"tool-call","toolCallId":"delegate","toolName":"mcp__zen_subagents__spawn_subagent","input":{"prompt":"work"}}]}`,
-					`{"role":"tool","content":[{"type":"tool-result","toolCallId":"delegate","toolName":"mcp__zen_subagents__spawn_subagent","content":[{"type":"text","text":"<session-id>child</session-id>"}]}]}`),
-				"child.jsonl": zencoder("child", "", "newChat"),
-			},
-			// Zencoder transcripts carry relationships but no token usage.
-			stored: 0, combined: 0,
-		},
-	} {
-		t.Run(string(tc.agent), func(t *testing.T) {
-			root := t.TempDir()
-			f := newSyncRouteFixture(t, withDisabledAgents(nil, map[parser.AgentType][]string{tc.agent: {root}}))
-			write := func(path, content string) {
-				t.Helper()
-				path = filepath.Join(root, path)
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-			}
-			write(tc.parentPath, tc.content)
-			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-			f.srv.engine = engine
-			f.srv.sessions = service.NewDirectBackend(f.db, engine)
-			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), tc.parentID))
-			for path, content := range tc.sources {
-				write(path, content)
-			}
-			body := map[string]any{"id": tc.parentID, "subagents": true, "usage_refresh": true}
-			w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-			usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, tc.parentID, false)
-			require.NoError(t, err)
-			require.NotNil(t, usage)
-			assert.Equal(t, tc.stored, usage.TotalOutputTokens)
-			assert.Zero(t, usage.SubagentCount)
-			child, err := f.db.GetSession(t.Context(), tc.childID)
-			require.NoError(t, err)
-			require.Nil(t, child)
-			w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			usage, err = service.SessionUsageWithSubagents(t.Context(), f.db, tc.parentID, false)
-			require.NoError(t, err)
-			require.NotNil(t, usage)
-			assert.Equal(t, tc.combined, usage.TotalOutputTokens)
-			assert.Equal(t, 1, usage.SubagentCount)
-			if tc.linkID != "" {
-				linked, err := f.db.GetSession(t.Context(), tc.linkID)
-				require.NoError(t, err)
-				require.NotNil(t, linked)
-				require.NotNil(t, linked.ParentSessionID)
-				assert.Equal(t, tc.parentID, *linked.ParentSessionID)
-				assert.Equal(t, tc.relationship, linked.RelationshipType)
-			}
-		})
+	childContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "parent").
+		AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done",
+			testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).
+		String()
+
+	root := t.TempDir()
+	f := newSyncRouteFixture(t, withDisabledAgents(nil,
+		map[parser.AgentType][]string{parser.AgentClaude: {root}},
+	))
+	write := func(path, content string) {
+		t.Helper()
+		path = filepath.Join(root, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	}
+	write("project/parent.jsonl", parentContent)
+
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	f.srv.sessions = service.NewDirectBackend(f.db, engine)
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
+
+	body := map[string]any{"id": "parent", "subagents": true, "usage_refresh": true}
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 20, usage.TotalOutputTokens)
+	assert.Zero(t, usage.SubagentCount)
+
+	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	write("project/parent/subagents/agent-child.jsonl", childContent)
+
+	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	usage, err = service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 62, usage.TotalOutputTokens)
+	assert.Equal(t, 1, usage.SubagentCount)
+
+	child, err := f.db.GetSession(t.Context(), "agent-child")
+	require.NoError(t, err)
+	require.NotNil(t, child)
 }

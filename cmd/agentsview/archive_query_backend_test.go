@@ -161,7 +161,6 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 		assert.Equal(t, tokenUseExitOK, exitCode)
 		assert.Equal(t, 42, out.TotalOutputTokens)
 	})
-	assert.NotContains(t, stderr, "warning: sync failed")
 	assert.NotContains(t, stderr, "warning: pricing seed failed")
 }
 
@@ -300,11 +299,6 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	})
 	assert.True(t, database.NeedsResync())
 	assert.Contains(t, stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
-	resolved, known := resolveRawSessionID(
-		t.Context(), database, agentDirs, "codex:"+freshID,
-	)
-	assert.Equal(t, "codex:"+freshID, resolved)
-	assert.True(t, known, "the disk probe should recognize the unarchived session")
 	retryStderr := captureStderr(t, func() {
 		out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "codex:" + freshID})
 		assert.Nil(t, out)

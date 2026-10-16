@@ -268,7 +268,7 @@ func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
 		"subagent rows keep their real source")
 }
 
-func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
+func TestRenderSessionUsageHuman_SubagentLines(t *testing.T) {
 	tests := []struct {
 		name              string
 		subagentCount     int
