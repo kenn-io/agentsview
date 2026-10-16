@@ -139,6 +139,9 @@ func (s *Sync) PushWithOptions(
 	// A run that replaces one it cannot resume takes over that run's duty to
 	// finish without errors.
 	mustFinish := pending && (!resumed || run.MustFinish)
+	// The resync before a CLI --full push leaves a run that cannot resume,
+	// but --full discards it either way, so report the discard for both.
+	discardedRun := pending && opts.Full
 	if resumed && opts.Full {
 		// --full asks for every session to be rewritten, including ones the
 		// unfinished run wrote; its fingerprints cannot see in-place edits.
@@ -154,7 +157,13 @@ func (s *Sync) PushWithOptions(
 			reason = run.Reason
 		}
 	}
-	result.Full, result.FullReason = full, reason
+	result.Full = full
+	switch {
+	case discardedRun:
+		result.FullReason = reason + "; discarded an unfinished full push"
+	case reason != "requested":
+		result.FullReason = reason
+	}
 	if full {
 		log.Printf("clickhouse push: full push (%s)", reason)
 	}

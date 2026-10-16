@@ -295,17 +295,19 @@ func writeReplicaPushSummary(
 			"Warning: skipped %d session(s) owned by another %s push marker\n",
 			result.SkippedConflicts, displayName,
 		)
-		writeReplicaVectorPushSummary(w, displayName, result.Vectors)
-		return
+	} else {
+		fmt.Fprintf(
+			w,
+			"Pushed %d sessions, %d messages%s in %s\n",
+			result.SessionsPushed,
+			result.MessagesPushed,
+			errSuffix,
+			dur,
+		)
 	}
-	fmt.Fprintf(
-		w,
-		"Pushed %d sessions, %d messages%s in %s\n",
-		result.SessionsPushed,
-		result.MessagesPushed,
-		errSuffix,
-		dur,
-	)
+	if result.FullReason != "" {
+		fmt.Fprintf(w, "%s push mode: full (%s)\n", displayName, result.FullReason)
+	}
 	if result.SkippedUnchanged > 0 {
 		fmt.Fprintf(w, "Skipped %d unchanged session(s)\n", result.SkippedUnchanged)
 	}

@@ -259,8 +259,9 @@ func (t *fullPushRunTracker) save(ctx context.Context) error {
 }
 
 // complete ends the run. A run with session errors stays pending with its
-// progress saved, so the next push resumes and retries the failed sessions;
-// otherwise the run record is cleared.
+// progress saved, but the next push resumes it only while another trigger
+// besides --full still forces a full push; otherwise that push drops the
+// record and runs incrementally. A clean run clears its record here.
 func (t *fullPushRunTracker) complete(ctx context.Context, sessionErrors int) error {
 	if t == nil {
 		return nil

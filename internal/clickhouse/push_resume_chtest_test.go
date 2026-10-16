@@ -242,17 +242,38 @@ func TestResumedFullPushWritesVectorsForEarlierSessions(t *testing.T) {
 		"the committed session's vectors are pushed too")
 }
 
-// An explicit full push starts over instead of resuming an unfinished one.
+// An explicit full push starts over instead of resuming an unfinished one,
+// and its reason says it discarded that run only when one was waiting. The
+// CLI resyncs the archive before a --full push, giving it a new generation
+// the run cannot resume against; the discard is reported then too.
 func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
-	ctx := t.Context()
-	local, target := seedFixture(t)
-	killSecondSessionBatch(t, newTestSync(t, local, target, storage.PusherOptions{}), false)
+	for _, tt := range []struct {
+		name     string
+		resynced bool
+	}{
+		{name: "resumable run"},
+		{name: "after archive resync", resynced: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			local, target := seedFixture(t)
+			killSecondSessionBatch(t, newTestSync(t, local, target, storage.PusherOptions{}), false)
+			if tt.resynced {
+				require.NoError(t, local.SetDatabaseIDForTest(ctx, "resynced-generation"))
+			}
 
-	res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, true, nil)
-	require.NoError(t, err)
-	assert.Equal(t, "requested", res.FullReason)
-	assert.Equal(t, 3, res.SessionsPushed)
-	assert.Zero(t, res.SkippedResumed)
+			res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, true, nil)
+			require.NoError(t, err)
+			assert.Equal(t, "requested; discarded an unfinished full push", res.FullReason)
+			assert.Equal(t, 3, res.SessionsPushed)
+			assert.Zero(t, res.SkippedResumed)
+
+			again, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, true, nil)
+			require.NoError(t, err)
+			assert.True(t, again.Full)
+			assert.Empty(t, again.FullReason, "nothing was discarded")
+		})
+	}
 }
 
 // A full push that ended with session errors does not keep later pushes

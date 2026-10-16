@@ -156,11 +156,13 @@ example, after a schema reset or when message content was rewritten in place.
 Every push sends the most recently active sessions first, so recent activity
 reaches PostgreSQL before older history. A full push that stops partway, for
 example because the process restarted, resumes on the next push: sessions it
-already pushed are skipped unless PostgreSQL lost them. The log says
-`resuming an unfinished full push`, and the summary counts the skipped
-sessions. Progress is saved at most every 15 seconds, so a restart repeats at
-most that much work. The push starts over instead when `--full` is passed or
-when the target, the local archive, or the data format changed since it began.
+already pushed are skipped unless PostgreSQL lost them. The summary says
+`resuming an unfinished full push` and counts the skipped sessions. Progress
+is saved at most every 15 seconds, so a restart repeats at most that much
+work. The push starts over instead when `--full` is passed or when the target,
+the local archive, or the data format changed since it began. When `--full`
+discards an unfinished full push, the summary says
+`discarded an unfinished full push`.
 A full push that reaches the end with session errors resumes only while
 something else still requires a full push. Otherwise the next push is
 incremental and retries the failed sessions.

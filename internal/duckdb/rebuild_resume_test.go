@@ -196,18 +196,34 @@ func TestPendingRebuildKeepsFileWhenCancelled(t *testing.T) {
 }
 
 // --full starts a rebuild over instead of resuming an unfinished one, since
-// the unfinished file's fingerprints cannot see sessions edited in place.
+// the unfinished file's fingerprints cannot see sessions edited in place. The
+// CLI resyncs the archive before a --full push, giving it a new generation
+// the unfinished rebuild cannot resume against; the discard is reported then
+// too.
 func TestFullPushDiscardsUnfinishedRebuild(t *testing.T) {
-	local := newLocalDB(t)
-	seedResumeSessions(t, local)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+	for _, tt := range []struct {
+		name     string
+		resynced bool
+	}{
+		{name: "resumable rebuild"},
+		{name: "after archive resync", resynced: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			local := newLocalDB(t)
+			seedResumeSessions(t, local)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			killedRebuild(t, path, local, storage.MirrorPushOptions{})
+			if tt.resynced {
+				require.NoError(t, local.SetDatabaseIDForTest(t.Context(), "resynced-generation"))
+			}
 
-	res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	assert.Equal(t, "--full requested", res.Diagnostics.RebuildReason)
-	assert.Equal(t, resumeSessionCount, res.SessionsPushed)
-	assert.Zero(t, res.Diagnostics.SkippedUnchangedSessions.Total)
+			res, err := Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			assert.Equal(t, "--full requested; discarded an unfinished rebuild", res.Diagnostics.RebuildReason)
+			assert.Equal(t, resumeSessionCount, res.SessionsPushed)
+			assert.Zero(t, res.Diagnostics.SkippedUnchangedSessions.Total)
+		})
+	}
 }
 
 // writeFailingSession adds a session whose message timestamp DuckDB rejects,

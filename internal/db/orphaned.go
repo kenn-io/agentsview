@@ -469,10 +469,15 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if oldDBHasTable(ctx, tx, "pg_sync_state") {
+		// An unfinished PostgreSQL full push record names the old database
+		// generation, so it cannot resume here; it survives only so the
+		// next --full push can report that it discarded the run.
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
+			   OR key = 'pg_full_push_run_v1'
+			   OR key LIKE 'pg\_full\_push\_run\_v1:%' ESCAPE '\'
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
 			   OR key LIKE 'machine\_label:%' ESCAPE '\'
 			   OR key LIKE 'machine\_alias:%' ESCAPE '\'

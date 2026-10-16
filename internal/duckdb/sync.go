@@ -201,11 +201,14 @@ func Push(
 	// runs, so a push that readers block resumes it instead of starting over.
 	var errored *rebuildRun
 	claim := func(required bool) error {
-		claimed, pending, err := claimRebuild(ctx, path, run, full)
+		claimed, pending, restarted, err := claimRebuild(ctx, path, run, full)
 		if err != nil {
 			return err
 		}
 		lock = claimed
+		if restarted {
+			reason += "; discarded an unfinished rebuild"
+		}
 		switch {
 		case pending == nil:
 		case pending.Errored && !required:

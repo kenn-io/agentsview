@@ -34,7 +34,13 @@ func newResumeFixture(t *testing.T, schema string) resumeFixture {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	return resumeFixture{pg: pg, local: openResumeArchive(t), schema: schema}
+}
 
+// openResumeArchive opens a local archive holding three sessions that end a
+// month apart.
+func openResumeArchive(t *testing.T) *db.DB {
+	t.Helper()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = local.Close() })
@@ -52,7 +58,7 @@ func newResumeFixture(t *testing.T, schema string) resumeFixture {
 			ContentLength: len(id), Timestamp: ended,
 		}}))
 	}
-	return resumeFixture{pg: pg, local: local, schema: schema}
+	return local
 }
 
 // sync returns a pusher that commits one session per batch and records its
@@ -254,7 +260,8 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 	assert.NotContains(t, exported, interrupted)
 }
 
-// An explicit full push starts over instead of resuming an unfinished one.
+// An explicit full push starts over instead of resuming an unfinished one,
+// and its reason says it discarded that run only when one was waiting.
 func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
 	f := newResumeFixture(t, "agentsview_push_resume_requested_test")
 	f.killedPush(t)
@@ -262,6 +269,36 @@ func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
 	res, err := f.sync().Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Full)
+	assert.Equal(t, "requested; discarded an unfinished full push", res.FullReason)
+	assert.Equal(t, 3, res.SessionsPushed)
+	assert.Zero(t, res.SkippedResumed)
+
+	again, err := f.sync().Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	assert.True(t, again.Full)
+	assert.Empty(t, again.FullReason, "nothing was discarded")
+}
+
+// The CLI resyncs the local archive before a --full push. The rebuilt
+// archive is a new generation, so the unfinished run cannot resume there, but
+// the push still reports that --full discarded it.
+func TestRequestedFullPushAfterResyncReportsDiscardedRun(t *testing.T) {
+	f := newResumeFixture(t, "agentsview_push_resume_resync_test")
+	f.killedPush(t)
+
+	resynced := openResumeArchive(t)
+	require.NoError(t, resynced.CopySyncStateFrom(f.local.Path()))
+	before, err := f.local.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	after, err := resynced.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	require.NotEqual(t, before, after, "a resync starts a new archive generation")
+	f.local = resynced
+
+	res, err := f.sync().Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Full)
+	assert.Equal(t, "requested; discarded an unfinished full push", res.FullReason)
 	assert.Equal(t, 3, res.SessionsPushed)
 	assert.Zero(t, res.SkippedResumed)
 }

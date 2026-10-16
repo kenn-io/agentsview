@@ -149,6 +149,12 @@ The latest release is
   DuckDB mirror open, a manual push rebuilds the mirror. When an earlier rebuild
   stopped with session errors, that push now continues it instead of starting
   over.
+- Push summaries say why a ClickHouse or PostgreSQL push ran in full when you
+  did not pass `--full`, and say `discarded an unfinished full push` when
+  `--full` threw away an interrupted one. A DuckDB rebuild reports
+  `discarded an unfinished rebuild` the same way.
+  A summary that reports ownership conflicts now also shows how many sessions
+  were unchanged, already pushed by the interrupted run, or removed.
 
 **Bug fixes**
 
