@@ -593,9 +593,11 @@ fixtures retain this field; missing identities remain source-local.
   135 uses the preservation rebuild because session identities change.
   Synthetic parser and SQLite sync regressions cover conflicting headers,
   either sync order, appended metadata, and repair of a misfiled session while
-  retaining sessions whose sources are absent. This establishes a producer
-  path for the shape reported in #2248, not the history of that particular
-  file.
+  retaining sessions whose sources are absent. Upgrade regressions also check
+  that pins and notes follow the corrected transcript, renames and stars
+  survive, and permanently deleted transcripts stay excluded when their files
+  return. This establishes a producer path for the shape reported in #2248,
+  not the history of that particular file.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

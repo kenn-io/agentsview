@@ -102,6 +102,7 @@ func TestForwardSignalsStopsBlockingChild(t *testing.T) {
 		"AGENTSVIEW_CAPTURE_TEST_SIGNAL_MARKER="+marker,
 	)
 	configureChildProcess(cmd)
+	cmd.Stderr = os.Stderr
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil {
@@ -111,7 +112,7 @@ func TestForwardSignalsStopsBlockingChild(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(marker)
 		return err == nil
-	}, time.Second, 10*time.Millisecond)
+	}, 20*time.Second, 10*time.Millisecond)
 
 	signals := make(chan os.Signal, 2)
 	stopForwarding := forwardSignals(cmd.Process, signals)
