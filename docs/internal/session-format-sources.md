@@ -3305,6 +3305,20 @@ schemas keep their existing ordering behavior.
   from the 2026-10-12 read-only probes. These rules were written down on
   2026-10-13. No probe has shown a counter restart, so the baseline rule is a
   guard, not observed behavior.
+- **Resume side effects:** Checked 2026-10-16 against open-source Codex at
+  `openai/codex@b5115cd`. `thread/resume` sends its reply and then runs the
+  thread's idle step whenever no turn is running, on the cold path
+  (`codex-rs/app-server/src/request_processors/thread_processor.rs`) and the
+  loaded path (`thread_lifecycle.rs`); `excludeTurns` does not skip it. The
+  goal extension then continues an active goal with a new turn
+  (`codex-rs/ext/goal/src/runtime.rs`, `continue_if_idle`), and the queue
+  extension sends queued user input unless the turn was interrupted
+  (`codex-rs/ext/queue/src/service.rs`). `thread/goal/get` returns
+  `{"goal": null}` or a goal whose `status` is `active`, `paused`, `blocked`,
+  `usageLimited`, `budgetLimited`, or `complete`, and answers `-32600` "goals
+  feature is disabled" when goals are off. `thread/queue/list` is experimental
+  and refused without the experimental API. The hosted server is
+  `no-public-source`; AgentsView assumes it shares this behavior.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).

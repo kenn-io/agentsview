@@ -173,6 +173,15 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 	if !m.recent(listedUpdatedAt) {
 		return nil
 	}
+	goal, err := activeGoal(ctx, conn, threadID)
+	if err != nil {
+		return m.failure(ctx, key, login, threadID, goalGetMethod, err)
+	}
+	if goal {
+		m.Log.Printf("codex-cloud: chat %s: not listening in, because the chat has an active goal", threadID)
+		// Marked handled, so the next run waits for a newer turn.
+		return m.flush(key, threadID, nil, turnID)
+	}
 	var reply resumeReply
 	if err := conn.Call(ctx, resumeMethod, ResumeParams{ThreadID: threadID, ExcludeTurns: true}, &reply); err != nil {
 		return m.failure(ctx, key, login, threadID, resumeMethod, err)
@@ -923,6 +932,28 @@ func newestTurn(ctx context.Context, c *Conn, threadID string) (id string, runni
 		return "", false, fmt.Errorf("%w: unreadable turn: %w", ErrProtocolChange, err)
 	}
 	return turn.ID, turn.Status == "inProgress", nil
+}
+
+// activeGoal reports whether the thread has an active goal. Codex runs a
+// thread's idle step after a resume that finds no running turn, and that
+// step continues an active goal, so a join that races the end of the turn
+// would start a turn nobody asked for.
+func activeGoal(ctx context.Context, c *Conn, threadID string) (bool, error) {
+	var reply struct {
+		Goal *struct {
+			Status string `json:"status"`
+		} `json:"goal"`
+	}
+	err := c.Call(ctx, goalGetMethod, GoalGetParams{ThreadID: threadID}, &reply)
+	if rpcErr, ok := errors.AsType[*RPCError](err); ok &&
+		rpcErr.Code == -32600 && rpcErr.Message == "goals feature is disabled" {
+		// A server without goals has none to continue.
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return reply.Goal != nil && reply.Goal.Status == "active", nil
 }
 
 func joinID() (string, error) {

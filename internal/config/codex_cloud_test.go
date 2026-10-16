@@ -23,7 +23,7 @@ func TestCodexCloudDefaults(t *testing.T) {
 	got := cfg.CodexCloud
 	assert.True(t, got.Present)
 	assert.False(t, got.Enabled)
-	assert.True(t, got.LiveTokens)
+	assert.False(t, got.LiveTokens, "listening in is opt-in")
 	assert.Equal(t, "wss://codex-cloud-backend.chatgpt.com/", got.Endpoint.String())
 	assert.Equal(t, "https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2", got.UsageEndpoint.String())
 	assert.Nil(t, got.Err)
@@ -47,12 +47,12 @@ func TestCodexCloudSettings(t *testing.T) {
 		check       func(t *testing.T, got CodexCloudConfig)
 	}{
 		{
-			name: "enabled with live tokens off",
-			body: "enabled = true\nlive_tokens = false\n",
+			name: "enabled with live tokens on",
+			body: "enabled = true\nlive_tokens = true\n",
 			check: func(t *testing.T, got CodexCloudConfig) {
 				t.Helper()
 				assert.True(t, got.Enabled)
-				assert.False(t, got.LiveTokens)
+				assert.True(t, got.LiveTokens)
 			},
 		},
 		{name: "dirs is unknown", body: "dirs = [\"/x\"]\n", wantErrKey: "dirs", wantUnknown: true},

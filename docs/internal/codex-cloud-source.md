@@ -38,8 +38,9 @@ protocol as a local `codex app-server`. Three facts shape the whole design:
 
 - **Read-only, with one exception.** The fetcher sends only `initialize`,
   `initialized`, `thread/list`, `thread/turns/list`, and `thread/items/list`.
-  The live token monitor adds `thread/resume`, accepted only with `threadId`
-  and `excludeTurns: true`. An allowlist in the client fails any other method
+  The live token monitor adds `thread/goal/get`, accepted only with
+  `threadId`, and `thread/resume`, accepted only with `threadId` and
+  `excludeTurns: true`. An allowlist in the client fails any other method
   before it is sent. Plan usage sends only to the configured `usage_endpoint`.
 - **No answers to the server.** Neither client answers a server-initiated
   request. In open-source Codex the first reply to an approval prompt wins, so
@@ -366,9 +367,17 @@ before joining, and sends `thread/resume` with `excludeTurns: true`.
 
 The 5-minute rule exists because a resume of a stopped thread is a cold resume:
 OpenAI loads the thread, starts its MCP servers, and stamps it with the resume
-time. In open-source Codex a resume also runs the thread's idle step, which can
-continue an active goal. The window keeps the monitor to threads that were
-running moments ago.
+time. In open-source Codex a resume that finds no running turn also runs the
+thread's idle step, on both the cold and the loaded path, and `excludeTurns`
+does not skip it. That step continues an active goal and sends queued user
+messages, so it starts a turn. The window keeps the monitor to threads that were
+running moments ago. Right before resuming, the monitor also sends
+`thread/goal/get` and skips a thread whose goal is `active`, marking its newest
+turn handled. A server answering "goals feature is disabled" has no goals to
+continue. Queued messages are not checked: `thread/queue/list` needs the
+experimental API, and Codex sends a queue itself when a turn ends, except after
+an interrupted turn. A turn that ends between the checks and the resume can
+still start one, which is why live capture is opt-in.
 
 The resume reply's `resumeKind` decides what happens:
 
@@ -540,9 +549,10 @@ count.
 ## Configuration and gates
 
 Settings live in `[agents.codex-cloud]`: `enabled` (default `false`),
-`endpoint`, `usage_endpoint`, and `live_tokens` (default `true`). The source is
+`endpoint`, `usage_endpoint`, and `live_tokens` (default `false`). The source is
 off by default because it uses private endpoints as the user's ChatGPT account.
-Once enabled, live capture is on unless `live_tokens = false`.
+Live capture is opt-in on top of that, because a join can make Codex start a
+turn; see [Live token capture](#live-token-capture).
 
 The shared `[agents.<id>]` reader skips this table, which has its own parser. An
 unknown key or a bad value there disables only this source and shows in its
@@ -603,9 +613,9 @@ docs recommend enabling the source on one machine.
   joining client in the running session, and later turns' context can mention
   it; the hosted server likely does the same. A cold resume can move the
   thread up in the user's list.
-- **Untested resume cases.** Whether a cold resume of a thread with an active
-  goal starts a turn, and whether an approval prompt raised while AgentsView
-  is joined still reaches the user's app afterwards.
+- **Untested resume cases.** Whether an approval prompt raised while AgentsView
+  is joined still reaches the user's app afterwards. Open-source Codex replays
+  pending approval requests to a new subscriber.
 - **Missed turns.** A turn that ends before a join, or while all 10 slots are
   full, gets no live tokens. The 5-minute window depends on the local clock.
 - **Counter restarts.** A reset is detected only as a decrease. A restart that

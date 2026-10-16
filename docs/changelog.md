@@ -80,11 +80,13 @@ The latest release is
   conversations whose transcript is gone. Names set in AgentsView still win.
 - Import ChatGPT dot, Codex web, and Codex cloud task chats that live only on
   OpenAI's servers. Turn it on with `[agents.codex-cloud] enabled = true` in
-  `config.toml`; it uses the ChatGPT login of your local Codex homes. Turning it
-  on also turns on live capture: while a chat runs, AgentsView connects to it
+  `config.toml`; it uses the ChatGPT login of your local Codex homes. Live capture
+  is opt-in: with `live_tokens = true`, AgentsView connects to a running chat
   on OpenAI's side to listen in and record its token usage, so its cost appears
-  in usage totals. Set `live_tokens = false` to import without listening in.
-  Chats that ran while AgentsView was not listening in show their share of your
+  in usage totals. Connecting to a chat whose turn just ended can make Codex
+  continue the chat, so AgentsView skips chats with an active goal; see the
+  configuration guide for the remaining case. Chats that ran while AgentsView
+  was not listening in show their share of your
   plan's weekly and five-hour limits instead, and token totals say how many
   chats were left out for that reason. The endpoints are private and
   undocumented, so a change on OpenAI's side can stop the import until

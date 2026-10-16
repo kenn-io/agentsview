@@ -52,7 +52,7 @@ func Classify(method string, anchored bool, e *RPCError) Category {
 		return CatProtocolChange
 	}
 	switch method {
-	case "thread/turns/list", "thread/items/list", resumeMethod:
+	case "thread/turns/list", "thread/items/list", resumeMethod, goalGetMethod:
 		return CatThreadError
 	default:
 		return CatAccountServiceError

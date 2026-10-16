@@ -61,7 +61,7 @@ func (e *CodexCloudConfigError) Error() string {
 func defaultCodexCloudConfig() CodexCloudConfig {
 	endpoint, _ := url.Parse(defaultCodexCloudEndpoint)
 	usage, _ := url.Parse(defaultCodexCloudUsageEndpoint)
-	return CodexCloudConfig{Endpoint: endpoint, UsageEndpoint: usage, LiveTokens: true}
+	return CodexCloudConfig{Endpoint: endpoint, UsageEndpoint: usage}
 }
 
 // parseCodexCloudTable reads [agents.codex-cloud] from the decoded agents
