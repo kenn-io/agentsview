@@ -6765,6 +6765,35 @@ func (db *DB) CountSessionsForMirrorScope(
 	return count, nil
 }
 
+// ReselectMirrorWindowSince moves every session whose sync_marker lies in
+// [since, now) up to now, so the next incremental mirror push lists it again.
+// A push that runs while local sync keeps writing captures its cutoff before
+// it lists sessions; a write stamped before that cutoff but committed after
+// the listing would otherwise fall below every later window. Callers pass the
+// time the push began, taken while no sync transaction was open. It returns
+// the number of sessions moved.
+func (db *DB) ReselectMirrorWindowSince(
+	ctx context.Context, since string,
+) (int64, error) {
+	normalized, err := normalizeMirrorWindowBound(since)
+	if err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	res, err := db.getWriter().Exec(ctx, `
+		UPDATE sessions
+		SET sync_marker = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE sync_marker >= ?
+		  AND sync_marker < strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+		normalized,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reselecting sessions for mirror window since %s: %w", since, err)
+	}
+	return res.RowsAffected()
+}
+
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the
 // bound compares correctly against trigger-maintained markers.

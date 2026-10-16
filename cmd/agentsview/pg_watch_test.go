@@ -227,14 +227,18 @@ type pusherRecorder struct {
 	connects int
 }
 
-// newTestReplicaPusher builds a replicaPusher whose localSync is a no-op and whose
-// connect hands out the supplied targets in order, recording each dial.
+// pushDirectly is a push window with no archive bracket, for pusher tests that
+// have no sync engine.
+func pushDirectly(_ context.Context, push func() error) error { return push() }
+
+// newTestReplicaPusher builds a replicaPusher with no push window whose connect
+// hands out the supplied targets in order, recording each dial.
 func newTestReplicaPusher(targets ...*fakeTarget) (*replicaPusher, *pusherRecorder) {
 	rec := &pusherRecorder{}
 	p := &replicaPusher{
 		label:         "pg watch",
 		displayName:   "PostgreSQL",
-		localSync:     func(context.Context) error { return nil },
+		window:        pushDirectly,
 		ensurePricing: func(context.Context) error { return nil },
 		connect: func(context.Context) (storage.Pusher, error) {
 			tgt := targets[rec.connects]
@@ -375,16 +379,18 @@ func TestPGPusherThreadsGenerationID(t *testing.T) {
 	assert.True(t, target.pushOpts[3].ScopeVectorsToChangedSessions)
 }
 
-func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {
+func TestPGPusherEnsuresPricingInsidePushWindowBeforeConnect(t *testing.T) {
 	var events []string
 	target := &fakeTarget{
 		onPush: func() { events = append(events, "push") },
 	}
 	pusher := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
-		localSync: func(context.Context) error {
-			events = append(events, "local sync")
-			return nil
+		window: func(_ context.Context, push func() error) error {
+			events = append(events, "window open")
+			err := push()
+			events = append(events, "window close")
+			return err
 		},
 		ensurePricing: func(context.Context) error {
 			events = append(events, "pricing ensure")
@@ -400,7 +406,7 @@ func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {
 		t.Context(), reasonChange, false,
 	))
 	assert.Equal(t, []string{
-		"local sync", "pricing ensure", "connect", "push",
+		"window open", "pricing ensure", "connect", "push", "window close",
 	}, events)
 }
 
@@ -410,7 +416,7 @@ func TestPGPusherPricingFailureWarnsAndContinues(t *testing.T) {
 	logs := captureLogOutput(t)
 	pusher := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
-		localSync:     func(context.Context) error { return nil },
+		window:        pushDirectly,
 		ensurePricing: func(context.Context) error { return wantErr },
 		connect:       func(context.Context) (storage.Pusher, error) { return target, nil },
 	}
@@ -428,7 +434,7 @@ func TestPGPusherCanceledPricingStopsBeforeConnect(t *testing.T) {
 	connectCalled := false
 	pusher := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
-		localSync: func(context.Context) error { return nil },
+		window: pushDirectly,
 		ensurePricing: func(got context.Context) error {
 			require.Equal(t, ctx, got)
 			cancel()
@@ -478,7 +484,7 @@ func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
 func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 	p := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
-		localSync: func(context.Context) error { return nil },
+		window: pushDirectly,
 		connect: func(context.Context) (storage.Pusher, error) {
 			return nil, errors.New("dial timeout")
 		},
@@ -486,18 +492,20 @@ func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 	require.Error(t, p.push(t.Context(), reasonChange, false))
 }
 
-func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
+func TestPgPusher_PushWindowErrorSkipsConnect(t *testing.T) {
 	connects := 0
 	p := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
-		localSync: func(context.Context) error { return errors.New("disk") },
+		window: func(context.Context, func() error) error {
+			return errors.New("disk")
+		},
 		connect: func(context.Context) (storage.Pusher, error) {
 			connects++
 			return &fakeTarget{}, nil
 		},
 	}
 	require.Error(t, p.push(t.Context(), reasonChange, false))
-	assert.Equal(t, 0, connects, "connect should not run when local sync fails")
+	assert.Equal(t, 0, connects, "connect should not run when the push window fails")
 }
 
 func TestPgPusher_LogsPartialPushErrors(t *testing.T) {

@@ -5,6 +5,7 @@ package db
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -474,4 +475,49 @@ func TestSyncMarkerMalformedCreatedAtIsDropped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, readMarker("sm-malformed"))
 	assert.Equal(t, "2026-07-02T09:30:00.000Z", readMarker("sm-mixed"))
+}
+
+func TestReselectMirrorWindowSinceMovesOnlyMarkersInsideWindow(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	markers := map[string]string{
+		"before": "2026-07-01T09:59:59.999Z",
+		"at":     "2026-07-01T10:00:00.000Z",
+		"after":  "2026-07-01T11:00:00.000Z",
+		"skewed": "2099-01-01T00:00:00.000Z",
+	}
+	for id, marker := range markers {
+		insertSession(t, database, id, "proj")
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, id)
+		require.NoError(t, err)
+	}
+	readMarker := func(id string) string {
+		var marker string
+		require.NoError(t, database.getReader().QueryRow(ctx,
+			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
+		return marker
+	}
+
+	floor := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	moved, err := database.ReselectMirrorWindowSince(ctx, "2026-07-01T10:00:00Z")
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(2), moved)
+	assert.Equal(t, markers["before"], readMarker("before"),
+		"a marker below the window was already pushed and stays put")
+	assert.Equal(t, markers["skewed"], readMarker("skewed"),
+		"a marker past now is already above every later cutoff")
+	for _, id := range []string{"at", "after"} {
+		assert.GreaterOrEqual(t, readMarker(id), floor,
+			"%s sits inside the window and moves up to now", id)
+	}
+	listed, err := database.ListSessionsForMirrorWindow(ctx, floor, nil, nil)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(listed))
+	for _, s := range listed {
+		ids = append(ids, s.ID)
+	}
+	assert.ElementsMatch(t, []string{"at", "after", "skewed"}, ids,
+		"a push whose cutoff fell before the move lists the moved sessions")
 }

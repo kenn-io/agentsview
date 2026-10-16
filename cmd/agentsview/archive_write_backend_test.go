@@ -143,9 +143,9 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 	target := &fakeTarget{}
 	pusher := backend.newReplicaPusher(
 		pgReplica{},
-		func(context.Context) error { return nil },
 		func(context.Context) (storage.Pusher, error) { return target, nil },
 	)
+	pusher.window = pushDirectly
 
 	require.NoError(t, pusher.push(
 		t.Context(), reasonChange, false,
@@ -520,25 +520,25 @@ func TestDaemonPGPushWatchRenameProbesDeferredRecoveryAtExecution(t *testing.T) 
 type pushWatchAttempt struct {
 	index    int
 	reason   pushReason
+	full     bool
 	batch    *syncpkg.WatchBatch
 	recovery *syncpkg.WatchRecoveryScope
 }
 
 type pushWatchOwnerHarness struct {
-	mu             stdsync.Mutex
-	partial        map[int]bool
-	events         []string
-	attempts       chan pushWatchAttempt
-	opened         chan struct{}
-	callback       syncpkg.WatchCallback
-	degraded       func([]string) error
-	loop           *pushLoop
-	fire           chan time.Time
-	floor          chan time.Time
-	openCount      int
-	startupSyncs   int
-	localPushSyncs int
-	attemptCount   int
+	mu           stdsync.Mutex
+	partial      map[int]bool
+	events       []string
+	attempts     chan pushWatchAttempt
+	opened       chan struct{}
+	callback     syncpkg.WatchCallback
+	degraded     func([]string) error
+	loop         *pushLoop
+	fire         chan time.Time
+	floor        chan time.Time
+	openCount    int
+	startupSyncs int
+	attemptCount int
 }
 
 func newPushWatchOwnerHarness(partial ...int) *pushWatchOwnerHarness {
@@ -627,29 +627,15 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			target := &pushWatchPGTarget{harness: h}
 			return &replicaPusher{
-				localSync: func(context.Context) error {
-					h.mu.Lock()
-					h.localPushSyncs++
-					h.events = append(h.events, "local-sync")
-					h.mu.Unlock()
-					return nil
-				},
 				connect: func(context.Context) (storage.Pusher, error) { return target, nil },
 			}
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
 			return &duckDBPusher{
-				localSync: func(context.Context) error {
-					h.mu.Lock()
-					h.localPushSyncs++
-					h.events = append(h.events, "local-sync")
-					h.mu.Unlock()
-					return nil
-				},
 				mirrorPush: func(
-					_ context.Context, _ bool,
+					_ context.Context, full bool,
 				) (storage.MirrorPushResult, error) {
-					attempt, partial := h.nextAttempt("")
+					attempt, partial := h.nextLocalAttempt(full)
 					if partial {
 						return storage.MirrorPushResult{Errors: 1}, nil
 					}
@@ -672,10 +658,12 @@ func (h *pushWatchOwnerHarness) nextAttempt(reason pushReason) (int, bool) {
 	return h.nextAttemptLocked(reason)
 }
 
-func (h *pushWatchOwnerHarness) nextPGAttempt() (int, bool) {
+// nextLocalAttempt records a push from a local owner's pusher, which sees the
+// full flag but not the loop's reason.
+func (h *pushWatchOwnerHarness) nextLocalAttempt(full bool) (int, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.nextAttemptLocked("")
+	return h.nextAttemptWithScopeLocked("", full, nil, nil)
 }
 
 func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
@@ -683,17 +671,20 @@ func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
 ) (int, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.nextAttemptWithScopeLocked(reason, cfg.WatchBatch, cfg.WatchRecovery)
+	return h.nextAttemptWithScopeLocked(
+		reason, false, cfg.WatchBatch, cfg.WatchRecovery,
+	)
 }
 
 func (h *pushWatchOwnerHarness) nextAttemptLocked(
 	reason pushReason,
 ) (int, bool) {
-	return h.nextAttemptWithScopeLocked(reason, nil, nil)
+	return h.nextAttemptWithScopeLocked(reason, false, nil, nil)
 }
 
 func (h *pushWatchOwnerHarness) nextAttemptWithScopeLocked(
 	reason pushReason,
+	full bool,
 	batch *syncpkg.WatchBatch,
 	recovery *syncpkg.WatchRecoveryScope,
 ) (int, bool) {
@@ -702,7 +693,8 @@ func (h *pushWatchOwnerHarness) nextAttemptWithScopeLocked(
 	h.events = append(h.events, "push")
 	partial := h.partial[index]
 	h.attempts <- pushWatchAttempt{
-		index: index, reason: reason, batch: batch, recovery: recovery,
+		index: index, reason: reason, full: full, batch: batch,
+		recovery: recovery,
 	}
 	return index, partial
 }
@@ -721,13 +713,10 @@ func pushLoopPendingState(loop *pushLoop) (bool, int) {
 	return len(loop.pendingTasks) > 0, waiters
 }
 
-func (h *pushWatchOwnerHarness) snapshot() (
-	[]string, int, int, int,
-) {
+func (h *pushWatchOwnerHarness) snapshot() ([]string, int, int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]string(nil), h.events...), h.openCount,
-		h.startupSyncs, h.localPushSyncs
+	return append([]string(nil), h.events...), h.openCount, h.startupSyncs
 }
 
 func (h *pushWatchOwnerHarness) watcherCallback() syncpkg.WatchCallback {
@@ -748,9 +737,9 @@ type pushWatchPGTarget struct {
 
 func (*pushWatchPGTarget) EnsureSchema(context.Context) error { return nil }
 func (t *pushWatchPGTarget) PushWithOptions(
-	_ context.Context, _ storage.PushOptions, _ func(storage.PushProgress),
+	_ context.Context, opts storage.PushOptions, _ func(storage.PushProgress),
 ) (storage.PushResult, error) {
-	attempt, partial := t.harness.nextPGAttempt()
+	attempt, partial := t.harness.nextLocalAttempt(opts.Full)
 	if partial {
 		return storage.PushResult{Errors: 1}, nil
 	}
@@ -762,10 +751,36 @@ func isLocalEnginePushWatchOwner(name string) bool {
 	return name == "local PostgreSQL" || name == "local DuckDB"
 }
 
+// daemonPushWatchOwnerCases returns the owners that delegate sync to the
+// daemon. Their watcher dispatch waits for the startup push, and authoritative
+// batches wait for a push acknowledgement; local owners sync on their own lane
+// instead (see archive_push_decouple_test.go).
+func daemonPushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
+	t.Helper()
+	var daemon []pushWatchOwnerCase
+	for _, owner := range pushWatchOwnerCases(t) {
+		if !isLocalEnginePushWatchOwner(owner.name) {
+			daemon = append(daemon, owner)
+		}
+	}
+	return daemon
+}
+
+func localPushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
+	t.Helper()
+	var local []pushWatchOwnerCase
+	for _, owner := range pushWatchOwnerCases(t) {
+		if isLocalEnginePushWatchOwner(owner.name) {
+			local = append(local, owner)
+		}
+	}
+	return local
+}
+
 func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 	t *testing.T,
 ) {
-	for _, owner := range pushWatchOwnerCases(t) {
+	for _, owner := range daemonPushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(1)
@@ -776,9 +791,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 
 				first := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 1, first.index)
-				if !isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, reasonStartup, first.reason)
-				}
+				assert.Equal(t, reasonStartup, first.reason)
 				synctest.Wait()
 				pending, waiters := h.pending()
 				require.True(t, pending && waiters == 1,
@@ -792,29 +805,18 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 				h.floor <- time.Now()
 				second := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 2, second.index)
-				if !isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, reasonInterval, second.reason)
-				}
+				assert.Equal(t, reasonInterval, second.reason)
 				receiveArchiveTest(t, h.opened)
 				synctest.Wait()
 				pending, waiters = h.pending()
 				require.True(t, !pending && waiters == 0,
 					"complete periodic push must drain startup work")
 
-				events, opens, startupSyncs, localSyncs := h.snapshot()
+				events, opens, _ := h.snapshot()
 				require.NotEmpty(t, events)
 				assert.Equal(t, "collect", events[0],
 					"watcher collection must precede startup work")
 				assert.Equal(t, 1, opens)
-				if isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, 1, startupSyncs)
-					assert.GreaterOrEqual(t, localSyncs, 2,
-						"initial and retry pushes each run local sync")
-					assert.Less(t, indexOfEvent(events, "startup-sync"),
-						indexOfEvent(events, "push"))
-					assert.Less(t, indexOfEvent(events, "local-sync"),
-						indexOfEvent(events, "push"))
-				}
 
 				cancel()
 				require.NoError(t, receiveArchiveTest(t, done))
@@ -826,7 +828,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 	t *testing.T,
 ) {
-	for _, owner := range pushWatchOwnerCases(t) {
+	for _, owner := range daemonPushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(2)
@@ -837,9 +839,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 
 				first := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 1, first.index)
-				if !isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, reasonStartup, first.reason)
-				}
+				assert.Equal(t, reasonStartup, first.reason)
 				receiveArchiveTest(t, h.opened)
 				callback := h.watcherCallback()
 				require.NotNil(t, callback)
@@ -854,9 +854,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 				h.floor <- time.Now()
 				second := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 2, second.index)
-				if !isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, reasonInterval, second.reason)
-				}
+				assert.Equal(t, reasonInterval, second.reason)
 				synctest.Wait()
 				select {
 				case err := <-callbackDone:
@@ -869,14 +867,12 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 				h.floor <- time.Now()
 				third := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 3, third.index)
-				if !isLocalEnginePushWatchOwner(owner.name) {
-					assert.Equal(t, reasonInterval, third.reason)
-				}
+				assert.Equal(t, reasonInterval, third.reason)
 				require.NoError(t, receiveArchiveTest(t, callbackDone))
 				synctest.Wait()
 				pending, waiters = h.pending()
 				require.True(t, !pending && waiters == 0)
-				_, opens, _, _ := h.snapshot()
+				_, opens, _ := h.snapshot()
 				assert.Equal(t, 1, opens, "runtime retries must not reopen dispatch")
 
 				cancel()
@@ -1101,7 +1097,7 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 				"repeated opencode.db-shm batches must not mark the push loop dirty")
 			assert.Zero(t, waiters,
 				"suppressed batches must not register an acknowledgement waiter")
-			events, _, _, _ := h.snapshot()
+			events, _, _ := h.snapshot()
 			t.Logf("owner=%s path=opencode.db-shm push_pending=%t waiters=%d pushes=%d",
 				owner.name, pending, waiters, countEvents(events, "push"))
 
@@ -1334,26 +1330,6 @@ func TestPushWatchRelevancePreservesAuthoritativeBatches(t *testing.T) {
 	}
 }
 
-func TestArchivePushWatchCallbackRetainsUnfilteredBatchForPush(t *testing.T) {
-	root := t.TempDir()
-	cfg := config.Config{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {root},
-		},
-	}
-	path := filepath.Join(root, "session.jsonl")
-	loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-		return nil
-	})
-	callback := archivePushWatchBatchCallback(cfg, loop)
-	require.NoError(t, callback(t.Context(), syncpkg.WatchBatch{Paths: []string{path}}))
-	claim, ok := loop.claimPending()
-	require.True(t, ok)
-	require.NotNil(t, claim.batch)
-	assert.Equal(t, []string{path}, claim.batch.Paths)
-	t.Log("engine_sync=deferred push_scope=changed_batch")
-}
-
 func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	dataDir := t.TempDir()
 	host, port := testPingServer(t)
@@ -1460,8 +1436,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			return &replicaPusher{
-				localSync: func(context.Context) error { return nil },
-				connect:   func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
+				connect: func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
 			}
 		},
 		newUnwatchedPoller: func(
@@ -1575,7 +1550,6 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
 			return &duckDBPusher{
-				localSync: func(context.Context) error { return nil },
 				mirrorPush: func(context.Context, bool) (storage.MirrorPushResult, error) {
 					return storage.MirrorPushResult{}, nil
 				},

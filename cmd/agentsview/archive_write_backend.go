@@ -148,14 +148,14 @@ func newArchivePushLoop(
 }
 
 func archivePushWatchWatcherOptions(
-	loop *pushLoop, poller unwatchedRootPoller,
+	notifyCoverageDegraded func([]string) error, poller unwatchedRootPoller,
 ) syncpkg.WatcherOptions {
 	return syncpkg.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
 			// Degraded coverage needs both owners: the poller reconciles
 			// the affected roots authoritatively (including tombstoning
-			// missed deletions) and the loop re-pushes the refreshed
-			// archive on its floor.
+			// missed deletions) and the notifier gets the refreshed archive
+			// pushed.
 			scopes := make([]pollingScope, 0, len(roots))
 			for _, r := range roots {
 				scopes = append(scopes, pollingScope{Root: r})
@@ -165,23 +165,12 @@ func archivePushWatchWatcherOptions(
 			}); err != nil {
 				return err
 			}
-			return loop.NotifyCoverageDegraded(roots)
+			return notifyCoverageDegraded(roots)
 		},
 		OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
 			return poller.AddObligation(syncObligationToPoller(obligation))
 		},
 		OnPollingReleased: poller.RemoveObligation,
-	}
-}
-
-func archivePushWatchBatchCallback(
-	appCfg config.Config,
-	loop *pushLoop,
-) syncpkg.WatchCallback {
-	return func(callbackCtx context.Context, batch syncpkg.WatchBatch) error {
-		return notifyPushForWatchBatchWithConfig(
-			callbackCtx, loop, appCfg, batch,
-		)
 	}
 }
 
@@ -805,13 +794,11 @@ func (b *localArchiveWriteBackend) ensureCurrentPricing(
 
 func (b *localArchiveWriteBackend) newReplicaPusher(
 	backend storage.Replica,
-	localSync func(context.Context) error,
 	connect func(context.Context) (storage.Pusher, error),
 ) *replicaPusher {
 	return &replicaPusher{
 		label:         backend.Name() + " watch",
 		displayName:   backend.DisplayName(),
-		localSync:     localSync,
 		ensurePricing: b.ensureCurrentPricing,
 		connect:       connect,
 		// True until the startup push completes a clean
@@ -993,20 +980,6 @@ func (b *localArchiveWriteBackend) newDuckDBPusher(
 	pushCfg := cfg
 	pushCfg.Automatic = true
 	return &duckDBPusher{
-		localSync: func(c context.Context) error {
-			stats := engine.SyncAll(c, nil)
-			if err := c.Err(); err != nil {
-				return err
-			}
-			if !stats.AuthoritativeDiscoveryComplete() {
-				return errors.New("local sync discovery incomplete")
-			}
-			if !stats.ProcessingComplete() {
-				return errors.New("local sync processing incomplete")
-			}
-			engine.FlushSignals()
-			return nil
-		},
 		ensurePricing: b.ensureCurrentPricing,
 		mirrorPush: func(c context.Context, forceFull bool) (
 			storage.MirrorPushResult, error,
@@ -1067,65 +1040,23 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	} else {
 		pusher = b.newDuckDBPusher(engine, duckCfg, cfg, projects, exclude)
 	}
-	pusher.scopedSync = func(
-		c context.Context,
-		batch syncpkg.WatchBatch,
-		recovery *syncpkg.WatchRecoveryScope,
-		work func() error,
-	) error {
-		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
-		return err
-	}
-
-	loop, stopLoop := newArchivePushLoop(
-		b.watchHooks,
-		"duckdb watch", debounce, interval,
-		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
-			return pusher.pushBatch(
-				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
-			)
-		},
-	)
-	defer stopLoop()
-
-	poller := newArchivePushUnwatchedPoller(ctx, b.watchHooks, engine)
-	defer poller.Stop()
-
-	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
-		b.watchHooks, b.appCfg, engine,
-		archivePushWatchBatchCallback(b.appCfg, loop),
-		archivePushWatchWatcherOptions(loop, poller),
-	)
-	defer stopWatcher()
-	if len(unwatchedDirs) > 0 {
-		log.Printf(
-			"duckdb watch: %d root(s) not watched; polling every %s",
-			len(unwatchedDirs), unwatchedPollInterval,
-		)
-	}
+	pusher.window = archivePushWindow(engine, b.database)
 
 	startupSync := runPGWatchStartupSync
 	if b.watchHooks != nil && b.watchHooks.duckDBStartupSync != nil {
 		startupSync = b.watchHooks.duckDBStartupSync
 	}
-	didResync, startupErr := startupSync(ctx, engine, cfg.Full)
-	if startupErr != nil && errors.Is(startupErr, context.Canceled) {
-		return nil
-	}
-	initialErr := startupErr
-	if initialErr == nil {
-		initialErr = pusher.push(ctx, reasonStartup, didResync)
-	}
-	if initialErr != nil {
-		if errors.Is(initialErr, context.Canceled) && ctx.Err() != nil {
-			return nil
-		}
-		log.Printf("duckdb watch: initial push failed: %v", initialErr)
-	}
-	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
-
-	loop.Run(ctx)
-	return nil
+	return localPushWatch{
+		hooks:       b.watchHooks,
+		appCfg:      b.appCfg,
+		engine:      engine,
+		label:       "duckdb watch",
+		debounce:    debounce,
+		interval:    interval,
+		full:        cfg.Full,
+		startupSync: startupSync,
+		push:        pusher.push,
+	}.run(ctx)
 }
 
 func logDuckDBWatchPushResult(res storage.MirrorPushResult, reason pushReason) {
@@ -1236,26 +1167,6 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		defer closeVectorPushSource(vectorSource)
 		pusher = b.newReplicaPusher(
 			backend,
-			func(c context.Context) error {
-				stats := engine.SyncAll(c, nil)
-				if err := c.Err(); err != nil {
-					return err
-				}
-				if !stats.AuthoritativeDiscoveryComplete() {
-					return errors.New("local sync discovery incomplete")
-				}
-				if !stats.ProcessingComplete() {
-					return errors.New("local sync processing incomplete")
-				}
-				// The push scans SQLite rows right after this returns;
-				// flush deferred signal recomputes and stale friction so
-				// pushed sessions carry current derived fields.
-				engine.FlushSignals()
-				if storage.StoresFriction(backend) {
-					drainStaleFriction(c, engine)
-				}
-				return nil
-			},
 			func(c context.Context) (storage.Pusher, error) {
 				applyClassifierConfig(b.appCfg)
 				return backend.NewPusher(
@@ -1265,21 +1176,19 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 			},
 		)
 	}
-	pusher.scopedSync = func(
-		c context.Context,
-		batch syncpkg.WatchBatch,
-		recovery *syncpkg.WatchRecoveryScope,
-		work func() error,
-	) error {
-		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, func() error {
-			if storage.StoresFriction(backend) {
-				if err := engine.DrainStaleFrictionLocked(c); err != nil {
-					return err
-				}
+	window := archivePushWindow(engine, b.database)
+	pusher.window = window
+	if storage.StoresFriction(backend) {
+		// Pushed sessions must carry current friction findings, so review
+		// stale sessions under the sync lock before each push.
+		pusher.window = func(c context.Context, push func() error) error {
+			if err := engine.RunExclusive(func() error {
+				return engine.DrainStaleFrictionLocked(c)
+			}); err != nil {
+				return err
 			}
-			return work()
-		})
-		return err
+			return window(c, push)
+		}
 	}
 	pusher.fullVectorsPending = cfg.Full
 	defer pusher.reset()
@@ -1290,61 +1199,33 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		name, backend.DisplayName(), target.Target.MachineName, debounce, interval,
 	)
 
-	loop, stopLoop := newArchivePushLoop(
-		b.watchHooks, name+" watch", debounce, interval,
-		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
-			err := pusher.pushBatch(
-				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
-			)
-			if embedder != nil && r != reasonShutdown {
-				embedder.ensureScheduler(ctx)
-			}
-			return err
-		},
-	)
-	defer stopLoop()
-
-	poller := newArchivePushUnwatchedPoller(ctx, b.watchHooks, engine)
-	defer poller.Stop()
-
-	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
-		b.watchHooks, b.appCfg, engine,
-		archivePushWatchBatchCallback(b.appCfg, loop),
-		archivePushWatchWatcherOptions(loop, poller),
-	)
-	defer stopWatcher()
-	if len(unwatchedDirs) > 0 {
-		log.Printf(
-			"pg watch: %d root(s) not watched; polling every %s",
-			len(unwatchedDirs), unwatchedPollInterval,
-		)
-	}
-
 	startupSync := runPGWatchStartupSync
 	if b.watchHooks != nil && b.watchHooks.replicaStartupSync != nil {
 		startupSync = b.watchHooks.replicaStartupSync
 	}
-	didResync, startupErr := startupSync(ctx, engine, cfg.Full)
-	if startupErr != nil && errors.Is(startupErr, context.Canceled) {
-		return nil
-	}
-	initialErr := startupErr
+	push := pusher.push
 	if embedder != nil {
-		embedder.ensureScheduler(ctx)
-	}
-	if initialErr == nil {
-		initialErr = pusher.push(ctx, reasonStartup, didResync)
-	}
-	if initialErr != nil {
-		if errors.Is(initialErr, context.Canceled) && ctx.Err() != nil {
-			return nil
+		// The embedder's scheduler state belongs to the push loop, which
+		// runs every push, so it starts the scheduler there.
+		push = func(c context.Context, r pushReason, full bool) error {
+			if r != reasonShutdown {
+				embedder.ensureScheduler(ctx)
+			}
+			return pusher.push(c, r, full)
 		}
-		log.Printf("pg watch: initial push failed: %v", initialErr)
 	}
-	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
-
-	loop.RunWithWake(ctx, cfg.LifecycleWake)
-	return nil
+	return localPushWatch{
+		hooks:       b.watchHooks,
+		appCfg:      b.appCfg,
+		engine:      engine,
+		label:       name + " watch",
+		debounce:    debounce,
+		interval:    interval,
+		full:        cfg.Full,
+		startupSync: startupSync,
+		push:        push,
+		wake:        cfg.LifecycleWake,
+	}.run(ctx)
 }
 
 func runPGWatchStartupSync(

@@ -15,7 +15,6 @@ import (
 	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -27,11 +26,9 @@ type replicaPusher struct {
 	label string
 	// displayName names the replica product in operator-facing warnings.
 	displayName string
-	localSync   func(context.Context) error
-	scopedSync  func(
-		context.Context, syncpkg.WatchBatch, *syncpkg.WatchRecoveryScope,
-		func() error,
-	) error
+	// window brackets each remote push so archive writes that land while
+	// it runs reach the next incremental push; see archivePushWindow.
+	window        func(context.Context, func() error) error
 	ensurePricing func(context.Context) error
 	connect       func(context.Context) (storage.Pusher, error)
 	target        storage.Pusher
@@ -56,35 +53,18 @@ type replicaPusher struct {
 	lastReconciledVectorGeneration int64
 }
 
-// push performs one local-sync-then-push cycle. On any replica error it
-// drops the cached connection so the next call reconnects.
+// push copies the archive to the replica. Local sync runs separately, so the
+// push sends whatever the archive holds when it starts. On any replica error
+// it drops the cached connection so the next call reconnects.
 func (p *replicaPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
-	return p.pushBatch(ctx, reason, full, nil, nil)
+	return p.window(ctx, func() error {
+		return p.pushTarget(ctx, reason, full)
+	})
 }
 
-func (p *replicaPusher) pushBatch(
-	ctx context.Context,
-	reason pushReason,
-	full bool,
-	batch *syncpkg.WatchBatch,
-	recovery *syncpkg.WatchRecoveryScope,
-) error {
-	push := func() error { return p.pushAfterSync(ctx, reason, full) }
-	if batch != nil {
-		if p.scopedSync == nil {
-			return errors.New("scoped local sync is unavailable")
-		}
-		return p.scopedSync(ctx, *batch, recovery, push)
-	}
-	if err := p.localSync(ctx); err != nil {
-		return fmt.Errorf("local sync: %w", err)
-	}
-	return push()
-}
-
-func (p *replicaPusher) pushAfterSync(
+func (p *replicaPusher) pushTarget(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
 	if p.ensurePricing != nil {
