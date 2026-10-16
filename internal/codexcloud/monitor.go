@@ -600,7 +600,7 @@ func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) erro
 		// commitThread saves the state only after the records are durable.
 		st.LastHandledTurnID = batch.handled
 	}
-	if _, err := commitBesideHistory(m.Store, key, threadID, st, batch.records, m.Now()); err != nil {
+	if _, err := commitBesideHistory(m.Store, key, nil, threadID, st, batch.records, m.Now()); err != nil {
 		return err
 	}
 	if len(batch.records) > 0 {
@@ -913,7 +913,7 @@ func (m *Monitor) writeResumeMetadata(key AccountKey, threadID string, thread js
 	}
 	now := m.Now()
 	record := mirror.Record{Kind: mirror.KindThreadResume, FetchedAt: now, Data: data}
-	_, err = commitBesideHistory(m.Store, key, threadID, st, []mirror.Record{record}, now)
+	_, err = commitBesideHistory(m.Store, key, nil, threadID, st, []mirror.Record{record}, now)
 	return err
 }
 

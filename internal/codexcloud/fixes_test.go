@@ -327,7 +327,7 @@ func TestWriteToLostMirrorKeepsHistoryDue(t *testing.T) {
 				require.NoError(t, os.Truncate(path, 0))
 			}
 			now := env.clock.Now()
-			require.NoError(t, env.syncer.appendPlan(passKey, "t", now, mirror.KindPlanUsageOutcome,
+			require.NoError(t, env.syncer.appendPlan(passKey, nil, "t", now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
 
 			env.clock.Advance(5 * time.Minute)
@@ -341,6 +341,48 @@ func TestWriteToLostMirrorKeepsHistoryDue(t *testing.T) {
 			assert.True(t, ok, "the rebuilt file imports")
 		})
 	}
+}
+
+// A plan usage record written to a lost mirror of an idle, finished chat
+// marks the chat to check again, so the next pass reads its history even
+// though its listing has not changed.
+func TestWriteToLostMirrorOfIdleChatFetchesHistory(t *testing.T) {
+	env := newPassEnv(t)
+	updated := ago(time.Hour)
+	env.threads.Set(codexcloudtest.Thread{
+		ID: "t", Name: "thread t", CreatedAt: updated - 3600, UpdatedAt: updated,
+		Turns: []codexcloudtest.Turn{{
+			ID: "turn-1", Status: "completed", StartedAt: updated - 3600,
+			Items: []codexcloudtest.Item{
+				command("a", "completed", agoMs(time.Hour)), command("b", "completed", agoMs(time.Hour)),
+			},
+		}},
+	})
+	env.run(t)
+	// A second pass after the save-lag margin finishes the chat.
+	env.clock.Advance(15 * time.Minute)
+	env.run(t)
+	acct := env.account(t)
+	require.NotContains(t, acct.Unfinished, "t")
+	require.NotContains(t, acct.CheckAgain, "t")
+	path := env.mirrorPath(t, "t")
+	require.NoError(t, os.Remove(path))
+	now := env.clock.Now()
+	require.NoError(t, env.syncer.appendPlan(passKey, nil, "t", now, mirror.KindPlanUsageOutcome,
+		mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
+	assert.True(t, env.account(t).CheckAgain["t"], "the lost mirror marks the chat")
+
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+
+	records, err := mirror.ReadAll(t.Context(), path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, recordedItemIDs(records))
+	// A pass after the save-lag margin that finds nothing new takes the
+	// chat off the list.
+	env.clock.Advance(15 * time.Minute)
+	env.run(t)
+	assert.NotContains(t, env.account(t).CheckAgain, "t")
 }
 
 // A failed refetch of a lost mirror writes nothing: a file holding only
