@@ -941,7 +941,8 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
       "has_cost": true
     }
   ],
-  "server_running": false
+  "server_running": false,
+  "refresh_incomplete": true
 }
 ```
 
@@ -961,6 +962,7 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `subagent_count`        | Number of subagent descendant sessions folded in; omitted when zero, so own-session results are byte-identical to before                                                                                                                         |
 | `breakdown`             | Per-step usage rows ordered by timestamp across all included sessions (the queried session wins ties); when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`        | `true` when the report came from an already-running daemon                                                                                                                                                                                       |
+| `refresh_incomplete`   | Present as `true` when a requested source refresh was refused or failed; the result still contains archived totals                                                                                                                                 |
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
@@ -1001,6 +1003,8 @@ Cost:          ~$2.41 (claude-opus-4-7)
 The `Subagents` line appears only when the figures cover subagent transcripts,
 so a session without them (or a `--own-only` run) prints the same five lines it
 always has.
+
+When refresh is incomplete, human output adds `Usage refresh: incomplete; showing archived totals`.
 
 The leading `~` on the cost line marks a computed or mixed figure. A reported
 cost omits it. The parenthesized model list is shown only when contributing
@@ -1047,8 +1051,8 @@ Unexpected usage-query failures return `500` with
 | Code | Meaning                                            |
 | ---- | -------------------------------------------------- |
 | `0`  | Token data or cost present and reported            |
-| `1`  | Query error or session awaiting daemon ingestion   |
-| `2`  | Session missing from an archive-only or direct lookup |
+| `1`  | Query error or session unavailable during startup ingestion or archive rebuild |
+| `2`  | Session missing after startup or rebuild, or from an archive-only/direct lookup |
 | `3`  | Session exists but has neither token data nor cost |
 
 The codes classify the reported document, so a session whose only token data
@@ -1056,19 +1060,19 @@ lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
 Combined usage refreshes a known session and nearby Claude subagent transcripts
-without waiting for startup ingestion. Totals include archived descendants.
-While startup ingestion is incomplete, another sync owns the engine, or the
-archive needs a rebuild, the command shows available stored usage with a
-warning. Unresolved daemon IDs return a retry error when refreshing; wait for
-scheduled ingestion or run `agentsview sync` if automatic ingestion is disabled.
-Direct mode keeps its targeted lookup of the named local transcript.
+without waiting for startup ingestion. If refresh is refused or fails, the
+command returns archived totals with a warning; JSON sets
+`refresh_incomplete: true`. A missing daemon ID returns a retry error while
+`GET /api/v1/sync/status` reports `startup_pending` or `archive_stale`. Once
+both are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
-`--no-sync`. Archived combined
-reads require API 6. `POST /api/v1/sessions/sync` returns HTTP 409 for a stale
-local archive. The command then shows stored usage with a warning.
+`--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
+returns HTTP 409 for a stale local archive for every caller, including
+`session sync`. When startup ingestion is deferred, its automatic fallback
+starts after a 30-second grace period.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.
 This preserves the full subagent rollup and the exit codes above; combine it

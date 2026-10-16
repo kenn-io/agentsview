@@ -309,6 +309,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	)
 
 	stale := b.database.NeedsResync()
+	refreshIncomplete := stale && !b.skipFreshData && !query.NoSync
 	if known && !b.skipFreshData && !query.NoSync && !stale {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
@@ -328,6 +329,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			syncErr = engine.SyncSessionWithSubagentsContext(ctx, resolvedID)
 		}
 		if syncErr != nil {
+			refreshIncomplete = true
 			fmt.Fprintf(os.Stderr,
 				"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
 		}
@@ -379,8 +381,9 @@ func (b localArchiveQueryBackend) SessionUsage(
 		}
 	}
 	return &sessionUsageOutput{
-		SessionUsage:  *u,
-		ServerRunning: false,
+		SessionUsage:      *u,
+		ServerRunning:     false,
+		RefreshIncomplete: refreshIncomplete,
 	}, usageExitCode(u), nil
 }
 

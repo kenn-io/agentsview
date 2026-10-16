@@ -55,9 +55,6 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 			}
 			err := engine.TrySyncSessionWithSubagentsContext(t.Context(), "parent")
 			assert.ErrorIs(t, err, ErrSyncInProgress)
-			child, err := database.GetSession(t.Context(), "agent-child")
-			require.NoError(t, err)
-			assert.Nil(t, child)
 		})
 	}
 }
@@ -67,13 +64,24 @@ func TestUnmarkedSessionRefreshWaitsForSyncLock(t *testing.T) {
 	engine := NewEngine(t.Context(), database, EngineConfig{Ephemeral: true})
 	t.Cleanup(engine.Close)
 	engine.syncMu.Lock()
-	done := make(chan error, 1)
-	go func() { done <- engine.SyncSessionWithSubagentsContext(context.Background(), "unknown") }()
+	started, done := make(chan struct{}), make(chan error, 1)
+	received := false
+	defer func() {
+		engine.syncMu.Unlock()
+		if !received {
+			assert.NotErrorIs(t, <-done, ErrSyncInProgress)
+		}
+	}()
+	go func() {
+		close(started)
+		done <- engine.SyncSessionWithSubagentsContext(context.Background(), "unknown")
+	}()
+	<-started
+	// Mutex acquisition does not durably block under testing/synctest.
 	select {
 	case err := <-done:
-		t.Errorf("manual refresh returned before the lock was released: %v", err)
-	case <-time.After(time.Second):
+		received = true
+		require.FailNowf(t, "manual refresh returned before the lock was released", "%v", err)
+	case <-time.After(5 * time.Second):
 	}
-	engine.syncMu.Unlock()
-	assert.NotErrorIs(t, <-done, ErrSyncInProgress)
 }

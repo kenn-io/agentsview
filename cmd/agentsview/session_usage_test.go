@@ -163,10 +163,11 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		// db.CostUSDFromCost helper (called by every backend and
 		// the subagent combiner); set here directly since this
 		// test pins the JSON contract, not the computation.
-		CostUSD:        db.CostUSDFromCost(true, cost),
-		Models:         []string{"gpt-5.1"},
-		UnpricedModels: []string{"local-model"},
-		ServerRunning:  true,
+		CostUSD:           db.CostUSDFromCost(true, cost),
+		Models:            []string{"gpt-5.1"},
+		UnpricedModels:    []string{"local-model"},
+		ServerRunning:     true,
+		RefreshIncomplete: true,
 	}
 
 	data, err := json.Marshal(out)
@@ -186,11 +187,12 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"cost": map[string]any{
 			"microdollars": float64(420000),
 		},
-		"has_cost":        true,
-		"cost_usd":        0.42,
-		"models":          []any{"gpt-5.1"},
-		"unpriced_models": []any{"local-model"},
-		"server_running":  true,
+		"has_cost":           true,
+		"cost_usd":           0.42,
+		"models":             []any{"gpt-5.1"},
+		"unpriced_models":    []any{"local-model"},
+		"server_running":     true,
+		"refresh_incomplete": true,
 	}, raw, "a session with no subagents must omit subagent-only fields")
 }
 
@@ -260,14 +262,19 @@ func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
 
 func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
 	tests := []struct {
-		name          string
-		subagentCount int
-		wantLine      bool
+		name              string
+		subagentCount     int
+		refreshIncomplete bool
+		wantLine          bool
 	}{
 		{name: "own session omits the line", subagentCount: 0},
 		{
 			name:          "combined session names the count",
 			subagentCount: 2, wantLine: true,
+		},
+		{
+			name:              "incomplete refresh reports stored totals",
+			refreshIncomplete: true,
 		},
 	}
 
@@ -276,12 +283,16 @@ func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
 			out := &sessionUsageOutput{
 				SessionID: "claude:s1", Agent: "claude-code",
 				TotalOutputTokens: 100, HasTokenData: true,
-				SubagentCount: tt.subagentCount,
+				SubagentCount: tt.subagentCount, RefreshIncomplete: tt.refreshIncomplete,
 			}
 			var b strings.Builder
 			require.NoError(t, renderSessionUsageHuman(&b, out))
 			if tt.wantLine {
 				assert.Contains(t, b.String(), "Subagents:     2 (included)")
+				return
+			}
+			if tt.refreshIncomplete {
+				assert.Contains(t, b.String(), "Usage refresh: incomplete; showing archived totals")
 				return
 			}
 			assert.NotContains(t, b.String(), "Subagents")

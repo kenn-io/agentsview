@@ -1159,12 +1159,9 @@ use IDs like `agent-a86574e`, and some other agents use prefixes such as
 `codex:my-session-id`. Raw session IDs emitted by the underlying agent are also
 accepted when AgentsView can resolve them back to the canonical stored session.
 
-The command uses a compatible local daemon, starting one if needed. Known
-sessions return available stored usage with a warning while ingestion is
-pending, the engine is busy, or the archive needs a rebuild. Unresolved daemon
-IDs return a retry error; wait for scheduled ingestion or run `agentsview sync`
-if automatic ingestion is disabled. With daemon autostart disabled, direct
-mode keeps its targeted lookup of the named local transcript.
+The command uses a compatible local daemon, starting one if needed. It follows
+the same refresh and missing-session behavior as
+[`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
 
 Totals include archived subagent spend. `token-use` has no opt-out; use
 `agentsview session usage <id> --own-only` for own-session numbers.
@@ -1735,15 +1732,10 @@ agentsview session parent <id> <parent>  # record the launching session
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
 
-`session usage` includes archived subagent spend in the parent total. Combined
-usage refreshes known sessions and nearby Claude subagent transcripts without
-waiting for startup ingestion. Pending ingestion, a busy engine, or a stale
-archive returns available stored usage with a warning. Unresolved daemon IDs
-return a retry error when refreshing; wait for scheduled ingestion or run
-`agentsview sync` if automatic ingestion is disabled. `--no-sync` and HTTP
-`--own-only` read only the archive and return exit 2 for missing IDs. Direct mode keeps its
-targeted source lookup. Combined HTTP refresh requires API 12; `--no-sync`
-combined reads require API 6.
+`session usage` includes archived subagent spend in the parent total. See the
+[session usage contract](/docs/session-api/#agentsview-session-usage) for
+refresh behavior, missing-session exit codes, and the `refresh_incomplete`
+JSON field.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from

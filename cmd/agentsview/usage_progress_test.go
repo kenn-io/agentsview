@@ -72,56 +72,46 @@ func TestUsageCommandsDeferStartupSyncExceptStatusline(t *testing.T) {
 }
 
 func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
-	for _, sessionQuery := range []bool{false, true} {
-		t.Run(fmt.Sprintf("session=%t", sessionQuery), func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
-				AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID,
-				DeferStartupMaintenance: true,
-			})
-			t.Cleanup(engine.Close)
-			ts := httptest.NewUnstartedServer(nil)
-			cfg.Host, cfg.Port = "127.0.0.1", ts.Listener.Addr().(*net.TCPAddr).Port
-			srv := server.New(cfg, database, engine)
-			ts.Config.Handler = srv.Handler()
-			ts.Start()
-			t.Cleanup(ts.Close)
-			stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
-				assert.True(t, launch.SkipInitialSync)
-				registerTestRuntime(t, cfg.DataDir, ts.URL, false)
-				return daemonRuntimeFromTestURL(t, ts.URL), nil
-			})
-			policy := archiveQueryPolicy{AutoStart: true, SkipInitialSync: true}
-			daily, closeDaily, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
-			require.NoError(t, err)
-			defer closeDaily()
-			_, err = daily.DailyUsage(t.Context(), dailyUsageQuery{})
-			require.NoError(t, err)
-			assert.False(t, engine.StartupReconciled(), "daily usage must not force ingestion")
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID,
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Host, cfg.Port = "127.0.0.1", ts.Listener.Addr().(*net.TCPAddr).Port
+	srv := server.New(cfg, database, engine)
+	ts.Config.Handler = srv.Handler()
+	ts.Start()
+	t.Cleanup(ts.Close)
+	stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+		assert.True(t, launch.SkipInitialSync)
+		registerTestRuntime(t, cfg.DataDir, ts.URL, false)
+		return daemonRuntimeFromTestURL(t, ts.URL), nil
+	})
+	policy := archiveQueryPolicy{AutoStart: true, SkipInitialSync: true}
+	daily, closeDaily, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+	require.NoError(t, err)
+	defer closeDaily()
+	_, err = daily.DailyUsage(t.Context(), dailyUsageQuery{})
+	require.NoError(t, err)
+	assert.False(t, engine.StartupReconciled(), "daily usage must not force ingestion")
 
-			policy.SkipInitialSync = false
-			fresh, closeFresh, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
-			require.NoError(t, err)
-			defer closeFresh()
-			if sessionQuery {
-				out, _, err := fresh.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "session0", OwnOnly: true})
-				require.NoError(t, err)
-				require.NotNil(t, out, "lookup must happen after the missing session is imported")
-			} else {
-				_, err := fresh.DailyUsage(t.Context(), dailyUsageQuery{})
-				require.NoError(t, err)
-				session, err := database.GetSession(t.Context(), "session0")
-				require.NoError(t, err)
-				require.NotNil(t, session, "statusline must query after startup ingestion")
-			}
-			lastSync := engine.LastSyncStartedAt(t.Context())
-			_, cleanup, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
-			require.NoError(t, err)
-			cleanup()
-			assert.Equal(t, lastSync, engine.LastSyncStartedAt(t.Context()), "warm prompt refresh must not repeat a full sync")
-		})
-	}
+	policy.SkipInitialSync = false
+	fresh, closeFresh, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+	require.NoError(t, err)
+	defer closeFresh()
+	_, err = fresh.DailyUsage(t.Context(), dailyUsageQuery{})
+	require.NoError(t, err)
+	session, err := database.GetSession(t.Context(), "session0")
+	require.NoError(t, err)
+	require.NotNil(t, session, "statusline must query after startup ingestion")
+	lastSync := engine.LastSyncStartedAt(t.Context())
+	_, cleanup, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+	require.NoError(t, err)
+	cleanup()
+	assert.Equal(t, lastSync, engine.LastSyncStartedAt(t.Context()), "warm prompt refresh must not repeat a full sync")
 }
 
 func TestUsageProgressRejectsDaemonWithoutStreamEndpoint(t *testing.T) {

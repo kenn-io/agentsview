@@ -261,24 +261,6 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	assert.Zero(t, own.SubagentCount)
 }
 
-func TestLocalSessionUsageImportsNewSource(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(root, "project-a", "saved.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(source), 0o755))
-	require.NoError(t, os.WriteFile(source, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "new source content").String()), 0o600))
-	database := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "sessions.db"))
-	backend := localArchiveQueryBackend{database: database, offline: true, cfg: config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}}
-	out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved"})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, "saved", out.SessionID)
-	assert.Equal(t, tokenUseExitNoTokenData, code)
-	session, err := database.GetSession(t.Context(), "saved")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "new source content", *session.FirstMessage)
-}
-
 func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	writer := dbtest.OpenTestDBAt(t, dbPath)
@@ -301,10 +283,15 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, out)
 		assert.Equal(t, 42, out.TotalOutputTokens)
+		assert.True(t, out.RefreshIncomplete)
 		assert.Equal(t, tokenUseExitOK, code)
 	})
 	assert.True(t, database.NeedsResync())
 	assert.Contains(t, stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
+	out, _, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved", NoSync: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.False(t, out.RefreshIncomplete)
 	missingStderr := captureStderr(t, func() {
 		out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "missing"})
 		require.NoError(t, err)

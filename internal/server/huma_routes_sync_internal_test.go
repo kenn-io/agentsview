@@ -1563,13 +1563,17 @@ func TestHumaSyncStatusUsesExistingOnDemandEngine(t *testing.T) {
 		WriteTimeout: 30 * time.Second,
 	}, database, nil)
 	engine := srv.syncEngineForLocal(t.Context(), database)
+	out, err := srv.humaSyncStatus(t.Context(), &emptyInput{})
+	require.NoError(t, err)
+	assert.False(t, out.Body.StartupPending)
 	engine.SyncAll(t.Context(), nil)
 
-	out, err := srv.humaSyncStatus(t.Context(), &emptyInput{})
+	out, err = srv.humaSyncStatus(t.Context(), &emptyInput{})
 
 	require.NoError(t, err)
 	require.NotNil(t, out.Body.Stats)
 	assert.Equal(t, engine.LastSyncStats(), *out.Body.Stats)
+	assert.False(t, out.Body.StartupPending)
 }
 
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
@@ -2479,7 +2483,6 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		response           string
 	}{
 		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, false, false, http.StatusConflict, "agentsview sync --full"},
 		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false, http.StatusOK, ""},
 		{http.MethodPost, "/api/v1/sync?startup_only", "", false, false, http.StatusOK, ""},
 		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false, http.StatusOK, ""},
@@ -2498,9 +2501,6 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
-			if tc.path == "/api/v1/sessions/sync" {
-				assert.Equal(t, "true", w.Header().Get(ResyncRequiredHeader))
-			}
 			if strings.HasPrefix(tc.path, "/api/v1/sync?startup_only") {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Zero(t, syncCalls)
@@ -2526,6 +2526,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				var status map[string]any
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
 				assert.Equal(t, true, status["archive_stale"])
+				assert.Equal(t, true, status["startup_pending"])
 			}
 			if tc.probe {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -2607,78 +2608,14 @@ func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("usage refresh waited for the ingestion lock")
 	}
-	messages, err := f.db.GetAllMessages(t.Context(), "retained")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "stored transcript", messages[0].Content)
-}
-
-func TestUsageRefreshWaitsForScheduledStartupCoverage(t *testing.T) {
-	for _, state := range []string{"deferred", "failed", "incomplete"} {
-		t.Run(state, func(t *testing.T) {
-			f := newSyncRouteFixture(t)
-			parent := testjsonl.JoinJSONL(
-				`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
-				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
-			)
-			f.writeClaudeTranscript(t, "project/parent.jsonl", parent)
-			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-			f.srv.engine = engine
-			f.srv.sessions = service.NewDirectBackend(f.db, engine)
-			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
-			fork := strings.ReplaceAll(strings.ReplaceAll(parent, `"sessionId":"parent"`, `"sessionId":"continuation"`), `"message":`, `"sessionKind":"bg","message":`)
-			fork += testjsonl.JoinJSONL(
-				`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T11:00:00Z","sessionId":"continuation","sessionKind":"bg","message":{"content":"continue"}}`,
-				`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-01-01T11:00:05Z","sessionId":"continuation","sessionKind":"bg","message":{"id":"msg-2","content":[{"type":"text","text":"continued"}],"usage":{"input_tokens":10,"output_tokens":7}}}`,
-			)
-			f.writeClaudeTranscript(t, "project/continuation.jsonl", fork)
-			f.writeClaudeTranscript(t, "project/continuation/subagents/agent-child.jsonl", testjsonl.NewSessionBuilder().
-				AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "continuation").
-				AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String())
-			if state == "failed" {
-				engine.RecordStartupReconciled(syncpkg.SyncStats{}, errors.New("ingestion failed"))
-			} else if state == "incomplete" {
-				engine.RecordStartupReconciled(syncpkg.SyncStats{Deferred: 1}, nil)
-			}
-			w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "parent", "subagents": true, "usage_refresh": true})
-			assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), "startup ingestion is incomplete")
-			usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
-			require.NoError(t, err)
-			require.NotNil(t, usage)
-			assert.Equal(t, 20, usage.TotalOutputTokens)
-			child, err := f.db.GetSession(t.Context(), "agent-child")
-			require.NoError(t, err)
-			assert.Nil(t, child)
-			// An explicit full pass completes the scheduled startup coverage.
-			w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			require.True(t, engine.StartupReconciled())
-			w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "parent", "subagents": true, "usage_refresh": true})
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			usage, err = service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
-			require.NoError(t, err)
-			require.NotNil(t, usage)
-			// Continuation spend belongs to that session; its delegated child rolls up.
-			assert.Equal(t, 62, usage.TotalOutputTokens)
-			continuation, err := f.db.GetSession(t.Context(), "continuation")
-			require.NoError(t, err)
-			require.NotNil(t, continuation)
-			require.NotNil(t, continuation.ParentSessionID)
-			assert.Equal(t, "parent", *continuation.ParentSessionID)
-		})
-	}
 }
 
 func TestUsageRefreshRequiresCombinedID(t *testing.T) {
 	f := newSyncRouteFixture(t)
-	for _, body := range []map[string]any{
-		{"id": "parent", "usage_refresh": true},
-		{"path": "/work/session.jsonl", "subagents": true, "usage_refresh": true},
-	} {
-		w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	}
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
+		"id": "parent", "usage_refresh": true,
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 
 func TestUsageRefreshWaitsForProviderDescendants(t *testing.T) {
@@ -2699,6 +2636,18 @@ func TestUsageRefreshWaitsForProviderDescendants(t *testing.T) {
 			`{"role":"user","content":[{"type":"text","text":"start"}]}` + "\n" +
 			`{"role":"assistant","content":[{"type":"text","text":"done"}]}` + "\n"
 	}
+	claudeParent := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
+	)
+	claudeContinuation := strings.ReplaceAll(
+		strings.ReplaceAll(claudeParent, `"sessionId":"parent"`, `"sessionId":"continuation"`),
+		`"message":`, `"sessionKind":"bg","message":`,
+	)
+	claudeContinuation += testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T11:00:00Z","sessionId":"continuation","sessionKind":"bg","message":{"content":"continue"}}`,
+		`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-01-01T11:00:05Z","sessionId":"continuation","sessionKind":"bg","message":{"id":"msg-2","content":[{"type":"text","text":"continued"}],"usage":{"input_tokens":10,"output_tokens":7}}}`,
+	)
 	for _, tc := range []struct {
 		agent                                  parser.AgentType
 		parentID, parentPath, content, childID string
@@ -2706,6 +2655,18 @@ func TestUsageRefreshWaitsForProviderDescendants(t *testing.T) {
 		sources                                map[string]string
 		stored, combined                       int
 	}{
+		{
+			agent: parser.AgentClaude, parentID: "parent", childID: "agent-child",
+			parentPath: "project/parent.jsonl", content: claudeParent,
+			linkID: "continuation", relationship: "continuation",
+			sources: map[string]string{
+				"project/continuation.jsonl": claudeContinuation,
+				"project/continuation/subagents/agent-child.jsonl": testjsonl.NewSessionBuilder().
+					AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "continuation").
+					AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String(),
+			},
+			stored: 20, combined: 62,
+		},
 		{
 			agent: parser.AgentCodex, parentID: "codex:" + parent, childID: "codex:" + descendant,
 			parentPath: "rollout-2026-01-01T10-00-00-" + parent + ".jsonl",

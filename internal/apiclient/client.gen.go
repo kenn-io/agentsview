@@ -5230,6 +5230,7 @@ type ClientInterface interface {
 	PostAPIV1SyncStreamWithResponse(ctx context.Context, options *PostAPIV1SyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SyncResp, error)
 	PostAPIV1SyncRemotesWithResponse(ctx context.Context, options *PostAPIV1SyncRemotesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SyncRemotesResp, error)
 	PostAPIV1SyncRemotesStreamWithResponse(ctx context.Context, options *PostAPIV1SyncRemotesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SyncRemotesResp, error)
+	GetAPIV1SyncStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SyncStatusResp, error)
 	GetAPIV1UsagePairwiseComparisonWithResponse(ctx context.Context, options *GetAPIV1UsagePairwiseComparisonRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsagePairwiseComparisonResp, error)
 	GetAPIV1UsageSummaryWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryResp, error)
 	GetAPIV1UsageSummaryStreamWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryStreamRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryStreamResp, error)
@@ -16880,6 +16881,212 @@ func (c *Client) PostAPIV1SyncRemotesWithResponse(ctx context.Context, options *
 	}
 }
 
+// GetAPIV1SyncStatus Get sync status
+func (c *Client) GetAPIV1SyncStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SyncStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/sync/status",
+		Method:     "GET",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sync/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1SyncStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1SyncStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1SyncStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1SyncStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1SyncStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1SyncStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1SyncStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1SyncStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1SyncStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1SyncStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1SyncStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1SyncStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SyncStatusErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // GetAPIV1UsagePairwiseComparison Get usage pairwise comparison
 func (c *Client) GetAPIV1UsagePairwiseComparisonWithResponse(ctx context.Context, options *GetAPIV1UsagePairwiseComparisonRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsagePairwiseComparisonResp, error) {
 	var err error
@@ -21044,6 +21251,28 @@ type PostAPIV1SyncRemotesErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1SyncRemotesErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1SyncStatusResponse = SyncStatusResponse
+
+type GetAPIV1SyncStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1SyncStatusErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1UsagePairwiseComparisonResponse = service.UsagePairwiseComparisonResponse
 
 type GetAPIV1UsagePairwiseComparisonErrorResponse = APIErrorResponse
@@ -22161,6 +22390,23 @@ type PostAPIV1SyncRemotesResp struct {
 	JSON502      *PostAPIV1SyncRemotesErrorResponseJSON502
 	JSON503      *PostAPIV1SyncRemotesErrorResponseJSON503
 	JSON504      *PostAPIV1SyncRemotesErrorResponseJSON504
+}
+
+type GetAPIV1SyncStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1SyncStatusResponse
+	JSON400      *GetAPIV1SyncStatusErrorResponse
+	JSON401      *GetAPIV1SyncStatusErrorResponseJSON
+	JSON403      *GetAPIV1SyncStatusErrorResponseJSON403
+	JSON404      *GetAPIV1SyncStatusErrorResponseJSON404
+	JSON409      *GetAPIV1SyncStatusErrorResponseJSON409
+	JSON500      *GetAPIV1SyncStatusErrorResponseJSON500
+	JSON501      *GetAPIV1SyncStatusErrorResponseJSON501
+	JSON502      *GetAPIV1SyncStatusErrorResponseJSON502
+	JSON503      *GetAPIV1SyncStatusErrorResponseJSON503
+	JSON504      *GetAPIV1SyncStatusErrorResponseJSON504
 }
 
 type GetAPIV1UsagePairwiseComparisonResp struct {
@@ -24891,6 +25137,30 @@ func (s SyncAnomalyStats) Validate() error {
 	return errors
 }
 
+type SyncProgress struct {
+	BytesDone         *int64     `json:"bytes_done,omitempty"`
+	BytesTotal        *int64     `json:"bytes_total,omitempty"`
+	CurrentProject    *string    `json:"current_project,omitempty"`
+	Detail            *string    `json:"detail,omitempty"`
+	FallbackProviders *int64     `json:"fallback_providers,omitempty"`
+	FallbackSources   *int64     `json:"fallback_sources,omitempty"`
+	Hint              *string    `json:"hint,omitempty"`
+	MessagesIndexed   int64      `json:"messages_indexed"`
+	Phase             string     `json:"phase" validate:"required"`
+	ProjectsDone      int64      `json:"projects_done"`
+	ProjectsTotal     int64      `json:"projects_total"`
+	Resync            *bool      `json:"resync,omitempty"`
+	SessionsDone      int64      `json:"sessions_done"`
+	SessionsTotal     int64      `json:"sessions_total"`
+	Stalled           *bool      `json:"stalled,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+}
+
+func (s SyncProgress) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
+}
+
 type SyncRebuildPhaseStats struct {
 	BatchedWrites  int64  `json:"batched_writes"`
 	Batches        int64  `json:"batches"`
@@ -24911,6 +25181,40 @@ type SyncSanitizeStats struct {
 	RoleCoerced          *int64 `json:"role_coerced,omitempty"`
 	TimestampsBlanked    *int64 `json:"timestamps_blanked,omitempty"`
 	TokensClamped        *int64 `json:"tokens_clamped,omitempty"`
+}
+
+type SyncStatusResponse struct {
+	// ArchiveStale Results may reflect the archive before a required parser rebuild
+	ArchiveStale bool          `json:"archive_stale"`
+	LastSync     string        `json:"last_sync" validate:"required"`
+	Progress     *SyncProgress `json:"progress,omitempty"`
+
+	// StartupPending Startup ingestion has not completed successfully
+	StartupPending bool          `json:"startup_pending"`
+	Stats          SyncSyncStats `json:"stats"`
+}
+
+func (s SyncStatusResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.LastSync, "required"); err != nil {
+		errors = errors.Append("LastSync", err)
+	}
+	if s.Progress != nil {
+		if v, ok := any(s.Progress).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Progress", err)
+			}
+		}
+	}
+	if v, ok := any(s.Stats).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Stats", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type SyncSyncStats struct {

@@ -34,10 +34,11 @@ func (s *Server) registerSyncRoutes() {
 }
 
 type syncStatusResponse struct {
-	ArchiveStale bool               `json:"archive_stale" doc:"Results may reflect the archive before a required parser rebuild"`
-	LastSync     string             `json:"last_sync"`
-	Stats        *syncpkg.SyncStats `json:"stats"`
-	Progress     *syncpkg.Progress  `json:"progress,omitempty"`
+	ArchiveStale   bool               `json:"archive_stale" doc:"Results may reflect the archive before a required parser rebuild"`
+	StartupPending bool               `json:"startup_pending" doc:"Startup ingestion has not completed successfully"`
+	LastSync       string             `json:"last_sync"`
+	Stats          *syncpkg.SyncStats `json:"stats"`
+	Progress       *syncpkg.Progress  `json:"progress,omitempty"`
 }
 
 type sessionSyncInput struct {
@@ -162,6 +163,7 @@ func (s *Server) humaSyncStatus(
 	if engine == nil {
 		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale()}}, nil
 	}
+	startupPending := s.engine != nil && !s.engine.StartupReconciled()
 	lastSync := engine.LastSync()
 	stats := engine.LastSyncStats()
 	var lastSyncStr string
@@ -174,10 +176,11 @@ func (s *Server) humaSyncStatus(
 	}
 	return &jsonOutput[syncStatusResponse]{
 		Body: syncStatusResponse{
-			ArchiveStale: s.archiveStale(),
-			LastSync:     lastSyncStr,
-			Stats:        &stats,
-			Progress:     progress,
+			ArchiveStale:   s.archiveStale(),
+			StartupPending: startupPending,
+			LastSync:       lastSyncStr,
+			Stats:          &stats,
+			Progress:       progress,
 		},
 	}, nil
 }

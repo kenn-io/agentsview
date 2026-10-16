@@ -9,5 +9,7 @@ export interface SyncStatusResponse {
   archive_stale: boolean;
   last_sync: string;
   progress?: SyncProgress;
+  /** Startup ingestion has not completed successfully */
+  startup_pending: boolean;
   stats: SyncSyncStats;
 }

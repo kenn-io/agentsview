@@ -1467,8 +1467,10 @@ type projectListResponse struct {
 }
 
 type syncStatusResponse struct {
-	LastSync string         `json:"last_sync"`
-	Progress *sync.Progress `json:"progress"`
+	StartupPending bool           `json:"startup_pending"`
+	ArchiveStale   bool           `json:"archive_stale"`
+	LastSync       string         `json:"last_sync"`
+	Progress       *sync.Progress `json:"progress"`
 }
 
 type githubConfigResponse struct {
@@ -2588,15 +2590,21 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 
 func TestSyncStatus(t *testing.T) {
 	te := setup(t)
+	w := te.get(t, "/api/v1/sync/status")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[syncStatusResponse](t, w)
+	assert.True(t, resp.StartupPending)
+	assert.False(t, resp.ArchiveStale)
 
 	// Trigger a sync so LastSync is set
-	w := te.post(t, "/api/v1/sync", "{}")
+	w = te.post(t, "/api/v1/sync?wait=true", "{}")
 	assertStatus(t, w, http.StatusOK)
 
 	w = te.get(t, "/api/v1/sync/status")
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[syncStatusResponse](t, w)
+	resp = decode[syncStatusResponse](t, w)
+	assert.False(t, resp.StartupPending)
 	if resp.LastSync == "" {
 		require.FailNow(t, "expected last_sync field")
 	}

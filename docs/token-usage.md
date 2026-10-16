@@ -1099,12 +1099,9 @@ retained archive with a stale warning.
 
 `session usage` and its `token-use` alias refresh known sessions without
 waiting for startup ingestion. Combined totals include archived descendants.
-Pending ingestion, a busy engine, or a stale archive returns available stored
-usage with a warning. Unresolved daemon IDs return a retry error when
-refreshing; wait for scheduled ingestion or run `agentsview sync` if automatic
-ingestion is disabled. `--no-sync` and HTTP `--own-only` read only the archive and return
-exit 2 for missing IDs. Direct mode keeps its targeted source lookup. Combined
-HTTP refresh requires API 12, while `--no-sync` combined reads require API 6.
+See the [session usage contract](/docs/session-api/#agentsview-session-usage)
+for refresh behavior, missing-session exit codes, and the `refresh_incomplete`
+JSON field.
 
 `--no-sync` skips source refresh and starts any new daemon without automatic
 sync. It does not disable sync on an already-running daemon. `--offline` reads
