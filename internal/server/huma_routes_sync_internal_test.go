@@ -2618,6 +2618,20 @@ func TestUsageRefreshRequiresCombinedID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 
+func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := syncpkg.NewEngine(t.Context(), f.db, syncpkg.EngineConfig{Ephemeral: true})
+	t.Cleanup(engine.Close)
+	f.srv.engine = engine
+	f.srv.sessions = service.NewDirectBackend(f.db, engine)
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
+		"path": "session.jsonl", "usage_refresh": true,
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "usage_refresh requires id and subagents")
+}
+
 func TestUsageRefreshWaitsForProviderDescendants(t *testing.T) {
 	const parent = "11111111-1111-4111-8111-111111111111"
 	const descendant = "22222222-2222-4222-8222-222222222222"

@@ -1081,6 +1081,9 @@ func (s *Server) humaSyncSession(
 	if in.Body.Subagents && in.Body.ID == "" {
 		return nil, apiError(http.StatusBadRequest, "'subagents' requires 'id'")
 	}
+	if err := service.ValidateUsageRefresh(in.Body); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusConflict,

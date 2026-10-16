@@ -541,6 +541,14 @@ type SyncInput struct {
 // ErrInvalidUsageRefresh reports a usage refresh without both ID and Subagents.
 var ErrInvalidUsageRefresh = errors.New("sync: usage_refresh requires id and subagents")
 
+// ValidateUsageRefresh checks that a usage refresh targets one combined session.
+func ValidateUsageRefresh(in SyncInput) error {
+	if in.UsageRefresh && (in.ID == "" || !in.Subagents) {
+		return ErrInvalidUsageRefresh
+	}
+	return nil
+}
+
 // Event is the CLI-side NDJSON wrapper for SSE events from
 // /api/v1/sessions/{id}/watch. See spec "watch" section.
 type Event struct {

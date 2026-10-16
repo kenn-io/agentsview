@@ -202,7 +202,7 @@ func usageExitCode(u *db.SessionUsage) int {
 type sessionUsageOutput struct {
 	db.SessionUsage
 	ServerRunning     bool `json:"server_running"`
-	RefreshIncomplete bool `json:"refresh_incomplete,omitempty"`
+	RefreshIncomplete bool `json:"refresh_incomplete,omitzero"`
 }
 
 // startupWaitTimeout is how long CLI subcommands wait for a

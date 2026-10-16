@@ -1060,9 +1060,11 @@ lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
 Combined usage refreshes a known session and nearby Claude subagent transcripts
-without waiting for startup ingestion. If refresh is refused or fails, the
-command returns archived totals with a warning; JSON sets
-`refresh_incomplete: true`. A missing daemon ID returns a retry error while
+without waiting for startup ingestion. The CLI requests this with
+`usage_refresh: true`, `id`, and `subagents: true` on
+`POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
+returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
+A missing daemon ID returns a retry error while
 `GET /api/v1/sync/status` reports `startup_pending` or `archive_stale`. Once
 both are clear, it returns exit 2. Scheduled ingestion owns retries.
 
@@ -1071,8 +1073,9 @@ missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including
-`session sync`. When startup ingestion is deferred, its automatic fallback
-starts after a 30-second grace period.
+`session sync`. A usage refresh also returns HTTP 409 while startup ingestion
+is incomplete or another sync holds the engine. When startup ingestion is
+deferred, its automatic fallback starts after a 30-second grace period.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.
 This preserves the full subagent rollup and the exit codes above; combine it

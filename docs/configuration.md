@@ -1934,6 +1934,9 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
+The JSON response includes `startup_pending` and `archive_stale` alongside
+sync progress.
+
 ## Privacy and Telemetry
 
 By default, all session data stays on your local machine in SQLite. Normal

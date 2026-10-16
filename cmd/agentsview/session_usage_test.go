@@ -194,6 +194,14 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"server_running":     true,
 		"refresh_incomplete": true,
 	}, raw, "a session with no subagents must omit subagent-only fields")
+
+	out.RefreshIncomplete = false
+	data, err = json.Marshal(out)
+	require.NoError(t, err)
+	raw = nil
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.NotContains(t, raw, "refresh_incomplete",
+		"complete usage results must omit the incomplete-refresh field")
 }
 
 // TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost pins the other half of

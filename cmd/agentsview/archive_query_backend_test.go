@@ -265,8 +265,16 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	writer := dbtest.OpenTestDBAt(t, dbPath)
 	root := t.TempDir()
+	codexRoot := t.TempDir()
 	source := filepath.Join(root, "project-a", "saved.jsonl")
 	dbtest.WriteTestFile(t, source, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "changed source").String()))
+	const freshID = "123e4567-e89b-42d3-a456-426614174000"
+	freshSource := filepath.Join(codexRoot,
+		"rollout-2026-01-01T00-00-00-"+freshID+".jsonl")
+	dbtest.WriteTestFile(t, freshSource, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(freshID, "project-a", "user", "2026-01-01T00:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "fresh source", "2026-01-01T00:00:00Z"),
+	)))
 	require.NoError(t, writer.UpsertSession(t.Context(), db.Session{ID: "saved", Agent: "claude", Project: "project-a", FilePath: new(source), TotalOutputTokens: 42, HasTotalOutputTokens: true}))
 	require.NoError(t, writer.Close())
 	raw, err := sql.Open("sqlite3", dbPath)
@@ -277,7 +285,11 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	database, err := db.OpenIsolatedContext(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
-	backend := localArchiveQueryBackend{database: database, offline: true, cfg: config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}}
+	agentDirs := map[parser.AgentType][]string{
+		parser.AgentClaude: {root},
+		parser.AgentCodex:  {codexRoot},
+	}
+	backend := localArchiveQueryBackend{database: database, offline: true, cfg: config.Config{AgentDirs: agentDirs}}
 	stderr := captureStderr(t, func() {
 		out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved"})
 		require.NoError(t, err)
@@ -288,6 +300,18 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	})
 	assert.True(t, database.NeedsResync())
 	assert.Contains(t, stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
+	resolved, known := resolveRawSessionID(
+		t.Context(), database, agentDirs, "codex:"+freshID,
+	)
+	assert.Equal(t, "codex:"+freshID, resolved)
+	assert.True(t, known, "the disk probe should recognize the unarchived session")
+	retryStderr := captureStderr(t, func() {
+		out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "codex:" + freshID})
+		assert.Nil(t, out)
+		require.ErrorContains(t, err, "archive rebuild")
+		assert.Equal(t, tokenUseExitErr, code)
+	})
+	assert.NotContains(t, retryStderr, "session not found")
 	out, _, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved", NoSync: true})
 	require.NoError(t, err)
 	require.NotNil(t, out)

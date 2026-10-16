@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -352,6 +353,11 @@ func (b localArchiveQueryBackend) SessionUsage(
 			fmt.Errorf("querying session usage: %w", err)
 	}
 	if u == nil {
+		if stale && known && !b.skipFreshData && !query.NoSync {
+			return nil, tokenUseExitErr, errors.New(
+				"session usage is not yet available; retry after the archive rebuild finishes",
+			)
+		}
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
