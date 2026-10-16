@@ -3305,7 +3305,10 @@ schemas keep their existing ordering behavior.
   `usageLimited`, `budgetLimited`, or `complete`, and answers `-32600` "goals
   feature is disabled" when goals are off. `thread/queue/list` is experimental
   and refused without the experimental API. The hosted server is
-  `no-public-source`; AgentsView assumes it shares this behavior.
+  `no-public-source`. A read-only probe on 2026-10-16 with the maintainer's
+  login found it answers `thread/goal/get`: both chats it listed returned
+  `{"goal": null}`. AgentsView assumes the hosted resume runs the same idle
+  step.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).
