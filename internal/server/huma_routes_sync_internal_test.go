@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	stdlibsync "sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -658,7 +659,7 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 	targets := remotesync.TargetSet{Dirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {remoteDir},
 	}}
-	archiveRequests := 0
+	var archiveRequests atomic.Int64
 	serverErrors := make(chan error, 8)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, strconv.Itoa(remotesync.ProtocolVersion),
@@ -688,7 +689,7 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
-			archiveRequests++
+			archiveRequests.Add(1)
 			w.Header().Set("Content-Type", "application/x-tar")
 			var err error
 			if request.DeltaFiles == nil {
@@ -738,7 +739,7 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 		}
 	}
 
-	assert.Equal(t, 2, archiveRequests,
+	assert.Equal(t, int64(2), archiveRequests.Load(),
 		"unchanged full rebuild should reuse the prepared mirror")
 	assertSessionCount(t, f.db, 3)
 	output := logs.String()
