@@ -1278,10 +1278,11 @@ AgentsView connects the way Codex reopens a chat, with the request OpenAI calls
   shows that prompt after AgentsView disconnects.
 
 Remove `live_tokens = true` or set it to `false` to stop listening in. Fetching
-and plan usage continue. The status bar and `agentsview serve status` show a live tokens line
-for each account. It says how many running chats AgentsView is listening in on,
-that it is listening in on none right now, that live tokens are off and why, or
-that live tokens stopped after a reply AgentsView could not read.
+and plan usage continue. The status bar and `agentsview serve status` show a
+live tokens line for each account. It says how many running chats AgentsView is
+listening in on, that it is listening in on none right now, that live tokens are
+off and why, or that live tokens stopped after a reply AgentsView could not
+read.
 
 A detached daemon normally exits once it has been idle for `daemon_idle_timeout`.
 While AgentsView is listening in on a running chat, the daemon stays up past that
