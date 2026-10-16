@@ -2559,6 +2559,24 @@ func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
 	}
 }
 
+func TestUsageRefreshImportsSessionOnNoSyncDaemon(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	require.Nil(t, f.srv.engine)
+	path := filepath.Join(f.claudeDir, "project", "fresh.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "fresh").
+		AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).String()), 0o600))
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
+		"id": "fresh", "subagents": true, "usage_refresh": true,
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "fresh", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 42, usage.TotalOutputTokens)
+}
+
 func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})

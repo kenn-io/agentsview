@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -2558,6 +2559,49 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 	var out bytes.Buffer
 	printSessionParentHuman(&out, "worker", &db.SessionExternalParent{}, true)
 	assert.Equal(t, "worker: no launcher parent to remove\n", out.String())
+}
+
+func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+			claudeDir := filepath.Join(dataDir, "claude")
+			path := filepath.Join(claudeDir, "project", "fresh.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+				AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "fresh").
+				AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).String()), 0o600))
+			ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			cfg := config.Config{
+				Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port,
+				DataDir: dataDir, DBPath: sessionsDBPath(dataDir),
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeDir}},
+			}
+			var engine *agentsync.Engine
+			if pending {
+				engine = agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Ephemeral: true})
+				t.Cleanup(engine.Close)
+			}
+			ts := httptest.NewUnstartedServer(server.New(cfg, database, engine).Handler())
+			ts.Listener = ln
+			ts.Start()
+			t.Cleanup(ts.Close)
+			cmd := sessionUsageCommand(t, "session", "usage", "fresh", "--server", ts.URL)
+			out, code, err := sessionUsageDataForCommand(cmd, "fresh")
+			if pending {
+				require.ErrorContains(t, err, "scheduled ingestion")
+				assert.Equal(t, tokenUseExitErr, code)
+				assert.Nil(t, out)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+		})
+	}
 }
 
 func TestSessionUsageRefusedRefreshReturnsStoredUsage(t *testing.T) {
