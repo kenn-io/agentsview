@@ -3509,6 +3509,18 @@ func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	syncB.Host = "host-b"
 	setHTTPSourceURL(t, &syncB, remoteB.ts.URL)
 	syncB.DB = database
+	preparedA := make(chan struct{})
+	syncA.Lifecycle = &RemoteSyncLifecycle{PrepareFinished: func(err error) {
+		assert.NoError(t, err)
+		close(preparedA)
+	}}
+	// Fail B after A succeeds, so this exercises unwind of a prepared source.
+	remoteB.onManifestRequest = func(r *http.Request) {
+		select {
+		case <-preparedA:
+		case <-r.Context().Done():
+		}
+	}
 	var lockOrder []string
 	var lockOrderMu stdsync.Mutex
 	recordLock := func(ctx context.Context, root string) (*MirrorLockHandle, error) {
