@@ -487,7 +487,7 @@ func TestReplicaWatchEmbedKeepsFullVectorRepairAfterStartupFailure(t *testing.T)
 						}
 						return loop, ticker.Stop
 					},
-					replicaStartupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
+					startupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
 						require.True(t, full)
 						_, err := runPGWatchStartupSync(ctx, engine, full)
 						return true, err
@@ -576,7 +576,7 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 					})
 				return loop, ticker.Stop
 			},
-			replicaStartupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
+			startupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
 				_, err := runPGWatchStartupSync(ctx, engine, full)
 				return false, err
 			},

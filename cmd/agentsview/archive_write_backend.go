@@ -80,10 +80,7 @@ type archivePushWatchHooks struct {
 	replicaPush func(
 		context.Context, pushReason, ReplicaPushConfig,
 	) (storage.PushResult, error)
-	replicaStartupSync func(
-		context.Context, *syncpkg.Engine, bool,
-	) (bool, error)
-	duckDBStartupSync func(
+	startupSync func(
 		context.Context, *syncpkg.Engine, bool,
 	) (bool, error)
 	newReplicaPusher   func(*syncpkg.Engine) *replicaPusher
@@ -543,18 +540,12 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		if b.watchHooks != nil && b.watchHooks.duckDBPush != nil {
 			res, err = b.watchHooks.duckDBPush(pctx, reason, full)
 		} else {
-			backend := archiveWriteBackend(b)
-			cleanup := func() {}
-			if reason != reasonStartup {
-				backend, cleanup, err = resolveArchiveWriteBackend(
-					pctx, b.appCfg, transportIntentLongLived,
-				)
-				if err != nil {
-					return err
-				}
+			writer, cleanup, werr := b.watchPushWriter(pctx, reason)
+			if werr != nil {
+				return werr
 			}
 			defer cleanup()
-			res, err = backend.DuckDBPush(
+			res, err = writer.DuckDBPush(
 				pctx, duckCfg, pushCfg, projects, excludeProjects,
 			)
 		}
@@ -645,38 +636,28 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 		pctx context.Context, reason pushReason, full bool,
 		batch *syncpkg.WatchBatch,
 	) error {
-		pushCfg := cfg
-		pushCfg.Full = full
-		pushCfg.WatchBatch = batch
-		pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
-		opts := vectors.options(reason, full)
-		pushCfg.ScopeVectorsToChangedSessions = opts.ScopeVectorsToChangedSessions
-		pushCfg.LastReconciledVectorGeneration = opts.LastReconciledVectorGeneration
-		var res storage.PushResult
-		var err error
-		if b.watchHooks != nil && b.watchHooks.replicaPush != nil {
-			res, err = b.watchHooks.replicaPush(pctx, reason, pushCfg)
-		} else {
-			writer := archiveWriteBackend(b)
-			cleanup := func() {}
-			if reason != reasonStartup {
-				writer, cleanup, err = resolveArchiveWriteBackend(
-					pctx, b.appCfg, transportIntentLongLived,
-				)
-				if err != nil {
-					return err
+		return vectors.push(
+			label, backend.DisplayName(), reason, full,
+			func(opts storage.PushOptions) (storage.PushResult, error) {
+				pushCfg := cfg
+				pushCfg.Full = full
+				pushCfg.WatchBatch = batch
+				pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
+				pushCfg.ScopeVectorsToChangedSessions = opts.ScopeVectorsToChangedSessions
+				pushCfg.LastReconciledVectorGeneration = opts.LastReconciledVectorGeneration
+				if b.watchHooks != nil && b.watchHooks.replicaPush != nil {
+					return b.watchHooks.replicaPush(pctx, reason, pushCfg)
 				}
-			}
-			defer cleanup()
-			res, err = writer.ReplicaPush(
-				pctx, backend, target, pushCfg, projects, exclude,
-			)
-		}
-		vectors.record(opts, res, err)
-		if err != nil {
-			return err
-		}
-		return completeReplicaWatchPush(label, backend.DisplayName(), res, reason)
+				writer, cleanup, err := b.watchPushWriter(pctx, reason)
+				if err != nil {
+					return storage.PushResult{}, err
+				}
+				defer cleanup()
+				return writer.ReplicaPush(
+					pctx, backend, target, pushCfg, projects, exclude,
+				)
+			},
+		)
 	}
 	return archivePushWatch{
 		hooks:    b.watchHooks,
@@ -688,6 +669,17 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 		push:     push,
 		wake:     cfg.LifecycleWake,
 	}.run(ctx)
+}
+
+// watchPushWriter returns the writer for one daemon watch push. The startup
+// push uses this backend; each later push resolves the archive owner again.
+func (b daemonArchiveWriteBackend) watchPushWriter(
+	ctx context.Context, reason pushReason,
+) (archiveWriteBackend, func(), error) {
+	if reason == reasonStartup {
+		return b, func() {}, nil
+	}
+	return resolveArchiveWriteBackend(ctx, b.appCfg, transportIntentLongLived)
 }
 
 // watchTimings applies the default debounce and floor interval.
@@ -928,21 +920,16 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		pusher = b.newDuckDBPusher(duckCfg, cfg, projects, exclude)
 	}
 
-	startupSync := runPGWatchStartupSync
-	if b.watchHooks != nil && b.watchHooks.duckDBStartupSync != nil {
-		startupSync = b.watchHooks.duckDBStartupSync
-	}
 	debounce, interval = watchTimings(debounce, interval)
 	return archivePushWatch{
-		hooks:       b.watchHooks,
-		appCfg:      b.appCfg,
-		engine:      engine,
-		label:       "duckdb watch",
-		debounce:    debounce,
-		interval:    interval,
-		full:        cfg.Full,
-		startupSync: startupSync,
-		push:        ignoreWatchBatch(pusher.push),
+		hooks:    b.watchHooks,
+		appCfg:   b.appCfg,
+		engine:   engine,
+		label:    "duckdb watch",
+		debounce: debounce,
+		interval: interval,
+		full:     cfg.Full,
+		push:     ignoreWatchBatch(pusher.push),
 	}.run(ctx)
 }
 
@@ -1049,10 +1036,6 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		name, backend.DisplayName(), target.Target.MachineName, debounce, interval,
 	)
 
-	startupSync := runPGWatchStartupSync
-	if b.watchHooks != nil && b.watchHooks.replicaStartupSync != nil {
-		startupSync = b.watchHooks.replicaStartupSync
-	}
 	push := pusher.push
 	if embedder != nil {
 		// The embedder's scheduler state belongs to the push loop, which
@@ -1065,16 +1048,15 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		}
 	}
 	return archivePushWatch{
-		hooks:       b.watchHooks,
-		appCfg:      b.appCfg,
-		engine:      engine,
-		label:       name + " watch",
-		debounce:    debounce,
-		interval:    interval,
-		full:        cfg.Full,
-		startupSync: startupSync,
-		push:        ignoreWatchBatch(push),
-		wake:        cfg.LifecycleWake,
+		hooks:    b.watchHooks,
+		appCfg:   b.appCfg,
+		engine:   engine,
+		label:    name + " watch",
+		debounce: debounce,
+		interval: interval,
+		full:     cfg.Full,
+		push:     ignoreWatchBatch(push),
+		wake:     cfg.LifecycleWake,
 	}.run(ctx)
 }
 

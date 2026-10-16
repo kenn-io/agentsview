@@ -27,8 +27,6 @@ type archivePushWatch struct {
 	label              string
 	debounce, interval time.Duration
 	full               bool
-	// startupSync runs the first local sync. Used only with engine.
-	startupSync func(context.Context, *syncpkg.Engine, bool) (bool, error)
 	// push runs one push. batch is the watcher scope a daemon owner syncs
 	// before it pushes; a local owner has already synced it.
 	push func(ctx context.Context, reason pushReason, full bool, batch *syncpkg.WatchBatch) error
@@ -83,7 +81,11 @@ func (w archivePushWatch) run(ctx context.Context) error {
 	if w.engine == nil {
 		lane.fullPending.Store(w.full)
 	} else {
-		didResync, startupErr := w.startupSync(ctx, w.engine, w.full)
+		startupSync := runPGWatchStartupSync
+		if w.hooks != nil && w.hooks.startupSync != nil {
+			startupSync = w.hooks.startupSync
+		}
+		didResync, startupErr := startupSync(ctx, w.engine, w.full)
 		if startupErr != nil && errors.Is(startupErr, context.Canceled) {
 			return nil
 		}

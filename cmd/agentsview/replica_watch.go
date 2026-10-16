@@ -36,13 +36,12 @@ type replicaPusher struct {
 func (p *replicaPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
-	opts := p.vectors.options(reason, full)
-	res, err := p.session.Push(ctx, opts, nil)
-	p.vectors.record(opts, res, err)
-	if err != nil {
-		return err
-	}
-	return completeReplicaWatchPush(p.label, p.displayName, res, reason)
+	return p.vectors.push(
+		p.label, p.displayName, reason, full,
+		func(opts storage.PushOptions) (storage.PushResult, error) {
+			return p.session.Push(ctx, opts, nil)
+		},
+	)
 }
 
 // vectorReconcile decides, across the pushes of one watch process, when a
@@ -108,6 +107,21 @@ func (v *vectorReconcile) record(
 	v.needed, v.lastGeneration = nextVectorReconcile(
 		v.needed, v.lastGeneration, opts.ScopeVectorsToChangedSessions, res,
 	)
+}
+
+// push runs one watch push to a replica. send performs the push with the
+// options chosen here; the two archive owners differ only in how they send it.
+func (v *vectorReconcile) push(
+	label, displayName string, reason pushReason, full bool,
+	send func(storage.PushOptions) (storage.PushResult, error),
+) error {
+	opts := v.options(reason, full)
+	res, err := send(opts)
+	v.record(opts, res, err)
+	if err != nil {
+		return err
+	}
+	return completeReplicaWatchPush(label, displayName, res, reason)
 }
 
 // scopedVectorPush reports whether a push may scope its vector phase

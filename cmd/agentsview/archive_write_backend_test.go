@@ -606,16 +606,7 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 			}
 			return storage.PushResult{SessionsPushed: attempt}, nil
 		},
-		replicaStartupSync: func(
-			context.Context, *syncpkg.Engine, bool,
-		) (bool, error) {
-			h.mu.Lock()
-			h.startupSyncs++
-			h.events = append(h.events, "startup-sync")
-			h.mu.Unlock()
-			return false, nil
-		},
-		duckDBStartupSync: func(
+		startupSync: func(
 			context.Context, *syncpkg.Engine, bool,
 		) (bool, error) {
 			h.mu.Lock()
@@ -1437,7 +1428,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				label:    label,
 			}, func() {}
 		},
-		replicaStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
+		startupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
 			return false, nil
 		},
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
@@ -1553,7 +1544,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				label:    label,
 			}, func() {}
 		},
-		duckDBStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
+		startupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
 			return false, nil
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {

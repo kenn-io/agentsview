@@ -239,8 +239,7 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 					h.record("startup-sync")
 					return true, errors.New("startup sync discovery incomplete")
 				}
-				hooks.replicaStartupSync = failedStartup
-				hooks.duckDBStartupSync = failedStartup
+				hooks.startupSync = failedStartup
 				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
@@ -365,7 +364,7 @@ func TestArchiveSyncLaneSettlesBeforePush(t *testing.T) {
 		})
 	}()
 	require.Eventually(t, func() bool {
-		return pushed.Load() || goroutineBlockedOnMutexIn("(*Engine).SettleForPush")
+		return pushed.Load() || goroutineBlockedIn("sync.Mutex.Lock", "(*Engine).SettleForPush")
 	}, 10*time.Second, 5*time.Millisecond)
 	require.False(t, pushed.Load(), "a push must wait for an in-progress sync")
 
@@ -405,7 +404,7 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 				stopCallbacks()
 			}, func() {}, nil
 		},
-		replicaStartupSync: func(
+		startupSync: func(
 			_ context.Context, engine *syncpkg.Engine, _ bool,
 		) (bool, error) {
 			engines <- engine
@@ -434,6 +433,11 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 	}()
 	engine := <-engines
 	<-pushed
+	// Cancelling during the startup push skips the final push, so wait for
+	// the loop to start waiting for work.
+	require.Eventually(t, func() bool {
+		return goroutineBlockedIn("select", "(*pushLoop).run")
+	}, 10*time.Second, 10*time.Millisecond)
 
 	// Stand in for a watcher batch that syncs until the watcher stops it.
 	held := make(chan struct{})
@@ -456,11 +460,13 @@ func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
 		"the final push runs after the watcher stops")
 }
 
-func goroutineBlockedOnMutexIn(fn string) bool {
+// goroutineBlockedIn reports whether a goroutine whose stack includes fn is
+// blocked in state, such as "sync.Mutex.Lock" or "select".
+func goroutineBlockedIn(state, fn string) bool {
 	buf := make([]byte, 1<<20)
 	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
 		header, _, _ := strings.Cut(g, "\n")
-		if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
+		if strings.Contains(header, "["+state) && strings.Contains(g, fn) {
 			return true
 		}
 	}
