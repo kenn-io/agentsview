@@ -72,8 +72,8 @@ add [custom model pricing](#custom-model-pricing). Recorded authoritative costs
 are retained when the source provides them.
 
 Codex Cloud chats (ChatGPT dot, Codex web, and Codex cloud tasks) get token
-counts only from live capture: AgentsView must listen in on a chat at least once
-while it runs. Each token update from OpenAI carries the chat's running total,
+counts only from live capture, which is off unless `live_tokens = true`:
+AgentsView must listen in on a chat at least once while it runs. Each token update from OpenAI carries the chat's running total,
 so one update also covers the turns that finished before it, back to the last
 time OpenAI restarted that total. Chats AgentsView never listened in on carry
 plan usage instead. OpenAI's usage report gives each one's share of your ChatGPT

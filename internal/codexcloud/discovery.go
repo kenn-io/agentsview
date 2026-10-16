@@ -66,7 +66,7 @@ func (m *Monitor) Discover(ctx context.Context) error {
 		for _, key := range order {
 			unsaved := m.unsaved(key)
 			m.Status.SetLive(string(key),
-				"Live tokens: off, because live_tokens = false under [agents.codex-cloud]."+pendingNote(unsaved), unsaved > 0)
+				"Live tokens: off. Set live_tokens = true under [agents.codex-cloud] to listen in."+pendingNote(unsaved), unsaved > 0)
 		}
 		return nil
 	}

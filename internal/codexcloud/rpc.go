@@ -38,6 +38,7 @@ const (
 
 	refreshMethod = "account/chatgptAuthTokens/refresh"
 	resumeMethod  = "thread/resume"
+	goalGetMethod = "thread/goal/get"
 )
 
 var (
@@ -62,6 +63,11 @@ var (
 type ResumeParams struct {
 	ThreadID     string `json:"threadId"`
 	ExcludeTurns bool   `json:"excludeTurns"`
+}
+
+// GoalGetParams is the only accepted thread/goal/get request.
+type GoalGetParams struct {
+	ThreadID string `json:"threadId"`
 }
 
 // Notification is a server message without an ID.
@@ -111,6 +117,9 @@ func allowed(mode Mode, method string, params any) bool {
 	case resumeMethod:
 		resume, ok := params.(ResumeParams)
 		return ok && mode == ModeMonitor && resume.ThreadID != "" && resume.ExcludeTurns
+	case goalGetMethod:
+		goal, ok := params.(GoalGetParams)
+		return ok && mode == ModeMonitor && goal.ThreadID != ""
 	default:
 		return false
 	}

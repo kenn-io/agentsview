@@ -167,7 +167,7 @@ func TestDiscoveryGatesCloseJoins(t *testing.T) {
 
 	assert.Empty(t, env.monitor.Joined(passKey))
 	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond)
-	assert.Equal(t, "Live tokens: off, because live_tokens = false under [agents.codex-cloud].", env.live(t))
+	assert.Equal(t, "Live tokens: off. Set live_tokens = true under [agents.codex-cloud] to listen in.", env.live(t))
 	from := len(env.host.Requests())
 	env.discover(t)
 	assert.Len(t, env.host.Requests(), from, "live_tokens = false sends nothing")
@@ -295,7 +295,7 @@ func TestDiscoveryProtocolChangeStopsCaptureOnly(t *testing.T) {
 	broken.Store(false)
 	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = false })
 	env.discover(t)
-	assert.Equal(t, "Live tokens: off, because live_tokens = false under [agents.codex-cloud].", env.live(t))
+	assert.Equal(t, "Live tokens: off. Set live_tokens = true under [agents.codex-cloud] to listen in.", env.live(t))
 	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = true })
 	env.discover(t)
 	assert.Equal(t, "Live tokens: listening in on 1 running chat.", env.live(t))
@@ -371,7 +371,7 @@ func TestPendingRecordsAreKeptWhileLiveTokensAreOff(t *testing.T) {
 	env.discover(t)
 
 	live := env.live(t)
-	assert.Contains(t, live, "live_tokens = false")
+	assert.Contains(t, live, "live_tokens = true")
 	assert.Contains(t, live, "Token counts for 1 chat are not saved yet")
 	assert.Contains(t, live, "restarting it before a save works loses them")
 

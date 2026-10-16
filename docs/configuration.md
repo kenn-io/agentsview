@@ -1161,20 +1161,20 @@ the Settings page does not show it.
 ```toml
 [agents.codex-cloud]
 enabled = true
-# live_tokens = false   # turn off live token capture (on by default)
+# live_tokens = true    # listen in on running chats (off by default)
 ```
 
 | Key              | Default                                                              | Meaning                                                 |
 | ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
 | `enabled`        | `false`                                                              | Fetch chats and capture tokens from OpenAI              |
-| `live_tokens`    | `true`                                                               | Listen in on running chats to record their token counts |
+| `live_tokens`    | `false`                                                              | Listen in on running chats to record their token counts |
 | `endpoint`       | `wss://codex-cloud-backend.chatgpt.com/`                             | Chat service; for tests only                            |
 | `usage_endpoint` | `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`   | Plan usage report; for tests only                       |
 
-Live capture is on by default. Setting `enabled = true` also makes AgentsView
-listen in on your running chats. Read
-[Tokens and plan usage](#tokens-and-plan-usage) for what that does on OpenAI's
-side, and set `live_tokens = false` if you want only the import.
+Live capture is off by default, so `enabled = true` only imports chats. Set
+`live_tokens = true` to also listen in on your running chats. Read
+[Tokens and plan usage](#tokens-and-plan-usage) first: listening in can change
+a chat on OpenAI's side.
 
 An endpoint override must use `wss` or `https` on `chatgpt.com`, `openai.com`,
 or a subdomain of either. Plain `ws` and `http` are accepted only for loopback
@@ -1266,14 +1266,19 @@ AgentsView connects the way Codex reopens a chat, with the request OpenAI calls
   OpenAI's apps. AgentsView disconnects at once and does not connect for that
   turn again. To make this less likely, AgentsView checks again right before
   connecting that the chat was updated in the last 5 minutes.
-- Not tested: for a stopped chat with an active goal, that same load might
-  continue the goal and start a new turn.
+- In Codex, connecting to a chat whose turn has ended runs the chat's idle
+  step. That step continues an active goal and sends any queued messages, so it
+  can start a turn you did not ask for. AgentsView reads the chat's goal first
+  and does not connect to a chat with an active goal. It cannot check for
+  queued messages: if a turn ends just before AgentsView connects while you
+  have messages queued, for example after you stopped the turn, connecting can
+  send them.
 - Not tested: AgentsView never answers approval prompts. If a chat asks for
   approval while AgentsView is connected, it is unknown whether your app still
   shows that prompt after AgentsView disconnects.
 
-Set `live_tokens = false` to stop listening in. Fetching and plan usage
-continue. The status bar and `agentsview serve status` show a live tokens line
+Remove `live_tokens = true` or set it to `false` to stop listening in. Fetching
+and plan usage continue. The status bar and `agentsview serve status` show a live tokens line
 for each account. It says how many running chats AgentsView is listening in on,
 that it is listening in on none right now, that live tokens are off and why, or
 that live tokens stopped after a reply AgentsView could not read.

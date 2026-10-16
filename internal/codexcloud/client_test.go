@@ -144,6 +144,12 @@ func TestAllowlist(t *testing.T) {
 		"resume with turns": func() error {
 			return monitor.Call(t.Context(), "thread/resume", codexcloud.ResumeParams{ThreadID: "t"}, nil)
 		},
+		"goal read in fetch mode": func() error {
+			return fetch.Call(t.Context(), "thread/goal/get", codexcloud.GoalGetParams{ThreadID: "t"}, nil)
+		},
+		"goal read with an extra field": func() error {
+			return monitor.Call(t.Context(), "thread/goal/get", map[string]string{"threadId": "t", "x": "y"}, nil)
+		},
 		"turn/start": func() error {
 			return monitor.Call(t.Context(), "turn/start", map[string]string{"threadId": "t"}, nil)
 		},

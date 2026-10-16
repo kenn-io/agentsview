@@ -49,6 +49,9 @@ type Thread struct {
 	Model string
 	// ResumeKind is thread/resume's resumeKind; empty leaves it out.
 	ResumeKind string
+	// GoalStatus is the status thread/goal/get reports; empty means the
+	// thread has no goal.
+	GoalStatus string
 }
 
 // Threads answers thread/turns/list and thread/items/list from scripted
@@ -92,6 +95,7 @@ func (h *Host) ServeThreads(s *Threads) {
 	h.Handle("thread/turns/list", s.TurnsList)
 	h.Handle("thread/items/list", s.ItemsList)
 	h.Handle("thread/resume", s.Resume)
+	h.Handle("thread/goal/get", s.GoalGet)
 }
 
 // ThreadList answers thread/list newest updatedAt first. A request with
@@ -160,6 +164,28 @@ func (s *Threads) Resume(params jsontext.Value) (any, *Error) {
 		reply["resumeKind"] = thread.ResumeKind
 	}
 	return reply, nil
+}
+
+// GoalGet answers thread/goal/get with the thread's GoalStatus, or a null
+// goal when it has none.
+func (s *Threads) GoalGet(params jsontext.Value) (any, *Error) {
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &Error{Code: -32602, Message: err.Error()}
+	}
+	s.mu.Lock()
+	thread, ok := s.threads[p.ThreadID]
+	s.mu.Unlock()
+	if !ok || thread.GoalStatus == "" {
+		return map[string]any{"goal": nil}, nil
+	}
+	return map[string]any{"goal": map[string]any{
+		"threadId": thread.ID, "objective": "ship it", "status": thread.GoalStatus,
+		"tokenBudget": nil, "tokensUsed": 0, "timeUsedSeconds": 0,
+		"createdAt": thread.CreatedAt, "updatedAt": thread.UpdatedAt,
+	}}, nil
 }
 
 func threadObject(thread Thread) map[string]any {

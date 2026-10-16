@@ -416,6 +416,67 @@ func TestIdleNewestTurnIsNotResumed(t *testing.T) {
 	assert.Zero(t, env.resumes())
 }
 
+// Codex continues an active goal when a resume finds the chat idle, so the
+// monitor never resumes a chat with one, and waits for a newer turn.
+func TestActiveGoalIsNotResumed(t *testing.T) {
+	env := newMonitorEnv(t)
+	thread := runningThread("a", "warm")
+	thread.GoalStatus = "active"
+	env.threads.Set(thread)
+
+	env.join(t, "a")
+	assert.Zero(t, env.resumes())
+	assert.Empty(t, env.monitor.Joined(passKey))
+	assert.Contains(t, env.logs.String(), "the chat has an active goal")
+	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID)
+
+	env.join(t, "a")
+	assert.Equal(t, 1, env.calls("thread/goal/get"), "the same turn is not checked again")
+}
+
+// A goal that is not active, or a server without goals, cannot start a
+// turn, so the monitor joins.
+func TestInactiveGoalIsResumed(t *testing.T) {
+	for name, goal := range map[string]func(*monitorEnv){
+		"no goal": func(*monitorEnv) {},
+		"paused": func(e *monitorEnv) {
+			e.threads.Update("a", func(th *codexcloudtest.Thread) { th.GoalStatus = "paused" })
+		},
+		"complete": func(e *monitorEnv) {
+			e.threads.Update("a", func(th *codexcloudtest.Thread) { th.GoalStatus = "complete" })
+		},
+		"goals disabled": func(e *monitorEnv) {
+			e.host.Handle("thread/goal/get", func(jsontext.Value) (any, *codexcloudtest.Error) {
+				return nil, &codexcloudtest.Error{Code: -32600, Message: "goals feature is disabled"}
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newMonitorEnv(t)
+			env.threads.Set(runningThread("a", "warm"))
+			goal(env)
+			env.join(t, "a")
+			assert.Equal(t, 1, env.resumes())
+			assert.Equal(t, []string{"a"}, env.monitor.Joined(passKey))
+		})
+	}
+}
+
+// Any other goal error skips the resume; the next run tries again.
+func TestGoalErrorSkipsResume(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	env.host.Handle("thread/goal/get", func(jsontext.Value) (any, *codexcloudtest.Error) {
+		return nil, &codexcloudtest.Error{Code: -32600, Message: "no rollout found for thread id a"}
+	})
+
+	env.join(t, "a")
+	assert.Zero(t, env.resumes())
+	assert.Empty(t, env.monitor.Joined(passKey))
+	env.join(t, "a")
+	assert.Equal(t, 2, env.calls("thread/goal/get"), "the next run checks again")
+}
+
 func TestCloseAllEndsJoins(t *testing.T) {
 	env := newMonitorEnv(t)
 	env.threads.Set(runningThread("a", "warm"))
