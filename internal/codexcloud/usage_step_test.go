@@ -470,7 +470,7 @@ func TestRowStoredAgainAfterNewerOutcome(t *testing.T) {
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
 	row := mirror.PlanUsageRowData{Row: mirror.UsageRow{ThreadID: "a", DataStatus: "available"}, DataAsOf: fetchNow}
 	env.run(t)
-	require.NoError(t, env.syncer.appendPlan(passKey, "a", fetchNow, mirror.KindPlanUsageRow, row))
+	require.NoError(t, env.syncer.appendPlan(passKey, nil, "a", fetchNow, mirror.KindPlanUsageRow, row))
 	// A crash after appending an outcome, before its state was saved.
 	outcome, err := planRecord(mirror.KindPlanUsageOutcome,
 		mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: fetchNow}, fetchNow)
@@ -480,7 +480,7 @@ func TestRowStoredAgainAfterNewerOutcome(t *testing.T) {
 	_, err = mirror.Append(env.mirrorPath(t, "a"), st.Offset, []mirror.Record{outcome})
 	require.NoError(t, err)
 
-	require.NoError(t, env.syncer.appendPlan(passKey, "a", fetchNow, mirror.KindPlanUsageRow, row))
+	require.NoError(t, env.syncer.appendPlan(passKey, nil, "a", fetchNow, mirror.KindPlanUsageRow, row))
 
 	plan := env.plan(t, "a")
 	assert.Equal(t, []mirror.Kind{

@@ -500,9 +500,12 @@ func commitThread(
 // fetch. Its append would recreate a lost mirror file and save an offset
 // that matches it, so the next fetch would no longer see the loss and
 // would resume past the lost history. A lost mirror first resets the
-// resume point, so the next fetch reads the whole chat again.
+// resume point and marks the chat to check again, so the next pass reads
+// the whole chat again even when its listing has not changed. acct is the
+// caller's account state, which the caller saves; with a nil acct the mark
+// is saved here. The caller holds the account lock.
 func commitBesideHistory(
-	store *Store, key AccountKey, threadID string, st ThreadState, records []mirror.Record, now time.Time,
+	store *Store, key AccountKey, acct *AccountState, threadID string, st ThreadState, records []mirror.Record, now time.Time,
 ) (ThreadState, error) {
 	lost, err := mirrorLost(store, key, threadID, st)
 	if err != nil {
@@ -517,9 +520,25 @@ func commitBesideHistory(
 			listing := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: st.Listing}
 			records = append([]mirror.Record{listing}, records...)
 		}
+		if err := markCheckAgain(store, key, acct, threadID); err != nil {
+			return st, err
+		}
 	}
 	next, _, err := commitThread(store, key, threadID, st, records, now)
 	return next, err
+}
+
+func markCheckAgain(store *Store, key AccountKey, acct *AccountState, threadID string) error {
+	if acct != nil {
+		acct.CheckAgain[threadID] = true
+		return nil
+	}
+	saved, err := store.LoadAccount(key)
+	if err != nil {
+		return err
+	}
+	saved.CheckAgain[threadID] = true
+	return store.SaveAccount(key, saved)
 }
 
 // forgetHistory resets a thread whose mirror file was lost after its

@@ -200,13 +200,17 @@ rebuilds the digests from it. A mirror file that is missing or shorter than its
 stored offset resets the thread's resume point, so the next pass fetches the
 whole thread again. A live-token or plan usage write checks for this first,
 because its append would recreate the file and hide the loss. The write then
-starts the new file with the saved listing, which the parser needs. If the full
-fetch fails, the fetch writes nothing.
+starts the new file with the saved listing, which the parser needs, and marks
+the thread to check again, so the next pass fetches it even when its listing has
+not changed. If the full fetch fails, the fetch writes nothing.
 
 Until the mirror holds the thread again, sync keeps the archived copy as it is.
 It skips a parse with fewer messages than the archive, or one with no token
 counts where the archive has some. Server history carries no token counts, so
-after a refetch the archived counts stay until new live counts arrive.
+after a refetch the archived counts stay until new live counts arrive. A refetch
+with new messages imports them and keeps the archived token counts, usage
+events, and capture coverage, plus the plan usage when the rebuilt file has
+none. Turns that ran while the mirror was missing do not count as uncaptured.
 
 Sync replaces an archived copy from an older parser version, so a parser change
 still takes effect, unless the file holds no messages: no parser change empties

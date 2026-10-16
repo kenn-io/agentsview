@@ -167,7 +167,7 @@ func (s *Syncer) countedUnder(key AccountKey, acct *AccountState, threadID, root
 	if err != nil {
 		return err
 	}
-	if _, err := commitBesideHistory(s.Store, key, threadID, st, []mirror.Record{record}, now); err != nil {
+	if _, err := commitBesideHistory(s.Store, key, acct, threadID, st, []mirror.Record{record}, now); err != nil {
 		return err
 	}
 	delete(acct.UsagePending, threadID)
@@ -359,7 +359,7 @@ func (s *Syncer) tooManyDescendants(key AccountKey, acct *AccountState, root str
 	s.Log.Printf("codex-cloud: chat %s: too many sub-agent chats for OpenAI's usage report", root)
 	delete(acct.UsagePending, root)
 	delete(acct.Refresh, root)
-	return s.appendPlan(key, root, now, mirror.KindPlanUsageOutcome,
+	return s.appendPlan(key, acct, root, now, mirror.KindPlanUsageOutcome,
 		mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeTooManyDescendants, At: now})
 }
 
@@ -455,7 +455,7 @@ func (s *Syncer) usageFailure(
 			// in the request says so, which keeps the work bounded.
 			acct.UsagePause = UsagePauseState{Until: now.Add(usageUnavailableFor), Reason: pauseUnavailable}
 			for _, g := range groups {
-				if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
+				if err := s.appendPlan(key, acct, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 					mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeAccountUnavailable, At: now}); err != nil {
 					return false, false, err
 				}
@@ -497,7 +497,7 @@ func (s *Syncer) usageFailure(
 			// that point does not keep it retrying. Its last row, if any, stays and is
 			// not marked final.
 			delete(acct.UsagePending, g.ThreadID)
-			if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
+			if err := s.appendPlan(key, acct, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeCouldNotCheck, At: now}); err != nil {
 				return false, false, err
 			}
@@ -529,7 +529,7 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 		if !pending {
 			ref := acct.Refresh[root]
 			if ok && row.DataStatus == mirror.UsageAvailable {
-				if err := s.appendPlan(key, root, now, mirror.KindPlanUsageRow,
+				if err := s.appendPlan(key, acct, root, now, mirror.KindPlanUsageRow,
 					mirror.PlanUsageRowData{Row: row, DataAsOf: resp.DataAsOf}); err != nil {
 					return err
 				}
@@ -544,7 +544,7 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 		settles := now.Sub(entry.LastChange) >= settleAfter
 		switch {
 		case ok && row.DataStatus == mirror.UsageAvailable:
-			if err := s.appendPlan(key, root, now, mirror.KindPlanUsageRow,
+			if err := s.appendPlan(key, acct, root, now, mirror.KindPlanUsageRow,
 				mirror.PlanUsageRowData{Row: row, DataAsOf: resp.DataAsOf}); err != nil {
 				return err
 			}
@@ -560,16 +560,16 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 		case ok:
 			// A partial or unavailable row: stored, still pending, and
 			// final once the root settles.
-			if err := s.appendPlan(key, root, now, mirror.KindPlanUsageRow,
+			if err := s.appendPlan(key, acct, root, now, mirror.KindPlanUsageRow,
 				mirror.PlanUsageRowData{Row: row, DataAsOf: resp.DataAsOf, Final: settles}); err != nil {
 				return err
 			}
 		case settles:
-			if err := s.settleLeftOut(key, root, entry.LastChange, now); err != nil {
+			if err := s.settleLeftOut(key, acct, root, entry.LastChange, now); err != nil {
 				return err
 			}
 		default:
-			if err := s.appendPlan(key, root, now, mirror.KindPlanUsageOutcome,
+			if err := s.appendPlan(key, acct, root, now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}); err != nil {
 				return err
 			}
@@ -591,18 +591,18 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 // "settled with no row" record. A row whose data predates lastChange may
 // not count the newest turns, so a "left out" record follows it; without
 // one, the final row would read as a complete account of the chat.
-func (s *Syncer) settleLeftOut(key AccountKey, root string, lastChange, now time.Time) error {
+func (s *Syncer) settleLeftOut(key AccountKey, acct *AccountState, root string, lastChange, now time.Time) error {
 	st, err := s.Store.LoadThread(key, root)
 	if err != nil {
 		return err
 	}
 	// Recover records a crash left unsaved first, so the newest row in
 	// the file, not an older one the saved state names, is kept.
-	if st, err = commitBesideHistory(s.Store, key, root, st, nil, now); err != nil {
+	if st, err = commitBesideHistory(s.Store, key, acct, root, st, nil, now); err != nil {
 		return err
 	}
 	if len(st.LastPlanRow) == 0 {
-		return s.appendPlan(key, root, now, mirror.KindPlanUsageOutcome,
+		return s.appendPlan(key, acct, root, now, mirror.KindPlanUsageOutcome,
 			mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeSettledNoRow, At: now})
 	}
 	var last mirror.PlanUsageRowData
@@ -624,13 +624,13 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, lastChange, now time
 		records = append(records, leftOut)
 	}
 	// One commit, so a crash cannot keep the final row without its mark.
-	_, err = commitBesideHistory(s.Store, key, root, st, records, now)
+	_, err = commitBesideHistory(s.Store, key, acct, root, st, records, now)
 	return err
 }
 
 // appendPlan appends one plan usage record to root's mirror file unless
 // it equals the newest plan usage record there.
-func (s *Syncer) appendPlan(key AccountKey, root string, now time.Time, kind mirror.Kind, data any) error {
+func (s *Syncer) appendPlan(key AccountKey, acct *AccountState, root string, now time.Time, kind mirror.Kind, data any) error {
 	record, err := planRecord(kind, data, now)
 	if err != nil {
 		return err
@@ -639,7 +639,7 @@ func (s *Syncer) appendPlan(key AccountKey, root string, now time.Time, kind mir
 	if err != nil {
 		return err
 	}
-	_, err = commitBesideHistory(s.Store, key, root, st, []mirror.Record{record}, now)
+	_, err = commitBesideHistory(s.Store, key, acct, root, st, []mirror.Record{record}, now)
 	return err
 }
 
