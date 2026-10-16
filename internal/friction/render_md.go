@@ -142,6 +142,9 @@ func dimsPrefix(d Dims) string {
 }
 
 func code(s string) string {
+	if s == "" {
+		return ""
+	}
 	s = SanitizeDisplay(s)
 	longest, run := 0, 0
 	for _, r := range s {

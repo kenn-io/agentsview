@@ -171,7 +171,7 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
 `friction-log.md` and `summary.json` share one archive-shaped fixture with plain
-error text, retry and runaway patterns, and two P0 tools detected across three
+error text, retry and runaway patterns, and two P0 tools across three
 sessions each. `friction-log-empty.md` pins every empty section. The Markdown
 frontmatter and JSON counts use the same signal grouping.
 

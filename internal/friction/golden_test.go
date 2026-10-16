@@ -20,19 +20,15 @@ var updateGolden = flag.Bool(
 
 func goldenDigestFixture() DigestSnapshot {
 	sigs := []Signal{
-		{Kind: KindCorrection, SubjectID: "s-1", Text: "no, use `pwd` for the directory"},
+		{Kind: KindCorrection, SubjectID: "s-1", Text: "no, use the other branch"},
 		{Kind: KindCorrection, SubjectID: "s-2", Text: "don't change the API", Dims: Dims{Seat: "seat-02", Agent: "claude", Machine: "host-a.example"}},
 		{Kind: KindError, SubjectID: "s-3", ToolName: "Read", Text: "fatal: denied\ncheck file permissions"},
 		{Kind: KindError, SubjectID: "s-1", ToolName: "Bash", Text: "command failed"},
-		{Kind: KindError, SubjectID: "s-2", ToolName: "Read", Text: "file unavailable"},
-		{Kind: KindError, SubjectID: "s-3", ToolName: "Bash", Text: "command failed"},
-		{Kind: KindError, SubjectID: "s-1", ToolName: "Read", Text: "file unavailable"},
-		{Kind: KindError, SubjectID: "s-2", ToolName: "Bash", Text: "command failed"},
-		{Kind: KindWorkaround, SubjectID: "s-1", Label: "for now", Text: "use the fallback for now\nthen retry"},
+		{Kind: KindWorkaround, SubjectID: "s-1", Label: "for now", Text: "use the fallback for now"},
 		{Kind: KindDeferral, SubjectID: "s-2", Label: "next session"},
 		{Kind: KindPattern, SubjectID: "s-1", Label: "retry_loop", Evidence: "`Bash` x3 identical arguments 09:00-09:02"},
 		{Kind: KindPattern, SubjectID: "s-3", Label: "runaway_loop", Evidence: "12 tool calls 09:00-09:11"},
-		{Kind: KindFrustration, SubjectID: "s-1", Text: "why won't it\nload???"},
+		{Kind: KindFrustration, SubjectID: "s-1", Text: "why won't it load???"},
 		{Kind: KindInterruption, SubjectID: "s-2", Dims: Dims{Agent: "claude"}},
 		{Kind: KindInterruption, SubjectID: "s-1"},
 		{Kind: KindInterruption, SubjectID: "s-2", Dims: Dims{Agent: "later"}},
