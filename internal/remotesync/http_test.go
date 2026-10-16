@@ -3490,70 +3490,103 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 	})
 }
 
-func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
-	remoteA := newMirrorTestRemote(t)
-	remoteA.manifestStatus = http.StatusNotImplemented
-	remoteA.writeSession(t, "a.jsonl",
-		time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), "host a")
-	remoteB := newMirrorTestRemote(t)
-	remoteB.manifestStatus = http.StatusInternalServerError
-	remoteB.writeSession(t, "b.jsonl",
-		time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), "host b")
+func TestPrepareHTTPSyncsUnwindsPreparedSources(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		failCleanup bool
+	}{
+		{"clean unwind", false},
+		{"failed cleanup retains ownership", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remoteA := newMirrorTestRemote(t)
+			remoteA.manifestStatus = http.StatusNotImplemented
+			remoteA.writeSession(t, "a.jsonl",
+				time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), "host a")
+			remoteB := newMirrorTestRemote(t)
+			remoteB.manifestStatus = http.StatusInternalServerError
+			remoteB.writeSession(t, "b.jsonl",
+				time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), "host b")
 
-	dataDir := t.TempDir()
-	tempParent := t.TempDir()
-	setPortableTempDir(t, tempParent)
-	database, syncA := newMirrorSync(t, remoteA, dataDir)
-	syncA.Host = "host-a"
-	syncB := syncA
-	syncB.Host = "host-b"
-	setHTTPSourceURL(t, &syncB, remoteB.ts.URL)
-	syncB.DB = database
-	preparedA := make(chan struct{})
-	syncA.Lifecycle = &RemoteSyncLifecycle{PrepareFinished: func(err error) {
-		assert.NoError(t, err)
-		close(preparedA)
-	}}
-	// Fail B after A succeeds, so this exercises unwind of a prepared source.
-	remoteB.onManifestRequest = func(r *http.Request) {
-		select {
-		case <-preparedA:
-		case <-r.Context().Done():
-		}
-	}
-	var lockOrder []string
-	var lockOrderMu stdsync.Mutex
-	recordLock := func(ctx context.Context, root string) (*MirrorLockHandle, error) {
-		lock, err := AcquireMirrorLock(ctx, root)
-		if err == nil {
-			lockOrderMu.Lock()
-			lockOrder = append(lockOrder, filepath.Base(root))
-			lockOrderMu.Unlock()
-		}
-		return lock, err
-	}
-	syncA.acquireMirrorLock = recordLock
-	syncB.acquireMirrorLock = recordLock
+			dataDir := t.TempDir()
+			tempParent := t.TempDir()
+			setPortableTempDir(t, tempParent)
+			database, syncA := newMirrorSync(t, remoteA, dataDir)
+			syncA.Host = "host-a"
+			syncB := syncA
+			syncB.Host = "host-b"
+			setHTTPSourceURL(t, &syncB, remoteB.ts.URL)
+			syncB.DB = database
+			preparedA := make(chan struct{})
+			syncA.Lifecycle = &RemoteSyncLifecycle{PrepareFinished: func(err error) {
+				assert.NoError(t, err)
+				close(preparedA)
+			}}
+			// Fail B after A succeeds, so this exercises unwind of a prepared source.
+			remoteB.onManifestRequest = func(r *http.Request) {
+				select {
+				case <-preparedA:
+				case <-r.Context().Done():
+				}
+			}
+			removeErr := errors.New("transient aggregate remove failure")
+			unlockErr := errors.New("transient aggregate unlock failure")
+			removeCalls := 0
+			unlockCalls := 0
+			var ownedRoot string
+			prepared, err := prepareRemoteSyncs(
+				t.Context(), []RemoteSync{syncB, syncA},
+				func(ctx context.Context, hs RemoteSync) (*PreparedRemote, error) {
+					source, prepareErr := hs.Prepare(ctx)
+					if prepareErr != nil || hs.Host != "host-a" || !tc.failCleanup {
+						return source, prepareErr
+					}
+					ownedRoot = source.Root()
+					source.removeRoot = func(path string) error {
+						removeCalls++
+						if removeCalls == 1 {
+							return removeErr
+						}
+						return os.RemoveAll(path)
+					}
+					source.releaseLock = func(lock *MirrorLockHandle) error {
+						unlockCalls++
+						if unlockCalls == 1 {
+							return unlockErr
+						}
+						return lock.Close()
+					}
+					return source, nil
+				},
+			)
+			require.Error(t, err)
+			var primary *HostError
+			require.ErrorAs(t, err, &primary)
+			assert.Equal(t, "host-b", primary.Host)
+			if !tc.failCleanup {
+				assert.Nil(t, prepared)
+				assertMirrorUnlocked(t, MirrorDir(dataDir, "host-a"))
+				assertMirrorUnlocked(t, MirrorDir(dataDir, "host-b"))
+				roots, globErr := filepath.Glob(filepath.Join(tempParent, "agentsview-http-*"))
+				require.NoError(t, globErr)
+				assert.Empty(t, roots, "unwind removes the successful legacy root and spools")
+				return
+			}
+			require.NotNil(t, prepared,
+				"failed cleanup ownership must be returned with the preparation error")
+			require.ErrorIs(t, err, removeErr)
+			require.ErrorIs(t, err, unlockErr)
+			assert.Equal(t, "prepare", primary.Operation)
+			assert.Contains(t, err.Error(), `remote host "host-a" cleanup prepared source`)
+			assert.DirExists(t, ownedRoot)
+			assertMirrorLocked(t, MirrorDir(dataDir, "host-a"))
 
-	syncs := []RemoteSync{syncB, syncA}
-	prepared, err := PrepareRemoteSyncs(t.Context(), syncs)
-	require.Error(t, err)
-	assert.Nil(t, prepared)
-	assert.Equal(t, []string{"host-b", "host-a"}, []string{
-		syncs[0].Host, syncs[1].Host,
-	}, "preparation must not mutate caller ordering")
-	assert.Equal(t, []string{
-		filepath.Base(MirrorDir(dataDir, "host-a")),
-		filepath.Base(MirrorDir(dataDir, "host-b")),
-	}, lockOrder)
-	var hostErr *HostError
-	require.ErrorAs(t, err, &hostErr)
-	assert.Equal(t, "host-b", hostErr.Host)
-	assertMirrorUnlocked(t, MirrorDir(dataDir, "host-a"))
-	assertMirrorUnlocked(t, MirrorDir(dataDir, "host-b"))
-	roots, globErr := filepath.Glob(filepath.Join(tempParent, "agentsview-http-*"))
-	require.NoError(t, globErr)
-	assert.Empty(t, roots, "unwind removes the successful legacy root and spools")
+			require.NoError(t, prepared.Close())
+			assert.NoDirExists(t, ownedRoot)
+			assertMirrorUnlocked(t, MirrorDir(dataDir, "host-a"))
+			require.NoError(t, prepared.Close(), "cleanup retry must remain idempotent")
+		})
+	}
 }
 
 func TestPrepareAvailableHTTPSyncsOmitsOfflineHost(t *testing.T) {
@@ -3990,82 +4023,6 @@ func TestPreparedHTTPSyncsCloseReversesJoinsAndRetries(t *testing.T) {
 	assert.Equal(t, []string{"host-b", "host-a", "host-b"}, order,
 		"only failed ownership is retained for retry")
 	require.NoError(t, prepared.Close(), "fully closed aggregate is idempotent")
-}
-
-func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
-	remoteA := newMirrorTestRemote(t)
-	remoteA.manifestStatus = http.StatusNotImplemented
-	remoteA.writeSession(t, "a.jsonl",
-		time.Date(2026, 7, 11, 15, 0, 0, 0, time.UTC), "legacy a")
-	remoteB := newMirrorTestRemote(t)
-	remoteB.manifestStatus = http.StatusInternalServerError
-	remoteB.writeSession(t, "b.jsonl",
-		time.Date(2026, 7, 11, 15, 0, 0, 0, time.UTC), "host b")
-	tempParent := t.TempDir()
-	setPortableTempDir(t, tempParent)
-	dataDir := t.TempDir()
-	database, syncA := newMirrorSync(t, remoteA, dataDir)
-	syncA.Host = "host-a"
-	syncB := syncA
-	syncB.Host = "host-b"
-	setHTTPSourceURL(t, &syncB, remoteB.ts.URL)
-	syncB.DB = database
-	removeErr := errors.New("transient aggregate remove failure")
-	unlockErr := errors.New("transient aggregate unlock failure")
-	removeCalls := 0
-	unlockCalls := 0
-	var ownedRoot string
-	firstPrepared := make(chan struct{})
-	remoteB.onManifestRequest = func(r *http.Request) {
-		select {
-		case <-firstPrepared:
-		case <-r.Context().Done():
-		}
-	}
-
-	prepared, err := prepareRemoteSyncs(
-		t.Context(), []RemoteSync{syncB, syncA},
-		func(ctx context.Context, hs RemoteSync) (*PreparedRemote, error) {
-			source, prepareErr := hs.Prepare(ctx)
-			if prepareErr != nil || hs.Host != "host-a" {
-				return source, prepareErr
-			}
-			ownedRoot = source.Root()
-			source.removeRoot = func(path string) error {
-				removeCalls++
-				if removeCalls == 1 {
-					return removeErr
-				}
-				return os.RemoveAll(path)
-			}
-			source.releaseLock = func(lock *MirrorLockHandle) error {
-				unlockCalls++
-				if unlockCalls == 1 {
-					return unlockErr
-				}
-				return lock.Close()
-			}
-			close(firstPrepared)
-			return source, nil
-		},
-	)
-	require.Error(t, err)
-	require.NotNil(t, prepared,
-		"failed cleanup ownership must be returned with the preparation error")
-	require.ErrorIs(t, err, removeErr)
-	require.ErrorIs(t, err, unlockErr)
-	var primary *HostError
-	require.ErrorAs(t, err, &primary)
-	assert.Equal(t, "host-b", primary.Host)
-	assert.Equal(t, "prepare", primary.Operation)
-	assert.Contains(t, err.Error(), `remote host "host-a" cleanup prepared source`)
-	assert.DirExists(t, ownedRoot)
-	assertMirrorLocked(t, MirrorDir(dataDir, "host-a"))
-
-	require.NoError(t, prepared.Close())
-	assert.NoDirExists(t, ownedRoot)
-	assertMirrorUnlocked(t, MirrorDir(dataDir, "host-a"))
-	require.NoError(t, prepared.Close(), "cleanup retry must remain idempotent")
 }
 
 func TestPrepareHTTPSyncRetainsCurrentSourceWhenCleanupFails(t *testing.T) {
