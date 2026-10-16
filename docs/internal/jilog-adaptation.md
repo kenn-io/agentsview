@@ -34,8 +34,8 @@ marked planned record the approved mapping, not current behavior.
   Go equivalents. A source-specific title exception was dropped.
 - `internal/serdejson` reproduces the relevant serde_json 1.x output: sorted
   keys, no HTML escaping, and float layout. The planned event ledger must
-  match jilog's format byte for byte, and the digest JSON uses the
-  same encoder, within the documented parity limits.
+  match jilog's format byte for byte, and the digest JSON uses the same
+  encoder, within the documented parity limits.
 
 ## Planned replacements
 
@@ -86,8 +86,8 @@ marked planned record the approved mapping, not current behavior.
 
 ## Deliberate differences
 
-- Titles use `[friction/<kind>]`, labels use `friction`, and the digest
-  heading is `# Friction Log — <date>`.
+- Titles use `[friction/<kind>]`, labels use `friction`, and the digest heading
+  is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
   15-200 byte user turn between two assistant turns, so instructions such as
   "now run the tests" became corrections. Instructions that contain "don't" or
@@ -167,15 +167,14 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
 - Archived text renders inside code spans, with control characters replaced by
   spaces and backticks by apostrophes. Markdown and HTML render literally.
 - Pattern evidence is plain text, unlike jilog's backticked names; the digest
-  wraps it in a code span. This output change bumps the detector rule set to
-  `friction-v2`. Fingerprints remain unchanged.
+  wraps it in a code span. Fingerprints remain unchanged.
 - The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
-`friction-log.md` and `summary.json` share one archive-shaped fixture with
-plain error text, retry and runaway patterns, and two P0 tools detected across
-three sessions each. `friction-log-empty.md` pins every empty section. The
-Markdown frontmatter and JSON counts use the same signal grouping.
+`friction-log.md` and `summary.json` share one archive-shaped fixture with plain
+error text, retry and runaway patterns, and two P0 tools detected across three
+sessions each. `friction-log-empty.md` pins every empty section. The Markdown
+frontmatter and JSON counts use the same signal grouping.
 
 ## License
 
