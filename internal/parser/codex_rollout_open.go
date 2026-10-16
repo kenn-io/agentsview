@@ -135,13 +135,7 @@ func (s *codexRolloutSnapshot) sourceHash(ctx context.Context) (string, error) {
 // newCodexRolloutDecoder returns a sequential, memory-bounded zstd decoder
 // over a compressed rollout.
 func newCodexRolloutDecoder(src io.Reader) (*zstd.Decoder, error) {
-	return zstd.NewReader(
-		src,
-		zstd.WithDecoderConcurrency(1),
-		zstd.WithDecoderLowmem(true),
-		zstd.WithDecoderMaxMemory(codexRolloutDecoderMemory),
-		zstd.WithDecoderMaxWindow(codexRolloutDecoderMaxWindow),
-	)
+	return newBoundedZstdDecoder(src, codexRolloutDecoderMaxWindow, codexRolloutDecoderMemory)
 }
 
 // openCodexRolloutLines opens a rollout for a forward line scan, plain or

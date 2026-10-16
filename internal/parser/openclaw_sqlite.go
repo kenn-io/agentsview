@@ -809,9 +809,9 @@ func openClawSQLiteFingerprintsEachTx(
 const openClawSQLiteZstdMaxEventBytes = 4 << 20
 
 var openClawSQLiteZstdDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
-	return zstd.NewReader(nil,
-		zstd.WithDecoderConcurrency(0),
-		zstd.WithDecoderMaxMemory(openClawSQLiteZstdMaxEventBytes),
+	return newBoundedZstdDecoder(nil,
+		openClawSQLiteZstdMaxEventBytes,
+		openClawSQLiteZstdMaxEventBytes,
 	)
 })
 
