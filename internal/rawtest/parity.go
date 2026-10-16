@@ -25,9 +25,19 @@ func Oracle(t *testing.T, agent parser.AgentType, root string, policy config.Arc
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	archive.SetArchiveContent(policy)
-	engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "capture-device", Ephemeral: true, DisableFilesystemProjectDiscovery: true, ToolResultImages: images})
+	engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "capture-device", Ephemeral: true, DisableFilesystemProjectDiscovery: true, ToolResultImages: images, FrictionEnabled: true})
 	t.Cleanup(engine.Close)
 	return archive, engine
+}
+
+// SyncOracle syncs the oracle archive and then reviews its friction, because
+// hosted projection always reviews while local sync leaves it to a later pass.
+func SyncOracle(t *testing.T, engine *agentsync.Engine) int {
+	t.Helper()
+	stats := engine.SyncAll(t.Context(), nil)
+	_, err := engine.BackfillFriction(t.Context())
+	require.NoError(t, err)
+	return stats.Synced
 }
 
 // EqualStored catches lost content, tool pairing, usage presence, signals,
@@ -81,6 +91,11 @@ func normalizeSession(s db.Session) db.Session {
 	// The hosted public adapter deliberately clears the internal parser parent
 	// cache; the resolved public ParentSessionID(s) remain fully compared.
 	s.ParserParentSessionID = nil
+	// PostgreSQL session reads leave out friction summaries until a reader
+	// needs them; EqualFriction compares the stored columns directly.
+	s.FrictionCount = 0
+	s.FrictionRulesVersion = ""
+	s.FrictionHash = ""
 	s.CreatedAt = ""
 	s.LocalModifiedAt = nil
 	s.TranscriptRevision = nil
@@ -129,6 +144,19 @@ func normalizeTime(s string) string {
 
 // EqualUsageEvents preserves the complete normalized accounting rows, including
 // nullable money/message links, provider/source keys and deduplication identity.
+// EqualFriction compares the friction summary, whose hash covers every
+// finding, between the local oracle and the hosted session row.
+func EqualFriction(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
+	t.Helper()
+	want, err := oracle.GetSessionFull(ctx, publicID)
+	require.NoError(t, err)
+	require.NotNil(t, want, publicID)
+	var count int
+	var version, hash string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT friction_count,friction_rules_version,friction_hash FROM sessions WHERE id=$1`, physicalID).Scan(&count, &version, &hash))
+	assert.Equal(t, []any{want.FrictionCount, want.FrictionRulesVersion, want.FrictionHash}, []any{count, version, hash}, "friction %s", publicID)
+}
+
 func EqualUsageEvents(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
 	t.Helper()
 	want, err := oracle.GetUsageEvents(ctx, publicID)

@@ -149,12 +149,14 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			answers := []string{"Answer A", "Answer B"}
 			mtime := time.Unix(100, 0)
 			var fetches atomic.Int32
-			var reopen func()
+			var beforeFetch func() error
 			oldFetch := fetchS3Object
 			t.Cleanup(func() { fetchS3Object = oldFetch })
 			fetchS3Object = func(uri string) (io.ReadCloser, error) {
-				if reopen != nil {
-					reopen()
+				if beforeFetch != nil {
+					if err := beforeFetch(); err != nil {
+						return nil, err
+					}
 				}
 				body, ok := bodies[uri]
 				require.True(t, ok, "unexpected object %s", uri)
@@ -244,8 +246,29 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					return oldLookup(agent)
 				}
 				var once sync.Once
-				reopen = func() { once.Do(func() { require.NoError(t, database.Reopen()) }) }
-				t.Cleanup(reopen)
+				var reopenErr error
+				reopen := func() { once.Do(func() { reopenErr = database.Reopen() }) }
+				t.Cleanup(func() {
+					reopen()
+					require.NoError(t, reopenErr)
+				})
+				// Keep both workers' ownership lookups inside the outage.
+				var arrivals atomic.Int32
+				bothFetching := make(chan struct{})
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				t.Cleanup(cancel)
+				beforeFetch = func() error {
+					if arrivals.Add(1) == 2 {
+						close(bothFetching)
+					}
+					select {
+					case <-bothFetching:
+						reopen()
+						return reopenErr
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 			}
 			stats := engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)

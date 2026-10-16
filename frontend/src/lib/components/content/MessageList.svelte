@@ -9,7 +9,7 @@
   import { settings } from "../../stores/settings.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
   import { CircleQuestionMarkIcon, MessageSquareIcon } from "../../icons.js";
-  import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
+  import { cancelScrollReconcile, createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";
   import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
@@ -39,6 +39,7 @@
   } from "../../search/session-scope.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
+  let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
   let destroyed = false;
@@ -375,6 +376,7 @@
 
   function handleScroll() {
     if (!containerRef) return;
+    containerScrollTop = containerRef.scrollTop;
     if (scrollRaf !== null) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
@@ -407,7 +409,7 @@
   }
 
   function handleManualScrollIntent() {
-    lastScrollRequest++;
+    endScrollOwnership();
     if (ui.followLatest) {
       cancelFollowLatestWork();
       ui.setFollowLatest(false);
@@ -459,7 +461,7 @@
 
   onDestroy(() => {
     destroyed = true;
-    lastScrollRequest++;
+    endScrollOwnership();
     if (visibleProgressRaf !== null) {
       cancelAnimationFrame(visibleProgressRaf);
       visibleProgressRaf = null;
@@ -483,7 +485,7 @@
       activeFollowScrollRequest !== null &&
       activeFollowScrollRequest === lastScrollRequest
     ) {
-      lastScrollRequest += 1;
+      endScrollOwnership(activeFollowScrollRequest);
     }
     activeFollowScrollRequest = null;
     if (followingScrollRaf !== null) {
@@ -496,19 +498,25 @@
     }
   }
 
+  function requestIsCurrent(reqId: number, sessionId: string | null): boolean {
+    return !destroyed && reqId === lastScrollRequest &&
+      messages.sessionId === sessionId && sessions.activeSessionId === sessionId;
+  }
+
   function scrollToDisplayIndex(
-    index: number,
+    getIndex: () => number,
     waitFrames = 0,
     scrollRetries = 0,
     reqId = lastScrollRequest,
     align: ScrollAlign = "start",
     stillValid: () => boolean = () => true,
   ): Promise<boolean> {
+    const sessionId = messages.sessionId;
     return settleVirtualScroll({
-      index, align, waitFrames, scrollRetries,
+      getIndex, align, waitFrames, scrollRetries,
       getVirtualizer: () => virtualizer.instance,
       getCount: () => displayItemsAsc.length,
-      isCurrent: () => !destroyed && reqId === lastScrollRequest && stillValid(),
+      isCurrent: () => requestIsCurrent(reqId, sessionId) && stillValid(),
       nextFrame: raf,
     });
   }
@@ -517,66 +525,122 @@
     return new Promise((r) => requestAnimationFrame(() => r()));
   }
 
+  function displayIndexOf(ordinal: number): number {
+    const ascIndex = displayItemsAsc.findIndex((item) => item.ordinals.includes(ordinal));
+    if (ascIndex < 0) return -1;
+    return ui.sortNewestFirst ? displayItemsAsc.length - 1 - ascIndex : ascIndex;
+  }
+
+  // Updating until must re-arm the expiry timer, so this object uses deep reactive state.
+  let ordinalJump: {
+    reqId: number;
+    ordinal: number;
+    sessionId: string | null;
+    until: number;
+    offset?: number;
+    sawLoadingOlder: boolean;
+    targetHolds: () => boolean;
+  } | null = $state(null);
+
+  let ordinalJumpIndex = $derived.by(() => ordinalJump ? displayIndexOf(ordinalJump.ordinal) : -1);
+
+  $effect(() => {
+    const jump = ordinalJump;
+    if (!jump || messages.loadingOlder) return;
+    const timer = setTimeout(() => {
+      if (ordinalJump !== jump) return;
+      endScrollOwnership(jump.reqId);
+    }, Math.max(0, jump.until - performance.now()));
+    return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
+    const jump = ordinalJump;
+    if (!jump) return;
+    // TanStack may not notify when scrolling stays within the same visible rows.
+    void containerScrollTop;
+    const items = displayItemsAsc;
+    const loadingOlder = messages.loadingOlder;
+    const instance = virtualizer.instance;
+    const now = performance.now();
+    const targetHolds = jump.targetHolds();
+    if (!requestIsCurrent(jump.reqId, jump.sessionId) || !targetHolds) {
+      endScrollOwnership(jump.reqId);
+      return;
+    }
+    if (loadingOlder) {
+      jump.sawLoadingOlder = true;
+    } else if (jump.sawLoadingOlder) {
+      jump.until = now + 5000;
+      jump.sawLoadingOlder = false;
+    }
+    const index = ordinalJumpIndex;
+    if (index < 0 || index >= items.length) {
+      endScrollOwnership(jump.reqId);
+      return;
+    }
+    if (!instance) return;
+    // getOffsetForIndex initializes scrollOffset through TanStack's private getter.
+    const offset = instance.getOffsetForIndex(index, "start")?.[0];
+    if (offset === undefined) return;
+    const previousOffset = untrack(() => jump.offset);
+    jump.offset = offset;
+    if (Math.abs(offset - (instance.scrollOffset ?? 0)) <= 1) return;
+    if (previousOffset === offset) {
+      // The viewport moved without a layout change, including focus and browser-find scrolling.
+      endScrollOwnership(jump.reqId);
+      return;
+    }
+    instance.scrollToIndex(index, { align: "start" });
+  });
+
+  function endScrollOwnership(reqId = lastScrollRequest): number {
+    if (reqId !== lastScrollRequest) return lastScrollRequest;
+    cancelScrollReconcile(untrack(() => virtualizer.instance));
+    ordinalJump = null;
+    return ++lastScrollRequest;
+  }
+
   async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
-    const reqId = ++lastScrollRequest;
+    const reqId = endScrollOwnership();
+    const sessionId = messages.sessionId;
+    const isCurrent = () => requestIsCurrent(reqId, sessionId);
     activeFollowScrollRequest = null;
+    const abandon = () => {
+      if (isCurrent() && ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
+      return false;
+    };
     // A rewrite can renumber messages, so a jump to a tool call stops once its ordinal holds a different message.
     const targetHolds = () => {
       if (call === undefined) return true;
       // Without a tool ID, a position can name another call after a rewrite, so the revision must still match.
       if (!call.toolUseId && call.revision !== undefined && messages.loadedRevision !== call.revision) {
-        return false;
+        return abandon();
       }
       if (call.index === undefined) return true;
       const message = messages.messages.find((m) => m.ordinal === ordinal);
       if (message === undefined) return true;
       const held = message.tool_calls?.[call.index];
-      if (held === undefined || (held.tool_use_id ?? "") !== call.toolUseId) return false;
+      if (held === undefined || (held.tool_use_id ?? "") !== call.toolUseId) return abandon();
       // Some agents derive tool IDs from the call's position, so a rewrite can reuse one for another call.
-      return call.fingerprint === undefined ||
-        toolCallFingerprint(held.tool_name, held.input_json ?? "") === call.fingerprint;
+      return (call.fingerprint === undefined ||
+        toolCallFingerprint(held.tool_name, held.input_json ?? "") === call.fingerprint) || abandon();
     };
-    const abandon = () => {
-      if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
-    };
-    if (!targetHolds()) return abandon();
+    if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
 
-    const idxAsc = displayItemsAsc.findIndex((item) =>
-      item.ordinals.includes(ordinal),
-    );
-    if (idxAsc >= 0) {
-      const idx = ui.sortNewestFirst
-        ? displayItemsAsc.length - 1 - idxAsc
-        : idxAsc;
-      void scrollToDisplayIndex(idx, 0, 0, reqId, "start", targetHolds).then(() => {
-        if (reqId === lastScrollRequest && !targetHolds()) abandon();
-      });
-      return;
+    if (!messages.messages.some((message) => message.ordinal === ordinal)) {
+      await messages.ensureOrdinalLoaded(ordinal);
+      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+      // Loading needs one frame for Svelte and another for resize observation.
+      await raf();
+      if (!isCurrent()) return endScrollOwnership(reqId);
+      await raf();
+      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
-    await messages.ensureOrdinalLoaded(ordinal);
-    if (reqId !== lastScrollRequest) return;
-    if (!targetHolds()) return abandon();
-
-    // Let Svelte re-derive displayItemsAsc and the
-    // virtualizer update its count after loading.
-    // Two frames: one for Svelte reactivity, one for
-    // virtualizer resize observation.
-    await raf();
-    await raf();
-    if (reqId !== lastScrollRequest) return;
-    if (!targetHolds()) return abandon();
-
-    const loadedIdxAsc = displayItemsAsc.findIndex(
-      (item) => item.ordinals.includes(ordinal),
-    );
-    if (loadedIdxAsc < 0) return;
-    const loadedIdx = ui.sortNewestFirst
-      ? displayItemsAsc.length - 1 - loadedIdxAsc
-      : loadedIdxAsc;
-    void scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", targetHolds).then(() => {
-      if (reqId === lastScrollRequest && !targetHolds()) abandon();
-    });
+    const settled = await scrollToDisplayIndex(() => displayIndexOf(ordinal), 0, 0, reqId, "start", targetHolds);
+    if (!isCurrent() || !targetHolds() || !settled) return endScrollOwnership(reqId);
+    ordinalJump = { reqId, ordinal, sessionId, targetHolds, until: performance.now() + 5000, sawLoadingOlder: false };
   }
 
   export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
@@ -584,7 +648,7 @@
   }
 
   function scrollToLatestInternal() {
-    const reqId = ++lastScrollRequest;
+    const reqId = endScrollOwnership();
     activeFollowScrollRequest = reqId;
     const idx = getLatestDisplayIndex(
       displayItemsAsc.length,
@@ -592,7 +656,7 @@
     );
     if (idx < 0) return;
     scrollToDisplayIndex(
-      idx,
+      () => idx,
       0,
       0,
       reqId,
@@ -706,16 +770,9 @@
       ordinal: match.ordinal,
       blockKey: match.blockKey,
       getContainer: () => containerRef,
-      isCurrent: () => !destroyed && reqId === lastScrollRequest &&
-        messages.sessionId === sessionId && sessions.activeSessionId === sessionId &&
-        inSessionSearch.isActive,
+      isCurrent: () => requestIsCurrent(reqId, sessionId) && inSessionSearch.isActive,
       ensureLoaded: (ordinal) => messages.ensureOrdinalLoaded(ordinal),
-      mountMessage: () => {
-        const ascIndex = displayItemsAsc.findIndex((item) => item.ordinals.includes(match.ordinal));
-        if (ascIndex < 0) return Promise.resolve(false);
-        const index = ui.sortNewestFirst ? displayItemsAsc.length - 1 - ascIndex : ascIndex;
-        return scrollToDisplayIndex(index, 0, 0, reqId);
-      },
+      mountMessage: () => scrollToDisplayIndex(() => displayIndexOf(match.ordinal), 0, 0, reqId),
       scrollToOffset: (offset) => virtualizer.instance?.scrollToOffset(
         Math.round(offset), { align: "start" },
       ),
@@ -730,28 +787,25 @@
     const sessionId = messages.sessionId;
     const count = displayItemsAsc.length;
     const newestFirst = ui.sortNewestFirst;
-    if (!inSessionSearch.isActive || !sessionId || !containerRef) return;
-    if (!key) {
-      // Active query without a renderable occurrence: drop any pending reveal
-      // so a filtered-out block cannot be mounted or scrolled into view.
-      lastScrollRequest++;
-      return;
-    }
+    if (!inSessionSearch.isActive || !key || !sessionId || !containerRef) return;
     void request;
     void count;
     void newestFirst;
     return untrack(() => {
       const match = inSessionSearch.resolvedCurrent;
       if (!match) return;
-      const reqId = ++lastScrollRequest;
+      const reqId = endScrollOwnership();
       activeFollowScrollRequest = null;
       ui.selectOrdinal(match.ordinal);
       ui.setFollowLatest(false);
-      void revealSearchMatch(match, sessionId, reqId).catch((error: unknown) => {
+      void revealSearchMatch(match, sessionId, reqId).then((revealed) => {
+        if (!revealed) endScrollOwnership(reqId);
+      }).catch((error: unknown) => {
         if (reqId === lastScrollRequest) console.warn("Could not reveal search occurrence", error);
+        endScrollOwnership(reqId);
       });
       return () => {
-        if (reqId === lastScrollRequest) lastScrollRequest++;
+        endScrollOwnership(reqId);
       };
     });
   });

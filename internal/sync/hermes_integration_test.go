@@ -39,7 +39,7 @@ func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
 	require.NotNil(t, sess.FilePath)
-	assert.Equal(t, filepath.Join(root, "state.db"), *sess.FilePath)
+	assert.Equal(t, parser.VirtualSourcePath(filepath.Join(root, "state.db"), "child"), *sess.FilePath)
 }
 
 func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {

@@ -2857,5 +2857,9 @@
   "analytics_tool_history_note": "Les taux excluent les appels des sessions en cours de recalcul ou enregistrées sans résultats d'outils.",
   "analytics_tool_rate_button_label": "{tool} – {rate} : {value}",
   "analytics_tool_latest_matching_call": "Dernier appel correspondant : {date}",
-  "analytics_tool_matching_calls": "Appels correspondants : {count}"
+  "analytics_tool_matching_calls": "Appels correspondants : {count}",
+  "usage_all_projects": "Tous les projets",
+  "usage_clear_selection": "Effacer la sélection",
+  "usage_open_project": "Ouvrir",
+  "usage_loading": "Chargement..."
 }

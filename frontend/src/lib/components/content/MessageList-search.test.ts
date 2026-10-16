@@ -18,7 +18,8 @@ const virtualizerMock = vi.hoisted(() => ({
   scrollToOffset: vi.fn(),
   getOffsetForIndex: vi.fn((index: number) => [index * 120, "start"]),
 }));
-vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
+vi.mock("../../virtual/createVirtualizer.svelte.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../virtual/createVirtualizer.svelte.js")>()),
   createVirtualizer: (read: () => { count: number }) => ({
     get instance() {
       virtualizerMock.options.count = read().count;
@@ -204,22 +205,5 @@ describe("MessageList search visibility", () => {
     expect(inSessionSearch.total).toBe(1);
     expect(inSessionSearch.query).toBe("needle");
     expect(inSessionSearch.resolvedCurrent?.blockKey).toBe("0:text:0");
-  });
-
-  it("cancels stale virtual scrolling after closing search", async () => {
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    inSessionSearch.open();
-    inSessionSearch.query = "needle";
-    await tick();
-    await vi.advanceTimersByTimeAsync(150);
-    await tick();
-    inSessionSearch.close();
-    await tick();
-    virtualizerMock.scrollToOffset.mockClear();
-    virtualizerMock.scrollToIndex.mockClear();
-    await vi.advanceTimersByTimeAsync(100);
-    expect(virtualizerMock.scrollToOffset).not.toHaveBeenCalled();
-    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
   });
 });

@@ -17,7 +17,30 @@ import (
 
 const sqliteSnapshotBusyTimeoutMS = 5000
 
-func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
+// sqliteBackupPagesPerStep bounds how long one backup step runs, so a
+// cancelled context is observed between steps.
+const sqliteBackupPagesPerStep = 1024
+
+// sqliteBackupStallSteps bounds consecutive backup steps that copy no
+// net pages. The source read transaction pins one snapshot, so a healthy
+// backup shrinks Remaining on every step; a step that does not is a BUSY
+// or LOCKED retry, or a restart if the snapshot was lost. A thousand
+// such steps rides out brief lock contention, yet stops a restart loop
+// after re-copying at most about 4 GiB of 4 KiB pages instead of never.
+const sqliteBackupStallSteps = 1000
+
+// afterSQLiteBackupStep is a test hook called after each completed step.
+var afterSQLiteBackupStep func()
+
+// sqliteBackupSteps is the part of *sqlite3.SQLiteBackup the copy loop
+// drives.
+type sqliteBackupSteps interface {
+	Step(pages int) (bool, error)
+	Remaining() int
+	Finish() error
+}
+
+func writeSQLiteSnapshot(ctx context.Context, dstPath, srcPath string) (err error) {
 	if err := os.Remove(dstPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("replace sqlite snapshot: %w", err)
 	}
@@ -38,18 +61,51 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 		}
 	}()
 
-	srcConn, err := src.Conn(context.Background())
+	srcConn, err := src.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("connect sqlite snapshot source: %w", err)
 	}
 	defer func() { err = errors.Join(err, srcConn.Close()) }()
-	dstConn, err := dst.Conn(context.Background())
+	dstConn, err := dst.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("connect sqlite snapshot destination: %w", err)
 	}
 	defer func() { err = errors.Join(err, dstConn.Close()) }()
 
-	err = dstConn.Raw(func(dstDriver any) error {
+	if err := backupPinnedSQLiteSource(ctx, dstConn, srcConn); err != nil {
+		return err
+	}
+	if _, err := dstConn.ExecContext(
+		ctx, `PRAGMA journal_mode = DELETE`,
+	); err != nil {
+		return fmt.Errorf("finalize standalone sqlite snapshot: %w", err)
+	}
+	complete = true
+	return nil
+}
+
+// backupPinnedSQLiteSource copies srcConn into dstConn inside one source
+// read transaction. Backup steps reuse that transaction, so writes from
+// other connections no longer restart the copy: in WAL mode writers keep
+// committing past the pinned snapshot, and in rollback-journal mode they
+// wait on the shared lock, as with a single-step backup.
+func backupPinnedSQLiteSource(ctx context.Context, dstConn, srcConn *sql.Conn) (err error) {
+	if _, err := srcConn.ExecContext(ctx, `BEGIN`); err != nil {
+		return fmt.Errorf("begin sqlite snapshot read: %w", err)
+	}
+	defer func() {
+		_, rollbackErr := srcConn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
+		if rollbackErr != nil {
+			err = errors.Join(err, fmt.Errorf("end sqlite snapshot read: %w", rollbackErr))
+		}
+	}()
+	var schemaRows int64
+	if err := srcConn.QueryRowContext(
+		ctx, `SELECT count(*) FROM sqlite_master`,
+	).Scan(&schemaRows); err != nil {
+		return fmt.Errorf("pin sqlite snapshot read: %w", err)
+	}
+	return dstConn.Raw(func(dstDriver any) error {
 		dstSQLite, ok := dstDriver.(*sqlite3.SQLiteConn)
 		if !ok {
 			return fmt.Errorf("sqlite snapshot destination is %T", dstDriver)
@@ -63,29 +119,43 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 			if err != nil {
 				return fmt.Errorf("start sqlite online backup: %w", err)
 			}
-			done, stepErr := backup.Step(-1)
-			finishErr := backup.Finish()
-			if stepErr != nil || finishErr != nil {
-				return fmt.Errorf(
-					"copy sqlite online backup: %w",
-					errors.Join(stepErr, finishErr),
-				)
-			}
-			if !done {
-				return errors.New("copy sqlite online backup: backup incomplete")
-			}
-			return nil
+			return copySQLiteBackup(ctx, backup)
 		})
 	})
-	if err != nil {
-		return err
+}
+
+// copySQLiteBackup steps backup to completion and always finishes it.
+func copySQLiteBackup(ctx context.Context, backup sqliteBackupSteps) error {
+	lowest, stalled := -1, 0
+	for {
+		done, stepErr := backup.Step(sqliteBackupPagesPerStep)
+		if stepErr != nil {
+			return fmt.Errorf("copy sqlite online backup: %w",
+				errors.Join(stepErr, backup.Finish()))
+		}
+		if done {
+			break
+		}
+		if afterSQLiteBackupStep != nil {
+			afterSQLiteBackupStep()
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, backup.Finish())
+		}
+		if remaining := backup.Remaining(); lowest < 0 || remaining < lowest {
+			lowest, stalled = remaining, 0
+			continue
+		}
+		stalled++
+		if stalled >= sqliteBackupStallSteps {
+			return errors.Join(fmt.Errorf(
+				"copy sqlite online backup: no progress after %d steps with %d pages left",
+				stalled, lowest), backup.Finish())
+		}
 	}
-	if _, err := dstConn.ExecContext(
-		context.Background(), `PRAGMA journal_mode = DELETE`,
-	); err != nil {
-		return fmt.Errorf("finalize standalone sqlite snapshot: %w", err)
+	if err := backup.Finish(); err != nil {
+		return fmt.Errorf("finish sqlite online backup: %w", err)
 	}
-	complete = true
 	return nil
 }
 

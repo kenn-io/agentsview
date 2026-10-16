@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -27,6 +28,12 @@ type pushToolCallAggregate struct {
 	Sum   int64
 }
 
+type pushFrictionComparison struct {
+	Count        int
+	RulesVersion string
+	Hash         string
+}
+
 type pushMessageComparison struct {
 	MessageAggregates       map[string]pushMessageAggregate
 	MessageContentHash      map[string]string
@@ -38,6 +45,7 @@ type pushMessageComparison struct {
 	ToolCallFingerprint     map[string]string
 	ToolResultFingerprint   map[string]string
 	UsageEventFingerprint   map[string]string
+	Friction                map[string]pushFrictionComparison
 }
 
 type pushLocalMessageFingerprint struct {
@@ -189,6 +197,7 @@ func readLocalPushDependencyState(
 // only queried on the usageKnown=false fallback, which the push loop never
 // takes (it prefetches usage fingerprints for every candidate).
 func (st *localPushDependencyState) dependencyFingerprint(
+	ctx context.Context,
 	local *db.DB,
 	sessionID string,
 	usageEventFingerprint string,
@@ -213,7 +222,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		msgFP.UsageEventFP = usageEventFingerprint
 	} else {
 		var err error
-		msgFP.UsageEventFP, err = local.UsageEventFingerprint(sessionID)
+		msgFP.UsageEventFP, err = localUsageEventPGFingerprint(ctx, local, sessionID)
 		if err != nil {
 			return "", fmt.Errorf(
 				"computing local usage event fingerprint: %w", err,
@@ -277,7 +286,7 @@ func localPushMessageFingerprint(ctx context.Context,
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil
 	}
-	fp.UsageEventFP, err = local.UsageEventFingerprint(sessionID)
+	fp.UsageEventFP, err = localUsageEventPGFingerprint(ctx, local, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local usage event fingerprint: %w", err)
 	}
@@ -312,12 +321,16 @@ func readPushSessionMessageComparisons(
 		ToolCallFingerprint:     make(map[string]string, len(sessionIDs)),
 		ToolResultFingerprint:   make(map[string]string, len(sessionIDs)),
 		UsageEventFingerprint:   make(map[string]string, len(sessionIDs)),
+		Friction:                make(map[string]pushFrictionComparison, len(sessionIDs)),
 	}
 
 	for i := 0; i < len(sessionIDs); i += pushComparisonBatchSize {
 		end := min(i+pushComparisonBatchSize, len(sessionIDs))
 		chunk := sessionIDs[i:end]
 
+		if err := loadPushFrictionComparisons(ctx, tx, chunk, comparisons.Friction); err != nil {
+			return nil, err
+		}
 		if err := loadPushMessageAggregates(ctx, tx, chunk, comparisons.MessageAggregates); err != nil {
 			return nil, err
 		}
@@ -369,6 +382,48 @@ func readPushSessionMessageComparisons(
 	}
 
 	return comparisons, nil
+}
+
+func loadPushFrictionComparisons(
+	ctx context.Context, tx *sql.Tx, sessionIDs []string,
+	out map[string]pushFrictionComparison,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, friction_count, friction_rules_version, friction_hash
+		FROM sessions WHERE id = ANY($1)`, sessionIDs)
+	if err != nil {
+		return fmt.Errorf("reading pg friction metadata: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var friction pushFrictionComparison
+		if err := rows.Scan(&id, &friction.Count, &friction.RulesVersion, &friction.Hash); err != nil {
+			return err
+		}
+		out[id] = friction
+	}
+	return rows.Err()
+}
+
+// sessionFrictionUnchanged must run before pushSession replaces the metadata.
+func sessionFrictionUnchanged(
+	ctx context.Context, tx *sql.Tx, sess db.Session,
+	comparisons *pushMessageComparison,
+) (bool, error) {
+	var existing map[string]pushFrictionComparison
+	if comparisons != nil {
+		existing = comparisons.Friction
+	} else {
+		existing = make(map[string]pushFrictionComparison, 1)
+		if err := loadPushFrictionComparisons(ctx, tx, []string{sess.ID}, existing); err != nil {
+			return false, err
+		}
+	}
+	previous, ok := existing[sess.ID]
+	return ok && previous == (pushFrictionComparison{
+		Count: sess.FrictionCount, RulesVersion: sess.FrictionRulesVersion, Hash: sess.FrictionHash,
+	}), nil
 }
 
 func loadPushMessageAggregates(
@@ -754,6 +809,9 @@ func loadPushToolCallFingerprints(
 	return nil
 }
 
+// loadPushUsageEventFingerprints sorts each session's encoded records, so
+// the local side must come from db.SortedUsageEventFingerprints with
+// pgUsageEventTimestampFingerprintText.
 func loadPushUsageEventFingerprints(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -768,14 +826,13 @@ func loadPushUsageEventFingerprints(
 			occurred_at, dedup_key
 		 FROM usage_events
 		WHERE session_id = ANY($1)
-		ORDER BY session_id, occurred_at NULLS FIRST, id
 `, sessionIDs)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
-	builders := make(map[string]*strings.Builder, len(sessionIDs))
+	records := make(map[string][]string, len(sessionIDs))
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
@@ -795,17 +852,11 @@ func loadPushUsageEventFingerprints(
 		); err != nil {
 			return err
 		}
-		b := builders[sessionID]
-		if b == nil {
-			b = &strings.Builder{}
-			builders[sessionID] = b
-		}
 		occurred := ""
 		if occurredAt.Valid {
 			occurred = FormatISO8601(occurredAt.Time)
 		}
-		fmt.Fprintf(
-			b,
+		record := fmt.Sprintf(
 			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
@@ -824,12 +875,14 @@ func loadPushUsageEventFingerprints(
 			len(occurred), occurred,
 			len(dedupKey.String), dedupKey.String,
 		)
+		records[sessionID] = append(records[sessionID], record)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for sessionID, b := range builders {
-		out[sessionID] = b.String()
+	for sessionID, events := range records {
+		slices.Sort(events)
+		out[sessionID] = strings.Join(events, "")
 	}
 	return nil
 }
@@ -1002,4 +1055,25 @@ func shouldSkipSessionMessages(
 		localFP.ToolResultFP == comparisons.ToolResultFingerprint[sessionID] &&
 		localFP.TokenFP == comparisons.MessageTokenFingerprint[sessionID] &&
 		localFP.UsageEventFP == comparisons.UsageEventFingerprint[sessionID]
+}
+
+func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
+	fingerprints, err := local.SortedUsageEventFingerprints(
+		ctx, []string{sessionID}, pgUsageEventTimestampFingerprintText,
+	)
+	if err != nil {
+		return "", err
+	}
+	return fingerprints[sessionID], nil
+}
+
+// pgUsageEventTimestampFingerprintText keeps malformed timestamps as written.
+// pgPushTimestampFingerprintText returns "" for them, which would match a NULL
+// timestamp in PostgreSQL and skip the push that reports the bad value.
+func pgUsageEventTimestampFingerprintText(value string) string {
+	normalized := pgPushTimestampFingerprintText(value)
+	if value != "" && normalized == "" {
+		return value
+	}
+	return normalized
 }

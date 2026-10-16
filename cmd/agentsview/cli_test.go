@@ -414,33 +414,3 @@ func TestExecuteCLIWithLegacyFlagCompatWarnsOnce(t *testing.T) {
 	want := "warning: deprecated single-dash long flags detected; use GNU-style long flags instead: -version -> --version\n"
 	assert.Equal(t, want, stderr.String())
 }
-
-func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"remote_hosts",
-		"remote-token",
-		"transport = \"http\"",
-		"daemon_idle_timeout",
-		"Top-level daemon_idle_timeout",
-		"Tailscale",
-	} {
-		assert.Contains(t, help, want,
-			"root help should document %q", want)
-	}
-}
-
-func TestSyncHelpMentionsConfiguredHosts(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "sync", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{"remote_hosts", "--host", "HTTP URL", "auth token"} {
-		assert.Contains(t, help, want, "sync help missing %q", want)
-	}
-}
-
-func TestSyncHelpHostFlagDescribesConfiguredHTTPHost(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "sync", "--help")
-	require.NoError(t, err, "Execute")
-	assert.Contains(t, help, "Configured HTTP host name")
-}

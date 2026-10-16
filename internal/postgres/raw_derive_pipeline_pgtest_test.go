@@ -45,7 +45,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 				ids = []string{"codex:" + rawtest.CodexToolsID}
 			}
 			oracle, engine := rawtest.Oracle(t, agent, root, "", "")
-			require.Equal(t, len(ids), engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(t, len(ids), rawtest.SyncOracle(t, engine))
 
 			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
 			require.True(t, ok)
@@ -128,6 +128,18 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 				resolved, err := sink.Resolve(t.Context(), id)
 				require.NoError(t, err)
 				rawtest.EqualUsageEvents(t, t.Context(), oracle, pg, id, resolved.SessionID)
+				rawtest.EqualFriction(t, t.Context(), oracle, pg, id, resolved.SessionID)
+				want, err := oracle.SessionFrictionFindings(t.Context(), id)
+				require.NoError(t, err)
+				for i := range want {
+					want[i].SessionID = resolved.SessionID
+				}
+				got := pgFrictionFindings(t, &Sync{pg: pg}, resolved.SessionID)
+				assert.Equal(t, want, got, "friction findings for %s", id)
+				if agent == parser.AgentCodex {
+					require.Len(t, want, 1)
+					assert.Equal(t, "error", want[0].Kind)
+				}
 			}
 
 			remaining, err := os.ReadDir(materializationDir)

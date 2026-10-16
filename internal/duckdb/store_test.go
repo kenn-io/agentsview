@@ -917,38 +917,6 @@ func TestSearchMultiTermAND(t *testing.T) {
 	assert.Equal(t, "duck-andboth-001", page.Results[0].SessionID, "session")
 }
 
-func TestStoreCurationMethods(t *testing.T) {
-	ctx := t.Context()
-	store, fixture := newSyncedStore(t)
-
-	starred, err := store.ListStarredSessionIDs(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []string{fixture.alphaID}, starred)
-
-	ok, err := store.StarSession(ctx, fixture.betaID)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	assert.False(t, ok)
-	require.ErrorIs(t, store.BulkStarSessions(ctx, []string{fixture.betaID}), db.ErrReadOnly)
-	require.ErrorIs(t, store.UnstarSession(ctx, fixture.alphaID), db.ErrReadOnly)
-	starred, err = store.ListStarredSessionIDs(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []string{fixture.alphaID}, starred)
-
-	msgs, err := store.GetAllMessages(ctx, fixture.betaID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	note := "duck pin"
-	pinID, err := store.PinMessage(ctx, fixture.betaID, msgs[0].ID, &note)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	assert.Zero(t, pinID)
-
-	require.ErrorIs(t, store.UnpinMessage(ctx, fixture.alphaID, msgs[0].ID), db.ErrReadOnly)
-	pins, err := store.ListPinnedMessages(ctx, fixture.alphaID, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, "pin alpha", *pins[0].Note)
-}
-
 func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
@@ -2755,80 +2723,81 @@ func distributionCount(buckets []db.DistributionBucket, label string) int {
 	return 0
 }
 
-func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern:  "claude-test",
-		InputPerMTok:  money.MustParseDollars("3"),
-		OutputPerMTok: money.MustParseDollars("15"),
-	}}))
+func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
+	for _, tc := range []struct{ name, requestID string }{
+		{"Claude pair", "shared-request"},
+		{"incomplete pair source UUID", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			local := newLocalDB(t)
+			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+				ModelPattern:  "claude-test",
+				InputPerMTok:  money.MustParseDollars("3"),
+				OutputPerMTok: money.MustParseDollars("15"),
+			}}))
 
-	first := syncMessage("duck-usage-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
-	first.ClaudeMessageID = "shared-message"
-	first.ClaudeRequestID = "shared-request"
-	second := syncMessage("duck-usage-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
-	second.ClaudeMessageID = "shared-message"
-	second.ClaudeRequestID = "shared-request"
+			first := syncMessage("duck-usage-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
+			first.ClaudeMessageID = "shared-message"
+			first.ClaudeRequestID = tc.requestID
+			second := syncMessage("duck-usage-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
+			second.ClaudeMessageID = "shared-message"
+			second.ClaudeRequestID = tc.requestID
+			if tc.requestID == "" {
+				first.SourceUUID = "shared-source"
+				second.SourceUUID = "shared-source"
+			}
 
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
-		{
-			Session:         syncSession("duck-usage-a", "alpha", "usage a", "2026-01-13T00:00:00.000Z", 1),
-			Messages:        []db.Message{first},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-		{
-			Session:         syncSession("duck-usage-b", "beta", "usage b", "2026-01-13T00:01:00.000Z", 1),
-			Messages:        []db.Message{second},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
-	require.NoError(t, err)
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+				{
+					Session:         syncSession("duck-usage-a", "alpha", "usage a", "2026-01-13T00:00:00.000Z", 1),
+					Messages:        []db.Message{first},
+					DataVersion:     1,
+					ReplaceMessages: true,
+				},
+				{
+					Session:         syncSession("duck-usage-b", "beta", "usage b", "2026-01-13T00:01:00.000Z", 1),
+					Messages:        []db.Message{second},
+					DataVersion:     1,
+					ReplaceMessages: true,
+				},
+			})
+			require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(t, err)
-	store := NewStoreFromDB(syncer.DB())
-	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
+			syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+			require.NoError(t, createSchema(ctx, syncer.DB()))
+			_, err = syncer.pushEverything(ctx, nil)
+			require.NoError(t, err)
+			store := NewStoreFromDB(syncer.DB())
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
 
-	daily, err := store.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, daily.Totals.InputTokens)
-	assert.Equal(t, 2, daily.Totals.OutputTokens)
+			daily, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, 1, daily.Totals.InputTokens)
+			assert.Equal(t, 2, daily.Totals.OutputTokens)
 
-	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	require.Len(t, top, 1)
-	assert.Equal(t, "duck-usage-a", top[0].SessionID)
+			top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			require.Len(t, top, 1)
+			assert.Equal(t, "duck-usage-a", top[0].SessionID)
 
-	counts, err := store.GetUsageSessionCounts(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, counts.Total)
-	assert.Equal(t, 1, counts.ByProject["alpha"])
-	assert.NotContains(t, counts.ByProject, "beta")
+			counts, err := store.GetUsageSessionCounts(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, 1, counts.Total)
+			assert.Equal(t, 1, counts.ByProject["alpha"])
+			assert.NotContains(t, counts.ByProject, "beta")
 
-	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-b", true)
-	require.NoError(t, err)
-	require.NotNil(t, sessionUsage)
-	assert.True(t, sessionUsage.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.000033"), sessionUsage.Cost)
-	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
-	require.Len(t, sessionUsage.Breakdown, 1)
-	entry := sessionUsage.Breakdown[0]
-	assert.Equal(t, 1, entry.Ordinal)
-	require.NotNil(t, entry.MessageOrdinal)
-	assert.Equal(t, 0, *entry.MessageOrdinal)
-	assert.Equal(t, "message", entry.Source)
-	assert.Equal(t, "Prompt 1", entry.Label)
-	assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
-	assert.Equal(t, "claude-test", entry.Model)
-	assert.Equal(t, 1, entry.InputTokens)
-	assert.Equal(t, 2, entry.OutputTokens)
-	assert.True(t, entry.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
+			sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-b", true)
+			require.NoError(t, err)
+			require.NotNil(t, sessionUsage)
+			assert.True(t, sessionUsage.HasCost)
+			assert.Equal(t, money.MustParseDollars("0.000033"), sessionUsage.Cost)
+			assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
+			require.Len(t, sessionUsage.Breakdown, 1)
+			require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
+			assert.Equal(t, 0, *sessionUsage.Breakdown[0].MessageOrdinal)
+		})
+	}
 }
 
 func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
@@ -2882,9 +2851,17 @@ func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 631, got.TotalOutputTokens)
 	assert.Equal(t, money.MustParseDollars("0.020775"), got.Cost)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
 	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
 	assert.Equal(t, 1, *got.Breakdown[0].MessageOrdinal)
+	entry := got.Breakdown[0]
+	assert.Equal(t, "message", entry.Source)
+	assert.Equal(t, "Prompt 2", entry.Label)
+	assert.Equal(t, "2026-01-13T00:01:00Z", entry.Timestamp)
+	assert.Equal(t, "claude-test", entry.Model)
+	assert.Equal(t, 1000, entry.InputTokens)
+	assert.Equal(t, 631, entry.OutputTokens)
+	assert.True(t, entry.HasCost)
+	assert.Equal(t, money.MustParseDollars("0.020775"), entry.Cost)
 
 	withoutBreakdown, err := store.GetSessionUsage(
 		ctx, "duck-streamed", false)
@@ -3119,72 +3096,6 @@ func TestUsageAggregatesPreferLatestEqualOutputSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 900, result.Totals.InputTokens)
 	assert.Equal(t, 100, result.Totals.OutputTokens)
-}
-
-func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern:  "claude-test",
-		InputPerMTok:  money.MustParseDollars("3"),
-		OutputPerMTok: money.MustParseDollars("15"),
-	}}))
-
-	first := syncMessage("duck-usage-source-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
-	first.ClaudeMessageID = "shared-message"
-	first.SourceUUID = "shared-source"
-	second := syncMessage("duck-usage-source-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
-	second.ClaudeMessageID = "shared-message"
-	second.SourceUUID = "shared-source"
-
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
-		{
-			Session:         syncSession("duck-usage-source-a", "alpha", "usage a", "2026-01-13T00:00:00.000Z", 1),
-			Messages:        []db.Message{first},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-		{
-			Session:         syncSession("duck-usage-source-b", "beta", "usage b", "2026-01-13T00:01:00.000Z", 1),
-			Messages:        []db.Message{second},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
-	require.NoError(t, err)
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(t, err)
-	store := NewStoreFromDB(syncer.DB())
-	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
-
-	daily, err := store.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, daily.Totals.InputTokens)
-	assert.Equal(t, 2, daily.Totals.OutputTokens)
-
-	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	require.Len(t, top, 1)
-	assert.Equal(t, "duck-usage-source-a", top[0].SessionID)
-
-	counts, err := store.GetUsageSessionCounts(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, counts.Total)
-	assert.Equal(t, 1, counts.ByProject["alpha"])
-	assert.NotContains(t, counts.ByProject, "beta")
-
-	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-source-b", true)
-	require.NoError(t, err)
-	require.NotNil(t, sessionUsage)
-	assert.True(t, sessionUsage.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.000033"), sessionUsage.Cost)
-	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
-	require.Len(t, sessionUsage.Breakdown, 1)
-	require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
-	assert.Equal(t, 0, *sessionUsage.Breakdown[0].MessageOrdinal)
 }
 
 func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {

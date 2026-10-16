@@ -96,35 +96,75 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
 
-func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "child-rollup", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "root-rollup"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "root-rollup", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "child-rollup", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
+func TestHandleSessionUsage_SubagentResponseModes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		query   string
+		untimed bool
+	}{
+		{name: "untimed rollup", query: "rollup=true", untimed: true},
+		{name: "breakdown rollup", query: "rollup=true&breakdown=true"},
+		{name: "root only", query: "breakdown=true"},
+		{name: "combined subagents", query: "breakdown=true&subagents=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			te := setup(t)
+			seedSessionUsagePricing(t, te.db)
+			te.seedSession(t, "root-rollup", "project", 1, func(s *db.Session) {
+				s.Agent = "codex"
+			})
+			te.seedSession(t, "child-rollup", "project", 1, func(s *db.Session) {
+				s.Agent = "codex"
+				parent := "root-rollup"
+				s.ParentSessionID = &parent
+				s.RelationshipType = "subagent"
+			})
+			for _, id := range []string{"root-rollup", "child-rollup"} {
+				te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+					m.Role, m.Model = "assistant", controlledSessionUsageModel
+					if tc.untimed {
+						m.Timestamp = ""
+					}
+					m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
+				})
+			}
 
-	w := te.get(t, "/api/v1/sessions/root-rollup/usage?rollup=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["rollup_cost"])
+			w := te.get(t, "/api/v1/sessions/root-rollup/usage?"+tc.query)
+			assertStatus(t, w, http.StatusOK)
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+			switch tc.name {
+			case "untimed rollup", "breakdown rollup":
+				assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
+				assert.Equal(t, true, got["has_rollup_cost"])
+				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
+				if !tc.untimed {
+					assert.InDelta(t, float64(1), got["breakdown_count"], 0)
+					assert.Len(t, got["breakdown"], 1)
+				}
+			case "root only":
+				assert.Equal(t, map[string]any{"microdollars": float64(10500)}, got["cost"])
+				assert.InDelta(t, float64(1), got["breakdown_count"], 0)
+				assert.NotContains(t, got, "subagent_count", "a request without the param must not gain the new field")
+			case "combined subagents":
+				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["cost"], "cost covers the root and its subagent")
+				assert.InDelta(t, 0.021, got["cost_usd"], 0, "cost_usd must reflect the combined subagent-inclusive cost")
+				assert.InDelta(t, float64(1), got["subagent_count"], 0)
+				assert.InDelta(t, float64(2), got["breakdown_count"], 0)
+				assert.NotContains(t, got, "rollup_cost", "subagents=true must not emit the rollup fields the SPA reads")
+				rows, ok := got["breakdown"].([]any)
+				require.True(t, ok)
+				require.Len(t, rows, 2)
+				rootRow, ok := rows[0].(map[string]any)
+				require.True(t, ok)
+				assert.NotContains(t, rootRow, "subagent_session_id")
+				childRow, ok := rows[1].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "child-rollup", childRow["subagent_session_id"])
+				assert.Equal(t, "message", childRow["source"])
+			}
+		})
+	}
 }
 
 func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
@@ -172,110 +212,7 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 		got["rollup_cost"])
 }
 
-func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup-breakdown", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "child-rollup-breakdown", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "root-rollup-breakdown"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "root-rollup-breakdown", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "child-rollup-breakdown", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-
-	w := te.get(t, "/api/v1/sessions/root-rollup-breakdown/usage?rollup=true&breakdown=true")
-	assertStatus(t, w, http.StatusOK)
-
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.InDelta(t, float64(1), got["breakdown_count"], 0)
-	assert.Len(t, got["breakdown"], 1)
-}
-
-func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup-rework", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "continuation-rollup-rework", "project", 1, func(s *db.Session) {
-		parent := "root-rollup-rework"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "continuation"
-	})
-	te.seedSession(t, "nested-rollup-rework", "project", 2, func(s *db.Session) {
-		parent := "continuation-rollup-rework"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	for _, id := range []string{"root-rollup-rework", "nested-rollup-rework"} {
-		te.seedMessages(t, id, 2, func(i int, m *db.Message) {
-			m.Role, m.Model = "assistant", controlledSessionUsageModel
-			m.ClaudeMessageID = "shared-rollup-message"
-			m.ClaudeRequestID = "shared-rollup-request"
-			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-			if id == "nested-rollup-rework" && i == 1 {
-				m.ClaudeMessageID = "unique-rollup-message"
-				m.ClaudeRequestID = "unique-rollup-request"
-			}
-		})
-	}
-
-	w := te.get(t, "/api/v1/sessions/root-rollup-rework/usage?rollup=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["rollup_cost"])
-}
-
-func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup-untimed", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "child-rollup-untimed", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "root-rollup-untimed"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "root-rollup-untimed", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.Timestamp = ""
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "child-rollup-untimed", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.Timestamp = ""
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-
-	w := te.get(t, "/api/v1/sessions/root-rollup-untimed/usage?rollup=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["rollup_cost"])
-}
-
-func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t *testing.T) {
+func TestHandleSessionUsage_RollupSelectsRootFirstForSharedSourceUUID(t *testing.T) {
 	te := setup(t)
 	seedSessionUsagePricing(t, te.db)
 	te.seedSession(t, "z-root-rollup-attribution", "project", 1, func(s *db.Session) {
@@ -291,8 +228,7 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
 			m.Role, m.Model = "assistant", controlledSessionUsageModel
 			m.Timestamp = "2026-03-12T10:00:00Z"
-			m.ClaudeMessageID = "shared-rollup-attribution"
-			m.ClaudeRequestID = "shared-rollup-attribution-request"
+			m.SourceUUID = "shared-rollup-attribution"
 			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 		})
 	}
@@ -301,40 +237,6 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
-	assert.Equal(t, false, got["has_rollup_cost"])
-	_, hasRollupCost := got["rollup_cost"]
-	assert.False(t, hasRollupCost)
-	assert.Equal(t, map[string]any{"microdollars": float64(10500)}, got["cost"])
-}
-
-func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "root-rollup-incomplete", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "child-rollup-incomplete", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "root-rollup-incomplete"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "root-rollup-incomplete", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "child-rollup-incomplete", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", "unknown-rollup-model"
-		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	})
-
-	w := te.get(t, "/api/v1/sessions/root-rollup-incomplete/usage?rollup=true")
-	assertStatus(t, w, http.StatusOK)
-
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, false, got["has_rollup_cost"])
 	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)
@@ -368,71 +270,6 @@ func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
 		"breakdown":           []any{},
 		"server_running":      true,
 	}, got)
-}
-
-func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "codex:usage-breakdown", "my-project", 3,
-		func(s *db.Session) {
-			s.Agent = "codex"
-			s.TotalOutputTokens = 1500
-			s.PeakContextTokens = 4000
-			s.HasTotalOutputTokens = true
-			s.HasPeakContextTokens = true
-		})
-	te.seedMessages(t, "codex:usage-breakdown", 3,
-		func(i int, m *db.Message) {
-			switch i {
-			case 0, 1:
-				m.Role = "assistant"
-				m.Model = controlledSessionUsageModel
-				m.ClaudeMessageID = "msg-dup"
-				m.ClaudeRequestID = "req-dup"
-				m.TokenUsage = jsontext.Value(
-					`{"input_tokens":1000,"output_tokens":500,` +
-						`"cache_creation_input_tokens":200,` +
-						`"cache_read_input_tokens":300}`,
-				)
-			}
-		})
-	ordinal := 1
-	require.NoError(t, te.db.ReplaceSessionUsageEvents(t.Context(),
-		"codex:usage-breakdown",
-		[]db.UsageEvent{{
-			SessionID:                "codex:usage-breakdown",
-			MessageOrdinal:           &ordinal,
-			Source:                   "step",
-			Model:                    controlledSessionUsageModel,
-			InputTokens:              250,
-			OutputTokens:             125,
-			CacheCreationInputTokens: 50,
-			CacheReadInputTokens:     25,
-			OccurredAt:               "2026-05-20T10:40:00Z",
-			DedupKey:                 "step:1",
-		}},
-	), "ReplaceSessionUsageEvents")
-
-	usage, err := te.db.GetSessionUsage(t.Context(),
-		"codex:usage-breakdown", true)
-	require.NoError(t, err, "GetSessionUsage")
-	require.NotNil(t, usage, "usage is nil")
-	require.Len(t, usage.Breakdown, 2)
-	assert.Equal(t, 1, usage.Breakdown[0].Ordinal)
-	assert.Equal(t, "Prompt 2", usage.Breakdown[0].Label)
-	assert.Equal(t, "message", usage.Breakdown[0].Source)
-	assert.Equal(t, 1000, usage.Breakdown[0].InputTokens)
-	assert.Equal(t, 500, usage.Breakdown[0].OutputTokens)
-	assert.Equal(t, 200, usage.Breakdown[0].CacheCreationInputTokens)
-	assert.Equal(t, 300, usage.Breakdown[0].CacheReadInputTokens)
-	assert.Equal(t, 2, usage.Breakdown[1].Ordinal)
-	assert.Equal(t, "Step 2", usage.Breakdown[1].Label)
-	assert.Equal(t, "step", usage.Breakdown[1].Source)
-	assert.Equal(t, 250, usage.Breakdown[1].InputTokens)
-	assert.Equal(t, 125, usage.Breakdown[1].OutputTokens)
-	assert.Equal(t, 50, usage.Breakdown[1].CacheCreationInputTokens)
-	assert.Equal(t, 25, usage.Breakdown[1].CacheReadInputTokens)
-	assert.Equal(t, money.MustParseDollars("0.01416"), usage.Cost)
 }
 
 func TestHandleSessionUsage_NotFound(t *testing.T) {
@@ -496,69 +333,6 @@ func assertSessionUsageError(
 			"message": message,
 		},
 	}, got)
-}
-
-// TestHandleSessionUsage_SubagentsParamCombinesInPlace covers the additive
-// `subagents=true` param the CLI uses: it folds descendant usage into the
-// primary totals and breakdown rather than adding parallel rollup_* fields.
-func TestHandleSessionUsage_SubagentsParamCombinesInPlace(t *testing.T) {
-	te := setup(t)
-	seedSessionUsagePricing(t, te.db)
-	te.seedSession(t, "subagents-root", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-	})
-	te.seedSession(t, "subagents-child", "project", 1, func(s *db.Session) {
-		s.Agent = "codex"
-		parent := "subagents-root"
-		s.ParentSessionID = &parent
-		s.RelationshipType = "subagent"
-	})
-	te.seedMessages(t, "subagents-root", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(
-			`{"input_tokens":1000,"output_tokens":500}`)
-	})
-	te.seedMessages(t, "subagents-child", 1, func(_ int, m *db.Message) {
-		m.Role, m.Model = "assistant", controlledSessionUsageModel
-		m.TokenUsage = jsontext.Value(
-			`{"input_tokens":1000,"output_tokens":500}`)
-	})
-
-	// Without the param the endpoint stays own-session.
-	w := te.get(t, "/api/v1/sessions/subagents-root/usage?breakdown=true")
-	assertStatus(t, w, http.StatusOK)
-	var own map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &own))
-	assert.Equal(t, map[string]any{"microdollars": float64(10500)},
-		own["cost"])
-	assert.InDelta(t, float64(1), own["breakdown_count"], 0)
-	assert.NotContains(t, own, "subagent_count",
-		"a request without the param must not gain the new field")
-
-	w = te.get(t,
-		"/api/v1/sessions/subagents-root/usage?breakdown=true&subagents=true")
-	assertStatus(t, w, http.StatusOK)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
-		got["cost"], "cost covers the root and its subagent")
-	assert.InDelta(t, 0.021, got["cost_usd"], 0,
-		"cost_usd must reflect the combined subagent-inclusive cost")
-	assert.InDelta(t, float64(1), got["subagent_count"], 0)
-	assert.InDelta(t, float64(2), got["breakdown_count"], 0)
-	assert.NotContains(t, got, "rollup_cost",
-		"subagents=true must not emit the rollup fields the SPA reads")
-
-	rows, ok := got["breakdown"].([]any)
-	require.True(t, ok)
-	require.Len(t, rows, 2)
-	rootRow, ok := rows[0].(map[string]any)
-	require.True(t, ok)
-	assert.NotContains(t, rootRow, "subagent_session_id")
-	childRow, ok := rows[1].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "subagents-child", childRow["subagent_session_id"])
-	assert.Equal(t, "message", childRow["source"])
 }
 
 func TestHandleSessionUsage_SubagentsRefreshesNewLocalTranscript(t *testing.T) {

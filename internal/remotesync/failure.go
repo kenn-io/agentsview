@@ -12,20 +12,50 @@ import (
 	"syscall"
 )
 
-// FailureSummary maps an HTTP remote sync error to a short,
+// Transports outside this package classify their own errors through these
+// interfaces; remotesync cannot import them.
+type hostAvailabilityError interface {
+	error
+	HostUnavailable() bool
+}
+
+type failureSummaryError interface {
+	error
+	FailureSummary() string
+}
+
+type remoteRefusalError interface {
+	error
+	RemoteRefused() bool
+}
+
+// isRemoteRefusal reports a remote that understood the request and refused
+// it, which prepareMirror answers by retrying a delta as a full archive.
+func isRemoteRefusal(err error) bool {
+	if _, ok := errors.AsType[*StatusError](err); ok {
+		return true
+	}
+	refusal, ok := errors.AsType[remoteRefusalError](err)
+	return ok && refusal.RemoteRefused()
+}
+
+// FailureSummary maps a remote sync error to a short,
 // actionable message that is safe to surface through the API and
 // CLI. Raw errors can embed the full remote URL and response
 // bodies, so callers log the raw error locally and hand users this
 // summary instead. Unrecognized errors collapse to the generic
 // message rather than leaking their text.
 func FailureSummary(err error) string {
-	const generic = "HTTP remote sync failed"
+	const generic = "remote sync failed"
 	if err == nil {
 		return generic
 	}
 	if _, ok := errors.AsType[*PendingCleanupError](err); ok {
-		return "HTTP remote sync blocked: cleanup from an earlier sync " +
+		return "remote sync blocked: cleanup from an earlier sync " +
 			"still owns resources"
+	}
+	if summary, ok := errors.AsType[failureSummaryError](err); ok {
+		return summary.FailureSummary()
 	}
 
 	if statusErr, ok := errors.AsType[*StatusError](err); ok {
@@ -99,6 +129,9 @@ func IsHostUnavailable(err error) bool {
 		cleanupRetrier
 	}](err); ok {
 		return false
+	}
+	if availability, ok := errors.AsType[hostAvailabilityError](err); ok {
+		return availability.HostUnavailable()
 	}
 	// Private-network names may stop resolving while the network is offline.
 	// Treat this like an unreachable host so other sources can still sync.

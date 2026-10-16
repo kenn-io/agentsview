@@ -1596,6 +1596,11 @@ type ParsedToolResult struct {
 	Status        string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode with DecodeContent
+	// PersistedOutputUnresolved is set, transiently and parse-time only, when
+	// this block genuinely referenced a Claude or iCodeMate
+	// persistedOutputPath side file that failed to resolve. It is never
+	// derived from ContentRaw's shape, only from that resolution attempt.
+	PersistedOutputUnresolved bool
 }
 
 // ParsedToolResultEvent is a canonical chronological update attached

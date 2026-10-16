@@ -68,7 +68,7 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
-	_, err := rebuildMirror(ctx, path, local, "m", storage.MirrorPushOptions{}, nil)
+	_, err := rebuildMirror(ctx, path, local, "m", storage.MirrorPushOptions{}, "test", nil)
 	require.NoError(t, err)
 
 	store, err := NewStore(ctx, path)

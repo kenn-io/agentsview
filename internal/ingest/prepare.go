@@ -32,6 +32,7 @@ type PreparedSession struct {
 	UsageEvents []db.UsageEvent
 	Signals     db.SessionSignalUpdate
 	Findings    []db.SecretFinding
+	Friction    db.SessionFrictionUpdate
 	Validation  db.ValidationStats
 }
 
@@ -47,9 +48,7 @@ func PrepareCandidate(
 	if err != nil {
 		return Candidate{}, err
 	}
-	if options.ToolResultImages == config.ToolResultImagesDrop && !options.ArchiveContent.OmitsToolContent() {
-		messages, _ = db.ProjectToolResultImagesWithoutWriting(messages, options.ToolResultImages, "")
-	}
+	messages = dropToolResultImagesIfPolicy(messages, options)
 	session, err := ConvertSessionContext(ctx, parsed.Session, parsed.Messages)
 	if err != nil {
 		return Candidate{}, err
@@ -65,7 +64,8 @@ func PrepareCandidate(
 }
 
 // Finalize applies post-reconciliation validation, aggregate repair, storage
-// projection, usage conversion, and content-derived state.
+// projection, usage conversion, signals, and secret findings. Friction is
+// computed separately after the caller assigns the final session identity.
 func Finalize(
 	ctx context.Context, candidate Candidate, options ContentOptions,
 ) (PreparedSession, error) {
@@ -260,6 +260,25 @@ func UsageEventTokenTotalsContext(
 		rolled = append(rolled, event)
 	}
 	return parser.UsageEventTokenAggregateContext(ctx, rolled)
+}
+
+// dropToolResultImagesIfPolicy strips inline tool-result images when the
+// live policy drops them and the archive content mode doesn't already omit
+// tool content outright. Any caller that can hand the live parse or an
+// archived transcript back to a reader under ToolResultImagesDrop must call
+// this after that content lands in messages, since merging or restoring
+// prior content can reintroduce images the live policy no longer keeps.
+func dropToolResultImagesIfPolicy(
+	messages []db.Message, options ContentOptions,
+) []db.Message {
+	if options.ToolResultImages != config.ToolResultImagesDrop ||
+		options.ArchiveContent.OmitsToolContent() {
+		return messages
+	}
+	projected, _ := db.ProjectToolResultImagesWithoutWriting(
+		messages, options.ToolResultImages, "",
+	)
+	return projected
 }
 
 func addValidationStats(a, b db.ValidationStats) db.ValidationStats {

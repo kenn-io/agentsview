@@ -180,9 +180,9 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}{
 		{"sessions_cursors_and_metadata", duckContractSessionsCursorsAndMetadata},
 		{"messages_search_and_secrets", duckContractMessagesSearchAndSecrets},
-		{"read_only_curation", duckContractReadOnlyCuration},
-		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
+		{"starred_and_pinned_reads", duckContractStarredAndPinnedReads},
 		{"local_only_methods_read_only", duckContractLocalOnlyMethodsReadOnly},
+		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
 		{"data_inventory_rules_candidates", duckContractDataInventoryRulesCandidates},
 	}
 	for _, tt := range tests {
@@ -356,6 +356,7 @@ func duckContractSessionsCursorsAndMetadata(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
+	require.True(t, store.ReadOnly())
 
 	ctx := t.Context()
 
@@ -521,7 +522,7 @@ func duckContractMessagesSearchAndSecrets(
 	require.Contains(t, source, "secret token")
 }
 
-func duckContractReadOnlyCuration(
+func duckContractStarredAndPinnedReads(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
@@ -531,17 +532,6 @@ func duckContractReadOnlyCuration(
 	stars, err := store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)
-
-	ok, err := store.StarSession(ctx, fixture.betaID)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	require.False(t, ok)
-	require.ErrorIs(t, store.UnstarSession(ctx, fixture.alphaID), db.ErrReadOnly)
-	require.ErrorIs(t, store.BulkStarSessions(ctx, []string{fixture.betaID}), db.ErrReadOnly)
-
-	pinID, err := store.PinMessage(ctx, fixture.alphaID, 1, nil)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	require.Zero(t, pinID)
-	require.ErrorIs(t, store.UnpinMessage(ctx, fixture.alphaID, 1), db.ErrReadOnly)
 
 	pins, err := store.ListPinnedMessages(ctx, fixture.alphaID, "")
 	require.NoError(t, err)
@@ -620,29 +610,6 @@ func duckContractAnalyticsTrendsAndUsage(
 		*sessionUsage.CostUSD, 1e-9)
 }
 
-func duckContractLocalOnlyMethodsReadOnly(
-	t *testing.T, store *Store, fixture syncFixture,
-) {
-	t.Helper()
-	require.True(t, store.ReadOnly())
-	name := "ignored"
-	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
-	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
-	_, err := store.RestoreSession(t.Context(), fixture.alphaID)
-	requireReadOnlyDuck(t, err)
-	_, err = store.DeleteSessionIfTrashed(t.Context(), fixture.alphaID)
-	requireReadOnlyDuck(t, err)
-	_, err = store.EmptyTrash(t.Context())
-	requireReadOnlyDuck(t, err)
-	_, err = store.InsertInsight(t.Context(), db.Insight{})
-	requireReadOnlyDuck(t, err)
-	requireReadOnlyDuck(t, store.DeleteInsight(t.Context(), 1))
-	_, err = store.RecordRecallQueryEvent(t.Context(), db.RecallQueryEvent{
-		Surface: db.RecallQuerySurfaceQuery,
-	})
-	requireReadOnlyDuck(t, err)
-}
-
 // duckContractDataInventoryRulesCandidates exercises the three Data reads
 // (GetProjectInventory, ListProjectRules, ListArchiveWorktreeCandidates)
 // against the shared sync fixture, which has no worktree mapping rules and
@@ -681,12 +648,6 @@ func duckContractDataInventoryRulesCandidates(
 	assert.Equal(t, "unavailable", candidates[0].EvidenceKind, "no cwd or identity evidence seeded")
 	assert.False(t, candidates[0].Available)
 	assert.Equal(t, 1, candidates[0].ContributingSessions)
-}
-
-func requireReadOnlyDuck(t *testing.T, err error) {
-	t.Helper()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
 
 func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
@@ -1072,4 +1033,32 @@ func duckContentSessionIDs(matches []db.ContentMatch) []string {
 		ids[i] = match.SessionID
 	}
 	return ids
+}
+
+func duckContractLocalOnlyMethodsReadOnly(
+	t *testing.T, store *Store, fixture syncFixture,
+) {
+	t.Helper()
+	name := "ignored"
+	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
+	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
+	_, err := store.RestoreSession(t.Context(), fixture.alphaID)
+	requireReadOnlyDuck(t, err)
+	_, err = store.DeleteSessionIfTrashed(t.Context(), fixture.alphaID)
+	requireReadOnlyDuck(t, err)
+	_, err = store.EmptyTrash(t.Context())
+	requireReadOnlyDuck(t, err)
+	_, err = store.InsertInsight(t.Context(), db.Insight{})
+	requireReadOnlyDuck(t, err)
+	requireReadOnlyDuck(t, store.DeleteInsight(t.Context(), 1))
+	_, err = store.RecordRecallQueryEvent(t.Context(), db.RecallQueryEvent{
+		Surface: db.RecallQuerySurfaceQuery,
+	})
+	requireReadOnlyDuck(t, err)
+}
+
+func requireReadOnlyDuck(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }

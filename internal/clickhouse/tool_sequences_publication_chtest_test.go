@@ -247,7 +247,8 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	res = get()
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
 
-	// A repair that republishes the unknown row but fails another session's row keeps repairing on the next push.
+	// A repair that republishes the unknown row but fails another session's row keeps repairing on the next push,
+	// which resumes the unfinished full push.
 	_, err = conn.ExecContext(ctx, "ALTER TABLE sessions UPDATE stored_message_count = NULL WHERE id = ? SETTINGS mutations_sync = 2", fixtureChildID)
 	require.NoError(t, err)
 	failing := newTestSync(t, local, target, storage.PusherOptions{})
@@ -267,7 +268,8 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, get().Code)
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "publishing stored message counts", result.FullReason)
+	assert.True(t, result.Full)
+	assert.Equal(t, "resuming an unfinished full push, started because: requested", result.FullReason)
 	res = get()
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)

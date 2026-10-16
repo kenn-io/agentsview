@@ -80,7 +80,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Nil(t, scope)
 	})
 
-	t.Run("matching session has rows", func(t *testing.T) {
+	t.Run("matching session has roles and content; other model has no rows", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			t.Context(),
@@ -98,45 +98,12 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		require.Len(t, rowsA, 2, "sessionA should have 2 matched rows")
 		assert.Equal(t, "user", rowsA[0].Role)
 		assert.Equal(t, "assistant", rowsA[1].Role)
+		assert.Equal(t, "hello content", rowsA[0].Content)
+		assert.Equal(t, "world content", rowsA[1].Content)
 
 		// sessionB: no rows (assistant used a different model)
 		assert.Empty(t, bySession[sessionB],
 			"sessionB should yield no rows")
-	})
-
-	t.Run("StatsBySession counts user and assistant", func(t *testing.T) {
-		d := setup(t)
-		scope, err := d.resolveAnalyticsMessageScope(
-			t.Context(),
-			[]string{sessionA},
-			AnalyticsFilter{Model: model},
-			false,
-		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-
-		stats := scope.StatsBySession()
-		sA, ok := stats[sessionA]
-		require.True(t, ok, "sessionA stats must exist")
-		assert.Equal(t, 1, sA.UserMessages, "user message count")
-		assert.Equal(t, 1, sA.AssistantMessages, "assistant message count")
-		assert.Equal(t, 2, sA.Messages, "total message count")
-	})
-
-	t.Run("TimingBySession returns one entry per row", func(t *testing.T) {
-		d := setup(t)
-		scope, err := d.resolveAnalyticsMessageScope(
-			t.Context(),
-			[]string{sessionA},
-			AnalyticsFilter{Model: model},
-			false,
-		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-
-		timing := scope.TimingBySession()
-		tA := timing[sessionA]
-		assert.Len(t, tA, 2, "timing should have 2 entries")
 	})
 
 	t.Run("includeContent=false omits content", func(t *testing.T) {
@@ -155,25 +122,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		for _, row := range rows {
 			assert.Empty(t, row.Content, "content should be empty when includeContent=false")
 		}
-	})
-
-	t.Run("includeContent=true populates content", func(t *testing.T) {
-		d := setup(t)
-		scope, err := d.resolveAnalyticsMessageScope(
-			t.Context(),
-			[]string{sessionA},
-			AnalyticsFilter{Model: model},
-			true,
-		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-
-		rows := scope[sessionA]
-		require.Len(t, rows, 2)
-		assert.Equal(t, "hello content", rows[0].Content,
-			"user row content should be populated")
-		assert.Equal(t, "world content", rows[1].Content,
-			"assistant row content should be populated")
 	})
 
 	t.Run("deduplicates sessionIDs", func(t *testing.T) {

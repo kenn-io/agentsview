@@ -11,7 +11,7 @@ import (
 
 // MirrorProbe summarizes a DuckDB mirror file's shape and push-scope
 // metadata without mutating it. ProbeMirror is the read-only counterpart to
-// rebuildMirror: callers use it to decide whether a mirror is safe to serve
+// buildMirror: callers use it to decide whether a mirror is safe to serve
 // as-is or needs a full rebuild.
 type MirrorProbe struct {
 	FileExists bool
@@ -225,7 +225,7 @@ func mirrorShapeIssueFromColumns(existing map[string]map[string]bool) string {
 }
 
 // NeedsRebuild reports whether the probed mirror can serve scope/
-// sourceDataVersion as-is, or must be rebuilt with rebuildMirror. A missing
+// sourceDataVersion as-is, or must be rebuilt with buildMirror. A missing
 // file, a shape problem, a schema version mismatch in either direction, a
 // stale source data version, or a different push scope all require a
 // rebuild; there is no in-place migration path for the mirror schema.

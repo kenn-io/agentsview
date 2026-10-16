@@ -201,6 +201,9 @@ type daemonReplicaTarget struct {
 	MachineName   string `json:"machine_name"`
 	AllowInsecure bool   `json:"allow_insecure,omitzero"`
 	PushVectors   *bool  `json:"push_vectors,omitempty"`
+	// PushBatchSize is the ClickHouse sessions-per-batch setting; zero or
+	// omitted selects the push default.
+	PushBatchSize int `json:"push_batch_size,omitzero"`
 }
 
 func (t daemonReplicaTarget) target() storage.ReplicaTarget {
@@ -210,6 +213,7 @@ func (t daemonReplicaTarget) target() storage.ReplicaTarget {
 		MachineName:   t.MachineName,
 		AllowInsecure: t.AllowInsecure,
 		PushVectors:   t.PushVectors == nil || *t.PushVectors,
+		PushBatchSize: t.PushBatchSize,
 	}
 }
 
@@ -593,6 +597,11 @@ func (s *Server) humaReplicaPush(
 			err := s.syncThenRunForPush(
 				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
 				func(forceFull bool) error {
+					if storage.StoresFriction(replica) {
+						if err := engine.DrainStaleFrictionLocked(ctx); err != nil {
+							return err
+						}
+					}
 					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
 						if ctxErr := ctx.Err(); ctxErr != nil {
 							return ctxErr

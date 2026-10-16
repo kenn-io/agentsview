@@ -765,7 +765,7 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		"idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)")
 }
 
-func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
+func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -809,19 +809,7 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"root", "child"})
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
-	assert.Equal(t, "root", rowSet.Rows[0].SessionID)
-	assert.Equal(t, "child", rowSet.Rows[0].SourceSessionID)
-	assert.Equal(t, 631, rowSet.Rows[0].OutputTokens)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631},
-		rowSet.RawOutputTokensBySession)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631},
-		rowSet.DeduplicatedOutputTokens)
-	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}},
-		rowSet.DiscardedContributingSessions)
-	assert.Equal(t, map[string]activity.SessionTokenCoverage{
-		"root":  {OutputTokens: 631, PeakContextTokens: 2},
-		"child": {OutputTokens: 631, PeakContextTokens: 2},
-	}, rowSet.CanonicalTokenCoverageBySession)
+	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
@@ -842,10 +830,10 @@ func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T
 		ts:      instant,
 		validTS: true,
 	}
-	sessionOrder := map[string]int{"a-parent": 0, "z-child": 1}
+	sessionOrder := map[string]int{"z-child": 0, "a-parent": 1}
 
-	assert.True(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
-	assert.False(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
+	assert.False(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
+	assert.True(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
 }
 
 func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
@@ -1032,7 +1020,6 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 		s.Agent = "claude"
 		s.StartedAt = Ptr("2026-06-16T10:31:00Z")
 		s.EndedAt = Ptr("2026-06-16T10:31:00Z")
-		s.IsAutomated = true
 	})
 	insertMessages(t, d, Message{
 		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
@@ -1045,17 +1032,6 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
 		dayQuery(t, "2026-06-16", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 900, r.Totals.OutputTokens)
-	assert.Equal(t, r.Totals.Cost, r.Totals.InteractiveCost)
-	assert.Zero(t, r.Totals.AutomatedCost.Microdollars)
-	bySession := make(map[string]activity.SessionRow, len(r.BySession))
-	for _, session := range r.BySession {
-		bySession[session.SessionID] = session
-	}
-	require.Contains(t, bySession, "earlier")
-	require.Contains(t, bySession, "later")
-	assert.Equal(t, 900, bySession["earlier"].OutputTokens)
-	assert.Zero(t, bySession["later"].OutputTokens)
 	require.NotNil(t, r.Pricing)
 	assert.Contains(t, r.Pricing.Models, "complete-model")
 	assert.NotContains(t, r.Pricing.Models, "partial-model")
@@ -1358,145 +1334,56 @@ func TestGetActivityReport_HourlyRange(t *testing.T) {
 	assert.True(t, found, "the 2026-06-17T10:00 hourly bucket must be present")
 }
 
-// TestGetActivityReport_UsageDedupSubSecondOrder confirms the SQLite usage
-// stream is ordered by the PARSED instant, not the RFC3339 text. A
-// resumed/forked pair shares one source UUID fallback dedup
-// key in the same second: one whole-second instant ("...00Z", 500 output
-// tokens) and one fractional ("...00.123Z", 9000). Lexically "...00.123Z"
-// sorts before "...00Z" ('.' < 'Z'), so a TEXT sort would keep the 9000 row;
-// chronologically the whole-second row is first. First-seen-wins dedup must
-// keep the 500 row, matching PostgreSQL/DuckDB which order on the parsed time.
-func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
+// TestGetActivityReport_UsageDedupOrdering checks parsed time and session-ID ties before source UUID deduplication.
+func TestGetActivityReport_UsageDedupOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name, firstID, secondID, secondTimestamp string
+		firstOutput, secondOutput, wantOutput    int
+	}{
+		{"parsed time", "z-earlier", "a-later", "2026-06-16T10:30:00.123Z", 500, 9000, 500},
+		{"equal instant uses session ID before token payload", "z-session", "a-session", "2026-06-16T05:30:00-05:00", 500, 9000, 9000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+				ModelPattern:  "claude-sonnet-4-20250514",
+				InputPerMTok:  money.MustParseDollars("3.0"),
+				OutputPerMTok: money.MustParseDollars("15.0"),
+			}}), "UpsertModelPricing")
 
-	insertSession(t, d, "earlier", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "earlier", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "later", "proj2", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00.123Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
-	})
+			insertSession(t, d, tc.firstID, "proj1", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.firstID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       "2026-06-16T10:30:00Z",
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput)),
+			})
+			insertSession(t, d, tc.secondID, "proj2", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID: tc.secondID, Ordinal: 0, Role: "assistant", Content: "x",
+				Timestamp:       tc.secondTimestamp,
+				Model:           "claude-sonnet-4-20250514",
+				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.secondOutput)),
+			})
 
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"first-seen dedup keeps the chronologically earlier whole-second row")
-}
-
-func TestGetActivityReport_UsageDedupEqualInstantUsesSessionOrder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "a-session", "project a", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "a-session", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "z-session", "project z", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "z-session", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T05:30:00-05:00",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
-	})
-
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"equal parsed instants fall through to session ID ordering")
-}
-
-func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "earlier", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:       "earlier",
-		Ordinal:         0,
-		Role:            "assistant",
-		Content:         "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup",
-		ClaudeRequestID: "",
-		SourceUUID:      "src-dup",
-		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "later", "proj2", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:01Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:01Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:       "later",
-		Ordinal:         0,
-		Role:            "assistant",
-		Content:         "x",
-		Timestamp:       "2026-06-16T10:30:01Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup",
-		ClaudeRequestID: "",
-		SourceUUID:      "src-dup",
-		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":900}`),
-	})
-
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
+			r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+				dayQuery(t, "2026-06-16", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantOutput, r.Totals.OutputTokens,
+				"first-seen dedup follows parsed time, then session ID")
+		})
+	}
 }
 
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback

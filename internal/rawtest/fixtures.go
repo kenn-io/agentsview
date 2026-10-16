@@ -114,7 +114,7 @@ func CodexTools(t *testing.T, root string) {
 {"type":"turn_context","timestamp":"2026-07-06T12:00:01Z","payload":{"model":"gpt-5.4","turn_id":"tool-turn"}}
 {"type":"response_item","timestamp":"2026-07-06T12:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Run the build."}]}}
 {"type":"response_item","timestamp":"2026-07-06T12:00:02Z","payload":{"type":"function_call","name":"exec_command","call_id":"build-1","arguments":"{\"cmd\":\"make check\"}"}}
-{"type":"response_item","timestamp":"2026-07-06T12:00:03Z","payload":{"type":"function_call_output","call_id":"build-1","output":"Process exited with code 1\nError: synthetic failure"}}
+{"type":"response_item","timestamp":"2026-07-06T12:00:03Z","payload":{"type":"function_call_output","call_id":"build-1","output":"bash: python3: command not found"}}
 {"type":"response_item","timestamp":"2026-07-06T12:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Build failed."}]}}
 {"type":"event_msg","timestamp":"2026-07-06T12:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":9,"total_tokens":129},"last_token_usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":9,"total_tokens":129}}}}
 `

@@ -133,7 +133,7 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 		CostStatus: "priced", CostSource: "provider",
 		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
 	}}))
-	want, err := local.UsageEventFingerprint("exact-money")
+	want, err := localUsageEventPGFingerprint(ctx, local, "exact-money")
 	require.NoError(t, err)
 
 	_, err = pg.ExecContext(ctx, `
@@ -155,12 +155,6 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
-
-	batched := map[string]string{}
-	require.NoError(t, loadPushUsageEventFingerprints(
-		ctx, tx, []string{"exact-money"}, batched,
-	))
-	assert.Equal(t, want, batched["exact-money"])
 }
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
@@ -3241,9 +3235,12 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// The failed push committed sess-1 under the repaired archive before
+	// metadata publication failed, so the retry resumes that run.
 	second, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, second.SessionsPushed)
+	assert.Zero(t, second.SessionsPushed)
+	assert.Equal(t, 1, second.SkippedResumed)
 	var gotArchiveID string
 	require.NoError(t, pg.QueryRowContext(ctx, `
 		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,
@@ -3550,4 +3547,157 @@ func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 	require.NoError(t, err, "GetSyncState after unfiltered push")
 	assert.Equal(t, "1", marker,
 		"unfiltered push must complete the provenance marker")
+}
+
+type usagePushFixture struct {
+	local   *db.DB
+	pusher  *Sync
+	session db.Session
+}
+
+// newUsagePushFixture stores one session with a single message and the given
+// usage events, then completes an initial push.
+func newUsagePushFixture(
+	t *testing.T, schema string, events []db.UsageEvent,
+) usagePushFixture {
+	t.Helper()
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	session := db.Session{
+		ID: "hermes:usage", Project: "project", Machine: "machine",
+		Agent: "hermes", MessageCount: 1,
+		FileMtime: new(time.Now().Add(time.Hour).UnixNano()),
+		FileHash:  new("first-source"),
+	}
+	require.NoError(t, local.UpsertSession(ctx, session))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: session.ID, Ordinal: 0, Role: "user",
+		Content: "unchanged message", ContentLength: 17,
+	}}))
+	for i := range events {
+		events[i].SessionID = session.ID
+	}
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, session.ID, events))
+
+	pusher, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pusher.Close() })
+	_, err = pusher.Push(ctx, false, nil)
+	require.NoError(t, err)
+	return usagePushFixture{local: local, pusher: pusher, session: session}
+}
+
+// pushMetadataChange renames the session and changes its source hash without
+// touching messages or usage, then pushes.
+func (f *usagePushFixture) pushMetadataChange(
+	t *testing.T, name, fileHash string,
+) storage.PushResult {
+	t.Helper()
+	f.session.SessionName = new(name)
+	f.session.FileHash = new(fileHash)
+	require.NoError(t, f.local.UpsertSession(t.Context(), f.session))
+	result, err := f.pusher.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	return result
+}
+
+func TestPGPushMetadataChangesPreserveUnchangedUsage(t *testing.T) {
+	type mirroredMessage struct {
+		Version     string
+		SessionName string
+	}
+	readMessage := func(t *testing.T, f usagePushFixture) mirroredMessage {
+		t.Helper()
+		var got mirroredMessage
+		require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(), `
+			SELECT m.xmin::text, COALESCE(s.session_name, '')
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.session_id = $1 AND m.ordinal = 0`, f.session.ID,
+		).Scan(&got.Version, &got.SessionName))
+		return got
+	}
+	for _, test := range []struct {
+		name       string
+		timestamps []string
+	}{
+		{name: "nanoseconds", timestamps: []string{"2026-07-01T12:00:00.123456789Z"}},
+		{name: "trailing zeroes", timestamps: []string{"2026-07-01T12:00:00.000Z"}},
+		{name: "offset", timestamps: []string{"2026-07-01T13:00:00.123456789+01:00"}},
+		{name: "empty", timestamps: []string{""}},
+		{name: "whole and fractional seconds", timestamps: []string{
+			"2026-07-01T12:00:00Z", "2026-07-01T12:00:00.5Z",
+		}},
+		{name: "different offsets", timestamps: []string{
+			"2026-07-01T13:00:00+01:00", "2026-07-01T12:30:00Z",
+		}},
+		{name: "same microsecond", timestamps: []string{
+			"2026-07-01T12:00:00.123456900Z", "2026-07-01T12:00:00.123456100Z",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events := make([]db.UsageEvent, len(test.timestamps))
+			for i, timestamp := range test.timestamps {
+				events[i] = db.UsageEvent{
+					Source: "session", Model: "model", InputTokens: i + 1,
+					OccurredAt: timestamp, DedupKey: fmt.Sprintf("event-%d", i),
+				}
+			}
+			f := newUsagePushFixture(t, "agentsview_usage_timestamp_test", events)
+			archived, err := f.local.UsageEventFingerprints([]string{f.session.ID})
+			require.NoError(t, err)
+			before := readMessage(t, f)
+
+			result := f.pushMetadataChange(t, "Renamed session", "second-source")
+
+			assert.Zero(t, result.MessagesPushed)
+			assert.Equal(t, mirroredMessage{
+				Version: before.Version, SessionName: "Renamed session",
+			}, readMessage(t, f), "metadata changes must not replace messages")
+			after, err := f.local.UsageEventFingerprints([]string{f.session.ID})
+			require.NoError(t, err)
+			assert.Equal(t, archived, after,
+				"pushing must keep the archive's timestamp text")
+		})
+	}
+}
+
+func TestPGPushReplacesChangedUsage(t *testing.T) {
+	type mirroredUsage struct {
+		OutputTokens int
+		OccurredAt   sql.NullTime
+	}
+	usage := db.UsageEvent{
+		Source: "session", Model: "model", InputTokens: 10, OutputTokens: 2,
+		DedupKey: "session:usage",
+	}
+	f := newUsagePushFixture(t, "agentsview_usage_change_test", []db.UsageEvent{usage})
+	usage.SessionID = f.session.ID
+
+	usage.OutputTokens = 3
+	require.NoError(t, f.local.ReplaceSessionUsageEvents(
+		t.Context(), f.session.ID, []db.UsageEvent{usage},
+	))
+	_, err := f.pusher.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	var got mirroredUsage
+	require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(),
+		"SELECT output_tokens, occurred_at FROM usage_events WHERE session_id = $1",
+		f.session.ID,
+	).Scan(&got.OutputTokens, &got.OccurredAt))
+	assert.Equal(t, mirroredUsage{OutputTokens: 3}, got,
+		"accounting changes must replace mirrored usage")
+
+	// PostgreSQL holds a NULL timestamp for this event, so a malformed local
+	// timestamp must not compare equal to it after normalization.
+	usage.OccurredAt = "invalid"
+	require.NoError(t, f.local.ReplaceSessionUsageEvents(
+		t.Context(), f.session.ID, []db.UsageEvent{usage},
+	))
+	result := f.pushMetadataChange(t, "Renamed session", "second-source")
+	assert.Equal(t, 1, result.Errors,
+		"a malformed usage timestamp must fail the push and remain retryable")
 }

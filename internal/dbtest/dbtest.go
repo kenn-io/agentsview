@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Ptr returns a pointer to v.
@@ -309,11 +310,35 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	assert.Equal(t, "group-other", byKey["host-a.example/"].SessionID)
 	assert.Equal(t, 10, byKey["host-a.example/"].InputTokens)
 	assert.Empty(t, byKey["host-a.example/job-a"].SessionID)
+	// The group shows the newest recorded job name in range; the later
+	// untitled run and the deleted rename do not replace it.
+	assert.Equal(t, "Research digest", byKey["host-a.example/job-a"].GroupLabel)
+	assert.Equal(t, "Research digest", byKey["host-a.example/job-a"].DisplayName)
+	// A limit keeps the top rows and folds the rest into one unnamed
+	// remainder row: host-b's job-a run and the ungrouped run.
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 2)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	assert.Equal(t, "job-b", rows[0].GroupKey)
+	assert.Equal(t, "host-a.example", rows[1].Machine)
+	assert.Equal(t, "job-a", rows[1].GroupKey)
+	assert.Equal(t, db.TopSessionEntry{
+		InputTokens: 20, OutputTokens: 4, TotalTokens: 24,
+		Cost: money.Money{Microdollars: 2_000_000},
+	}, rows[2])
 	filter.From, filter.To = "2026-10-07", "2026-10-07"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, int64(1_000_000), rows[0].Cost.Microdollars)
+	assert.Equal(t, "Old digest", rows[0].GroupLabel)
+	assert.Equal(t, "Old digest", rows[0].DisplayName)
+	filter.From, filter.To = "2026-10-09", "2026-10-09"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].GroupLabel)
+	assert.Equal(t, "job-a", rows[0].DisplayName)
 	filter.From, filter.To = "2026-10-07", "2026-10-10"
 	filter.Machine = "host-b.example"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)

@@ -59,6 +59,7 @@ risk via documented flags and config.
 | Session files → parser            | Treated as untrusted data                                           | Parsers should not exec/eval; bugs are security-relevant.            |
 | Imports and new readers           | Treated as untrusted structured data                                | Same posture as parsers; imported archives may be remote-origin.     |
 | HTTP remote sync                  | User-configured endpoints authenticated with per-host bearer tokens | Pulled archives are parsed locally as untrusted data.                |
+| SSH remote sync                   | System `ssh` client; release binary checked against `SHA256SUMS`    | `SHA256SUMS.sig` is not checked. Pulled archives are untrusted data. |
 | Parser → SQLite / FTS5            | Trusted                                                             | Indexed content is preserved verbatim.                               |
 | HTTP server → caller              | Loopback-trusted; bearer-gated for `/api/` when `--require-auth`    | Static assets are not gated.                                         |
 | Browser → HTTP server             | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                   |
@@ -106,6 +107,19 @@ complete description of the system once optional features are in use.
   authentication. Use a private network such as Tailscale. Pulled files are
   parsed locally as untrusted data and merged into the unified archive. See
   [HTTP Remote Sync](docs/remote-access.md#http-remote-sync).
+- **SSH remote sync.** agentsview runs the system `ssh` client with your
+  `~/.ssh/config`, in batch mode, so it never prompts and keys must work
+  unattended. It installs one binary per version under the remote user's
+  `~/.cache/agentsview/bin`. A release build downloads that version's tarball
+  from GitHub over HTTPS and checks it against `SHA256SUMS` from the same
+  release. `SHA256SUMS.sig` is not checked, so the check catches a damaged
+  download, not a compromised release. A development build uploads its own
+  executable instead. The remote command resolves its allowed session
+  directories from its own read-only configuration, answers one request, and
+  exits. It writes only temporary SQLite snapshots that it removes before it
+  exits, and it creates no AgentsView state. Pulled files are parsed locally
+  as untrusted data. See
+  [SSH Remote Sync](docs/remote-access.md#ssh-remote-sync).
 - **Imports.** Imported archives from other agentsview instances or third-party
   exports are treated as untrusted structured data, no different from session
   files written by local agents.

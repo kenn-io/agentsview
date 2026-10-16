@@ -351,6 +351,32 @@ func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 		"a rebuild has no incremental candidate/skip counters to print")
 }
 
+// A resumed rebuild reports the sessions it kept from the unfinished one, so
+// a push that wrote one session does not look like it lost the rest.
+func TestWriteDuckDBPushDiagnosticsReportsResumedRebuildKept(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
+		SessionsPushed: 1,
+		MessagesPushed: 1,
+		Diagnostics: storage.MirrorPushDiagnostics{
+			Full:          true,
+			RebuildReason: "resuming an unfinished rebuild, started because: missing file",
+			SkippedUnchangedSessions: storage.MirrorSessionCounts{
+				Total:   4,
+				ByAgent: map[string]int{"claude": 3, "codex": 1},
+			},
+			PushedSessions: storage.MirrorSessionCounts{
+				Total:   1,
+				ByAgent: map[string]int{"claude": 1},
+			},
+		},
+	})
+
+	assert.Contains(t, out.String(),
+		"DuckDB push kept: sessions 4 (claude=3, codex=1) already written by the unfinished rebuild")
+}
+
 // TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
 // watch-mode push (mirror held by a live serve; see
 // storage.MirrorPushOptions.Automatic) prints its mode and reason

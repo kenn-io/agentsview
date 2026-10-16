@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -171,6 +172,9 @@ type Sync struct {
 	// databaseGeneration identifies the exact local database generation that
 	// produced each pushed session and its identity snapshot.
 	databaseGeneration string
+	// fullVectorSessions holds PushOptions.FullVectorSessions for the push
+	// in progress.
+	fullVectorSessions map[string]struct{}
 
 	// Project filtering for push scope.
 	projects        []string
@@ -179,6 +183,9 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource storage.VectorPushSource
+	// recipePrivilegeLogged limits the notice that this writer cannot
+	// publish embedding recipes to once per Sync.
+	recipePrivilegeLogged bool
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.
@@ -187,6 +194,16 @@ type Sync struct {
 	afterVectorGenerationLookup func()
 	// afterScopedVectorApply is a scoped-retry test hook.
 	afterScopedVectorApply func()
+
+	// fullRun tracks the running full push's progress; nil outside one.
+	fullRun *fullPushRunTracker
+	// fullRunCheckpointInterval, when positive, replaces
+	// fullPushRunCheckpointInterval.
+	fullRunCheckpointInterval time.Duration
+	// pushBatchSize, when positive, replaces the session batch size.
+	pushBatchSize int
+	// afterPushBatch is a test hook called after each session batch.
+	afterPushBatch func()
 
 	closeOnce sync.Once
 	closeErr  error

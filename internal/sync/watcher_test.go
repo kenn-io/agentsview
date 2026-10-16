@@ -791,6 +791,19 @@ func TestWatchEventSinkRetainsConcurrentAuthoritativeLifecycleMarkers(t *testing
 		"separate lifecycle gates must not overwrite one another")
 }
 
+func TestWatchEventSinkFullSyncRetryKeepsFreshPathsQueued(t *testing.T) {
+	sink := newWatchEventSink(8, 1024)
+	sink.RetainRetry(WatchBatch{FullSync: true})
+	sink.Add(backendEvent{Path: "/outer/fresh.jsonl", Op: backendOpWrite})
+
+	batch, ok := sink.Take(nil)
+	require.True(t, ok)
+	assert.True(t, batch.FullSync)
+	batch, ok = sink.Take(nil)
+	require.True(t, ok, "a retried full sync must not discard fresh paths")
+	assert.Equal(t, []string{"/outer/fresh.jsonl"}, batch.Paths)
+}
+
 func TestWatchEventSinkDispatchConsumesImmediateWake(t *testing.T) {
 	sink := newWatchEventSink(8, 1024)
 	sink.RetainRetryImmediate(WatchBatch{Paths: []string{"/retry"}})
@@ -973,10 +986,10 @@ func TestWatcherSchedulerContinuesIntakeWithOnePendingAccumulator(t *testing.T) 
 		"watcher callbacks must remain serialized")
 }
 
-func TestWatcherDeferredPathRetryPreservesCoalescedReconcileRoot(t *testing.T) {
+func TestWatcherDeferredPathRetryPreservesConcurrentReconcileRoot(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	calls := make(chan WatchBatch, 2)
+	calls := make(chan WatchBatch, 3)
 	var callbackCount atomic.Int32
 	backend := newFakeWatchBackend()
 	w, err := newWatcherWithBackend(
@@ -1017,11 +1030,18 @@ func TestWatcherDeferredPathRetryPreservesCoalescedReconcileRoot(t *testing.T) {
 	})
 	close(release)
 	first := receiveWatchBatch(t, calls)
-	second := receiveWatchBatch(t, calls)
 	assert.Contains(t, first.Paths, "/sessions/deferred.jsonl")
-	assert.Contains(t, second.Paths, "/sessions/deferred.jsonl")
+	// The fresh reconcile root dispatches at once; the retry joins it only if
+	// its backoff has already expired, otherwise it follows on its own.
+	second := receiveWatchBatch(t, calls)
 	assert.Contains(t, second.ReconcileRoots, "/sessions")
 	assert.False(t, second.FullSync)
+	retried := second
+	if !slices.Contains(second.Paths, "/sessions/deferred.jsonl") {
+		retried = receiveWatchBatch(t, calls)
+	}
+	assert.Contains(t, retried.Paths, "/sessions/deferred.jsonl")
+	assert.False(t, retried.FullSync)
 }
 
 func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
@@ -1470,30 +1490,147 @@ func TestWatcherRetryFloorStartsWhenFailedCallbackCompletes(t *testing.T) {
 	})
 }
 
-func TestWatcherFailedRetryBacksOffWhileUnrelatedEventsArrive(t *testing.T) {
+func TestWatcherNativeEventsDoNotWaitForFailedRetryBackoff(t *testing.T) {
+	t.Run("events during callback", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			root := t.TempDir()
+			retainedPath := filepath.Join(root, "failed.jsonl")
+			unrelatedPath := filepath.Join(t.TempDir(), "active.jsonl")
+			backend := newFakeWatchBackend()
+			type call struct {
+				at    time.Duration
+				batch WatchBatch
+			}
+			calls := make(chan call, 8)
+			start := time.Now()
+			attempt, retryFailures := 0, 0
+			w, err := newWatcherWithBackend(
+				0, 20*time.Millisecond,
+				func(_ context.Context, batch WatchBatch) error {
+					attempt++
+					calls <- call{at: time.Since(start), batch: batch}
+					if attempt < 8 {
+						// The unbuffered send makes the loop consume this event before completion.
+						backend.sendEvent(t, unrelatedPath)
+					}
+					if slices.Contains(batch.Paths, retainedPath) && retryFailures < 3 {
+						retryFailures++
+						return retryScopedWatchError{retry: WatchBatch{
+							Paths: []string{retainedPath}, ReconcileRoots: []string{root},
+							LostEvents: true,
+						}}
+					}
+					return nil
+				},
+				backend, 8, 100_000,
+			)
+			require.NoError(t, err)
+			w.Start()
+			defer w.Stop()
+			backend.sendEvent(t, retainedPath)
+			type observed struct {
+				at       time.Duration
+				retained bool
+				fresh    bool
+				lost     bool
+				roots    []string
+			}
+			var got []observed
+			for range 8 {
+				c := requireReceiveWithin(t, calls, time.Second)
+				got = append(got, observed{
+					at:       c.at,
+					retained: slices.Contains(c.batch.Paths, retainedPath),
+					fresh:    slices.Contains(c.batch.Paths, unrelatedPath),
+					lost:     c.batch.LostEvents,
+					roots:    c.batch.ReconcileRoots,
+				})
+			}
+			ms := time.Millisecond
+			// The retry backs off 20, 40, 80ms; fresh events run alone on the 20ms floor.
+			retry := []string{root}
+			none := []string{}
+			assert.Equal(t, []observed{
+				{at: 0, retained: true, roots: none},
+				{at: 20 * ms, retained: true, fresh: true, lost: true, roots: retry},
+				{at: 40 * ms, fresh: true, roots: none},
+				{at: 60 * ms, retained: true, fresh: true, lost: true, roots: retry},
+				{at: 80 * ms, fresh: true, roots: none},
+				{at: 100 * ms, fresh: true, roots: none},
+				{at: 120 * ms, fresh: true, roots: none},
+				{at: 140 * ms, retained: true, fresh: true, lost: true, roots: retry},
+			}, got)
+		})
+	})
+	t.Run("new project during capped discovery retry", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			backend := newFakeWatchBackend()
+			root := t.TempDir()
+			calls := make(chan WatchBatch, 16)
+			w, err := newWatcherWithBackend(
+				5*time.Second, 5*time.Second,
+				func(_ context.Context, batch WatchBatch) error {
+					calls <- batch
+					return retryScopedWatchError{retry: WatchBatch{ReconcileRoots: []string{root}}}
+				},
+				backend, 32, 100_000,
+			)
+			require.NoError(t, err)
+			w.Start()
+			defer w.Stop()
+			backend.sendBackendEvent(t, backendEvent{
+				Path: root, Root: root, Op: backendOpReconcileRootChange,
+			})
+			for range 6 {
+				requireReceiveWithin(t, calls, 3*time.Minute)
+				synctest.Wait()
+			}
+			time.Sleep(time.Second)
+			writtenAt := time.Now()
+			project := filepath.Join(root, "new-project")
+			path := filepath.Join(project, "new-session.jsonl")
+			backend.sendBackendEvent(t, backendEvent{
+				Path: project, Root: root, Op: backendOpCreate, ItemType: backendItemDirectory,
+			})
+			backend.sendEvent(t, path)
+			batch := requireReceiveWithin(t, calls, 3*time.Minute)
+			assert.Contains(t, batch.Paths, path)
+			assert.Equal(t, []string{root}, batch.ReconcileRoots, "failed discovery remains retryable")
+			assert.Equal(t, 5*time.Second, time.Since(writtenAt),
+				"a native event must use the debounce delay while discovery retries are capped")
+		})
+	})
+}
+
+func TestWatcherRecurringFreshFailuresDoNotPostponeOlderRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		root := t.TempDir()
-		retainedPath := filepath.Join(root, "failed.jsonl")
-		unrelatedPath := filepath.Join(t.TempDir(), "active.jsonl")
+		olderPath := filepath.Join(root, "older.jsonl")
+		freshPath := filepath.Join(root, "active.jsonl")
 		backend := newFakeWatchBackend()
-		calls := make(chan WatchBatch, 6)
-		starts := make(chan time.Time, 6)
-		attempt := 0
+		type call struct {
+			at    time.Duration
+			older bool
+		}
+		calls := make(chan call, 64)
+		start := time.Now()
+		attempt, olderFailures := 0, 0
 		w, err := newWatcherWithBackend(
 			0, 20*time.Millisecond,
 			func(_ context.Context, batch WatchBatch) error {
 				attempt++
-				starts <- time.Now()
-				calls <- batch
-				if attempt < 6 {
+				older := slices.Contains(batch.Paths, olderPath)
+				calls <- call{at: time.Since(start), older: older}
+				if attempt >= 3 && attempt < 10 {
 					// The unbuffered send makes the loop consume this event before completion.
-					backend.sendEvent(t, unrelatedPath)
+					backend.sendEvent(t, freshPath)
 				}
-				if attempt <= 3 || attempt == 5 {
-					return retryScopedWatchError{retry: WatchBatch{
-						Paths: []string{retainedPath}, ReconcileRoots: []string{root},
-						LostEvents: true,
-					}}
+				if older && olderFailures < 3 {
+					olderFailures++
+					return retryScopedWatchError{retry: WatchBatch{Paths: []string{olderPath}}}
+				}
+				if slices.Contains(batch.Paths, freshPath) {
+					return retryScopedWatchError{retry: WatchBatch{Paths: []string{freshPath}}}
 				}
 				return nil
 			},
@@ -1502,26 +1639,18 @@ func TestWatcherFailedRetryBacksOffWhileUnrelatedEventsArrive(t *testing.T) {
 		require.NoError(t, err)
 		w.Start()
 		defer w.Stop()
-		backend.sendEvent(t, retainedPath)
-		var at []time.Time
-		for i := range 6 {
-			at = append(at, requireReceiveWithin(t, starts, time.Second))
-			batch := receiveWatchBatch(t, calls)
-			if i == 1 || i == 2 || i == 3 || i == 5 {
-				assert.ElementsMatch(t, []string{retainedPath, unrelatedPath}, batch.Paths)
-				assert.Equal(t, []string{root}, batch.ReconcileRoots)
-				assert.True(t, batch.LostEvents)
-				assert.False(t, batch.FullSync)
-			}
-			if i == 4 {
-				assert.Equal(t, []string{unrelatedPath}, batch.Paths)
-				assert.Empty(t, batch.ReconcileRoots)
-				assert.False(t, batch.LostEvents)
+		backend.sendEvent(t, olderPath)
+		var olderAt []time.Duration
+		for len(olderAt) < 4 {
+			c := requireReceiveWithin(t, calls, time.Minute)
+			if c.older {
+				olderAt = append(olderAt, c.at)
 			}
 		}
-		gaps := []time.Duration{at[1].Sub(at[0]), at[2].Sub(at[1]), at[3].Sub(at[2]), at[4].Sub(at[3]), at[5].Sub(at[4])}
-		t.Logf("callback gaps: %v", gaps)
-		assert.Equal(t, []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}, gaps)
+		ms := time.Millisecond
+		// The older retry backs off 20, 40, 80ms. Fresh failures from 80ms on
+		// must not push its fourth attempt past 140ms.
+		assert.Equal(t, []time.Duration{0, 20 * ms, 60 * ms, 140 * ms}, olderAt)
 	})
 }
 
@@ -1534,7 +1663,6 @@ func TestWatcherFailedRetryBackoffIsIndependentOfBatchPathCount(t *testing.T) {
 				for i := range paths {
 					paths[i] = filepath.Join(root, fmt.Sprintf("session-%d.jsonl", i))
 				}
-				unrelatedPath := filepath.Join(t.TempDir(), "active.jsonl")
 				backend := newFakeWatchBackend()
 				var starts []time.Time
 				w, err := newWatcherWithBackend(
@@ -1542,7 +1670,6 @@ func TestWatcherFailedRetryBackoffIsIndependentOfBatchPathCount(t *testing.T) {
 					func(_ context.Context, batch WatchBatch) error {
 						starts = append(starts, time.Now())
 						assert.Subset(t, batch.Paths, paths)
-						backend.sendEvent(t, unrelatedPath)
 						return retryScopedWatchError{retry: WatchBatch{Paths: paths}}
 					},
 					backend, 1024, 1_000_000,

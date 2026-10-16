@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -793,6 +794,20 @@ func CodexSessionUUIDFromFilename(name string) string {
 		return ""
 	}
 	return extractUUIDFromRollout(name)
+}
+
+// CodexSessionUUIDFromPath is CodexSessionUUIDFromFilename for a stored session
+// path. A foreign raw-archive session stores "archive://<root>/<escaped key>",
+// so the file name sits inside the escaped last segment.
+func CodexSessionUUIDFromPath(path string) string {
+	if rest, ok := strings.CutPrefix(path, "archive://"); ok {
+		if _, after, found := strings.CutLast(rest, "/"); found {
+			if unescaped, err := url.PathUnescape(after); err == nil {
+				path = unescaped
+			}
+		}
+	}
+	return CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
 }
 
 // CodexThreadIDFromSessionKey returns the thread UUID of a revert page key

@@ -143,6 +143,31 @@ func (s *Sync) pushVectors(
 		log.Printf("vector push: no changed sessions; deferring reconciliation to the next generation-wide push")
 		return res, nil
 	}
+	// A source that builds embeddings on demand prepares only after the
+	// replica proves it can store and register its generation, so a push
+	// that would skip vectors does no build work.
+	baseSchemaReady := false
+	if preparer, ok := s.vectorSource.(storage.VectorExportPreparer); ok {
+		if skipped, err := s.prepareVectorBaseSchema(ctx, &res); err != nil || skipped {
+			return res, err
+		}
+		baseSchemaReady = true
+		planned, building, err := preparer.PlannedGeneration(ctx)
+		if err != nil {
+			return res, fmt.Errorf("planning local vector generation: %w", err)
+		}
+		if building {
+			if _, err := s.registerVectorGeneration(ctx, planned); err != nil {
+				if s.skipVectorsOnPrivilegeError(err, &res) {
+					return res, nil
+				}
+				return res, err
+			}
+		}
+		if err := preparer.PrepareExport(ctx); err != nil {
+			return res, fmt.Errorf("preparing local vector generation: %w", err)
+		}
+	}
 	export, hasGen, err := s.vectorSource.BeginExport(ctx, scope)
 	if errors.Is(err, storage.ErrVectorSourceNotReady) {
 		res.Skipped, res.SkippedReason = true, err.Error()
@@ -165,16 +190,10 @@ func (s *Sync) pushVectors(
 		}
 	}()
 	gen := export.Generation()
-	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
-	if err != nil {
-		if s.skipVectorsOnPrivilegeError(err, &res) {
-			return res, nil
+	if !baseSchemaReady {
+		if skipped, err := s.prepareVectorBaseSchema(ctx, &res); err != nil || skipped {
+			return res, err
 		}
-		return res, err
-	}
-	if unavailable != "" {
-		res.Skipped, res.SkippedReason = true, unavailable
-		return res, nil
 	}
 	witnessKey, err := s.vectorGenerationWitnessKey(ctx)
 	if err != nil {
@@ -455,6 +474,26 @@ SELECT EXISTS (
 // pgvector, instead of failing a push whose session phase succeeded.
 // Privilege errors AFTER setup (mid-push writes) never reach this and still
 // fail the push loudly.
+// prepareVectorBaseSchema installs pgvector and the base vector tables. It
+// reports true when vectors are unavailable on this server or to this role,
+// with res marked skipped.
+func (s *Sync) prepareVectorBaseSchema(
+	ctx context.Context, res *storage.VectorPushResult,
+) (bool, error) {
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
+	if err != nil {
+		if s.skipVectorsOnPrivilegeError(err, res) {
+			return true, nil
+		}
+		return false, err
+	}
+	if unavailable != "" {
+		res.Skipped, res.SkippedReason = true, unavailable
+		return true, nil
+	}
+	return false, nil
+}
+
 func (s *Sync) skipVectorsOnPrivilegeError(err error, res *storage.VectorPushResult) bool {
 	if !isInsufficientPrivilege(err) {
 		return false
@@ -481,9 +520,10 @@ func (s *Sync) skipVectorsOnPrivilegeError(err error, res *storage.VectorPushRes
 // Failed sessions are excluded from eviction the same way: the local hash map
 // only lists sessions with embedded docs, so a failed session whose docs all
 // vanished locally would otherwise be evicted — vector state running ahead of
-// the sessions/messages rows its session-phase push failed to write. full
-// re-sends
-// unchanged sessions too, while still honoring out-of-scope exclusion,
+// the sessions/messages rows its session-phase push failed to write. full,
+// or a session's entry in s.fullVectorSessions, re-sends unchanged sessions
+// too, except those the running full push already pushed before an
+// interruption, while still honoring out-of-scope exclusion,
 // ownership conflicts, and failed-session deferral. onProgress, when non-nil,
 // receives a Phase "vectors" report after every pushed session and every
 // vectorProgressStride examined ones, so long delta scans stay visible
@@ -536,12 +576,14 @@ func (s *Sync) applyVectorDeltas(
 			res.Conflicts++
 			continue
 		}
-		if !full && hasState && prev.docAggHash == agg {
+		_, repair := s.fullVectorSessions[sessionID]
+		if !repair && hasState && prev.docAggHash == agg &&
+			(!full || s.fullRun.vectorDone(gen.id, sessionID, agg)) {
 			res.SessionsUnchanged++
 			continue
 		}
 		if _, failed := failedSessions[sessionID]; failed {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 			continue
 		}
 		outcome, err := s.pushVectorSession(ctx, scope, export, sessionID, agg)
@@ -552,13 +594,16 @@ func (s *Sync) applyVectorDeltas(
 			res.Conflicts++
 		}
 		if outcome.deferred {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 		}
 		if outcome.pushed {
 			res.SessionsPushed++
 			res.DocsPushed += outcome.docs
 			res.ChunksPushed += outcome.chunks
 			res.DocsDeleted += outcome.deleted
+			if err := s.fullRun.recordVector(ctx, gen.id, sessionID, agg); err != nil {
+				return err
+			}
 			report()
 		} else if examined%vectorProgressStride == 0 {
 			report()
@@ -575,7 +620,7 @@ func (s *Sync) applyVectorDeltas(
 			continue
 		}
 		if _, failed := failedSessions[sessionID]; failed {
-			res.SessionsDeferred++
+			res.DeferSession(sessionID)
 			continue
 		}
 		switch {
@@ -765,6 +810,50 @@ func vectorOutOfScopeQuery(
 		[]any{ids, excludeProjects}
 }
 
+// publishGenerationRecipe records gen's recipe for adoption by other hosts.
+// It runs only on generation-wide pushes. A writer that may not add the
+// params column or update the row keeps pushing vectors without publishing.
+func (s *Sync) publishGenerationRecipe(
+	ctx context.Context, gen storage.VectorGenerationInfo,
+) error {
+	if gen.Params == nil {
+		return nil
+	}
+	err := ensureVectorRecipeColumn(ctx, s.pg)
+	if err == nil {
+		err = publishVectorRecipe(ctx, s.pg, gen.Fingerprint, gen.Params)
+	}
+	if !isInsufficientPrivilege(err) {
+		return err
+	}
+	if !s.recipePrivilegeLogged {
+		s.recipePrivilegeLogged = true
+		log.Printf("vector push: cannot publish the embedding recipe "+
+			"(insufficient privilege); pushing vectors without it: %v", err)
+	}
+	return nil
+}
+
+// registerVectorGeneration registers gen, publishes its recipe, and creates
+// its chunk table, returning the generation id.
+func (s *Sync) registerVectorGeneration(
+	ctx context.Context, gen storage.VectorGenerationInfo,
+) (int64, error) {
+	genID, err := ensureVectorGeneration(
+		ctx, s.pg, gen.Fingerprint, gen.Model, gen.Dimension,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.publishGenerationRecipe(ctx, gen); err != nil {
+		return 0, err
+	}
+	if err := ensureVectorChunkTable(ctx, s.pg, genID, gen.Dimension); err != nil {
+		return 0, err
+	}
+	return genID, nil
+}
+
 // resolveVectorGeneration registers the generation, creates its chunk table,
 // and reads whether this machine has already completed a generation-wide push
 // against it. Its id is the generation
@@ -776,13 +865,8 @@ func vectorOutOfScopeQuery(
 func (s *Sync) resolveVectorGeneration(
 	ctx context.Context, gen storage.VectorGenerationInfo, witnessKey string,
 ) (vectorGeneration, error) {
-	genID, err := ensureVectorGeneration(
-		ctx, s.pg, gen.Fingerprint, gen.Model, gen.Dimension,
-	)
+	genID, err := s.registerVectorGeneration(ctx, gen)
 	if err != nil {
-		return vectorGeneration{}, err
-	}
-	if err := ensureVectorChunkTable(ctx, s.pg, genID, gen.Dimension); err != nil {
 		return vectorGeneration{}, err
 	}
 	extSchema, err := vectorExtensionSchema(ctx, s.pg)

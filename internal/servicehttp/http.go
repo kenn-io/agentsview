@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -93,8 +94,9 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly   bool `json:"read_only"`
-	APIVersion int  `json:"api_version"`
+	ReadOnly           bool `json:"read_only"`
+	APIVersion         int  `json:"api_version"`
+	NonRecordingRecall bool
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -121,7 +123,7 @@ func NewHTTPBackendForServer(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
-		!capabilities.ReadOnly &&
+		(!capabilities.ReadOnly || capabilities.NonRecordingRecall) &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
 	b.apiVersion = capabilities.APIVersion
@@ -131,9 +133,14 @@ func NewHTTPBackendForServer(
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
+	browserURL := baseURL
+	if requestsign.SignsFromEnvironment(baseURL) {
+		// Signed machine listeners serve no browser UI, so omit session links.
+		browserURL = ""
+	}
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
-		browserURL:        baseURL,
+		browserURL:        browserURL,
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
@@ -152,6 +159,10 @@ func ProbeHTTPServerCapabilities(
 	if err != nil {
 		return HTTPServerCapabilities{}, err
 	}
+	return probeHTTPServerCapabilities(ctx, api)
+}
+
+func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HTTPServerCapabilities, error) {
 	response, err := api.GetAPIV1VersionWithResponse(ctx)
 	if response == nil {
 		return HTTPServerCapabilities{}, err
@@ -161,7 +172,7 @@ func ProbeHTTPServerCapabilities(
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion)}, nil
+	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
@@ -663,6 +674,9 @@ func (b *httpBackend) Watch(
 		// Closing out signals a dropped watch stream to the consumer.
 		for stream.Next() {
 			frame := stream.Event()
+			if frame.Type == "session_ready" {
+				continue
+			}
 			select {
 			case out <- service.Event{Event: frame.Type, Data: string(frame.Data)}:
 			case <-ctx.Done():
@@ -1074,6 +1088,9 @@ func (b *httpBackend) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {
 	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
+	if req.FallbackToDefault {
+		q.FallbackToDefault = new(true)
+	}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
 		if err != nil {
@@ -1129,16 +1146,16 @@ func (b *httpBackend) UsagePairwiseComparison(
 		q.Termination = new(req.Termination)
 	}
 	if req.LeftDimension != "" {
-		q.LeftDimension = req.LeftDimension
+		q.LeftDimension = new(req.LeftDimension)
 	}
 	if req.LeftValue != "" {
-		q.LeftValue = req.LeftValue
+		q.LeftValue = new(req.LeftValue)
 	}
 	if req.RightDimension != "" {
-		q.RightDimension = req.RightDimension
+		q.RightDimension = new(req.RightDimension)
 	}
 	if req.RightValue != "" {
-		q.RightValue = req.RightValue
+		q.RightValue = new(req.RightValue)
 	}
 	if req.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(req.MinUserMessages))

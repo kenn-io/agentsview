@@ -999,7 +999,7 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 // pushSession fully replaces one mirror session row and all of its
 // dependent rows (messages, tool calls/results, usage events, secret
 // findings, pins) with the current local content, then writes the
-// fingerprint used to detect future changes. rebuildMirror and
+// fingerprint used to detect future changes. buildMirror and
 // incrementalPush share this single write path: on a freshly created
 // rebuild file the pre-delete below is simply a no-op.
 func (s *Sync) pushSession(

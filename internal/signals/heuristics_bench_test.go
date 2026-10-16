@@ -2,10 +2,31 @@ package signals
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func BenchmarkAnalyzeHeuristicsNonCodingHistory(b *testing.B) {
+	input := HeuristicInput{Messages: make([]HeuristicMessage, 1000)}
+	for i := range input.Messages {
+		input.Messages[i] = HeuristicMessage{
+			Role:    "user",
+			Ordinal: i,
+			Content: fmt.Sprintf("Discussion %d. %s", i,
+				strings.Repeat("Please summarize the following discussion. ", 24)),
+		}
+	}
+	b.ReportAllocs()
+	var got HeuristicSignals
+	for b.Loop() {
+		got = AnalyzeHeuristics(input)
+	}
+	assert.False(b, got.UnstructuredStart)
+	assert.Zero(b, got.NoCodeContextCount)
+}
 
 // BenchmarkCountDuplicatePromptsLargeSession measures the quality-signal
 // workload that previously rescanned every prior prompt's complete token list.

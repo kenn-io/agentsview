@@ -7,6 +7,13 @@
   import { formatMoney, formatSignedMoney } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
 
+  const loadingPickers = $derived(
+    !usage.summary ||
+      (usage.loading.pairwise &&
+        !usage.pairwiseSelection.left.value &&
+        !usage.pairwiseSelection.right.value),
+  );
+
   function fmtCount(value: number): string {
     return String(value);
   }
@@ -249,6 +256,7 @@
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
             <Typeahead
+              disabled={loadingPickers}
               options={dimensionOptions}
               value={usage.pairwiseSelection.left.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.left.dimension)}
@@ -273,7 +281,7 @@
               placeholder={m.usage_pairwise_left_value()}
               title={m.usage_pairwise_left_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
+              disabled={loadingPickers || optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("left", {
                   value,
@@ -291,6 +299,7 @@
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
             <Typeahead
+              disabled={loadingPickers}
               options={dimensionOptions}
               value={usage.pairwiseSelection.right.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.right.dimension)}
@@ -315,7 +324,7 @@
               placeholder={m.usage_pairwise_right_value()}
               title={m.usage_pairwise_right_value()}
               emptyLabel={m.usage_pairwise_no_matching_values()}
-              disabled={optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
+              disabled={loadingPickers || optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
               onselect={(value) =>
                 usage.setPairwiseSide("right", {
                   value,
@@ -337,12 +346,12 @@
         {m.shared_retry()}
       </button>
     </Card>
+  {:else if usage.loading.pairwise && rows.length === 0}
+    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if !hasSelection}
     <Card level="default" padding="none" class="pairwise-note">
       {m.usage_pairwise_not_enough_data()}
     </Card>
-  {:else if usage.loading.pairwise && rows.length === 0}
-    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if rows.length > 0}
     <div class="table-wrap">
       <table>

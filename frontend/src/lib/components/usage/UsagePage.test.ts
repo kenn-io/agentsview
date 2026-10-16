@@ -927,6 +927,86 @@ describe("Usage attribution navigation", () => {
     usage.selectedTimeRange = null;
   });
 
+  it("keeps chart colors and the legend while clearing a model selection and after the clear refresh fails", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const full = tenModelUsageSummary();
+    let clearFails = false;
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockImplementation(async (params) => {
+      if (clearFails && !params?.model) throw new Error("clear refresh failed");
+      const response = structuredClone(full);
+      if (params?.model) {
+        response.modelTotals = response.modelTotals.filter((entry) => entry.model === params.model);
+        for (const day of response.daily) {
+          day.modelBreakdowns = day.modelBreakdowns?.filter(
+            (entry) => entry.modelName === params.model,
+          );
+        }
+      }
+      return response;
+    });
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
+      priorFrom: "2026-06-01",
+      priorTo: "2026-06-30",
+      priorTotalCost: testMoney(0),
+      deltaPct: 0,
+    });
+    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockRejectedValue(
+      new Error("pairwise not under test"),
+    );
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+    component = mount(UsagePage, { target: document.body });
+    await vi.waitFor(() => expect(usage.summary?.modelTotals).toHaveLength(10));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    await flushEffects();
+    const colors = () => ({
+      legend: [...document.querySelectorAll<HTMLElement>(".legend-item")].map((item) => [
+        item.textContent?.trim(),
+        item.querySelector<HTMLElement>(".legend-dot")!.style.background,
+      ]),
+      rows: [...document.querySelectorAll<HTMLElement>(".list-row")].map((row) => [
+        row.querySelector(".list-label")!.textContent,
+        row.querySelector<HTMLElement>(".list-dot")!.style.background,
+      ]),
+    });
+    const initial = colors();
+    expect(initial.legend).toHaveLength(10);
+    expect(initial.rows).toHaveLength(10);
+
+    [...document.querySelectorAll<HTMLElement>(".list-row")]
+      .find((row) => row.querySelector(".list-label")!.textContent === "model-zulu")!
+      .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    await vi.waitFor(() => expect(usage.summary?.modelTotals).toHaveLength(1));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    await flushEffects();
+    expect(colors()).toEqual(initial);
+
+    clearFails = true;
+    [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
+      .find((button) => button.textContent?.trim() === "Clear selection")!
+      .click();
+    await flushEffects();
+    expect(usage.selectedModel).toBe("");
+    expect(colors()).toEqual(initial);
+    await vi.waitFor(() => expect(usage.errors.summary).toBe("clear refresh failed"));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    await flushEffects();
+    expect(colors()).toEqual(initial);
+    usage.cancelInFlightReads();
+  });
+
   it.each(["button", "Escape"])("%s Back keeps the current dates and selection", async (action) => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

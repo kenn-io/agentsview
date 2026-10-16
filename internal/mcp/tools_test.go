@@ -413,14 +413,9 @@ func TestSearchSessions_Pagination(t *testing.T) {
 
 func TestListSessions_ReturnsRows(t *testing.T) {
 	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "a-1", "proj-a", func(s *db.Session) {
-		s.MessageCount = 4
-		s.UserMessageCount = 2
-	})
-	dbtest.SeedSession(t, d, "b-1", "proj-b", func(s *db.Session) {
-		s.MessageCount = 4
-		s.UserMessageCount = 2
-	})
+	dbtest.SeedSession(t, d, "a-1", "proj-a", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "b-1", "proj-b", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "single", "proj-a", dbtest.WithMessageCounts(2, 1))
 
 	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{
 		Project: "proj-a",
@@ -429,6 +424,14 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 	require.Len(t, out.Sessions, 1)
 	assert.Equal(t, "a-1", out.Sessions[0].SessionID)
 	assert.Equal(t, "proj-a", out.Sessions[0].Project)
+
+	_, out, err = ts.listSessions(t.Context(), nil, listSessionsIn{
+		Project:        "proj-a",
+		IncludeOneShot: new(true),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.Sessions, 2)
+	assert.Equal(t, 2, out.Total)
 }
 
 func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
@@ -1915,4 +1918,86 @@ func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 	_, out, err := ts.listSessions(t.Context(), nil, in)
 	require.NoError(t, err)
 	assert.Empty(t, out.Sessions)
+}
+
+func TestListSessionsAnnotationsPreserveOneShotPresence(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, row := range []struct {
+		id    string
+		turns int
+	}{{"single", 1}, {"conversation", 2}} {
+		dbtest.SeedSession(t, d, row.id, "proj", func(s *db.Session) {
+			s.MessageCount, s.UserMessageCount = 4, row.turns
+			s.PRLinks = []db.PRLink{{
+				URL: "https://github.com/example/project/pull/7", Host: "github.com",
+				Repository: "example/project", Number: 7,
+			}}
+		})
+		_, err := d.SetSessionLabels(t.Context(), row.id, []string{"nightly"})
+		require.NoError(t, err)
+	}
+	for _, selection := range []struct {
+		name string
+		in   listSessionsIn
+	}{
+		{"label", listSessionsIn{Labels: []string{"nightly"}}},
+		{"pr", listSessionsIn{PR: "example/project#7"}},
+	} {
+		for _, tc := range []struct {
+			name, args string
+			want       []string
+		}{
+			{"omitted", `{}`, []string{"single", "conversation"}},
+			{"false", `{"include_one_shot":false}`, []string{"conversation"}},
+			{"true", `{"include_one_shot":true}`, []string{"single", "conversation"}},
+		} {
+			t.Run(selection.name+"/"+tc.name, func(t *testing.T) {
+				in := selection.in
+				require.NoError(t, json.Unmarshal([]byte(tc.args), &in))
+				_, out, err := ts.listSessions(t.Context(), nil, in)
+				require.NoError(t, err)
+				ids := make([]string, 0, len(out.Sessions))
+				for _, session := range out.Sessions {
+					ids = append(ids, session.SessionID)
+				}
+				assert.ElementsMatch(t, tc.want, ids)
+			})
+		}
+	}
+}
+
+func TestListSessionsOneShotHTTPPresence(t *testing.T) {
+	for _, selection := range []struct {
+		name string
+		in   listSessionsIn
+	}{
+		{"label", listSessionsIn{Labels: []string{"nightly"}}},
+		{"pr", listSessionsIn{PR: "example/project#7"}},
+	} {
+		for _, tc := range []struct {
+			name, args, want string
+		}{
+			{"omitted", `{}`, ""},
+			{"false", `{"include_one_shot":false}`, "false"},
+			{"true", `{"include_one_shot":true}`, "true"},
+		} {
+			t.Run(selection.name+"/"+tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, "/api/v1/sessions", r.URL.Path)
+					assert.Equal(t, tc.want, r.URL.Query().Get("include_one_shot"))
+					assert.Equal(t, selection.in.Labels, r.URL.Query()["label"])
+					assert.Equal(t, selection.in.PR, r.URL.Query().Get("pr"))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{"sessions":[],"total":0}`)
+				}))
+				t.Cleanup(srv.Close)
+				ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "",
+					servicehttp.HTTPServerCapabilities{APIVersion: service.SessionAnnotationsAPIVersion})}
+				in := selection.in
+				require.NoError(t, json.Unmarshal([]byte(tc.args), &in))
+				_, _, err := ts.listSessions(t.Context(), nil, in)
+				require.NoError(t, err)
+			})
+		}
+	}
 }

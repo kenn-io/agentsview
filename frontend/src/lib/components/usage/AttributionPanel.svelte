@@ -4,6 +4,7 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import { tick } from "svelte";
   import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
@@ -70,8 +71,17 @@
     if (!zoomedProject || !panel.contains(document.activeElement) || target.closest("input, textarea, select, [contenteditable]")) return;
     if (event.key === "Escape" || event.key === "Backspace") {
       event.preventDefault();
-      usage.setOpenProject(null);
+      void closeProject();
     }
+  }
+
+  // Leaving zoom unmounts the Back button, so hand focus to the project that was open.
+  async function closeProject() {
+    const key = zoomedProject?.key;
+    usage.setOpenProject(null);
+    await tick();
+    const row = [...panel.querySelectorAll<HTMLElement>("[data-row-id]")].find((el) => el.dataset.rowId === key);
+    (row ?? panel).focus();
   }
 
   const rowItems = $derived.by(() => {
@@ -200,7 +210,7 @@
 <section class="attribution-panel" aria-label={isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()} tabindex="-1" bind:this={panel}>
   <div class="panel-header">
     {#if zoomedProject}
-      <Button surface="soft" label={`← ${m.data_workspace_all_projects()}`} onclick={() => usage.setOpenProject(null)} />
+      <Button surface="soft" label={`← ${m.usage_all_projects()}`} onclick={closeProject} />
       <h3 class="chart-title">{zoomedProject.label}</h3>
     {:else}
       <h3 class="chart-title">
@@ -211,10 +221,10 @@
     {/if}
     <div class="toggles">
       <div class="selection-actions" class:inactive={!hasSelection}>
-        <Button size="sm" surface="soft" label={m.sidebar_clear_selection()} onclick={() => usage.clearSelection(groupBy)} />
+        <Button size="sm" surface="soft" label={m.usage_clear_selection()} onclick={() => usage.clearSelection(groupBy)} />
         {#if groupBy === "project"}
           <span class:inactive={!usage.selectedProjectKey || !!zoomedProject || !rows.some((row) => row.id === usage.selectedProjectKey)}>
-            <Button size="sm" surface="soft" label={m.breadcrumb_open()} title={usage.focusLabel} onclick={() => handleOpen(usage.selectedProjectKey)} />
+            <Button size="sm" surface="soft" label={m.usage_open_project()} title={usage.focusLabel} onclick={() => handleOpen(usage.selectedProjectKey)} />
           </span>
         {/if}
       </div>
@@ -262,7 +272,7 @@
   {#if zoomedProject && usage.errors.zoom}
     <div class="empty">{usage.errors.zoom}</div>
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
-    <div class="empty">{m.subagent_inline_loading()}</div>
+    <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
@@ -283,6 +293,7 @@
             <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
             <div
               class="rail-row"
+              data-row-id={row.id}
               class:selected={usage.isSelected(groupBy, row.id)}
               class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
               role={zoomedProject ? undefined : "button"}
@@ -314,6 +325,7 @@
           <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
           <div
             class="list-row"
+            data-row-id={row.id}
             class:selected={usage.isSelected(groupBy, row.id)}
             class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
             role={zoomedProject ? undefined : "button"}

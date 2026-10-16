@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -136,29 +137,6 @@ func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, erro
 		resolved = append(resolved, label)
 	}
 	return resolved, nil
-}
-
-func ResolveUsagePairwiseProjectKeys(
-	ctx context.Context, store db.Store, req UsagePairwiseComparisonRequest,
-) (UsagePairwiseComparisonRequest, error) {
-	resolvedBase, err := ResolveUsageProjectKeys(ctx, store, req.UsageRequest)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	req.UsageRequest = resolvedBase
-	req.LeftProjectLabels, err = resolvePairwiseProjectLabels(
-		ctx, store, req.LeftDimension, req.LeftValue,
-	)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	req.RightProjectLabels, err = resolvePairwiseProjectLabels(
-		ctx, store, req.RightDimension, req.RightValue,
-	)
-	if err != nil {
-		return UsagePairwiseComparisonRequest{}, err
-	}
-	return req, nil
 }
 
 func resolvePairwiseProjectLabels(
@@ -362,6 +340,8 @@ type UsageSummaryResult struct {
 // UsagePairwiseComparisonSide holds aggregate and derived
 // metrics for one side of a pairwise comparison.
 type UsagePairwiseComparisonSide struct {
+	Dimension           string       `json:"dimension,omitempty"`
+	Value               string       `json:"value,omitempty"`
 	TotalCost           money.Money  `json:"totalCost"`
 	InputTokens         int          `json:"inputTokens"`
 	OutputTokens        int          `json:"outputTokens"`
@@ -408,14 +388,49 @@ type UsagePairwiseComparisonResponse struct {
 // extra include filter per side.
 type UsagePairwiseComparisonRequest struct {
 	UsageRequest
-	LeftDimension  string `json:"left_dimension,omitempty"`
-	LeftValue      string `json:"left_value,omitempty"`
-	RightDimension string `json:"right_dimension,omitempty"`
-	RightValue     string `json:"right_value,omitempty"`
+	LeftDimension     string `json:"left_dimension,omitempty"`
+	LeftValue         string `json:"left_value,omitempty"`
+	RightDimension    string `json:"right_dimension,omitempty"`
+	RightValue        string `json:"right_value,omitempty"`
+	FallbackToDefault bool   `json:"fallback_to_default,omitempty"`
 	// Project label slices are populated only after resolving opaque keys and
 	// preserve exact labels that cannot round-trip through CSV strings.
 	LeftProjectLabels  []string `json:"-"`
 	RightProjectLabels []string `json:"-"`
+}
+
+func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
+	switch dimension {
+	case "model":
+		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return total.Model == value })
+	case "project":
+		return slices.ContainsFunc(summary.ProjectTotals, func(total ProjectTotal) bool { return total.ProjectKey == value })
+	}
+	return false
+}
+
+func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
+	var models, projects []string
+	for _, total := range summary.ModelTotals {
+		if total.Model != "" {
+			models = append(models, total.Model)
+		}
+	}
+	for _, total := range summary.ProjectTotals {
+		if total.ProjectKey != "" {
+			projects = append(projects, total.ProjectKey)
+		}
+	}
+	switch {
+	case len(models) >= 2:
+		return "model", models[0], "model", models[1]
+	case len(projects) >= 2:
+		return "project", projects[0], "project", projects[1]
+	case len(models) > 0 && len(projects) > 0:
+		return "model", models[0], "project", projects[0]
+	default:
+		return "", "", "", ""
+	}
 }
 
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage
@@ -613,20 +628,9 @@ func BuildUsagePairwiseComparisonResult(
 	}, nil
 }
 
-func BuildUsagePairwiseFilters(
-	req UsagePairwiseComparisonRequest,
-) (
-	db.UsageFilter,
-	bool,
-	db.UsageFilter,
-	bool,
-	error,
-) {
-	base, err := BuildUsageFilter(req.UsageRequest)
-	if err != nil {
-		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
-	}
-
+func buildUsagePairwiseFilters(
+	req UsagePairwiseComparisonRequest, base db.UsageFilter,
+) (db.UsageFilter, bool, db.UsageFilter, bool, error) {
 	left, err := applyPairwiseDimension(
 		base,
 		req.LeftDimension,
@@ -705,38 +709,41 @@ type pairwiseFilterResult struct {
 	empty  bool
 }
 
+func validatePairwiseDimension(dimension, value, label string) error {
+	if value == "" {
+		return &UsageInputError{Msg: label + "_value is required"}
+	}
+	switch dimension {
+	case "model", "project":
+		return nil
+	case "":
+		return &UsageInputError{Msg: label + "_dimension is required"}
+	default:
+		return &UsageInputError{Msg: label + "_dimension must be model or project"}
+	}
+}
+
 func applyPairwiseDimension(
 	base db.UsageFilter, dimension, value string, projectLabels []string,
 	label string,
 ) (pairwiseFilterResult, error) {
-	filter := base
-	if value == "" {
-		return pairwiseFilterResult{},
-			&UsageInputError{Msg: label + "_value is required"}
+	if err := validatePairwiseDimension(dimension, value, label); err != nil {
+		return pairwiseFilterResult{}, err
 	}
+	filter := base
 	var ok bool
-	switch dimension {
-	case "model":
+	if dimension == "model" {
 		filter.Model, ok = intersectCSV(filter.Model, value)
 		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
-	case "project":
-		if projectLabels == nil {
-			projectLabels = splitCSVTokens(value)
-		}
-		filter.ProjectLabels, ok = intersectValues(
-			filter.ProjectFilterLabels(), projectLabels,
-		)
-		filter.Project = joinCSVTokens(filter.ProjectLabels)
-		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
-	case "":
-		return pairwiseFilterResult{},
-			&UsageInputError{Msg: label + "_dimension is required"}
-	default:
-		return pairwiseFilterResult{},
-			&UsageInputError{
-				Msg: label + "_dimension must be model or project",
-			}
 	}
+	if projectLabels == nil {
+		projectLabels = splitCSVTokens(value)
+	}
+	filter.ProjectLabels, ok = intersectValues(
+		filter.ProjectFilterLabels(), projectLabels,
+	)
+	filter.Project = joinCSVTokens(filter.ProjectLabels)
+	return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 }
 
 func safePerTurnDenominator(count int) bool {

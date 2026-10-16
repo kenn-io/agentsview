@@ -419,23 +419,14 @@ func (c *usageRollupCoordinator) ensureAttempt(
 func readCurrentUsageFillResults(
 	ctx context.Context, conn *sql.Conn, versions []usageSourceVersion,
 ) (map[string]usageFillResult, error) {
-	results := make(map[string]usageFillResult, len(versions))
+	results, err := readUsageCachedSessions(ctx, conn, usageSourceVersionIDs(versions))
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		var result usageFillResult
-		err := conn.QueryRowContext(ctx, `SELECT source_sync_marker,
-			source_transcript_rev, usage_event_fingerprint, install_revision
-			FROM usage_cached_sessions WHERE session_id = ?`, version.SessionID).Scan(
-			&result.source.SyncMarker, &result.source.TranscriptRevision,
-			&result.source.UsageEventFingerprint, &result.InstallRevision)
-		if errors.Is(err, sql.ErrNoRows) {
+		if _, ok := results[version.SessionID]; !ok {
 			results[version.SessionID] = usageFillResult{Deleted: true}
-			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		result.source.SessionID = version.SessionID
-		results[version.SessionID] = result
 	}
 	return results, nil
 }
@@ -561,26 +552,26 @@ func installUsageRollupBuilds(
 			"%w: dedup identities gained members during rollup build",
 			errUsageCacheSourceChanged)
 	}
+	sessionIDs := make([]string, 0, len(builds))
+	for _, build := range builds {
+		if build.SessionID != usageRollupCursorSessionID {
+			sessionIDs = append(sessionIDs, build.SessionID)
+		}
+	}
+	cachedSessions, err := readUsageCachedSessions(ctx, conn, sessionIDs)
+	if err != nil {
+		return err
+	}
 	for _, build := range builds {
 		if build.SessionID == usageRollupCursorSessionID {
 			continue
 		}
-		var current usageFillResult
-		err := conn.QueryRowContext(ctx, `SELECT source_sync_marker,
-			source_transcript_rev, usage_event_fingerprint, install_revision
-			FROM usage_cached_sessions WHERE session_id = ?`, build.SessionID).Scan(
-			&current.source.SyncMarker, &current.source.TranscriptRevision,
-			&current.source.UsageEventFingerprint, &current.InstallRevision)
-		current.source.SessionID = build.SessionID
-		if errors.Is(err, sql.ErrNoRows) || err == nil &&
-			(current.InstallRevision != build.FactRevision ||
-				!current.source.Equal(build.Source)) {
+		current, ok := cachedSessions[build.SessionID]
+		if !ok || current.InstallRevision != build.FactRevision ||
+			!current.source.Equal(build.Source) {
 			return fmt.Errorf(
 				"%w: usage facts changed during rollup build",
 				errUsageCacheSourceChanged)
-		}
-		if err != nil {
-			return err
 		}
 	}
 	// Background rebuilds install here too, so only a new zone takes the

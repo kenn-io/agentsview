@@ -33,6 +33,8 @@ describe("Treemap", () => {
     expect(tile?.hasAttribute("role")).toBe(false);
     expect(tile?.hasAttribute("tabindex")).toBe(false);
     expect(tile?.hasAttribute("aria-pressed")).toBe(false);
+    // A role-less <g> takes its name from <title>; an aria-label there is not exposed reliably.
+    expect(tile?.hasAttribute("aria-label")).toBe(false);
     const clipPath = tile?.getAttribute("clip-path");
     expect(typeof clipPath).toBe("string");
     if (typeof clipPath !== "string") {

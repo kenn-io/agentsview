@@ -28,6 +28,14 @@ if ! command -v sqlite3 &> /dev/null; then
   exit 1
 fi
 
+# Skip ~/.sqliterc. This script parses query output, and a personal rc file
+# with settings such as `.mode box` or `.headers on` breaks that parsing. The
+# CLI finds the rc file through the account's home directory, so overriding
+# HOME does not avoid it.
+sqlite() {
+  sqlite3 -init /dev/null "$@"
+}
+
 if [ ! -d "$AGENTSVIEW_SRC" ]; then
   echo "Error: agentsview source not found at $AGENTSVIEW_SRC"
   echo "Set AGENTSVIEW_SRC to the correct path"
@@ -89,7 +97,7 @@ bash "$ROOT/screenshots/extract-db.sh" \
   "$SOURCE_DB" "$CONTEXT/test-sessions.db"
 
 # Keep relative dates stable when colleagues reuse the same curated archive.
-SCREENSHOT_NOW=$(sqlite3 "$CONTEXT/test-sessions.db" \
+SCREENSHOT_NOW=$(sqlite "$CONTEXT/test-sessions.db" \
   "SELECT strftime('%Y-%m-%dT12:00:00Z',
     max(datetime(COALESCE(NULLIF(started_at, ''), created_at))), '+1 day')
     FROM sessions")
@@ -102,7 +110,7 @@ fi
 # and never recent, so the thinking-blocks screenshot navigates straight to
 # this id rather than hunting through thousands of list rows. Pick the
 # session with the most thinking messages for a representative capture.
-THINKING_SESSION_ID=$(sqlite3 "$CONTEXT/test-sessions.db" \
+THINKING_SESSION_ID=$(sqlite "$CONTEXT/test-sessions.db" \
   "SELECT session_id FROM messages
    WHERE COALESCE(thinking_text, '') != ''
    GROUP BY session_id
@@ -118,7 +126,7 @@ fi
 # raw/formatted output screenshot can navigate through the virtualized transcript
 # without depending on whichever messages are initially mounted. Prefer output
 # with Markdown syntax because it makes the formatted state visually distinct.
-TOOL_OUTPUT_TARGET=$(sqlite3 -separator $'\t' "$CONTEXT/test-sessions.db" \
+TOOL_OUTPUT_TARGET=$(sqlite -separator $'\t' "$CONTEXT/test-sessions.db" \
   "SELECT tc.session_id, m.ordinal
    FROM tool_calls tc
    JOIN messages m ON m.id = tc.message_id
@@ -152,7 +160,7 @@ fi
 # Resolve a session with a fenced Markdown code block. Recent sidebar rows do
 # not reliably contain one, so the code-block copy screenshot navigates to a
 # known match in the privacy-filtered fixture.
-CODE_BLOCK_SESSION_ID=$(sqlite3 "$CONTEXT/test-sessions.db" \
+CODE_BLOCK_SESSION_ID=$(sqlite "$CONTEXT/test-sessions.db" \
   "SELECT m.session_id
    FROM messages m
    JOIN sessions s ON s.id = m.session_id

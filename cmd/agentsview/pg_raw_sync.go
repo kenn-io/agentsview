@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/artifact"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -56,7 +55,7 @@ func preparePGRawSyncServices(
 		dataDir:  dataDir,
 		metadata: metadata,
 		limits:   rawsync.DefaultManifestLimits(),
-		version:  fmt.Sprintf("parser-data-%d", db.CurrentDataVersion()),
+		version:  rawProcessingVersion(),
 	}
 	uploadOption, closeUploads, err := preparePGRawSyncUploads(
 		dataDir, database, custody,

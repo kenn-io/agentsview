@@ -206,16 +206,12 @@ func writeDuckDBPushPlan(
 }
 
 // writeDuckDBPushDiagnostics prints how the push selected sessions. A
-// rebuild (result.Diagnostics.Full) has no incremental candidate/skip
-// counters to report — pushEverything never populates them — so it gets its
-// own branch that always prints, including the reason a rebuild ran instead
-// of the requested incremental push (see rebuildReason in
-// internal/duckdb/probe.go). Earlier code only printed anything when
-// Diagnostics.Cutoff was non-empty, which incremental pushes always set but
-// rebuilds never do; that made every rebuild-instead-of-incremental case
-// (missing file, schema drift, a live serve holding the mirror locked, ...)
-// silently print nothing here, leaving only the generic "Pushed N
-// sessions..." summary with no indication a full rebuild had just run.
+// rebuild (result.Diagnostics.Full) has no incremental candidate counters,
+// so it gets its own branch that always prints, including the reason a
+// rebuild ran instead of the requested incremental push (see rebuildReason
+// in internal/duckdb/probe.go) and the sessions a resumed rebuild kept from
+// the unfinished one. Rebuilds set no Diagnostics.Cutoff, so keying output
+// on it would print nothing for them.
 func writeDuckDBPushDiagnostics(w io.Writer, result storage.MirrorPushResult) {
 	if result.Diagnostics.Deferred {
 		reason := result.Diagnostics.DeferredReason
@@ -237,6 +233,14 @@ func writeDuckDBPushDiagnostics(w io.Writer, result storage.MirrorPushResult) {
 			formatDuckDBPushSessionCounts(result.Diagnostics.PushedSessions),
 			result.MessagesPushed,
 		)
+		// A fresh rebuild file is empty, so any skipped session is one the
+		// unfinished rebuild already wrote.
+		if kept := result.Diagnostics.SkippedUnchangedSessions; kept.Total > 0 {
+			fmt.Fprintf(
+				w, "DuckDB push kept: sessions %s already written by the unfinished rebuild\n",
+				formatDuckDBPushSessionCounts(kept),
+			)
+		}
 		return
 	}
 	if result.Diagnostics.Cutoff == "" {

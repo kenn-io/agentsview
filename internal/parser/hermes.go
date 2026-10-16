@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -28,7 +30,16 @@ const hermesIDPrefix = string(AgentHermes) + ":"
 
 var hermesCronSessionID = regexp.MustCompile(`^cron_([A-Za-z0-9][A-Za-z0-9._-]*)_\d{8}_\d{6}$`)
 
-const hermesCronParentQuery = `SELECT COALESCE(parent_session_id, '') FROM sessions WHERE id = ?`
+// hermesCronAncestorsQuery returns every ancestor row reachable from one
+// session ID. UNION drops a repeated (id, parent) row, which ends the walk
+// on a parent cycle.
+const hermesCronAncestorsQuery = `WITH RECURSIVE chain(id, parent) AS (
+	SELECT id, COALESCE(parent_session_id, '') FROM sessions WHERE id = ?
+	UNION
+	SELECT s.id, COALESCE(s.parent_session_id, '')
+	FROM chain JOIN sessions s ON s.id = chain.parent
+)
+SELECT id, parent FROM chain`
 
 type hermesStateSession struct {
 	id               string
@@ -178,8 +189,19 @@ func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSes
 	return parseHermesJSONLSession(path, project, machine)
 }
 
+// hermesTranscriptParses counts full decodes of a Hermes transcript file
+// (JSON or JSONL), the expensive step fingerprinting must not pay for a
+// sibling it hasn't confirmed changed. HermesTranscriptParses exposes it so
+// tests can assert that count stays flat as sibling count grows.
+var hermesTranscriptParses atomic.Int64
+
+// HermesTranscriptParses returns how many Hermes transcript files have
+// been fully decoded (JSON or JSONL) since process start.
+func HermesTranscriptParses() int64 { return hermesTranscriptParses.Load() }
+
 // parseHermesJSONLSession parses a Hermes Agent JSONL session file.
 func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+	hermesTranscriptParses.Add(1)
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -388,6 +410,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 
 // parseHermesJSONSession parses a Hermes CLI-format JSON session file.
 func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+	hermesTranscriptParses.Add(1)
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -577,6 +600,54 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	return sess, messages, nil
 }
 
+// HermesRootResolvesToStateDB reports whether a configured Hermes/Augure
+// Desktop root resolves to a real state.db home, the same way discovery
+// does: the root itself can be the state.db file, a directory containing
+// it, a not-yet-created "sessions" directory whose sibling state.db
+// already exists, or a profiles container (.hermes/profiles) that expands
+// to at least one child home resolving to a state.db. A flat os.Stat on
+// the configured root alone misses all but the simplest of these cases.
+func HermesRootResolvesToStateDB(root string) bool {
+	if _, _, ok := hermesStatePaths(root); ok {
+		return true
+	}
+	if !isHermesProfilesContainer(root) {
+		return false
+	}
+	profileRoots, _ := hermesProfileArchiveRoots(root)
+	for _, profileRoot := range profileRoots {
+		if _, _, ok := hermesStatePaths(profileRoot); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// HermesStoredPathIsAggregateArchive reports whether path is the bare
+// state.db archive path rather than a per-session "state.db#<id>" member
+// path or a standalone transcript file. A session synced before the
+// per-session rework has its stored FilePath stamped as this bare path,
+// since the old whole-archive write stamped it for every session alike.
+// A caller resolving one specific session must not treat that stamp as a
+// match for the session it's asking about.
+func HermesStoredPathIsAggregateArchive(path string) bool {
+	if path == "" {
+		return false
+	}
+	// ParseVirtualSourcePathForBase, not the bare ParseVirtualSourcePath:
+	// a literal "#" can appear in a real directory name ancestor to
+	// state.db (e.g. a profile directory named "profile#one"), which the
+	// bare split would misread as a virtual member suffix even though
+	// the container part's basename is never "state.db". Requiring the
+	// container to actually end in "state.db" is what tells apart a
+	// genuine "state.db#<id>" member from an unrelated "#" elsewhere in
+	// the path.
+	if _, _, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
+		return false
+	}
+	return filepath.Base(path) == "state.db"
+}
+
 func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
 	if root == "" {
 		return "", "", false
@@ -742,35 +813,66 @@ func readHermesStateMessages(ctx context.Context,
 	return out, rows.Err()
 }
 
+const hermesStateSessionQuery = `
+	SELECT id, source, COALESCE(model, ''),
+		COALESCE(parent_session_id, ''), started_at,
+		COALESCE(ended_at, 0), COALESCE(message_count, 0),
+		COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
+		COALESCE(cache_read_tokens, 0),
+		COALESCE(cache_write_tokens, 0),
+		COALESCE(reasoning_tokens, 0),
+		estimated_cost_usd, actual_cost_usd,
+		COALESCE(cost_status, ''), COALESCE(cost_source, ''),
+		COALESCE(title, ''), COALESCE(api_call_count, 0)
+	FROM sessions
+	WHERE id = ?`
+
+const hermesStateMessagesQuery = `
+	SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
+		COALESCE(tool_calls, ''), timestamp,
+		COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
+		COALESCE(reasoning_content, ''),
+		COALESCE(reasoning_details, ''),
+		COALESCE(codex_reasoning_items, ''),
+		COALESCE(codex_message_items, '')
+	FROM messages
+	WHERE session_id = ?
+	ORDER BY timestamp ASC, id ASC`
+
+// hermesStateMessageTimestampsQuery selects the one hermesStateMessagesQuery
+// column that can fail to scan. Every other column there is COALESCEd text,
+// which always scans into a string. Keep the two queries in step.
+const hermesStateMessageTimestampsQuery = `
+	SELECT timestamp FROM messages WHERE session_id = ?`
+
+// checkHermesStateSchema prepares the per-session read queries, so a
+// database whose tables or columns cannot satisfy them fails before any of
+// its sessions are treated as readable.
+func checkHermesStateSchema(ctx context.Context, conn *sql.DB) error {
+	for _, query := range []string{hermesStateSessionQuery, hermesStateMessagesQuery} {
+		if err := prepareHermesStateQuery(ctx, conn, query); err != nil {
+			return fmt.Errorf("check hermes state schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func prepareHermesStateQuery(ctx context.Context, conn *sql.DB, query string) error {
+	stmt, err := conn.PrepareContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	return nil
+}
+
 func readHermesStateSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) (hermesStateSession, bool, error) {
-	row := conn.QueryRowContext(ctx, `
-		SELECT id, source, COALESCE(model, ''),
-			COALESCE(parent_session_id, ''), started_at,
-			COALESCE(ended_at, 0), COALESCE(message_count, 0),
-			COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
-			COALESCE(cache_read_tokens, 0),
-			COALESCE(cache_write_tokens, 0),
-			COALESCE(reasoning_tokens, 0),
-			estimated_cost_usd, actual_cost_usd,
-			COALESCE(cost_status, ''), COALESCE(cost_source, ''),
-			COALESCE(title, ''), COALESCE(api_call_count, 0)
-		FROM sessions
-		WHERE id = ?`,
-		rawSessionID,
+	ss, err := scanHermesStateSession(
+		conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID),
 	)
-	var ss hermesStateSession
-	var started, ended float64
-	err := row.Scan(
-		&ss.id, &ss.source, &ss.model,
-		&ss.parentSessionID, &started, &ended,
-		&ss.messageCount, &ss.inputTokens, &ss.outputTokens,
-		&ss.cacheReadTokens, &ss.cacheWriteTokens,
-		&ss.reasoningTokens, &ss.estimatedCost, &ss.actualCost,
-		&ss.costStatus, &ss.costSource, &ss.title, &ss.apiCallCount,
-	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return hermesStateSession{}, false, nil
 	}
 	if err != nil {
@@ -778,27 +880,34 @@ func readHermesStateSession(ctx context.Context,
 			"query hermes session %s: %w", rawSessionID, err,
 		)
 	}
+	return ss, true, nil
+}
+
+// scanHermesStateSession scans one hermesStateSessionQuery row. It accepts
+// *sql.Row and *sql.Rows so a caller that must tell a query failure from a
+// row that fails to scan can iterate the rows itself.
+func scanHermesStateSession(row interface{ Scan(...any) error }) (hermesStateSession, error) {
+	var ss hermesStateSession
+	var started, ended float64
+	if err := row.Scan(
+		&ss.id, &ss.source, &ss.model,
+		&ss.parentSessionID, &started, &ended,
+		&ss.messageCount, &ss.inputTokens, &ss.outputTokens,
+		&ss.cacheReadTokens, &ss.cacheWriteTokens,
+		&ss.reasoningTokens, &ss.estimatedCost, &ss.actualCost,
+		&ss.costStatus, &ss.costSource, &ss.title, &ss.apiCallCount,
+	); err != nil {
+		return hermesStateSession{}, err
+	}
 	ss.startedAt = hermesUnixTime(started)
 	ss.endedAt = hermesUnixTime(ended)
-	return ss, true, nil
+	return ss, nil
 }
 
 func readHermesStateMessagesForSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) ([]hermesStateMessage, error) {
-	rows, err := conn.QueryContext(ctx, `
-		SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
-			COALESCE(tool_calls, ''), timestamp,
-			COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
-			COALESCE(reasoning_content, ''),
-			COALESCE(reasoning_details, ''),
-			COALESCE(codex_reasoning_items, ''),
-			COALESCE(codex_message_items, '')
-		FROM messages
-		WHERE session_id = ?
-		ORDER BY timestamp ASC, id ASC`,
-		rawSessionID,
-	)
+	rows, err := conn.QueryContext(ctx, hermesStateMessagesQuery, rawSessionID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"query hermes messages for %s: %w", rawSessionID, err,
@@ -883,6 +992,48 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 		"",
 	)
 	return ss, messages, selectedPath, nil
+}
+
+// readHermesStateSessionFingerprintInputs reads a member's DB-side session
+// and messages, plus every transcript candidate path that exists on disk,
+// without deciding which candidate Parse would pick or decoding any of
+// their content. Fingerprinting only needs to detect whether a candidate
+// changed, not which one is the richer source -- that decision
+// (chooseHermesStateSessionSource) fully parses a candidate transcript's
+// messages just to score it, which makes fingerprinting as expensive as a
+// real parse for every sibling on every pass. Hashing every existing
+// candidate's bytes, rather than only the parsed winner's, still catches
+// any change to any candidate while skipping that decode entirely; the
+// real Parse path still makes the authoritative richer-source choice when
+// a session is actually reparsed.
+func readHermesStateSessionFingerprintInputs(ctx context.Context,
+	conn *sql.DB, stateDB, rawSessionID string,
+) (hermesStateSession, []hermesStateMessage, []string, error) {
+	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
+	}
+	if !found {
+		return hermesStateSession{}, nil, nil, fmt.Errorf(
+			"hermes session %s not found in %s: %w",
+			rawSessionID, stateDB, os.ErrNotExist,
+		)
+	}
+	messages, err := readHermesStateMessagesForSession(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
+	}
+	sessionsDir := filepath.Join(filepath.Dir(stateDB), "sessions")
+	var candidates []string
+	for _, p := range []string{
+		filepath.Join(sessionsDir, "session_"+rawSessionID+".json"),
+		filepath.Join(sessionsDir, rawSessionID+".jsonl"),
+	} {
+		if IsRegularFile(p) {
+			candidates = append(candidates, p)
+		}
+	}
+	return ss, messages, candidates, nil
 }
 
 func copyHermesTranscriptFile(w io.Writer, path string) error {
@@ -1321,6 +1472,10 @@ func firstNonEmptyHermes(values ...string) string {
 	return ""
 }
 
+func isValidHermesSessionID(id string) bool {
+	return IsValidSessionID(id) || hermesCronSessionID.MatchString(id)
+}
+
 // HermesSessionID extracts the session ID from a Hermes filename.
 // "20260403_153620_5a3e2ff1.jsonl" -> "20260403_153620_5a3e2ff1"
 func HermesSessionID(name string) string {
@@ -1328,27 +1483,6 @@ func HermesSessionID(name string) string {
 	name = strings.TrimSuffix(name, ".json")
 	name = strings.TrimPrefix(name, "session_")
 	return name
-}
-
-// discoverHermesSessions finds Hermes session sources under root. When a
-// sibling state.db exists, it prefers that archive root; otherwise it returns
-// transcript files from the sessions directory. It is the provider-owned
-// discovery body folded off the package-level entrypoint.
-func discoverHermesSessions(sessionsDir string) []DiscoveredFile {
-	if sessionsDir == "" {
-		return nil
-	}
-	if stateDB, _, ok := hermesStatePaths(sessionsDir); ok {
-		return []DiscoveredFile{{
-			Path:  stateDB,
-			Agent: AgentHermes,
-		}}
-	}
-	childSessions := filepath.Join(sessionsDir, "sessions")
-	if info, err := os.Stat(childSessions); err == nil && info.IsDir() {
-		return discoverHermesTranscriptFiles(childSessions)
-	}
-	return discoverHermesTranscriptFiles(sessionsDir)
 }
 
 func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
@@ -1404,7 +1538,7 @@ func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
 // sessionsDir. It is the provider-owned find-source body folded off the
 // package-level entrypoint.
 func findHermesSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
+	if !isValidHermesSessionID(sessionID) {
 		return ""
 	}
 	candidate := filepath.Join(sessionsDir, sessionID+".jsonl")
@@ -1548,13 +1682,45 @@ func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (stri
 	return lookupErr
 }
 
-func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, error) {
-	var parent string
-	err := conn.QueryRowContext(ctx, hermesCronParentQuery, id).Scan(&parent)
-	if err == sql.ErrNoRows {
-		err = nil
+// resolveHermesStateCronJobConn resolves a cron member's job from state.db.
+// It loads the member's whole ancestry in one query on the first lookup, so
+// the walk costs at most one query per member instead of one per hop.
+// Missing IDs resolve to an empty parent, as in the bulk parse.
+func resolveHermesStateCronJobConn(
+	ctx context.Context, conn *sql.DB, ss *hermesStateSession,
+) error {
+	var parents map[string]string
+	return resolveHermesStateCronJob(ss, func(id string) (string, error) {
+		if parents == nil {
+			var err error
+			if parents, err = hermesCronAncestors(ctx, conn, id); err != nil {
+				return "", err
+			}
+		}
+		return parents[id], nil
+	})
+}
+
+func hermesCronAncestors(
+	ctx context.Context, conn *sql.DB, id string,
+) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, hermesCronAncestorsQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("query hermes cron ancestors: %w", err)
 	}
-	return parent, err
+	defer rows.Close()
+	parents := make(map[string]string)
+	for rows.Next() {
+		var child, parent string
+		if err := rows.Scan(&child, &parent); err != nil {
+			return nil, fmt.Errorf("scan hermes cron ancestor: %w", err)
+		}
+		parents[child] = parent
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read hermes cron ancestors: %w", err)
+	}
+	return parents, nil
 }
 
 // HermesCronJobName strips the run timestamp from a recorded job title.

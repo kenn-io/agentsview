@@ -163,8 +163,14 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
-The container's entrypoint runs `agentsview serve` by default. Set `PG_SERVE=1`
-to switch to `agentsview pg serve` instead — the same image powers both modes.
+The image runs `agentsview serve` by default. Set `AGENTSVIEW_MODE=pg-serve`, or
+pass `pg serve` as the command, to read PostgreSQL instead; the older
+`PG_SERVE=1` selector still works. The image listens on `0.0.0.0` inside the
+container and requires a bearer token. Flags you add, such as `--port 9000`,
+keep those defaults. The generated token is stored in `/data/config.toml`, or
+you can supply one with `AGENTSVIEW_AUTH_TOKEN_FILE`. See
+[container deployment](/docs/configuration/#container-deployment) for every
+variable.
 
 A containerized AgentsView only sees agent sessions from directories you
 explicitly bind-mount into the container. Mount each agent's session root
@@ -183,15 +189,15 @@ session roots read-only, and publishes the UI on `127.0.0.1:8080`:
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-The example publishes the UI on loopback only. To expose it beyond the host,
-also enable bearer-token [authentication](/docs/remote-access/#authentication) and
-publish the port intentionally.
+The example publishes the UI on loopback only. The image already requires
+bearer-token [authentication](/docs/remote-access/#authentication); publish the
+port beyond the host only intentionally.
 
 For a PostgreSQL-backed deployment, point the container at your shared database:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -e PG_SERVE=1 \
+  -e AGENTSVIEW_MODE=pg-serve \
   -e AGENTSVIEW_PG_URL='postgres://user:password@host:5432/agentsview?sslmode=require' \
   ghcr.io/kenn-io/agentsview:latest
 ```

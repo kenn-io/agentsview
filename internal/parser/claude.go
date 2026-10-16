@@ -34,6 +34,13 @@ var (
 	persistedToolResultPathRe = regexp.MustCompile(`(?m)Full output saved to:\s*(.+)$`)
 )
 
+// persistedOutputUnresolvedKey marks a tool_result block, within the line
+// resolveClaudePersistedToolResultsContext rewrites, whose persistedOutputPath
+// side file genuinely failed to resolve. parseToolResult reads it to set
+// ParsedToolResult.PersistedOutputUnresolved and it never reaches ContentRaw,
+// since it sits beside "content" on the block, not inside it.
+const persistedOutputUnresolvedKey = "_persistedOutputUnresolved"
+
 const (
 	initialScanBufSize         = 64 * 1024        // 64KB
 	maxLineSize                = 64 * 1024 * 1024 // 64MB
@@ -2411,7 +2418,7 @@ func resolveClaudePersistedToolResultsContext(
 		}
 		path := persistedOutputPathFromContent(content)
 		if path == "" && (toolResultCount == 1 ||
-			isPersistedToolResultPlaceholder(content)) {
+			containsPersistedOutputTag(content)) {
 			path = persistedPath
 		}
 		if path == "" {
@@ -2429,6 +2436,15 @@ func resolveClaudePersistedToolResultsContext(
 			return "", err
 		}
 		if !ok {
+			block[persistedOutputUnresolvedKey] = jsontext.Value("true")
+			marked, err := json.Marshal(block, json.Deterministic(true))
+			if err != nil {
+				// Marking failed; leave this block as the parser's own
+				// original text rather than fail the whole line.
+				continue
+			}
+			blocks[i] = marked
+			changed = true
 			continue
 		}
 		contentData, err := json.Marshal(output)
@@ -2476,7 +2492,7 @@ func countClaudeToolResultBlocks(blocks []jsontext.Value) int {
 	return count
 }
 
-func isPersistedToolResultPlaceholder(content string) bool {
+func containsPersistedOutputTag(content string) bool {
 	return strings.Contains(content, "<persisted-output>")
 }
 

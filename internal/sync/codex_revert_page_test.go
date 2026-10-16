@@ -20,6 +20,10 @@ import (
 // rollout it builds on in history_base. Each file is its own session, linked to
 // its base as a continuation.
 
+const (
+	otherThreadID = "66666666-6666-4666-8666-666666666666"
+)
+
 const paginationThread = "11111111-1111-4111-8111-111111111111"
 
 var paginationRollouts = []string{
@@ -57,11 +61,18 @@ func writeCodexRollout(t *testing.T, root, day, name, content string) string {
 
 // codexRevertMeta returns a page session_meta; an empty base omits history_base.
 func codexRevertMeta(timestamp, base string, ordinal int) string {
+	return codexRevertMetaFor(paginationThread, timestamp, base, ordinal)
+}
+
+// codexRevertMetaFor writes the header as id. The current shape passes the
+// thread id; the older Codex Desktop shape passes the page's own rollout id
+// while session_id still names the thread.
+func codexRevertMetaFor(id, timestamp, base string, ordinal int) string {
 	extra := map[string]any{"session_id": paginationThread, "history_mode": "paginated"}
 	if base != "" {
 		extra["history_base"] = map[string]any{"thread_id": base, "end_ordinal_exclusive": ordinal}
 	}
-	return testjsonl.CodexSessionMetaWithFieldsJSON(paginationThread, "/work/project", "codex_cli_rs", timestamp, extra)
+	return testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work/project", "codex_cli_rs", timestamp, extra)
 }
 
 // paginationSessionID is the session id of file page: the thread for page 0,
@@ -87,6 +98,22 @@ func paginationParent(page int, previousRollout bool) string {
 
 func writeCodexUsagePage(t *testing.T, root string, page int, crossDay, previousRollout bool) string {
 	t.Helper()
+	return writeCodexUsagePageAs(t, root, page, crossDay, previousRollout, false)
+}
+
+// writeCodexLegacyUsagePage writes page with the older header, whose id is the
+// page's own rollout. Page 0 is the thread and has no older shape.
+func writeCodexLegacyUsagePage(t *testing.T, root string, page int, crossDay, previousRollout bool) string {
+	t.Helper()
+	return writeCodexUsagePageAs(t, root, page, crossDay, previousRollout, true)
+}
+
+func writeCodexUsagePageAs(t *testing.T, root string, page int, crossDay, previousRollout, legacy bool) string {
+	t.Helper()
+	headerID := paginationThread
+	if legacy && page > 0 {
+		headerID = paginationRollouts[page]
+	}
 	day := 24 + page
 	timestamp := fmt.Sprintf("2026-09-%02dT04:00:00Z", day)
 	base := ""
@@ -107,7 +134,7 @@ func writeCodexUsagePage(t *testing.T, root string, page int, crossDay, previous
 	return writeCodexRollout(t, root, dirDay,
 		fmt.Sprintf("rollout-2026-09-%02dT12-00-00-%s.jsonl", day, identity),
 		testjsonl.JoinJSONL(
-			codexRevertMeta(timestamp, base, page*5),
+			codexRevertMetaFor(headerID, timestamp, base, page*5),
 			fmt.Sprintf(`{"type":"turn_context","timestamp":%q,"payload":{"model":"gpt-5","turn_id":"turn-%d"}}`, timestamp, page),
 			codexUserEntryJSON(timestamp, fmt.Sprintf("Request %d", page)),
 			codexAssistantEntryJSON(timestamp, fmt.Sprintf("Response %d", page)),
@@ -762,4 +789,177 @@ func TestCodexRevertPageSpawnedSubagentLinksToThePage(t *testing.T) {
 	assert.Equal(t, paginationSessionID(1), *child.ParentSessionID,
 		"the spawn edge in the page outranks the thread id in the child's meta")
 	assert.Equal(t, "subagent", child.RelationshipType)
+}
+
+func TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	for page := range 3 {
+		writeCodexLegacyUsagePage(t, root, page, true, true)
+	}
+	indexPath := filepath.Join(home, parser.CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Thread title"}`+"\n", paginationThread), 0o644))
+	parser.EvictCodexSessionIndex(indexPath)
+
+	database := openTestDB(t)
+	engine := newCodexRevertEngine(t, database, root)
+	first := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, first.Failed)
+	require.Equal(t, 3, first.Synced)
+	for page := range 3 {
+		name, found, err := database.GetSessionName(t.Context(), paginationSessionID(page))
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "Thread title", name, "page %d takes the thread title", page)
+	}
+
+	second := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, second.Failed)
+	assert.Zero(t, second.Synced, "unchanged older-header pages are skipped")
+}
+
+// TestCodexOlderHeaderRevertPageUpgradeMovesCuration rebuilds a version-133
+// archive whose older-header pages were stored as codex:<rollout>. Curation
+// and deletions follow each page to codex:<thread>_<rollout>, whether the
+// source files are present, gone, or never existed on this machine.
+func TestCodexOlderHeaderRevertPageUpgradeMovesCuration(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prefix      string
+		sources     bool
+		mirrorPath  bool
+		archiveOnly bool
+	}{
+		{"sources_present", "", true, false, false},
+		{"sources_missing", "", false, false, false},
+		{"http_mirror_paths", "host_a~", false, true, false},
+		{"archive_only", "", false, false, true},
+		{"archive_only_http_mirror", "host_a~", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := make([]string, 4)
+			for page := range 4 {
+				paths[page] = writeCodexLegacyUsagePage(t, root, page, true, false)
+			}
+			if !tc.sources {
+				for _, path := range paths {
+					require.NoError(t, os.Remove(path))
+				}
+				// A resync that discovers nothing is refused to protect the
+				// archive, so one unrelated session keeps discovery non-empty.
+				writeCodexRollout(t, root, "20", "rollout-2026-09-20T10-00-00-"+otherThreadID+".jsonl",
+					`{"type":"session_meta","timestamp":"2026-09-20T10:00:00Z","payload":{"id":"`+otherThreadID+`","cwd":"/tmp/other"}}`+"\n"+
+						codexUserEntryJSON("2026-09-20T10:00:01Z", "Unrelated")+"\n"+
+						codexAssistantEntryJSON("2026-09-20T10:00:02Z", "Reply")+"\n")
+			}
+			rolloutID := func(page int) string { return tc.prefix + "codex:" + paginationRollouts[page] }
+			pageID := func(page int) string { return tc.prefix + paginationSessionID(page) }
+
+			database := openTestDB(t)
+			for page := 1; page < 4; page++ {
+				stored := paths[page]
+				if tc.mirrorPath {
+					stored = "host_a:/remote/" + filepath.Base(paths[page])
+				}
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+					ID: rolloutID(page), Agent: "codex", Project: "sample", Machine: "local",
+					MessageCount: 2, FilePath: &stored,
+				}))
+				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
+					{SessionID: rolloutID(page), Ordinal: 0, Role: "user", Content: fmt.Sprintf("Request %d", page)},
+					{SessionID: rolloutID(page), Ordinal: 1, Role: "assistant", Content: fmt.Sprintf("Response %d", page)},
+				}))
+			}
+			savedName, trashedName, note := "Saved page", "Trashed page", "Keep this reply"
+			require.NoError(t, database.RenameSession(t.Context(), rolloutID(1), &savedName))
+			starred, err := database.StarSession(t.Context(), rolloutID(1))
+			require.NoError(t, err)
+			require.True(t, starred)
+			messages, err := database.GetAllMessages(t.Context(), rolloutID(1))
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			_, err = database.PinMessage(t.Context(), rolloutID(1), messages[1].ID, &note)
+			require.NoError(t, err)
+			require.NoError(t, database.RenameSession(t.Context(), rolloutID(2), &trashedName))
+			require.NoError(t, database.SoftDeleteSession(t.Context(), rolloutID(2)))
+			require.NoError(t, database.DeleteSession(t.Context(), rolloutID(3)))
+
+			path := database.Path()
+			require.NoError(t, database.Close())
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = raw.Close() })
+			_, err = raw.ExecContext(t.Context(), `INSERT INTO session_labels(session_id,label) VALUES (?, 'keep')`, rolloutID(1))
+			require.NoError(t, err)
+			_, err = raw.ExecContext(t.Context(),
+				`INSERT INTO session_external_parents(session_id,parent_session_id) VALUES (?, ?)`,
+				rolloutID(2), rolloutID(1))
+			require.NoError(t, err)
+			_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET data_version=133`)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 133")
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+
+			reopened, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = reopened.Close() })
+			if tc.archiveOnly {
+				require.NoError(t, reopened.EnableArchiveOnly(t.Context()))
+			}
+			require.True(t, reopened.NeedsResync())
+			// Archive-only archives take the real source-restricted rebuild:
+			// the engine has no ArchiveReparse, so its sources are cleared and
+			// ResyncAll preserves the archive rows instead of reparsing files.
+			upgraded := NewEngine(t.Context(), reopened, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+				Machine:   "local", IDPrefix: tc.prefix,
+			})
+			t.Cleanup(upgraded.Close)
+			var stats SyncStats
+			if tc.archiveOnly {
+				stats = upgraded.ResyncAll(t.Context(), nil)
+			} else {
+				var err error
+				stats, err = upgraded.SyncThenRun(t.Context(), false, nil, func(bool) error { return nil })
+				require.NoError(t, err)
+			}
+			require.Zero(t, stats.Failed)
+			require.False(t, stats.Aborted)
+
+			for page := 1; page < 4; page++ {
+				var left int
+				require.NoError(t, reopened.Reader().QueryRow(t.Context(),
+					`SELECT count(*) FROM sessions WHERE id = ?`, rolloutID(page)).Scan(&left))
+				assert.Zero(t, left, "no codex:<rollout> row survives for page %d", page)
+			}
+			curated, err := reopened.GetSession(t.Context(), pageID(1))
+			require.NoError(t, err)
+			require.NotNil(t, curated)
+			assert.Equal(t, &savedName, curated.DisplayName)
+			stars, err := reopened.ListStarredSessionIDs(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, []string{pageID(1)}, stars)
+			pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, pageID(1), pins[0].SessionID)
+			assert.Equal(t, &note, pins[0].Note)
+			var labels, external int
+			require.NoError(t, reopened.Reader().QueryRow(t.Context(),
+				`SELECT count(*) FROM session_labels WHERE session_id = ? AND label = 'keep'`, pageID(1)).Scan(&labels))
+			assert.Equal(t, 1, labels, "label follows the canonical page")
+			require.NoError(t, reopened.Reader().QueryRow(t.Context(),
+				`SELECT count(*) FROM session_external_parents WHERE session_id = ? AND parent_session_id = ?`,
+				pageID(2), pageID(1)).Scan(&external))
+			assert.Equal(t, 1, external, "both sides of an external parent are remapped")
+			assert.True(t, reopened.IsSessionTrashed(t.Context(), pageID(2)))
+			assert.True(t, reopened.IsSessionExcluded(t.Context(), pageID(3)))
+			deleted, err := reopened.GetSession(t.Context(), pageID(3))
+			require.NoError(t, err)
+			assert.Nil(t, deleted, "a permanently deleted page stays deleted")
+		})
+	}
 }

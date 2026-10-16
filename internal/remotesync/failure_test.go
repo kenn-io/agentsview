@@ -45,14 +45,14 @@ func TestFailureSummary(t *testing.T) {
 		{
 			name: "nil error",
 			err:  nil,
-			want: "HTTP remote sync failed",
+			want: "remote sync failed",
 		},
 		{
 			name: "pending cleanup takes precedence over retained status",
 			err: &PendingCleanupError{Err: &StatusError{
 				Code: 403, Detail: "private retained response",
 			}},
-			want: "HTTP remote sync blocked: cleanup from an earlier sync " +
+			want: "remote sync blocked: cleanup from an earlier sync " +
 				"still owns resources",
 		},
 		{
@@ -167,7 +167,7 @@ func TestFailureSummary(t *testing.T) {
 			err: errors.New(
 				"Get \"http://stored.example\": bearer secret-token rejected",
 			),
-			want: "HTTP remote sync failed",
+			want: "remote sync failed",
 		},
 	}
 
@@ -287,8 +287,8 @@ func TestIsHostUnavailableWhenHTTPServerClosesBeforeHeaders(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := (HTTPSync{URL: server.URL}).fetchTargets(
-		t.Context(), server.Client(),
+	_, err := (HTTPSource{URL: server.URL, Client: server.Client()}).Targets(
+		t.Context(),
 	)
 	require.NoError(t, <-serverResult)
 	require.Error(t, err)
@@ -305,9 +305,9 @@ func TestIsHostUnavailableWhenHTTPArchiveBodyIsTruncated(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	root, err := (HTTPSync{URL: server.URL}).downloadAndExtract(
-		t.Context(), server.Client(), TargetSet{},
-	)
+	root, err := (RemoteSync{
+		Source: HTTPSource{URL: server.URL, Client: server.Client()},
+	}).downloadAndExtract(t.Context(), TargetSet{})
 	assert.Empty(t, root)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.True(t, IsHostUnavailable(err))
@@ -316,19 +316,19 @@ func TestIsHostUnavailableWhenHTTPArchiveBodyIsTruncated(t *testing.T) {
 func TestIsHostUnavailableWhenHTTPJSONBodyIsTruncated(t *testing.T) {
 	tests := []struct {
 		name  string
-		fetch func(context.Context, HTTPSync, *http.Client) error
+		fetch func(context.Context, HTTPSource) error
 	}{
 		{
 			name: "targets",
-			fetch: func(ctx context.Context, hs HTTPSync, client *http.Client) error {
-				_, err := hs.fetchTargets(ctx, client)
+			fetch: func(ctx context.Context, source HTTPSource) error {
+				_, err := source.Targets(ctx)
 				return err
 			},
 		},
 		{
 			name: "manifest",
-			fetch: func(ctx context.Context, hs HTTPSync, client *http.Client) error {
-				_, _, err := hs.fetchManifest(ctx, client, TargetSet{})
+			fetch: func(ctx context.Context, source HTTPSource) error {
+				_, _, err := source.Manifest(ctx, TargetSet{})
 				return err
 			},
 		},
@@ -346,7 +346,7 @@ func TestIsHostUnavailableWhenHTTPJSONBodyIsTruncated(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			err := tt.fetch(
-				t.Context(), HTTPSync{URL: server.URL}, server.Client(),
+				t.Context(), HTTPSource{URL: server.URL, Client: server.Client()},
 			)
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 			assert.True(t, IsHostUnavailable(err))
@@ -363,8 +363,8 @@ func TestIsHostUnavailableKeepsCompleteMalformedJSONActionable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := (HTTPSync{URL: server.URL}).fetchTargets(
-		t.Context(), server.Client(),
+	_, err := (HTTPSource{URL: server.URL, Client: server.Client()}).Targets(
+		t.Context(),
 	)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.False(t, IsHostUnavailable(err))
@@ -381,9 +381,93 @@ func TestIsHostUnavailableWhenHTTPManifestGzipHeaderIsTruncated(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, _, err := (HTTPSync{URL: server.URL}).fetchManifest(
-		t.Context(), server.Client(), TargetSet{},
+	_, _, err := (HTTPSource{URL: server.URL, Client: server.Client()}).Manifest(
+		t.Context(), TargetSet{},
 	)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.True(t, IsHostUnavailable(err))
+}
+
+type fakeTransportError struct {
+	unavailable bool
+	summary     string
+	refused     bool
+}
+
+func (e *fakeTransportError) Error() string         { return "fake transport failure" }
+func (e *fakeTransportError) HostUnavailable() bool { return e.unavailable }
+func (e *fakeTransportError) FailureSummary() string {
+	return e.summary
+}
+func (e *fakeTransportError) RemoteRefused() bool { return e.refused }
+
+func TestTransportErrorHooks(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		wantUnavailable bool
+		wantSummary     string
+		wantRefusal     bool
+	}{
+		{
+			name:            "unavailable transport",
+			err:             &fakeTransportError{unavailable: true, summary: "transport down"},
+			wantUnavailable: true,
+			wantSummary:     "transport down",
+		},
+		{
+			name:        "reachable transport that failed",
+			err:         &fakeTransportError{summary: "transport failed"},
+			wantSummary: "transport failed",
+		},
+		{
+			name:        "refusing transport",
+			err:         &fakeTransportError{summary: "transport refused", refused: true},
+			wantSummary: "transport refused",
+			wantRefusal: true,
+		},
+		{
+			name: "wrapped transport error",
+			err: fmt.Errorf("fetch: %w", &fakeTransportError{
+				unavailable: true, summary: "wrapped summary", refused: true,
+			}),
+			wantUnavailable: true,
+			wantSummary:     "wrapped summary",
+			wantRefusal:     true,
+		},
+		{
+			name: "transport error inside a host error",
+			err: &HostError{Host: "devbox", Operation: "manifest", Err: &fakeTransportError{
+				summary: "host summary", refused: true,
+			}},
+			wantSummary: "host summary",
+			wantRefusal: true,
+		},
+		{
+			name:        "http status is a refusal",
+			err:         &StatusError{Code: 501},
+			wantSummary: "HTTP remote sync failed: remote daemon returned 501 Not Implemented",
+			wantRefusal: true,
+		},
+		{
+			name:        "plain error is not a refusal",
+			err:         errors.New("boom"),
+			wantSummary: "remote sync failed",
+		},
+		{
+			name: "pending cleanup outranks transport hooks",
+			err: &PendingCleanupError{Err: &fakeTransportError{
+				unavailable: true, summary: "transport down",
+			}},
+			wantSummary: "remote sync blocked: cleanup from an earlier sync " +
+				"still owns resources",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantUnavailable, IsHostUnavailable(tt.err))
+			assert.Equal(t, tt.wantSummary, FailureSummary(tt.err))
+			assert.Equal(t, tt.wantRefusal, isRemoteRefusal(tt.err))
+		})
+	}
 }

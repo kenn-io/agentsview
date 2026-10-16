@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -180,20 +181,32 @@ func replaceSessionUsageEventsTx(
 	return nil
 }
 
-// GetUsageEvents returns usage events for one session in stable order.
 // UsageEventFingerprints returns exact ordered fingerprints of
-// stored usage events keyed by session ID. Used by PG push fast-paths
-// to detect usage-only changes without N+1 queries.
+// stored usage events keyed by session ID.
 func (db *DB) UsageEventFingerprints(
 	sessionIDs []string,
 ) (map[string]string, error) {
 	return usageEventFingerprintsWithQuerier(
-		context.Background(), db.getReader(), sessionIDs,
+		context.Background(), db.getReader(), sessionIDs, nil, false,
+	)
+}
+
+// SortedUsageEventFingerprints returns usage fingerprints keyed by session
+// ID after applying normalizeTimestamp to each occurred_at value. Normalized
+// timestamps no longer follow the stored text order, so the encoded records
+// are sorted and the fingerprint ignores row order.
+func (db *DB) SortedUsageEventFingerprints(
+	ctx context.Context, sessionIDs []string,
+	normalizeTimestamp func(string) string,
+) (map[string]string, error) {
+	return usageEventFingerprintsWithQuerier(
+		ctx, db.getReader(), sessionIDs, normalizeTimestamp, true,
 	)
 }
 
 func usageEventFingerprintsWithQuerier(
 	ctx context.Context, q messageRowsQuerier, sessionIDs []string,
+	normalizeTimestamp func(string) string, sorted bool,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	if len(sessionIDs) == 0 {
@@ -207,7 +220,7 @@ func usageEventFingerprintsWithQuerier(
 	for start := 0; start < len(sessionIDs); start += batchSize {
 		end := min(start+batchSize, len(sessionIDs))
 		if err := appendUsageEventFingerprints(
-			ctx, q, out, sessionIDs[start:end],
+			ctx, q, out, sessionIDs[start:end], normalizeTimestamp, sorted,
 		); err != nil {
 			return nil, err
 		}
@@ -218,6 +231,7 @@ func usageEventFingerprintsWithQuerier(
 func appendUsageEventFingerprints(
 	ctx context.Context, q messageRowsQuerier,
 	out map[string]string, sessionIDs []string,
+	normalizeTimestamp func(string) string, sorted bool,
 ) error {
 	placeholders := make([]string, len(sessionIDs))
 	args := make([]any, len(sessionIDs))
@@ -241,7 +255,7 @@ func appendUsageEventFingerprints(
 	}
 	defer rows.Close()
 
-	builders := make(map[string]*strings.Builder)
+	records := make(map[string][]string)
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
@@ -260,14 +274,12 @@ func appendUsageEventFingerprints(
 		); err != nil {
 			return err
 		}
-		b := builders[sessionID]
-		if b == nil {
-			b = &strings.Builder{}
-			builders[sessionID] = b
-		}
 		occurred := ""
 		if occurredAt.Valid {
 			occurred = occurredAt.String
+		}
+		if normalizeTimestamp != nil {
+			occurred = normalizeTimestamp(occurred)
 		}
 		// Sanitize before measuring so fingerprints match the
 		// PG-readback fingerprint, whose values were sanitized
@@ -278,7 +290,7 @@ func appendUsageEventFingerprints(
 		costStatus = SanitizeUTF8(costStatus)
 		costSource = SanitizeUTF8(costSource)
 		dedupKey.String = SanitizeUTF8(dedupKey.String)
-		fmt.Fprintf(b,
+		records[sessionID] = append(records[sessionID], fmt.Sprintf(
 			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
@@ -296,26 +308,21 @@ func appendUsageEventFingerprints(
 			len(costSource), costSource,
 			len(occurred), occurred,
 			len(dedupKey.String), dedupKey.String,
-		)
+		))
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for id, b := range builders {
-		out[id] += b.String()
+	for id, sessionRecords := range records {
+		if sorted {
+			slices.Sort(sessionRecords)
+		}
+		out[id] += strings.Join(sessionRecords, "")
 	}
 	return nil
 }
 
-// UsageEventFingerprint returns exact ordered fingerprint for one session.
-func (db *DB) UsageEventFingerprint(sessionID string) (string, error) {
-	fps, err := db.UsageEventFingerprints([]string{sessionID})
-	if err != nil {
-		return "", err
-	}
-	return fps[sessionID], nil
-}
-
+// GetUsageEvents returns usage events for one session in stable order.
 func (db *DB) GetUsageEvents(
 	ctx context.Context, sessionID string,
 ) ([]UsageEvent, error) {

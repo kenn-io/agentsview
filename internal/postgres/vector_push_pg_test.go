@@ -1155,6 +1155,58 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	assert.Equal(t, 1,
 		countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)),
 		"full push restores the missing chunk")
+
+	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	require.NoError(t, err)
+	repair, err := sync.PushWithOptions(ctx, storage.PushOptions{
+		FullVectors: true, ScopeVectorsToChangedSessions: true,
+	}, nil)
+	require.NoError(t, err)
+	assert.False(t, repair.Full)
+	assert.Zero(t, repair.SessionsPushed, "vector repair keeps unchanged sessions incremental")
+	assert.Zero(t, repair.MessagesPushed)
+	assert.Equal(t, 1, repair.Vectors.SessionsPushed)
+	assert.Zero(t, repair.Vectors.SessionsUnchanged)
+	assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)), "FullVectors restores unchanged chunks even with no changed sessions")
+}
+
+// TestVectorPushRepairsNamedSessions pins FullVectorSessions: a named
+// session's chunks are restored although its push state reports it current,
+// while other sessions keep the unchanged-hash skip.
+func TestVectorPushRepairsNamedSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_repair_test")
+	ctx := context.Background()
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-repair", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha", "B": "hb"},
+		docs: map[string][]storage.VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca", "h1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb", "h2", []float32{0, 1, 0, 0})},
+		},
+	}
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "seed Push")
+	genID, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-repair")
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	require.NoError(t, err, "corrupting chunk table")
+
+	res, err := sync.PushWithOptions(ctx, storage.PushOptions{
+		FullVectorSessions: []string{"A"},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Vectors.SessionsPushed)
+	assert.Equal(t, 1, res.Vectors.SessionsUnchanged, "B keeps the unchanged-hash skip")
+	assert.Equal(t, 1, countRows(t, pg,
+		`SELECT COUNT(*) FROM `+vectorChunkTable(genID)+` c
+		 JOIN vector_documents d ON d.doc_key = c.doc_key WHERE d.session_id = 'A'`))
+	assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)))
 }
 
 // TestVectorPushDeferredOnSessionError pins that a changed session named in
@@ -1194,6 +1246,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	)
 	require.NoError(t, err, "deferred pushVectors")
 	assert.Equal(t, 1, res.SessionsDeferred)
+	assert.Equal(t, []string{"A"}, res.DeferredSessionIDs)
 	assert.Equal(t, 0, res.SessionsPushed)
 	assert.Equal(t, 1, res.SessionsUnchanged, "B is unchanged")
 

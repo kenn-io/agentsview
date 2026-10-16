@@ -133,7 +133,7 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 // duckdb-go driver: the driver caches instances per literal DSN, so opening
 // path again with the same read-only DSN while the Store's original
 // connection is still open silently returns the *already open, stale*
-// database instance instead of re-reading the file rebuildMirror just
+// database instance instead of re-reading the file buildMirror just
 // renamed into place (and a differing DSN errors with "Can't open a
 // connection to same database file with a different configuration than
 // existing connections"). A hardlink gives the identical bytes a distinct

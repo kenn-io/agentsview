@@ -237,6 +237,39 @@ func TestPushRemovesUnownedSessionsMissingLocally(t *testing.T) {
 	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", "ch-sync-unowned-other"))
 }
 
+// A rebuilt archive gets a new database ID and may have retired session IDs
+// without journaling a deletion. The next push, even an incremental one, must
+// take the full path that removes mirror rows missing locally.
+func TestPushAfterArchiveRebuildRemovesRetiredSessions(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	conn := chtest.Open(t, target.URL, target.Database)
+	const retired = "ch-sync-retired-by-rebuild"
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+			? AS id, push_version + 1 AS push_version)
+		FROM (SELECT * FROM sessions WHERE id = ?)`, retired, fixtureAlphaID)
+	require.NoError(t, err)
+
+	// Same archive generation: an incremental push leaves the row alone.
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, res.DeletedStale)
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ?", retired))
+
+	// The mirror was last pushed from another archive generation.
+	require.NoError(t, writeMetadata(ctx, conn, map[string]string{
+		s.archiveKey(databaseIDKeyBase): "previous-generation",
+	}))
+	res, err = s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.DeletedStale)
+	assert.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", retired))
+}
+
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
@@ -354,4 +387,40 @@ func TestEnsureSchemaUpgradesOlderMirrorInPlace(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, target))
 	assert.NoError(t, CheckSchemaCompat(ctx, conn))
 	assert.NoError(t, CheckDataVersionCompat(ctx, conn))
+}
+
+func TestPushHonorsTargetPushBatchSize(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	tests := []struct {
+		name      string
+		batchSize int
+		want      []int
+	}{
+		{"default fits the fixture in one batch", 0, []int{3}},
+		{"configured size splits the fixture", 2, []int{2, 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pusher, err := Backend{}.NewPusher(ctx, storage.ReplicaTarget{
+				URL:           target.URL,
+				Schema:        target.Database,
+				MachineName:   fixtureMachine,
+				PushBatchSize: tt.batchSize,
+			}, local, storage.PusherOptions{})
+			require.NoError(t, err)
+			s, ok := pusher.(*Sync)
+			require.True(t, ok)
+			t.Cleanup(func() { s.Close() })
+			var sizes []int
+			s.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+				sizes = append(sizes, len(batch))
+				return nil
+			}}
+			res, err := s.Push(ctx, true, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 3, res.SessionsPushed)
+			assert.Equal(t, tt.want, sizes)
+		})
+	}
 }

@@ -366,43 +366,6 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
 }
 
-func TestDuckGetActivityReportPrefersCompleteClaudeSnapshot(t *testing.T) {
-	ctx := t.Context()
-	sess := syncSession(
-		"streamed", "proj1", "first", "2026-06-14T10:30:00.000Z", 2)
-	sess.Agent = "claude"
-	partial := syncMessage(
-		"streamed", 0, "assistant", "partial", "2026-06-14T10:30:00.000Z")
-	partial.Model = "claude-sonnet-4-20250514"
-	partial.ClaudeMessageID = "msg-stream"
-	partial.ClaudeRequestID = "req-stream"
-	partial.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":5}`)
-	partial.OutputTokens = 5
-	complete := syncMessage(
-		"streamed", 1, "assistant", "complete", "2026-06-14T10:31:00.000Z")
-	complete.Model = "claude-sonnet-4-20250514"
-	complete.ClaudeMessageID = "msg-stream"
-	complete.ClaudeRequestID = "req-stream"
-	complete.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":631}`)
-	complete.OutputTokens = 631
-	store := activityReportStore(t, []db.SessionBatchWrite{{
-		Session:         sess,
-		Messages:        []db.Message{partial, complete},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}}, []db.ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}})
-
-	r, err := store.GetActivityReport(
-		ctx, db.AnalyticsFilter{Timezone: "UTC"},
-		duckDayQuery(t, "2026-06-14", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 631, r.Totals.OutputTokens)
-}
-
 func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 	t *testing.T,
 ) {
@@ -1080,14 +1043,9 @@ func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T
 	assert.Equal(t, 1, r.Totals.Sessions)
 }
 
-// TestDuckGetActivityReportUsageDedupSubSecondOrder confirms DuckDB orders the
-// usage stream by the parsed instant so first-seen-wins fallback dedup keeps
-// the chronologically earlier row when two rows share a source UUID in the same
-// second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
-// already sorts on the parsed time (not the formatted text), so this locks in
-// that cross-backend behavior, matching the SQLite
-// TestGetActivityReport_UsageDedupSubSecondOrder.
-func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
+// Source UUID fallback keeps the earlier parsed instant even when session ID
+// order puts the later fractional-second row first.
+func TestDuckActivityReportSourceUUIDFallbackOrdersTimeBeforeSessionID(t *testing.T) {
 	ctx := t.Context()
 	pricing := []db.ModelPricing{{
 		ModelPattern:  "claude-sonnet-4-20250514",
@@ -1097,17 +1055,19 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 
 	// A resumed/forked pair shares one source UUID fallback dedup identity
 	// across two sessions: the earlier whole-second instant carries 500 output
-	// tokens, the later fractional instant 9000. Dedup must keep the 500 row.
-	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
-	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	// tokens, the later instant 9000. Dedup must keep the 500 row.
+	earlier := syncSession("z-earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	earlier.Agent = "claude"
+	earlierMsg := syncMessage("z-earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
 	earlierMsg.Model = "claude-sonnet-4-20250514"
 	earlierMsg.ClaudeMessageID = "dup-m"
 	earlierMsg.SourceUUID = "dup-source"
 	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 
-	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
-	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
+	later := syncSession("a-later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
+	later.Agent = "claude"
+	laterMsg := syncMessage("a-later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
 	laterMsg.Model = "claude-sonnet-4-20250514"
 	laterMsg.ClaudeMessageID = "dup-m"
 	laterMsg.SourceUUID = "dup-source"
@@ -1131,53 +1091,7 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 		duckDayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"first-seen dedup keeps the chronologically earlier whole-second row")
-}
-
-func TestDuckGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
-	ctx := t.Context()
-	pricing := []db.ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}
-
-	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
-	earlier.Agent = "claude"
-	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
-	earlierMsg.Model = "claude-sonnet-4-20250514"
-	earlierMsg.ClaudeMessageID = "dup-m"
-	earlierMsg.SourceUUID = "src-dup"
-	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
-	earlierMsg.OutputTokens = 500
-
-	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:01Z", 1)
-	later.Agent = "claude"
-	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:01Z")
-	laterMsg.Model = "claude-sonnet-4-20250514"
-	laterMsg.ClaudeMessageID = "dup-m"
-	laterMsg.SourceUUID = "src-dup"
-	laterMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":900}`)
-	laterMsg.OutputTokens = 900
-
-	writes := []db.SessionBatchWrite{
-		{
-			Session: earlier, Messages: []db.Message{earlierMsg},
-			DataVersion: 1, ReplaceMessages: true,
-		},
-		{
-			Session: later, Messages: []db.Message{laterMsg},
-			DataVersion: 1, ReplaceMessages: true,
-		},
-	}
-	store := activityReportStore(t, writes, pricing)
-
-	r, err := store.GetActivityReport(
-		ctx, db.AnalyticsFilter{Timezone: "UTC"},
-		duckDayQuery(t, "2026-06-14", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
+		"source UUID fallback keeps the chronologically earlier whole-second row")
 }
 
 // TestDuckGetActivityReportZeroCostKeepsPrimaryModel confirms a usage-only

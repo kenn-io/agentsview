@@ -13,6 +13,9 @@ type VectorGenerationInfo struct {
 	Fingerprint string
 	Model       string
 	Dimension   int
+	// Params is the generation's immutable input recipe; nil when the
+	// generation is unpublished or predates recipe publication.
+	Params map[string]string
 }
 
 // VectorPushChunk is one embedded slice of a document. ChunkIndex is stable
@@ -44,6 +47,16 @@ type VectorPushDoc struct {
 // document and chunk reads on one SQLite snapshot.
 type VectorPushSource interface {
 	BeginExport(ctx context.Context, sessionIDs []string) (VectorExport, bool, error)
+}
+
+// VectorExportPreparer is an optional VectorPushSource hook for sources that
+// build embeddings on demand. Once per vector phase, a replica confirms it can
+// store vectors, registers PlannedGeneration when ok is true, and only then
+// calls PrepareExport and BeginExport. A replica that cannot store or register
+// the generation skips the phase without a build.
+type VectorExportPreparer interface {
+	PlannedGeneration(ctx context.Context) (gen VectorGenerationInfo, ok bool, err error)
+	PrepareExport(ctx context.Context) error
 }
 
 // VectorExport is one open read of the local vector index.

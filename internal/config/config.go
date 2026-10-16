@@ -95,6 +95,9 @@ type pgEnvOverrides struct {
 	URL         string
 	Schema      string
 	MachineName string
+	// AllowInsecure comes from AGENTSVIEW_PG_ALLOW_INSECURE under a
+	// deployment mode; nil leaves the target's setting in place.
+	AllowInsecure *bool
 }
 
 // ResolvedPGTarget is one PostgreSQL target after target selection,
@@ -128,6 +131,11 @@ type ClickHouseConfig struct {
 	// PushVectors gates the vector phase of clickhouse push. A pointer so an
 	// omitted key keeps the default (enabled) while an explicit false opts out.
 	PushVectors *bool `toml:"push_vectors" json:"push_vectors,omitempty"`
+	// PushBatchSize sets how many sessions clickhouse push writes per batch.
+	// Each batch runs one lightweight DELETE per dependent table, so larger
+	// batches mean fewer part rewrites but more session payloads in memory
+	// at once. Nil keeps the push default.
+	PushBatchSize *int `toml:"push_batch_size" json:"push_batch_size,omitempty"`
 }
 
 // PushVectorsEnabled reports whether clickhouse push should run its vector
@@ -158,6 +166,7 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"projects":         {},
 	"exclude_projects": {},
 	"push_vectors":     {},
+	"push_batch_size":  {},
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
@@ -305,6 +314,10 @@ type VectorEmbeddingsServerConfig struct {
 	// vector.EncoderConfig.RetryRateLimits). Other 4xx responses fail fast;
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
+
+	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the
+	// deployment server; it takes precedence over APIKeyEnv.
+	apiKey string
 }
 
 // ResolvedDefaultServer returns the server name used when no explicit
@@ -522,9 +535,12 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey reads the API key from the environment variable named by
-// APIKeyEnv. Returns "" when APIKeyEnv is unset.
+// APIKey returns the key read from a deployment secret file, else the
+// environment variable named by APIKeyEnv. Returns "" when neither is set.
 func (c VectorEmbeddingsServerConfig) APIKey() string {
+	if c.apiKey != "" {
+		return c.apiKey
+	}
 	if c.APIKeyEnv == "" {
 		return ""
 	}
@@ -626,6 +642,13 @@ type AutomatedConfig struct {
 	Prefixes     []string `toml:"prefixes" json:"prefixes,omitempty"`
 	Substrings   []string `toml:"substrings" json:"substrings,omitempty"`
 	ExactMatches []string `toml:"exact_matches" json:"exact_matches,omitempty"`
+}
+
+// FrictionConfig controls Friction Log analysis. It is off by default because
+// reviewing transcripts costs CPU that users without a digest do not need.
+type FrictionConfig struct {
+	// Enabled reviews changed sessions in the background after each sync.
+	Enabled bool `toml:"enabled" json:"enabled,omitempty"`
 }
 
 // AgentConfig holds per-agent runtime overrides.
@@ -762,7 +785,10 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 
 type RemoteTransport string
 
-const RemoteTransportHTTP RemoteTransport = "http"
+const (
+	RemoteTransportHTTP RemoteTransport = "http"
+	RemoteTransportSSH  RemoteTransport = "ssh"
+)
 
 type ChartPalette string
 
@@ -830,8 +856,10 @@ func (a ArchiveContent) UsageOnly() bool {
 }
 
 // RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out over HTTP. Host, URL, and Token are required. An omitted Transport
-// selects HTTP. A zero/empty Interval disables periodic remote sync for this host.
+// fan-out. An omitted Transport selects HTTP, which requires URL and Token.
+// The SSH transport takes no URL or Token and uses Destination, or Host when
+// Destination is empty, as the ssh destination. A zero/empty Interval disables
+// periodic remote sync for this host.
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type RemoteHost struct {
@@ -839,7 +867,17 @@ type RemoteHost struct {
 	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
 	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
 	Token     string          `toml:"token,omitempty" json:"-"`
-	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitzero"`
+	// Destination is the ssh destination for ssh entries. Empty means Host.
+	Destination string        `toml:"destination,omitempty" json:"destination,omitempty"`
+	Interval    time.Duration `toml:"interval,omitempty" json:"interval,omitzero"`
+}
+
+// SSHDestination returns the argument passed to ssh for this entry.
+func (h RemoteHost) SSHDestination() string {
+	if h.Destination != "" {
+		return h.Destination
+	}
+	return h.Host
 }
 
 type remoteHostJSON RemoteHost
@@ -909,6 +947,7 @@ type Config struct {
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -988,6 +1027,16 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+
+	// DeploymentEmbeddings is the embedding transport from deployment env,
+	// set only without a [vector] section.
+	DeploymentEmbeddings *VectorEmbeddingsServerConfig `json:"-" toml:"-"`
+	// NoDaemonAutostart suppresses daemon autostart for this invocation
+	// only; pg push --embed sets it to keep the archive writer local.
+	NoDaemonAutostart bool `json:"-" toml:"-"`
+
+	// vectorSectionDefined records a [vector] section in config.toml.
+	vectorSectionDefined bool
 
 	pgEnvOverrides         pgEnvOverrides
 	clickHouseEnvOverrides clickHouseEnvOverrides
@@ -1111,19 +1160,7 @@ func (c Config) ValidateRemoteHosts() error {
 				fmt.Sprintf("entry %d (%q): invalid interval %s",
 					i+1, h.Host, h.Interval))
 		}
-		if h.Transport != "" && h.Transport != RemoteTransportHTTP {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid transport %q; use http with a url and token",
-					i+1, h.Host, h.Transport))
-		}
-		if err := validateRemoteHTTPURL(h.URL); err != nil {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): %v", i+1, h.Host, err))
-		}
-		if h.Token == "" {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): token is required for http", i+1, h.Host))
-		}
+		problems = append(problems, validateRemoteTransport(i+1, h)...)
 		// Remote sync namespaces sessions and cached state by host.
 		if h.Host != "" {
 			if first, ok := seen[h.Host]; ok {
@@ -1140,6 +1177,37 @@ func (c Config) ValidateRemoteHosts() error {
 			strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func validateRemoteTransport(entry int, h RemoteHost) []string {
+	prefix := fmt.Sprintf("entry %d (%q): ", entry, h.Host)
+	var problems []string
+	switch h.Transport {
+	case "", RemoteTransportHTTP:
+		if err := validateRemoteHTTPURL(h.URL); err != nil {
+			problems = append(problems, prefix+err.Error())
+		}
+		if h.Token == "" {
+			problems = append(problems, prefix+"token is required for http")
+		}
+		if h.Destination != "" {
+			problems = append(problems, prefix+"destination is only valid for ssh")
+		}
+	case RemoteTransportSSH:
+		if h.URL != "" {
+			problems = append(problems, prefix+"url is only valid for http")
+		}
+		if h.Token != "" {
+			problems = append(problems, prefix+"token is only valid for http")
+		}
+		if strings.HasPrefix(h.SSHDestination(), "-") {
+			problems = append(problems, prefix+"destination must not start with -")
+		}
+	default:
+		problems = append(problems, fmt.Sprintf(
+			"%sinvalid transport %q; use http or ssh", prefix, h.Transport))
+	}
+	return problems
 }
 
 func validateRemoteHTTPURL(raw string) error {
@@ -1378,8 +1446,8 @@ func loadPGServeBase() (Config, error) {
 	// pg serve intentionally ignores persisted normal serve/public/proxy
 	// settings so an existing SQLite-backed serve deployment cannot silently
 	// reconfigure the PG-backed server. Until a dedicated pg-serve config
-	// namespace exists, only explicit pg-serve flags should shape its
-	// network/proxy behavior.
+	// namespace exists, only deployment variables and explicit pg-serve
+	// flags shape its network/proxy behavior.
 	cfg.Host = "127.0.0.1"
 	cfg.Port = 8080
 	cfg.PublicURL = ""
@@ -1387,7 +1455,7 @@ func loadPGServeBase() (Config, error) {
 	cfg.Proxy = ProxyConfig{}
 	cfg.NoBrowser = false
 	cfg.HostExplicit = false
-	return cfg, nil
+	return cfg, cfg.applyDeploymentEnv()
 }
 
 // LoadMinimal builds a Config from defaults, env, and config file,
@@ -1418,7 +1486,7 @@ func loadConfigLayers() (Config, error) {
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
-	return cfg, nil
+	return cfg, cfg.applyDeploymentEnv()
 }
 
 func finishLoadedConfig(cfg *Config) error {
@@ -1451,6 +1519,9 @@ func LoadReadOnly() (Config, error) {
 
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	if err := cfg.applyDeploymentEnv(); err != nil {
+		return cfg, err
 	}
 	if err := cfg.readInstallationID(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cfg, fmt.Errorf("reading installation identity: %w", err)
@@ -1661,6 +1732,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1676,6 +1748,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
 		}
+		c.vectorSectionDefined = true
 	}
 	if file.ZoomLevel != nil {
 		if err := file.ZoomLevel.Validate(); err != nil {
@@ -1848,6 +1921,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		if legacyCH.PushVectors != nil {
 			c.ClickHouse.PushVectors = legacyCH.PushVectors
 		}
+		if legacyCH.PushBatchSize != nil {
+			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
+		}
 	}
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -1948,6 +2024,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
 	}
+	if meta.IsDefined("friction", "enabled") {
+		c.Friction.Enabled = file.Friction.Enabled
+	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
 	}
@@ -1977,11 +2056,12 @@ func (c *Config) applyConfigTOML(data string) error {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
 			hosts[i] = RemoteHost{
-				Host:      strings.TrimSpace(h.Host),
-				Transport: RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				URL:       strings.TrimSpace(h.URL),
-				Token:     strings.TrimSpace(h.Token),
-				Interval:  h.Interval,
+				Host:        strings.TrimSpace(h.Host),
+				Transport:   RemoteTransport(strings.TrimSpace(string(h.Transport))),
+				URL:         strings.TrimSpace(h.URL),
+				Token:       strings.TrimSpace(h.Token),
+				Destination: strings.TrimSpace(h.Destination),
+				Interval:    h.Interval,
 			}
 		}
 		c.RemoteHosts = hosts
@@ -3162,6 +3242,9 @@ func (c *Config) resolvePGConfig(
 		if c.pgEnvOverrides.MachineName != "" {
 			pg.MachineName = c.pgEnvOverrides.MachineName
 		}
+		if c.pgEnvOverrides.AllowInsecure != nil {
+			pg.AllowInsecure = *c.pgEnvOverrides.AllowInsecure
+		}
 	}
 	if pg.URL != "" {
 		expanded, err := expandBracedEnv(pg.URL)
@@ -3305,8 +3388,18 @@ func (c *Config) RawClickHouseTarget(name string) (ClickHouseConfig, error) {
 }
 
 func (c *Config) resolveClickHouseConfig(
-	ch ClickHouseConfig, applyDefaultEnv bool,
+	name string, ch ClickHouseConfig, applyDefaultEnv bool,
 ) (ClickHouseConfig, error) {
+	if ch.PushBatchSize != nil && *ch.PushBatchSize < 1 {
+		section := "[clickhouse]"
+		if name != "" {
+			section = "[clickhouse." + name + "]"
+		}
+		return ch, fmt.Errorf(
+			"%s push_batch_size must be at least 1, got %d; remove the key to use the default",
+			section, *ch.PushBatchSize,
+		)
+	}
 	if applyDefaultEnv {
 		if c.clickHouseEnvOverrides.URL != "" {
 			ch.URL = c.clickHouseEnvOverrides.URL
@@ -3368,7 +3461,7 @@ func (c *Config) ResolveClickHouseTarget(name string) (ClickHouseConfig, error) 
 				name,
 			)
 		}
-		return c.resolveClickHouseConfig(c.ClickHouse, true)
+		return c.resolveClickHouseConfig("", c.ClickHouse, true)
 	}
 	defaultName, err := c.DefaultClickHouseTargetName()
 	if err != nil {
@@ -3384,7 +3477,7 @@ func (c *Config) ResolveClickHouseTarget(name string) (ClickHouseConfig, error) 
 			targetName,
 		)
 	}
-	return c.resolveClickHouseConfig(targetCfg, targetName == defaultName)
+	return c.resolveClickHouseConfig(targetName, targetCfg, targetName == defaultName)
 }
 
 func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) {
@@ -3392,7 +3485,7 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 		return nil, err
 	}
 	if len(c.ClickHouseTargets) == 0 {
-		ch, err := c.resolveClickHouseConfig(c.ClickHouse, true)
+		ch, err := c.resolveClickHouseConfig("", c.ClickHouse, true)
 		if err != nil {
 			return nil, err
 		}
@@ -3408,7 +3501,7 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 	targets := make([]ResolvedClickHouseTarget, 0, len(names))
 	for _, name := range names {
 		targetCfg, err := c.resolveClickHouseConfig(
-			c.ClickHouseTargets[name], name == defaultName,
+			name, c.ClickHouseTargets[name], name == defaultName,
 		)
 		if err != nil {
 			return nil, err

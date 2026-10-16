@@ -1,16 +1,14 @@
-/** Settle virtual-list scrolling only after the exact-offset phase succeeds. */
-import { getAlignedOffsetScrollAlign, type ScrollAlign } from "./message-scroll.js";
+/** Wait for a rendered row before handing measurement tracking to the virtualizer. */
+import type { ScrollAlign } from "./message-scroll.js";
 
 interface ScrollTarget {
   options: { count: number };
   getVirtualItems(): readonly { index: number }[];
-  getOffsetForIndex(index: number, align: ScrollAlign): readonly [number, unknown] | undefined;
-  scrollToOffset(offset: number, options: { align: "start" }): void;
   scrollToIndex(index: number, options: { align: ScrollAlign }): void;
 }
 
 export interface StagedScrollOptions {
-  index: number;
+  getIndex(): number;
   align: ScrollAlign;
   getVirtualizer(): ScrollTarget | undefined;
   getCount(): number;
@@ -24,9 +22,10 @@ export interface StagedScrollOptions {
 export async function settleVirtualScroll(options: StagedScrollOptions): Promise<boolean> {
   let waitFrames = options.waitFrames ?? 0;
   let retries = options.scrollRetries ?? 0;
-  const { index, align } = options;
+  const { align } = options;
   for (;;) {
     if (!options.isCurrent()) return false;
+    const index = options.getIndex();
     const virtualizer = options.getVirtualizer();
     const count = options.getCount();
     if (
@@ -40,16 +39,12 @@ export async function settleVirtualScroll(options: StagedScrollOptions): Promise
     if (!virtualizer || index < 0 || index >= virtualizer.options.count) return false;
 
     const rendered = virtualizer.getVirtualItems().some((item) => item.index === index);
-    const offset = rendered ? virtualizer.getOffsetForIndex(index, align) : undefined;
-    if (offset) {
-      virtualizer.scrollToOffset(Math.round(offset[0]), {
-        align: getAlignedOffsetScrollAlign(align),
-      });
+    if (rendered) {
+      virtualizer.scrollToIndex(index, { align });
       return true;
     }
 
-    // Estimated scrolling is not completion. ResizeObserver and Svelte need
-    // two frames before the next measured-offset attempt can be trusted.
+    // ResizeObserver and Svelte need two frames before retrying the rendered row.
     virtualizer.scrollToIndex(index, { align });
     if (retries >= 15) return false;
     await options.nextFrame();

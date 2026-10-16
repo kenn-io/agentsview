@@ -688,6 +688,7 @@ func remoteCacheFamily(key string) (string, parser.AgentType) {
 }
 
 func remotePathWithinAnyRoot(path string, roots []string) bool {
+	path, _ = splitHermesMemberPath(path)
 	return slices.ContainsFunc(roots, func(root string) bool {
 		_, ok := remoteArchiveRel(root, path)
 		return ok

@@ -113,11 +113,12 @@ func (c *usageFillCoordinator) Ensure(
 	results := make(map[string]usageFillResult, len(versions))
 	waiting := make(map[string]*usageFillCall)
 	owned := make([]usageSourceVersion, 0, len(versions))
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		if ok && cached.source.Equal(version) {
 			results[version.SessionID] = cached
 			continue
@@ -172,26 +173,43 @@ func usageFillCallKey(version usageSourceVersion) string {
 	}, "\x00")
 }
 
-func (c *usageFillCoordinator) cachedSession(ctx context.Context,
-	sessionID string,
-) (usageFillResult, bool, error) {
-	var result usageFillResult
-	err := c.cache.db.QueryRowContext(ctx, `
-		SELECT source_sync_marker, source_transcript_rev,
-		       usage_event_fingerprint, install_revision
-		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(
-		&result.source.SyncMarker, &result.source.TranscriptRevision,
-		&result.source.UsageEventFingerprint, &result.InstallRevision,
-	)
-	result.source.SessionID = sessionID
-	if errors.Is(err, sql.ErrNoRows) {
-		return usageFillResult{}, false, nil
+func usageSourceVersionIDs(versions []usageSourceVersion) []string {
+	ids := make([]string, len(versions))
+	for i, version := range versions {
+		ids[i] = version.SessionID
 	}
+	return ids
+}
+
+func readUsageCachedSessions(
+	ctx context.Context, runner usageCacheStatementRunner, sessionIDs []string,
+) (map[string]usageFillResult, error) {
+	results := make(map[string]usageFillResult, len(sessionIDs))
+	err := queryChunked(sessionIDs, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := runner.QueryContext(ctx, `SELECT session_id,
+			source_sync_marker, source_transcript_rev,
+			usage_event_fingerprint, install_revision
+			FROM usage_cached_sessions WHERE session_id IN `+placeholders, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var result usageFillResult
+			if err := rows.Scan(&result.source.SessionID,
+				&result.source.SyncMarker, &result.source.TranscriptRevision,
+				&result.source.UsageEventFingerprint, &result.InstallRevision); err != nil {
+				return err
+			}
+			results[result.source.SessionID] = result
+		}
+		return rows.Err()
+	})
 	if err != nil {
-		return usageFillResult{}, false,
-			fmt.Errorf("reading cached usage session %s: %w", sessionID, err)
+		return nil, fmt.Errorf("reading cached usage sessions: %w", err)
 	}
-	return result, true, nil
+	return results, nil
 }
 
 func (c *usageFillCoordinator) fillSessions(versions []usageSourceVersion) {
@@ -300,11 +318,12 @@ func (c *usageFillCoordinator) captureFillInstallExpectations(ctx context.Contex
 	versions []usageSourceVersion,
 ) (map[string]usageFillInstallExpectation, error) {
 	expected := make(map[string]usageFillInstallExpectation, len(versions))
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		expected[version.SessionID] = usageFillInstallExpectation{
 			InstallRevision: cached.InstallRevision,
 			Exists:          ok,
@@ -322,11 +341,12 @@ func (c *usageFillCoordinator) FillBackground(
 ) (map[string]usageFillResult, error) {
 	results := make(map[string]usageFillResult, len(versions))
 	pending := make([]usageSourceVersion, 0, len(versions))
+	cachedSessions, err := readUsageCachedSessions(ctx, c.cache.db, usageSourceVersionIDs(versions))
+	if err != nil {
+		return nil, err
+	}
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(ctx, version.SessionID)
-		if err != nil {
-			return nil, err
-		}
+		cached, ok := cachedSessions[version.SessionID]
 		if ok && cached.source.Equal(version) {
 			results[version.SessionID] = cached
 			continue
@@ -803,28 +823,25 @@ func (c *usageFillCoordinator) installSpoolBatch(
 		}
 	}()
 
+	sessionIDs := append(usageSourceVersionIDs(stable), deleted...)
+	cachedSessions, err := readUsageCachedSessions(ctx, conn, sessionIDs)
+	if err != nil {
+		return nil, nil, err
+	}
 	eligibleStable := make([]usageSourceVersion, 0, len(stable))
 	eligibleDeleted := make([]string, 0, len(deleted))
 	var lost []string
 	for _, version := range stable {
-		matches, matchErr := fillInstallExpectationMatches(
-			ctx, conn, version.SessionID, expected[version.SessionID])
-		if matchErr != nil {
-			return nil, nil, matchErr
-		}
-		if matches {
+		cached, exists := cachedSessions[version.SessionID]
+		if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
 			eligibleStable = append(eligibleStable, version)
 		} else {
 			lost = append(lost, version.SessionID)
 		}
 	}
 	for _, sessionID := range deleted {
-		matches, matchErr := fillInstallExpectationMatches(
-			ctx, conn, sessionID, expected[sessionID])
-		if matchErr != nil {
-			return nil, nil, matchErr
-		}
-		if matches {
+		cached, exists := cachedSessions[sessionID]
+		if fillInstallExpectationMatches(cached, exists, expected[sessionID]) {
 			eligibleDeleted = append(eligibleDeleted, sessionID)
 		} else {
 			lost = append(lost, sessionID)
@@ -873,19 +890,13 @@ func (c *usageFillCoordinator) installSpoolBatch(
 }
 
 func fillInstallExpectationMatches(
-	ctx context.Context, conn *sql.Conn, sessionID string,
+	cached usageFillResult, exists bool,
 	expected usageFillInstallExpectation,
-) (bool, error) {
-	var revision int64
-	err := conn.QueryRowContext(ctx, `SELECT install_revision
-		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(&revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return !expected.Exists, nil
+) bool {
+	if !exists {
+		return !expected.Exists
 	}
-	if err != nil {
-		return false, err
-	}
-	return expected.Exists && revision == expected.InstallRevision, nil
+	return expected.Exists && cached.InstallRevision == expected.InstallRevision
 }
 
 // invalidateChangedIdentitySharers compares the dedup identities a fill
@@ -1010,7 +1021,7 @@ func loadUsageSourceVersions(
 			foundIDs = append(foundIDs, id)
 		}
 	}
-	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, foundIDs)
+	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, foundIDs, nil, false)
 	if err != nil {
 		return nil, err
 	}

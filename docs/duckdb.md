@@ -190,7 +190,7 @@ Environment variables override the config file:
   works normally. On all other platforms the DuckDB driver is linked into the
   standard binary (which grows it considerably — this is expected).
 - **The mirror is a disposable derived artifact** — `duckdb push` rebuilds it
-  from scratch (temp file, atomic swap) when the file is missing or damaged,
+  from scratch (rebuild file, atomic swap) when the file is missing or damaged,
   `--full` is passed, the mirror's schema version does not match the running
   binary, the local SQLite data version has changed (for example after a
   resync), the mirror was built from a different SQLite archive than the one
@@ -198,6 +198,22 @@ Environment variables override the config file:
   applies a bounded incremental update that replaces only changed sessions,
   applies recorded deletions, and removes previously mirrored sessions whose
   project has since moved out of the configured scope.
+- **An interrupted rebuild resumes** — a rebuild writes the new mirror to
+  `<mirror-name>.rebuild` in the work directory, newest sessions first, and
+  swaps it in only when it is complete. If the process stops partway, the
+  next push continues that file instead of starting over, even when the
+  existing mirror would accept an incremental push, and reports
+  `resuming an unfinished rebuild`. Sessions the stopped rebuild already
+  wrote are kept unless they changed or were deleted since. The push
+  discards the file and starts over when `--full` is passed or when the
+  local archive, the project scope, the machine name, or the mirror format
+  changed since the rebuild began. A rebuild that reaches the end with
+  session errors resumes only while the mirror still needs a rebuild;
+  otherwise the push discards it and updates the mirror incrementally.
+- **One rebuild at a time** — a push holds a lock beside the rebuild file
+  from the moment it reads the file until the swap. While another push holds
+  it, a watch-mode push waits for a later cycle and a manual push fails. A
+  push also fails while another process has the rebuild file open.
 - **The first push after a resync is always a full rebuild** — the mirror
   records the `database_id` of the SQLite archive generation it was built
   from, and a resync builds a fresh archive with a new `database_id`. A push
@@ -215,7 +231,7 @@ Environment variables override the config file:
   from the mirror by the next incremental push, including when it was
   hard-deleted locally after the move.
 - **Generated artifacts live in a per-mirror work directory** — push and
-  serve keep everything they generate (rebuild temp files, the hardlink
+  serve keep everything they generate (the rebuild file, the hardlink
   aliases serve uses to reopen a replaced mirror) in a private directory
   next to the mirror named `<mirror-path>.agentsview-work`. Stale-artifact
   cleanup only ever deletes inside that directory, so your own files next
@@ -240,7 +256,7 @@ Environment variables override the config file:
   therefore always inspect a served mirror; only DuckDB's exclusive WRITE
   lock conflicts. While serve processes hold the file, an incremental
   push cannot acquire write access: an explicit `duckdb push` falls back
-  to a full rebuild (temp file plus atomic rename, which never opens the
+  to a full rebuild (rebuild file plus atomic rename, which never opens the
   destination for writing), while the automatic pushes of `duckdb push
   --watch` defer instead (logging the deferral) so a long-running serve
   does not turn every changed batch into a full-archive rebuild. A

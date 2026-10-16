@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
@@ -91,6 +91,68 @@ function mockResyncFailure(error: Error): void {
     done: Promise.reject(error),
   });
 }
+
+describe("session watch visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    api.watchSession.mockImplementation(() => Object.assign(new EventTarget(), { close: vi.fn() }));
+  });
+
+  afterEach(() => {
+    sync.unwatchSession();
+    vi.restoreAllMocks();
+  });
+
+  it("closes a hidden session stream and refreshes on return and every reconnect", () => {
+    const onUpdate = vi.fn();
+    const onTiming = vi.fn();
+    sync.watchSession("session-a", onUpdate, onTiming);
+    expect(api.watchSession).toHaveBeenLastCalledWith("session-a", onUpdate, onTiming);
+    const first = api.watchSession.mock.results[0]!.value;
+    first.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(api.watchSession).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(api.watchSession).toHaveBeenLastCalledWith("session-a", onUpdate, onTiming);
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    const reopened = api.watchSession.mock.results[1]!.value;
+    reopened.dispatchEvent(new Event("open"));
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    reopened.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(3);
+    reopened.dispatchEvent(new Event("error"));
+    reopened.dispatchEvent(new Event("open"));
+    reopened.dispatchEvent(new Event("session_ready"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(onUpdate).toHaveBeenCalledTimes(4);
+  });
+
+  it("only starts the latest selected session when a hidden tab returns", () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const oldUpdate = vi.fn();
+    const newUpdate = vi.fn();
+    sync.watchSession("session-a", oldUpdate);
+    sync.watchSession("session-b", newUpdate);
+    expect(api.watchSession).not.toHaveBeenCalled();
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledExactlyOnceWith("session-b", newUpdate, undefined);
+    expect(oldUpdate).not.toHaveBeenCalled();
+    expect(newUpdate).toHaveBeenCalledTimes(1);
+    api.watchSession.mock.results[0]!.value.dispatchEvent(new Event("session_ready"));
+    expect(newUpdate).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("commitsDisagree", () => {
   it.each([

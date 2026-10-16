@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,10 +80,8 @@ func TestReconcileProviderRootsDescendantDoesNotClaimSiblingScope(t *testing.T) 
 		"rehydration must stay bounded by the requested scope")
 }
 
-// TestReconcileProviderRootsClaudeDescendantUsesConfiguredTraversal verifies
-// the provider-owned gateway: a requested project directory traverses from
-// the configured projects root while admission stays inside the descendant.
-func TestReconcileProviderRootsClaudeDescendantUsesConfiguredTraversal(t *testing.T) {
+// Descendant discovery buffers only requested sources, even with many sibling projects.
+func TestReconcileProviderRootsClaudeDescendantBoundsDiscovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -101,7 +100,9 @@ func TestReconcileProviderRootsClaudeDescendantUsesConfiguredTraversal(t *testin
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	writeClaudeProjectSession(t, claudeRoot, "projA", "new-a")
-	writeClaudeProjectSession(t, claudeRoot, "projB", "new-b")
+	for i := range 128 {
+		writeClaudeProjectSession(t, claudeRoot, fmt.Sprintf("projB-%d", i), "new-b")
+	}
 
 	require.NoError(t, engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentClaude, []string{projectA},
@@ -115,6 +116,8 @@ func TestReconcileProviderRootsClaudeDescendantUsesConfiguredTraversal(t *testin
 	require.NoError(t, err)
 	assert.Nil(t, sibling,
 		"admission must stay bounded to the requested descendant")
+	assert.Equal(t, 2, engine.LastReconciliationResult().Metrics.MaxProviderBuffered,
+		"discovery must buffer only the two sources in the requested project")
 }
 
 // TestReconcileProviderRootsProofBoundedTombstoneWithinDescendant verifies

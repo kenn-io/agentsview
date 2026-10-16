@@ -9,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -65,7 +65,7 @@ type SyncStatus struct {
 }
 
 // New opens a DuckDB mirror file and returns a Sync instance. It never
-// creates or migrates schema: callers reach New only from rebuildMirror
+// creates or migrates schema: callers reach New only from buildMirror
 // (which creates schema itself on a fresh file) and incrementalPush (which
 // requires an already-valid mirror, verified by ProbeMirror beforehand).
 func New(ctx context.Context,
@@ -138,14 +138,15 @@ func (s *Sync) isFiltered() bool {
 // build predating the read-only serve change — and fails closed. When the
 // incremental push's own write open is blocked by reader processes, the
 // push defers (storage.MirrorPushOptions.Automatic) or falls back to a rebuild, which
-// never write-opens the destination (temp file plus atomic rename). Every
+// never write-opens the destination (rebuild file plus atomic rename). A
+// rebuild that was killed partway resumes on the next push. Every
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts storage.MirrorPushOptions, full bool, onProgress func(storage.MirrorPushProgress),
-) (storage.MirrorPushResult, error) {
+) (result storage.MirrorPushResult, err error) {
 	if err := sweepStaleTempFiles(path); err != nil {
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}
@@ -179,6 +180,41 @@ func Push(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
 		machine, localDatabaseID, localArchiveID,
 	)
+	run, err := newRebuildRun(ctx, local, machine, opts, reason)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	// The lock spans reading the rebuild file through the swap, so two pushes
+	// never build, validate, or swap the same file.
+	var lock *flock.Flock
+	defer func() {
+		if lock != nil {
+			err = errors.Join(err, unlockRebuild(lock))
+		}
+	}()
+	claim := func(required bool) error {
+		claimed, pending, err := claimRebuild(ctx, path, run, full, required)
+		if err != nil {
+			return err
+		}
+		lock = claimed
+		if pending != nil {
+			// An unfinished rebuild resumes even when the mirror would now
+			// accept an incremental push, so a requested rebuild still finishes.
+			run.Reason = pending.Reason
+			reason = "resuming an unfinished rebuild, started because: " + pending.Reason
+		}
+		return nil
+	}
+	leftover, err := rebuildFileExists(path)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	if reason != "" || leftover {
+		if err := claim(reason != ""); err != nil {
+			return rebuildClaimFailed(path, opts, err)
+		}
+	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 		switch {
@@ -192,11 +228,17 @@ func Push(
 		}
 		reason = "mirror is held open by reader processes; " +
 			"incremental write access unavailable"
+		run.Reason = reason
+		if lock == nil {
+			if err := claim(true); err != nil {
+				return rebuildClaimFailed(path, opts, err)
+			}
+		}
 	} else if err := ensureReplaceableMirror(path, probe); err != nil {
 		return storage.MirrorPushResult{}, err
 	}
 	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
-	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	result, err = buildMirror(ctx, path, local, machine, opts, run, onProgress)
 	result.Diagnostics.RebuildReason = reason
 	if err == nil {
 		cleanUpLegacyDuckDBSyncState(ctx, local)
@@ -204,12 +246,24 @@ func Push(
 	return result, err
 }
 
-// deferredHeldMirrorPush is the successful no-op an automatic push returns
-// when reader processes (a serve holding the mirror read-only) block the
-// incremental push's write open: rebuilding the whole archive on every
-// watcher-triggered batch would be unbounded work, and no cutoff or mirror
-// state advances here, so the next unheld push catches up on everything
-// that changed in the meantime.
+// rebuildClaimFailed reports a failed claimRebuild. Another push holding the
+// rebuild lock defers an automatic push, like a mirror held by readers.
+func rebuildClaimFailed(
+	path string, opts storage.MirrorPushOptions, err error,
+) (storage.MirrorPushResult, error) {
+	if !errors.Is(err, errRebuildLocked) {
+		return storage.MirrorPushResult{}, err
+	}
+	if opts.Automatic {
+		var result storage.MirrorPushResult
+		result.Diagnostics.Deferred = true
+		result.Diagnostics.DeferredReason = "another push is rebuilding the mirror; deferring until it finishes"
+		log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
+		return result, nil
+	}
+	return storage.MirrorPushResult{}, rebuildInProgressError(path, err)
+}
+
 func deferredHeldMirrorPush() storage.MirrorPushResult {
 	var result storage.MirrorPushResult
 	result.Diagnostics.Deferred = true
@@ -219,7 +273,7 @@ func deferredHeldMirrorPush() storage.MirrorPushResult {
 }
 
 // ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:
-// before rebuildMirror renames a fresh file over an EXISTING destination,
+// before buildMirror renames a fresh file over an EXISTING destination,
 // that destination must be positively identified as an agentsview DuckDB
 // mirror (see MirrorProbe.RecognizedMirror). A missing file is always fine
 // (fresh create). Anything else — a SQLite database, an arbitrary file, a
@@ -404,7 +458,7 @@ func (s *Sync) pushChangedSessions(
 			"listing sessions for duckdb incremental push: %w", err,
 		)
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
+	db.SortSessionsNewestFirst(candidates)
 
 	inScope, outOfScope := s.partitionPushScope(candidates)
 	result.Diagnostics.CandidateSessions = countPushSessions(inScope)

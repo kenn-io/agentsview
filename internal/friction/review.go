@@ -19,8 +19,9 @@ func Review(in SessionInput) []Signal {
 		out = append(out, DetectCorrections(in.Messages, in.SubjectID)...)
 	}
 	out = append(out, DetectErrors(in.Messages, in.SubjectID)...)
-	out = append(out, DetectWorkarounds(in.Messages, in.SubjectID)...)
-	out = append(out, DetectDeferrals(in.Messages, in.SubjectID)...)
+	folded := foldAssistantTexts(in.Messages)
+	out = append(out, detectWorkarounds(in.Messages, folded, in.SubjectID)...)
+	out = append(out, detectDeferrals(in.Messages, folded, in.SubjectID)...)
 	out = append(out, DetectPatterns(in.SubjectID, in.IsSubAgent, in.Patterns)...)
 	out = append(out, DetectFrustration(in.Messages, in.SubjectID)...)
 	out = append(out, DetectInterruptions(in.Interruptions, in.SubjectID)...)
