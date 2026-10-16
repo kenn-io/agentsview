@@ -42,39 +42,16 @@ type DuckDBPushConfig struct {
 	Automatic bool
 }
 
-// duckDBPusher pushes the archive to the DuckDB mirror. It mirrors
-// replicaPusher's watch-loop shape: local sync runs separately, so each push
-// sends whatever the archive holds when it starts.
+// duckDBPusher pushes the archive to the DuckDB mirror from a watch process
+// that owns the archive. Local sync runs separately, so each push sends
+// whatever the archive holds when it starts.
 type duckDBPusher struct {
-	// window runs each mirror push once local sync settles; see
-	// archivePushWindow.
-	window        func(context.Context, func() error) error
-	ensurePricing func(context.Context) error
-	mirrorPush    func(context.Context, bool) (storage.MirrorPushResult, error)
+	mirrorPush func(context.Context, bool) (storage.MirrorPushResult, error)
 }
 
 func (p *duckDBPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
-	return p.window(ctx, func() error {
-		return p.pushTarget(ctx, reason, full)
-	})
-}
-
-func (p *duckDBPusher) pushTarget(
-	ctx context.Context, reason pushReason, full bool,
-) error {
-	if p.ensurePricing != nil {
-		if err := p.ensurePricing(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			log.Printf("warning: pricing refresh failed: %v", err)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	res, err := p.mirrorPush(ctx, full)
 	if err != nil {
 		return err

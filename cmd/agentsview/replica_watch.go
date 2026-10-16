@@ -13,117 +13,101 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/daemon"
 )
 
-// replicaPusher runs a local sync then pushes to a replica, lazily
-// connecting and reconnecting after errors so a transiently
-// unreachable database never crashes the daemon.
+// replicaPusher pushes the archive to a replica from a watch process that
+// owns the archive. Its session keeps one connection and reconnects after
+// errors, so a replica that is unreachable for a while never stops the watch.
 type replicaPusher struct {
 	// label prefixes log lines, e.g. "pg watch".
 	label string
 	// displayName names the replica product in operator-facing warnings.
 	displayName string
-	// window runs each remote push once local sync settles; see
-	// archivePushWindow.
-	window        func(context.Context, func() error) error
-	ensurePricing func(context.Context) error
-	connect       func(context.Context) (storage.Pusher, error)
-	target        storage.Pusher
-	// vectorReconcileNeeded is true until a generation-wide vector
-	// reconciliation succeeds in this watch process, and again after
-	// any push error or a vector phase that skipped or deferred work.
-	// While true, change pushes stay generation-wide so nothing waits
-	// on the interval floor unnecessarily; while false, change pushes
-	// scope their vector reads to the changed relational sessions.
-	vectorReconcileNeeded bool
-	// fullVectorsPending keeps a full watch's generation-wide vector repair
-	// until a vector phase runs. vectorRepairSessions then keeps the repair
-	// for each session that phase deferred until the session's vectors push.
-	fullVectorsPending   bool
-	vectorRepairSessions map[string]struct{}
-	// lastReconciledVectorGeneration is the replica generation id of the
-	// last clean generation-wide reconciliation in this process. A scoped
-	// push carrying it lets the vector phase promote itself to
-	// generation-wide when the active generation id differs, so a re-embed
-	// or a reset/drop-and-recreate (by any machine) never leaves a
-	// generation partially populated.
-	lastReconciledVectorGeneration int64
+	session     archivepush.ReplicaSession
+	vectors     vectorReconcile
 }
 
 // push copies the archive to the replica. Local sync runs separately, so the
-// push sends whatever the archive holds when it starts. On any replica error
-// it drops the cached connection so the next call reconnects.
+// push sends whatever the archive holds when it starts.
 func (p *replicaPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
-	return p.window(ctx, func() error {
-		return p.pushTarget(ctx, reason, full)
-	})
-}
-
-func (p *replicaPusher) pushTarget(
-	ctx context.Context, reason pushReason, full bool,
-) error {
-	if p.ensurePricing != nil {
-		if err := p.ensurePricing(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			log.Printf("warning: pricing refresh failed: %v", err)
-		}
-	}
-	if err := ctx.Err(); err != nil {
+	opts := p.vectors.options(reason, full)
+	res, err := p.session.Push(ctx, opts, nil)
+	p.vectors.record(opts, res, err)
+	if err != nil {
 		return err
 	}
-	if p.target == nil {
-		t, err := p.connect(ctx)
-		if err != nil {
-			return fmt.Errorf("connect: %w", err)
-		}
-		p.target = t
-	}
-	if err := p.target.EnsureSchema(ctx); err != nil {
-		p.reset()
-		return fmt.Errorf("ensure schema: %w", err)
-	}
-	repairPending := p.fullVectorsPending || len(p.vectorRepairSessions) > 0
-	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded || repairPending)
-	res, err := p.target.PushWithOptions(ctx, storage.PushOptions{
+	return completeReplicaWatchPush(p.label, p.displayName, res, reason)
+}
+
+// vectorReconcile decides, across the pushes of one watch process, when a
+// change push may limit its vector phase to the changed sessions. Both archive
+// owners use it: a local owner passes the decision to its pusher, and a daemon
+// owner sends it with each push request because the daemon builds a new
+// pusher for every request.
+type vectorReconcile struct {
+	// needed is true until a generation-wide vector reconciliation succeeds
+	// in this watch process, and again after any push error or a vector
+	// phase that skipped or deferred work. While true, change pushes stay
+	// generation-wide so nothing waits on the interval floor unnecessarily;
+	// while false, change pushes scope their vector reads to the changed
+	// relational sessions.
+	needed bool
+	// lastGeneration is the replica generation id of the last clean
+	// generation-wide reconciliation in this process. A scoped push carrying
+	// it lets the vector phase promote itself to generation-wide when the
+	// active generation id differs, so a re-embed or a reset/drop-and-recreate
+	// (by any machine) never leaves a generation partially populated.
+	lastGeneration int64
+	// fullPending keeps a full watch's generation-wide vector repair until
+	// a vector phase runs. repairSessions then keeps the repair for each
+	// session that phase deferred until the session's vectors push. Only a
+	// local owner sets fullPending; a daemon push request has no field for
+	// it.
+	fullPending    bool
+	repairSessions map[string]struct{}
+}
+
+// newVectorReconcile starts generation-wide: nothing has been reconciled yet.
+func newVectorReconcile() vectorReconcile {
+	return vectorReconcile{needed: true}
+}
+
+// options returns the push options for the next push. A pending vector repair
+// keeps the vector phase generation-wide.
+func (v *vectorReconcile) options(reason pushReason, full bool) storage.PushOptions {
+	repairPending := v.fullPending || len(v.repairSessions) > 0
+	return storage.PushOptions{
 		Full:                           full,
-		FullVectors:                    p.fullVectorsPending,
-		FullVectorSessions:             slices.Sorted(maps.Keys(p.vectorRepairSessions)),
-		ScopeVectorsToChangedSessions:  scoped,
-		LastReconciledVectorGeneration: p.lastReconciledVectorGeneration,
-	}, nil)
+		FullVectors:                    v.fullPending,
+		FullVectorSessions:             slices.Sorted(maps.Keys(v.repairSessions)),
+		ScopeVectorsToChangedSessions:  scopedVectorPush(reason, full, v.needed || repairPending),
+		LastReconciledVectorGeneration: v.lastGeneration,
+	}
+}
+
+// record updates the state from the outcome of a push sent with opts.
+func (v *vectorReconcile) record(
+	opts storage.PushOptions, res storage.PushResult, err error,
+) {
 	if err != nil {
-		p.vectorReconcileNeeded = true
-		p.reset()
-		return fmt.Errorf("push: %w", err)
+		v.needed = true
+		return
 	}
 	if !res.Vectors.Skipped {
-		p.vectorRepairSessions = nextVectorRepair(
-			p.fullVectorsPending, p.vectorRepairSessions,
-			res.Vectors.DeferredSessionIDs,
+		v.repairSessions = nextVectorRepair(
+			v.fullPending, v.repairSessions, res.Vectors.DeferredSessionIDs,
 		)
-		p.fullVectorsPending = false
+		v.fullPending = false
 	}
-	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration = nextVectorReconcile(
-		p.vectorReconcileNeeded,
-		p.lastReconciledVectorGeneration, scoped, res,
+	v.needed, v.lastGeneration = nextVectorReconcile(
+		v.needed, v.lastGeneration, opts.ScopeVectorsToChangedSessions, res,
 	)
-	if res.Errors > 0 {
-		logReplicaWatchPushResult(p.label, p.displayName, res, reason)
-		log.Printf(
-			"%s: %d session(s) failed to push; will retry",
-			p.label, res.Errors,
-		)
-		return fmt.Errorf("%d session(s) failed to push", res.Errors)
-	}
-	logReplicaWatchPushResult(p.label, p.displayName, res, reason)
-	return nil
 }
 
 // scopedVectorPush reports whether a push may scope its vector phase
@@ -216,13 +200,6 @@ func logReplicaWatchPushResult(
 		"%s: pushed %d sessions, %d messages (%s)",
 		label, res.SessionsPushed, res.MessagesPushed, reason,
 	)
-}
-
-func (p *replicaPusher) reset() {
-	if p.target != nil {
-		_ = p.target.Close()
-		p.target = nil
-	}
 }
 
 // resolveWatchTarget validates the replica config and resolves the project

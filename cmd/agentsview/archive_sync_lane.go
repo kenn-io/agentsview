@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	stdsync "sync"
 	"sync/atomic"
 	"time"
 
@@ -12,24 +13,29 @@ import (
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
-// localPushWatch runs a push-watch process that owns the SQLite archive. Local
-// ingestion and remote pushes run on separate goroutines: watcher batches and
-// periodic syncs write the archive as files change, and the push loop copies
-// whatever the archive holds when each push starts. A push that takes an hour
-// therefore never delays ingestion.
-type localPushWatch struct {
+// archivePushWatch runs a push-watch process. The same loop serves both
+// archive owners. When this process owns the SQLite archive, engine is set:
+// watcher batches and periodic syncs write the archive on their own
+// goroutines, and each push copies whatever the archive holds when it starts,
+// so a push that takes an hour never delays ingestion. When the daemon owns
+// the archive, engine is nil: the daemon syncs before each push, and watcher
+// batches travel with the push requests.
+type archivePushWatch struct {
 	hooks              *archivePushWatchHooks
 	appCfg             config.Config
 	engine             *syncpkg.Engine
 	label              string
 	debounce, interval time.Duration
 	full               bool
-	startupSync        func(context.Context, *syncpkg.Engine, bool) (bool, error)
-	push               func(context.Context, pushReason, bool) error
-	wake               <-chan struct{}
+	// startupSync runs the first local sync. Used only with engine.
+	startupSync func(context.Context, *syncpkg.Engine, bool) (bool, error)
+	// push runs one push. batch is the watcher scope a daemon owner syncs
+	// before it pushes; a local owner has already synced it.
+	push func(ctx context.Context, reason pushReason, full bool, batch *syncpkg.WatchBatch) error
+	wake <-chan struct{}
 }
 
-func (w localPushWatch) run(ctx context.Context) error {
+func (w archivePushWatch) run(ctx context.Context) error {
 	lane := &archiveSyncLane{
 		label:    w.label,
 		engine:   w.engine,
@@ -38,77 +44,97 @@ func (w localPushWatch) run(ctx context.Context) error {
 	}
 	loop, stopLoop := newArchivePushLoop(
 		w.hooks, w.label, w.debounce, w.interval,
-		func(c context.Context, r pushReason, _ *syncpkg.WatchBatch) error {
-			return lane.push(c, r, w.push)
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return lane.push(c, r, batch, w.push)
 		},
 	)
 	defer stopLoop()
 	lane.loop = loop
 
-	poller := newArchivePushUnwatchedPoller(ctx, w.hooks, w.engine)
-	defer poller.Stop()
-
+	callback := func(c context.Context, batch syncpkg.WatchBatch) error {
+		return notifyPushForWatchBatchWithConfig(c, loop, w.appCfg, batch)
+	}
+	options := syncpkg.WatcherOptions{OnCoverageDegraded: loop.NotifyCoverageDegraded}
+	unwatchedCoverage := fmt.Sprintf("relying on the %s floor for coverage", w.interval)
+	if w.engine != nil {
+		poller := newArchivePushUnwatchedPoller(ctx, w.hooks, w.engine)
+		defer poller.Stop()
+		callback = lane.watchCallback(w.appCfg)
+		options = archivePushWatchWatcherOptions(lane.notifyCoverageDegraded, poller)
+		unwatchedCoverage = fmt.Sprintf("polling every %s", unwatchedPollInterval)
+	}
 	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
-		w.hooks, w.appCfg, w.engine,
-		lane.watchCallback(w.appCfg),
-		archivePushWatchWatcherOptions(lane.notifyCoverageDegraded, poller),
+		w.hooks, w.appCfg, w.engine, callback, options,
 	)
+	stopWatcher = stdsync.OnceFunc(stopWatcher)
 	defer stopWatcher()
+	// Stop the watcher as soon as shutdown starts. A watcher batch can hold
+	// the sync lock, and the final push waits for that lock.
+	defer context.AfterFunc(ctx, stopWatcher)()
 	lane.openDispatch = openDispatch
 	if len(unwatchedDirs) > 0 {
 		log.Printf(
-			"%s: %d root(s) not watched; polling every %s",
-			w.label, len(unwatchedDirs), unwatchedPollInterval,
+			"%s: %d root(s) not watched; %s",
+			w.label, len(unwatchedDirs), unwatchedCoverage,
 		)
 	}
 
-	didResync, startupErr := w.startupSync(ctx, w.engine, w.full)
-	if startupErr != nil && errors.Is(startupErr, context.Canceled) {
-		return nil
-	}
-	// A resync rebuilt the archive, so the first push that runs resends
-	// every session, even when a failed startup sync delays it.
-	lane.fullPending.Store(didResync)
-	if startupErr != nil {
-		log.Printf(
-			"%s: startup sync failed: %v; remote pushes stay paused until a "+
-				"local sync completes; retrying every %s",
-			w.label, startupErr, w.debounce,
-		)
-	} else if ctx.Err() == nil {
-		lane.markReady()
+	wake := w.wake
+	if w.engine == nil {
+		lane.fullPending.Store(w.full)
+	} else {
+		didResync, startupErr := w.startupSync(ctx, w.engine, w.full)
+		if startupErr != nil && errors.Is(startupErr, context.Canceled) {
+			return nil
+		}
+		// A resync rebuilt the archive, so the first push that runs resends
+		// every session, even when a failed startup sync delays it.
+		lane.fullPending.Store(didResync)
+		if startupErr != nil {
+			log.Printf(
+				"%s: startup sync failed: %v; remote pushes stay paused until a "+
+					"local sync completes; retrying every %s",
+				w.label, startupErr, w.debounce,
+			)
+		} else if ctx.Err() == nil {
+			lane.markReady()
+		}
+
+		ticker := time.NewTicker(w.interval)
+		defer ticker.Stop()
+		laneDone := make(chan struct{})
+		go func() {
+			defer close(laneDone)
+			lane.run(ctx, ticker.C, w.wake)
+		}()
+		defer func() { <-laneDone }()
+		// The lane turns lifecycle wakes into syncs, and a sync that writes
+		// the archive queues a push.
+		wake = nil
 	}
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
-	laneDone := make(chan struct{})
-	go func() {
-		defer close(laneDone)
-		lane.run(ctx, ticker.C, w.wake)
-	}()
-	defer func() { <-laneDone }()
-
-	if lane.ready.Load() {
+	if lane.canPush() {
 		// The startup push runs on this goroutine before the loop starts, so
-		// it skips the change debounce. Watcher dispatch is already open, so
-		// a long push only delays later pushes.
+		// it skips the change debounce. A failed startup push stays queued
+		// and retries on the debounce.
 		loop.enqueueUnscoped(reasonStartup, nil, false)
 		loop.runNextTask(ctx, false)
 		if ctx.Err() != nil {
 			return nil
 		}
 	}
-	loop.Run(ctx)
+	loop.RunWithWake(ctx, wake)
 	return nil
 }
 
-// archiveSyncLane owns local archive writes for a push-watch process. Watcher
-// batches sync on the watcher's dispatch goroutine; the lane goroutine runs
-// authoritative syncs on the floor interval, on lifecycle wake, and after the
-// watcher loses coverage. A sync that writes the archive marks the push loop
-// dirty.
+// archiveSyncLane tracks when the archive is ready to push and, when this
+// process owns the archive, writes it. Watcher batches sync on the watcher's
+// dispatch goroutine; the lane goroutine runs authoritative syncs on the floor
+// interval, on lifecycle wake, and after the watcher loses coverage. A sync
+// that writes the archive marks the push loop dirty.
 type archiveSyncLane struct {
-	label  string
+	label string
+	// engine is nil when the daemon owns the archive.
 	engine *syncpkg.Engine
 	loop   *pushLoop
 	// retry spaces syncs while no complete local sync has run, so a failed
@@ -116,10 +142,12 @@ type archiveSyncLane struct {
 	retry        time.Duration
 	openDispatch func()
 	requests     chan struct{}
-	// ready is set once a complete local sync has run. Watcher dispatch
-	// opens and pushes start only after that: a full push deletes remote
-	// rows missing locally, so it must never read an archive that a failed
-	// startup sync left incomplete.
+	// ready is set once the archive has caught up: after a complete local
+	// sync, or after the first successful push when the daemon owns the
+	// archive and syncs before it pushes. Watcher dispatch opens then. A local
+	// owner also holds pushes until then: a full push deletes remote rows
+	// missing locally, so it must never read an archive that a failed startup
+	// sync left incomplete.
 	ready atomic.Bool
 	// fullPending asks the next push to resend every session. The first
 	// push that runs clears it, even if that push fails: each mirror
@@ -128,8 +156,8 @@ type archiveSyncLane struct {
 	fullPending atomic.Bool
 }
 
-// markReady opens watcher dispatch the first time a complete local sync runs
-// and reports whether this call did so.
+// markReady opens watcher dispatch the first time the archive catches up and
+// reports whether this call did so.
 func (l *archiveSyncLane) markReady() bool {
 	if !l.ready.CompareAndSwap(false, true) {
 		return false
@@ -138,19 +166,41 @@ func (l *archiveSyncLane) markReady() bool {
 	return true
 }
 
+// canPush reports whether a push may run now. A daemon owner always may: its
+// push syncs the archive first.
+func (l *archiveSyncLane) canPush() bool {
+	return l.engine == nil || l.ready.Load()
+}
+
 func (l *archiveSyncLane) push(
 	ctx context.Context,
 	reason pushReason,
-	push func(context.Context, pushReason, bool) error,
+	batch *syncpkg.WatchBatch,
+	push func(context.Context, pushReason, bool, *syncpkg.WatchBatch) error,
 ) error {
-	if !l.ready.Load() {
+	if !l.canPush() {
 		// Skipping instead of failing keeps the loop from retrying on its
 		// debounce. The sync that sets ready queues a push.
 		log.Printf("%s: push (%s) paused until a local sync completes",
 			l.label, reason)
 		return nil
 	}
-	return push(ctx, reason, l.fullPending.Swap(false))
+	if l.engine != nil {
+		// Wait for an in-progress sync and flush deferred signal recomputes,
+		// so the push copies settled sessions. Local sync keeps writing
+		// during the push; those writes reach the next push because each
+		// push takes its cutoff under the archive write lock.
+		if err := l.engine.SettleForPush(ctx); err != nil {
+			return fmt.Errorf("starting push: %w", err)
+		}
+	}
+	if err := push(ctx, reason, l.fullPending.Swap(false), batch); err != nil {
+		return err
+	}
+	if l.engine == nil {
+		l.markReady()
+	}
+	return nil
 }
 
 // requestSync asks the lane for an authoritative sync. Requests coalesce.
@@ -238,21 +288,5 @@ func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	// that, a sync that wrote nothing leaves the push loop alone.
 	if opened || (l.ready.Load() && stats.ChangedArchive()) {
 		l.loop.NotifyDirty()
-	}
-}
-
-// archivePushWindow runs one remote push against the archive while local sync
-// keeps writing. Before the push it waits for an in-progress sync to finish and
-// flushes deferred signal recomputes, so the push copies settled sessions.
-// Writes that land during the push reach the next push because each push takes
-// its cutoff under the archive write lock (see db.MirrorPushCutoff).
-func archivePushWindow(
-	engine *syncpkg.Engine,
-) func(context.Context, func() error) error {
-	return func(_ context.Context, push func() error) error {
-		if err := engine.RunExclusiveFlushed(func() error { return nil }); err != nil {
-			return fmt.Errorf("starting push: %w", err)
-		}
-		return push()
 	}
 }

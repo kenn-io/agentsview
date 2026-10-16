@@ -681,6 +681,21 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 	require.ErrorIs(t, err, pushFailure)
 }
 
+// A daemon push must not block local ingestion: a sync can take the engine
+// lock while the push copies the archive.
+func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+		func(bool) error {
+			return engine.TryRunExclusive(func() error { return nil })
+		})
+
+	require.NoError(t, err, "a sync must be able to run while the push runs")
+}
+
 func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
 		context.Context, func(syncpkg.Progress),

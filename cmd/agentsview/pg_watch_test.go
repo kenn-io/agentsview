@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -227,26 +228,28 @@ type pusherRecorder struct {
 	connects int
 }
 
-// pushDirectly is a push window with no archive bracket, for pusher tests that
-// have no sync engine.
-func pushDirectly(_ context.Context, push func() error) error { return push() }
-
-// newTestReplicaPusher builds a replicaPusher with no push window whose connect
-// hands out the supplied targets in order, recording each dial.
+// newTestReplicaPusher builds a replicaPusher whose connect hands out the
+// supplied targets in order, recording each dial.
 func newTestReplicaPusher(targets ...*fakeTarget) (*replicaPusher, *pusherRecorder) {
 	rec := &pusherRecorder{}
-	p := &replicaPusher{
-		label:         "pg watch",
-		displayName:   "PostgreSQL",
-		window:        pushDirectly,
-		ensurePricing: func(context.Context) error { return nil },
-		connect: func(context.Context) (storage.Pusher, error) {
+	p := testReplicaPusher(archivepush.ReplicaSession{
+		EnsurePricing: func(context.Context) error { return nil },
+		Connect: func(context.Context) (storage.Pusher, error) {
 			tgt := targets[rec.connects]
 			rec.connects++
 			return tgt, nil
 		},
-	}
+	})
 	return p, rec
+}
+
+func testReplicaPusher(session archivepush.ReplicaSession) *replicaPusher {
+	return &replicaPusher{
+		label:       "pg watch",
+		displayName: "PostgreSQL",
+		session:     session,
+		vectors:     newVectorReconcile(),
+	}
 }
 
 // TestPGPusherScopesChangeVectorPushes pins the watch scoping policy: only
@@ -259,7 +262,7 @@ func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
 		Vectors: storage.VectorPushResult{GenerationID: 1},
 	}}
 	pusher, _ := newTestReplicaPusher(target)
-	pusher.vectorReconcileNeeded = true
+	pusher.vectors.needed = true
 	ctx := t.Context()
 
 	require.NoError(t, pusher.push(ctx, reasonStartup, false))
@@ -293,7 +296,7 @@ func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
 func TestPGPusherZeroGenerationKeepsReconcile(t *testing.T) {
 	target := &fakeTarget{}
 	pusher, _ := newTestReplicaPusher(target)
-	pusher.vectorReconcileNeeded = true
+	pusher.vectors.needed = true
 	ctx := t.Context()
 
 	require.NoError(t, pusher.push(ctx, reasonStartup, false))
@@ -321,7 +324,7 @@ func TestPGPusherPushErrorForcesReconcile(t *testing.T) {
 	failing := &fakeTarget{pushErr: errors.New("boom")}
 	recovered := &fakeTarget{}
 	pusher, _ := newTestReplicaPusher(failing, recovered)
-	pusher.vectorReconcileNeeded = false
+	pusher.vectors.needed = false
 	ctx := t.Context()
 
 	require.Error(t, pusher.push(ctx, reasonChange, false))
@@ -341,7 +344,7 @@ func TestPGPusherPushErrorForcesReconcile(t *testing.T) {
 func TestPGPusherThreadsGenerationID(t *testing.T) {
 	target := &fakeTarget{}
 	pusher, _ := newTestReplicaPusher(target)
-	pusher.vectorReconcileNeeded = true
+	pusher.vectors.needed = true
 	ctx := t.Context()
 
 	// Startup reconciles generation id 1 generation-wide.
@@ -379,47 +382,36 @@ func TestPGPusherThreadsGenerationID(t *testing.T) {
 	assert.True(t, target.pushOpts[3].ScopeVectorsToChangedSessions)
 }
 
-func TestPGPusherEnsuresPricingInsidePushWindowBeforeConnect(t *testing.T) {
+func TestPGPusherEnsuresPricingBeforeConnect(t *testing.T) {
 	var events []string
 	target := &fakeTarget{
 		onPush: func() { events = append(events, "push") },
 	}
-	pusher := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		window: func(_ context.Context, push func() error) error {
-			events = append(events, "window open")
-			err := push()
-			events = append(events, "window close")
-			return err
-		},
-		ensurePricing: func(context.Context) error {
+	pusher := testReplicaPusher(archivepush.ReplicaSession{
+		EnsurePricing: func(context.Context) error {
 			events = append(events, "pricing ensure")
 			return nil
 		},
-		connect: func(context.Context) (storage.Pusher, error) {
+		Connect: func(context.Context) (storage.Pusher, error) {
 			events = append(events, "connect")
 			return target, nil
 		},
-	}
+	})
 
 	require.NoError(t, pusher.push(
 		t.Context(), reasonChange, false,
 	))
-	assert.Equal(t, []string{
-		"window open", "pricing ensure", "connect", "push", "window close",
-	}, events)
+	assert.Equal(t, []string{"pricing ensure", "connect", "push"}, events)
 }
 
 func TestPGPusherPricingFailureWarnsAndContinues(t *testing.T) {
 	wantErr := errors.New("catalog unavailable")
 	target := &fakeTarget{}
 	logs := captureLogOutput(t)
-	pusher := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		window:        pushDirectly,
-		ensurePricing: func(context.Context) error { return wantErr },
-		connect:       func(context.Context) (storage.Pusher, error) { return target, nil },
-	}
+	pusher := testReplicaPusher(archivepush.ReplicaSession{
+		EnsurePricing: func(context.Context) error { return wantErr },
+		Connect:       func(context.Context) (storage.Pusher, error) { return target, nil },
+	})
 
 	require.NoError(t, pusher.push(
 		t.Context(), reasonChange, false,
@@ -432,19 +424,17 @@ func TestPGPusherPricingFailureWarnsAndContinues(t *testing.T) {
 func TestPGPusherCanceledPricingStopsBeforeConnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	connectCalled := false
-	pusher := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		window: pushDirectly,
-		ensurePricing: func(got context.Context) error {
+	pusher := testReplicaPusher(archivepush.ReplicaSession{
+		EnsurePricing: func(got context.Context) error {
 			require.Equal(t, ctx, got)
 			cancel()
 			return got.Err()
 		},
-		connect: func(context.Context) (storage.Pusher, error) {
+		Connect: func(context.Context) (storage.Pusher, error) {
 			connectCalled = true
 			return &fakeTarget{}, nil
 		},
-	}
+	})
 
 	err := pusher.push(ctx, reasonChange, false)
 
@@ -482,13 +472,11 @@ func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
 }
 
 func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
-	p := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		window: pushDirectly,
-		connect: func(context.Context) (storage.Pusher, error) {
+	p := testReplicaPusher(archivepush.ReplicaSession{
+		Connect: func(context.Context) (storage.Pusher, error) {
 			return nil, errors.New("dial timeout")
 		},
-	}
+	})
 	require.Error(t, p.push(t.Context(), reasonChange, false))
 }
 
@@ -508,7 +496,6 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 
 	got := logs.String()
 	assert.Contains(t, got, "pushed 3 sessions, 9 messages, 2 errors")
-	assert.Contains(t, got, "2 session(s) failed to push; will retry")
 	assert.Contains(t, got, "change")
 }
 
@@ -694,7 +681,7 @@ func TestPGPusherFullVectorRepairNarrowsToDeferredSessions(t *testing.T) {
 	}
 	target := &fakeTarget{}
 	pusher, _ := newTestReplicaPusher(target)
-	pusher.fullVectorsPending = true
+	pusher.vectors.fullPending = true
 	steps := []storage.PushResult{
 		{Vectors: storage.VectorPushResult{Skipped: true}},
 		deferred("s1"),

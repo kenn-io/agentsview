@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -321,13 +322,12 @@ func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
 	embedder, err := newReplicaEmbedder(cfg, replica, embedTarget(), archive)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
-	pusher := &replicaPusher{
-		window: pushDirectly,
-		connect: func(ctx context.Context) (storage.Pusher, error) {
+	pusher := testReplicaPusher(archivepush.ReplicaSession{
+		Connect: func(ctx context.Context) (storage.Pusher, error) {
 			return replica.NewPusher(ctx, storage.ReplicaTarget{}, archive, storage.PusherOptions{VectorSource: embedder})
 		},
-	}
-	t.Cleanup(pusher.reset)
+	})
+	t.Cleanup(pusher.session.Close)
 	require.NoError(t, pusher.push(t.Context(), reasonStartup, false))
 	require.Error(t, embedder.startScheduler(t.Context()))
 	assert.Equal(t, []bool{true}, replica.skipped)

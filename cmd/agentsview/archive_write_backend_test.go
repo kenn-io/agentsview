@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -145,7 +146,6 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 		pgReplica{},
 		func(context.Context) (storage.Pusher, error) { return target, nil },
 	)
-	pusher.window = pushDirectly
 
 	require.NoError(t, pusher.push(
 		t.Context(), reasonChange, false,
@@ -627,7 +627,9 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			target := &pushWatchPGTarget{harness: h}
 			return &replicaPusher{
-				connect: func(context.Context) (storage.Pusher, error) { return target, nil },
+				session: archivepush.ReplicaSession{
+					Connect: func(context.Context) (storage.Pusher, error) { return target, nil },
+				},
 			}
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
@@ -798,8 +800,8 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 				assert.Equal(t, reasonStartup, first.reason)
 				synctest.Wait()
 				pending, waiters := h.pending()
-				require.True(t, pending && waiters == 1,
-					"partial startup must retain one dirty generation and waiter")
+				require.True(t, pending && waiters == 0,
+					"partial startup must stay queued for retry")
 				select {
 				case <-h.opened:
 					require.Fail(t, "partial startup opened watcher dispatch")
@@ -1440,7 +1442,9 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			return &replicaPusher{
-				connect: func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
+				session: archivepush.ReplicaSession{
+					Connect: func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
+				},
 			}
 		},
 		newUnwatchedPoller: func(

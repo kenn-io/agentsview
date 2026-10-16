@@ -5,12 +5,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -70,10 +75,12 @@ func TestLocalPushWatchIngestsWhileRemotePushBlocks(t *testing.T) {
 					newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 						return &replicaPusher{
 							label: "clickhouse watch", displayName: "ClickHouse",
-							connect: func(context.Context) (storage.Pusher, error) {
-								return remote, nil
+							session: archivepush.ReplicaSession{
+								Connect: func(context.Context) (storage.Pusher, error) {
+									return remote, nil
+								},
 							},
-							vectorReconcileNeeded: true,
+							vectors: newVectorReconcile(),
 						}
 					},
 				}
@@ -319,4 +326,143 @@ func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	))
 	lane.syncAll(ctx)
 	assert.True(t, queued(), "a sync that wrote a session queues a push")
+}
+
+// A push waits for an in-progress local sync, so it never copies a session
+// that the sync has only half written.
+func TestArchiveSyncLaneSettlesBeforePush(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
+	t.Cleanup(engine.Close)
+	lane := &archiveSyncLane{
+		label: "test watch", engine: engine, openDispatch: func() {},
+	}
+	lane.ready.Store(true)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	releaseSync := sync.OnceFunc(func() { close(release) })
+	// Runs before the engine closes, which waits for the held sync.
+	t.Cleanup(releaseSync)
+	syncDone := make(chan error, 1)
+	go func() {
+		syncDone <- engine.RunExclusive(func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	var pushed atomic.Bool
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- lane.push(t.Context(), reasonChange, nil, func(
+			context.Context, pushReason, bool, *syncpkg.WatchBatch,
+		) error {
+			pushed.Store(true)
+			return nil
+		})
+	}()
+	require.Eventually(t, func() bool {
+		return pushed.Load() || goroutineBlockedOnMutexIn("(*Engine).SettleForPush")
+	}, 10*time.Second, 5*time.Millisecond)
+	require.False(t, pushed.Load(), "a push must wait for an in-progress sync")
+
+	releaseSync()
+	require.NoError(t, <-syncDone)
+	require.NoError(t, <-pushDone)
+	assert.True(t, pushed.Load())
+}
+
+// Shutdown stops the watcher before the final push. A watcher batch can hold
+// the sync lock until the watcher cancels it, and the final push waits for
+// that lock, so stopping the watcher afterwards would stall shutdown.
+func TestLocalPushWatchStopsWatcherBeforeFinalPush(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}
+	callbackCtx, stopCallbacks := context.WithCancel(t.Context())
+	t.Cleanup(stopCallbacks)
+	engines := make(chan *syncpkg.Engine, 1)
+	pushed := make(chan struct{}, 2)
+	target := &fakeTarget{onPush: func() {
+		record("push")
+		pushed <- struct{}{}
+	}}
+	backend.watchHooks = &archivePushWatchHooks{
+		startWatcher: func(
+			config.Config, *syncpkg.Engine, syncpkg.WatchCallback,
+			syncpkg.WatcherOptions,
+		) (func(), func(), []string) {
+			return func() {
+				record("watcher stopped")
+				stopCallbacks()
+			}, func() {}, nil
+		},
+		replicaStartupSync: func(
+			_ context.Context, engine *syncpkg.Engine, _ bool,
+		) (bool, error) {
+			engines <- engine
+			return false, nil
+		},
+		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
+			return &replicaPusher{
+				session: archivepush.ReplicaSession{
+					Connect: func(context.Context) (storage.Pusher, error) {
+						return target, nil
+					},
+				},
+				vectors: newVectorReconcile(),
+			}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() {
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{},
+			nil, nil, time.Hour, time.Hour,
+		)
+	}()
+	engine := <-engines
+	<-pushed
+
+	// Stand in for a watcher batch that syncs until the watcher stops it.
+	held := make(chan struct{})
+	batchDone := make(chan error, 1)
+	go func() {
+		batchDone <- engine.RunExclusive(func() error {
+			close(held)
+			<-callbackCtx.Done()
+			return nil
+		})
+	}()
+	<-held
+
+	cancel()
+	require.NoError(t, <-done)
+	require.NoError(t, <-batchDone)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"push", "watcher stopped", "push"}, events,
+		"the final push runs after the watcher stops")
+}
+
+func goroutineBlockedOnMutexIn(fn string) bool {
+	buf := make([]byte, 1<<20)
+	for g := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
+			return true
+		}
+	}
+	return false
 }
