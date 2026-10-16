@@ -1706,13 +1706,11 @@ func TestDirectBackend_Stats_ArchiveOnlyHostOutcomesUnavailable(t *testing.T) {
 	}
 }
 
-func TestDirectUsageRefreshRequiresCombinedID(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{Ephemeral: true})
-	t.Cleanup(engine.Close)
-	backend := service.NewDirectBackend(database, engine)
-	_, err := backend.Sync(t.Context(), service.SyncInput{
-		ID: "parent", UsageRefresh: true,
-	})
-	require.ErrorIs(t, err, service.ErrInvalidUsageRefresh)
+func TestValidateUsageRefreshRequiresCombinedID(t *testing.T) {
+	for _, input := range []service.SyncInput{
+		{UsageRefresh: true, Subagents: true},
+		{ID: "parent", UsageRefresh: true},
+	} {
+		require.ErrorIs(t, service.ValidateUsageRefresh(input), service.ErrInvalidUsageRefresh)
+	}
 }

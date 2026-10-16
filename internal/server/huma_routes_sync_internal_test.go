@@ -2589,6 +2589,8 @@ func TestUsageRefreshRoute(t *testing.T) {
 				f.srv.engine = engine
 				f.srv.sessions = service.NewDirectBackend(f.db, engine)
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
+				f.writeClaudeTranscript(t, "project/parent.jsonl",
+					strings.ReplaceAll(content, `"output_tokens":20`, `"output_tokens":30`))
 
 				body := map[string]any{"id": "parent", "subagents": true, "usage_refresh": true}
 				w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
@@ -2600,6 +2602,12 @@ func TestUsageRefreshRoute(t *testing.T) {
 
 				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				usage, err = service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+				require.NoError(t, err)
+				require.NotNil(t, usage)
+				assert.Equal(t, 30, usage.TotalOutputTokens)
 			},
 		},
 		{

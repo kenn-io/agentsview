@@ -1622,15 +1622,16 @@ func TestSessionUsage_NoSyncLocalAttributionAndMissingData(t *testing.T) {
 
 func TestSessionUsageRemoteCombinedAPIVersionRequirements(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		version   int
-		noSync    bool
-		wantError string
+		name                     string
+		version                  int
+		noSync                   bool
+		wantError, wantErrorAlso string
 	}{
 		{
-			name:      "combined usage requires API 6",
-			version:   server.SubagentUsageAPIVersion - 1,
-			wantError: "does not support combined subagent usage",
+			name:          "combined usage requires API 6",
+			version:       server.SubagentUsageAPIVersion - 1,
+			wantError:     "does not support combined subagent usage",
+			wantErrorAlso: "--own-only",
 		},
 		{
 			name:      "refresh requires API 12",
@@ -1656,6 +1657,9 @@ func TestSessionUsageRemoteCombinedAPIVersionRequirements(t *testing.T) {
 			out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
+				if tc.wantErrorAlso != "" {
+					assert.ErrorContains(t, err, tc.wantErrorAlso)
+				}
 				assert.Nil(t, out)
 				assert.Equal(t, tokenUseExitErr, code)
 				assert.Equal(t, []string{"/api/v1/version"}, reqs.RequestPath)

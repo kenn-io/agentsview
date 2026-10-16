@@ -71,7 +71,7 @@ func TestUsageCommandsDeferStartupSyncExceptStatusline(t *testing.T) {
 	}
 }
 
-func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
+func TestDailyUsageDefersReconciliationUntilFreshQuery(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
