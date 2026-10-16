@@ -1799,9 +1799,9 @@ func CodexReplayParentID(childPath string) (string, bool) {
 	return codexReplayParentIDContext(context.Background(), childPath)
 }
 
-// ReadCodexRolloutSessionID reads the owning metadata ID without replaying the
-// transcript. Archive repairs use it before copying trash, which must not be
-// reparsed into live sessions. Revert-page naming remains a separate concern.
+// ReadCodexRolloutSessionID reads the owning thread or page key without replaying
+// the transcript. Archive repairs use the same header and filename rules as
+// the parser before copying trash, which must not be reparsed into live sessions.
 func ReadCodexRolloutSessionID(ctx context.Context, path string) (string, error) {
 	f, err := openCodexRolloutLines(path)
 	if err != nil {
@@ -1814,6 +1814,11 @@ func ReadCodexRolloutSessionID(ctx context.Context, path string) (string, error)
 		line := scanner.Text()
 		if gjson.Valid(line) && gjson.Get(line, "type").Str == codexTypeSessionMeta {
 			if id := gjson.Get(line, "payload.id").Str; id != "" {
+				key := CodexSessionUUIDFromPath(path)
+				thread := codexRevertPageThreadID(key, id, gjson.Get(line, "payload.session_id").Str)
+				if page, _, ok := codexRevertPage(path, thread, "", "", false); ok {
+					return page, nil
+				}
 				return id, nil
 			}
 		}

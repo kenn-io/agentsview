@@ -406,7 +406,9 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		WHERE copied.id != copied.source_id
 		  -- Only a pre-131 page keeps its thread's ID as the source. A page
 		  -- whose source ID was retired has no thread row under that ID.
-		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'`); err != nil {
+		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'
+          AND EXISTS (SELECT 1 FROM _codex_session_ids mapped
+              WHERE mapped.source_id = old_s.id AND mapped.is_page = 1)`); err != nil {
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
 
@@ -3028,19 +3030,6 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		if err := mapRetainedCodexThreads(ctx, conn); err != nil {
 			return 0, err
 		}
-		// A's row held B's file. The new parse identifies B even if A's own
-		// rollout is also present, or B's file has a noncanonical name.
-		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO _codex_session_ids (source_id, target_id, is_page, is_thread_correction)
-			SELECT old_s.id, new_s.id, 0, 1
-			FROM old_db.sessions old_s
-			JOIN main.sessions new_s ON new_s.file_path = old_s.file_path AND new_s.agent = old_s.agent
-			WHERE old_s.agent IN ('codex', 'traex', 'augure-code')
-			  AND old_s.file_path != '' AND old_s.id != new_s.id AND new_s.deleted_at IS NULL
-			ON CONFLICT(source_id) DO UPDATE SET
-				target_id = excluded.target_id, is_thread_correction = 1`); err != nil {
-			return 0, fmt.Errorf("mapping corrected Codex threads: %w", err)
-		}
 	}
 	return version, nil
 }
@@ -3065,9 +3054,13 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT old_s.id, old_s.file_path, (
 			SELECT new_s.id FROM main.sessions new_s
-			WHERE new_s.file_path = old_s.file_path AND new_s.agent = old_s.agent
-			  AND new_s.deleted_at IS NULL LIMIT 1
-		) FROM old_db.sessions old_s
+			WHERE new_s.file_path IN `+codexSourcePathsSQL("old_s.file_path")+` AND new_s.agent = old_s.agent
+              AND new_s.deleted_at IS NULL LIMIT 1
+        ), EXISTS (
+            SELECT 1 FROM old_db.sessions peer
+            WHERE peer.file_path IN `+codexSourcePathsSQL("old_s.file_path")+`
+              AND peer.agent = old_s.agent AND peer.id != old_s.id
+        ) FROM old_db.sessions old_s
 		WHERE old_s.agent IN ('codex', 'traex', 'augure-code') AND old_s.file_path != ''`)
 	if err != nil {
 		return fmt.Errorf("reading retained Codex sources: %w", err)
@@ -3076,11 +3069,12 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 	type source struct {
 		id, path string
 		parsed   sql.NullString
+		shared   bool
 	}
 	var sources []source
 	for rows.Next() {
 		var s source
-		if err := rows.Scan(&s.id, &s.path, &s.parsed); err != nil {
+		if err := rows.Scan(&s.id, &s.path, &s.parsed, &s.shared); err != nil {
 			return err
 		}
 		sources = append(sources, s)
@@ -3102,6 +3096,11 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		if mappedPage {
 			continue // Keep verified historical page mappings.
 		}
+		if s.shared {
+			// A shared historical path does not identify which transcript
+			// owns a filename or parsed ID. Preserve every archived row.
+			s.parsed = sql.NullString{}
+		}
 		prefixEnd := strings.LastIndex(s.id, ":") + 1
 		if prefixEnd == 0 {
 			continue
@@ -3111,7 +3110,7 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			return err
 		}
 		target := s.parsed.String
-		if target == "" {
+		if target == "" && !s.shared {
 			id := key
 			var err error
 			if !archiveOnly {
@@ -3123,7 +3122,7 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 				var kept bool
 				if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
 					SELECT 1 FROM main.sessions WHERE id = ?1
-					  AND (file_path IS NULL OR file_path = '' OR file_path = ?2)
+					  AND (file_path IS NULL OR file_path = '' OR file_path IN `+codexSourcePathsSQL("?2")+`)
 				)`, s.id, s.path).Scan(&kept); err != nil {
 					return err
 				}
@@ -3144,7 +3143,7 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		if target == "" || target == s.id {
 			var displaced bool
 			if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
-				SELECT 1 FROM main.sessions WHERE id = ? AND file_path != '' AND file_path != ?
+				SELECT 1 FROM main.sessions WHERE id = ?1 AND file_path != '' AND file_path NOT IN `+codexSourcePathsSQL("?2")+`
 			)`, s.id, s.path).Scan(&displaced); err != nil {
 				return err
 			}
@@ -3157,8 +3156,8 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		}
 		var occupied bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1 FROM main.sessions WHERE id = ?1 AND file_path IS NOT ?2
-			UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND file_path IS NOT ?2
+			SELECT 1 FROM main.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
+			UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
 		)`, target, s.path).Scan(&occupied); err != nil {
 			return err
 		}
@@ -3168,8 +3167,8 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 				continue
 			}
 			if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
-				SELECT 1 FROM main.sessions WHERE id = ?1 AND file_path IS NOT ?2
-				UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND file_path IS NOT ?2
+				SELECT 1 FROM main.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
+				UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
 			)`, target, s.path).Scan(&occupied); err != nil {
 				return err
 			}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestCodexPermanentDeletionFollowsSourcePath(t *testing.T) {
@@ -37,5 +38,67 @@ func TestCodexPermanentDeletionFollowsSourcePath(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
+	for _, mode := range []string{"new_destination", "same_transcript", "other_source", "delete_failure"} {
+		t.Run(mode, func(t *testing.T) {
+			database := testDB(t)
+			ctx := t.Context()
+			path := filepath.Join(t.TempDir(), "rollout-restored.jsonl")
+			oldID := parser.AltSessionID("codex:old", path)
+			const id = "codex:corrected"
+			require.NoError(t, database.UpsertSession(ctx, Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135}))
+			require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: oldID, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
+			require.NoError(t, database.RenameSession(ctx, oldID, new("Saved name")))
+			_, err := database.StarSession(ctx, oldID)
+			require.NoError(t, err)
+			messages, err := database.GetAllMessages(ctx, oldID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			_, err = database.PinMessage(ctx, oldID, messages[0].ID, new("saved note"))
+			require.NoError(t, err)
+			if mode == "same_transcript" || mode == "other_source" {
+				destinationPath := path
+				if mode == "other_source" {
+					destinationPath = filepath.Join(t.TempDir(), "another.jsonl")
+				}
+				require.NoError(t, database.UpsertSession(ctx, Session{ID: id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &destinationPath}))
+				require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
+			}
+			if mode == "delete_failure" {
+				_, err = database.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_identity_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'forced delete failure'); END`)
+				require.NoError(t, err)
+			}
+			err = database.RecoverCodexSessionIdentity(ctx, oldID, id, path, "codex")
+			retainedID := id
+			if mode == "other_source" || mode == "delete_failure" {
+				require.Error(t, err)
+				retainedID = oldID
+			} else {
+				require.NoError(t, err)
+				requireSessionGone(t, database, oldID)
+			}
+			pins, err := database.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, retainedID, pins[0].SessionID)
+			assert.Equal(t, new("saved note"), pins[0].Note)
+			saved, err := database.GetSession(ctx, retainedID)
+			require.NoError(t, err)
+			require.NotNil(t, saved)
+			assert.Equal(t, new("Saved name"), saved.DisplayName)
+			stars, err := database.ListStarredSessionIDs(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{retainedID}, stars)
+			messages, err = database.GetAllMessages(ctx, retainedID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "saved question", messages[0].Content)
+			if mode == "delete_failure" {
+				requireSessionGone(t, database, id)
+			}
+		})
 	}
 }

@@ -422,18 +422,23 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 }
 
 func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
-	for _, readable := range []bool{false, true} {
-		t.Run(fmt.Sprintf("source_readable=%t", readable), func(t *testing.T) {
+	for _, tc := range []struct{ readable, canonical bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprintf("source_readable=%t/canonical=%t", tc.readable, tc.canonical), func(t *testing.T) {
 			ctx := t.Context()
 			data := t.TempDir()
 			path := filepath.Join(data, "sessions.db")
 			database, err := db.OpenIsolatedContext(ctx, path)
 			require.NoError(t, err)
-			sourcePath := filepath.Join(t.TempDir(), "rollout.jsonl")
-			if readable {
+			activeID, filename := "codex:active-fork", "rollout.jsonl"
+			if tc.canonical {
+				activeID = "codex:22222222-2222-7222-8222-222222222222"
+				filename = "rollout-2025-10-20T12-00-00-22222222-2222-7222-8222-222222222222.jsonl"
+			}
+			sourcePath := filepath.Join(t.TempDir(), filename)
+			if tc.readable {
 				dbtest.WriteTestFile(t, sourcePath, []byte(`{"type":"session_meta","payload":{"id":"another-thread"}}`+"\n"))
 			}
-			for _, id := range []string{"codex:trashed-parent", "codex:active-fork"} {
+			for _, id := range []string{"codex:trashed-parent", activeID} {
 				require.NoError(t, database.UpsertSession(ctx, db.Session{ID: id, Agent: "codex", Project: "example", Machine: "original", FilePath: &sourcePath, MessageCount: 1}))
 				require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: id}}))
 			}
@@ -469,11 +474,11 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 			rebuiltGeneration, err := got.GetOrCreateDatabaseID(ctx)
 			require.NoError(t, err)
 			assert.NotEqual(t, originalGeneration, rebuiltGeneration)
-			session, err := got.GetSessionFull(ctx, "codex:active-fork")
+			session, err := got.GetSessionFull(ctx, activeID)
 			require.NoError(t, err)
 			require.NotNil(t, session, "archive-only restore must retain the active row beside its historical trashed same-path row")
 			assert.False(t, got.NeedsResync())
-			for _, id := range []string{"codex:trashed-parent", "codex:active-fork"} {
+			for _, id := range []string{"codex:trashed-parent", activeID} {
 				messages, err := got.GetAllMessages(ctx, id)
 				require.NoError(t, err)
 				require.Len(t, messages, 1)

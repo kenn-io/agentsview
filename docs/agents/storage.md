@@ -188,8 +188,14 @@ its transcript, pins, notes, rename, and star. Missing sources can use a
 recoverable filename identity to preserve their archived transcript without
 replacing another source. Revert pages retain their full page identity. When the
 canonical identity is unavailable or already belongs to another source, a stable
-alternative ID preserves the archived transcript and pins. Archive-only rebuilds
-do not consult files on the receiving host.
+alternative ID preserves the archived transcript and pins. When that source
+returns, its archived content and curation move to the recovered identity in one
+transaction before the alternative is removed. A destination owned by another
+source is left intact. Plain and compressed paths identify the same rollout
+during correction and ownership checks. Multiple archived identities sharing a
+path remain separate. Archive-only rebuilds do not consult files on the
+receiving host. Empty trash anchors are limited to verified historical page
+mappings.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -222,7 +223,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 }
 
 func TestCodexThreadCorrectionPreservesPostgresPins(t *testing.T) {
-	for _, mode := range []string{"full", "original_absent", "original_first", "corrected_first", "noncanonical", "excluded_destination"} {
+	for _, mode := range []string{"full", "original_absent", "original_first", "corrected_first", "noncanonical", "plain_to_compressed", "compressed_to_plain", "excluded_destination"} {
 		t.Run(mode, func(t *testing.T) {
 			const oldID = "codex:11111111-1111-7111-8111-111111111111"
 			const correctedID = "codex:22222222-2222-7222-8222-222222222222"
@@ -235,6 +236,9 @@ func TestCodexThreadCorrectionPreservesPostgresPins(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "rollout-2026-10-16T12-00-00-22222222-2222-7222-8222-222222222222.jsonl")
 			if mode == "noncanonical" {
 				path = filepath.Join(t.TempDir(), "rollout-restored.jsonl")
+			}
+			if mode == "compressed_to_plain" {
+				path += ".zst"
 			}
 			require.NoError(t, source.UpsertSession(ctx, db.Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &path, MessageCount: 1}))
 			require.NoError(t, source.InsertMessages(ctx, []db.Message{{SessionID: oldID, Role: "user", Content: "saved corrected transcript", SourceUUID: "corrected-message"}}))
@@ -260,6 +264,12 @@ func TestCodexThreadCorrectionPreservesPostgresPins(t *testing.T) {
 					continue
 				}
 				file, content, uuid := path, "saved corrected transcript", "corrected-message"
+				if mode == "plain_to_compressed" {
+					file += ".zst"
+				}
+				if mode == "compressed_to_plain" {
+					file = strings.TrimSuffix(file, ".zst")
+				}
 				if id == oldID {
 					file = filepath.Join(t.TempDir(), "rollout-original.jsonl")
 					content, uuid = "original transcript", "original-message"
@@ -365,5 +375,95 @@ func TestCodexCorrectionLookupStaysBounded(t *testing.T) {
 			assert.LessOrEqual(t, buffers, small+20)
 		}
 		t.Logf("sessions=%d buffers=%.0f", count, buffers)
+	}
+}
+
+func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
+	for _, mode := range []string{"chain", "cycle", "chain_first_batch", "cycle_first_batch", "chain_destination_first"} {
+		t.Run(mode, func(t *testing.T) {
+			const schema = "agentsview_codex_pin_chain"
+			ctx := t.Context()
+			pgURL := testPGURL(t)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			source := testDB(t)
+			root := t.TempDir()
+			pathA, pathB, pathC := filepath.Join(root, "rollout-a.jsonl"), filepath.Join(root, "rollout-b.jsonl"), filepath.Join(root, "rollout-c.jsonl")
+			lastPath, lastContent, lastUUID := pathC, "transcript C", "message-c"
+			lastID, lastNote := "codex:c", "note C"
+			if strings.HasPrefix(mode, "cycle") {
+				lastPath, lastContent, lastUUID = pathA, "transcript A", "message-a"
+				lastID, lastNote = "codex:a", "note A"
+			}
+			for _, old := range []struct{ id, path, content, uuid string }{
+				{"codex:a", pathB, "transcript B", "message-b"},
+				{"codex:b", lastPath, lastContent, lastUUID},
+			} {
+				require.NoError(t, source.UpsertSession(ctx, db.Session{ID: old.id, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &old.path, MessageCount: 1}))
+				require.NoError(t, source.InsertMessages(ctx, []db.Message{{SessionID: old.id, Role: "user", Content: old.content, SourceUUID: old.uuid}}))
+				require.NoError(t, source.SetSessionDataVersion(ctx, old.id, 135))
+			}
+			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			result, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			store := &Store{pg: syncer.pg}
+			_, err = store.PinMessage(ctx, "codex:a", 0, new("note B"))
+			require.NoError(t, err)
+			_, err = store.PinMessage(ctx, "codex:b", 0, &lastNote)
+			require.NoError(t, err)
+			require.NoError(t, source.Close())
+			rebuilt := testDB(t)
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
+			require.NoError(t, rebuilt.CopySyncStateFrom(source.Path()))
+			for _, corrected := range []struct{ id, path, content, uuid string }{
+				{"codex:a", pathA, "transcript A", "message-a"},
+				{"codex:b", pathB, "transcript B", "message-b"},
+				{"codex:c", pathC, "transcript C", "message-c"},
+			} {
+				if strings.HasPrefix(mode, "cycle") && corrected.id == "codex:c" {
+					continue
+				}
+				require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{ID: corrected.id, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &corrected.path, MessageCount: 1}))
+				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: corrected.id, Role: "user", Content: corrected.content, SourceUUID: corrected.uuid}}))
+				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, corrected.id, db.CurrentDataVersion()))
+			}
+			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+			if strings.Contains(mode, "batch") || mode == "chain_destination_first" {
+				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+				require.NoError(t, err)
+				upgraded.databaseGeneration, err = rebuilt.GetDatabaseID(ctx)
+				require.NoError(t, err)
+				marker, err := upgraded.pushMarkerID(ctx)
+				require.NoError(t, err)
+				firstID := "codex:a"
+				if mode == "chain_destination_first" {
+					firstID = "codex:c"
+				}
+				first, err := rebuilt.GetSessionFull(ctx, firstID)
+				require.NoError(t, err)
+				require.NotNil(t, first)
+				var pushed []db.Session
+				batch, err := upgraded.pushBatch(ctx, []db.Session{*first}, true, marker, nil, nil, &pushed)
+				require.NoError(t, err)
+				require.True(t, batch.ok)
+			}
+			result, err = upgraded.Push(ctx, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			pins, err := store.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			notes := map[string]string{}
+			for _, pin := range pins {
+				if pin.Note != nil {
+					notes[pin.SessionID] = *pin.Note
+				}
+			}
+			assert.Equal(t, map[string]string{"codex:b": "note B", lastID: lastNote}, notes)
+		})
 	}
 }

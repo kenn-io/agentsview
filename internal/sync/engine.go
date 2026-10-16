@@ -14375,6 +14375,26 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 				return nil, err
 			}
 		}
+		// A pre-136 repair may retain a missing Codex source under an
+		// alternative ID. Recover its archived curation before stale-row
+		// cleanup cascades through that row. The DB verifies source ownership
+		// and publishes the retained content and curation atomically.
+		for _, result := range res.results {
+			agent := string(result.Session.Agent)
+			if agent != "codex" && agent != "traex" && agent != "augure-code" {
+				continue
+			}
+			path := result.Session.File.Path
+			if e.pathRewriter != nil {
+				path = e.pathRewriter(path)
+			}
+			id := e.applyIDPrefixToSessionIDs([]string{result.Session.ID})[0]
+			for _, oldID := range excluded {
+				if err := e.db.RecoverCodexSessionIdentity(ctx, oldID, id, path, agent); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if _, err := e.db.DeleteParserExcludedSessions(ctx, excluded); err != nil {
 			return nil, err
 		}

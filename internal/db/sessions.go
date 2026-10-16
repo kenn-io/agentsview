@@ -1386,14 +1386,18 @@ func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent strin
 	return n == 1
 }
 
-const codexSourcePathsSQL = `(?1, CASE
-		WHEN substr(?1, -10) = '.jsonl.zst' THEN substr(?1, 1, length(?1) - 4)
-		WHEN substr(?1, -6) = '.jsonl' THEN ?1 || '.zst'
-		ELSE ?1 END)`
+// codexSourcePathsSQL lists both storage representations of one rollout.
+// path is an internal SQL expression, never a source path supplied by a caller.
+func codexSourcePathsSQL(path string) string {
+	return `(` + path + `, CASE
+        WHEN substr(` + path + `, -10) = '.jsonl.zst' THEN substr(` + path + `, 1, length(` + path + `) - 4)
+        WHEN substr(` + path + `, -6) = '.jsonl' THEN ` + path + ` || '.zst'
+        ELSE ` + path + ` END)`
+}
 
-const excludedCodexSourceQuery = `SELECT EXISTS (
-	SELECT 1 FROM excluded_sessions WHERE file_path IN ` + codexSourcePathsSQL + ` AND file_path != ''
-	AND (id GLOB ?2 OR id GLOB ?3)
+var excludedCodexSourceQuery = `SELECT EXISTS (
+    SELECT 1 FROM excluded_sessions WHERE file_path IN ` + codexSourcePathsSQL("?1") + ` AND file_path != ''
+    AND (id GLOB ?2 OR id GLOB ?3)
 )`
 
 // CorrectedCodexSessionID identifies a unique retained source after an identity
@@ -1403,7 +1407,7 @@ func (db *DB) CorrectedCodexSessionID(ctx context.Context, oldID, path, agent st
 		return "", nil
 	}
 	rows, err := db.getReader().Query(ctx, `SELECT id FROM sessions
-		WHERE file_path IN `+codexSourcePathsSQL+` AND agent = ?2 LIMIT 2`, path, agent)
+		WHERE file_path IN `+codexSourcePathsSQL("?1")+` AND agent = ?2 LIMIT 2`, path, agent)
 	if err != nil {
 		return "", err
 	}

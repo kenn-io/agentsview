@@ -90,7 +90,22 @@ func (s *Sync) migrateCodexPages(
 	if err := rows.Close(); err != nil {
 		return err
 	}
+	type correction struct {
+		old                 legacyPage
+		page                db.Session
+		head                *db.Session
+		pins                []savedPostgresPin
+		hasHead, pageExists bool
+	}
+	var corrections []correction
+	seen := make(map[string]bool, len(pages))
 	for _, old := range pages {
+		seen[old.id] = true
+	}
+	// Discover every overwritten destination before publishing any messages.
+	// A destination may itself hold another source, outside this push batch.
+	for i := 0; i < len(pages); i++ {
+		old := pages[i]
 		incoming, selected := threads[old.id]
 		if !selected {
 			incoming = sources[old.path]
@@ -182,6 +197,27 @@ func (s *Sync) migrateCodexPages(
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, pageID).Scan(&pageExists); err != nil {
 			return fmt.Errorf("checking retained Codex page: %w", err)
 		}
+		corrections = append(corrections, correction{old: old, page: *page, head: head, pins: pins, hasHead: hasHead, pageExists: pageExists})
+		if !seen[pageID] {
+			seen[pageID] = true
+			threads[pageID] = *page
+			var dependency legacyPage
+			err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
+                FROM sessions WHERE id = $1 AND data_version < 136
+                AND provenance_kind = 'legacy' AND agent IN ('codex','traex','augure-code') FOR UPDATE`, pageID).
+				Scan(&dependency.id, &dependency.path, &dependency.agent, &dependency.machine, &dependency.owner, &dependency.archive, &dependency.dataVersion)
+			if err == nil {
+				pages = append(pages, dependency)
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+	}
+	// Pins still refer to their original messages in every snapshot, including
+	// cycles. Publish all destinations before moving any of those pins.
+	for _, correction := range corrections {
+		old, page, head := correction.old, correction.page, correction.head
+		hasHead, pageID := correction.hasHead, page.ID
 		// Apply a selected empty anchor's current trash scope before the page
 		// can inherit it. Its messages remain available for pin matching.
 		if head != nil && !hasHead && slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id }) {
@@ -189,7 +225,7 @@ func (s *Sync) migrateCodexPages(
 				return fmt.Errorf("publishing Codex trash anchor metadata: %w", err)
 			}
 		}
-		if err := s.pushSession(ctx, tx, *page, markerID, legacyMarkerMachines); err != nil {
+		if err := s.pushSession(ctx, tx, page, markerID, legacyMarkerMachines); err != nil {
 			return fmt.Errorf("publishing retained Codex page: %w", err)
 		}
 		if _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
@@ -203,9 +239,16 @@ func (s *Sync) migrateCodexPages(
 		if _, err := s.pushFrictionFindings(ctx, tx, pageID); err != nil {
 			return err
 		}
-		if err := restorePinnedMessages(ctx, tx, pageID, pins); err != nil {
+	}
+	for _, correction := range corrections {
+		if err := restorePinnedMessages(ctx, tx, correction.page.ID, correction.pins); err != nil {
 			return err
 		}
+	}
+	for _, correction := range corrections {
+		old, pageID := correction.old, correction.page.ID
+		hasHead, pageExists := correction.hasHead, correction.pageExists
+
 		// SQLite may keep a thread row without a file as a trash-scope anchor.
 		// It does not represent a surviving original rollout.
 		if !hasHead {
