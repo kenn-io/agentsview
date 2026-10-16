@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -29,6 +30,7 @@ type Store struct {
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
+	frictionAvailable          atomic.Bool
 
 	pricingMu     sync.Mutex
 	pricingLoadMu sync.Mutex

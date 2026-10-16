@@ -8,8 +8,9 @@ notice. Source paths below are relative to that jilog commit.
 
 The pure detection, signal, formatting, JSON, archived-row adapter, session
 review, and digest renderer are built, and sync stores each session's findings.
-Scheduling, NanoClaw integration, and Kata filing remain planned. Sections
-marked planned record the approved mapping, not current behavior.
+Daily scheduling and stored digests are built. NanoClaw integration and Kata
+filing remain planned. Sections marked planned record the approved mapping, not
+current behavior.
 
 ## Kept
 
@@ -39,11 +40,6 @@ marked planned record the approved mapping, not current behavior.
 
 ## Planned replacements
 
-- Database tables replace the processed-sessions file and retry sidecar. A
-  catch-up job will build each completed local day once, replacing the nightly
-  run.
-- A direct usage-rollup query will replace the `agentsview usage daily`
-  shell-out for archive spend.
 - A native Kata HTTP client will replace the Kata CLI tracker. Filing remains
   off until a Kata hub is configured.
 - Generic NanoClaw persona and channel resolution, trust filtering, and
@@ -81,8 +77,7 @@ marked planned record the approved mapping, not current behavior.
   markers and interrupted-turn rows. They do not change a jilog kind.
 - Archived tool calls supply error and pattern findings. jilog's AgentsView
   reader cannot produce those findings from its session rows.
-- Detection and digests are planned to be on by default, as running jilog makes
-  them. P0 filing awaits the archive and Kata integration.
+- Detection and digests are opt-in. P0 filing awaits Kata integration.
 
 ## Deliberate differences
 
@@ -135,9 +130,9 @@ Additions beyond jilog:
 - Frustration markers (`signals.IsFrustrationMarker`) and user interruptions
   (rows the Claude parser tags `interrupted`) are friction kinds of their own.
   They run after jilog's five kinds.
-- `SeatFromPath` uses only the patterns its caller provides. Wiring those
-  patterns to `[friction] seat_patterns` configuration is planned for a later
-  PR. jilog's built-in pool-directory conventions are not carried over.
+- `SeatFromPath` uses only the patterns its caller provides. The digest runner
+  reads those patterns from `[friction] seat_patterns`. jilog's built-in
+  pool-directory conventions are not carried over.
 
 ## Parity notes
 
@@ -165,15 +160,40 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
 - Personas, spend, issue links and recurrence costs await the slices that supply
   them. Timezone handling belongs to daily digest scheduling.
 - Archived text renders in code spans that preserve backticks and boundary
-  spaces. Control characters become spaces. Markdown and HTML render literally.
-  Stored pattern evidence and the detector rules version stay unchanged.
+  spaces. Control characters become spaces. Markdown and HTML render
+  literally. Stored pattern evidence and the detector rules version stay
+  unchanged.
 - The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
-`friction-log.md` and `summary.json` share one archive-shaped fixture with
-error text, retry and runaway patterns, and two P0 tools across three
-sessions each. `friction-log-empty.md` pins every empty section. The Markdown
-frontmatter and JSON counts use the same signal grouping.
+`friction-log.md` and `summary.json` share one archive-shaped fixture with error
+text, retry and runaway patterns, and two P0 tools across three sessions each.
+`friction-log-empty.md` pins every empty section. The Markdown frontmatter and
+JSON counts use the same signal grouping.
+
+## Review orchestration
+
+The daily runner adapts jilog `9e8e094`
+`crates/jilog-review/src/digest.rs:208-706` (`run_review`), `reader.rs:233-270`
+(processed sessions), and `archive_spend.rs:83-109`.
+
+- Database tables replace the processed-sessions file. An hourly catch-up builds
+  completed dates and revisits dates with late sessions within the configured
+  backfill window. Local dates wait for current findings without a timeout;
+  PostgreSQL accepts each source's stored rules version. Each daily build has
+  its own sync lock, and PostgreSQL defaults to UTC.
+- Subjects use their last activity date. Rebuilds retain prior membership, and
+  recurrence counts include each subject once. Dry runs write nothing.
+- Frozen snapshots retain findings, usage totals, and the preceding week's
+  native archive spend. Costs use archive microdollars; sub-agent spend uses
+  the `subagent` role. The merged Markdown and schema 1 JSON renderers remain
+  unchanged; spend display and persona integration are deferred.
+- The runner respects the merged finding pipeline's skipped-session marker. It
+  derives seat labels from configured paths without a dimensions table or
+  changes to detector fingerprints. Generic diagnostic subjects remain an
+  optional input and never raise P0 alerts.
+- SQLite preserves digest state during resyncs that retain transcript text.
+  PostgreSQL builds its own digests and checks write access before scheduling.
 
 ## License
 

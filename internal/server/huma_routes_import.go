@@ -176,7 +176,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
-				return s.serializeArchiveWrite(ctx, write)
+				return s.SerializeArchiveWrite(ctx, write)
 			},
 			OnProgress: func(stats importer.ImportStats) {
 				if !stream.SendJSON("progress", stats) {
@@ -290,7 +290,7 @@ func (s *Server) importClaudeAIFromFileWithCallbacks(
 	}
 	defer cleanup()
 	var stats importer.ImportStats
-	err = s.serializeArchiveWrite(ctx, func() error {
+	err = s.SerializeArchiveWrite(ctx, func() error {
 		var importErr error
 		stats, importErr = importer.ImportClaudeAIWithOptions(ctx, s.db, reader, cb, opts)
 		return importErr
@@ -429,7 +429,7 @@ func (s *Server) importChatGPTFromFile(
 	}
 	defer cleanup()
 	var stats importer.ImportStats
-	err = s.serializeArchiveWrite(ctx, func() error {
+	err = s.SerializeArchiveWrite(ctx, func() error {
 		var importErr error
 		stats, importErr = importer.ImportChatGPTWithOptions(ctx, s.db, dir,
 			filepath.Join(s.cfg.DataDir, "assets"), cb, opts)

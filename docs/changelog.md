@@ -24,6 +24,13 @@ The latest release is
 
 **New features**
 
+- When Friction Log review is enabled, AgentsView stores daily digests and
+  catches up on completed days missed while offline, including sessions that
+  arrive late within the configured backfill window. Digests retain findings,
+  usage, and pattern recurrence, and survive full resyncs that retain transcript
+  text. PostgreSQL hubs build their own digests. Read APIs and CLI commands
+  remain planned.
+
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which
