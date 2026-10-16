@@ -2687,6 +2687,12 @@ func preferDiscoveredFile(
 		if candLayout != currLayout {
 			return candLayout == parser.CodexLayoutDated
 		}
+		candCompressed := strings.HasSuffix(candidate.Path, ".jsonl.zst")
+		currCompressed := strings.HasSuffix(current.Path, ".jsonl.zst")
+		if candCompressed != currCompressed {
+			return !candCompressed
+		}
+		return candidate.Path < current.Path
 	}
 	return false
 }

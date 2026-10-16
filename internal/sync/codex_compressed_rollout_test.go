@@ -348,7 +348,7 @@ func TestCodexReconciliationPrefersRestoredPlain(t *testing.T) {
 	assert.Equal(t, plain, files[0].ProviderSource.DisplayPath)
 }
 
-func TestCodexReconciliationDuplicatePreferenceAcrossRoots(t *testing.T) {
+func TestCodexDuplicatePreferenceAcrossRoots(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		plainFlat      bool
@@ -397,6 +397,17 @@ func TestCodexReconciliationDuplicatePreferenceAcrossRoots(t *testing.T) {
 			require.NoError(t, e.ReconcileWatchRoots(t.Context(), roots, false))
 			assert.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
 			assert.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+
+			for _, paths := range [][]string{{compressed, plain}, {plain, compressed}} {
+				plan, err := e.PlanChangedPathsContext(t.Context(), paths)
+				require.NoError(t, err)
+				require.Len(t, plan.Files, 1)
+				assert.Equal(t, wantPath, plan.Files[0].Path)
+				_, err = e.SyncChangedPathPlanContext(t.Context(), plan, nil)
+				require.NoError(t, err)
+				assert.Equal(t, wantTexts, compressedRolloutTexts(t, database, compressedRolloutSession))
+				assert.Equal(t, wantPath, codexSessionFilePath(t, database, compressedRolloutSession))
+			}
 		})
 	}
 }
