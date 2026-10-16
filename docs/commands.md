@@ -1159,13 +1159,15 @@ use IDs like `agent-a86574e`, and some other agents use prefixes such as
 `codex:my-session-id`. Raw session IDs emitted by the underlying agent are also
 accepted when AgentsView can resolve them back to the canonical stored session.
 
-If the AgentsView server is already running, the command reads the current
-database state. If no server is running, it performs an on-demand sync for the
-requested session first.
+The command uses a compatible local daemon, starting one if needed. It
+refreshes archived sessions without waiting for startup ingestion. Pending
+ingestion, a busy engine, or a stale archive returns stored usage with a
+warning. Missing daemon IDs return exit 2 until scheduled ingestion imports
+them. With daemon autostart disabled, direct mode can import the named local
+transcript.
 
-As of 0.40.0, the reported totals include every subagent transcript the session
-spawned, so the cost matches what the session actually spent. `token-use` has no
-opt-out; use `agentsview session usage <id> --own-only` for own-session numbers.
+Totals include archived subagent spend. `token-use` has no opt-out; use
+`agentsview session usage <id> --own-only` for own-session numbers.
 
 **Example:**
 
