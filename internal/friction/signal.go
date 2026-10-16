@@ -11,7 +11,7 @@ import (
 
 // RulesVersion identifies the detector rule set. Bump it whenever a
 // detector's output can change for the same input.
-const RulesVersion = "friction-v1"
+const RulesVersion = "friction-v2"
 
 // SkippedRulesVersion marks a session over the review budget: current, so
 // backfill leaves it alone, but never reviewed.
