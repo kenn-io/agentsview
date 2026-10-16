@@ -6,4 +6,5 @@ export interface ServiceSyncInput {
   id?: string;
   path?: string;
   subagents?: boolean;
+  usage_refresh?: boolean;
 }

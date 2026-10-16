@@ -1705,3 +1705,17 @@ func TestDirectBackend_Stats_ArchiveOnlyHostOutcomesUnavailable(t *testing.T) {
 		assert.Contains(t, source.Warnings, provider+" outcomes are unavailable in an archive-only database")
 	}
 }
+
+func TestDirectUsageRefreshRequiresCombinedID(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{Ephemeral: true})
+	t.Cleanup(engine.Close)
+	backend := service.NewDirectBackend(database, engine)
+	for _, input := range []service.SyncInput{
+		{ID: "parent", UsageRefresh: true},
+		{Path: "/work/session.jsonl", UsageRefresh: true},
+	} {
+		_, err := backend.Sync(t.Context(), input)
+		require.ErrorContains(t, err, "usage_refresh requires id and subagents")
+	}
+}

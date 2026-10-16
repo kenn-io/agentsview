@@ -1452,7 +1452,7 @@ func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "breakdown=true&subagents=true", reqs.UsageQuery,
 		"remote CLI must request full breakdown rows and subagent usage")
 	assert.Equal(t, service.SyncInput{
-		ID: "remote-session", Subagents: true,
+		ID: "remote-session", Subagents: true, UsageRefresh: true,
 	}, reqs.SyncInput)
 	assert.Equal(t, []string{
 		"/api/v1/version",
@@ -1662,11 +1662,9 @@ func TestSessionUsage_ServerFlagOwnOnlySkipsSubagents(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "breakdown=true", reqs.UsageQuery,
 		"--own-only must not ask the daemon for subagent usage")
-	assert.Equal(t, service.SyncInput{ID: "remote-session"}, reqs.SyncInput,
-		"--own-only refreshes only the named session")
+	assert.Empty(t, reqs.SyncInput.ID, "--own-only reads archived usage over HTTP")
 	assert.Equal(t, []string{
 		"/api/v1/sessions/remote-session",
-		"/api/v1/sessions/sync",
 		"/api/v1/sessions/remote-session/usage",
 	}, reqs.RequestPath)
 	assert.Equal(t, tokenUseExitOK, code)
@@ -1760,23 +1758,6 @@ func TestSessionUsage_PGFlagIncludesSubagentUsage(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 }
 
-func TestSessionUsageAutostartSkipsInitialSync(t *testing.T) {
-	testDataDir(t)
-	ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-	stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
-		assert.True(t, cfg.SkipInitialSync)
-		assert.False(t, cfg.NoSync)
-		return daemonRuntimeFromTestURL(t, ts.URL), nil
-	})
-	cmd := sessionUsageCommand(t, "session", "usage", "remote-session")
-	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, 42, out.TotalOutputTokens)
-	assert.Equal(t, tokenUseExitOK, code)
-	assert.NotContains(t, requests.RequestPath, "/api/v1/sync")
-}
-
 func TestSessionUsageSkipsStartupSync(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(strconv.FormatBool(missing), func(t *testing.T) {
@@ -1826,7 +1807,7 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 			if missing {
 				assert.Empty(t, requests.SyncInput.ID)
 			} else {
-				assert.Equal(t, service.SyncInput{ID: "remote-session", Subagents: true}, requests.SyncInput)
+				assert.Equal(t, service.SyncInput{ID: "remote-session", Subagents: true, UsageRefresh: true}, requests.SyncInput)
 			}
 		})
 	}
@@ -1851,7 +1832,7 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 				return
 			}
 			assert.Equal(t, service.SyncInput{
-				ID: "remote-session", Subagents: true,
+				ID: "remote-session", Subagents: true, UsageRefresh: true,
 			}, input)
 			_, _ = w.Write([]byte(`{"id":"remote-session"}`))
 		case "/api/v1/sessions/remote-session/usage":
@@ -1926,7 +1907,7 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 				return
 			}
 			assert.Equal(t, service.SyncInput{
-				ID: "remote-session", Subagents: true,
+				ID: "remote-session", Subagents: true, UsageRefresh: true,
 			}, input)
 			_, _ = w.Write([]byte(`{"id":"remote-session"}`))
 		case "/api/v1/sessions/remote-session/usage":
@@ -2579,25 +2560,55 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 	assert.Equal(t, "worker: no launcher parent to remove\n", out.String())
 }
 
-func TestSessionUsageStaleDaemonReturnsStoredUsage(t *testing.T) {
-	newAgentDataDir(t)
-	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-	original := ts.Config.Handler
-	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/sessions/sync" {
-			http.Error(w, "archive data version changed", http.StatusConflict)
-			return
+func TestSessionUsageRefusedRefreshReturnsStoredUsage(t *testing.T) {
+	for _, reason := range []string{"archive is stale", "sync already in progress", "startup ingestion is incomplete"} {
+		t.Run(reason, func(t *testing.T) {
+			newAgentDataDir(t)
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/sessions/sync" {
+					http.Error(w, reason, http.StatusConflict)
+					return
+				}
+				original.ServeHTTP(w, r)
+			})
+			stderr := captureStderr(t, func() {
+				cmd := sessionUsageCommand(t, "session", "usage", "remote-session", "--server", ts.URL)
+				out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+				require.NoError(t, err)
+				require.NotNil(t, out)
+				assert.Equal(t, 42, out.TotalOutputTokens)
+				assert.Equal(t, tokenUseExitOK, code)
+			})
+			assert.Contains(t, stderr, "showing stored usage")
+			assert.Contains(t, stderr, reason)
+		})
+	}
+}
+
+func TestSessionUsageRemoteRefreshAPIRequirement(t *testing.T) {
+	for _, version := range []int{server.SubagentUsageAPIVersion, server.UsageRefreshAPIVersion - 1, server.UsageRefreshAPIVersion} {
+		for _, noSync := range []bool{false, true} {
+			t.Run(fmt.Sprintf("api=%d/no-sync=%t", version, noSync), func(t *testing.T) {
+				newAgentDataDir(t)
+				ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "parent", apiVersion: version})
+				args := []string{"session", "usage", "parent", "--server", ts.URL}
+				if noSync {
+					args = append(args, "--no-sync")
+				}
+				cmd := sessionUsageCommand(t, args...)
+				out, _, err := sessionUsageDataForCommand(cmd, "parent")
+				if !noSync && version < server.UsageRefreshAPIVersion {
+					require.ErrorContains(t, err, "--no-sync")
+					assert.Nil(t, out)
+					assert.Empty(t, requests.SyncInput.ID)
+				} else {
+					require.NoError(t, err)
+					require.NotNil(t, out)
+					assert.Equal(t, 42, out.TotalOutputTokens)
+				}
+			})
 		}
-		original.ServeHTTP(w, r)
-	})
-	stderr := captureStderr(t, func() {
-		cmd := sessionUsageCommand(t, "session", "usage", "remote-session", "--server", ts.URL)
-		out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
-		require.NoError(t, err)
-		require.NotNil(t, out)
-		assert.Equal(t, 42, out.TotalOutputTokens)
-		assert.Equal(t, tokenUseExitOK, code)
-	})
-	assert.Contains(t, stderr, "warning: sync failed")
-	assert.Contains(t, stderr, "archive data version changed")
+	}
 }

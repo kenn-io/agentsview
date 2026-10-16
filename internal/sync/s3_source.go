@@ -433,6 +433,10 @@ func (e *Engine) SyncS3SubagentTranscriptsContext(
 	ctx context.Context, parentSessionID string, parentAgent parser.AgentType,
 	paths []string,
 ) error {
+	return e.syncS3SubagentTranscriptsContext(ctx, parentSessionID, parentAgent, paths, false)
+}
+
+func (e *Engine) syncS3SubagentTranscriptsContext(ctx context.Context, parentSessionID string, parentAgent parser.AgentType, paths []string, try bool) error {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -442,7 +446,9 @@ func (e *Engine) SyncS3SubagentTranscriptsContext(
 	if !isClaudeFormatAgent(parentAgent) {
 		return fmt.Errorf("sync s3 subagent transcripts: unsupported parent agent %q", parentAgent)
 	}
-	e.syncMu.Lock()
+	if err := e.lockSessionRefresh(try); err != nil {
+		return err
+	}
 	synced := false
 	sessionsChanged := false
 	// Defers run LIFO: emit runs after syncMu.Unlock, matching the

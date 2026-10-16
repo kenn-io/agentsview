@@ -2024,6 +2024,10 @@ func (e *Engine) ReparsePathsContext(ctx context.Context, paths []string) error 
 }
 
 func (e *Engine) syncPathsContext(ctx context.Context, paths []string, force bool) error {
+	return e.syncPathsWithLockContext(ctx, paths, force, false)
+}
+
+func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, force, try bool) error {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -2032,7 +2036,9 @@ func (e *Engine) syncPathsContext(ctx context.Context, paths []string, force boo
 	}
 	ctx = e.parsePolicyContext(ctx)
 	stats, tombstoned, err := func() (SyncStats, int, error) {
-		e.syncMu.Lock()
+		if err := e.lockSessionRefresh(try); err != nil {
+			return SyncStats{}, 0, err
+		}
 		defer e.syncMu.Unlock()
 		defer e.clearCurrentProgress()
 		previous := e.forceFullParse
@@ -21025,6 +21031,10 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
+	return e.syncSingleSessionContext(ctx, sessionID, false)
+}
+
+func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try bool) (err error) {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -21035,7 +21045,9 @@ func (e *Engine) SyncSingleSessionContext(
 		)
 	}
 	ctx = e.parsePolicyContext(ctx)
-	e.syncMu.Lock()
+	if err := e.lockSessionRefresh(try); err != nil {
+		return err
+	}
 	preserved := false
 	sessionsChanged := false
 	// Defers run LIFO: unlock runs first (releasing syncMu), then

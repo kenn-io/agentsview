@@ -6764,6 +6764,8 @@ components:
           type: string
         subagents:
           type: boolean
+        usage_refresh:
+          type: boolean
       type: object
     ServiceToolCall:
       additionalProperties: false

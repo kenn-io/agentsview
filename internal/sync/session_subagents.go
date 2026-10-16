@@ -18,7 +18,30 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 	ctx context.Context,
 	sessionID string,
 ) error {
-	parentErr := e.SyncSingleSessionContext(ctx, sessionID)
+	return e.syncSessionWithSubagentsContext(ctx, sessionID, false)
+}
+
+// TrySyncSessionWithSubagentsContext refreshes without waiting for another sync.
+func (e *Engine) TrySyncSessionWithSubagentsContext(ctx context.Context, sessionID string) error {
+	return e.syncSessionWithSubagentsContext(ctx, sessionID, true)
+}
+
+func (e *Engine) lockSessionRefresh(try bool) error {
+	if try {
+		if !e.syncMu.TryLock() {
+			return ErrSyncInProgress
+		}
+	} else {
+		e.syncMu.Lock()
+	}
+	return nil
+}
+
+func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID string, try bool) error {
+	parentErr := e.syncSingleSessionContext(ctx, sessionID, try)
+	if errors.Is(parentErr, ErrSyncInProgress) {
+		return parentErr
+	}
 
 	// The archive session ID carries its agent prefix (host prefixes are
 	// stripped first), so the parent agent resolves without a row lookup and
@@ -38,10 +61,10 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 
 	var subagentErr error
 	if strings.HasPrefix(sourcePath, "s3://") {
-		subagentErr = e.SyncS3SubagentTranscriptsContext(
-			ctx, sessionID, parentAgent, paths)
+		subagentErr = e.syncS3SubagentTranscriptsContext(
+			ctx, sessionID, parentAgent, paths, try)
 	} else {
-		subagentErr = e.SyncPathsContext(ctx, paths)
+		subagentErr = e.syncPathsWithLockContext(ctx, paths, false, try)
 	}
 	return errors.Join(parentErr, subagentErr)
 }

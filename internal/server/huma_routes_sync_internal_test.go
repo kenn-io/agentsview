@@ -2558,3 +2558,108 @@ func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
 		assert.ErrorIs(t, convert(fmt.Errorf("write failed: %w", db.ErrWriterClosed)), db.ErrWriterClosed)
 	}
 }
+
+func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	f.srv.sessions = service.NewDirectBackend(f.db, engine)
+	engine.RecordStartupReconciled(syncpkg.SyncStats{}, nil)
+	locked, release, unlocked := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() { unlocked <- engine.RunExclusive(func() error { close(locked); <-release; return nil }) }()
+	<-locked
+	response := make(chan *httptest.ResponseRecorder, 1)
+	received := false
+	t.Cleanup(func() {
+		close(release)
+		require.NoError(t, <-unlocked)
+		if !received {
+			<-response
+		}
+	})
+	go func() {
+		response <- serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "retained", "subagents": true, "usage_refresh": true})
+	}()
+	select {
+	case w := <-response:
+		received = true
+		assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Error("usage refresh waited for the ingestion lock")
+	}
+	messages, err := f.db.GetAllMessages(t.Context(), "retained")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "stored transcript", messages[0].Content)
+}
+
+func TestUsageRefreshWaitsForScheduledStartupCoverage(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	parent := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
+	)
+	parentPath := filepath.Join(f.claudeDir, "project", "parent.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(parentPath), 0o755))
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
+	fork := strings.ReplaceAll(strings.ReplaceAll(parent, `"sessionId":"parent"`, `"sessionId":"continuation"`), `"message":`, `"sessionKind":"bg","message":`)
+	fork += testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-01T11:00:00Z","sessionId":"continuation","sessionKind":"bg","message":{"content":"continue"}}`,
+		`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-01-01T11:00:05Z","sessionId":"continuation","sessionKind":"bg","message":{"id":"msg-2","content":[{"type":"text","text":"continued"}],"usage":{"input_tokens":10,"output_tokens":7}}}`,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(parentPath), "continuation.jsonl"), []byte(fork), 0o600))
+	childPath := filepath.Join(f.claudeDir, "project", "continuation", "subagents", "agent-child.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(childPath), 0o755))
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "continuation").
+		AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).String()), 0o600))
+	for _, state := range []string{"deferred", "failed", "incomplete"} {
+		t.Run(state, func(t *testing.T) {
+			if state == "failed" {
+				engine.RecordStartupReconciled(syncpkg.SyncStats{}, errors.New("ingestion failed"))
+			} else if state == "incomplete" {
+				engine.RecordStartupReconciled(syncpkg.SyncStats{Deferred: 1}, nil)
+			}
+			w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "parent", "subagents": true, "usage_refresh": true})
+			assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), "startup ingestion is incomplete")
+			usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			assert.Equal(t, 20, usage.TotalOutputTokens)
+			child, err := f.db.GetSession(t.Context(), "agent-child")
+			require.NoError(t, err)
+			assert.Nil(t, child)
+		})
+	}
+	// The explicit full pass reuses the cached engine of a no-sync daemon.
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.True(t, engine.StartupReconciled())
+	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{"id": "parent", "subagents": true, "usage_refresh": true})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	// Continuation spend belongs to that session; its delegated child rolls up.
+	assert.Equal(t, 62, usage.TotalOutputTokens)
+	continuation, err := f.db.GetSession(t.Context(), "continuation")
+	require.NoError(t, err)
+	require.NotNil(t, continuation)
+	require.NotNil(t, continuation.ParentSessionID)
+	assert.Equal(t, "parent", *continuation.ParentSessionID)
+}
+
+func TestUsageRefreshRequiresCombinedID(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	for _, body := range []map[string]any{
+		{"id": "parent", "usage_refresh": true},
+		{"path": "/work/session.jsonl", "subagents": true, "usage_refresh": true},
+	} {
+		w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}

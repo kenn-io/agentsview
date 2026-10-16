@@ -1054,13 +1054,18 @@ The codes classify the reported document, so a session whose only token data
 lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
-Before querying, the local backend refreshes a session already in the archive
-and its subagent transcripts. `--own-only` skips the subagent refresh. A usage
-lookup skips startup ingestion. With a daemon, a missing ID returns not found
-until scheduled ingestion imports it. Direct mode keeps its targeted lookup of
-the named local transcript. If the archive needs a rebuild,
-`POST /api/v1/sessions/sync` returns HTTP 409 and the command shows stored usage
-with a warning. Direct local queries also show stored usage with a warning.
+Combined usage refreshes an archived session and its Claude subagent transcripts
+without waiting for startup ingestion. Totals include archived descendants.
+While startup ingestion is incomplete, another sync owns the engine, or the
+archive needs a rebuild, the command shows stored usage with a warning. Missing
+daemon IDs return exit 2 until scheduled ingestion imports them. Direct mode
+keeps its targeted lookup of the named local transcript.
+
+HTTP `--own-only` reads archived usage without refreshing sources. Direct mode
+still refreshes the named transcript. Combined HTTP refresh requires daemon API
+12; upgrade or restart older servers, or use `--no-sync`. Archived combined
+reads require API 6. `POST /api/v1/sessions/sync` returns HTTP 409 for a stale
+local archive. The command then shows stored usage with a warning.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.
 This preserves the full subagent rollup and the exit codes above; combine it

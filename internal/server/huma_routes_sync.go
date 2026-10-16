@@ -1078,12 +1078,20 @@ func (s *Server) humaSyncSession(
 	if in.Body.Subagents && in.Body.ID == "" {
 		return nil, apiError(http.StatusBadRequest, "'subagents' requires 'id'")
 	}
+	if in.Body.UsageRefresh && (in.Body.ID == "" || !in.Body.Subagents) {
+		return nil, apiError(http.StatusBadRequest, "'usage_refresh' requires 'id' and 'subagents'")
+	}
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusConflict,
-				"archive data version changed; wait for the rebuild or run 'agentsview sync --full' before syncing this session"),
+				"archive is stale; wait for the rebuild or run 'agentsview sync --full' before syncing this session"),
 			http.Header{ResyncRequiredHeader: []string{"true"}},
 		)
+	}
+	if in.Body.UsageRefresh {
+		if local, ok := s.db.(*db.DB); ok && !s.syncEngineForLocal(ctx, local).StartupReconciled() {
+			return nil, apiError(http.StatusConflict, "startup ingestion is incomplete; wait for scheduled ingestion or run 'agentsview sync'")
+		}
 	}
 	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {
@@ -1096,7 +1104,8 @@ func (s *Server) humaSyncSession(
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
-		if errors.Is(err, db.ErrSessionExcluded) ||
+		if errors.Is(err, syncpkg.ErrSyncInProgress) ||
+			errors.Is(err, db.ErrSessionExcluded) ||
 			errors.Is(err, db.ErrSessionTrashed) {
 			return nil, apiError(http.StatusConflict, err.Error())
 		}

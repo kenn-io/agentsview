@@ -34,10 +34,11 @@ func newSessionUsageCommand() *cobra.Command {
 		Use:   "usage <id>",
 		Short: "Show token usage and cost estimate for a session",
 		Long: "Show token usage and cost estimate for a session.\n\n" +
-			"Totals include every subagent transcript spawned by the " +
-			"session (Claude Code writes those to their own files), so " +
-			"the cost matches what the session actually spent. Pass " +
-			"--own-only to report just the named transcript's rows.",
+			"Totals include archived subagent usage. Source refresh can find " +
+			"Claude subagent transcripts beside the named session. " +
+			"--own-only reports the named transcript's usage.\n\n" +
+			"Missing daemon IDs return exit 2 until scheduled ingestion imports them. " +
+			"Pending ingestion, a busy sync engine, or a stale archive returns stored usage with a warning.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -103,7 +104,7 @@ func sessionUsageDataForCommand(
 		}
 		if !query.OwnOnly {
 			if err := requireRemoteSubagentUsageSupport(
-				ctx, remote, token,
+				ctx, remote, token, !query.NoSync,
 			); err != nil {
 				return nil, tokenUseExitErr, err
 			}
@@ -140,7 +141,7 @@ func sessionUsageDataForCommand(
 }
 
 func requireRemoteSubagentUsageSupport(
-	ctx context.Context, baseURL, token string,
+	ctx context.Context, baseURL, token string, refresh bool,
 ) error {
 	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 		ctx, baseURL, token,
@@ -154,6 +155,9 @@ func requireRemoteSubagentUsageSupport(
 				"upgrade or restart the server, or pass --own-only",
 			capabilities.APIVersion,
 		)
+	}
+	if refresh && capabilities.APIVersion < server.UsageRefreshAPIVersion {
+		return fmt.Errorf("server API version %d does not support usage refresh without waiting for ingestion; upgrade or restart the server, or pass --no-sync", capabilities.APIVersion)
 	}
 	return nil
 }
@@ -187,12 +191,12 @@ func httpSessionUsageData(
 		}
 		return nil, tokenUseExitErr, err
 	}
-	if !query.NoSync {
+	if !query.OwnOnly && !query.NoSync {
 		backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
-			ID: resolvedID, Subagents: !query.OwnOnly,
+			ID: resolvedID, Subagents: true, UsageRefresh: true,
 		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
-			fmt.Fprintf(os.Stderr, "warning: sync failed: %v\n", syncErr)
+			fmt.Fprintf(os.Stderr, "warning: sync failed; showing stored usage: %v\n", syncErr)
 		}
 	}
 	// Request the full breakdown so the remote path matches the

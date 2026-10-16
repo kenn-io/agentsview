@@ -1733,13 +1733,14 @@ agentsview session parent <id> <parent>  # record the launching session
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
 
-`session usage` attributes each subagent transcript's spend to the session that
-spawned it, so a parent that delegated most of its work still reports the full
-cost. `--own-only` restores the older own-session output. Usage lookups refresh
-archived sessions without waiting for startup ingestion. With a daemon, missing
-IDs return not found until ingestion imports them. Direct mode can import the
-named local transcript. A stale archive returns stored usage with
-a warning until the archive is rebuilt.
+`session usage` includes archived subagent spend in the parent total. Combined
+usage refreshes the named session and Claude subagent transcripts without
+waiting for startup ingestion. Pending ingestion, a busy engine, or a stale
+archive returns stored usage with a warning. Missing daemon IDs return exit 2
+until scheduled ingestion imports them. Direct mode can import the named local
+transcript. HTTP `--own-only` reads stored usage; direct `--own-only` refreshes
+the named transcript. Combined HTTP refresh requires API 12; `--no-sync`
+combined reads require API 6.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
