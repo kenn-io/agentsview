@@ -743,6 +743,22 @@ func TestJoinRuleIsCheckedAgainBeforeResume(t *testing.T) {
 	assert.Empty(t, env.monitor.Joined(passKey))
 }
 
+func TestJoinRuleIsCheckedAgainAfterGoalCheck(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	// A slow goal reply carries the chat past the join window.
+	env.host.Handle("thread/goal/get", func(jsontext.Value) (any, *codexcloudtest.Error) {
+		env.clock.Advance(joinWindow)
+		return map[string]any{"goal": nil}, nil
+	})
+
+	env.join(t, "a")
+
+	assert.Equal(t, 1, env.calls("thread/goal/get"))
+	assert.Zero(t, env.resumes())
+	assert.Empty(t, env.monitor.Joined(passKey))
+}
+
 func TestJoinSetUpDuringARefreshRequestIsNotKept(t *testing.T) {
 	env := newMonitorEnv(t)
 	env.threads.Set(runningThread("a", "warm"))

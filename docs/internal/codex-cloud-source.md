@@ -375,13 +375,14 @@ time. In open-source Codex a resume that finds no running turn also runs the
 thread's idle step, on both the cold and the loaded path, and `excludeTurns`
 does not skip it. That step continues an active goal and sends queued user
 messages, so it starts a turn. The window keeps the monitor to threads that were
-running moments ago. Right before resuming, the monitor also sends
-`thread/goal/get` and skips a thread whose goal is `active`, marking its newest
-turn handled. A server answering "goals feature is disabled" has no goals to
-continue. Queued messages are not checked: `thread/queue/list` needs the
-experimental API, and Codex sends a queue itself when a turn ends, except after
-an interrupted turn. A turn that ends between the checks and the resume can
-still start one, which is why live capture is opt-in.
+running moments ago. Before resuming, the monitor also sends `thread/goal/get`
+and skips a thread whose goal is `active`, marking its newest turn handled. A
+server answering "goals feature is disabled" has no goals to continue. The
+5-minute check runs again after the goal reply, so a slow reply cannot carry a
+stale thread into a resume. Queued messages are not checked: `thread/queue/list`
+needs the experimental API, and Codex sends a queue itself when a turn ends,
+except after an interrupted turn. A turn that ends between the checks and the
+resume can still start one, which is why live capture is opt-in.
 
 The resume reply's `resumeKind` decides what happens:
 
