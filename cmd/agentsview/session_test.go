@@ -1735,44 +1735,37 @@ func seedSubagentOnlyUsage(
 	}))
 }
 
-func TestSessionUsage_LocalIncludesSubagentUsageByDefault(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+func TestSessionUsage_LocalSubagentInclusionToggle(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		args          []string
+		wantCode      int
+		wantChildren  int
+		wantTokens    int
+		wantTokenData bool
+	}{
+		{"default includes", nil, tokenUseExitOK, 1, 24, true},
+		{"own-only excludes", []string{"--own-only"}, tokenUseExitNoTokenData, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 
-	localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
-	seedSubagentOnlyUsage(t, localDB, "claude:parent-only", "agent-child", 24)
+			localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+			seedSubagentOnlyUsage(t, localDB, "claude:parent-only", "agent-child", 24)
 
-	cmd := sessionUsageCommand(t, "session", "usage", "claude:parent-only")
-
-	out, code, err := sessionUsageDataForCommand(cmd, "claude:parent-only")
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, tokenUseExitOK, code,
-		"a parent whose token data lives in subagents must not exit 3")
-	assert.Equal(t, "claude:parent-only", out.SessionID)
-	assert.Equal(t, 1, out.SubagentCount)
-	assert.Equal(t, 24, out.TotalOutputTokens)
-	assert.True(t, out.HasTokenData)
-}
-
-func TestSessionUsage_LocalOwnOnlyExcludesSubagentUsage(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-
-	localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
-	seedSubagentOnlyUsage(t, localDB, "claude:parent-only", "agent-child", 24)
-
-	cmd := sessionUsageCommand(t,
-		"session", "usage", "claude:parent-only", "--own-only")
-
-	out, code, err := sessionUsageDataForCommand(cmd, "claude:parent-only")
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, tokenUseExitNoTokenData, code,
-		"--own-only restores the pre-rollup empty report and exit code")
-	assert.Zero(t, out.SubagentCount)
-	assert.Zero(t, out.TotalOutputTokens)
-	assert.False(t, out.HasTokenData)
+			args := append([]string{"session", "usage", "claude:parent-only"}, tc.args...)
+			cmd := sessionUsageCommand(t, args...)
+			out, code, err := sessionUsageDataForCommand(cmd, "claude:parent-only")
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tc.wantCode, code)
+			assert.Equal(t, "claude:parent-only", out.SessionID)
+			assert.Equal(t, tc.wantChildren, out.SubagentCount)
+			assert.Equal(t, tc.wantTokens, out.TotalOutputTokens)
+			assert.Equal(t, tc.wantTokenData, out.HasTokenData)
+		})
+	}
 }
 
 func TestSessionUsage_PGFlagIncludesSubagentUsage(t *testing.T) {
@@ -1804,7 +1797,6 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
-			var gotUsagePath string
 			var paths *[]string
 			var ts *httptest.Server
 			if tc.readOnly {
@@ -1823,7 +1815,6 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 					case "/api/v1/sessions/sync":
 						_, _ = w.Write([]byte(`{"id":"remote-session"}`))
 					case "/api/v1/sessions/remote-session/usage":
-						gotUsagePath = r.URL.Path
 						_, _ = w.Write([]byte(`{
 							"session_id": "remote-session",
 							"agent": "codex",
@@ -1860,7 +1851,6 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 				}, *paths)
 				return
 			}
-			assert.Equal(t, "/api/v1/sessions/remote-session/usage", gotUsagePath)
 			assert.Equal(t, "remote-session", out.SessionID)
 			assert.True(t, out.ServerRunning)
 		})
