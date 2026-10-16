@@ -1716,6 +1716,6 @@ func TestDirectUsageRefreshRequiresCombinedID(t *testing.T) {
 		{Path: "/work/session.jsonl", UsageRefresh: true},
 	} {
 		_, err := backend.Sync(t.Context(), input)
-		require.ErrorContains(t, err, "usage_refresh requires id and subagents")
+		require.ErrorIs(t, err, service.ErrInvalidUsageRefresh)
 	}
 }

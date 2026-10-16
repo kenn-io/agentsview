@@ -538,13 +538,8 @@ type SyncInput struct {
 	UsageRefresh bool   `json:"usage_refresh,omitempty"`
 }
 
-// ValidateUsageRefresh checks the targeted combined-refresh contract.
-func (in SyncInput) ValidateUsageRefresh() error {
-	if in.UsageRefresh && (in.ID == "" || !in.Subagents) {
-		return errors.New("sync: usage_refresh requires id and subagents")
-	}
-	return nil
-}
+// ErrInvalidUsageRefresh reports a usage refresh without both ID and Subagents.
+var ErrInvalidUsageRefresh = errors.New("sync: usage_refresh requires id and subagents")
 
 // Event is the CLI-side NDJSON wrapper for SSE events from
 // /api/v1/sessions/{id}/watch. See spec "watch" section.

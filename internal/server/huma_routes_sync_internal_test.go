@@ -209,8 +209,7 @@ func (f *syncRouteFixture) writeClaudeSession(
 func (f *syncRouteFixture) writeClaudeTranscript(t *testing.T, relPath, content string) string {
 	t.Helper()
 	path := filepath.Join(f.claudeDir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	dbtest.WriteTestFile(t, path, []byte(content))
 	return path
 }
 

@@ -1078,9 +1078,6 @@ func (s *Server) humaSyncSession(
 	if in.Body.Subagents && in.Body.ID == "" {
 		return nil, apiError(http.StatusBadRequest, "'subagents' requires 'id'")
 	}
-	if err := in.Body.ValidateUsageRefresh(); err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusConflict,
@@ -1094,6 +1091,9 @@ func (s *Server) humaSyncSession(
 	}
 	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidUsageRefresh) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
 		if errors.Is(err, context.Canceled) {
 			return nil, nil
 		}
