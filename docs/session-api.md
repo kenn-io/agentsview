@@ -1042,30 +1042,31 @@ sessions return `404` with:
 Unexpected usage-query failures return `500` with
 `error.code = "usage_query_failed"`.
 
-**Exit codes** — `usage` keeps the older `token-use` contract:
+**Exit codes**:
 
 | Code | Meaning                                            |
 | ---- | -------------------------------------------------- |
 | `0`  | Token data or cost present and reported            |
-| `2`  | Session not found in the local archive             |
+| `1`  | Query error or session awaiting daemon ingestion   |
+| `2`  | Session missing from an archive-only or direct lookup |
 | `3`  | Session exists but has neither token data nor cost |
 
 The codes classify the reported document, so a session whose only token data
 lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
-Combined usage refreshes the named session and its Claude subagent transcripts
+Combined usage refreshes a known session and nearby Claude subagent transcripts
 without waiting for startup ingestion. Totals include archived descendants.
 While startup ingestion is incomplete, another sync owns the engine, or the
 archive needs a rebuild, the command shows available stored usage with a
-warning. Combined refresh can import an unarchived canonical ID from its
-source. If startup ingestion blocks it, the command reports that usage is not
-yet available; retry after scheduled ingestion. Absent IDs return exit 2.
+warning. Unresolved daemon IDs return a retry error when refreshing; wait for
+scheduled ingestion or run `agentsview sync` if automatic ingestion is disabled.
 Direct mode keeps its targeted lookup of the named local transcript.
 
-HTTP `--own-only` reads archived usage without refreshing sources. Direct mode
-still refreshes the named transcript. Combined HTTP refresh requires daemon API
-12; upgrade or restart older servers, or use `--no-sync`. Archived combined
+HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
+missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
+refresh requires daemon API 12; upgrade or restart older servers, or use
+`--no-sync`. Archived combined
 reads require API 6. `POST /api/v1/sessions/sync` returns HTTP 409 for a stale
 local archive. The command then shows stored usage with a warning.
 

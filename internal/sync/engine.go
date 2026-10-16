@@ -21104,7 +21104,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	path := e.FindSourceFile(ctx, sessionID)
 	if path == "" {
 		return fmt.Errorf(
-			"source file not found for %s: %w", sessionID, os.ErrNotExist,
+			"source file not found for %s", sessionID,
 		)
 	}
 	// OpenCode-format agents (OpenCode, Kilo, MiMoCode) are

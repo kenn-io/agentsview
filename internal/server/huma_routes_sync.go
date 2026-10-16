@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -1103,9 +1102,6 @@ func (s *Server) humaSyncSession(
 		}
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
-		}
-		if in.Body.UsageRefresh && errors.Is(err, os.ErrNotExist) {
-			return nil, apiError(http.StatusNotFound, err.Error())
 		}
 		if errors.Is(err, syncpkg.ErrSyncInProgress) ||
 			errors.Is(err, db.ErrSessionExcluded) ||

@@ -1764,7 +1764,7 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 		t.Run(strconv.FormatBool(missing), func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
 			remote, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-			var startupRequests int
+			var startupRequests, sessionSyncRequests int
 			original := remote.Config.Handler
 			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
 			remote.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1777,6 +1777,9 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 					http.Error(w, "startup failed", http.StatusInternalServerError)
 					return
 				}
+				if r.URL.Path == "/api/v1/sessions/sync" {
+					sessionSyncRequests++
+				}
 				if missing && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") {
 					http.NotFound(w, r)
 					return
@@ -1784,7 +1787,7 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 				original.ServeHTTP(w, r)
 			})
 			registerSyncRouteTestRuntime(t, dataDir, remote.URL)
-			for _, alias := range []bool{false, true} {
+			for _, alias := range []bool{false, true, false, true} {
 				var out *sessionUsageOutput
 				var code int
 				var err error
@@ -1794,11 +1797,12 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 					cmd := sessionUsageCommand(t, "session", "usage", "remote-session")
 					out, code, err = sessionUsageDataForCommand(cmd, "remote-session")
 				}
-				require.NoError(t, err)
 				if missing {
+					require.ErrorContains(t, err, "scheduled ingestion")
 					assert.Nil(t, out)
-					assert.Equal(t, tokenUseExitNotFound, code)
+					assert.Equal(t, tokenUseExitErr, code)
 				} else {
+					require.NoError(t, err)
 					require.NotNil(t, out)
 					assert.Equal(t, 42, out.TotalOutputTokens)
 					assert.Equal(t, tokenUseExitOK, code)
@@ -1806,6 +1810,7 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 			}
 			assert.Zero(t, startupRequests)
 			if missing {
+				assert.Zero(t, sessionSyncRequests)
 				assert.Empty(t, requests.SyncInput.ID)
 			} else {
 				assert.Equal(t, service.SyncInput{ID: "remote-session", Subagents: true, UsageRefresh: true}, requests.SyncInput)
@@ -2561,15 +2566,16 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 	assert.Equal(t, "worker: no launcher parent to remove\n", out.String())
 }
 
-func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
+func TestSessionUsageWaitsForIngestion(t *testing.T) {
 	for _, tc := range []struct {
-		name, id        string
-		pending, noSync bool
+		name, id                 string
+		pending, noSync, ownOnly bool
 	}{
-		{name: "targeted", id: "fresh"},
+		{name: "not-ingested", id: "fresh"},
 		{name: "pending", id: "fresh", pending: true},
 		{name: "absent", id: "absent"},
 		{name: "archive-only", id: "fresh", noSync: true},
+		{name: "own-only", id: "fresh", ownOnly: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
@@ -2600,23 +2606,34 @@ func TestSessionUsageImportsUnarchivedTranscript(t *testing.T) {
 			if tc.noSync {
 				args = append(args, "--no-sync")
 			}
+			if tc.ownOnly {
+				args = append(args, "--own-only")
+			}
 			cmd := sessionUsageCommand(t, args...)
 			out, code, err := sessionUsageDataForCommand(cmd, tc.id)
-			if tc.pending {
-				require.ErrorContains(t, err, "scheduled ingestion")
-				assert.Equal(t, tokenUseExitErr, code)
-				assert.Nil(t, out)
-				return
-			}
-			require.NoError(t, err)
-			if tc.noSync || tc.id == "absent" {
-				assert.Equal(t, tokenUseExitNotFound, code)
-				assert.Nil(t, out)
-				stored, err := database.GetSession(t.Context(), "fresh")
+			assert.Nil(t, out)
+			if tc.noSync || tc.ownOnly {
 				require.NoError(t, err)
-				assert.Nil(t, stored)
+				assert.Equal(t, tokenUseExitNotFound, code)
 				return
 			}
+			require.ErrorContains(t, err, "scheduled ingestion")
+			assert.Equal(t, tokenUseExitErr, code)
+			stored, err := database.GetSession(t.Context(), "fresh")
+			require.NoError(t, err)
+			assert.Nil(t, stored)
+			if tc.id == "absent" {
+				return
+			}
+			// Simulate the daemon's normal full ingestion pass.
+			if engine == nil {
+				engine = agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Ephemeral: true})
+				t.Cleanup(engine.Close)
+			}
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			out, code, err = sessionUsageDataForCommand(cmd, tc.id)
+			require.NoError(t, err)
 			require.NotNil(t, out)
 			assert.Equal(t, tokenUseExitOK, code)
 			assert.Equal(t, 42, out.TotalOutputTokens)

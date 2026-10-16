@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"strings"
@@ -639,9 +638,6 @@ func (b *httpBackend) Sync(
 		})
 	if response == nil {
 		return nil, err
-	}
-	if in.UsageRefresh && response.StatusCode == http.StatusNotFound {
-		return nil, fs.ErrNotExist
 	}
 	detail := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {
