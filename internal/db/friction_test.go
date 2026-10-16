@@ -222,7 +222,7 @@ func TestFrictionHash(t *testing.T) {
 			return f, friction.RulesVersion
 		}},
 		{"rules version", func(f []FrictionFinding) ([]FrictionFinding, string) {
-			return f, "friction-v2"
+			return f, friction.RulesVersion + "-next"
 		}},
 		{"field boundary", func(f []FrictionFinding) ([]FrictionFinding, string) {
 			f[1].ToolName, f[1].Label = "Bas", "h"

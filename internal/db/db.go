@@ -582,12 +582,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // linked to its thread, instead of codex:<rollout>. This changes session ids,
 // so it is a full rebuild; the resync's curation copy moves the old row's
 // state to the new id.)
-// (135: Codex-format rollouts keep their first nonempty session_meta id when
+// (135: reparse Vibe sessions in place so existing search_replace tool calls
+// gain the corrected Edit category without changing session identities.)
+// (136: Codex-format rollouts keep their first nonempty session_meta id when
 // copied history includes another thread's metadata. Rebuild to recover
 // sessions previously filed under that other thread, preserving archived
 // sessions whose sources are gone. Curation follows reparsed transcripts and
 // permanent exclusions also cover their corrected identities.)
-const dataVersion = 135
+const dataVersion = 136
 
 const archiveOnlyVersionBase = 1 << 20
 

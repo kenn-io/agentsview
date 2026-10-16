@@ -132,20 +132,26 @@ schema reset or when message content was rewritten in place.
 Every push sends the most recently active sessions first, so recent activity
 reaches the mirror before older history. A full push that stops partway, for
 example because the process restarted, resumes on the next push: sessions it
-already pushed are skipped. The log says `resuming an unfinished full push`, and
-the summary counts the skipped sessions. The push starts over instead when
-`--full` is passed or when the archive was rebuilt, the push scope changed, or
-the mirror format changed since it began. A full push that ends with session
-errors resumes only while something else still requires a full push. Otherwise
-the next push is incremental and retries the failed sessions. If a full push
-ended with session errors and began under a different push scope, archive, or
-mirror format, the next push is also full. Pushes stay full until one finishes
-without errors. This brings back sessions that a filtered push removed from the
-mirror when you restore the wider scope. The push log names each session that
-failed, and pushes return to incremental once those sessions push cleanly.
+already pushed are skipped. The summary says `resuming an unfinished full push`
+and counts the skipped sessions. The push starts over instead when `--full` is
+passed or when the archive was rebuilt, the push scope changed, or the mirror
+format changed since it began. When `--full` discards an unfinished full push,
+the summary says `discarded an unfinished full push`. A full push that reaches
+the end with session errors resumes only while something else still requires a
+full push. Otherwise the next push is incremental: it picks up failed sessions
+that changed since the last clean push and skips the rest. If a `--full` push
+ends with errors, run it again.
 
-If any sessions fail to push, the cursor is not advanced so they are retried on
-the next run. The exit code is 1 when any errors occur, 0 otherwise.
+If a full push ended with session errors and began under a different push scope,
+archive, or mirror format, the next push is also full. Pushes stay full until
+one finishes without errors. This brings back sessions that a filtered push
+removed from the mirror when you restore the wider scope. The push log names
+each session that failed, and pushes return to incremental once those sessions
+push cleanly.
+
+If any sessions fail during an incremental push, the cursor is not advanced, so
+the next push retries them. The exit code is 1 when any errors occur, 0
+otherwise.
 
 #### Automatic Push Watcher
 

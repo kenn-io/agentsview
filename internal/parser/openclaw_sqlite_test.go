@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1640,4 +1641,135 @@ func TestOpenClawSQLiteSessionTitle(t *testing.T) {
 			"a title change must change the source digest so sync reparses %s", id)
 	}
 	assert.Equal(t, hashes["openclaw:main:untitled"], renamedHashes["openclaw:main:untitled"])
+}
+
+// OpenClaw stores a transcript event either as plain event_json text or, with
+// event_json NULL, as a zstd-compressed event_zstd blob.
+func TestOpenClawSQLiteZstdCompressedEvents(t *testing.T) {
+	root := t.TempDir()
+	events := openClawSQLiteFixtureEvents("zs")
+	dbPath := openClawSQLiteDBPath(root, "main")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE transcript_events (
+			session_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			event_json TEXT,
+			created_at INTEGER NOT NULL,
+			event_zstd BLOB,
+			PRIMARY KEY (session_id, seq)
+		) STRICT
+	`)
+	require.NoError(t, err)
+	enc, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	for seq, event := range events {
+		if seq%2 == 1 {
+			_, err = db.ExecContext(t.Context(),
+				`INSERT INTO transcript_events(session_id, seq, event_json, created_at, event_zstd) VALUES (?, ?, NULL, ?, ?)`,
+				"zs", seq, 1_700_000_000_000+seq, enc.EncodeAll([]byte(event), nil),
+			)
+		} else {
+			_, err = db.ExecContext(t.Context(),
+				`INSERT INTO transcript_events(session_id, seq, event_json, created_at, event_zstd) VALUES (?, ?, ?, ?, NULL)`,
+				"zs", seq, event, 1_700_000_000_000+seq,
+			)
+		}
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Close())
+
+	plainRoot := t.TempDir()
+	createOpenClawSQLiteFixture(t, plainRoot, "main", map[string][]string{"zs": events})
+
+	parse := func(root string) (SourceFingerprint, []ParsedMessage) {
+		provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		fp, err := provider.Fingerprint(t.Context(), sources[0])
+		require.NoError(t, err)
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: fp})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		return fp, outcome.Results[0].Result.Messages
+	}
+	// Compressed rows are read as their decompressed event, so the archive
+	// is identical to one stored as plain text.
+	plainFP, plainMsgs := parse(plainRoot)
+	zstdFP, zstdMsgs := parse(root)
+	assert.Equal(t, plainFP.Hash, zstdFP.Hash)
+	require.Len(t, zstdMsgs, 4)
+	assert.Equal(t, plainMsgs, zstdMsgs)
+}
+
+// A corrupt compressed event must only affect its own session: discovery and
+// the container parse still yield the valid sessions before and after it.
+func TestOpenClawSQLiteCorruptZstdEventIsolatedToItsSession(t *testing.T) {
+	root := t.TempDir()
+	dbPath := openClawSQLiteDBPath(root, "main")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE transcript_events (
+			session_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			event_json TEXT,
+			created_at INTEGER NOT NULL,
+			event_zstd BLOB,
+			PRIMARY KEY (session_id, seq)
+		) STRICT
+	`)
+	require.NoError(t, err)
+	for _, id := range []string{"a-good", "b-good", "d-good"} {
+		for seq, event := range openClawSQLiteFixtureEvents(id) {
+			_, err = db.ExecContext(t.Context(),
+				`INSERT INTO transcript_events(session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)`,
+				id, seq, event, 1_700_000_000_000+seq,
+			)
+			require.NoError(t, err)
+		}
+	}
+	_, err = db.ExecContext(t.Context(),
+		`INSERT INTO transcript_events(session_id, seq, event_json, created_at, event_zstd) VALUES (?, 0, NULL, ?, ?)`,
+		"c-corrupt", 1_700_000_000_000, []byte("not a zstd frame"),
+	)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var discovered []string
+	for _, src := range sources {
+		discovered = append(discovered, src.DisplayPath)
+	}
+	for _, id := range []string{"a-good", "b-good", "d-good"} {
+		assert.Contains(t, strings.Join(discovered, "\n"), "#main:"+id,
+			"discovery must still list %s", id)
+	}
+
+	openClaw, ok := provider.(*openClawProvider)
+	require.True(t, ok)
+	container := openClaw.sources.sqlite.sourceRef(root, multiSessionMatch{
+		Path: dbPath, Container: dbPath,
+	})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: container})
+	require.NoError(t, err)
+	var parsed []string
+	for _, result := range outcome.Results {
+		parsed = append(parsed, result.Result.Session.ID)
+	}
+	assert.ElementsMatch(t,
+		[]string{"openclaw:main:a-good", "openclaw:main:b-good", "openclaw:main:d-good"}, parsed)
+	require.Len(t, outcome.SourceErrors, 1)
+	assert.Equal(t, "openclaw:main:c-corrupt", outcome.SourceErrors[0].SessionID)
+	assert.False(t, outcome.ResultSetComplete)
 }

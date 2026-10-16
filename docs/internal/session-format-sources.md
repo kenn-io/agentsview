@@ -590,7 +590,7 @@ fixtures retain this field; missing identities remain source-local.
   and ignores later metadata with a different or empty ID. Same-thread
   metadata can still update the working directory and branch; existing fork
   replay filtering and revert-page identities remain in effect. Data version
-  135 uses the preservation rebuild because session identities change.
+  136 uses the preservation rebuild because session identities change.
   Synthetic parser and SQLite sync regressions cover conflicting headers,
   either sync order, appended metadata, and repair of a misfiled session while
   retaining sessions whose sources are absent. Upgrade regressions also check
@@ -4086,23 +4086,113 @@ schemas keep their existing ordering behavior.
 
 ## Mistral Vibe (`vibe`)
 
-- **Format:** A session directory containing `messages.jsonl` and `meta.json`.
+- **Format:** Legacy sessions are a directory containing `messages.jsonl` and
+  `meta.json`. Since the CLI's unified harness rollout (around September 2026)
+  sessions are written under `unified/<session-id>/`. Agentsview reads store
+  v1 minors 1–8, manifest v1, projection v1, required runtime v3, and journal
+  record v1. Missing store, manifest, and projection versions default to v1; a
+  missing store minor defaults to 1. Newer versions return an error. The
+  session directory holds these files:
+    - `CURRENT` names the newest generation and pins its `manifest.json` by
+      `manifest_sha256`, the SHA-256 of the document without its trailing
+      newline. Agentsview rejects a mismatch, as the producer does.
+    - `generations/<sequence>/manifest.json` lists the projection chunks and the
+      `recovery_journal_segment` that extends the generation.
+      `projection-state.json` holds the public session envelope, including
+      aggregate `tokenUsage` and `contextUsage`.
+    - `chunks/<sha256>.json` are content-addressed JSON arrays of public history
+      entries. A null or missing manifest `chunks` keeps the transcript inline
+      in `snapshot.history.entries`, as before chunk pooling.
+    - `journal/<sequence>.jsonl` holds digest-chained records. The producer
+      journals every durable projection change as a `projection_delta`
+      (`append_entry`, `replace_entry`, `remove_entry`, `set_history_entries`,
+      `set_envelope`) or `projection_advanced` record. It folds the journal into
+      a new generation only when the session settles, so a running turn exists
+      only in the journal. Agentsview replays these records like
+      `_apply_journal`, ignores runtime records, and skips a final record
+      without its newline.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/mistralai/mistral-vibe.git` at
   `0685654a40a4035966891289065379a751a7e617`; see
   [session_logger.py](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/core/session/session_logger.py)
   and
   [history_manager.py](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/cli/history_manager.py).
-- **Usage and cost:** Metadata stores aggregate session prompt/completion and
-  context/last-turn/total statistics, without per-message cache or cost data.
-  Agentsview emits one aggregate usage event and catalog-prices it when model
-  identity is available.
+  The unified store is verified against v2.26.1, commit
+  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`. See
+  [\_storage.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
+  for `apply_projection_delta` at line 893 and `_apply_journal` at line
+  3631,
+  [\_runtime.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_runtime.py#L1788)
+  for the settle-time journal fold,
+  [\_projection.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_projection.py),
+  and
+  [vibe_schema.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/vibe/core/config/vibe_schema.py).
+- **Usage and cost:** Legacy metadata stores aggregate session prompt/completion
+  and context/last-turn/total statistics; the unified projection state stores
+  session `tokenUsage` (input, output, cached input) and `contextUsage`.
+  Neither stores per-message cache-creation or cost data. Agentsview emits one
+  aggregate usage event for recorded tokens and splits cached input out as
+  cache reads. Each unified session uses its recorded `runtime-state.json`
+  `session_metadata.active_model`, the alias the producer pins at each turn
+  start in
+  [\_pin_session_model_choice](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/vibe/app_server/_unified_harness_backend_adapter.py#L6452).
+  Mid-session switches appear as `checkpoint` entries with
+  `kind: model_change`; Agentsview skips them and labels the whole aggregate
+  with the latest alias, which matches how Vibe prices the session. The
+  producer builds subagent metadata without a model in
+  [\_host.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_host.py#L1545),
+  so a subagent uses its direct parent's recorded model, read when the
+  subagent itself is parsed. Later parent turns and parent removal leave the
+  archived subagent unchanged. Sessions with no recorded model keep their
+  tokens with an empty model, which usage reports exclude from pricing and
+  totals. Context size is `contextUsage` input plus output tokens, matching
+  `_context_tokens` in
+  [\_unified_harness_backend_adapter.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/vibe/app_server/_unified_harness_backend_adapter.py#L9300).
+- **Transcript:** Message and reasoning entries with `outcome.type: discarded`
+  keep their visible content, which Agentsview archives. Reasoning entries
+  with empty `text` use the `summary` string list, concatenated without a
+  separator. `_projection.py` copies `vibe.userDisplayContent` metadata into
+  `userDisplayContent` and preserves resource blocks with nested
+  `resource.text`. `PublicMessageEntry` roles are `system`, `user`, or
+  `assistant`; steering uses a user message with `source: turn_steer`. Message
+  images remain text placeholders.
+- **Tool results:** Effect states use `running`, `completed`, `failed`,
+  `skipped`, or `cancelled`. A settled state carries the serialized tool
+  result as `output`, plus `outputText`, `reason`, and `error.message`.
+  `outputText` joins only the result's text content blocks in
+  [\_projection.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_projection.py#L1556).
+  Builtin tools return only `structured_content` in
+  [\_file_tools.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_file_tools.py#L296)
+  and
+  [\_shell_tools.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_shell_tools.py#L162),
+  so Agentsview renders it when the content blocks are empty: `bash` as
+  `stdout` followed by `stderr`, `read_file` as its `content`, and other tools
+  as their JSON object. Tool-result images use `data` and `mimeType` in
+  `RustImageContentBlock` from
+  [protocol.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/protocol.py#L422).
+  Agentsview stores those results as text and `input_image` blocks so the
+  storage image policy handles their payloads.
 - **Project identity:** Metadata records `session_id`, `git_branch`, and
   `environment.working_directory`. Agentsview recovers those independent
   fields even when another optional metadata field is malformed, so a partial
   parse cannot replace repository classification with generic fallbacks.
-- **Agentsview:** `internal/parser/vibe.go` and
-  `internal/parser/vibe_provider.go`.
+  Unified session IDs come from directory names. Legacy lookup scans session
+  directories for the matching `meta.json` session ID. Unified sessions keep a
+  legacy-shaped `meta.json` sidecar; subagent sessions have none and fall back
+  to the projection snapshot and runtime identity. Runtime identity
+  distinguishes forks and subagents. Imports and forks link to their source
+  and keep inherited entries. Imports get a fresh session ID and use
+  continuation links. Imported history copies text without token usage, so
+  only text repeats.
+- **Change detection:** Fingerprints hash `CURRENT` and `meta.json` and add the
+  journal segment's size and mtime, because the journal grows by appends and
+  can reach tens of megabytes. Within a session directory only `CURRENT`,
+  `meta.json`, and journal segments are data-bearing; publication temporaries,
+  generation directories, chunks, and the `active/` session leases are not.
+  Reverified 2026-10-16 with `TestVibeUnifiedProviderParseJournal` and
+  `TestSyncVibeUnifiedJournalAppends`.
+- **Agentsview:** `internal/parser/vibe.go`, `internal/parser/vibe_unified.go`,
+  and `internal/parser/vibe_provider.go`.
 
 ## Aider (`aider`)
 

@@ -469,10 +469,15 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if oldDBHasTable(ctx, tx, "pg_sync_state") {
+		// An unfinished PostgreSQL full push record names the old database
+		// generation, so it cannot resume here; it survives only so the
+		// next --full push can report that it discarded the run.
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
+			   OR key = 'pg_full_push_run_v1'
+			   OR key LIKE 'pg\_full\_push\_run\_v1:%' ESCAPE '\'
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
 			   OR key LIKE 'machine\_label:%' ESCAPE '\'
 			   OR key LIKE 'machine\_alias:%' ESCAPE '\'
@@ -1090,7 +1095,7 @@ const codexLegacyPageHeaderDataVersion = 134
 
 // Before this version, copied session_meta could reassign a rollout to
 // another thread.
-const codexThreadIdentityDataVersion = 135
+const codexThreadIdentityDataVersion = 136
 
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
@@ -2922,7 +2927,7 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 // source ID, so only they also remap relationships, labels, and launcher
 // parents (retired = 1). A pre-134 candidate whose source ID the fresh parse
 // already produced is no page: the parser rejected it and kept its own ID.
-// Pre-135 thread corrections move curation by the reparsed file path. They
+// Pre-136 thread corrections move curation by the reparsed file path. They
 // do not retire the source ID: its original rollout may still exist or return.
 // Populate in batches, then check destination IDs with joins instead of one
 // query per candidate. The view includes pages as they are copied or parsed.
@@ -3007,7 +3012,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 			FROM old_db.sessions old_s
 			JOIN main.sessions new_s ON new_s.file_path = old_s.file_path AND new_s.agent = old_s.agent
 			WHERE old_s.agent IN ('codex', 'traex', 'augure-code')
-			  AND old_s.id != new_s.id AND new_s.deleted_at IS NULL
+			  AND old_s.file_path != '' AND old_s.id != new_s.id AND new_s.deleted_at IS NULL
 			ON CONFLICT(source_id) DO UPDATE SET
 				target_id = excluded.target_id, is_thread_correction = 1`); err != nil {
 			return 0, fmt.Errorf("mapping corrected Codex threads: %w", err)

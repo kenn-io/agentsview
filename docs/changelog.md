@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-09
+last_edited: 2026-10-16
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -37,6 +37,9 @@ The latest release is
   results. Subagent runs appear as child sessions. Usage reports include Muse
   token counts, priced at Meta's published Muse Spark and Muse Wonder rates.
   (#2241)
+- Mistral Vibe sessions from the unified session store sync again, including
+  running turns, tool output, subagents, and token usage. Existing Vibe
+  sessions reparse once for corrected tool categories. (#2139)
 - Include single-prompt sessions in MCP `list_sessions` results with
   `include_one_shot`, matching `search_content`.
 - Browse and search the retained archive during full parser and archive-only
@@ -149,6 +152,12 @@ The latest release is
   DuckDB mirror open, a manual push rebuilds the mirror. When an earlier rebuild
   stopped with session errors, that push now continues it instead of starting
   over.
+- Push summaries say why a ClickHouse or PostgreSQL push ran in full when you
+  did not pass `--full`, and say `discarded an unfinished full push` when
+  `--full` threw away an interrupted one. A DuckDB rebuild reports
+  `discarded an unfinished rebuild` the same way.
+  A summary that reports ownership conflicts now also shows how many sessions
+  were unchanged, already pushed by the interrupted run, or removed.
 
 **Bug fixes**
 

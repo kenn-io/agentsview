@@ -207,11 +207,13 @@ Environment variables override the config file:
   wrote are kept unless they changed or were deleted since. The push
   discards the file and starts over when `--full` is passed or when the
   local archive, the project scope, the machine name, or the mirror format
-  changed since the rebuild began. A rebuild that ended with session errors
-  resumes only while the mirror still needs a rebuild. A manual push also
-  resumes it when other processes have the mirror open and the push has to fall
-  back to a rebuild. The reported reason then names those processes. Otherwise
-  the push deletes the rebuild file after the incremental update runs.
+  changed since the rebuild began. When `--full` discards an unfinished
+  rebuild, the push mode line says `discarded an unfinished rebuild`. A
+  rebuild that ended with session errors resumes only while the mirror still
+  needs a rebuild. A manual push also resumes it when other processes have the
+  mirror open and the push has to fall back to a rebuild. The reported reason
+  then names those processes. Otherwise the push deletes the rebuild file after
+  the incremental update runs.
 - **One rebuild at a time** — a push holds a lock beside the rebuild file
   from the moment it reads the file until the swap. While another push holds
   it, a watch-mode push waits for a later cycle and a manual push fails. A

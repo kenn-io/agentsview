@@ -318,6 +318,9 @@ func (s *Sync) pushWithOptions(
 		}
 		runPending, resumed = false, false
 	}
+	// The resync before a CLI --full push leaves a run that cannot resume,
+	// but --full discards it either way, so report the discard for both.
+	discardedRun := runPending && opts.Full
 	if resumed && opts.Full {
 		// --full asks for every session to be rewritten, including ones the
 		// unfinished run wrote; its fingerprints cannot see in-place edits.
@@ -393,7 +396,10 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 	result.Full = full
-	if full && fullReason != "requested" {
+	switch {
+	case discardedRun:
+		result.FullReason = "requested; discarded an unfinished full push"
+	case full && fullReason != "requested":
 		result.FullReason = fullReason
 	}
 	var run *fullPushRunTracker

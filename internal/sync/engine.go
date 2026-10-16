@@ -17526,11 +17526,15 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 func vibeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
-	metaPath := filepath.Join(filepath.Dir(path), "meta.json")
-	if metaInfo, err := os.Stat(metaPath); err == nil {
-		size += metaInfo.Size()
-		if metaMtime := metaInfo.ModTime().UnixNano(); metaMtime > mtime {
-			mtime = metaMtime
+	siblings := []string{filepath.Join(filepath.Dir(path), "meta.json")}
+	// A unified session's running turn is appended to its journal segment.
+	if journal, ok := parser.VibeUnifiedJournalPath(path); ok {
+		siblings = append(siblings, journal)
+	}
+	for _, sibling := range siblings {
+		if siblingInfo, err := os.Stat(sibling); err == nil {
+			size += siblingInfo.Size()
+			mtime = max(mtime, siblingInfo.ModTime().UnixNano())
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}

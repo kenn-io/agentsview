@@ -83,10 +83,12 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 		name            string
 		originalPresent bool
 		renamedFile     bool
+		version         int
 	}{
-		{"original_present", true, false},
-		{"original_absent", false, false},
-		{"noncanonical_filename", true, true},
+		{"original_present", true, false, 134},
+		{"original_absent", false, false, 134},
+		{"noncanonical_filename", true, true, 134},
+		{"version_135", false, false, 135},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, pathA, pathB := writeCodexIdentityRollouts(t)
@@ -99,11 +101,11 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 				require.NoError(t, os.Remove(pathA))
 			}
 			database := openTestDB(t)
-			// Version 134 could store B's transcript as A and lose A's full history.
+			// Earlier versions could store B's transcript as A and lose A's full history.
 			const legacyID = "codex:" + identityThreadA
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: legacyID, Agent: "codex", Project: "project-a", Machine: "local", FilePath: &pathB,
-				DataVersion: 134, MessageCount: 1, UserMessageCount: 1,
+				DataVersion: tc.version, MessageCount: 1, UserMessageCount: 1,
 			}))
 			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: legacyID, Role: "user", Content: "other question"}}))
 			name, note := "Saved conversation", "Keep this question"
@@ -124,7 +126,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			raw, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, raw.Close()) })
-			_, err = raw.ExecContext(t.Context(), "PRAGMA user_version=134")
+			_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", tc.version))
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 			reopened, err := db.OpenIsolated(t.Context(), dbPath)
@@ -180,12 +182,20 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 }
 
 func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
-	for _, missing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("corrected_source_missing=%t", missing), func(t *testing.T) {
+	for _, tc := range []struct {
+		missing bool
+		version int
+	}{
+		{false, 134},
+		{true, 134},
+		{false, 135},
+		{true, 135},
+	} {
+		t.Run(fmt.Sprintf("version=%d/corrected_source_missing=%t", tc.version, tc.missing), func(t *testing.T) {
 			root, _, pathB := writeCodexIdentityRollouts(t)
 			content, err := os.ReadFile(pathB)
 			require.NoError(t, err)
-			if missing {
+			if tc.missing {
 				require.NoError(t, os.Remove(pathB))
 			}
 			database := openTestDB(t)
@@ -193,7 +203,7 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			const correctedID = "codex:" + identityThreadB
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: legacyID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB,
-				DataVersion: 134, MessageCount: 1,
+				DataVersion: tc.version, MessageCount: 1,
 			}))
 			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 				{SessionID: legacyID, Role: "user", Content: "other question"},
@@ -204,7 +214,7 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			raw, err := sql.Open("sqlite3", path)
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, raw.Close()) })
-			_, err = raw.ExecContext(t.Context(), "PRAGMA user_version=134")
+			_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", tc.version))
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 			reopened, err := db.OpenIsolated(t.Context(), path)
@@ -224,7 +234,7 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			deleted, err := reopened.GetSession(t.Context(), correctedID)
 			require.NoError(t, err)
 			assert.Nil(t, deleted)
-			if missing {
+			if tc.missing {
 				require.NoError(t, os.WriteFile(pathB, content, 0o600))
 			}
 			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))

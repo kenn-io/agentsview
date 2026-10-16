@@ -165,22 +165,27 @@ func (r rebuildRun) resumableAs(current rebuildRun) bool {
 // fresh discards an unfinished rebuild: --full asks for every session to be
 // rewritten, and the file's fingerprints cannot see in-place edits. The
 // caller decides whether a rebuild that ended with session errors resumes.
+// restarted reports that fresh discarded an unfinished rebuild, including one
+// that could not resume, such as after the resync a CLI --full push runs.
 func claimRebuild(
 	ctx context.Context, path string, current rebuildRun, fresh bool,
-) (*flock.Flock, *rebuildRun, error) {
+) (lock *flock.Flock, pending *rebuildRun, restarted bool, err error) {
 	workDir, err := ensureMirrorWorkDir(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	lock := flock.New(filepath.Join(workDir, filepath.Base(path)+rebuildLockSuffix))
+	lock = flock.New(filepath.Join(workDir, filepath.Base(path)+rebuildLockSuffix))
 	locked, err := lock.TryLock()
 	if err != nil {
-		return nil, nil, fmt.Errorf("locking duckdb mirror %s for rebuild: %w", path, err)
+		return nil, nil, false, fmt.Errorf("locking duckdb mirror %s for rebuild: %w", path, err)
 	}
 	if !locked {
-		return nil, nil, errRebuildLocked
+		return nil, nil, false, errRebuildLocked
 	}
-	pending, err := pendingRebuild(ctx, path, current)
+	existed, err := rebuildFileExists(path)
+	if err == nil {
+		pending, err = pendingRebuild(ctx, path, current)
+	}
 	if err == nil && pending != nil {
 		switch {
 		case fresh:
@@ -189,9 +194,9 @@ func claimRebuild(
 		}
 	}
 	if err != nil {
-		return nil, nil, errors.Join(err, unlockRebuild(lock))
+		return nil, nil, false, errors.Join(err, unlockRebuild(lock))
 	}
-	return lock, pending, nil
+	return lock, pending, fresh && existed, nil
 }
 
 func unlockRebuild(lock *flock.Flock) error {

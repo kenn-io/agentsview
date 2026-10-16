@@ -411,6 +411,46 @@ func TestWritePGPushSummaryReportsResumedSessions(t *testing.T) {
 		"Skipped 7 session(s) already pushed by the unfinished full push")
 }
 
+// Ownership conflicts must not hide how many sessions the unfinished full
+// push already finished.
+func TestWritePGPushSummaryReportsResumedSessionsWithConflicts(t *testing.T) {
+	var out bytes.Buffer
+
+	writeReplicaPushSummary(&out, "PostgreSQL", storage.PushResult{
+		SessionsPushed:   1,
+		SkippedConflicts: 2,
+		SkippedResumed:   7,
+		Duration:         time.Second,
+	})
+
+	got := out.String()
+	assert.Contains(t, got,
+		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
+	assert.Contains(t, got,
+		"Skipped 7 session(s) already pushed by the unfinished full push")
+}
+
+// A full push prints why it ran, so a requested full push that discarded an
+// unfinished one says so on the console rather than only in the log.
+func TestWritePGPushSummaryReportsFullPushReason(t *testing.T) {
+	var discarded bytes.Buffer
+	writeReplicaPushSummary(&discarded, "PostgreSQL", storage.PushResult{
+		SessionsPushed: 3,
+		Full:           true,
+		FullReason:     "requested; discarded an unfinished full push",
+		Duration:       time.Second,
+	})
+	assert.Contains(t, discarded.String(),
+		"PostgreSQL push mode: full (requested; discarded an unfinished full push)")
+
+	var incremental bytes.Buffer
+	writeReplicaPushSummary(&incremental, "PostgreSQL", storage.PushResult{
+		SessionsPushed: 3,
+		Duration:       time.Second,
+	})
+	assert.NotContains(t, incremental.String(), "push mode")
+}
+
 func TestWritePGPushSummaryVectorPhase(t *testing.T) {
 	tests := []struct {
 		name        string

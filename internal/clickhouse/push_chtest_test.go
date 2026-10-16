@@ -129,7 +129,8 @@ func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 	full, err := s.Push(ctx, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, full.SessionsPushed)
-	assert.Equal(t, "requested", full.FullReason)
+	assert.True(t, full.Full)
+	assert.Empty(t, full.FullReason, "a requested full push needs no explanation")
 	assert.Equal(t, 5, chtest.Count(t, conn, "messages", ""))
 	assert.Equal(t, 3, chtest.Count(t, conn, "sessions", ""))
 }

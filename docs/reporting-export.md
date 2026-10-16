@@ -234,10 +234,13 @@ different models or buckets.
 Identities use the existing project identity fields: `key`, `kind`,
 `repository_key`, and, for `git_remote`, a credential-free `normalized_remote`.
 Machine-root identities retain opaque scoped keys; they do not prove that a
-consumer's configured filesystem path matches. Consumers own permission checks:
-match verified identity evidence to their policy, never a display label. Missing
-catalogs, unresolved entries, or identities that cannot establish the requested
-permission must not authorize detailed cells.
+consumer's configured filesystem path matches. Their `root_key` is included only
+when every contributing session agrees on that root. Different worktrees of the
+same repository retain the shared identity and `repository_key`, with no
+`root_key`. Consumers own permission checks: match verified identity evidence to
+their policy, never a display label. Missing catalogs, unresolved entries, or
+identities that cannot establish the requested permission must not authorize
+detailed cells.
 
 Identity-only changes alter the hour and day digests, so ordinary correction
 screening discovers them. The exporter loads session snapshots in bounded

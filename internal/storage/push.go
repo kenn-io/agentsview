@@ -77,7 +77,8 @@ type PushResult struct {
 	Errors       int
 	Duration     time.Duration
 	// Full reports whether the push rewrote every in-scope session, and
-	// FullReason says why when the caller did not ask for it.
+	// FullReason says why when the caller did not ask for it. A requested
+	// full push that discarded an unfinished one says so in FullReason.
 	Full       bool
 	FullReason string
 	// Vectors summarizes the vector phase. A backend without one reports

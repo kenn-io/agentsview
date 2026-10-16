@@ -22,6 +22,7 @@ import (
 var dataVersionScopes = map[int][]parser.AgentType{
 	132: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate, parser.AgentGrok},
 	133: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+	135: {parser.AgentVibe},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

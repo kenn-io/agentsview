@@ -6,10 +6,10 @@ AgentsView's Friction Log adapts the session review from
 behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
-The pure detection, signal, formatting, JSON, archived-row adapter, and session
-review packages are built, and sync stores each session's findings. Digest
-rendering, scheduling, NanoClaw integration, and Kata filing remain planned.
-Sections marked planned record the approved mapping, not current behavior.
+The pure detection, signal, formatting, JSON, archived-row adapter, session
+review, and digest renderer are built, and sync stores each session's findings.
+Scheduling, NanoClaw integration, and Kata filing remain planned. Sections
+marked planned record the approved mapping, not current behavior.
 
 ## Kept
 
@@ -34,8 +34,8 @@ Sections marked planned record the approved mapping, not current behavior.
   Go equivalents. A source-specific title exception was dropped.
 - `internal/serdejson` reproduces the relevant serde_json 1.x output: sorted
   keys, no HTML escaping, and float layout. The planned event ledger must
-  match jilog's format byte for byte, and the planned digest JSON uses the
-  same encoder, within the documented parity limits.
+  match jilog's format byte for byte, and the digest JSON uses the same
+  encoder, within the documented parity limits.
 
 ## Planned replacements
 
@@ -86,8 +86,8 @@ Sections marked planned record the approved mapping, not current behavior.
 
 ## Deliberate differences
 
-- Titles use `[friction/<kind>]`, labels use `friction`, and the planned digest
-  heading is `# Friction Log — <date>`.
+- Titles use `[friction/<kind>]`, labels use `friction`, and the digest heading
+  is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
   15-200 byte user turn between two assistant turns, so instructions such as
   "now run the tests" became corrections. Instructions that contain "don't" or
@@ -155,11 +155,25 @@ Additions beyond jilog:
   exponents and underscores, which AgentsView does not produce.
 - An empty tool name becomes `unknown`; jilog does this only for a missing name.
 
-## Digest golden deltas
+## Digest goldens
 
-The digest renderer is planned. When it lands, this section will list every
-difference between AgentsView's golden digest and jilog's
-`tests/golden/learning-digest.md`.
+The digest follows jilog's `learning-digest.md` layout with these differences:
+
+- The heading is `# Friction Log` with the digest date.
+- Frustration and interruption counts and sections extend jilog's five kinds.
+  Interruptions group by session in first-appearance order.
+- Personas, spend, issue links and recurrence costs await the slices that supply
+  them. Timezone handling belongs to daily digest scheduling.
+- Archived text renders in code spans that preserve backticks and boundary
+  spaces. Control characters become spaces. Markdown and HTML render literally.
+  Stored pattern evidence and the detector rules version stay unchanged.
+- The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
+  `sessions_scanned`, seven kind counts and `p0_alerts`.
+
+`friction-log.md` and `summary.json` share one archive-shaped fixture with
+error text, retry and runaway patterns, and two P0 tools across three
+sessions each. `friction-log-empty.md` pins every empty section. The Markdown
+frontmatter and JSON counts use the same signal grouping.
 
 ## License
 

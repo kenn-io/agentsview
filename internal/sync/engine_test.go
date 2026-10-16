@@ -7497,65 +7497,6 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 	assert.False(t, res.skip, "WAL-only update must trigger a reparse")
 }
 
-func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
-	database := openTestDB(t)
-	ctx := t.Context()
-
-	root := t.TempDir()
-	e := NewEngine(ctx, database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentVibe: {root},
-		},
-	})
-
-	sessionDir := filepath.Join(root, "session_20260616_083518_0107f266")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
-
-	msgPath := filepath.Join(sessionDir, "messages.jsonl")
-	require.NoError(t, os.WriteFile(
-		msgPath,
-		[]byte(`{"role":"user","content":"hi"}`+"\n"),
-		0o644,
-	))
-
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	require.NoError(t, os.WriteFile(
-		metaPath,
-		[]byte(`{"session_id":"abc","title":"Original title"}`+"\n"),
-		0o644,
-	))
-
-	canonicalID := "vibe:abc"
-
-	e.SyncPaths([]string{msgPath})
-	sess, err := database.GetSession(ctx, canonicalID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.NotNil(t, sess.DisplayName)
-	assert.Equal(t, "Original title", *sess.DisplayName)
-
-	// meta.json-only update: messages.jsonl is untouched, but the title
-	// (sourced from meta.json) changes. The Vibe provider's composite
-	// fingerprint folds the sibling meta.json mtime in, so the change busts
-	// the skip cache and triggers a reparse rather than a skip.
-	info, err := os.Stat(msgPath)
-	require.NoError(t, err)
-	metaTime := info.ModTime().Add(5 * time.Second)
-	require.NoError(t, os.WriteFile(
-		metaPath,
-		[]byte(`{"session_id":"abc","title":"Renamed title"}`+"\n"),
-		0o644,
-	))
-	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
-
-	e.SyncPaths([]string{msgPath})
-	sess, err = database.GetSession(ctx, canonicalID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.NotNil(t, sess.DisplayName)
-	assert.Equal(t, "Renamed title", *sess.DisplayName)
-}
-
 func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	database := openTestDB(t)
 	ctx := t.Context()
