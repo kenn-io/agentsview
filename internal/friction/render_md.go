@@ -82,12 +82,11 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	})
 	b.WriteString("## Interruptions\n\n")
 	if groups := groupInterruptions(interruptions); len(groups) == 0 {
-		b.WriteString("_No interruptions detected._\n\n")
+		b.WriteString("_No interruptions detected._\n")
 	} else {
 		for _, g := range groups {
 			fmt.Fprintf(&b, "- %s%s interruptions=%d\n", dimsPrefix(g.first.Dims), code(g.first.SubjectID), g.n)
 		}
-		b.WriteByte('\n')
 	}
 
 	return b.Bytes()

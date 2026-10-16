@@ -44,4 +44,3 @@ _No frustration detected._
 ## Interruptions
 
 _No interruptions detected._
-

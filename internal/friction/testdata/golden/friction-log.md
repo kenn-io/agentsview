@@ -53,4 +53,3 @@ interruptions: 3
 
 - `agent:claude` `s-2` interruptions=2
 - `s-1` interruptions=1
-
