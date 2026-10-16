@@ -27,7 +27,7 @@ type CodexCloudPrior struct {
 func CodexCloudKeepReason(messages int, prior CodexCloudPrior) string {
 	saved := prior.Session.MessageCount
 	if messages == 0 && saved > 0 || prior.Current && messages < saved {
-		return fmt.Sprintf("the local copy of the chat has fewer messages (%d saved, %d found)", saved, messages)
+		return fmt.Sprintf("the local copy of the chat has fewer messages (%d saved, %d in the local copy)", saved, messages)
 	}
 	return ""
 }
@@ -37,18 +37,24 @@ func CodexCloudKeepReason(messages int, prior CodexCloudPrior) string {
 // writes, and server history carries neither, so a parse without them
 // where the saved copy has them was rebuilt after the mirror was lost.
 //
-//   - With no token counts, prepared takes the saved token counts, usage
-//     events, peak context, and capture coverage. Turns that ran while the
-//     mirror was missing are not counted as uncaptured.
+//   - With no token counts, or with a smaller output total than a current
+//     saved copy, prepared takes the saved token counts, usage events,
+//     peak context, and capture coverage. Records only accumulate, so a
+//     smaller total means the file was cut short. Turns that ran while
+//     the mirror was missing are not counted as uncaptured.
 //   - With token counts, prepared keeps the larger peak context of the two
 //     when the saved copy is current: a rebuilt mirror holds only the
 //     newest records.
-//   - With no plan records, prepared takes the saved plan figures.
+//   - With no plan records, prepared takes the saved plan figures. With
+//     only an outcome other than "counted under", it keeps the saved
+//     report figures under the new outcome, as the parser does for a
+//     whole mirror.
 //
 // It reports whether prepared took the saved token counts.
 func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool {
 	saved := prior.Session
-	tokens := !prepared.Session.HasTotalOutputTokens && saved.HasTotalOutputTokens
+	tokens := saved.HasTotalOutputTokens && (!prepared.Session.HasTotalOutputTokens ||
+		prior.Current && prepared.Session.TotalOutputTokens < saved.TotalOutputTokens)
 	if tokens {
 		prepared.UsageEvents = prior.UsageEvents
 		prepared.Session.TotalOutputTokens = saved.TotalOutputTokens
@@ -65,7 +71,13 @@ func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool
 		row = *prepared.PlanUsage
 	}
 	switch {
+	case hasPlanReport(prepared.PlanUsage) || row.CountedUnder != "":
 	case hasPlanRecords(prepared.PlanUsage):
+		if hasPlanReport(prior.PlanUsage) {
+			merged := *prior.PlanUsage
+			merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
+			row = withCoverage(merged, row)
+		}
 	case hasPlanRecords(prior.PlanUsage):
 		row = withCoverage(*prior.PlanUsage, row)
 	case tokens:
@@ -86,6 +98,12 @@ func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool
 		prepared.PlanUsage = nil
 	}
 	return tokens
+}
+
+// hasPlanReport reports whether a plan usage row holds OpenAI's report
+// figures.
+func hasPlanReport(row *db.SessionPlanUsage) bool {
+	return row != nil && row.HasPlanUsage && row.DataAsOf != ""
 }
 
 // hasPlanRecords reports whether a plan usage row holds a report or an

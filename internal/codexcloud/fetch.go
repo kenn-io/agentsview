@@ -502,8 +502,8 @@ func commitThread(
 // would resume past the lost history. A lost mirror first resets the
 // resume point and marks the chat to check again, so the next pass reads
 // the whole chat again even when its listing has not changed. acct is the
-// caller's account state, which the caller saves; with a nil acct the mark
-// is saved here. The caller holds the account lock.
+// caller's account state, which the caller saves, or nil. The caller holds
+// the account lock.
 func commitBesideHistory(
 	store *Store, key AccountKey, acct *AccountState, threadID string, st ThreadState, records []mirror.Record, now time.Time,
 ) (ThreadState, error) {
@@ -528,10 +528,13 @@ func commitBesideHistory(
 	return next, err
 }
 
+// markCheckAgain saves the mark before the rebuilt file and its matching
+// offset are, because once they are saved the loss can no longer be seen.
+// It also sets the mark in acct, so the caller's later save keeps it. It
+// does not save acct itself, which may hold unfinished changes.
 func markCheckAgain(store *Store, key AccountKey, acct *AccountState, threadID string) error {
 	if acct != nil {
 		acct.CheckAgain[threadID] = true
-		return nil
 	}
 	saved, err := store.LoadAccount(key)
 	if err != nil {

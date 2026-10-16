@@ -739,6 +739,7 @@ func TestJoinRuleIsCheckedAgainBeforeResume(t *testing.T) {
 
 	env.join(t, "a")
 
+	assert.Zero(t, env.calls("thread/goal/get"), "a stale chat needs no goal check")
 	assert.Zero(t, env.resumes())
 	assert.Empty(t, env.monitor.Joined(passKey))
 }

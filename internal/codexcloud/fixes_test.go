@@ -368,9 +368,13 @@ func TestWriteToLostMirrorOfIdleChatFetchesHistory(t *testing.T) {
 	path := env.mirrorPath(t, "t")
 	require.NoError(t, os.Remove(path))
 	now := env.clock.Now()
-	require.NoError(t, env.syncer.appendPlan(passKey, nil, "t", now, mirror.KindPlanUsageOutcome,
+	// The plan usage step passes its own account state and saves it last;
+	// here that save never happens, as when a later root fails.
+	caller := env.account(t)
+	require.NoError(t, env.syncer.appendPlan(passKey, &caller, "t", now, mirror.KindPlanUsageOutcome,
 		mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
-	assert.True(t, env.account(t).CheckAgain["t"], "the lost mirror marks the chat")
+	assert.True(t, caller.CheckAgain["t"], "the caller's state carries the mark")
+	assert.True(t, env.account(t).CheckAgain["t"], "the mark is saved before the rebuilt file")
 
 	env.clock.Advance(5 * time.Minute)
 	env.run(t)

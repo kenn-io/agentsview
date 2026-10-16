@@ -167,6 +167,11 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 	if !running || turnID == handled {
 		return nil
 	}
+	// The dial and the turn check can take minutes; a chat past the join
+	// window needs no goal check.
+	if !m.recent(listedUpdatedAt) {
+		return nil
+	}
 	goal, err := activeGoal(ctx, conn, threadID)
 	if err != nil {
 		return m.failure(ctx, key, login, threadID, goalGetMethod, err)
@@ -176,9 +181,8 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 		// Marked handled, so the next run waits for a newer turn.
 		return m.flush(key, threadID, nil, turnID)
 	}
-	// The dial, the turn check, and the goal check can each take minutes.
-	// The join rule must still hold when the resume is sent, or a stale
-	// turn gets a cold resume.
+	// The goal check can take minutes too. The join rule must still hold
+	// when the resume is sent, or a stale turn gets a cold resume.
 	if !m.recent(listedUpdatedAt) {
 		return nil
 	}
