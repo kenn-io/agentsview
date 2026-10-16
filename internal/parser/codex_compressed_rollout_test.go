@@ -3,6 +3,7 @@ package parser
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -361,4 +362,59 @@ func TestCodexCompressedSiblingHidden(t *testing.T) {
 	assert.False(t, codexCompressedSiblingHidden(plain, listed))
 	assert.False(t, codexCompressedSiblingHidden(plain+".zst", map[string]struct{}{plain + ".zst": {}}),
 		"alone, the compressed copy is the thread's file")
+}
+
+// Resolving a known rollout must not inspect unrelated archive entries.
+func TestCodexKnownRolloutLookupWorkDoesNotGrowWithArchive(t *testing.T) {
+	for _, reconciliation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reconciliation_%t", reconciliation), func(t *testing.T) {
+			root := t.TempDir()
+			path := writeFileIn(t, root, compressedDayPrefix+compressedThreadA+".jsonl.zst",
+				zstdCompress(t, []byte(codexRolloutContent(compressedThreadA, "known rollout"))))
+			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			lookup := func() {
+				if reconciliation {
+					source, found, err := provider.(ReconciliationSourceResolver).SourceForReconciliation(
+						t.Context(), path, "codex:"+compressedThreadA,
+					)
+					require.NoError(t, err)
+					require.True(t, found)
+					require.Equal(t, path, source.DisplayPath)
+					return
+				}
+				sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+					Path: path, EventKind: "write",
+				})
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				require.Equal(t, path, sources[0].DisplayPath)
+			}
+			small := testing.AllocsPerRun(3, lookup)
+			for i := range 256 {
+				name := fmt.Sprintf("rollout-2026-06-11T12-44-06-019f1000-0000-7000-8001-%012d.jsonl.zst", i)
+				require.NoError(t, os.WriteFile(filepath.Join(root, name), nil, 0o644))
+			}
+			large := testing.AllocsPerRun(3, lookup)
+			// Leave room for runtime variation while rejecting per-entry work.
+			assert.Less(t, large, 2*small,
+				"known-path lookup work must stay bounded as the archive grows")
+		})
+	}
+}
+
+func TestCodexCompressedChangedPathFindsDatedPlainByFilename(t *testing.T) {
+	flat, live := t.TempDir(), t.TempDir()
+	name := compressedDayPrefix + compressedThreadA + ".jsonl"
+	content := []byte(codexRolloutContent(compressedThreadA, "same rollout"))
+	compressed := writeFileIn(t, flat, name+".zst", zstdCompress(t, content))
+	plain := writeFileIn(t, codexDayDir(live), name, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{flat, live}})
+	require.True(t, ok)
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: compressed, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, plain, sources[0].DisplayPath)
 }

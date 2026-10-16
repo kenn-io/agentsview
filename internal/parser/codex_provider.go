@@ -153,13 +153,24 @@ func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) 
 func (p *codexProvider) SourceForReconciliation(
 	ctx context.Context, path, _ string,
 ) (SourceRef, bool, error) {
-	sources, err := p.sources.SourcesForChangedPath(ctx, ChangedPathRequest{
-		Path: path, EventKind: "write",
-	})
-	if err != nil || len(sources) == 0 || !IsRegularFile(sources[0].DisplayPath) {
+	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
-	return sources[0], true, nil
+	// Reconciliation already ranked this path. Only check its plain sibling;
+	// searching by UUID here repeats discovery for every compressed rollout.
+	if isCompressedCodexRolloutPath(path) && IsRegularFile(codexPlainRolloutPath(path)) {
+		path = codexPlainRolloutPath(path)
+	}
+	for _, root := range p.sources.roots {
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			source, ok = p.sources.directPathSource(root, path, true)
+		}
+		if ok {
+			return source, true, nil
+		}
+	}
+	return SourceRef{}, false, nil
 }
 
 func (p *codexProvider) DiscoverRawCaptureSourcesEach(
@@ -1189,7 +1200,7 @@ func (s codexSourceSet) SourcesForChangedPath(
 		}
 		if ok {
 			if compressed {
-				preferred, _, err := s.canonicalSource(ctx, source)
+				preferred, err := s.preferredKnownRolloutSource(ctx, source)
 				if err != nil {
 					return nil, err
 				}
@@ -1373,6 +1384,51 @@ func (s codexSourceSet) directPathSource(
 			Path: path,
 		},
 	}, true
+}
+
+// preferredKnownRolloutSource checks the known filename in each supported
+// layout. Compression keeps that filename and only adds .zst. Do not turn a
+// changed-path event into a UUID scan over every session in every root.
+func (s codexSourceSet) preferredKnownRolloutSource(
+	ctx context.Context,
+	source SourceRef,
+) (SourceRef, error) {
+	src, ok := source.Opaque.(codexSource)
+	if !ok || src.UUID == "" {
+		return source, nil
+	}
+	name := filepath.Base(codexPlainRolloutPath(src.Path))
+	relativePaths := []string{name}
+	if src.Layout == CodexLayoutDated {
+		if day, err := filepath.Rel(src.Root, filepath.Dir(src.Path)); err == nil {
+			relativePaths = append(relativePaths, filepath.Join(day, name))
+		}
+	} else {
+		// Flat archives retain the timestamp in the original rollout name.
+		date, _, _ := strings.Cut(strings.TrimPrefix(name, "rollout-"), "T")
+		if day, err := time.Parse("2006-01-02", date); err == nil {
+			relativePaths = append(relativePaths, filepath.Join(day.Format("2006/01/02"), name))
+		}
+	}
+	best := source
+	found := false
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, err
+		}
+		if isS3URI(root) {
+			continue
+		}
+		for _, relative := range relativePaths {
+			for _, suffix := range []string{"", ".zst"} {
+				candidate, ok := s.sourceRef(root, filepath.Join(root, relative)+suffix, true)
+				if ok && (!found || preferCodexSource(candidate, best)) {
+					best, found = candidate, true
+				}
+			}
+		}
+	}
+	return best, nil
 }
 
 func (s codexSourceSet) canonicalSource(

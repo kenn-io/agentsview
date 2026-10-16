@@ -605,19 +605,21 @@ fixtures retain this field; missing identities remain source-local.
   including raw-capture audits, watcher events and streaming reconciliation.
   Changed-path batches and S3 imports apply the same duplicate ranking across
   configured roots: dated layouts before flat archives, then plain files, then
-  the lexically smaller path. A compressed-only local event also looks for the
-  preferred same-session source across roots. Quick sync prefers the newest
-  modification time before applying that ranking. Cross-root ranking is
-  AgentsView's import policy; a file suffix alone does not establish recency
-  between independently imported stores. Full parses and replay-parent reads
-  stream decoded bytes through an `io.Reader` without a temporary decompressed
-  copy. Compressed rollouts are parsed in full, without resumable checkpoints
-  or decoded-byte offsets. Local scheduling and S3 imports after download read
-  the frame's declared decoded size without a decoding pass. Frames without a
-  declared size use scratch staging and reserve the full parse memory budget.
-  Stored fingerprints retain the original compressed file's size, modification
-  time, identity and hash. A decoding error prevents partial results from
-  replacing the archive.
+  the lexically smaller path. A compressed-only local event checks the known
+  rollout filename in the dated and flat layouts across roots, without
+  scanning directories by UUID. Reconciliation checks its selected path and
+  plain sibling directly. Quick sync prefers the newest modification time
+  before applying that ranking. Cross-root ranking is AgentsView's import
+  policy; a file suffix alone does not establish recency between independently
+  imported stores. Full parses and replay-parent reads stream decoded bytes
+  through an `io.Reader` without a temporary decompressed copy. Compressed
+  rollouts are parsed in full, without resumable checkpoints or decoded-byte
+  offsets. Local scheduling and S3 imports after download read the frame's
+  declared decoded size without a decoding pass. Frames without a declared
+  size use scratch staging and reserve the full parse memory budget. Stored
+  fingerprints retain the original compressed file's size, modification time,
+  identity and hash. A decoding error prevents partial results from replacing
+  the archive.
 
 - **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
   `thread/revert` writes a rollout named
