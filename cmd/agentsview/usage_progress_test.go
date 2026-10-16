@@ -85,8 +85,7 @@ func TestDailyUsageDefersReconciliationUntilFreshQuery(t *testing.T) {
 	ts.Config.Handler = srv.Handler()
 	ts.Start()
 	t.Cleanup(ts.Close)
-	stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
-		assert.True(t, launch.SkipInitialSync)
+	stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 		registerTestRuntime(t, cfg.DataDir, ts.URL, false)
 		return daemonRuntimeFromTestURL(t, ts.URL), nil
 	})

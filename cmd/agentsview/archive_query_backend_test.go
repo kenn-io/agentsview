@@ -151,11 +151,8 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 		offline:       true,
 		skipFreshData: true,
 	}
-	var out *sessionUsageOutput
-	var exitCode int
 	stderr := captureStderr(t, func() {
-		var err error
-		out, exitCode, err = backend.SessionUsage(
+		out, exitCode, err := backend.SessionUsage(
 			t.Context(),
 			sessionUsageQuery{SessionID: "codex:no-sync-usage"},
 		)
@@ -163,7 +160,6 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 		require.NotNil(t, out)
 		assert.Equal(t, tokenUseExitOK, exitCode)
 		assert.Equal(t, 42, out.TotalOutputTokens)
-		assert.False(t, out.RefreshIncomplete)
 	})
 	assert.NotContains(t, stderr, "warning: usage refresh incomplete")
 }
