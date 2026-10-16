@@ -684,8 +684,6 @@ ______________________________________________________________________
 ### `agentsview prune`
 
 Delete sessions matching one or more filters. At least one filter is required.
-Prune deletes source transcripts stored as files, while SQLite-backed agents
-retain their source database. `--agent` includes matching trash.
 
 ```bash
 agentsview prune [flags]

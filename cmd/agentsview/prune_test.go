@@ -62,6 +62,47 @@ func TestPrunerKeepsSharedSourceFiles(t *testing.T) {
 	}
 }
 
+func TestPrunerAgentKeepsTrashedHermesStore(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	hermes := filepath.Join(t.TempDir(), "state.db")
+	claude := filepath.Join(t.TempDir(), "session.jsonl")
+	for _, row := range []struct{ agent, path, content string }{
+		{"hermes", hermes, "app state"},
+		{"claude", claude, "source data"},
+	} {
+		require.NoError(t, os.WriteFile(row.path, []byte(row.content), 0o600))
+		dbtest.SeedSession(t, d, row.agent, "test", func(s *db.Session) {
+			s.Agent, s.FilePath = row.agent, new(row.path)
+		})
+	}
+	deleted, err := d.SoftDeleteSessions(t.Context(), []string{"hermes"})
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	session, err := d.GetSessionFull(t.Context(), "hermes")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+
+	pruner, out := newTestPruner(t, d, "")
+	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{
+		Filter: db.PruneFilter{Agent: "hermes"}, Yes: true,
+	}))
+	content, err := os.ReadFile(hermes)
+	require.NoError(t, err)
+	assert.Equal(t, "app state", string(content))
+	content, err = os.ReadFile(claude)
+	require.NoError(t, err)
+	assert.Equal(t, "source data", string(content))
+	session, err = d.GetSessionFull(t.Context(), "hermes")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	session, err = d.GetSessionFull(t.Context(), "claude")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "claude", session.Agent)
+	assert.Equal(t, new(claude), session.FilePath)
+	assert.Contains(t, out.String(), "Deleted 1 sessions, removed 0 files (0 B reclaimed), left 1 source file in place")
+}
+
 func TestPrunerRemovesClaudeAndKeepsHermes(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	claude := filepath.Join(t.TempDir(), "session.jsonl")
