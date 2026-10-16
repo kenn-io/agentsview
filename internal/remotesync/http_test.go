@@ -3518,8 +3518,9 @@ func TestPrepareHTTPSyncsUnwindsPreparedSources(t *testing.T) {
 			setHTTPSourceURL(t, &syncB, remoteB.ts.URL)
 			syncB.DB = database
 			preparedA := make(chan struct{})
+			prepareAErr := make(chan error, 1)
 			syncA.Lifecycle = &RemoteSyncLifecycle{PrepareFinished: func(err error) {
-				assert.NoError(t, err)
+				prepareAErr <- err
 				close(preparedA)
 			}}
 			// Fail B after A succeeds, so this exercises unwind of a prepared source.
@@ -3559,6 +3560,7 @@ func TestPrepareHTTPSyncsUnwindsPreparedSources(t *testing.T) {
 					return source, nil
 				},
 			)
+			require.NoError(t, <-prepareAErr)
 			require.Error(t, err)
 			var primary *HostError
 			require.ErrorAs(t, err, &primary)
