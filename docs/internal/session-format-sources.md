@@ -214,10 +214,10 @@ fixtures retain this field; missing identities remain source-local.
   continuations and their companions into one source. Reparse preserves either
   seed transcript's stored path and refuses replacement if a recorded
   contributor is absent. Hosted capture plans and watcher discovery are
-  unchanged. Scoped discovery covers each affected project under its configured
-  root so companion transcripts remain in scope.
-  Rechecked 2026-10-14 with discovery fixtures: a project that vanishes or becomes
-  a file during raw-capture enumeration makes discovery incomplete even if it
+  unchanged. Scoped discovery covers each affected project under its
+  configured root so companion transcripts remain in scope. Rechecked
+  2026-10-14 with discovery fixtures: a project that vanishes or becomes a
+  file during raw-capture enumeration makes discovery incomplete even if it
   returns before enumeration ends. Scoped reconciliation accepts missing paths
   as absence.
 
@@ -577,6 +577,50 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Compressed rollouts (checked 2026-10-16, source at commit
+  `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
+  by the Codex app compresses rollouts whose modification time is at least
+  seven days old to `rollout-<ts>-<uuid>.jsonl.zst`. Undo pages become
+  `rollout-<ts>-<thread>_<rollout>.jsonl.zst`. It writes one zstd frame at
+  level 3, removes the plain file, and preserves its modification time and
+  permissions
+  ([compression.rs](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L846-L973)).
+  Codex prefers the plain file while both forms exist and restores it before
+  appending to a compressed thread
+  ([materialize_rollout_for_append_blocking](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L121-L185)).
+  Successful restoration removes the compressed file before returning for
+  append. Read resolution explicitly checks the plain file before its
+  compressed sibling
+  ([path_metadata.rs](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression/path_metadata.rs#L11-L17)).
+  The worker scans `sessions` and `archived_sessions` beneath one
+  `codex_home`
+  ([worker](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L492-L503)).
+  Compression changes the representation of the existing JSONL bytes. It
+  does not copy a session into another configured root or generate an
+  independent transcript history. New frames declare the decoded size
+  ([encoder](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L1011-L1018));
+  Codex still reads older frames without it
+  ([prefix reader](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
+  AgentsView treats both names as one session and prefers the plain file,
+  including raw-capture audits, watcher events and streaming reconciliation.
+  Changed-path batches and S3 imports apply the same duplicate ranking across
+  configured roots: dated layouts before flat archives, then plain files, then
+  the lexically smaller path. A compressed-only local event checks the known
+  rollout filename in the dated and flat layouts across roots, without
+  scanning directories by UUID. Reconciliation checks its selected path and
+  plain sibling directly. Quick sync prefers the newest modification time
+  before applying that ranking. Cross-root ranking is AgentsView's import
+  policy; a file suffix alone does not establish recency between independently
+  imported stores. Full parses and replay-parent reads stream decoded bytes
+  through an `io.Reader` without a temporary decompressed copy. Compressed
+  rollouts are parsed in full, without resumable checkpoints or decoded-byte
+  offsets. Local scheduling and S3 imports after download read the frame's
+  declared decoded size without a decoding pass. Frames without a declared
+  size use scratch staging and reserve the full parse memory budget. Stored
+  fingerprints retain the original compressed file's size, modification time,
+  identity and hash. A decoding error prevents partial results from replacing
+  the archive.
+
 - **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
   `thread/revert` writes a rollout named
   `rollout-<ts>-<thread>_<rollout>.jsonl`
@@ -722,21 +766,21 @@ fixtures retain this field; missing identities remain source-local.
   [recorder.rs](https://github.com/openai/codex/blob/rust-v0.148.0-alpha.15/codex-rs/rollout/src/recorder.rs#L818-L820)
   (rust-v0.148.0-alpha.15, checked 2026-10-04) only writes the thread id as
   `conversation_id`. It does not produce this reversed header, so the reversed
-  shape and its version range come from local files and are `no-public-source`.
-  The `id` rule in the
-  entry above describes rust-v0.154.0 and later. AgentsView accepts the
-  older header only when the file name is `<session_id>_<id>`, and stores the page under the
-  file-name key like any other revert page. Data version 134 rebuilds archives
-  that stored such pages as `codex:<rollout>`, moving curation, trash, and
-  deletions to the canonical page whether its file is present or gone.
-  Tests: `TestCodexOlderHeaderRevertPageUpgradeMovesCuration`,
+  shape and its version range come from local files and are
+  `no-public-source`. The `id` rule in the entry above describes rust-v0.154.0
+  and later. AgentsView accepts the older header only when the file name is
+  `<session_id>_<id>`, and stores the page under the file-name key like any
+  other revert page. Data version 134 rebuilds archives that stored such pages
+  as `codex:<rollout>`, moving curation, trash, and deletions to the canonical
+  page whether its file is present or gone. Tests:
+  `TestCodexOlderHeaderRevertPageUpgradeMovesCuration`,
   `TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing`,
   `TestCodexOlderHeaderRevertPageTitleAndSubagent`,
   `TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow`,
   `TestCodexPurgedRolloutExclusionBlocksCanonicalPage`,
   `TestPGSessionTombstoneIDsIncludeRetiredCodexRollout`,
-  `TestCodexRevertPageSessionsThroughAPI`,
-  `TestCodexRevertPagesFormATree`, `TestCodexRevertPagesRetainDailyUsage`,
+  `TestCodexRevertPageSessionsThroughAPI`, `TestCodexRevertPagesFormATree`,
+  `TestCodexRevertPagesRetainDailyUsage`,
   `TestCodexRevertPageUpgradeReplacesStaleThreadRow`,
   `TestCopySessionMetadataFrom_CodexPagePins`,
   `TestCodexPageUpgradePreservesPostgresPins`,
@@ -3322,12 +3366,11 @@ schemas keep their existing ordering behavior.
   by project, machine, home and job ID. The pinned recognizer's legacy `job-1`
   example was reverified on 2026-10-09. The `home scopes` subtest of
   `TestHermesCronStateGroups` verifies that rewritten Windows paths keep
-  distinct homes separate by accepting both path separators. Names derive
-  from the recorded `session_name` at read time; usage-only archives show job
-  IDs because their titles are discarded. Resync copies preserve stored job
-  IDs, including imported sessions. Archived runs whose sources were gone
-  before upgrading stay individual sessions unless they already have a stored
-  job ID.
+  distinct homes separate by accepting both path separators. Names derive from
+  the recorded `session_name` at read time; usage-only archives show job IDs
+  because their titles are discarded. Resync copies preserve stored job IDs,
+  including imported sessions. Archived runs whose sources were gone before
+  upgrading stay individual sessions unless they already have a stored job ID.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. A non-empty `state.db`

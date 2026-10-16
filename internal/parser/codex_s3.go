@@ -51,9 +51,10 @@ func StatCodexS3Session(uri string) (S3Object, error) {
 	return statS3Object(uri)
 }
 
-// codexS3Scanner lists Codex rollout-*.jsonl under an s3:// sessions root
-// (any depth — Codex nests under 2026/MM/DD/). Project is derived from
-// session content, so it is left empty here, as in the local path.
+// codexS3Scanner lists Codex rollout-*.jsonl and rollout-*.jsonl.zst under
+// an s3:// sessions root (any depth — Codex nests under 2026/MM/DD/).
+// Project is derived from session content, so it is left empty here, as in
+// the local path.
 func codexS3Scanner() S3SessionScanner {
 	return S3SessionScanner{
 		Agent: AgentCodex,
@@ -101,13 +102,44 @@ func FindCodexS3ParentSessionURIs(
 	return slices.Sorted(maps.Values(byKey))
 }
 
+// codexS3PreferredFiles drops a compressed rollout object whose plain object
+// sits beside it, so the two forms of one rollout are one source, as on
+// disk. Objects of one session at different addresses, such as a live and
+// an archived copy, stay separate: the sync engine chooses between those.
+// The order of the kept objects is the scan's.
+func codexS3PreferredFiles(files []DiscoveredFile) []DiscoveredFile {
+	plain := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if isCodexSessionFilename(path.Base(file.Path)) &&
+			!isCompressedCodexRolloutPath(file.Path) {
+			plain[file.Path] = struct{}{}
+		}
+	}
+	kept := make([]DiscoveredFile, 0, len(files))
+	for _, file := range files {
+		if isCompressedCodexRolloutPath(file.Path) {
+			if _, ok := plain[codexPlainRolloutPath(file.Path)]; ok {
+				continue
+			}
+		}
+		kept = append(kept, file)
+	}
+	return kept
+}
+
 // codexS3URIPreferred reports whether a should replace b as the copy of one
-// session: live layout before archived, then the lexically smaller URI.
+// session: live layout before archived, plain before compressed, then the
+// lexically smaller URI.
 func codexS3URIPreferred(a, b string) bool {
 	aArchived := strings.Contains(a, "/archived_sessions/")
 	bArchived := strings.Contains(b, "/archived_sessions/")
 	if aArchived != bArchived {
 		return !aArchived
+	}
+	aCompressed := isCompressedCodexRolloutPath(a)
+	bCompressed := isCompressedCodexRolloutPath(b)
+	if aCompressed != bCompressed {
+		return !aCompressed
 	}
 	return a < b
 }

@@ -779,9 +779,10 @@ func claudeFindSourceFile(
 	return ""
 }
 
+// isCodexSessionFilename reports whether name is a Codex rollout, plain
+// (.jsonl) or compressed by Codex (.jsonl.zst); both forms name one session.
 func isCodexSessionFilename(name string) bool {
-	return strings.HasPrefix(name, "rollout-") &&
-		strings.HasSuffix(name, ".jsonl")
+	return strings.HasPrefix(name, "rollout-") && hasCodexRolloutSuffix(name)
 }
 
 // CodexSessionUUIDFromFilename extracts the session key from a Codex
@@ -841,7 +842,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
 		return CodexLayoutUnknown, "", false
 	}
-	if !strings.HasSuffix(path, ".jsonl") {
+	if !hasCodexRolloutSuffix(path) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
@@ -907,10 +908,11 @@ func walkCodexDayDirs(
 }
 
 // extractUUIDFromRollout extracts the session key from a Codex filename
-// like rollout-{timestamp}-{uuid}.jsonl: the thread UUID, or
-// {thread}_{rollout} for a file Codex thread/revert wrote.
+// like rollout-{timestamp}-{uuid}.jsonl or its compressed .jsonl.zst form:
+// the thread UUID, or {thread}_{rollout} for a file Codex thread/revert
+// wrote.
 func extractUUIDFromRollout(filename string) string {
-	stem := strings.TrimSuffix(filename, ".jsonl")
+	stem := codexRolloutStem(filename)
 	match := uuidRe.FindStringSubmatch(stem)
 	if len(match) < 2 {
 		return ""

@@ -1646,7 +1646,7 @@ func preprocessCodexUserTextBlocks(texts []string, initial bool) string {
 // originator. Scan all session_meta lines to match the old
 // skip condition exactly.
 func IsCodexExecSessionFile(path string) bool {
-	f, err := os.Open(path)
+	f, err := openCodexRolloutLines(path)
 	if err != nil {
 		return false
 	}
@@ -1686,18 +1686,15 @@ func (p *codexProvider) parseSession(
 func (p *codexProvider) parseSessionContext(
 	ctx context.Context, path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
-	}
-	return p.parseSessionSnapshotContext(
-		ctx, path, machine, includeExec, f, info,
+	defer snapshot.Close()
+	sess, msgs, _, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
+		ctx, path, machine, includeExec, *snapshot,
 	)
+	return sess, msgs, err
 }
 
 // parseSessionWithCursor is parseSession plus the end-of-snapshot
@@ -1708,19 +1705,13 @@ func (p *codexProvider) parseSessionWithCursor(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "", "",
-			fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "", "",
-			fmt.Errorf("stat %s: %w", path, err)
-	}
+	defer snapshot.Close()
 	return p.parseSessionSnapshotWithCursor(
-		ctx, path, machine, includeExec, f, info,
+		ctx, path, machine, includeExec, *snapshot,
 	)
 }
 
@@ -1809,7 +1800,7 @@ func codexReplayParentIDContext(
 	if ctx.Err() != nil {
 		return "", false
 	}
-	f, err := os.Open(childPath)
+	f, err := openCodexRolloutLines(childPath)
 	if err != nil {
 		return "", false
 	}
@@ -1869,7 +1860,7 @@ func (p *codexProvider) parseSessionSnapshotContext(
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
 	sess, msgs, _, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
-		ctx, path, machine, includeExec, f, info,
+		ctx, path, machine, includeExec, plainCodexRolloutSnapshot(f, info),
 	)
 	return sess, msgs, err
 }
@@ -1883,11 +1874,10 @@ func (p *codexProvider) parseSessionSnapshotContext(
 func (p *codexProvider) parseSessionSnapshotWithCursor(
 	ctx context.Context, path, machine string,
 	includeExec bool,
-	f *os.File,
-	info os.FileInfo,
+	snapshot codexRolloutSnapshot,
 ) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	return p.parseCodexSessionSnapshotStreaming(
-		ctx, path, machine, includeExec, f, info, NewCodexCollectingSink(0),
+		ctx, path, machine, includeExec, snapshot, NewCodexCollectingSink(0),
 	)
 }
 
@@ -1952,14 +1942,15 @@ func codexRevertPage(
 func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	ctx context.Context, path, machine string,
 	includeExec bool,
-	f *os.File,
-	info os.FileInfo,
+	snapshot codexRolloutSnapshot,
 	sink CodexSessionSink,
 ) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
-	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
+	// The tee hashes decoded bytes; the snapshot separately hashes the source.
+	f, info := snapshot.File, snapshot.Source
+	tee := newCodexHashAnchorTee(snapshot.Reader)
 	lr := newLineReaderContext(ctx, tee, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(
@@ -1976,15 +1967,10 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			break
 		}
 		if !gjson.Valid(line) {
-			var terminator [1]byte
-			if _, err := f.ReadAt(terminator[:], lr.bytesRead-1); err != nil {
-				return nil, nil, codexCursorState{}, false, nil, "", "",
-					fmt.Errorf("checking codex line terminator: %w", err)
-			}
 			// A writer may leave its final JSON record incomplete while the
 			// session is live. Count terminated malformed records, and count an
 			// unterminated tail only when the caller owns a stable snapshot.
-			if terminator[0] == '\n' || p.Config.StableSourceSnapshots {
+			if lr.terminated || p.Config.StableSourceSnapshots {
 				malformedLines++
 			}
 			continue
@@ -2020,7 +2006,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	// remaining replayed parent records would be imported as child
 	// content. Refuse the checkpoint until a genuine child turn opens the
 	// gate; the file then reparses authoritatively and earns its cursor.
-	if !b.forkGate.active && !b.pendingCallsOverflow && !b.checkpointUnsafe {
+	// A compressed rollout never earns one: its stored size is the
+	// compressed file's, which is no offset into the plain bytes.
+	if !snapshot.Compressed && !b.forkGate.active && !b.pendingCallsOverflow && !b.checkpointUnsafe {
 		if safeCheck, safeErr := codexSafeResumeOffsetFile(
 			f, info.Size(),
 		); safeErr == nil && safeCheck {
@@ -2049,9 +2037,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		parentSessionID, relationshipType = pageParent, RelContinuation
 	}
 	if sessionID == "" {
-		sessionID = strings.TrimSuffix(
-			filepath.Base(path), ".jsonl",
-		)
+		sessionID = codexRolloutStem(filepath.Base(path))
 	}
 	sessionID = "codex:" + sessionID
 
@@ -2065,7 +2051,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		}
 	}
 
-	mtime := info.ModTime().UnixNano()
+	// The session records the rollout as it is on disk, so a later pass that
+	// stats an unchanged compressed file finds it fresh.
+	mtime := snapshot.Source.ModTime().UnixNano()
 	if p.spec.agent == AgentCodex {
 		// Include session_index.jsonl mtime so Codex renames trigger a re-parse.
 		mtime = p.sources.metadata.EffectiveMtime(path, mtime)
@@ -2102,7 +2090,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		TerminationStatus:  classifyCodexTermination(b.lastTaskEvent),
 		File: FileInfo{
 			Path:       path,
-			Size:       info.Size(),
+			Size:       snapshot.Source.Size(),
 			Mtime:      mtime,
 			Inode:      int64(inode),
 			Device:     int64(device),
@@ -2120,6 +2108,14 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
 	sess.File.Hash = fullHash
+	if snapshot.Compressed {
+		// The session records the compressed file's own hash, which is what
+		// Fingerprint computes for the path on every later pass.
+		sess.File.Hash, err = snapshot.sourceHash(ctx)
+		if err != nil {
+			return nil, nil, codexCursorState{}, false, nil, "", "", err
+		}
+	}
 
 	var hashState []byte
 	var anchorDigest string
@@ -2454,16 +2450,27 @@ func readCodexJSONLFromContext(
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	f, err := os.Open(path)
+	snapshot, err := openCodexRollout(ctx, path)
 	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", path, err)
+		return 0, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("stat %s: %w", path, err)
+	defer snapshot.Close()
+	if snapshot.Compressed && offset != 0 {
+		return 0, fmt.Errorf("read %s: a compressed rollout has no byte offset %d", path, offset)
 	}
-	return readCodexJSONLSectionContext(ctx, f, offset, info.Size(), fn)
+	if snapshot.Compressed {
+		consumed, err = readCodexJSONLReaderContext(ctx, snapshot.Reader, fn)
+		if err != nil && !errors.Is(err, errCodexIncrementalNeedsFullParse) {
+			return consumed, err
+		}
+		// An unfinished JSONL tail can stop the scan before a deferred
+		// checksum error. Finish this decoder to validate the whole frame.
+		if _, decodeErr := io.Copy(io.Discard, ctxio.Reader{Context: ctx, Reader: snapshot.Reader}); decodeErr != nil {
+			return consumed, decodeErr
+		}
+		return consumed, err
+	}
+	return readCodexJSONLSectionContext(ctx, snapshot.File, offset, snapshot.Source.Size(), fn)
 }
 
 // readCodexJSONLSection applies the conservative Codex JSONL rules to the
@@ -2493,23 +2500,21 @@ func readCodexJSONLSectionContext(
 		)
 	}
 	section := io.NewSectionReader(f, offset, limit-offset)
-	return readCodexJSONLReaderContext(ctx, section, section, fn)
+	return readCodexJSONLReaderContext(ctx, section, fn)
 }
 
 func readCodexJSONLReader(
 	r io.Reader,
-	at io.ReaderAt,
 	fn func(line string),
 ) (consumed int64, err error) {
 	return readCodexJSONLReaderContext(
-		context.Background(), r, at, fn,
+		context.Background(), r, fn,
 	)
 }
 
 func readCodexJSONLReaderContext(
 	ctx context.Context,
 	r io.Reader,
-	at io.ReaderAt,
 	fn func(line string),
 ) (consumed int64, err error) {
 	lr := newLineReaderContext(ctx, r, maxLineSize)
@@ -2522,11 +2527,7 @@ func readCodexJSONLReaderContext(
 		if !ok {
 			break
 		}
-		var terminator [1]byte
-		if _, err := at.ReadAt(terminator[:], lr.bytesRead-1); err != nil {
-			return consumed, err
-		}
-		if terminator[0] != '\n' {
+		if !lr.terminated {
 			if gjson.Valid(line) {
 				return consumed, errCodexIncrementalNeedsFullParse
 			}

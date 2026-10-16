@@ -1369,6 +1369,75 @@ func TestDedupeCodexS3IncludesSourceMachine(t *testing.T) {
 	})
 }
 
+func TestSyncAllCodexS3DuplicatePreferenceAcrossRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		olderRoot  string
+		compressed bool
+	}{
+		{name: "plain before compressed", olderRoot: "s3://bucket/a/laptop/raw/codex", compressed: true},
+		{name: "lexical path breaks ties", olderRoot: "s3://bucket/z/laptop/raw/codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const newerRoot = "s3://bucket/m/laptop/raw/codex"
+			olderPath := tc.olderRoot + "/2026/09/01/" + compressedRolloutPlain
+			newerPath := newerRoot + "/2026/09/01/" + compressedRolloutPlain
+			one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+			two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "new answer")
+			older := compressedRolloutContent(one)
+			if tc.compressed {
+				olderPath += ".zst"
+				older = string(zstdCompressString(t, older))
+			}
+			objects := map[string]string{
+				olderPath: older,
+				newerPath: compressedRolloutContent(one, two),
+			}
+			oldFetch, oldStat := fetchS3Object, statS3Object
+			t.Cleanup(func() { fetchS3Object, statS3Object = oldFetch, oldStat })
+			fetchS3Object = func(uri string) (io.ReadCloser, error) {
+				content, ok := objects[uri]
+				if !ok {
+					return nil, missingS3ObjectError()
+				}
+				return io.NopCloser(strings.NewReader(content)), nil
+			}
+			statS3Object = func(string) (parser.S3Object, error) {
+				return parser.S3Object{}, missingS3ObjectError()
+			}
+			def, ok := parser.AgentByType(parser.AgentCodex)
+			require.True(t, ok)
+			provider := &processFixtureProvider{Def: def, Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported},
+			}}
+			// Stub remote listing and transport; selection, parsing and writes are real.
+			for i, uri := range []string{olderPath, newerPath} {
+				provider.discovered = append(provider.discovered, parser.SourceRef{
+					Provider: parser.AgentCodex, Key: uri, DisplayPath: uri,
+					ConfiguredRoot: []string{tc.olderRoot, newerRoot}[i], FingerprintKey: uri,
+					Opaque: parser.S3DiscoveredSource{
+						URI: uri, Machine: "laptop", Size: int64(len(objects[uri])),
+						MtimeNS: time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC).UnixNano(),
+					},
+				})
+			}
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {tc.olderRoot, newerRoot}},
+				Machine:   "local", DisableFilesystemProjectDiscovery: true,
+				ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+			})
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			require.Equal(t, 1, stats.Synced)
+			const sessionID = "laptop~" + compressedRolloutSession
+			assert.Equal(t, []string{"one", "new answer"}, compressedRolloutTexts(t, database, sessionID))
+			assert.Equal(t, newerPath, database.GetSessionFilePath(t.Context(), sessionID))
+		})
+	}
+}
+
 func TestSyncS3MachineFromRootUsesRawAgentLayout(t *testing.T) {
 	assert.Equal(t,
 		"laptop",
@@ -1865,7 +1934,7 @@ func TestParseMaterializedS3SourcePreservesExclusionsWithoutResults(t *testing.T
 		Machine: "laptop",
 	}
 	res, err := e.parseMaterializedS3Source(
-		t.Context(), file, dir, tempPath,
+		t.Context(), file, dir, tempPath, int64(len(content)),
 	)
 	require.NoError(t, err)
 	assert.Empty(t, res.results, "a /usage probe yields no live sessions")

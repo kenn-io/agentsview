@@ -384,7 +384,22 @@ func (e *Engine) processS3Session(
 			retentionLease: lease,
 		}
 	}
-	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp)
+	if sizer, ok := p.(parser.ParseSourceSizer); ok && file.Agent == parser.AgentCodex {
+		sourceBytes, err = sizer.ParseSourceSize(ctx, parser.SourceRef{
+			Provider: file.Agent, Opaque: parser.MaterializedFileSource{Path: tmp},
+		})
+		if err != nil {
+			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
+		}
+		// Release the download lease before acquiring a larger parse lease;
+		// several workers upgrading while holding their old leases can deadlock.
+		lease.Release()
+		lease, err = e.retentionBudget().acquire(ctx, sourceBytes)
+		if err != nil {
+			return processResult{err: err, noCacheSkip: true}
+		}
+	}
+	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp, sourceBytes)
 	if err != nil {
 		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
@@ -410,7 +425,7 @@ func (e *Engine) processS3Session(
 	res.excludedSessionIDs = applyIDPrefixToIDs(
 		idPrefix, res.excludedSessionIDs,
 	)
-	res.sourceBytes = sourceBytes
+	res.sourceBytes = max(sourceBytes, 0)
 	switch file.Agent {
 	case parser.AgentClaude:
 		missing, err := e.claudeSourceMissingSessionOwnershipsForCompleteResult(
@@ -471,15 +486,17 @@ func (e *Engine) parseMaterializedS3Source(
 	ctx context.Context,
 	file parser.DiscoveredFile,
 	tempDir, tempPath string,
+	sourceBytes int64,
 ) (processResult, error) {
 	machine := e.machine
 	if file.Machine != "" {
 		machine = file.Machine // the s3 source machine overrides the host
 	}
-	provider, ok := parser.NewProvider(file.Agent, parser.ProviderConfig{
+	providerConfig := parser.ProviderConfig{
 		Roots:   []string{tempDir},
 		Machine: machine,
-	})
+	}
+	provider, ok := parser.NewProvider(file.Agent, providerConfig)
 	if !ok {
 		return processResult{}, fmt.Errorf(
 			"no provider for s3 agent %s", file.Agent,
@@ -493,11 +510,36 @@ func (e *Engine) parseMaterializedS3Source(
 		ProjectHint:    file.Project,
 		Opaque:         parser.MaterializedFileSource{Path: tempPath},
 	}
-	outcome, err := provider.Parse(ctx, parser.ParseRequest{
-		Source:     source,
-		Machine:    machine,
-		ForceParse: true,
-	})
+	var outcome parser.ParseOutcome
+	var err error
+	var staged processResult
+	defer func() { staged.releaseStaged() }()
+	if file.Agent == parser.AgentCodex && !e.forceParse &&
+		(sourceBytes < 0 || sourceBytes > e.stagedCodexMin) {
+		staged.staged, err = newCodexStagingSink(ctx,
+			e.stagedCodexDir, e.blockedResultCategories, max(sourceBytes, 0),
+		)
+		if err != nil {
+			return processResult{}, err
+		}
+		staged.staged.toolResultImages = e.toolResultImages
+		staged.staged.database = e.db
+		staged.staged.idPrefix = s3SessionIDPrefix(file.Machine)
+		if !strings.HasPrefix(staged.staged.idPrefix, e.idPrefix) {
+			staged.staged.idPrefix = e.idPrefix + staged.staged.idPrefix
+		}
+		staged.staged.disableSignals = e.disableSignalRecompute
+		staged.stagedGCRelease = beginStagedColdSync()
+		outcome, err = stagedCodexParseOutcome(ctx, providerConfig, source,
+			parser.SourceFingerprint{}, staged.staged,
+		)
+	} else {
+		outcome, err = provider.Parse(ctx, parser.ParseRequest{
+			Source:     source,
+			Machine:    machine,
+			ForceParse: true,
+		})
+	}
 	if err != nil {
 		return processResult{}, err
 	}
@@ -542,5 +584,7 @@ func (e *Engine) parseMaterializedS3Source(
 	if collisionPolicyApplies(provider) {
 		e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, s3SessionIDPrefix(file.Machine))
 	}
+	res.staged, res.stagedGCRelease = staged.staged, staged.stagedGCRelease
+	staged.staged, staged.stagedGCRelease = nil, nil
 	return res, nil
 }

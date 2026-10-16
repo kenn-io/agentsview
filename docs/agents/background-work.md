@@ -44,6 +44,19 @@ recall extraction still own their timing; migrating them is separate work.
   macOS, record `vmmap` physical footprint and dirty memory. Use portable Go
   allocation and heap metrics on Linux and Windows.
 
+## Codex rollout compression
+
+Before changing rollout selection or accepting a compression-related review
+finding, read the pinned Codex sources in the
+[format provenance](../internal/session-format-sources.md#codex-codex).
+Compression and restoration change the representation of one rollout at the same
+path. Prefer its plain JSONL sibling when both forms exist.
+
+A test that writes different transcript contents under separate configured roots
+exercises AgentsView's import policy. It does not show that Codex creates that
+state. Establish the upstream producer path before reporting such a test as a
+Codex data-loss bug or a merge blocker.
+
 ## Usage cache backfill
 
 - Start usage-cache backfill only after the writable archive transaction that
