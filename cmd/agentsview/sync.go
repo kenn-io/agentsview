@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesource"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
@@ -75,7 +76,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			}
 		}
 		if len(remoteHosts) == 0 {
-			fatal("unknown remote host %q; add an HTTP remote in [[remote_hosts]] with a url and token", cfg.Host)
+			fatal("unknown remote host %q; add an entry in [[remote_hosts]]", cfg.Host)
 		}
 	}
 	if err := (config.Config{RemoteHosts: remoteHosts}).ValidateRemoteHosts(); err != nil {
@@ -443,14 +444,11 @@ func runRemoteSyncTransportWithCleanup(
 	full bool,
 	acquireHTTPCleanup bool,
 ) (remotesync.SyncStats, error) {
-	if rh.Transport != "" && rh.Transport != config.RemoteTransportHTTP {
-		return remotesync.SyncStats{}, fmt.Errorf("invalid remote transport %q; use http", rh.Transport)
-	}
 	if !acquireHTTPCleanup {
-		return runHTTPRemoteSync(ctx, appCfg, database, rh, full)
+		return runRemoteHostSync(ctx, appCfg, database, rh, full)
 	}
 	return httpRemoteCleanupRegistry.Run(func() (remotesync.SyncStats, error) {
-		return runHTTPRemoteSync(ctx, appCfg, database, rh, full)
+		return runRemoteHostSync(ctx, appCfg, database, rh, full)
 	})
 }
 
@@ -464,9 +462,9 @@ type preparedHTTPRebuildCLI interface {
 }
 
 var prepareHTTPRebuildCLI = func(
-	ctx context.Context, syncs []remotesync.HTTPSync,
+	ctx context.Context, syncs []remotesync.RemoteSync,
 ) (preparedHTTPRebuildCLI, error) {
-	return remotesync.PrepareAvailableHTTPSyncs(ctx, syncs)
+	return remotesync.PrepareAvailableRemoteSyncs(ctx, syncs)
 }
 
 var (
@@ -506,28 +504,26 @@ func (l *preparedHTTPRebuildLeaseCLI) Commit() error {
 	return nil
 }
 
-var runHTTPRemoteSync = func(
+var runRemoteHostSync = func(
 	ctx context.Context,
 	appCfg config.Config,
 	database *db.DB,
 	rh config.RemoteHost,
 	full bool,
 ) (remotesync.SyncStats, error) {
-	token := rh.Token
-	if token == "" {
-		return remotesync.SyncStats{}, fmt.Errorf(
-			"http remote sync token is required for host %q",
-			rh.Host,
-		)
+	source, err := remotesource.For(rh, remotesource.Options{
+		Version: version, DataDir: appCfg.DataDir,
+	})
+	if err != nil {
+		return remotesync.SyncStats{}, err
 	}
 	fullReason := remotesync.FullImportReason("")
 	if full {
 		fullReason = remotesync.FullImportExplicit
 	}
-	return remotesync.HTTPSync{
+	return remotesync.RemoteSync{
 		Host:                    rh.Host,
-		URL:                     rh.URL,
-		Token:                   token,
+		Source:                  source,
 		Full:                    full,
 		FullReason:              fullReason,
 		DataDir:                 appCfg.DataDir,
@@ -548,7 +544,7 @@ type remoteHostFailure struct {
 // runRemoteHosts syncs each configured host in declared order via syncFn and
 // continues past host-attributable failures. A pending cleanup from an earlier
 // host stops iteration and is returned separately because the callback for the
-// current host never ran. Unavailable configured HTTP hosts are omitted from
+// current host never ran. Unavailable configured hosts are omitted from
 // the returned failures.
 func runRemoteHosts(
 	hosts []config.RemoteHost, full bool,
@@ -624,7 +620,7 @@ func runConfiguredLocalAndRemotes(
 		_, err := runLocalSyncWithRebuildCLI(
 			ctx, appCfg, database, full, progress,
 			func() (sync.RebuildOptions, sync.RebuildCleanup, error) {
-				prepared, err := prepareConfiguredHTTPHosts(
+				prepared, err := prepareConfiguredRemoteHosts(
 					ctx, appCfg, database, hosts, fullReason, progress,
 				)
 				if err != nil {
@@ -686,7 +682,7 @@ func runConfiguredLocalAndRemotes(
 
 var runConfiguredLocalAndRemotesCLI = runConfiguredLocalAndRemotes
 
-func prepareConfiguredHTTPHosts(
+func prepareConfiguredRemoteHosts(
 	ctx context.Context,
 	appCfg config.Config,
 	database *db.DB,
@@ -697,19 +693,17 @@ func prepareConfiguredHTTPHosts(
 	if len(hosts) == 0 {
 		return nil, nil
 	}
-	syncs := make([]remotesync.HTTPSync, 0, len(hosts))
+	syncs := make([]remotesync.RemoteSync, 0, len(hosts))
 	for _, host := range hosts {
-		if host.Token == "" {
-			return nil, &remotesync.HostError{
-				Host:      host.Host,
-				Operation: "authenticate",
-				Err:       errors.New("HTTP remote sync token is required"),
-			}
+		source, err := remotesource.For(host, remotesource.Options{
+			Version: version, DataDir: appCfg.DataDir, Progress: progress,
+		})
+		if err != nil {
+			return nil, &remotesync.HostError{Host: host.Host, Operation: "configure", Err: err}
 		}
-		syncs = append(syncs, remotesync.HTTPSync{
+		syncs = append(syncs, remotesync.RemoteSync{
 			Host:                    host.Host,
-			URL:                     host.URL,
-			Token:                   host.Token,
+			Source:                  source,
 			Full:                    true,
 			FullReason:              fullReason,
 			DataDir:                 appCfg.DataDir,

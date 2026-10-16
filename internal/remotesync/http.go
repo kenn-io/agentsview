@@ -1,48 +1,41 @@
 package remotesync
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
-// HTTPSyncLifecycle observes the preparation and atomic rebuild work for one
-// HTTP host. Callbacks run synchronously around the operation they describe.
-type HTTPSyncLifecycle struct {
+// RemoteSyncLifecycle observes the preparation and atomic rebuild work for one
+// remote host. Callbacks run synchronously around the operation they describe.
+type RemoteSyncLifecycle struct {
 	PrepareStarted  func()
 	PrepareFinished func(error)
 	RebuildStarted  func()
 	RebuildFinished func(syncpkg.SyncStats, error)
 }
 
-type HTTPSync struct {
-	Host                    string
-	URL                     string
-	Token                   string
+type RemoteSync struct {
+	Host string
+	// Source fetches the remote half of the sync. Required.
+	Source                  Source
 	Full                    bool
 	FullReason              FullImportReason
 	DataDir                 string
 	DB                      *db.DB
 	BlockedResultCategories []string
 	Progress                syncpkg.ProgressFunc
-	Client                  *http.Client
-	Lifecycle               *HTTPSyncLifecycle
-	runPrepare              func(context.Context) (*PreparedHTTP, error)
+	Lifecycle               *RemoteSyncLifecycle
+	runPrepare              func(context.Context) (*PreparedRemote, error)
 	removeArchiveSpool      func(string) error
 	acquireMirrorLock       func(context.Context, string) (*MirrorLockHandle, error)
 }
@@ -50,11 +43,11 @@ type HTTPSync struct {
 // forceParseRequested distinguishes an operator-requested full sync from a
 // complete source scan required by an automatic data rebuild. A blank reason
 // retains the historical meaning of Full for direct callers.
-func (hs HTTPSync) forceParseRequested() bool {
+func (hs RemoteSync) forceParseRequested() bool {
 	return hs.Full && (hs.FullReason == "" || hs.FullReason == FullImportExplicit)
 }
 
-func (hs HTTPSync) forceFullParseAfterCacheRequested() bool {
+func (hs RemoteSync) forceFullParseAfterCacheRequested() bool {
 	return hs.Full && !hs.forceParseRequested()
 }
 
@@ -65,7 +58,7 @@ func (hs HTTPSync) forceFullParseAfterCacheRequested() bool {
 type PreparedCleanupError struct {
 	mu       sync.Mutex
 	cause    error
-	prepared *PreparedHTTP
+	prepared *PreparedRemote
 }
 
 func (e *PreparedCleanupError) Error() string { return e.cause.Error() }
@@ -89,7 +82,7 @@ func (e *PreparedCleanupError) RetryCleanup() error {
 	return nil
 }
 
-func (hs HTTPSync) Run(ctx context.Context) (stats SyncStats, err error) {
+func (hs RemoteSync) Run(ctx context.Context) (stats SyncStats, err error) {
 	prepare := hs.Prepare
 	if hs.runPrepare != nil {
 		prepare = hs.runPrepare
@@ -117,7 +110,7 @@ func (hs HTTPSync) Run(ctx context.Context) (stats SyncStats, err error) {
 	return prepared.ImportActive(ctx)
 }
 
-func (hs HTTPSync) importRoot(
+func (hs RemoteSync) importRoot(
 	ctx context.Context, targets TargetSet, root string,
 ) (SyncStats, error) {
 	stats, err := Importer{
@@ -145,56 +138,8 @@ func (hs HTTPSync) importRoot(
 	return stats, nil
 }
 
-func (hs HTTPSync) fetchManifest(
-	ctx context.Context, client *http.Client, targets TargetSet,
-) (Manifest, bool, error) {
-	body := generatedTargets(targets)
-	resp, err := apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
-		_, err := api.PostAPIV1RemoteSyncManifestWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncManifestRequestOptions{Body: &body})
-		return err
-	}, hs.transferHeaders)
-	if err != nil {
-		return Manifest{}, false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotImplemented {
-		if err := ValidateProtocolHeader(resp.Header); err != nil {
-			return Manifest{}, false, err
-		}
-		return Manifest{}, false, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Manifest{}, false, httpStatusError(resp)
-	}
-	if err := ValidateProtocolHeader(resp.Header); err != nil {
-		return Manifest{}, false, err
-	}
-	bodyReader := &httpBodyReader{r: resp.Body}
-	reader := io.Reader(bodyReader)
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(bodyReader)
-		if err != nil {
-			if bodyReader.err != nil {
-				err = bodyReader.err
-			}
-			return Manifest{}, false, fmt.Errorf("decode manifest gzip: %w", err)
-		}
-		defer gz.Close()
-		reader = gz
-	}
-	var manifest Manifest
-	if err := json.UnmarshalRead(reader, &manifest); err != nil {
-		if bodyReader.err != nil {
-			err = bodyReader.err
-		}
-		return Manifest{}, false, fmt.Errorf("decode remote manifest: %w", err)
-	}
-	return manifest, true, nil
-}
-
-func (hs HTTPSync) downloadIntoMirror(
+func (hs RemoteSync) downloadIntoMirror(
 	ctx context.Context,
-	client *http.Client,
 	targets TargetSet,
 	fetch []string,
 	full bool,
@@ -214,18 +159,12 @@ func (hs HTTPSync) downloadIntoMirror(
 		request.DeltaFiles = fetch
 	}
 	downloadStarted := time.Now()
-	resp, err := hs.requestArchive(ctx, client, request)
+	stream, err := hs.Source.Archive(ctx, request)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		if err := ValidateProtocolHeader(resp.Header); err != nil {
-			_ = resp.Body.Close()
-			return err
-		}
-	}
 	archive, err := hs.downloadArchive(
-		ctx, resp, downloadLabel, filepath.Dir(mirrorRoot),
+		ctx, stream, downloadLabel, filepath.Dir(mirrorRoot),
 	)
 	if err != nil {
 		return err
@@ -258,61 +197,24 @@ func (hs HTTPSync) downloadIntoMirror(
 	} else {
 		extractErr = archive.extract(ctx, mirrorRoot, hs.Progress, extractLabel)
 	}
-	log.Printf("remote sync HTTP archive: host=%s encoding=%q wire_bytes=%d download_duration=%s extract_duration=%s",
-		hs.Host, archive.encoding, archive.bytes, downloadDuration.Round(time.Millisecond), time.Since(extractStarted).Round(time.Millisecond))
+	hs.logArchiveTransfer(archive, downloadDuration, extractStarted)
 	if extractErr != nil {
 		return fmt.Errorf("extract archive into mirror: %w", extractErr)
 	}
 	return nil
 }
 
-func (hs HTTPSync) fetchTargets(
+func (hs RemoteSync) downloadAndExtract(
 	ctx context.Context,
-	client *http.Client,
-) (TargetSet, error) {
-	resp, err := apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
-		_, err := api.GetAPIV1RemoteSyncTargetsWithResponse(ctx, &apiclient.GetAPIV1RemoteSyncTargetsRequestOptions{})
-		return err
-	}, hs.transferHeaders)
-	if err != nil {
-		return TargetSet{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return TargetSet{}, httpStatusError(resp)
-	}
-	if err := ValidateProtocolHeader(resp.Header); err != nil {
-		return TargetSet{}, err
-	}
-	var targets TargetSet
-	bodyReader := &httpBodyReader{r: resp.Body}
-	if err := json.UnmarshalRead(bodyReader, &targets); err != nil {
-		if bodyReader.err != nil {
-			err = bodyReader.err
-		}
-		return TargetSet{}, fmt.Errorf("decode remote targets: %w", err)
-	}
-	return targets, nil
-}
-
-func (hs HTTPSync) downloadAndExtract(
-	ctx context.Context,
-	client *http.Client,
 	targets TargetSet,
 ) (root string, err error) {
 	downloadStarted := time.Now()
-	resp, err := hs.requestArchive(ctx, client, ArchiveRequest{TargetSet: targets})
+	stream, err := hs.Source.Archive(ctx, ArchiveRequest{TargetSet: targets})
 	if err != nil {
 		return "", err
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		if err := ValidateProtocolHeader(resp.Header); err != nil {
-			_ = resp.Body.Close()
-			return "", err
-		}
-	}
 	downloadLabel := "Downloading session archive from " + hs.Host
-	archive, err := hs.downloadArchive(ctx, resp, downloadLabel, os.TempDir())
+	archive, err := hs.downloadArchive(ctx, stream, downloadLabel, os.TempDir())
 	if err != nil {
 		return "", err
 	}
@@ -350,29 +252,32 @@ func (hs HTTPSync) downloadAndExtract(
 	extractLabel := "Extracting session archive from " + hs.Host
 	extractStarted := time.Now()
 	extractErr := archive.extract(ctx, tmpDir, hs.Progress, extractLabel)
-	log.Printf("remote sync HTTP archive: host=%s encoding=%q wire_bytes=%d download_duration=%s extract_duration=%s",
-		hs.Host, archive.encoding, archive.bytes, downloadDuration.Round(time.Millisecond), time.Since(extractStarted).Round(time.Millisecond))
+	hs.logArchiveTransfer(archive, downloadDuration, extractStarted)
 	if extractErr != nil {
 		return "", extractErr
 	}
 	return tmpDir, nil
 }
 
-func (hs HTTPSync) report(progress syncpkg.Progress) {
+// logArchiveTransfer records how one archive's download and extraction
+// split their time, so slow syncs show which side to look at.
+func (hs RemoteSync) logArchiveTransfer(
+	archive *downloadedArchive, download time.Duration, extractStarted time.Time,
+) {
+	log.Printf("remote sync archive: host=%s encoding=%q wire_bytes=%d "+
+		"download_duration=%s extract_duration=%s",
+		hs.Host, archive.encoding, archive.bytes, download.Round(time.Millisecond),
+		time.Since(extractStarted).Round(time.Millisecond))
+}
+
+func (hs RemoteSync) report(progress syncpkg.Progress) {
 	if hs.Progress != nil {
 		hs.Progress(progress)
 	}
 }
 
-func (hs HTTPSync) reportProgressDetail(detail string) {
+func (hs RemoteSync) reportProgressDetail(detail string) {
 	hs.report(syncpkg.Progress{Detail: detail})
-}
-
-func positiveContentLength(n int64) int64 {
-	if n > 0 {
-		return n
-	}
-	return 0
 }
 
 type progressReader struct {
@@ -389,72 +294,4 @@ func (r *progressReader) Read(p []byte) (int, error) {
 		r.report(r.done, r.total)
 	}
 	return n, err
-}
-
-func (hs HTTPSync) transferHeaders(_ context.Context, req *http.Request) error {
-	if hs.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+hs.Token)
-	}
-	SetProtocolHeader(req.Header)
-	if req.Method == http.MethodPost {
-		req.Header.Set("Accept-Encoding", "zstd, gzip")
-	}
-	return nil
-}
-
-func generatedProviderPaths(paths map[parser.AgentType][]string) map[string][]string {
-	result := make(map[string][]string, len(paths))
-	for provider, paths := range paths {
-		result[string(provider)] = paths
-	}
-	return result
-}
-
-func generatedTargets(targets TargetSet) apiclient.RemotesyncTargetSet {
-	return apiclient.RemotesyncTargetSet{
-		Dirs: generatedProviderPaths(targets.Dirs), Files: generatedProviderPaths(targets.Files),
-		ProviderExtraFiles: generatedProviderPaths(targets.ProviderExtraFiles), ExtraFiles: targets.ExtraFiles,
-		CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
-	}
-}
-
-func (hs HTTPSync) requestArchive(ctx context.Context, client *http.Client, request ArchiveRequest) (*http.Response, error) {
-	targets := generatedTargets(request.TargetSet)
-	body := apiclient.RemotesyncArchiveRequest{
-		Dirs: targets.Dirs, Files: targets.Files, ProviderExtraFiles: targets.ProviderExtraFiles,
-		ExtraFiles: targets.ExtraFiles, CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
-	}
-	if request.DeltaFiles != nil {
-		body.DeltaFiles = new(request.DeltaFiles)
-	}
-	return apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
-		_, err := api.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncArchiveRequestOptions{Body: &body})
-		return err
-	}, hs.transferHeaders)
-}
-
-// StatusError reports a non-2xx response from a remote daemon's
-// remote-sync endpoints. Detail carries the (untrusted) response
-// body for local logs; user-facing summaries should rely on Code.
-type StatusError struct {
-	Code   int
-	Status string
-	Detail string
-}
-
-func (e *StatusError) Error() string {
-	msg := e.Detail
-	if msg == "" {
-		msg = e.Status
-	}
-	return fmt.Sprintf("remote sync %s: %s", e.Status, msg)
-}
-
-func httpStatusError(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return &StatusError{
-		Code:   resp.StatusCode,
-		Status: resp.Status,
-		Detail: strings.TrimSpace(string(body)),
-	}
 }

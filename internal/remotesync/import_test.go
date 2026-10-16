@@ -99,8 +99,8 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), "devbox", map[string]int64{
 		remoteFile: mtime.UnixNano(),
 	}))
-	hs := HTTPSync{
-		Host: "devbox", URL: server.URL, DataDir: t.TempDir(), DB: database,
+	hs := RemoteSync{
+		Host: "devbox", Source: HTTPSource{URL: server.URL}, DataDir: t.TempDir(), DB: database,
 	}
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)

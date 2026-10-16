@@ -659,6 +659,8 @@ components:
     ConfigRemoteHost:
       additionalProperties: false
       properties:
+        destination:
+          type: string
         host:
           type: string
         interval:

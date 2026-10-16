@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"log"
 	"mime"
@@ -88,32 +89,16 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid manifest request", http.StatusBadRequest)
 		return
 	}
-	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	manifest, err := remotesync.ServeManifest(r.Context(), s.ingestionConfig(), req)
+	switch {
+	case errors.Is(err, remotesync.ErrTargetNotAllowed):
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
-	}
-	manifestTargets, ok := remotesync.SelectAllowedTargets(allowed, req)
-	if !ok {
-		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
+	case errors.Is(err, remotesync.ErrManifestUnsupported):
+		// 501 is in the client's manifest-unsupported set.
+		http.Error(w, err.Error(), http.StatusNotImplemented)
 		return
-	}
-	if manifestTargets.HasSanitizedFileScopedAgents() {
-		// Sanitized file-scoped agents (Windsurf) stream a transformed
-		// subset of their directory through WriteArchive; the manifest
-		// cannot model that per-file transformation, and advertising
-		// the raw tree would let a delta request fetch unsanitized
-		// files. Refuse the manifest so the client falls back to the
-		// full-archive flow (501 is in the client's
-		// manifest-unsupported set). Verbatim file-scoped agents
-		// (RooCode) are fine: BuildManifest lists exactly their curated
-		// files.
-		http.Error(w, "manifest unavailable for sanitized file-scoped agents",
-			http.StatusNotImplemented)
-		return
-	}
-	manifest, err := remotesync.BuildManifest(r.Context(), manifestTargets)
-	if err != nil {
+	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -147,26 +132,15 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid archive request", http.StatusBadRequest)
 		return
 	}
-	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
-	if err != nil {
+	plan, err := remotesync.PlanArchive(s.ingestionConfig(), req)
+	switch {
+	case errors.Is(err, remotesync.ErrTargetNotAllowed),
+		errors.Is(err, remotesync.ErrFileNotAllowed):
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	archiveTargets, ok := remotesync.SelectAllowedTargets(allowed, req.TargetSet)
-	if !ok {
-		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
-		return
-	}
-	// A present delta file list selects delta mode even when empty:
-	// an explicit empty delta yields an empty tar, not the full corpus.
-	deltaMode := req.DeltaFiles != nil
-	var files []string
-	if deltaMode {
-		files, ok = remotesync.SelectAllowedFiles(allowed, req.DeltaFiles)
-		if !ok {
-			http.Error(w, "remote sync file is not allowed", http.StatusForbidden)
-			return
-		}
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
 	addVaryHeader(w.Header(), "Accept-Encoding")
@@ -199,11 +173,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", encoding)
 		out = compressor
 	}
-	if deltaMode {
-		err = remotesync.WriteArchiveFiles(r.Context(), out, allowed, files)
-	} else {
-		err = remotesync.WriteArchive(r.Context(), out, archiveTargets)
-	}
+	err = plan.Write(r.Context(), out)
 	if err == nil && compressor != nil {
 		err = compressor.Close()
 	}

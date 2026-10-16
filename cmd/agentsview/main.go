@@ -74,12 +74,17 @@ func main() {
 	secrets.EnableFixtureDeny()
 
 	if err := executeCLI(); err != nil {
-		code := exitCodeFromError(err)
-		if !isSilentExitError(err) {
-			fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
-		}
-		os.Exit(code)
+		os.Exit(reportCLIError(err, os.Stderr))
 	}
+}
+
+// reportCLIError prints a failed command's error unless the command already
+// reported it, and returns the process exit code.
+func reportCLIError(err error, stderr io.Writer) int {
+	if !isSilentExitError(err) {
+		fmt.Fprintf(stderr, "fatal: %v\n", err)
+	}
+	return exitCodeFromError(err)
 }
 
 // warnMissingDirs prints a warning to stderr for each

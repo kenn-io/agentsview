@@ -785,7 +785,10 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 
 type RemoteTransport string
 
-const RemoteTransportHTTP RemoteTransport = "http"
+const (
+	RemoteTransportHTTP RemoteTransport = "http"
+	RemoteTransportSSH  RemoteTransport = "ssh"
+)
 
 type ChartPalette string
 
@@ -853,8 +856,10 @@ func (a ArchiveContent) UsageOnly() bool {
 }
 
 // RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out over HTTP. Host, URL, and Token are required. An omitted Transport
-// selects HTTP. A zero/empty Interval disables periodic remote sync for this host.
+// fan-out. An omitted Transport selects HTTP, which requires URL and Token.
+// The SSH transport takes no URL or Token and uses Destination, or Host when
+// Destination is empty, as the ssh destination. A zero/empty Interval disables
+// periodic remote sync for this host.
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type RemoteHost struct {
@@ -862,7 +867,17 @@ type RemoteHost struct {
 	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
 	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
 	Token     string          `toml:"token,omitempty" json:"-"`
-	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitzero"`
+	// Destination is the ssh destination for ssh entries. Empty means Host.
+	Destination string        `toml:"destination,omitempty" json:"destination,omitempty"`
+	Interval    time.Duration `toml:"interval,omitempty" json:"interval,omitzero"`
+}
+
+// SSHDestination returns the argument passed to ssh for this entry.
+func (h RemoteHost) SSHDestination() string {
+	if h.Destination != "" {
+		return h.Destination
+	}
+	return h.Host
 }
 
 type remoteHostJSON RemoteHost
@@ -1145,19 +1160,7 @@ func (c Config) ValidateRemoteHosts() error {
 				fmt.Sprintf("entry %d (%q): invalid interval %s",
 					i+1, h.Host, h.Interval))
 		}
-		if h.Transport != "" && h.Transport != RemoteTransportHTTP {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid transport %q; use http with a url and token",
-					i+1, h.Host, h.Transport))
-		}
-		if err := validateRemoteHTTPURL(h.URL); err != nil {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): %v", i+1, h.Host, err))
-		}
-		if h.Token == "" {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): token is required for http", i+1, h.Host))
-		}
+		problems = append(problems, validateRemoteTransport(i+1, h)...)
 		// Remote sync namespaces sessions and cached state by host.
 		if h.Host != "" {
 			if first, ok := seen[h.Host]; ok {
@@ -1174,6 +1177,37 @@ func (c Config) ValidateRemoteHosts() error {
 			strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func validateRemoteTransport(entry int, h RemoteHost) []string {
+	prefix := fmt.Sprintf("entry %d (%q): ", entry, h.Host)
+	var problems []string
+	switch h.Transport {
+	case "", RemoteTransportHTTP:
+		if err := validateRemoteHTTPURL(h.URL); err != nil {
+			problems = append(problems, prefix+err.Error())
+		}
+		if h.Token == "" {
+			problems = append(problems, prefix+"token is required for http")
+		}
+		if h.Destination != "" {
+			problems = append(problems, prefix+"destination is only valid for ssh")
+		}
+	case RemoteTransportSSH:
+		if h.URL != "" {
+			problems = append(problems, prefix+"url is only valid for http")
+		}
+		if h.Token != "" {
+			problems = append(problems, prefix+"token is only valid for http")
+		}
+		if strings.HasPrefix(h.SSHDestination(), "-") {
+			problems = append(problems, prefix+"destination must not start with -")
+		}
+	default:
+		problems = append(problems, fmt.Sprintf(
+			"%sinvalid transport %q; use http or ssh", prefix, h.Transport))
+	}
+	return problems
 }
 
 func validateRemoteHTTPURL(raw string) error {
@@ -2022,11 +2056,12 @@ func (c *Config) applyConfigTOML(data string) error {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
 			hosts[i] = RemoteHost{
-				Host:      strings.TrimSpace(h.Host),
-				Transport: RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				URL:       strings.TrimSpace(h.URL),
-				Token:     strings.TrimSpace(h.Token),
-				Interval:  h.Interval,
+				Host:        strings.TrimSpace(h.Host),
+				Transport:   RemoteTransport(strings.TrimSpace(string(h.Transport))),
+				URL:         strings.TrimSpace(h.URL),
+				Token:       strings.TrimSpace(h.Token),
+				Destination: strings.TrimSpace(h.Destination),
+				Interval:    h.Interval,
 			}
 		}
 		c.RemoteHosts = hosts

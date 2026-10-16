@@ -6,25 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
-
-	"github.com/klauspost/compress/zstd"
 
 	"go.kenn.io/agentsview/internal/ctxio"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
-// downloadedArchive owns an isolated directory containing a raw HTTP
-// response-body spool until Close. Keeping the wire representation separate
-// from extraction makes transfer progress independent from tar processing and
-// preserves meaningful Content-Length totals for compressed responses.
+// downloadedArchive owns an isolated directory containing a spool of the raw
+// archive stream, an HTTP response body or ssh output, until Close. Keeping
+// the wire representation separate from extraction makes transfer progress
+// independent from tar processing and preserves meaningful Content-Length
+// totals for compressed responses.
 type downloadedArchive struct {
 	dir      string
 	path     string
-	encoding string
+	encoding ArchiveEncoding
 	bytes    int64
 	open     func() (io.ReadCloser, error)
 	remove   func(string) error
@@ -97,15 +95,15 @@ func retainDownloadedArchiveCleanup(
 	}
 }
 
-func (hs HTTPSync) downloadArchive(
+func (hs RemoteSync) downloadArchive(
 	ctx context.Context,
-	resp *http.Response,
+	stream *ArchiveStream,
 	label string,
 	spoolDir string,
 ) (result *downloadedArchive, err error) {
 	var owned *downloadedArchive
 	defer func() {
-		err = errors.Join(err, resp.Body.Close())
+		err = errors.Join(err, stream.Body.Close())
 		if err != nil && owned != nil {
 			if cleanupErr := owned.Close(); cleanupErr != nil {
 				err = &downloadedArchiveCleanupError{
@@ -115,9 +113,6 @@ func (hs HTTPSync) downloadArchive(
 			result = nil
 		}
 	}()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, httpStatusError(resp)
-	}
 	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create archive spool dir: %w", err)
 	}
@@ -128,7 +123,7 @@ func (hs HTTPSync) downloadArchive(
 	owned = &downloadedArchive{
 		dir:      tempDir,
 		path:     filepath.Join(tempDir, "archive"),
-		encoding: resp.Header.Get("Content-Encoding"),
+		encoding: stream.Encoding,
 		remove:   hs.removeArchiveSpool,
 	}
 	spool, err := os.Create(owned.path)
@@ -136,10 +131,10 @@ func (hs HTTPSync) downloadArchive(
 		return nil, fmt.Errorf("create archive spool: %w", err)
 	}
 
-	total := positiveContentLength(resp.ContentLength)
+	total := stream.Size
 	hs.report(syncpkg.Progress{Detail: label, BytesTotal: total})
 	reader := &progressReader{
-		r:     ctxio.Reader{Context: ctx, Reader: resp.Body},
+		r:     ctxio.Reader{Context: ctx, Reader: stream.Body},
 		total: total,
 		report: func(done, total int64) {
 			hs.report(syncpkg.Progress{
@@ -210,20 +205,23 @@ func (a *downloadedArchive) extractWithSelection(
 
 	var stream io.Reader = ctxio.Reader{Context: ctx, Reader: archive}
 	switch a.encoding {
-	case "gzip":
+	case ArchiveEncodingNone:
+	case ArchiveEncodingGzip:
 		gz, gzipErr := gzip.NewReader(stream)
 		if gzipErr != nil {
 			return fmt.Errorf("decode archive gzip: %w", gzipErr)
 		}
 		defer func() { err = errors.Join(err, gz.Close()) }()
 		stream = gz
-	case "zstd":
-		decoder, decodeErr := zstd.NewReader(stream, zstd.WithDecoderConcurrency(1))
-		if decodeErr != nil {
-			return fmt.Errorf("decode archive zstd: %w", decodeErr)
+	case ArchiveEncodingZstd:
+		zr, zstdErr := NewZstdReader(stream)
+		if zstdErr != nil {
+			return fmt.Errorf("decode archive zstd: %w", zstdErr)
 		}
-		defer decoder.Close()
-		stream = decoder
+		defer zr.Close()
+		stream = zr
+	default:
+		return fmt.Errorf("unsupported archive encoding %q", a.encoding)
 	}
 	stream = ctxio.Reader{Context: ctx, Reader: stream}
 	if _, err := extractTarStream(ctx, stream, dst, selected); err != nil {

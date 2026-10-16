@@ -3,6 +3,7 @@ package remotesync
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -354,7 +355,7 @@ func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
 
 	wantErr := errors.New("forced sqlite backup failure")
 	originalSnapshot := writeSQLiteSnapshotFile
-	writeSQLiteSnapshotFile = func(dstPath, srcPath string) error {
+	writeSQLiteSnapshotFile = func(_ context.Context, dstPath, srcPath string) error {
 		assert.NotEmpty(t, dstPath)
 		assert.Equal(t, stateDB, srcPath)
 		return wantErr
@@ -381,7 +382,7 @@ func TestWriteArchiveOmitsSnapshotWhenSourceVanishesMidBackup(t *testing.T) {
 	writeHermesImportStateDB(t, stateDB)
 
 	originalSnapshot := writeSQLiteSnapshotFile
-	writeSQLiteSnapshotFile = func(dstPath, srcPath string) error {
+	writeSQLiteSnapshotFile = func(_ context.Context, dstPath, srcPath string) error {
 		require.NoError(t, os.Remove(srcPath))
 		return errors.New("open sqlite snapshot source: no such file")
 	}

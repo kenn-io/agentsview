@@ -1095,15 +1095,15 @@ func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {
 		},
 	)
 	require.Error(t, seedErr)
-	originalHTTP := runHTTPRemoteSync
+	originalHTTP := runRemoteHostSync
 	httpCalls := 0
-	runHTTPRemoteSync = func(
+	runRemoteHostSync = func(
 		context.Context, config.Config, *db.DB, config.RemoteHost, bool,
 	) (remotesync.SyncStats, error) {
 		httpCalls++
 		return remotesync.SyncStats{SessionsSynced: 1}, nil
 	}
-	t.Cleanup(func() { runHTTPRemoteSync = originalHTTP })
+	t.Cleanup(func() { runRemoteHostSync = originalHTTP })
 	database := dbtest.OpenTestDB(t)
 	syncFn := remoteHostSyncFunc(
 		t.Context(), config.Config{}, database, runner,
@@ -1161,7 +1161,7 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 		Machine:   "local",
 	})
 	var called config.RemoteHost
-	restore := stubHTTPRemoteSyncForTest(t, func(
+	restore := stubRemoteHostSyncForTest(t, func(
 		_ context.Context,
 		rh config.RemoteHost,
 		full bool,

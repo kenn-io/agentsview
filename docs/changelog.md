@@ -114,6 +114,15 @@ The latest release is
   reviewed. Hosted raw sync adds findings to existing sessions through a
   `pg raw-reparse` rollout. See
   [Friction Log](/docs/configuration/#friction-log).
+- Sync a machine you reach over SSH without installing AgentsView on it. Add a
+  `[[remote_hosts]]` entry with `transport = "ssh"` and, if it differs from
+  `host`, a `destination` such as `user@devbox.example.com`. AgentsView places a
+  matching copy of itself in the remote's `~/.cache/agentsview/bin` and runs it
+  only while a sync is in progress. Transfers are compressed with zstd and send
+  only changed files after the first sync, which uploads about 50 MB. An
+  unreachable host is skipped like an offline HTTP host. See
+  [SSH Remote Sync](https://agentsview.io/docs/remote-access/#ssh-remote-sync)
+  for setup, the files left on the remote, and limits.
 
 **Improvements**
 

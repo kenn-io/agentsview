@@ -83,7 +83,7 @@ func requireCompleteProcessing(stats syncpkg.SyncStats) error {
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping
-// this mapping independent from Importer lets prepared HTTP imports and future
+// this mapping independent from Importer lets prepared remote imports and future
 // rebuild contributors share the exact engine inputs and cache translation.
 type importLayout struct {
 	engineDirs   map[parser.AgentType][]string

@@ -27,7 +27,7 @@ func TestPrepareHTTPSyncsOverlapsTransfersWithinBound(t *testing.T) {
 	var progress []string
 	var lifecycle []string
 	dataDir := t.TempDir()
-	var syncs []HTTPSync
+	var syncs []RemoteSync
 	for i := range 6 {
 		remote := newMirrorTestRemote(t)
 		remote.writeSession(t, "session.jsonl", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "session")
@@ -43,19 +43,19 @@ func TestPrepareHTTPSyncsOverlapsTransfersWithinBound(t *testing.T) {
 			case <-ctx.Done():
 			}
 		}
-		var hs HTTPSync
+		var hs RemoteSync
 		if len(syncs) == 0 {
 			_, hs = newMirrorSync(t, remote, dataDir)
 		} else {
 			hs = syncs[0]
-			hs.URL = remote.ts.URL
+			setHTTPSourceURL(t, &hs, remote.ts.URL)
 		}
 		hs.Host = host
 		hs.Progress = func(p syncpkg.Progress) {
 			runtime.Gosched()
 			progress = append(progress, p.Detail)
 		}
-		hs.Lifecycle = &HTTPSyncLifecycle{
+		hs.Lifecycle = &RemoteSyncLifecycle{
 			PrepareStarted: func() {
 				runtime.Gosched()
 				lifecycle = append(lifecycle, host+":started")
@@ -68,12 +68,12 @@ func TestPrepareHTTPSyncsOverlapsTransfersWithinBound(t *testing.T) {
 		syncs = append(syncs, hs)
 	}
 	type result struct {
-		prepared *PreparedHTTPSyncs
+		prepared *PreparedRemoteSyncs
 		err      error
 	}
 	done := make(chan result, 1)
 	go func() {
-		prepared, err := PrepareHTTPSyncs(ctx, syncs)
+		prepared, err := PrepareRemoteSyncs(ctx, syncs)
 		done <- result{prepared, err}
 	}()
 	started := 0
@@ -128,7 +128,7 @@ func TestPrepareHTTPSyncsCancelsPeersAndRetainsSpoolCleanup(t *testing.T) {
 			cleanupErr := errors.New("archive spool removal failed")
 			var allowCleanup atomic.Bool
 			allowCleanup.Store(!failCleanup)
-			var syncs []HTTPSync
+			var syncs []RemoteSync
 			for _, host := range []string{"host-a", "host-b"} {
 				remote := newMirrorTestRemote(t)
 				remote.writeSession(t, "session.jsonl", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "session")
@@ -145,12 +145,12 @@ func TestPrepareHTTPSyncsCancelsPeersAndRetainsSpoolCleanup(t *testing.T) {
 					<-r.Context().Done()
 					archiveStopped <- struct{}{}
 				})
-				var hs HTTPSync
+				var hs RemoteSync
 				if len(syncs) == 0 {
 					_, hs = newMirrorSync(t, remote, dataDir)
 				} else {
 					hs = syncs[0]
-					hs.URL = remote.ts.URL
+					setHTTPSourceURL(t, &hs, remote.ts.URL)
 				}
 				hs.Host = host
 				var reported bool
@@ -180,11 +180,12 @@ func TestPrepareHTTPSyncsCancelsPeersAndRetainsSpoolCleanup(t *testing.T) {
 				}
 			}
 			failed := syncs[0]
-			failed.Host, failed.URL, failed.Progress = "host-c", remote.ts.URL, nil
+			failed.Host, failed.Progress = "host-c", nil
+			setHTTPSourceURL(t, &failed, remote.ts.URL)
 			syncs = append(syncs, failed)
 			ctx, cancel := context.WithTimeout(t.Context(), backgroundWaitTimeout)
 			defer cancel()
-			prepared, err := PrepareHTTPSyncs(ctx, syncs)
+			prepared, err := PrepareRemoteSyncs(ctx, syncs)
 			require.Error(t, err)
 			assert.Nil(t, prepared)
 			require.NotErrorIs(t, err, context.Canceled)
@@ -239,13 +240,13 @@ func TestPrepareHTTPSyncsParentCancellationWaitsForWorkers(t *testing.T) {
 	defer cancel()
 	finished := make(chan struct{})
 	releaseFinished := make(chan struct{})
-	hs.Lifecycle = &HTTPSyncLifecycle{PrepareFinished: func(error) {
+	hs.Lifecycle = &RemoteSyncLifecycle{PrepareFinished: func(error) {
 		close(finished)
 		<-releaseFinished
 	}}
 	done := make(chan error, 1)
 	go func() {
-		prepared, err := PrepareAvailableHTTPSyncs(ctx, []HTTPSync{hs})
+		prepared, err := PrepareAvailableRemoteSyncs(ctx, []RemoteSync{hs})
 		if prepared != nil {
 			err = errors.Join(err, prepared.Close())
 		}

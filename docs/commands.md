@@ -192,7 +192,7 @@ configuration. Seed import and restore generate fresh local authentication and l
 Previously retained raw files are preserved without redaction and may contain
 credentials. Seeded and restored databases are permanently archive-only: foreground starts,
 background starts and restarts do not scan the receiving machine. Ordinary sync,
-source transfers, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
+source transfers over HTTP or SSH, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
 mirror publication and raw-sync watch are refused. Browsing, curation, archive
 import, verification, extraction, backup and explicit reparse remain available. Use a separate data directory to collect new
 local sessions; no runtime flag or config setting disables archive-only mode.
@@ -579,7 +579,7 @@ agentsview sync [flags]
 | ---------- | ------- | --------------------------------------------------- |
 | `--full`   | `false` | Force a full resync regardless of data version       |
 | `--target` |         | Exchange normalized artifacts with a trusted folder |
-| `--host`   |         | Configured HTTP remote host name                    |
+| `--host`   |         | Configured remote host name                         |
 
 **Examples:**
 
@@ -599,8 +599,9 @@ first-use requirements, and exclusions. `--target` cannot be combined with
 When `--host` is set, AgentsView syncs only the matching configured
 `[[remote_hosts]]` entry and fails fast on error. This also applies to offline
 sync with `AGENTSVIEW_NO_DAEMON=1`: the local command contacts the configured
-remote daemon directly. Unknown host names are rejected; ad hoc remotes are not
-supported.
+remote directly. Unknown host names are rejected; ad hoc remotes are not
+supported. `--host` runs an entry with `transport = "ssh"` the same way as an
+HTTP entry; see [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
 
 Local sync can also read configured Claude, Codex, and Cursor roots from
 S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
@@ -614,7 +615,9 @@ parsing. See
 #### Configured Remote Hosts
 
 Declare remote hosts in `~/.agentsview/config.toml` so a single bare
-`agentsview sync` covers a whole fleet. HTTP is the only remote sync transport:
+`agentsview sync` covers a whole fleet. An entry uses `transport = "http"` (the
+default) to reach a remote daemon, or `transport = "ssh"` to reach a machine
+over `ssh` with no AgentsView running there:
 
 ```toml
 [[remote_hosts]]
@@ -622,13 +625,19 @@ host = "devbox1"
 transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
+
+[[remote_hosts]]
+host = "devbox2"
+transport = "ssh"
+destination = "user@devbox.example.com" # optional; defaults to host
 ```
 
 With hosts configured, `agentsview sync` (no `--host`) includes local sources
-and configured HTTP hosts in one coordinated sync. During a full or automatic
-data-version rebuild, AgentsView prepares every HTTP mirror, bulk-ingests the
-local and HTTP sources into one temporary database with FTS updates suspended,
-rebuilds FTS once, and atomically swaps the completed archive into place.
+and configured hosts, HTTP and SSH, in one coordinated sync. During a full or
+automatic data-version rebuild, AgentsView prepares every remote mirror,
+bulk-ingests the local and remote sources into one temporary database with FTS
+updates suspended, rebuilds FTS once, and atomically swaps the completed
+archive into place.
 
 `--full` reparses every discovered local and remote session, but it does not
 force unchanged manifest-capable files to transfer again. Directory-scoped and
@@ -636,12 +645,14 @@ verbatim curated content still use delta transfer. Windsurf's sanitized curated
 export remains a separate full-archive transfer on every sync. HTTP collectors
 and spokes must use the same remote-sync protocol version; incompatible peers
 fail before exchanging targets or archive data. A configured HTTP host that is
-offline, cannot resolve through DNS, is unreachable, or times out is skipped;
-local sources and reachable HTTP hosts still join the combined rebuild. Archived
-sessions from skipped hosts are preserved. Other HTTP preparation or contributor
-failures abort the combined rebuild without replacing the active archive. The
-command exits non-zero for any failure other than an unavailable configured HTTP
-host. See [Incremental Sync](/docs/remote-access/#incremental-sync).
+offline, cannot resolve through DNS, is unreachable, or times out is skipped; an
+SSH host is skipped when `ssh` reports one of the network errors listed under
+[Offline Hosts](/docs/remote-access/#offline-hosts). Local sources and reachable
+hosts still join the combined rebuild. Archived sessions from skipped hosts are
+preserved. Other remote preparation or contributor failures abort the combined
+rebuild without replacing the active archive. The command exits non-zero for
+any failure other than an unavailable configured host. See
+[Incremental Sync](/docs/remote-access/#incremental-sync).
 
 HTTP remote sync requires a reachable remote daemon, preferably over a private
 network such as Tailscale, and remote archive endpoints always require bearer

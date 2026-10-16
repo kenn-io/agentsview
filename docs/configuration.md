@@ -332,9 +332,9 @@ naming the file.
 ## Remote Hosts
 
 Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw
-session files from other machines. HTTP is the only remote sync transport and
-the default when `transport` is omitted. Run an AgentsView daemon on the remote
-host and secure reachability with a private network such as Tailscale:
+session files from other machines. `transport` is `"http"` (the default when
+omitted) or `"ssh"`. An HTTP entry needs an AgentsView daemon on the remote host
+and a private network such as Tailscale to reach it:
 
 ```toml
 [[remote_hosts]]
@@ -345,32 +345,62 @@ token = "remote-token"
 interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
-Each host requires a `url` and a `token`. Other transport values, including
-`"ssh"`, are rejected. HTTP remote sync calls the remote daemon's archive
-endpoints and always uses a bearer token, even when the rest of that daemon has
-`require_auth = false`. The per-host `token` must match the remote daemon's
-`auth_token`. Do not reuse the collector daemon's own `auth_token` for untrusted
-remote endpoints. HTTP transfers use a persistent per-host mirror and request
-file deltas when fewer than half of the manifest files need fetching; see
+An SSH entry needs no daemon and no install on the remote host. It runs your
+`ssh` client. The SSH transport is newer than the latest release and is
+available on `main`:
+
+```toml
+[[remote_hosts]]
+host = "devbox2"
+transport = "ssh"
+destination = "user@devbox.example.com" # optional; defaults to host
+interval = "15m" # optional; zero or omitted means manual sync only
+```
+
+`destination` is the argument passed to `ssh`: a `~/.ssh/config` alias or
+`user@hostname`. When omitted, `host` is used. Set the port, user, identity, and
+`ProxyJump` in `~/.ssh/config`. Setup, the files placed on the remote, and
+limits are in
+[Remote Access — SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
+
+Configuration is rejected when:
+
+- `transport` is anything other than `http` or `ssh`.
+- An HTTP entry, including one with `transport` omitted, has no `url` or no
+  `token`, or sets `destination`.
+- An SSH entry sets `url` or `token`.
+- An SSH entry's destination starts with `-`. The destination is `destination`,
+  or `host` when `destination` is omitted.
+
+HTTP remote sync calls the remote daemon's archive endpoints and always uses a
+bearer token, even when the rest of that daemon has `require_auth = false`. The
+per-host `token` must match the remote daemon's `auth_token`. Do not reuse the
+collector daemon's own `auth_token` for untrusted remote endpoints. HTTP and
+SSH transfers use a persistent per-host mirror and fetch only changed files. A
+full archive is used only when every manifest file needs fetching or a delta
+request is refused; see
 [Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured
-HTTP hosts join the same temporary-database bulk ingest and atomic swap.
-`--full` reparses the complete local and remote corpus without retransferring
-unchanged files from manifest-capable spokes. HTTP remote sync requires the
-collector and remote daemon to use the same remote-sync protocol version. After
-upgrading either host, upgrade the other before syncing again; incompatible
-peers fail before targets or archive data are exchanged.
+remote hosts, HTTP and SSH, join the same temporary-database bulk ingest and
+atomic swap. `--full` reparses the complete local and remote corpus without
+retransferring unchanged files from manifest-capable spokes. HTTP remote sync
+requires the collector and remote daemon to use the same remote-sync protocol
+version. After upgrading either host, upgrade the other before syncing again;
+incompatible peers fail before targets or archive data are exchanged. SSH hosts
+need no manual upgrade: AgentsView places a matching binary on the remote; see
+[SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
 
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
 the same machine can duplicate sessions, while reusing it for another machine
 can reuse stale state. Select a configured host with
 `agentsview sync --host <name>`, including for direct sync with
-`AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are not
-supported. HTTP failures are summarized with actionable messages for common
-cases such as token rejection, missing remote archive
-endpoints, connection refusal, DNS failures, and timeouts.
+`AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are
+not supported. HTTP failures are summarized with actionable messages for common
+cases such as token rejection, missing remote archive endpoints, connection
+refusal, DNS failures, and timeouts. For how SSH failures are reported, see
+[Offline Hosts](/docs/remote-access/#offline-hosts).
 
 Set `interval` to a positive duration such as `"5m"` to have a running collector
 daemon sync that host periodically. Zero or omitted disables the per-host
