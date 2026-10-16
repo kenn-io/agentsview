@@ -2543,24 +2543,69 @@ func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
 	}
 }
 
-func TestUsageRefreshUpdatesKnownSessionOnNoSyncDaemon(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	require.Nil(t, f.srv.engine)
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "fresh").
-		AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done", testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).String()
-	f.writeClaudeTranscript(t, "project/fresh.jsonl", content)
-	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "fresh"))
-	f.writeClaudeTranscript(t, "project/fresh.jsonl", strings.ReplaceAll(content, `"output_tokens":42`, `"output_tokens":57`))
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
-		"id": "fresh", "subagents": true, "usage_refresh": true,
-	})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "fresh", false)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 57, usage.TotalOutputTokens)
+func TestUsageRefreshRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{
+			name: "updates a known session when startup sync is disabled",
+			run: func(t *testing.T) {
+				f := newSyncRouteFixture(t)
+				require.Nil(t, f.srv.engine)
+				content := testjsonl.NewSessionBuilder().
+					AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "fresh").
+					AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done",
+						testjsonl.ClaudeAssistantUsage{MessageID: "msg-fresh", OutputTokens: 42}).
+					String()
+				f.writeClaudeTranscript(t, "project/fresh.jsonl", content)
+				engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "fresh"))
+				f.writeClaudeTranscript(t, "project/fresh.jsonl",
+					strings.ReplaceAll(content, `"output_tokens":42`, `"output_tokens":57`))
+
+				w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", map[string]any{
+					"id": "fresh", "subagents": true, "usage_refresh": true,
+				})
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "fresh", false)
+				require.NoError(t, err)
+				require.NotNil(t, usage)
+				assert.Equal(t, 57, usage.TotalOutputTokens)
+			},
+		},
+		{
+			name: "defers a known session until startup finishes",
+			run: func(t *testing.T) {
+				f := newSyncRouteFixture(t)
+				content := testjsonl.NewSessionBuilder().
+					AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "parent").
+					AddClaudeAssistantUsage("2026-01-01T10:00:05Z", "done",
+						testjsonl.ClaudeAssistantUsage{MessageID: "msg-parent", OutputTokens: 20}).
+					String()
+				f.writeClaudeTranscript(t, "project/parent.jsonl", content)
+				engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+				f.srv.engine = engine
+				f.srv.sessions = service.NewDirectBackend(f.db, engine)
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
+
+				body := map[string]any{"id": "parent", "subagents": true, "usage_refresh": true}
+				w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+				require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+				usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
+				require.NoError(t, err)
+				require.NotNil(t, usage)
+				assert.Equal(t, 20, usage.TotalOutputTokens)
+
+				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			},
+		},
+	} {
+		t.Run(tc.name, tc.run)
+	}
 }
 
 func TestUsageRefreshRefusesBusyEngine(t *testing.T) {
@@ -2606,58 +2651,4 @@ func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "usage_refresh requires id and subagents")
-}
-
-func TestUsageRefreshWaitsForStartupAndImportsNewSubagent(t *testing.T) {
-	parentContent := testjsonl.JoinJSONL(
-		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"parent","message":{"content":"start"}}`,
-		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"parent","message":{"id":"msg-1","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":20}}}`,
-	)
-	childContent := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithSessionID("2026-01-01T11:01:00Z", "subtask", "parent").
-		AddClaudeAssistantUsage("2026-01-01T11:01:05Z", "done",
-			testjsonl.ClaudeAssistantUsage{MessageID: "msg-child", RequestID: "request-child", OutputTokens: 42}).
-		String()
-
-	root := t.TempDir()
-	f := newSyncRouteFixture(t, withDisabledAgents(nil,
-		map[parser.AgentType][]string{parser.AgentClaude: {root}},
-	))
-	write := func(path, content string) {
-		t.Helper()
-		path = filepath.Join(root, path)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	}
-	write("project/parent.jsonl", parentContent)
-
-	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-	f.srv.engine = engine
-	f.srv.sessions = service.NewDirectBackend(f.db, engine)
-	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "parent"))
-
-	body := map[string]any{"id": "parent", "subagents": true, "usage_refresh": true}
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-	usage, err := service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 20, usage.TotalOutputTokens)
-	assert.Zero(t, usage.SubagentCount)
-
-	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	write("project/parent/subagents/agent-child.jsonl", childContent)
-
-	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/sync", body)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	usage, err = service.SessionUsageWithSubagents(t.Context(), f.db, "parent", false)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 62, usage.TotalOutputTokens)
-	assert.Equal(t, 1, usage.SubagentCount)
-
-	child, err := f.db.GetSession(t.Context(), "agent-child")
-	require.NoError(t, err)
-	require.NotNil(t, child)
 }

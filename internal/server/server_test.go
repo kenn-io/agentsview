@@ -1468,7 +1468,6 @@ type projectListResponse struct {
 
 type syncStatusResponse struct {
 	StartupPending bool           `json:"startup_pending"`
-	ArchiveStale   bool           `json:"archive_stale"`
 	LastSync       string         `json:"last_sync"`
 	Progress       *sync.Progress `json:"progress"`
 }
@@ -2594,7 +2593,6 @@ func TestSyncStatus(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[syncStatusResponse](t, w)
 	assert.True(t, resp.StartupPending)
-	assert.False(t, resp.ArchiveStale)
 
 	// Trigger a sync so LastSync is set
 	w = te.post(t, "/api/v1/sync?wait=true", "{}")

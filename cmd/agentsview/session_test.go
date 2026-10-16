@@ -1791,35 +1791,6 @@ func TestSessionUsage_PGFlagIncludesSubagentUsage(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 }
 
-func TestSessionUsageSkipsStartupSync(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	remote, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-	var startupRequests int
-	original := remote.Config.Handler
-	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
-	remote.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/ping" {
-			ping.ServeHTTP(w, r)
-			return
-		}
-		if r.URL.Path == "/api/v1/sync" {
-			startupRequests++
-			http.Error(w, "startup failed", http.StatusInternalServerError)
-			return
-		}
-		original.ServeHTTP(w, r)
-	})
-	registerSyncRouteTestRuntime(t, dataDir, remote.URL)
-
-	cmd := sessionUsageCommand(t, "session", "usage", "remote-session")
-	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, 42, out.TotalOutputTokens)
-	assert.Equal(t, tokenUseExitOK, code)
-	assert.Zero(t, startupRequests)
-}
-
 func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 

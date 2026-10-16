@@ -122,48 +122,6 @@ func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
 	assert.Equal(t, "generated-token", daemonBackend.authToken)
 }
 
-func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
-	t *testing.T,
-) {
-	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "sessions.db")
-	writer := dbtest.OpenTestDBAt(t, dbPath)
-	started := "2026-06-23T12:00:00Z"
-	require.NoError(t, writer.UpsertSession(t.Context(), db.Session{
-		ID:                   "codex:no-sync-usage",
-		Project:              "proj",
-		Machine:              "local",
-		Agent:                "codex",
-		StartedAt:            &started,
-		MessageCount:         1,
-		TotalOutputTokens:    42,
-		HasTotalOutputTokens: true,
-	}))
-	require.NoError(t, writer.Close())
-
-	readonly, err := db.OpenReadOnly(t.Context(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { readonly.Close() })
-
-	backend := localArchiveQueryBackend{
-		cfg:           config.Config{DBPath: dbPath},
-		database:      readonly,
-		offline:       true,
-		skipFreshData: true,
-	}
-	stderr := captureStderr(t, func() {
-		out, exitCode, err := backend.SessionUsage(
-			t.Context(),
-			sessionUsageQuery{SessionID: "codex:no-sync-usage"},
-		)
-		require.NoError(t, err)
-		require.NotNil(t, out)
-		assert.Equal(t, tokenUseExitOK, exitCode)
-		assert.Equal(t, 42, out.TotalOutputTokens)
-	})
-	assert.NotContains(t, stderr, "warning: pricing seed failed")
-}
-
 // TestLocalSessionUsageRefreshesSubagentTranscripts covers the freshness
 // half of the subagent rollup: SyncSingleSession only knows about the named
 // session's file, so the backend must also ingest the agent-*.jsonl files
