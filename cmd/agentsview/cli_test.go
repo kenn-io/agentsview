@@ -99,23 +99,18 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 }
 
 func TestPruneCommandAgentFilter(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		args []string
-		want PruneConfig
-	}{
-		{"combined filters", []string{"--agent", "mimocode", "--project", "project-a", "--max-messages", "0", "--before", "2025-01-01", "--first-message", "hello", "--dry-run", "--yes"}, PruneConfig{Filter: db.PruneFilter{Agent: "mimocode", Project: "project-a", MaxMessages: new(0), Before: "2025-01-01", FirstMessage: "hello"}, DryRun: true, Yes: true}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			var got []PruneConfig
-			cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
-				got = append(got, cfg)
-			})
-			_, err := executeCommand(cmd, tt.args...)
-			require.NoError(t, err)
-			assert.Equal(t, []PruneConfig{tt.want}, got)
-		})
-	}
+	var got []PruneConfig
+	cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
+		got = append(got, cfg)
+	})
+	_, err := executeCommand(cmd,
+		"--agent", "mimocode", "--project", "project-a", "--max-messages", "0",
+		"--before", "2025-01-01", "--first-message", "hello", "--dry-run", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, []PruneConfig{{
+		Filter: db.PruneFilter{Agent: "mimocode", Project: "project-a", MaxMessages: new(0), Before: "2025-01-01", FirstMessage: "hello"},
+		DryRun: true, Yes: true,
+	}}, got)
 }
 
 func TestPruneCommandRejectsEmptyAgent(t *testing.T) {

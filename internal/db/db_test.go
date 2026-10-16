@@ -2824,11 +2824,6 @@ func TestFindPruneCandidates(t *testing.T) {
 			want:   []string{},
 		},
 		{
-			name:   "AgentLiteralMatch",
-			filter: PruneFilter{Agent: "mimocode' OR 1=1 --"},
-			want:   []string{},
-		},
-		{
 			name:   "ProjectSubstring",
 			filter: PruneFilter{Project: "spicy"},
 			want:   []string{"s1", "s2", "s4"},

@@ -39,6 +39,30 @@ func upgradedCodexTrash(t *testing.T) *DB {
 	return d
 }
 
+func TestFindPruneCandidatesLegacyCodexTrash(t *testing.T) {
+	d := upgradedCodexTrash(t)
+	ctx := t.Context()
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET ended_at =
+		CASE WHEN id = ? THEN '2025-02-01' ELSE '2024-01-01' END`, legacyTrashPage)
+	require.NoError(t, err)
+
+	candidates, err := d.FindPruneCandidates(ctx, PruneFilter{Agent: "codex"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{legacyTrashThread, legacyTrashPage, legacyTrashSibling}, collectIDs(candidates))
+
+	candidates, err = d.FindPruneCandidates(ctx, PruneFilter{Agent: "codex", Before: "2025-01-01"})
+	require.NoError(t, err)
+	ids := collectIDs(candidates)
+	assert.ElementsMatch(t, []string{legacyTrashSibling}, ids, "a kept page must protect its thread anchor")
+
+	n, err := d.DeleteSessions(ctx, ids)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	page, err := d.GetSessionFull(ctx, legacyTrashPage)
+	require.NoError(t, err)
+	assert.NotNil(t, page, "deleting previewed candidates must preserve the kept page")
+}
+
 func TestLegacyCodexTrashBlocksAbsentPageWrites(t *testing.T) {
 	d := upgradedCodexTrash(t)
 	ctx := t.Context()
