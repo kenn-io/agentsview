@@ -204,17 +204,25 @@ starts the new file with the saved listing, which the parser needs, and marks
 the thread to check again, so the next pass fetches it even when its listing has
 not changed. If the full fetch fails, the fetch writes nothing.
 
-Until the mirror holds the thread again, sync keeps the archived copy as it is.
-It skips a parse with fewer messages than the archive, or one with no token
-counts where the archive has some. Server history carries no token counts, so
-after a refetch the archived counts stay until new live counts arrive. A refetch
-with new messages imports them and keeps the archived token counts, usage
-events, and capture coverage, plus the plan usage when the rebuilt file has
-none. Turns that ran while the mirror was missing do not count as uncaptured.
+Until the mirror holds the thread again, sync keeps the archived chat. It skips
+a parse with fewer messages than the archive. Token counts and plan usage reach
+the mirror only from AgentsView's own writes, and server history carries
+neither, so a parse without them where the archive has them comes from a rebuilt
+file. Such a parse still imports its messages, but keeps the archived token
+counts, usage events, and capture coverage until new live counts arrive, and the
+archived plan figures until newer plan usage arrives. Turns that ran while the
+mirror was missing do not count as uncaptured. When the first new live record
+arrives, its running total restores the token totals, and the larger of the
+archived and new peak context stays.
 
 Sync replaces an archived copy from an older parser version, so a parser change
 still takes effect, unless the file holds no messages: no parser change empties
 a chat, but a deleted file rebuilt around a usage record does.
+
+A hosted hub that receives raw captures applies the same rules when it projects
+a capture over the previous one. For the hub, the previous projection counts as
+current when it ran at the same processing version. The rules live in
+`internal/ingest/codex_cloud_history.go`.
 
 A descendants or waiting file that does not decode is rebuilt from the saved
 thread files. A descendants list collects the threads counted under that root. A
