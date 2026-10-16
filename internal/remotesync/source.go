@@ -3,6 +3,8 @@ package remotesync
 import (
 	"context"
 	"io"
+
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // Source fetches the remote half of one sync: the remote's targets, a
@@ -18,6 +20,15 @@ type Source interface {
 	// Archive opens a tar stream for request. Close on the stream reports
 	// any failure the remote reported after the body ended.
 	Archive(ctx context.Context, request ArchiveRequest) (*ArchiveStream, error)
+}
+
+// ProgressReporter is a Source that reports progress of its own, such as an
+// SSH source installing agentsview on its host. RemoteSync hands it the
+// sync's progress callback before the first fetch. That callback is
+// serialized when several hosts prepare at once, so a source must report only
+// through it.
+type ProgressReporter interface {
+	ReportProgress(progress syncpkg.ProgressFunc)
 }
 
 // ArchiveEncoding names the compression of an ArchiveStream body.

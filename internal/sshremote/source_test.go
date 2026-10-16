@@ -20,6 +20,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesync"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -62,6 +63,7 @@ func (e sourceEnv) source() *Source {
 		Runner:  Runner{Destination: sourceTestDestination, SSHPath: e.ssh.Path},
 		Build:   e.build,
 		DataDir: e.dataDir,
+		Host:    sourceTestHost,
 	})
 }
 
@@ -384,6 +386,24 @@ func TestSSHSourceProvisionsAgainWhenItsBinaryVanishesBeforeTheArchive(t *testin
 			assert.FileExists(t, filepath.Join(cached, "agentsview"), "uploaded again")
 		})
 	}
+}
+
+func TestSSHSourceReportsItsUploadThroughTheSyncProgress(t *testing.T) {
+	env := newSourceEnv(t)
+	var details []string
+
+	_, err := remotesync.RemoteSync{
+		Host:    sourceTestHost,
+		DataDir: env.dataDir,
+		DB:      env.database,
+		Source:  env.source(),
+		Progress: func(p syncpkg.Progress) {
+			details = append(details, p.Detail)
+		},
+	}.Run(t.Context())
+
+	require.NoError(t, err)
+	assert.Contains(t, details, "Installing agentsview on "+sourceTestHost)
 }
 
 func TestSSHSourceFullSyncLeavesRemoteHomeUnchanged(t *testing.T) {

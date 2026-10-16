@@ -89,7 +89,7 @@ var runRemoteHostSync = func(
 	progress func(syncpkg.Progress),
 ) (remotesync.SyncStats, error) {
 	source, err := remotesource.For(rh, remotesource.Options{
-		Version: version, DataDir: cfg.DataDir, Progress: progress,
+		Version: version, DataDir: cfg.DataDir,
 	})
 	if err != nil {
 		return remotesync.SyncStats{}, err
@@ -825,7 +825,7 @@ func prepareRemoteHosts(
 	syncs := make([]remotesync.RemoteSync, 0, len(hosts))
 	for _, host := range hosts {
 		source, err := remotesource.For(host, remotesource.Options{
-			Version: version, DataDir: cfg.DataDir, Progress: progress,
+			Version: version, DataDir: cfg.DataDir,
 		})
 		if err != nil {
 			return nil, &remotesync.HostError{Host: host.Host, Operation: "configure", Err: err}

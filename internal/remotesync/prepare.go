@@ -461,6 +461,9 @@ func (hs RemoteSync) prepare(
 	if hs.Source == nil {
 		return nil, errors.New("remote sync source is required")
 	}
+	if reporter, ok := hs.Source.(ProgressReporter); ok {
+		reporter.ReportProgress(hs.report)
+	}
 	hs.reportProgressResolvingTargets()
 	targetsStarted := time.Now()
 	targets, err := hs.Source.Targets(ctx)

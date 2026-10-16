@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/remotesync"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // zstdMagic starts every zstd frame. A response that starts otherwise was
@@ -56,6 +57,15 @@ func (s *Source) ensure(ctx context.Context) (remoteBinary, error) {
 		s.ensured = true
 	}
 	return s.binary, s.ensureErr
+}
+
+// ReportProgress implements remotesync.ProgressReporter: upload messages go
+// through the sync's own progress callback, which RemoteSync serializes
+// across hosts that prepare at once.
+func (s *Source) ReportProgress(progress syncpkg.ProgressFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provisioner.Progress = func(detail string) { progress(syncpkg.Progress{Detail: detail}) }
 }
 
 // forgetBinary makes the next step provision again, once per sync. Another

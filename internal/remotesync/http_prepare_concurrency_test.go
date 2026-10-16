@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -276,4 +277,67 @@ func TestPrepareHTTPSyncsParentCancellationWaitsForWorkers(t *testing.T) {
 		require.FailNow(t, "group did not finish after its worker exited")
 	}
 	assertMirrorUnlocked(t, MirrorDir(hs.DataDir, hs.Host))
+}
+
+// offlineHostError marks a test host as unreachable, so preparation skips it
+// instead of cancelling its peers.
+type offlineHostError struct{}
+
+func (offlineHostError) Error() string         { return "host is offline" }
+func (offlineHostError) HostUnavailable() bool { return true }
+
+// progressingSource reports progress of its own, as the SSH source does while
+// it installs agentsview, and then reports its host offline.
+type progressingSource struct {
+	started  *sync.WaitGroup
+	progress syncpkg.ProgressFunc
+}
+
+func (s *progressingSource) ReportProgress(progress syncpkg.ProgressFunc) {
+	s.progress = progress
+}
+
+func (s *progressingSource) Targets(context.Context) (TargetSet, error) {
+	// Report only once every host is preparing, so the reports overlap.
+	s.started.Done()
+	s.started.Wait()
+	for range 200 {
+		s.progress(syncpkg.Progress{Detail: "Installing agentsview"})
+	}
+	return TargetSet{}, offlineHostError{}
+}
+
+func (s *progressingSource) Manifest(context.Context, TargetSet) (Manifest, bool, error) {
+	return Manifest{}, false, errors.New("not reached")
+}
+
+func (s *progressingSource) Archive(context.Context, ArchiveRequest) (*ArchiveStream, error) {
+	return nil, errors.New("not reached")
+}
+
+func TestPrepareRemoteSyncsSerializesProgressFromSources(t *testing.T) {
+	var started sync.WaitGroup
+	started.Add(2)
+	var inside, overlaps, reports atomic.Int64
+	// The CLI printer and the daemon's SSE writer are not safe for
+	// concurrent use, so reports from all hosts must arrive one at a time.
+	progress := func(syncpkg.Progress) {
+		if inside.Add(1) > 1 {
+			overlaps.Add(1)
+		}
+		runtime.Gosched()
+		reports.Add(1)
+		inside.Add(-1)
+	}
+	syncs := []RemoteSync{
+		{Host: "host-a", Source: &progressingSource{started: &started}, Progress: progress},
+		{Host: "host-b", Source: &progressingSource{started: &started}, Progress: progress},
+	}
+
+	prepared, err := PrepareAvailableRemoteSyncs(t.Context(), syncs)
+
+	require.NoError(t, err)
+	require.NoError(t, prepared.Close())
+	assert.GreaterOrEqual(t, reports.Load(), int64(400), "each source reported")
+	assert.Zero(t, overlaps.Load(), "progress callbacks overlapped")
 }

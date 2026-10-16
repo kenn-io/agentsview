@@ -9,7 +9,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/sshremote"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // Options describe the local collector.
@@ -18,9 +17,6 @@ type Options struct {
 	Version string
 	// DataDir holds the downloaded release cache for SSH hosts.
 	DataDir string
-	// Progress, when set, receives the SSH upload message. Pass the same
-	// function as RemoteSync.Progress.
-	Progress syncpkg.ProgressFunc
 }
 
 // For returns a new Source for one sync of rh. Callers name the host when
@@ -37,16 +33,14 @@ func For(rh config.RemoteHost, opts Options) (remotesync.Source, error) {
 		if err != nil {
 			return nil, fmt.Errorf("locate agentsview executable: %w", err)
 		}
-		p := sshremote.Provisioner{
+		// The source reports its upload through RemoteSync's progress
+		// callback, which RemoteSync hands it (remotesync.ProgressReporter).
+		return sshremote.NewSource(sshremote.Provisioner{
 			Runner:  sshremote.Runner{Destination: rh.SSHDestination()},
 			Build:   sshremote.LocalBuild{Version: opts.Version, Executable: exe},
 			DataDir: opts.DataDir,
 			Host:    rh.Host,
-		}
-		if opts.Progress != nil {
-			p.Progress = func(detail string) { opts.Progress(syncpkg.Progress{Detail: detail}) }
-		}
-		return sshremote.NewSource(p), nil
+		}), nil
 	default:
 		return nil, fmt.Errorf("invalid remote transport %q; use http or ssh", rh.Transport)
 	}

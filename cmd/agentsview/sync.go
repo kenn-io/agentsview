@@ -696,7 +696,7 @@ func prepareConfiguredRemoteHosts(
 	syncs := make([]remotesync.RemoteSync, 0, len(hosts))
 	for _, host := range hosts {
 		source, err := remotesource.For(host, remotesource.Options{
-			Version: version, DataDir: appCfg.DataDir, Progress: progress,
+			Version: version, DataDir: appCfg.DataDir,
 		})
 		if err != nil {
 			return nil, &remotesync.HostError{Host: host.Host, Operation: "configure", Err: err}
