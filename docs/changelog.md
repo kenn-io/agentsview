@@ -158,6 +158,10 @@ The latest release is
   `discarded an unfinished rebuild` the same way.
   A summary that reports ownership conflicts now also shows how many sessions
   were unchanged, already pushed by the interrupted run, or removed.
+- `agentsview prune --agent <name>` removes an agent you no longer use from
+  search and the archive in one pass, including its sessions in trash and their
+  subagent sessions. A parent session stays when a session outside the filters
+  still belongs to it.
 
 **Bug fixes**
 
