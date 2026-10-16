@@ -61,9 +61,9 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Text))
 	})
 	section(&b, "Errors", "_No errors detected._", errs, func(sig Signal) string {
-		return fmt.Sprintf("- %s%s / %s: %s\n",
+		return strings.TrimRight(fmt.Sprintf("- %s%s / %s: %s",
 			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.ToolName),
-			code(sig.Text))
+			code(sig.Text)), " ") + "\n"
 	})
 	section(&b, "Workarounds", "_No workarounds detected._", workarounds, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s pattern=%s: %s\n",

@@ -170,7 +170,7 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
 - The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
-`friction-log.md` and `summary.json` share one archive-shaped fixture with plain
+`friction-log.md` and `summary.json` share one archive-shaped fixture with
 error text, retry and runaway patterns, and two P0 tools across three
 sessions each. `friction-log-empty.md` pins every empty section. The Markdown
 frontmatter and JSON counts use the same signal grouping.
