@@ -986,8 +986,8 @@ server's normal write timeout. Press Ctrl+C to stop waiting; shared cache work
 can continue in the daemon.
 
 Restart older daemons after upgrading so they provide the usage progress
-endpoint. `session usage`, `token-use`, and `usage statusline` still wait for
-initial sync, including when they reuse a daemon started by daily usage.
+endpoint. `usage statusline` still waits for initial sync, including when it
+reuses a daemon started by daily usage.
 Statusline limits the complete wait and report request to 30 seconds.
 
 Offline reads require an archive at the current data version. If an upgrade
@@ -1735,7 +1735,10 @@ agentsview session parent <id> <parent>  # record the launching session
 
 `session usage` attributes each subagent transcript's spend to the session that
 spawned it, so a parent that delegated most of its work still reports the full
-cost. `--own-only` restores the older own-session output.
+cost. `--own-only` restores the older own-session output. Usage lookups refresh
+archived sessions without waiting for startup ingestion. Missing IDs return not
+found until the daemon imports them. A stale archive returns stored usage with
+a warning while the daemon handles the rebuild.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from

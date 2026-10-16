@@ -1051,9 +1051,12 @@ The codes classify the reported document, so a session whose only token data
 lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
 did before.
 
-Before querying, the local backend refreshes the session's own transcript and
-the `agent-*.jsonl` files under its `subagents/` directory, so a session that
-just finished reports complete numbers. `--own-only` skips the subagent refresh.
+Before querying, the local backend refreshes a session already in the archive
+and its subagent transcripts. `--own-only` skips the subagent refresh. A usage
+lookup skips startup ingestion. A missing ID returns not found until the
+daemon's scheduled ingestion imports it. If the archive needs a rebuild,
+`POST /api/v1/sessions/sync` returns HTTP 409 and the command shows stored usage
+with a warning. Direct local queries also show stored usage with a warning.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.
 This preserves the full subagent rollup and the exit codes above; combine it

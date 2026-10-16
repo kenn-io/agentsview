@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -209,9 +212,10 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 
 	// Ingest the parent, then write a subagent transcript the way Claude
 	// Code does after the parent's own file was last synced.
-	_, _, err := backend.SessionUsage(
-		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
+	engine := agentsync.NewEngine(ctx, database, agentsync.EngineConfig{AgentDirs: backend.cfg.AgentDirs})
+	err := engine.SyncSingleSessionContext(ctx, "parent-uuid")
 	require.NoError(t, err)
+	engine.Close()
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(projDir, "parent-uuid", "subagents",
@@ -258,4 +262,54 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, own)
 	assert.Zero(t, own.SubagentCount)
+}
+
+func TestLocalSessionUsageStaleAndMissing(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(strconv.FormatBool(stale), func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "sessions.db")
+			writer := dbtest.OpenTestDBAt(t, dbPath)
+			root := t.TempDir()
+			source := filepath.Join(root, "project-a", "saved.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(source), 0o755))
+			require.NoError(t, os.WriteFile(source, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "new source content").String()), 0o600))
+			if stale {
+				require.NoError(t, writer.UpsertSession(t.Context(), db.Session{ID: "saved", Agent: "claude", Project: "project-a", FilePath: new(source), TotalOutputTokens: 42, HasTotalOutputTokens: true}))
+			}
+			require.NoError(t, writer.Close())
+			if stale {
+				raw, err := sql.Open("sqlite3", dbPath)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 0")
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
+			database, err := db.OpenIsolatedContext(t.Context(), dbPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { database.Close() })
+			backend := localArchiveQueryBackend{database: database, offline: true, cfg: config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}}
+			stderr := captureStderr(t, func() {
+				for range 2 {
+					out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved"})
+					require.NoError(t, err)
+					if stale {
+						require.NotNil(t, out)
+						assert.Equal(t, 42, out.TotalOutputTokens)
+						assert.Equal(t, tokenUseExitOK, code)
+					} else {
+						assert.Nil(t, out)
+						assert.Equal(t, tokenUseExitNotFound, code)
+					}
+				}
+			})
+			if stale {
+				assert.True(t, database.NeedsResync())
+				assert.Contains(t, stderr, "warning: archive data version changed")
+			} else {
+				session, err := database.GetSession(t.Context(), "saved")
+				require.NoError(t, err)
+				assert.Nil(t, session)
+			}
+		})
+	}
 }

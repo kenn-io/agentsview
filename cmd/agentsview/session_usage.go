@@ -127,6 +127,7 @@ func sessionUsageDataForCommand(
 		archiveQueryPolicy{
 			NoSync:               noSync,
 			AutoStart:            true,
+			SkipInitialSync:      true,
 			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
 		},
@@ -186,10 +187,10 @@ func httpSessionUsageData(
 		}
 		return nil, tokenUseExitErr, err
 	}
-	if !query.OwnOnly && !query.NoSync {
+	if !query.NoSync {
 		backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
-			ID: resolvedID, Subagents: true,
+			ID: resolvedID, Subagents: !query.OwnOnly,
 		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
 			fmt.Fprintf(os.Stderr, "warning: sync failed: %v\n", syncErr)
 		}

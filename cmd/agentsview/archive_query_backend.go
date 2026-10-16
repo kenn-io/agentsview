@@ -140,8 +140,8 @@ func resolveArchiveQueryTransport(
 	policy archiveQueryPolicy,
 ) (transport, error) {
 	if policy.AutoStart && !policy.NoSync {
-		// Daily reports can read committed data while sync runs after
-		// readiness. Session-specific commands still need startup ingestion.
+		// Queries that skip startup ingestion can read committed data
+		// while the daemon syncs after readiness.
 		cfg.SkipInitialSync = policy.SkipInitialSync
 		return ensureTransportContext(ctx, cfg, transportIntentArchiveWrite, 0)
 	}
@@ -304,11 +304,20 @@ func (b localArchiveQueryBackend) SessionUsage(
 	applyCustomPricing(b.database, b.cfg)
 	ensureUsagePricing(b.database, b.offline, b.cfg.CustomModelPricing)
 
-	resolvedID, known := resolveRawSessionID(
-		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
-	)
+	// Resolve from the archive only; daemon ingestion owns missing sources.
+	resolvedID, _ := resolveRawSessionID(ctx, b.database, nil, query.SessionID)
+	session, err := b.database.GetSession(ctx, resolvedID)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	if session == nil {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
+		return nil, tokenUseExitNotFound, nil
+	}
 
-	if known && !b.skipFreshData && !query.NoSync {
+	if !b.skipFreshData && !query.NoSync && b.database.NeedsResync() {
+		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the daemon rebuilds the archive")
+	} else if !b.skipFreshData && !query.NoSync {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,
