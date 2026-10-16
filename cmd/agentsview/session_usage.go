@@ -194,26 +194,34 @@ func httpSessionUsageData(
 		if !errors.Is(err, errSessionNotFound) {
 			return nil, tokenUseExitErr, err
 		}
-		if !query.OwnOnly && !query.NoSync {
-			startupPending, archiveStale, statusErr := httpSessionSyncStatus(
-				ctx, baseURL, token,
+		if query.OwnOnly || query.NoSync {
+			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+			return nil, tokenUseExitNotFound, nil
+		}
+		startupPending, archiveStale, statusErr := httpSessionSyncStatus(
+			ctx, baseURL, token,
+		)
+		if statusErr != nil {
+			return nil, tokenUseExitErr, fmt.Errorf(
+				"checking sync status: %w", statusErr,
 			)
-			if statusErr != nil {
-				return nil, tokenUseExitErr, fmt.Errorf(
-					"checking sync status: %w", statusErr,
-				)
-			}
-			if !startupPending && !archiveStale {
-				fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-				return nil, tokenUseExitNotFound, nil
-			}
+		}
+		if startupPending || archiveStale {
 			return nil, tokenUseExitErr, errors.New(
 				"session usage is not yet available; retry after startup ingestion " +
 					"or the archive rebuild finishes",
 			)
 		}
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-		return nil, tokenUseExitNotFound, nil
+		// Startup or rebuild work can finish after the first lookup but before
+		// the status request. Resolve once more before declaring the ID absent.
+		resolvedID, err = resolveServiceSessionID(ctx, backend, sessionID)
+		if err != nil {
+			if !errors.Is(err, errSessionNotFound) {
+				return nil, tokenUseExitErr, err
+			}
+			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+			return nil, tokenUseExitNotFound, nil
+		}
 	}
 	refreshIncomplete := false
 	if !query.OwnOnly && !query.NoSync {
@@ -221,8 +229,8 @@ func httpSessionUsageData(
 			ID: resolvedID, Subagents: true, UsageRefresh: true,
 		})
 		if syncErr != nil {
-			refreshIncomplete = true
 			if !errors.Is(syncErr, db.ErrReadOnly) {
+				refreshIncomplete = true
 				fmt.Fprintf(os.Stderr,
 					"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
 			}

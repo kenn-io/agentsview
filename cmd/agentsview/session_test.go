@@ -1869,6 +1869,7 @@ func TestSessionUsage_DefaultUsesArchivedReadOnlyDaemonUsage(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, tokenUseExitOK, code)
 	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.False(t, out.RefreshIncomplete)
 	assert.Equal(t, []string{
 		"/api/v1/sessions/remote-session",
 		"/api/v1/sessions/sync",
@@ -2663,6 +2664,39 @@ func TestSessionUsageMissingIDReturnsStatusError(t *testing.T) {
 	assert.Equal(t, tokenUseExitErr, code)
 	assert.Empty(t, requests.SyncInput.ID)
 	assert.NotContains(t, requests.RequestPath, "/api/v1/sync")
+}
+
+func TestSessionUsageResolvesIDImportedAfterStatusCheck(t *testing.T) {
+	newAgentDataDir(t)
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	detailLookups := 0
+	statusChecks := 0
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions/remote-session":
+			detailLookups++
+			if detailLookups == 1 {
+				http.NotFound(w, r)
+				return
+			}
+			original.ServeHTTP(w, r)
+		case "/api/v1/sync/status":
+			statusChecks++
+			writeJSONResponse(w, `{"archive_stale":false,"last_sync":"","startup_pending":false,"stats":{}}`)
+		default:
+			original.ServeHTTP(w, r)
+		}
+	})
+
+	cmd := sessionUsageCommand(t, "session", "usage", "remote-session", "--server", ts.URL)
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.Equal(t, 2, detailLookups)
+	assert.Equal(t, 1, statusChecks)
 }
 
 func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
