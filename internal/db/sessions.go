@@ -1386,10 +1386,44 @@ func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent strin
 	return n == 1
 }
 
+const codexSourcePathsSQL = `(?1, CASE
+		WHEN substr(?1, -10) = '.jsonl.zst' THEN substr(?1, 1, length(?1) - 4)
+		WHEN substr(?1, -6) = '.jsonl' THEN ?1 || '.zst'
+		ELSE ?1 END)`
+
 const excludedCodexSourceQuery = `SELECT EXISTS (
-	SELECT 1 FROM excluded_sessions WHERE file_path = ?1 AND file_path != ''
+	SELECT 1 FROM excluded_sessions WHERE file_path IN ` + codexSourcePathsSQL + ` AND file_path != ''
 	AND (id GLOB ?2 OR id GLOB ?3)
 )`
+
+// CorrectedCodexSessionID identifies a unique retained source after an identity
+// repair. Shared-path archives provide no evidence to move another row's pins.
+func (db *DB) CorrectedCodexSessionID(ctx context.Context, oldID, path, agent string) (string, error) {
+	if path == "" || (agent != "codex" && agent != "traex" && agent != "augure-code") {
+		return "", nil
+	}
+	rows, err := db.getReader().Query(ctx, `SELECT id FROM sessions
+		WHERE file_path IN `+codexSourcePathsSQL+` AND agent = ?2 LIMIT 2`, path, agent)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) == 1 && ids[0] != oldID {
+		return ids[0], nil
+	}
+	return "", nil
+}
 
 // HasExcludedCodexSource retains a permanent deletion when a Codex rollout's
 // parsed identity changes, including files absent during an archive rebuild.

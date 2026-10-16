@@ -14228,6 +14228,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
 		suppress := false
+		sourceExcluded := false
 		for _, agentStr := range agentsToQuery {
 			excludedSource, err := e.db.HasExcludedCodexSource(ctx, lookupPath, agentStr)
 			if err != nil {
@@ -14237,13 +14238,21 @@ func (e *Engine) applyProviderFilePathPolicies(
 				return
 			}
 			if excludedSource {
-				suppress = true
+				sourceExcluded = true
 				break
 			}
 			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
 				suppress = true
 				break
 			}
+		}
+		if sourceExcluded {
+			// The exclusion owns a source, not every row with its parsed ID.
+			// Only clean up rows whose stored path proves that ownership.
+			for _, id := range existingIDs {
+				addExclusion(id)
+			}
+			continue
 		}
 		if !suppress {
 			for id := range excluded {

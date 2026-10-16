@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 
@@ -217,5 +218,152 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NotNil(t, after[0].Content)
 			assert.Equal(t, "answer saved only on page", *after[0].Content)
 		})
+	}
+}
+
+func TestCodexThreadCorrectionPreservesPostgresPins(t *testing.T) {
+	for _, mode := range []string{"full", "original_absent", "original_first", "corrected_first", "noncanonical", "excluded_destination"} {
+		t.Run(mode, func(t *testing.T) {
+			const oldID = "codex:11111111-1111-7111-8111-111111111111"
+			const correctedID = "codex:22222222-2222-7222-8222-222222222222"
+			const schema = "agentsview_codex_thread_pin_test"
+			ctx := t.Context()
+			pgURL := testPGURL(t)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			source := testDB(t)
+			path := filepath.Join(t.TempDir(), "rollout-2026-10-16T12-00-00-22222222-2222-7222-8222-222222222222.jsonl")
+			if mode == "noncanonical" {
+				path = filepath.Join(t.TempDir(), "rollout-restored.jsonl")
+			}
+			require.NoError(t, source.UpsertSession(ctx, db.Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &path, MessageCount: 1}))
+			require.NoError(t, source.InsertMessages(ctx, []db.Message{{SessionID: oldID, Role: "user", Content: "saved corrected transcript", SourceUUID: "corrected-message"}}))
+			require.NoError(t, source.SetSessionDataVersion(ctx, oldID, 135))
+			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			result, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			store := &Store{pg: syncer.pg}
+			pinID, err := store.PinMessage(ctx, oldID, 0, new("remote-only note"))
+			require.NoError(t, err)
+			localPins, err := source.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			require.Empty(t, localPins)
+			require.NoError(t, source.Close())
+			rebuilt := testDB(t)
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
+			require.NoError(t, rebuilt.CopySyncStateFrom(source.Path()))
+			for _, id := range []string{oldID, correctedID} {
+				if id == oldID && mode == "original_absent" {
+					continue
+				}
+				file, content, uuid := path, "saved corrected transcript", "corrected-message"
+				if id == oldID {
+					file = filepath.Join(t.TempDir(), "rollout-original.jsonl")
+					content, uuid = "original transcript", "original-message"
+				}
+				require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{ID: id, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &file, MessageCount: 1}))
+				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "user", Content: content, SourceUUID: uuid}}))
+				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, id, db.CurrentDataVersion()))
+			}
+			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+			if mode == "excluded_destination" {
+				_, err = syncer.pg.ExecContext(ctx, `INSERT INTO excluded_sessions(id) VALUES($1)`, correctedID)
+				require.NoError(t, err)
+			}
+			if mode == "original_first" || mode == "corrected_first" {
+				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+				require.NoError(t, err)
+				upgraded.databaseGeneration, err = rebuilt.GetDatabaseID(ctx)
+				require.NoError(t, err)
+				marker, err := upgraded.pushMarkerID(ctx)
+				require.NoError(t, err)
+				order := []string{oldID, correctedID}
+				if mode == "corrected_first" {
+					order = []string{correctedID, oldID}
+				}
+				var pushed []db.Session
+				for _, id := range order {
+					sess, err := rebuilt.GetSessionFull(ctx, id)
+					require.NoError(t, err)
+					require.NotNil(t, sess)
+					batch, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, &pushed)
+					require.NoError(t, err)
+					require.True(t, batch.ok)
+				}
+			}
+			result, err = upgraded.Push(ctx, true, nil)
+			if mode == "excluded_destination" {
+				require.Error(t, err)
+				pins, err := store.ListPinnedMessages(ctx, "", "")
+				require.NoError(t, err)
+				require.Len(t, pins, 1)
+				assert.Equal(t, oldID, pins[0].SessionID)
+				assert.Equal(t, "remote-only note", *pins[0].Note)
+				return
+			}
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			pins, err := store.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, correctedID, pins[0].SessionID)
+			assert.Equal(t, pinID, pins[0].ID)
+			require.NotNil(t, pins[0].Note)
+			assert.Equal(t, "remote-only note", *pins[0].Note)
+			require.NotNil(t, pins[0].Content)
+			assert.Equal(t, "saved corrected transcript", *pins[0].Content)
+			if mode == "original_absent" {
+				old, err := store.GetSessionFull(ctx, oldID)
+				require.NoError(t, err)
+				assert.Nil(t, old)
+			}
+		})
+	}
+}
+
+func TestCodexCorrectionLookupStaysBounded(t *testing.T) {
+	const schema = "agentsview_codex_source_lookup_test"
+	_, store := prepareUsageSchema(t, schema)
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO sessions(id,agent,project,machine,file_path,data_version)
+ VALUES ('codex:old','codex','sample','machine','/source/rollout.jsonl',135)`)
+	require.NoError(t, err)
+	var small float64
+	for _, count := range []int{100, 10000} {
+		if count == 10000 {
+			_, err = store.DB().ExecContext(ctx, "DROP INDEX idx_sessions_codex_repair_source")
+			require.NoError(t, err)
+			syncer := &Sync{pg: store.DB(), schema: schema}
+			require.NoError(t, syncer.EnsureSchema(ctx))
+		}
+		_, err = store.DB().ExecContext(ctx, `INSERT INTO sessions(id,agent,project,machine,file_path,data_version)
+   SELECT 'codex:noise-'||n,'codex','sample','machine','/source/noise-'||n||'.jsonl',135
+   FROM generate_series(1,$1::int)n ON CONFLICT(id) DO NOTHING`, count)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx, "ANALYZE sessions")
+		require.NoError(t, err)
+		tx, err := store.DB().BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var raw []byte
+		require.NoError(t, tx.QueryRowContext(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+codexIdentityCandidatesSQL,
+			[]string{"codex:new"}, []string{"/source/rollout.jsonl"}).Scan(&raw))
+		require.NoError(t, tx.Rollback())
+		var plans []struct{ Plan map[string]any }
+		require.NoError(t, json.Unmarshal(raw, &plans))
+		require.Len(t, plans, 1)
+		plan := plans[0].Plan
+		assert.Equal(t, float64(1), plan["Actual Rows"])
+		buffers := plan["Shared Hit Blocks"].(float64) + plan["Shared Read Blocks"].(float64)
+		if count == 100 {
+			small = buffers
+		} else {
+			assert.LessOrEqual(t, buffers, small+20)
+		}
+		t.Logf("sessions=%d buffers=%.0f", count, buffers)
 	}
 }

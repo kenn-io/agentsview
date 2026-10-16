@@ -3049,10 +3049,24 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 // including trash. A readable header outranks its filename. Missing sources
 // may use a filename to preserve data, but never to replace another source.
 func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
+	var hasMetadata, archiveOnly bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM old_db.sqlite_master WHERE type = 'table' AND name = 'archive_metadata'
+	)`).Scan(&hasMetadata); err != nil {
+		return err
+	}
+	if hasMetadata {
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM old_db.archive_metadata WHERE key = 'archive_only' AND value = '1'
+		)`).Scan(&archiveOnly); err != nil {
+			return err
+		}
+	}
 	rows, err := conn.QueryContext(ctx, `
 		SELECT old_s.id, old_s.file_path, (
 			SELECT new_s.id FROM main.sessions new_s
-			WHERE new_s.file_path = old_s.file_path AND new_s.agent = old_s.agent LIMIT 1
+			WHERE new_s.file_path = old_s.file_path AND new_s.agent = old_s.agent
+			  AND new_s.deleted_at IS NULL LIMIT 1
 		) FROM old_db.sessions old_s
 		WHERE old_s.agent IN ('codex', 'traex', 'augure-code') AND old_s.file_path != ''`)
 	if err != nil {
@@ -3079,8 +3093,14 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 	}
 	for _, s := range sources {
 		key := parser.CodexSessionUUIDFromPath(s.path)
-		if parser.CodexThreadIDFromSessionKey(key) != key {
-			continue // Revert pages use their existing structural mapping.
+		var mappedPage bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM _codex_session_ids WHERE source_id = ? AND is_page = 1
+		)`, s.id).Scan(&mappedPage); err != nil {
+			return err
+		}
+		if mappedPage {
+			continue // Keep verified historical page mappings.
 		}
 		prefixEnd := strings.LastIndex(s.id, ":") + 1
 		if prefixEnd == 0 {
@@ -3092,19 +3112,48 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		}
 		target := s.parsed.String
 		if target == "" {
-			id, err := parser.ReadCodexRolloutSessionID(ctx, s.path)
-			if errors.Is(err, os.ErrNotExist) {
+			id := key
+			var err error
+			if !archiveOnly {
+				id, err = parser.ReadCodexRolloutSessionID(ctx, s.path)
+			}
+			if archiveOnly || errors.Is(err, os.ErrNotExist) {
+				// A kept ID with no different source path is not evidence of a
+				// foreign transcript. In particular, retain rejected page IDs.
+				var kept bool
+				if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+					SELECT 1 FROM main.sessions WHERE id = ?1
+					  AND (file_path IS NULL OR file_path = '' OR file_path = ?2)
+				)`, s.id, s.path).Scan(&kept); err != nil {
+					return err
+				}
+				if kept {
+					continue
+				}
 				id = key
 			} else if err != nil {
 				// An unreadable source provides no evidence of a new identity.
-				continue
+				id = ""
+			} else if thread := parser.CodexThreadIDFromSessionKey(key); thread != key && thread == id {
+				id = key
 			}
 			if id != "" {
 				target = s.id[:prefixEnd] + id
 			}
 		}
 		if target == "" || target == s.id {
-			continue
+			var displaced bool
+			if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+				SELECT 1 FROM main.sessions WHERE id = ? AND file_path != '' AND file_path != ?
+			)`, s.id, s.path).Scan(&displaced); err != nil {
+				return err
+			}
+			if !displaced {
+				continue
+			}
+			// The original thread owns this ID again. Keep the other archived
+			// source under the same stable alternative used for source collisions.
+			target = parser.AltSessionID(parser.BaseSessionID(s.id), s.path)
 		}
 		var occupied bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
@@ -3114,7 +3163,19 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			return err
 		}
 		if occupied {
-			continue
+			target = parser.AltSessionID(parser.BaseSessionID(s.id), s.path)
+			if target == s.id {
+				continue
+			}
+			if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+				SELECT 1 FROM main.sessions WHERE id = ?1 AND file_path IS NOT ?2
+				UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND file_path IS NOT ?2
+			)`, target, s.path).Scan(&occupied); err != nil {
+				return err
+			}
+			if occupied {
+				return fmt.Errorf("cannot preserve Codex source: alternative identity %s belongs to another source", target)
+			}
 		}
 		if _, err := conn.ExecContext(ctx, `
 			INSERT INTO _codex_session_ids (source_id, target_id, is_page, is_thread_correction)

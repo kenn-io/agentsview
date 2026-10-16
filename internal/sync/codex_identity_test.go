@@ -91,12 +91,17 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 		trash           bool
 		snapshot        bool
 		matchingRoot    bool
+		page            bool
+		occupied        bool
 	}{
 		{name: "original_present", originalPresent: true, version: 134},
 		{name: "original_absent", version: 134},
 		{name: "noncanonical_filename", originalPresent: true, renamedFile: true, version: 134},
 		{name: "version_135", version: 135},
 		{name: "corrected_source_missing", originalPresent: true, missing: true, version: 135},
+		{name: "missing_noncanonical_source", originalPresent: true, renamedFile: true, missing: true, version: 135},
+		{name: "missing_misfiled_page", originalPresent: true, page: true, missing: true, version: 135},
+		{name: "missing_page_destination_owned", originalPresent: true, page: true, missing: true, occupied: true, version: 135},
 		{name: "both_sources_missing", missing: true, version: 135},
 		{name: "trash", originalPresent: true, trash: true, version: 135},
 		{name: "trash_noncanonical", originalPresent: true, renamedFile: true, trash: true, version: 135},
@@ -106,6 +111,14 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, pathA, pathB := writeCodexIdentityRollouts(t)
+			correctedID := "codex:" + identityThreadB
+			if tc.page {
+				const suffix = "_33333333-3333-7333-8333-333333333333"
+				pagePath := strings.TrimSuffix(pathB, ".jsonl") + suffix + ".jsonl"
+				require.NoError(t, os.Rename(pathB, pagePath))
+				pathB = pagePath
+				correctedID += suffix
+			}
 			if tc.renamedFile {
 				restored := filepath.Join(filepath.Dir(pathB), "rollout-restored.jsonl")
 				require.NoError(t, os.Rename(pathB, restored))
@@ -171,10 +184,24 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 				ID: "retained", Agent: "gemini", Project: "sample", Machine: "local", MessageCount: 1,
 			}))
 			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "retained", Role: "user", Content: "Only stored in the archive"}}))
+			if tc.occupied {
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: correctedID, Agent: "codex", Project: "sample", Machine: "local", MessageCount: 1}))
+				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: correctedID, Role: "user", Content: "independent archive"}}))
+			}
 			reopened, engine := rebuildCodexIdentityArchive(t, database, root, tc.version)
+			if tc.occupied {
+				assert.Equal(t, []string{"independent archive"}, messageContents(t, reopened, correctedID))
+			}
+			if tc.missing && (tc.renamedFile || tc.occupied) {
+				ids, err := reopened.ListSessionIDsByFilePath(t.Context(), pathB, "codex")
+				require.NoError(t, err)
+				require.Len(t, ids, 1, "retain the archived transcript even without its canonical identity")
+				correctedID = ids[0]
+				assert.NotEqual(t, legacyID, correctedID)
+			}
 			if tc.trash {
-				require.True(t, reopened.IsSessionTrashed(t.Context(), "codex:"+identityThreadB))
-				_, err = reopened.RestoreSession(t.Context(), "codex:"+identityThreadB)
+				require.True(t, reopened.IsSessionTrashed(t.Context(), correctedID))
+				_, err = reopened.RestoreSession(t.Context(), correctedID)
 				require.NoError(t, err)
 				if tc.missing {
 					require.NoError(t, os.WriteFile(pathB, contentB, 0o600))
@@ -196,19 +223,19 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 				require.NoError(t, err)
 				assert.Nil(t, stale, "B's misfiled transcript must not also survive under A")
 			}
-			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, "codex:"+identityThreadB))
+			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, correctedID))
 			assert.Equal(t, []string{"Only stored in the archive"}, messageContents(t, reopened, "retained"))
-			assert.Equal(t, pathB, reopened.GetSessionFilePath(t.Context(), "codex:"+identityThreadB))
+			assert.Equal(t, pathB, reopened.GetSessionFilePath(t.Context(), correctedID))
 			pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
 			require.NoError(t, err)
 			require.Len(t, pins, 1)
-			assert.Equal(t, "codex:"+identityThreadB, pins[0].SessionID)
+			assert.Equal(t, correctedID, pins[0].SessionID)
 			assert.Equal(t, &note, pins[0].Note)
-			corrected, err := reopened.GetAllMessages(t.Context(), "codex:"+identityThreadB)
+			corrected, err := reopened.GetAllMessages(t.Context(), correctedID)
 			require.NoError(t, err)
 			require.Len(t, corrected, 1)
 			assert.Equal(t, corrected[0].ID, pins[0].MessageID)
-			curatedID := "codex:" + identityThreadB
+			curatedID := correctedID
 			if tc.originalPresent && !tc.trash {
 				curatedID = legacyID
 			}
@@ -220,16 +247,25 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []string{curatedID}, stars)
 
-			if tc.snapshot {
-				snapshots, err := reopened.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + identityThreadB})
+			if tc.missing && tc.renamedFile {
+				engine.Close()
+				again, _ := rebuildCodexIdentityArchive(t, reopened, root, tc.version)
+				assert.Equal(t, []string{"other question"}, messageContents(t, again, correctedID))
+				retainedPins, err := again.ListPinnedMessages(t.Context(), "", "")
 				require.NoError(t, err)
-				require.Contains(t, snapshots, "codex:"+identityThreadB)
-				assert.Equal(t, correctedRoot, snapshots["codex:"+identityThreadB].RootPath)
+				require.Len(t, retainedPins, 1)
+				assert.Equal(t, correctedID, retainedPins[0].SessionID)
+			}
+			if tc.snapshot {
+				snapshots, err := reopened.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{correctedID})
+				require.NoError(t, err)
+				require.Contains(t, snapshots, correctedID)
+				assert.Equal(t, correctedRoot, snapshots[correctedID].RootPath)
 				expectedRemote := "https://example.com/team/project-b.git"
 				if tc.matchingRoot {
 					expectedRemote = "https://example.com/team/project-a.git"
 				}
-				assert.Equal(t, expectedRemote, snapshots["codex:"+identityThreadB].GitRemote)
+				assert.Equal(t, expectedRemote, snapshots[correctedID].GitRemote)
 			}
 		})
 	}
@@ -318,11 +354,16 @@ func rebuildCodexIdentityArchive(t *testing.T, database *db.DB, root string, ver
 }
 
 func TestCodexIdentityDeletionDoesNotTrustFilename(t *testing.T) {
-	for _, missing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("deleted_source_missing=%t", missing), func(t *testing.T) {
+	for _, tc := range []struct{ missing, corrected bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		missing := tc.missing
+		t.Run(fmt.Sprintf("deleted_source_missing=%t/corrected=%t", missing, tc.corrected), func(t *testing.T) {
 			root, pathA, pathB := writeCodexIdentityRollouts(t)
 			// A renamed export can name B while its first metadata still owns A.
-			content, err := os.ReadFile(pathA)
+			contentPath := pathA
+			if tc.corrected {
+				contentPath = pathB
+			}
+			content, err := os.ReadFile(contentPath)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(pathB, content, 0o600))
 			if missing {
@@ -350,5 +391,39 @@ func TestCodexIdentityDeletionDoesNotTrustFilename(t *testing.T) {
 			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
 			assert.Equal(t, []string{"Unrelated archived history"}, messageContents(t, reopened, "codex:"+identityThreadB))
 		})
+	}
+}
+
+func TestCodexDeletedSourceChangesCompressionDuringUpgrade(t *testing.T) {
+	for _, compressedFirst := range []bool{false, true} {
+		for _, returnsLater := range []bool{false, true} {
+			t.Run(fmt.Sprintf("compressed_first=%t/returns_later=%t", compressedFirst, returnsLater), func(t *testing.T) {
+				root, _, plain := writeCodexIdentityRollouts(t)
+				raw, err := os.ReadFile(plain)
+				require.NoError(t, err)
+				compressed := plain + ".zst"
+				oldPath, newPath := plain, compressed
+				newContent := zstdCompressString(t, string(raw))
+				if compressedFirst {
+					oldPath, newPath, newContent = compressed, plain, raw
+				}
+				database := openTestDB(t)
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:" + identityThreadA, Agent: "codex", Project: "sample", Machine: "local", FilePath: &oldPath}))
+				require.NoError(t, database.DeleteSession(t.Context(), "codex:"+identityThreadA))
+				require.NoError(t, os.Remove(plain))
+				if !returnsLater {
+					require.NoError(t, os.WriteFile(newPath, newContent, 0o600))
+				}
+				rebuilt, engine := rebuildCodexIdentityArchive(t, database, root, 135)
+				if returnsLater {
+					require.NoError(t, os.WriteFile(newPath, newContent, 0o600))
+				}
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{newPath}))
+				restored, err := rebuilt.GetSessionFull(t.Context(), "codex:"+identityThreadB)
+				require.NoError(t, err)
+				assert.Nil(t, restored)
+				assert.True(t, rebuilt.IsSessionExcluded(t.Context(), "codex:"+identityThreadA))
+			})
+		}
 	}
 }

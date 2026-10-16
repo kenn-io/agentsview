@@ -180,11 +180,16 @@ use the same exclusion check.
 
 Data version 136 corrects threads filed under foreign metadata. Permanent
 Codex-format deletions retain their source paths and reject that file even if it
-returns with a corrected identity or a noncanonical filename. A filename UUID
-alone does not exclude another thread. Trash is corrected before parsing, so
-restoring it keeps its transcript, pins, notes, rename, and star. Missing
-sources can use a recoverable filename identity to preserve their archived
-transcript without replacing another source.
+returns with a corrected identity, a noncanonical filename, or the other
+`.jsonl`/`.jsonl.zst` representation. Dropping an excluded source cannot delete
+an unrelated archive row with the same parsed ID. A filename UUID alone does not
+exclude another thread. Trash is corrected before parsing, so restoring it keeps
+its transcript, pins, notes, rename, and star. Missing sources can use a
+recoverable filename identity to preserve their archived transcript without
+replacing another source. Revert pages retain their full page identity. When the
+canonical identity is unavailable or already belongs to another source, a stable
+alternative ID preserves the archived transcript and pins. Archive-only rebuilds
+do not consult files on the receiving host.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
@@ -232,6 +237,13 @@ been removed or filtered out.
 If the original rollout moves outside a filtered push's project scope, the
 curation transfer and removal of the old thread row share a transaction. A
 failed transfer leaves the thread and its pins intact.
+
+The same PostgreSQL transaction handles pre-136 thread corrections when a unique
+local source path identifies the corrected session. Remote-only pins and notes
+move before the old transcript is replaced or removed, including when the
+corrected session belongs to a later push batch. Plain and compressed paths
+identify the same source. A partial index on pre-136 source paths keeps this
+lookup limited to the current batch; the next push installs it when missing.
 
 ### Codex incremental import state
 

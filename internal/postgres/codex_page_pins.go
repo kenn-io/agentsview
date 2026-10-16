@@ -12,6 +12,13 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+const codexIdentityCandidatesSQL = `
+		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
+		FROM sessions
+		WHERE (id = ANY($1) OR (data_version < 136 AND file_path = ANY($2)))
+		  AND provenance_kind = 'legacy' AND agent IN ('codex', 'traex', 'augure-code')
+		ORDER BY id FOR UPDATE`
+
 // Before data version 131, a thread row could hold a revert page's messages.
 // Publish that page and move its remote pins before replacing the thread row.
 // If the original rollout is absent, retire the duplicate thread transcript
@@ -19,14 +26,22 @@ import (
 // leaves the old row intact if publication fails. Before data version 134, a
 // page whose header named its own rollout was stored under that rollout id; it
 // retires into its canonical page the same way.
+// Pre-136 thread corrections use the retained source path to transfer remote
+// curation before the original thread is replaced, even across push batches.
 func (s *Sync) migrateCodexPages(
 	ctx context.Context, tx *sql.Tx, batch []db.Session,
 	markerID string, legacyMarkerMachines []string,
 ) error {
 	threads := make(map[string]db.Session)
+	sources := make(map[string]db.Session)
 	for _, sess := range batch {
 		switch sess.Agent {
 		case "codex", "traex", "augure-code":
+			if sess.FilePath != nil && *sess.FilePath != "" {
+				path := strings.TrimSuffix(*sess.FilePath, ".zst")
+				sources[path] = sess
+				sources[path+".zst"] = sess
+			}
 			prefixEnd := strings.LastIndex(sess.ID, ":") + 1
 			if prefixEnd > 0 {
 				id := sess.ID[:prefixEnd] + parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:])
@@ -52,11 +67,7 @@ func (s *Sync) migrateCodexPages(
 	}
 	// Purge inventories pages under the thread lock. Keep that same lock
 	// through publication, including after the thread's migration or retirement.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
-		FROM sessions
-		WHERE id = ANY($1) AND provenance_kind = 'legacy'
-		ORDER BY id FOR UPDATE`, mapKeys(threads))
+	rows, err := tx.QueryContext(ctx, codexIdentityCandidatesSQL, mapKeys(threads), mapKeys(sources))
 	if err != nil {
 		return fmt.Errorf("finding legacy Codex pages: %w", err)
 	}
@@ -80,6 +91,10 @@ func (s *Sync) migrateCodexPages(
 		return err
 	}
 	for _, old := range pages {
+		incoming, selected := threads[old.id]
+		if !selected {
+			incoming = sources[old.path]
+		}
 		syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
 		prefixEnd := strings.LastIndex(old.id, ":") + 1
 		key := parser.CodexSessionUUIDFromPath(old.path)
@@ -99,12 +114,22 @@ func (s *Sync) migrateCodexPages(
 			}
 			migratePage = canonical != nil && canonical.Agent == old.agent
 		}
+		pageID := old.id[:prefixEnd] + key
+		if !migratePage && old.dataVersion < 136 {
+			corrected, err := s.local.CorrectedCodexSessionID(ctx, old.id, old.path, old.agent)
+			if err != nil {
+				return fmt.Errorf("finding corrected Codex source: %w", err)
+			}
+			if corrected != "" {
+				pageID, migratePage = corrected, true
+			}
+		}
 		if !syncScope && !migratePage {
 			continue
 		}
 		if !sameSessionOwner(
 			old.owner, old.machine, markerID,
-			db.MirroredSessionMachine(threads[old.id], s.machine), legacyMarkerMachines,
+			db.MirroredSessionMachine(incoming, s.machine), legacyMarkerMachines,
 		) {
 			continue
 		}
@@ -112,7 +137,7 @@ func (s *Sync) migrateCodexPages(
 		if err != nil {
 			return fmt.Errorf("reading original Codex rollout: %w", err)
 		}
-		if syncScope && head != nil && head.Agent == old.agent && threads[old.id].Agent == old.agent &&
+		if syncScope && head != nil && head.Agent == old.agent && incoming.Agent == old.agent &&
 			(old.archive == "" || old.archive == s.archiveID) && projectFailsFilter(head.Project, s.projects, s.excludeProjects) {
 			// A filtered page restore still ends its source's thread scope.
 			// Publish that dependency without the excluded project's content.
@@ -142,7 +167,6 @@ func (s *Sync) migrateCodexPages(
 		if old.archive != "" && old.archive != s.archiveID {
 			return errors.New("cannot migrate Codex pages from another source archive")
 		}
-		pageID := old.id[:prefixEnd] + key
 		// Keep parser-owned names separate from user renames when publishing.
 		page, err := s.local.GetArtifactExportSession(ctx, pageID)
 		if err != nil {
