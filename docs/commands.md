@@ -1739,7 +1739,7 @@ cost. `--own-only` restores the older own-session output. Usage lookups refresh
 archived sessions without waiting for startup ingestion. With a daemon, missing
 IDs return not found until ingestion imports them. Direct mode can import the
 named local transcript. A stale archive returns stored usage with
-a warning while the daemon handles the rebuild.
+a warning until the archive is rebuilt.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from

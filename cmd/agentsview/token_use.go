@@ -249,6 +249,7 @@ func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutpu
 		appCfg,
 		archiveQueryPolicy{
 			AutoStart:            true,
+			SkipInitialSync:      true,
 			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
 		},

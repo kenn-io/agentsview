@@ -919,7 +919,8 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if !archiveFreshnessProbe(r.URL.Path) && s.archiveStale() {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
-				if archiveWriteRequest(r) {
+				// Session sync returns its stale-archive conflict through the route.
+				if archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
 					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
 						response := writerClosedResponse(w.Header().Add, true)
 						writeError(w, response.Status, response.Message)

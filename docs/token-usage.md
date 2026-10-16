@@ -1101,7 +1101,7 @@ retained archive with a stale warning.
 archive without waiting for startup ingestion. With a daemon, missing IDs
 return not found until scheduled ingestion imports them. Direct mode can import
 the named local transcript. A stale archive returns
-stored usage with a warning while the daemon handles the rebuild.
+stored usage with a warning until the archive is rebuilt.
 
 `--no-sync` skips source refresh and starts any new daemon without automatic
 sync. It does not disable sync on an already-running daemon. `--offline` reads

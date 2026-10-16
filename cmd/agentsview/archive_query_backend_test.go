@@ -302,6 +302,13 @@ func TestLocalSessionUsageStaleAndNewSource(t *testing.T) {
 				}
 			})
 			if stale {
+				missingStderr := captureStderr(t, func() {
+					out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "missing"})
+					require.NoError(t, err)
+					assert.Nil(t, out)
+					assert.Equal(t, tokenUseExitNotFound, code)
+				})
+				assert.NotContains(t, missingStderr, "warning:")
 				assert.True(t, database.NeedsResync())
 				assert.Contains(t, stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
 			} else {

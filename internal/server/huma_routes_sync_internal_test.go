@@ -1835,7 +1835,7 @@ func TestHumaSyncSessionRejectsStaleDB(t *testing.T) {
 	assert.True(t, f.db.NeedsResync())
 }
 
-func TestHumaSyncSessionCanceledStaleArchiveReturnsNil(t *testing.T) {
+func TestHumaSyncSessionCanceledBeforeSourceSyncReturnsNil(t *testing.T) {
 	f := newSyncRouteFixture(t, withStaleDB())
 	require.True(t, f.db.NeedsResync())
 
@@ -2480,6 +2480,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		response           string
 	}{
 		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, false, false, http.StatusConflict, "agentsview sync --full"},
 		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false, http.StatusOK, ""},
 		{http.MethodPost, "/api/v1/sync?startup_only", "", false, false, http.StatusOK, ""},
 		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false, http.StatusOK, ""},
@@ -2498,6 +2499,9 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
+			if tc.path == "/api/v1/sessions/sync" {
+				assert.Equal(t, "true", w.Header().Get(ResyncRequiredHeader))
+			}
 			if strings.HasPrefix(tc.path, "/api/v1/sync?startup_only") {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Zero(t, syncCalls)

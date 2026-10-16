@@ -1802,9 +1802,16 @@ func TestSessionUsageSkipsStartupSync(t *testing.T) {
 				original.ServeHTTP(w, r)
 			})
 			registerSyncRouteTestRuntime(t, dataDir, remote.URL)
-			for range 2 {
-				cmd := sessionUsageCommand(t, "session", "usage", "remote-session")
-				out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+			for _, alias := range []bool{false, true} {
+				var out *sessionUsageOutput
+				var code int
+				var err error
+				if alias {
+					out, code, err = sessionUsageData(t.Context(), "remote-session")
+				} else {
+					cmd := sessionUsageCommand(t, "session", "usage", "remote-session")
+					out, code, err = sessionUsageDataForCommand(cmd, "remote-session")
+				}
 				require.NoError(t, err)
 				if missing {
 					assert.Nil(t, out)

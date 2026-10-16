@@ -308,9 +308,8 @@ func (b localArchiveQueryBackend) SessionUsage(
 		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
 	)
 
-	if !b.skipFreshData && !query.NoSync && b.database.NeedsResync() {
-		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
-	} else if known && !b.skipFreshData && !query.NoSync {
+	stale := b.database.NeedsResync()
+	if known && !b.skipFreshData && !query.NoSync && !stale {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,
@@ -353,6 +352,9 @@ func (b localArchiveQueryBackend) SessionUsage(
 	if u == nil {
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
 		return nil, tokenUseExitNotFound, nil
+	}
+	if stale && !b.skipFreshData && !query.NoSync {
+		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
 		refreshed, refErr := pricingrefresh.RefreshIfStale(

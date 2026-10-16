@@ -21,7 +21,7 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
-func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
+func TestUsageCommandsDeferStartupSyncExceptStatusline(t *testing.T) {
 	for _, command := range []string{"daily", "statusline", "session usage", "token-use"} {
 		t.Run(command, func(t *testing.T) {
 			newAgentDataDir(t)
@@ -47,7 +47,7 @@ func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
 						assert.InDelta(t, 30, time.Until(deadline).Seconds(), 1)
 					}
 				}
-				assert.Equal(t, command == "daily", cfg.SkipInitialSync)
+				assert.Equal(t, command != "statusline", cfg.SkipInitialSync)
 				assert.False(t, cfg.NoSync)
 				return daemonRuntimeFromTestURL(t, ts.URL), nil
 			})

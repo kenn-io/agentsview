@@ -596,6 +596,9 @@ sessions already present there.
   detached daemon when no compatible daemon is running. It then proxies to
   `POST /api/v1/sessions/sync` so parsing and signal computation remain
   daemon-owned.
+- If the local archive needs a rebuild, `POST /api/v1/sessions/sync` returns
+  HTTP 409 with `X-Agentsview-Resync-Required: true`. Wait for the rebuild or
+  run `agentsview sync --full`, then retry the session sync.
 - If a [`pg serve`](/docs/pg-sync/#agentsview-pg-serve) daemon is running
   (read-only), sync refuses with a clear error.
 - If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI runs the sync in-process only

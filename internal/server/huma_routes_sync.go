@@ -1081,7 +1081,7 @@ func (s *Server) humaSyncSession(
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusConflict,
-				"archive data version changed; showing stored data until the daemon rebuilds the archive"),
+				"archive data version changed; wait for the rebuild or run 'agentsview sync --full' before syncing this session"),
 			http.Header{ResyncRequiredHeader: []string{"true"}},
 		)
 	}
