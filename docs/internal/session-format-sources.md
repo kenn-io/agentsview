@@ -554,32 +554,43 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Compressed rollouts (checked 2026-10-15, source at commit
-  `1ef30bcbe784f1006548adc1542985be32b05109`):** A background worker started
+- **Compressed rollouts (checked 2026-10-16, source at commit
+  `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
   by the Codex app compresses rollouts whose modification time is at least
   seven days old to `rollout-<ts>-<uuid>.jsonl.zst`. Undo pages become
   `rollout-<ts>-<thread>_<rollout>.jsonl.zst`. It writes one zstd frame at
   level 3, removes the plain file, and preserves its modification time and
   permissions
-  ([compression.rs](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L846-L973)).
+  ([compression.rs](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L846-L973)).
   Codex prefers the plain file while both forms exist and restores it before
   appending to a compressed thread
-  ([materialize_rollout_for_append_blocking](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L121-L185)).
-  New frames declare the decoded size
-  ([encoder](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/compression.rs#L1011-L1018));
+  ([materialize_rollout_for_append_blocking](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L121-L185)).
+  Successful restoration removes the compressed file before returning for
+  append. Read resolution explicitly checks the plain file before its
+  compressed sibling
+  ([path_metadata.rs](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression/path_metadata.rs#L11-L17)).
+  The worker scans `sessions` and `archived_sessions` beneath one
+  `codex_home`
+  ([worker](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L492-L503)).
+  Compression changes the representation of the existing JSONL bytes. It
+  does not copy a session into another configured root or generate an
+  independent transcript history. New frames declare the decoded size
+  ([encoder](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/compression.rs#L1011-L1018));
   Codex still reads older frames without it
-  ([prefix reader](https://github.com/openai/codex/blob/1ef30bcbe784f1006548adc1542985be32b05109/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
+  ([prefix reader](https://github.com/openai/codex/blob/6b991972c5b539198dcea9bac4fc14e57559c3af/codex-rs/rollout/src/seekable_reader.rs#L140-L179)).
   AgentsView treats both names as one session and prefers the plain file,
   including raw-capture audits, watcher events and streaming reconciliation.
   Changed-path batches and S3 imports apply the same duplicate ranking across
   configured roots: dated layouts before flat archives, then plain files, then
   the lexically smaller path. Quick sync prefers the newest modification time
-  before applying that ranking. Full parses and replay-parent reads stream
-  decoded bytes through an `io.Reader` without a temporary decompressed copy.
-  Compressed rollouts are parsed in full, without resumable checkpoints or
-  decoded-byte offsets. Scheduling reads the frame's declared decoded size
-  without a decoding pass. Frames without a declared size use scratch staging
-  and reserve the full parse memory budget. Stored fingerprints retain the
+  before applying that ranking. Cross-root ranking is AgentsView's import
+  policy; a file suffix alone does not establish recency between independently
+  imported stores. Full parses and replay-parent reads stream decoded bytes
+  through an `io.Reader` without a temporary decompressed copy. Compressed
+  rollouts are parsed in full, without resumable checkpoints or decoded-byte
+  offsets. Scheduling reads the frame's declared decoded size without a
+  decoding pass. Frames without a declared size use scratch staging and
+  reserve the full parse memory budget. Stored fingerprints retain the
   original compressed file's size, modification time, identity and hash. A
   decoding error prevents partial results from replacing the archive.
 

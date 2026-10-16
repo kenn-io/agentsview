@@ -16,12 +16,19 @@ import (
 
 // Codex compresses a rollout whose file has not changed for a week to
 // rollout-<ts>-<uuid>.jsonl.zst and removes the plain file, keeping the
-// file's modification time (codex-rs/rollout/src/compression.rs). Codex reads
-// prefer the plain file while both exist, and a resumed thread is unpacked
-// back to the plain file in place before Codex appends to it. The compressed
-// file is a zstd stream of the plain file's bytes, so it is always parsed in
-// full: it offers no byte offsets to resume from, and no checkpoint or cursor
-// is taken into it.
+// file's modification time. The compressed file contains the original JSONL
+// bytes, not a separate transcript. Codex reads prefer the plain sibling while
+// both exist. Resuming a compressed rollout restores the JSONL at the same
+// path and removes the compressed file before returning for append.
+// Compression does not replicate sessions into other configured roots.
+//
+// Upstream lifecycle and source links are recorded in
+// docs/internal/session-format-sources.md under Codex. Keep representation
+// selection distinct from policies for independently imported copies.
+//
+// AgentsView decodes the compressed stream once through io.Reader. Compressed
+// rollouts are parsed in full; no checkpoint or cursor resumes from offsets
+// into their compressed bytes.
 const (
 	codexRolloutSuffix           = ".jsonl"
 	codexCompressedRolloutSuffix = ".jsonl.zst"

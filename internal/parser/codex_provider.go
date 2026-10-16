@@ -1163,6 +1163,9 @@ func (s codexSourceSet) SourcesForChangedPath(
 		return s.sourcesForIndexPath(ctx, req.Path)
 	}
 	if isCompressedCodexRolloutPath(req.Path) {
+		// Codex restores this same rollout path before appending. Prefer its
+		// plain sibling, following the producer lifecycle documented in
+		// docs/internal/session-format-sources.md under Codex.
 		plain := codexPlainRolloutPath(req.Path)
 		if IsRegularFile(plain) {
 			req.Path = plain
@@ -1428,6 +1431,9 @@ func preferCodexSource(candidate, current SourceRef) bool {
 // the plain rollout before the compressed one, because Codex appends to the
 // plain file and unpacks a resumed thread back to it, then the lexically
 // smaller path.
+// This is representation precedence. A suffix alone does not establish which
+// of two independently imported copies has newer content; Codex compression
+// does not create divergent copies across configured roots.
 func preferCodexRolloutPath(candidate, current string) bool {
 	candCompressed := isCompressedCodexRolloutPath(candidate)
 	currCompressed := isCompressedCodexRolloutPath(current)
