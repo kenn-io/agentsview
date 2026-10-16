@@ -1799,6 +1799,28 @@ func CodexReplayParentID(childPath string) (string, bool) {
 	return codexReplayParentIDContext(context.Background(), childPath)
 }
 
+// ReadCodexRolloutSessionID reads the owning metadata ID without replaying the
+// transcript. Archive repairs use it before copying trash, which must not be
+// reparsed into live sessions. Revert-page naming remains a separate concern.
+func ReadCodexRolloutSessionID(ctx context.Context, path string) (string, error) {
+	f, err := openCodexRolloutLines(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if gjson.Valid(line) && gjson.Get(line, "type").Str == codexTypeSessionMeta {
+			if id := gjson.Get(line, "payload.id").Str; id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", scanner.Err()
+}
+
 func codexReplayParentIDContext(
 	ctx context.Context, childPath string,
 ) (string, bool) {

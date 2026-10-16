@@ -3765,6 +3765,8 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
 	}
 	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_excluded_sessions_file_path
+		 ON excluded_sessions(file_path) WHERE file_path IS NOT NULL`,
 		// Activity checks terminal events even for sessions whose ended_at
 		// predates the report. Avoid reading historical result payloads for
 		// every session just to find a recent tool completion.

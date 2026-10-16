@@ -1386,6 +1386,22 @@ func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent strin
 	return n == 1
 }
 
+const excludedCodexSourceQuery = `SELECT EXISTS (
+	SELECT 1 FROM excluded_sessions WHERE file_path = ?1 AND file_path != ''
+	AND (id GLOB ?2 OR id GLOB ?3)
+)`
+
+// HasExcludedCodexSource retains a permanent deletion when a Codex rollout's
+// parsed identity changes, including files absent during an archive rebuild.
+func (db *DB) HasExcludedCodexSource(ctx context.Context, path, agent string) (bool, error) {
+	if path == "" || (agent != "codex" && agent != "traex" && agent != "augure-code") {
+		return false, nil
+	}
+	var excluded bool
+	err := db.getReader().QueryRow(ctx, excludedCodexSourceQuery, path, agent+":*", "*~"+agent+":*").Scan(&excluded)
+	return excluded, err
+}
+
 // PurgeExcludedSessions removes any session rows whose IDs
 // appear in excluded_sessions. Used after a resync to clean
 // up sessions that were synced before their exclusion was
@@ -1730,6 +1746,14 @@ func upsertSessionExec(
 	if excluded == 1 {
 		return sessionUpsertResult{}, ErrSessionExcluded
 	}
+	if s.FilePath != nil && *s.FilePath != "" && (s.Agent == "codex" || s.Agent == "traex" || s.Agent == "augure-code") {
+		if err := queryRow(ctx, excludedCodexSourceQuery, *s.FilePath, s.Agent+":*", "*~"+s.Agent+":*").Scan(&excluded); err != nil {
+			return sessionUpsertResult{}, fmt.Errorf("checking excluded Codex source: %w", err)
+		}
+		if excluded == 1 {
+			return sessionUpsertResult{}, ErrSessionExcluded
+		}
+	}
 	var previousProject string
 	var previousSessionName sql.NullString
 	var previousAutomated bool
@@ -1839,6 +1863,14 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 	).Scan(&excluded)
 	if excluded == 1 {
 		return ErrSessionExcluded
+	}
+	if s.FilePath != nil && *s.FilePath != "" && (s.Agent == "codex" || s.Agent == "traex" || s.Agent == "augure-code") {
+		if err := db.getWriter().QueryRowContext(ctx, excludedCodexSourceQuery, *s.FilePath, s.Agent+":*", "*~"+s.Agent+":*").Scan(&excluded); err != nil {
+			return fmt.Errorf("checking excluded Codex source: %w", err)
+		}
+		if excluded == 1 {
+			return ErrSessionExcluded
+		}
 	}
 	// A soft-deleted (trashed) session would satisfy ON CONFLICT DO NOTHING and
 	// silently leave the import attached to a hidden session. Reject it like

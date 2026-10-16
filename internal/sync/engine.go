@@ -14229,6 +14229,17 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// permanently excluded. In that case the new row must not be written.
 		suppress := false
 		for _, agentStr := range agentsToQuery {
+			excludedSource, err := e.db.HasExcludedCodexSource(ctx, lookupPath, agentStr)
+			if err != nil {
+				res.err = fmt.Errorf("checking excluded source %q: %w", lookupPath, err)
+				res.noCacheSkip = true
+				res.results = nil
+				return
+			}
+			if excludedSource {
+				suppress = true
+				break
+			}
 			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
 				suppress = true
 				break
