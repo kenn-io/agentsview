@@ -427,7 +427,12 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
-	b.sessionID = payload.Get("id").Str
+	sessionID := payload.Get("id").Str
+	// Legacy forks copy foreign metadata without explicit lineage fields.
+	if b.sessionID != "" && sessionID != b.sessionID {
+		return false
+	}
+	b.sessionID = sessionID
 	b.metaSessionID = payload.Get("session_id").Str
 	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
 	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
