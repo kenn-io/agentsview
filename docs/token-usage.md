@@ -1098,8 +1098,9 @@ During a full parser rebuild, statusline skips startup ingestion and reads the
 retained archive with a stale warning.
 
 `session usage` and its `token-use` alias refresh sessions already in the
-archive without waiting for startup ingestion. Missing IDs return not found
-until the daemon imports them on its normal schedule. A stale archive returns
+archive without waiting for startup ingestion. With a daemon, missing IDs
+return not found until scheduled ingestion imports them. Direct mode can import
+the named local transcript. A stale archive returns
 stored usage with a warning while the daemon handles the rebuild.
 
 `--no-sync` skips source refresh and starts any new daemon without automatic

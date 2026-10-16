@@ -18,7 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
-	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -212,10 +211,9 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 
 	// Ingest the parent, then write a subagent transcript the way Claude
 	// Code does after the parent's own file was last synced.
-	engine := agentsync.NewEngine(ctx, database, agentsync.EngineConfig{AgentDirs: backend.cfg.AgentDirs})
-	err := engine.SyncSingleSessionContext(ctx, "parent-uuid")
+	_, _, err := backend.SessionUsage(
+		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
 	require.NoError(t, err)
-	engine.Close()
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(projDir, "parent-uuid", "subagents",
@@ -264,7 +262,7 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	assert.Zero(t, own.SubagentCount)
 }
 
-func TestLocalSessionUsageStaleAndMissing(t *testing.T) {
+func TestLocalSessionUsageStaleAndNewSource(t *testing.T) {
 	for _, stale := range []bool{false, true} {
 		t.Run(strconv.FormatBool(stale), func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "sessions.db")
@@ -297,8 +295,9 @@ func TestLocalSessionUsageStaleAndMissing(t *testing.T) {
 						assert.Equal(t, 42, out.TotalOutputTokens)
 						assert.Equal(t, tokenUseExitOK, code)
 					} else {
-						assert.Nil(t, out)
-						assert.Equal(t, tokenUseExitNotFound, code)
+						require.NotNil(t, out)
+						assert.Equal(t, "saved", out.SessionID)
+						assert.Equal(t, tokenUseExitNoTokenData, code)
 					}
 				}
 			})
@@ -308,7 +307,8 @@ func TestLocalSessionUsageStaleAndMissing(t *testing.T) {
 			} else {
 				session, err := database.GetSession(t.Context(), "saved")
 				require.NoError(t, err)
-				assert.Nil(t, session)
+				require.NotNil(t, session)
+				assert.Equal(t, "new source content", *session.FirstMessage)
 			}
 		})
 	}

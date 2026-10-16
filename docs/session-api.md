@@ -1053,8 +1053,9 @@ did before.
 
 Before querying, the local backend refreshes a session already in the archive
 and its subagent transcripts. `--own-only` skips the subagent refresh. A usage
-lookup skips startup ingestion. A missing ID returns not found until the
-daemon's scheduled ingestion imports it. If the archive needs a rebuild,
+lookup skips startup ingestion. With a daemon, a missing ID returns not found
+until scheduled ingestion imports it. Direct mode keeps its targeted lookup of
+the named local transcript. If the archive needs a rebuild,
 `POST /api/v1/sessions/sync` returns HTTP 409 and the command shows stored usage
 with a warning. Direct local queries also show stored usage with a warning.
 

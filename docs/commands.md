@@ -1736,8 +1736,9 @@ agentsview session parent <id> <parent>  # record the launching session
 `session usage` attributes each subagent transcript's spend to the session that
 spawned it, so a parent that delegated most of its work still reports the full
 cost. `--own-only` restores the older own-session output. Usage lookups refresh
-archived sessions without waiting for startup ingestion. Missing IDs return not
-found until the daemon imports them. A stale archive returns stored usage with
+archived sessions without waiting for startup ingestion. With a daemon, missing
+IDs return not found until ingestion imports them. Direct mode can import the
+named local transcript. A stale archive returns stored usage with
 a warning while the daemon handles the rebuild.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,

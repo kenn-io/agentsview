@@ -304,20 +304,13 @@ func (b localArchiveQueryBackend) SessionUsage(
 	applyCustomPricing(b.database, b.cfg)
 	ensureUsagePricing(b.database, b.offline, b.cfg.CustomModelPricing)
 
-	// Resolve from the archive only; daemon ingestion owns missing sources.
-	resolvedID, _ := resolveRawSessionID(ctx, b.database, nil, query.SessionID)
-	session, err := b.database.GetSession(ctx, resolvedID)
-	if err != nil {
-		return nil, tokenUseExitErr, err
-	}
-	if session == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
-		return nil, tokenUseExitNotFound, nil
-	}
+	resolvedID, known := resolveRawSessionID(
+		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
+	)
 
 	if !b.skipFreshData && !query.NoSync && b.database.NeedsResync() {
 		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the daemon rebuilds the archive")
-	} else if !b.skipFreshData && !query.NoSync {
+	} else if known && !b.skipFreshData && !query.NoSync {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,
