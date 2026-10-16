@@ -418,6 +418,10 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 	s.fullRun = run
+	// Take the cutoff before any listing. A sync that commits after an
+	// earlier listing but stamps before the cutoff would otherwise be missed
+	// by this push and skipped by every later one.
+	cutoff := s.local.MirrorPushCutoff()
 	if s.isFiltered() {
 		scopeMoveCandidates, scopeErr := listPGProjectScopeMoveCandidates(
 			ctx, s.local, lastPush,
@@ -453,8 +457,6 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
-	cutoff := s.local.MirrorPushCutoff()
-
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
 	// deliberately unbounded above. An upper bound at cutoff would let a
