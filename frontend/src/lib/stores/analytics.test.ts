@@ -929,26 +929,31 @@ describe("AnalyticsStore automated scope params", () => {
 });
 
 describe("AnalyticsStore model filter", () => {
-  it("adopts a canonical model and refetches the panels once", async () => {
+  it("keeps a saved member selection and fetches the panels once", async () => {
     analytics.model = "claude-opus-4-20250514";
     analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
       ...makeSummary(),
-      model_filter: "claude-4",
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
     });
     await analytics.fetchAll();
-    await vi.waitFor(() =>
-      expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(2),
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
+    expect(analytics.model).toBe("claude-opus-4-20250514");
+    expect(analytics.displayedModels).toBe("claude-4");
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]?.model).toBe(
+      "claude-opus-4-20250514",
     );
+    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenCalledTimes(1);
+    analytics.toggleModel("claude-4");
+    expect(analytics.model).toBe("");
+    analytics.toggleModel("claude-4");
     expect(analytics.model).toBe("claude-4");
-    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]?.model).toBe("claude-4");
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a canonical selection in one request round", async () => {
+  it("keeps a group selection in one request round", async () => {
     analytics.model = "claude-4";
     analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
       ...makeSummary(),
-      model_filter: "claude-4",
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
     });
     await analytics.fetchAll();
     expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
@@ -964,7 +969,7 @@ describe("AnalyticsStore model filter", () => {
     );
     const pending = analytics.fetchSummary();
     analytics.model = "other";
-    resolve({ ...makeSummary(), model_filter: "claude-4" });
+    resolve({ ...makeSummary(), model_aliases: { "claude-opus-4-20250514": "claude-4" } });
     await pending;
     expect(analytics.model).toBe("other");
     expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);

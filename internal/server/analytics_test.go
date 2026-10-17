@@ -1210,10 +1210,10 @@ func TestAnalyticsModelGroups(t *testing.T) {
 		assert.Equal(t, tt.models, result.Models)
 		body := decode[map[string]any](t, w)
 		if tt.grouped == "true" {
-			assert.Equal(t, "group", result.ModelFilter)
-			assert.Contains(t, body, "model_filter")
+			assert.Equal(t, map[string]string{"claude-3-5-sonnet": "group", "gpt-4o": "group"}, result.ModelAliases)
+			assert.Contains(t, body, "model_aliases")
 		} else {
-			assert.NotContains(t, body, "model_filter")
+			assert.NotContains(t, body, "model_aliases")
 		}
 	}
 }

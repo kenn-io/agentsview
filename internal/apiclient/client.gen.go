@@ -25319,21 +25319,21 @@ type UpdateSessionLabelsInputBody struct {
 }
 
 type UsageSummaryResponse struct {
-	AgentTotals        []AgentTotal                     `json:"agentTotals" validate:"required"`
-	CacheStats         CacheStats                       `json:"cacheStats"`
-	Comparison         *Comparison                      `json:"comparison,omitempty"`
-	Daily              []DBDailyUsageEntry              `json:"daily" validate:"required"`
-	ExcludeModelFilter *string                          `json:"exclude_model_filter,omitempty"`
-	From               string                           `json:"from" validate:"required"`
-	ModelTotals        []ModelTotal                     `json:"modelTotals" validate:"required"`
-	Pricing            *ExportPricingBlock              `json:"pricing,omitempty"`
-	ProjectTotals      []ProjectTotal                   `json:"projectTotals" validate:"required"`
-	Projects           map[string]ExportProjectMapEntry `json:"projects"`
-	SchemaVersion      *int64                           `json:"schema_version,omitempty"`
-	SessionCounts      DBUsageSessionCounts             `json:"sessionCounts"`
-	To                 string                           `json:"to" validate:"required"`
-	Totals             DBUsageTotals                    `json:"totals"`
-	UnsupportedUsage   *UnsupportedUsage                `json:"unsupportedUsage,omitempty"`
+	AgentTotals      []AgentTotal                     `json:"agentTotals" validate:"required"`
+	CacheStats       CacheStats                       `json:"cacheStats"`
+	Comparison       *Comparison                      `json:"comparison,omitempty"`
+	Daily            []DBDailyUsageEntry              `json:"daily" validate:"required"`
+	From             string                           `json:"from" validate:"required"`
+	ModelTotals      []ModelTotal                     `json:"modelTotals" validate:"required"`
+	ModelAliases     map[string]string                `json:"model_aliases,omitempty"`
+	Pricing          *ExportPricingBlock              `json:"pricing,omitempty"`
+	ProjectTotals    []ProjectTotal                   `json:"projectTotals" validate:"required"`
+	Projects         map[string]ExportProjectMapEntry `json:"projects"`
+	SchemaVersion    *int64                           `json:"schema_version,omitempty"`
+	SessionCounts    DBUsageSessionCounts             `json:"sessionCounts"`
+	To               string                           `json:"to" validate:"required"`
+	Totals           DBUsageTotals                    `json:"totals"`
+	UnsupportedUsage *UnsupportedUsage                `json:"unsupportedUsage,omitempty"`
 }
 
 func (u UsageSummaryResponse) Validate() error {

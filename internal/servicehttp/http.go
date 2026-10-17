@@ -1083,12 +1083,10 @@ func (b *httpBackend) UsageSummary(
 		ModelTotals: wire.ModelTotals, AgentTotals: wire.AgentTotals,
 		SessionCounts: wire.SessionCounts, CacheStats: wire.CacheStats,
 		UnsupportedUsage: wire.UnsupportedUsage,
+		ModelAliases:     wire.ModelAliases,
 	}
 	if wire.SchemaVersion != nil {
 		out.SchemaVersion = int(*wire.SchemaVersion)
-	}
-	if wire.ExcludeModelFilter != nil {
-		out.ExcludeModelFilter = *wire.ExcludeModelFilter
 	}
 	return out, nil
 }

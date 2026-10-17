@@ -27,19 +27,13 @@ func TestModelGroupsExpand(t *testing.T) {
 	assert.Equal(t, "unknown", groups.Name("unknown"))
 }
 
-func TestModelGroupsCanonical(t *testing.T) {
+func TestModelGroupsAliases(t *testing.T) {
 	groups := service.NewModelGroups(map[string]string{"a": "group", "b": "group"})
-	for _, tt := range []struct{ input, want string }{
-		{"a", "group"}, {"a,b", "group"}, {"group,a", "group"},
-		{"other,a,unknown,b", "other,group,unknown"}, {" , a , , b, ", "group"}, {"", ""},
-	} {
-		t.Run(tt.input, func(t *testing.T) {
-			got := groups.Canonical(tt.input)
-			assert.Equal(t, tt.want, got)
-			assert.Equal(t, got, groups.Canonical(got))
-		})
-	}
-	assert.Equal(t, "a,b", (service.ModelGroups{}).Canonical(" a, b,a "))
+	aliases := groups.Aliases()
+	assert.Equal(t, map[string]string{"a": "group", "b": "group"}, aliases)
+	aliases["a"] = "changed"
+	assert.Equal(t, "group", groups.Name("a"))
+	assert.Nil(t, (service.ModelGroups{}).Aliases())
 }
 
 func TestModelGroupsGroupDaily(t *testing.T) {

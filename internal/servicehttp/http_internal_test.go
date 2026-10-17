@@ -332,13 +332,14 @@ func TestUsageModelGroupsQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "true", r.URL.Query().Get("group_models"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{"model_aliases":{"model-a":"group"}}`))
 	}))
 	t.Cleanup(srv.Close)
 	backend := NewHTTPBackend(srv.URL, "", false, "")
 	req := service.UsageRequest{GroupModels: true}
-	_, err := backend.UsageSummary(t.Context(), req)
+	summary, err := backend.UsageSummary(t.Context(), req)
 	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"model-a": "group"}, summary.ModelAliases)
 	_, err = backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
 	require.NoError(t, err)
 }

@@ -842,7 +842,6 @@ type AgentSummary struct {
 
 // AnalyticsSummary is the response for the summary endpoint.
 type AnalyticsSummary struct {
-	ModelFilter            string                   `json:"model_filter,omitempty"`
 	TotalSessions          int                      `json:"total_sessions"`
 	TotalMessages          int                      `json:"total_messages"`
 	TotalOutputTokens      int                      `json:"total_output_tokens"`
@@ -856,6 +855,7 @@ type AnalyticsSummary struct {
 	MostActive             string                   `json:"most_active_project"`
 	Concentration          float64                  `json:"concentration"`
 	Agents                 map[string]*AgentSummary `json:"agents"`
+	ModelAliases           map[string]string        `json:"model_aliases,omitempty"`
 }
 
 // GetAnalyticsSummary returns aggregate statistics.

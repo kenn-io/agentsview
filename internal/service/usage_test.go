@@ -971,13 +971,13 @@ func TestUsageModelGroups(t *testing.T) {
 		excluded.ExcludeModel = "gpt-4o"
 		exact, err := be.UsageSummary(t.Context(), excluded)
 		require.NoError(t, err)
-		assert.Empty(t, exact.ExcludeModelFilter)
+		assert.Empty(t, exact.ModelAliases)
 		assert.Equal(t, 175, exact.Totals.InputTokens)
 		excluded.GroupModels = true
-		canonical, err := be.UsageSummary(t.Context(), excluded)
+		memberGrouped, err := be.UsageSummary(t.Context(), excluded)
 		require.NoError(t, err)
-		assert.Equal(t, "group", canonical.ExcludeModelFilter)
-		assert.Equal(t, exact.Totals, canonical.Totals)
+		assert.Equal(t, map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group", "absent": "group"}, memberGrouped.ModelAliases)
+		assert.Equal(t, exact.Totals, memberGrouped.Totals)
 		base.GroupModels = true
 		grouped, err := be.UsageSummary(t.Context(), base)
 		require.NoError(t, err)

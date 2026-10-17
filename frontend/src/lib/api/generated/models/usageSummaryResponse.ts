@@ -11,6 +11,7 @@ import type { ExportPricingBlock } from "./exportPricingBlock.ts";
 import type { ModelTotal } from "./modelTotal.ts";
 import type { ProjectTotal } from "./projectTotal.ts";
 import type { UnsupportedUsage } from "./unsupportedUsage.ts";
+import type { UsageSummaryResponseModelAliases } from "./usageSummaryResponseModelAliases.ts";
 import type { UsageSummaryResponseProjects } from "./usageSummaryResponseProjects.ts";
 
 export interface UsageSummaryResponse {
@@ -18,9 +19,9 @@ export interface UsageSummaryResponse {
   cacheStats: CacheStats;
   comparison?: Comparison;
   daily: DbDailyUsageEntry[];
-  exclude_model_filter?: string;
   from: string;
   modelTotals: ModelTotal[];
+  model_aliases?: UsageSummaryResponseModelAliases;
   pricing?: ExportPricingBlock;
   projectTotals: ProjectTotal[];
   projects: UsageSummaryResponseProjects;

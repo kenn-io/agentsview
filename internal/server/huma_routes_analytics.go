@@ -145,7 +145,7 @@ func (s *Server) humaAnalyticsSummary(
 		return nil, internalError("analytics error", err)
 	}
 	if in.GroupModels {
-		result.ModelFilter = s.modelGroups.Canonical(in.Model)
+		result.ModelAliases = s.modelGroups.Aliases()
 		for i, model := range result.Models {
 			result.Models[i] = s.modelGroups.Name(model)
 		}

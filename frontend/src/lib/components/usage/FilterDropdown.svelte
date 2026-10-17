@@ -13,6 +13,7 @@
     id?: string;
     name: string;
     count?: number;
+    description?: string;
   }
 
   interface Props {
@@ -109,6 +110,7 @@
       return {
         id,
         label: item.name,
+        description: item.description,
         active: included,
         count: item.count,
         color: color?.(item.name),

@@ -578,10 +578,10 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 			}
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal([]byte(payload), &body))
-			if tt.grouped == "true" && tt.exclude != "" {
-				assert.JSONEq(t, `"group"`, string(body["exclude_model_filter"]))
+			if tt.grouped == "true" {
+				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"group","gpt-4o":"group"}`, string(body["model_aliases"]))
 			} else {
-				assert.NotContains(t, body, "exclude_model_filter")
+				assert.NotContains(t, body, "model_aliases")
 			}
 			if tt.grouped == "true" {
 				assert.NotContains(t, body, "pricing")

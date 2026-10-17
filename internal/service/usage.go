@@ -323,20 +323,20 @@ type UnsupportedUsage struct {
 // JSON shape served by GET /api/v1/usage/summary. The prior-period
 // comparison is a separate endpoint, so it is intentionally absent here.
 type UsageSummaryResult struct {
-	ExcludeModelFilter string                            `json:"exclude_model_filter,omitempty"`
-	SchemaVersion      int                               `json:"schema_version,omitempty"`
-	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects           map[string]export.ProjectMapEntry `json:"projects"`
-	From               string                            `json:"from"`
-	To                 string                            `json:"to"`
-	Totals             db.UsageTotals                    `json:"totals"`
-	Daily              []db.DailyUsageEntry              `json:"daily"`
-	ProjectTotals      []ProjectTotal                    `json:"projectTotals"`
-	ModelTotals        []ModelTotal                      `json:"modelTotals"`
-	AgentTotals        []AgentTotal                      `json:"agentTotals"`
-	SessionCounts      db.UsageSessionCounts             `json:"sessionCounts"`
-	CacheStats         CacheStats                        `json:"cacheStats"`
-	UnsupportedUsage   *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	SchemaVersion    int                               `json:"schema_version,omitempty"`
+	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
+	Projects         map[string]export.ProjectMapEntry `json:"projects"`
+	From             string                            `json:"from"`
+	To               string                            `json:"to"`
+	Totals           db.UsageTotals                    `json:"totals"`
+	Daily            []db.DailyUsageEntry              `json:"daily"`
+	ProjectTotals    []ProjectTotal                    `json:"projectTotals"`
+	ModelTotals      []ModelTotal                      `json:"modelTotals"`
+	AgentTotals      []AgentTotal                      `json:"agentTotals"`
+	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
+	CacheStats       CacheStats                        `json:"cacheStats"`
+	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	ModelAliases     map[string]string                 `json:"model_aliases,omitempty"`
 }
 
 // UsagePairwiseComparisonSide holds aggregate and derived

@@ -942,8 +942,10 @@ components:
         median_messages:
           format: int64
           type: integer
-        model_filter:
-          type: string
+        model_aliases:
+          additionalProperties:
+            type: string
+          type: object
         models:
           items:
             type: string
@@ -7811,14 +7813,16 @@ components:
           items:
             $ref: "#/components/schemas/DbDailyUsageEntry"
           type: array
-        exclude_model_filter:
-          type: string
         from:
           type: string
         modelTotals:
           items:
             $ref: "#/components/schemas/ModelTotal"
           type: array
+        model_aliases:
+          additionalProperties:
+            type: string
+          type: object
         pricing:
           $ref: "#/components/schemas/ExportPricingBlock"
         projectTotals:

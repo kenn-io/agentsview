@@ -213,7 +213,7 @@ describe("UsagePage refresh behavior", () => {
     usage.cancelInFlightReads();
   });
 
-  it("rewrites a saved member exclusion and shows one unticked group row", async () => {
+  it("keeps a saved member exclusion and shows one unticked group row", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -234,25 +234,36 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
     await flushEffects();
-    const pendingRows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    const pendingRows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
+    ];
     expect(pendingRows.map((row) => row.textContent?.trim())).toEqual(["claude-opus-4-20250514"]);
     expect(pendingRows[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
     summary.resolve({
       ...usageSummaryWithUnsupported(),
-      exclude_model_filter: "claude-4",
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
     });
-    await vi.waitFor(() => expect(usage.excludedModels).toBe("claude-4"));
+    await vi.waitFor(() => expect(usage.displayedModels).toBe("claude-4"));
+    expect(usage.excludedModels).toBe("claude-opus-4-20250514");
     await flushEffects();
-    expect(router.params.exclude_model).toBe("claude-4");
-    expect(new URL(window.location.href).searchParams.get("exclude_model")).toBe("claude-4");
+    expect(router.params.exclude_model).toBe("claude-opus-4-20250514");
+    expect(new URL(window.location.href).searchParams.get("exclude_model")).toBe(
+      "claude-opus-4-20250514",
+    );
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
     await flushEffects();
     const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
-    const groups = rows.filter((row) => row.textContent?.trim() === "claude-4");
+    const groups = rows.filter(
+      (row) => row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
+    );
+    expect(rows).toHaveLength(1);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
-    expect(rows.some((row) => row.textContent?.includes("claude-opus-4-20250514"))).toBe(false);
+    expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
+    groups[0]!.click();
+    await flushEffects();
+    expect(usage.excludedModels).toBe("");
   });
 
   it("lets an applied model exclusion be cleared when the summary fails", async () => {

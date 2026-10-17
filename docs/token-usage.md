@@ -512,14 +512,19 @@ Each variant keeps its own pricing before the totals are combined. Keys and
 names must be non-empty, have no surrounding whitespace or commas, and cannot
 form alias chains.
 
-Saved selections on Usage and Analytics that name a member become selections of
-its whole group. API filters keep their exact member meaning.
+A saved filter naming one model variant keeps its one-variant meaning after you
+configure an alias. The picker shows that selection on the group row. The
+selected variant names appear on hover and are available to screen readers.
+Clicking the row clears those variants; clicking again applies the whole group.
+Grouped summary responses include the `model_aliases` map used to display these
+selections.
 
 Filters accept a group name anywhere a model filter is accepted. A raw member
 name selects just that variant unless it is also a group name, in which case
 it selects the whole group. API callers can request grouped report rows with
 `group_models=true` on usage endpoints, or a grouped model list on the
-analytics summary. Grouped usage summaries omit `schema_version` and `pricing`.
+analytics summary. When aliases are configured, grouped usage summaries omit
+`schema_version` and `pricing`.
 Without the flag, responses, `usage daily`, exports, and MCP keep raw model
 names and raw `pricing.models` entries.
 

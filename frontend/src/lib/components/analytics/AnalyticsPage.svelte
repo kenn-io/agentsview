@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { groupedModelCsv } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -298,15 +299,19 @@
 
   $effect(() => {
     const fromSummary = analytics.summary?.models ?? [];
-    const canonical = analytics.summary?.model_filter?.split(",") ?? [];
-    untrack(() => mergeIntoKnownModels([...fromSummary, ...canonical]));
+    untrack(() => mergeIntoKnownModels(fromSummary));
   });
 
   const modelItems = $derived(
-    [...new Set([...knownModels, ...analytics.model.split(",")])]
+    groupedModelCsv([...knownModels, analytics.model].join(","), analytics.modelAliases)
+      .split(",")
       .filter(Boolean)
       .sort()
-      .map((name) => ({ name })),
+      .map((name) => ({
+        name,
+        description: analytics.model.split(",").includes(name) ? undefined :
+          analytics.model.split(",").filter((token) => token !== name && analytics.modelAliases[token] === name).join(", ") || undefined,
+      })),
   );
   function handleExportCSV() {
     exportAnalyticsCSV({
@@ -673,7 +678,7 @@
     <FilterDropdown
       label={m.analytics_model()}
       items={modelItems}
-      excludedCsv={analytics.model}
+      excludedCsv={analytics.displayedModels}
       mode="include"
       onToggle={(name) => analytics.toggleModel(name)}
       onSelectAll={() => analytics.clearModel()}

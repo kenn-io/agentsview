@@ -1,3 +1,4 @@
+import { groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
 import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
@@ -771,10 +772,18 @@ class UsageStore {
     });
   }
 
+  get modelAliases(): Record<string, string> {
+    return this.summary?.model_aliases ?? {};
+  }
+
+  get displayedModels(): string {
+    return groupedModelCsv(this.excludedModels, this.modelAliases);
+  }
+
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedModels = this.toggleCsv(this.excludedModels, name);
+    this.excludedModels = toggleGroupedModel(this.excludedModels, name, this.modelAliases);
     const changed = this.excludedModels;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
@@ -1181,15 +1190,6 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
-        if (
-          data.exclude_model_filter !== undefined &&
-          this.excludedModels === (params.exclude_model ?? "") &&
-          data.exclude_model_filter !== this.excludedModels
-        ) {
-          this.excludedModels = data.exclude_model_filter;
-          void this.fetchAll({ preserveTimeRange: true });
-          return null;
-        }
         const loaded = {
           version: v,
           summary: data,

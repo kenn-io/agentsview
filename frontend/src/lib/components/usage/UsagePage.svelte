@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { groupedModelCsv } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
@@ -121,7 +122,7 @@
     }
   }
 
-  // Track models from summary rows and canonical filters. This keeps the model
+  // Track models from summary rows and applied filters. This keeps the model
   // dropdown usable when landing on a shared filtered URL.
   let knownModels: string[] = $state([]);
 
@@ -143,16 +144,20 @@
   // Seed from the filtered summary response.
   $effect(() => {
     const fromSummary = ((usage.attributionSummary ?? usage.summary)?.modelTotals ?? [])
-      .map((m) => m.model);
-    const canonical = usage.summary?.exclude_model_filter?.split(",") ?? [];
-    untrack(() => mergeIntoKnownModels([...fromSummary, ...canonical]));
+      .map((model) => model.model);
+    untrack(() => mergeIntoKnownModels(fromSummary));
   });
 
   const modelItems = $derived(
-    [...new Set([...knownModels, ...usage.excludedModels.split(",")])]
+    groupedModelCsv([...knownModels, usage.excludedModels].join(","), usage.modelAliases)
+      .split(",")
       .filter(Boolean)
       .sort()
-      .map((name) => ({ name })),
+      .map((name) => ({
+        name,
+        description: usage.excludedModels.split(",").includes(name) ? undefined :
+          usage.excludedModels.split(",").filter((token) => token !== name && usage.modelAliases[token] === name).join(", ") || undefined,
+      })),
   );
   const unsupportedUsageMessage = $derived.by(() => {
     const kind = usage.isTimeRangeSummaryProvisional
@@ -516,7 +521,7 @@
         label={m.usage_model()}
         selectedLabel={usage.selectedModel}
         items={modelItems}
-        excludedCsv={usage.excludedModels}
+        excludedCsv={usage.displayedModels}
         onToggle={(name) => usage.toggleModel(name)}
         onSelectAll={() => usage.selectAllModels()}
         onDeselectAll={() =>

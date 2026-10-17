@@ -1,6 +1,7 @@
 package service
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -35,18 +36,12 @@ func (g ModelGroups) Name(model string) string {
 	return model
 }
 
-// Canonical maps filter tokens to group names, preserving order and unknown names.
-func (g ModelGroups) Canonical(csv string) string {
-	var out []string
-	seen := make(map[string]bool)
-	for _, token := range splitCSVTokens(csv) {
-		name := g.Name(token)
-		if !seen[name] {
-			out = append(out, name)
-			seen[name] = true
-		}
+// Aliases returns a copy of the configured model-to-group map.
+func (g ModelGroups) Aliases() map[string]string {
+	if len(g.names) == 0 {
+		return nil
 	}
-	return strings.Join(out, ",")
+	return maps.Clone(g.names)
 }
 
 // Expand includes group members while retaining raw member selections.
