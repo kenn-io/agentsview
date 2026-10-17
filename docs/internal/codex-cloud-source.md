@@ -202,7 +202,9 @@ whole thread again. A live-token or plan usage write checks for this first,
 because its append would recreate the file and hide the loss. The write then
 starts the new file with the saved listing, which the parser needs, and marks
 the thread to check again, so the next pass fetches it even when its listing has
-not changed. If the full fetch fails, the fetch writes nothing.
+not changed. The mark also clears a stalled turn, which is otherwise checked
+again only when its thread changes. If the full fetch fails, the fetch writes
+nothing.
 
 Until the mirror holds the thread again, sync keeps the archived chat. It skips
 a parse with fewer messages than the archive. Token counts and plan usage reach

@@ -533,14 +533,23 @@ func commitBesideHistory(
 // It also sets the mark in acct, so the caller's later save keeps it. It
 // does not save acct itself, which may hold unfinished changes.
 func markCheckAgain(store *Store, key AccountKey, acct *AccountState, threadID string) error {
-	if acct != nil {
+	mark := func(acct *AccountState) {
 		acct.CheckAgain[threadID] = true
+		// A stalled turn is not checked again, so the stall mark goes too,
+		// as in a pass's own write.
+		if unfinished, ok := acct.Unfinished[threadID]; ok && unfinished.Stalled {
+			unfinished.Stalled = false
+			acct.Unfinished[threadID] = unfinished
+		}
+	}
+	if acct != nil {
+		mark(acct)
 	}
 	saved, err := store.LoadAccount(key)
 	if err != nil {
 		return err
 	}
-	saved.CheckAgain[threadID] = true
+	mark(&saved)
 	return store.SaveAccount(key, saved)
 }
 

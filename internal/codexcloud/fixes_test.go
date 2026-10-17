@@ -720,3 +720,36 @@ func TestUnreadableConfigWithABadKeptValueSaysImportIsOff(t *testing.T) {
 	assert.Contains(t, row.Message, "keeps its last good settings. Under those settings: /data/config.toml has an invalid value for \"enabled\"")
 	assert.Contains(t, row.Message, "Codex cloud import stays off until this is fixed.")
 }
+
+func TestWriteToLostMirrorOfStalledChatFetchesHistory(t *testing.T) {
+	env := newPassEnv(t)
+	updated := ago(30 * time.Second)
+	env.threads.Set(codexcloudtest.Thread{
+		ID: "s", Name: "s", CreatedAt: updated - 60, UpdatedAt: updated,
+		Turns: []codexcloudtest.Turn{{
+			ID: "s-1", Status: "inProgress", StartedAt: updated - 60,
+			Items: []codexcloudtest.Item{message("m", "working")},
+		}},
+	})
+	env.run(t)
+	env.clock.Advance(25 * time.Hour)
+	env.run(t)
+	require.True(t, env.account(t).Unfinished["s"].Stalled)
+	path := env.mirrorPath(t, "s")
+	require.NoError(t, os.Remove(path))
+	now := env.clock.Now()
+	caller := env.account(t)
+	require.NoError(t, env.syncer.appendPlan(passKey, &caller, "s", now, mirror.KindPlanUsageOutcome,
+		mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}))
+	assert.False(t, caller.Unfinished["s"].Stalled, "the caller's state drops the stall mark")
+	assert.False(t, env.account(t).Unfinished["s"].Stalled, "the saved state drops the stall mark")
+
+	from := len(env.host.Requests())
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+
+	assert.Contains(t, env.fetchedThreads(from), "s", "the unchanged stalled chat is fetched again")
+	records, err := mirror.ReadAll(t.Context(), path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m"}, recordedItemIDs(records))
+}
