@@ -1758,8 +1758,8 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 	}
 	for key, name := range file.ModelAliases {
-		if key == "" || name == "" || key == "__other__" || name == "__other__" || strings.Contains(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
-			return fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, contain no commas, and differ from __other__", key)
+		if key == "" || name == "" || key == "__all__" || name == "__all__" || key == "__other__" || name == "__other__" || strings.Contains(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
+			return fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, contain no commas, and differ from __all__ and __other__", key)
 		}
 		if target, ok := file.ModelAliases[name]; ok && target != name {
 			return fmt.Errorf("model_aliases.%q: alias chains are unsupported", key)

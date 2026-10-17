@@ -76,8 +76,8 @@ func TestModelGroupsGroupDaily(t *testing.T) {
 			require.NoError(t, groups.GroupDaily(tt.daily))
 			for i, want := range tt.breakdowns {
 				assert.Equal(t, want, tt.daily[i].ModelBreakdowns)
+				assert.Equal(t, tt.models, tt.daily[i].ModelsUsed)
 			}
-			assert.Equal(t, tt.models, tt.daily[0].ModelsUsed)
 		})
 	}
 }
