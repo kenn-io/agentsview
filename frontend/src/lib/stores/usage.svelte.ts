@@ -793,7 +793,7 @@ class UsageStore {
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedModels = toggleGroupedModel(this.excludedModels, name, this.modelAliases);
+    this.excludedModels = toggleGroupedModel(this.excludedModels, name, this.modelAliases, true);
     const changed = this.excludedModels;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;

@@ -563,7 +563,7 @@ describe("UsageStore session filter params", () => {
     vi.clearAllMocks();
   });
 
-  it("displays and clears a saved member exclusion through its group", async () => {
+  it("replaces a saved member exclusion with its group, then clears it", async () => {
     const { usage } = await loadStore();
     usage.excludedModels = "claude-opus-4-20250514";
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
@@ -574,6 +574,10 @@ describe("UsageStore session filter params", () => {
     expect(usage.excludedModels).toBe("claude-opus-4-20250514");
     expect(usage.displayedModels).toBe("");
     expect(usage.partlyExcludedModelCount).toBe(1);
+    usage.toggleModel("claude-4");
+    expect(usage.excludedModels).toBe("claude-4");
+    expect(usage.displayedModels).toBe("claude-4");
+    expect(usage.partlyExcludedModelCount).toBe(0);
     usage.toggleModel("claude-4");
     expect(usage.excludedModels).toBe("");
   });

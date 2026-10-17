@@ -14,12 +14,15 @@ export function toggleGroupedModel(
   csv: string,
   name: string,
   aliases: Record<string, string>,
+  exclude = false,
 ): string {
   const tokens = parseCsv(csv);
   const remaining = tokens.filter(
     (token) => token !== name && !(Object.hasOwn(aliases, token) && aliases[token] === name),
   );
-  return remaining.length === tokens.length ? [...tokens, name].join(",") : remaining.join(",");
+  return (exclude ? !tokens.includes(name) : remaining.length === tokens.length)
+    ? [...remaining, name].join(",")
+    : remaining.join(",");
 }
 
 export function modelPickerItems(
