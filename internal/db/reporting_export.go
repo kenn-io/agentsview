@@ -336,10 +336,11 @@ func reportingHoursFromSource(
 	}
 	projects := source.projects
 	var references map[string]export.ProjectReference
+	var projectlessGroups map[string]bool
 	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		references = source.references
 		if schemaVersion == export.ReportingIdentitySchemaVersion {
-			projects, references = partitionReportingProjects(sessionByID, projects, references)
+			projects, references, projectlessGroups = partitionReportingProjects(sessionByID, projects, references)
 			sessions = slices.Clone(sessions)
 			for i := range sessions {
 				sessions[i] = sessionByID[sessions[i].SessionID]
@@ -362,6 +363,7 @@ func reportingHoursFromSource(
 		createdAt,
 		events,
 		activityUsage,
+		projectlessGroups,
 	)
 	// Pair once for the whole range. Prior-model inheritance does not depend on
 	// the pruning window, and each hour's window [hourStart-gapCap, hourEnd)
@@ -858,6 +860,7 @@ func buildReportingFirstSeen(
 	createdAt map[string]time.Time,
 	events []activity.ActivityEvent,
 	usage []activity.UsageRow,
+	projectlessGroups map[string]bool,
 ) map[int]reportingFirstSeenCounts {
 	sessionFirst := make(map[string]time.Time, len(sessions))
 	timed := make(map[string]bool, len(sessions))
@@ -933,7 +936,7 @@ func buildReportingFirstSeen(
 	sessionByID := make(map[string]activity.SessionMeta, len(sessions))
 	for _, session := range sessions {
 		sessionByID[session.SessionID] = session
-		if at, ok := sessionFirst[session.SessionID]; ok && session.Project != "" {
+		if at, ok := sessionFirst[session.SessionID]; ok && session.Project != "" && !projectlessGroups[session.Project] {
 			setEarlierReportingTime(projectFirst, session.Project, at)
 		}
 	}

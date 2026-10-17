@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json/jsontext"
+	"strconv"
 	"testing"
 	"time"
 
@@ -9,6 +10,42 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestReportingIdentityGroupsDoNotInventProjects(t *testing.T) {
+	for _, tc := range []struct {
+		name, project string
+		newProjects   int
+	}{
+		{name: "projectless"},
+		{name: "redacted label", project: "/synthetic/api", newProjects: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+			insertSession(t, d, "session-a", tc.project, func(s *Session) {
+				s.Agent = "agent-a"
+				s.StartedAt, s.EndedAt = new("2026-07-28T12:00:00Z"), new("2026-07-28T12:02:00Z")
+			})
+			insertMessages(t, d,
+				Message{SessionID: "session-a", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
+				Message{SessionID: "session-a", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:02:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
+			)
+			for _, version := range []int{3, 4, 5} {
+				t.Run(strconv.Itoa(version), func(t *testing.T) {
+					day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+						Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: version,
+					})
+					require.NoError(t, err)
+					hour := day.Hours[12]
+					assert.Equal(t, tc.newProjects, hour.Activity.Totals.NewProjects)
+					assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
+					assert.InDelta(t, 2.0, hour.Activity.Totals.AgentMinutes, 0)
+					assert.Equal(t, int64(10), hour.Usage.Totals.OutputTokens)
+				})
+			}
+		})
+	}
+}
 
 func TestReportingIdentityGroupsKeepVerifiedContributionsSelectable(t *testing.T) {
 	for _, tc := range []struct {

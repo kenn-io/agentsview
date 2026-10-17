@@ -40,9 +40,10 @@ func (db *DB) reportingSessionReferences(ctx context.Context, tx *sql.Tx, sessio
 
 // Partition before aggregation so missing evidence cannot erase a known
 // contribution or borrow its identity. Only export-local session copies change.
-func partitionReportingProjects(sessions map[string]activity.SessionMeta, projects map[string]export.ProjectMapEntry, references map[string]export.ProjectReference) (map[string]export.ProjectMapEntry, map[string]export.ProjectReference) {
+func partitionReportingProjects(sessions map[string]activity.SessionMeta, projects map[string]export.ProjectMapEntry, references map[string]export.ProjectReference) (map[string]export.ProjectMapEntry, map[string]export.ProjectReference, map[string]bool) {
 	groups := make(map[string]export.ProjectMapEntry)
 	groupReferences := make(map[string]export.ProjectReference, len(sessions))
+	projectlessGroups := make(map[string]bool)
 	for id, session := range sessions {
 		labelKey := export.ProjectKeyForEntry(projects[session.Project])
 		reference := references[id]
@@ -55,12 +56,17 @@ func partitionReportingProjects(sessions map[string]activity.SessionMeta, projec
 			key += "/" + reference.Identity.Key
 		}
 		groups[key] = export.ProjectMapEntry{ProjectKey: key, DisplayLabel: export.SafeProjectDisplayLabel(session.Project)}
+		// A nonempty selector does not turn a projectless session into a
+		// project. DisplayLabel cannot preserve this fact: it also hides paths.
+		if session.Project == "" {
+			projectlessGroups[key] = true
+		}
 		reference.ProjectKey = key
 		groupReferences[id] = reference
 		session.Project, session.ProjectKey = key, key
 		sessions[id] = session
 	}
-	return groups, groupReferences
+	return groups, groupReferences, projectlessGroups
 }
 
 // Restore labels after the ordinary aggregator has used the opaque groups.
