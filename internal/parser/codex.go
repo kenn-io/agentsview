@@ -20,6 +20,11 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 )
 
+// IsCodexFormatAgent reports agents using Codex rollout result identity rules.
+func IsCodexFormatAgent(agent AgentType) bool {
+	return agent == AgentCodex || agent == AgentTraeX || agent == AgentAugureCode
+}
+
 // Codex JSONL entry types.
 const (
 	codexTypeSessionMeta      = "session_meta"
@@ -1804,6 +1809,15 @@ func CodexReplayParentID(childPath string) (string, bool) {
 // the parser before copying trash, which must not be reparsed into live sessions.
 func ReadCodexRolloutSessionID(ctx context.Context, path string) (string, error) {
 	f, err := openCodexRolloutLines(path)
+	if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case strings.HasSuffix(path, ".jsonl.zst"):
+			path = strings.TrimSuffix(path, ".zst")
+		case strings.HasSuffix(path, ".jsonl"):
+			path += ".zst"
+		}
+		f, err = openCodexRolloutLines(path)
+	}
 	if err != nil {
 		return "", err
 	}

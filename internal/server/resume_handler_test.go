@@ -24,7 +24,9 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 type failingResumeModelCountsStore struct {
@@ -1928,4 +1930,29 @@ func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
 		_, err := os.Stat(completed)
 		return err == nil
 	}, time.Second, 5*time.Millisecond)
+}
+
+func TestResumeCodexRetainedAlternative(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+			te := setup(t)
+			path := filepath.Join(t.TempDir(), "rollout-restored.jsonl")
+			const thread = "22222222-2222-7222-8222-222222222222"
+			if !missing {
+				require.NoError(t, os.WriteFile(path, []byte(testjsonl.CodexSessionMetaJSON(thread, "/work/sample", "codex_cli_rs", "2025-10-20T19:00:00Z")), 0o600))
+			}
+			id := parser.AltSessionID("codex:11111111-1111-7111-8111-111111111111", path)
+			te.seedSession(t, id, "sample", 1, func(s *db.Session) {
+				s.Agent, s.FilePath = "codex", &path
+			})
+			w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true}`)
+			if missing {
+				assert.Equal(t, http.StatusConflict, w.Code)
+				assert.JSONEq(t, `{"error":"Cannot resume this archived session until its source file is available."}`, w.Body.String())
+			} else {
+				assert.Equal(t, http.StatusOK, w.Code)
+				assert.JSONEq(t, `{"launched":false,"command":"codex resume `+thread+`"}`, w.Body.String())
+			}
+		})
+	}
 }

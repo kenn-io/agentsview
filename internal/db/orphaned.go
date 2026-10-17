@@ -195,7 +195,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
-	if sourceVersion < codexThreadIdentityDataVersion {
+	if sourceVersion < CodexThreadIdentityDataVersion {
 		// A parsed thread can occupy the old transcript's ID. Preserve the
 		// archived transcript under its corrected identity even without a file.
 		if _, err := conn.ExecContext(ctx, `
@@ -413,7 +413,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		  -- whose source ID was retired has no thread row under that ID.
 		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'
           AND EXISTS (SELECT 1 FROM _codex_session_ids mapped
-              WHERE mapped.source_id = old_s.id AND mapped.is_page = 1)`); err != nil {
+              WHERE mapped.source_id = old_s.id AND mapped.is_page = 1 AND mapped.is_thread_correction = 0)`); err != nil {
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
 
@@ -1100,9 +1100,9 @@ const codexRevertPageDataVersion = 131
 // stored as codex:<rollout> instead of codex:<thread>_<rollout>.
 const codexLegacyPageHeaderDataVersion = 134
 
-// Before this version, copied session_meta could reassign a rollout to
-// another thread.
-const codexThreadIdentityDataVersion = 136
+// CodexThreadIdentityDataVersion is the fixed release boundary before which
+// copied session_meta could reassign a rollout to another thread.
+const CodexThreadIdentityDataVersion = 136
 
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
@@ -1221,7 +1221,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return err
 		}
 	}
-	if hasFilePath && sourceVersion < codexThreadIdentityDataVersion {
+	if hasFilePath && sourceVersion < CodexThreadIdentityDataVersion {
 		if err := correctRetainedCodexExclusions(ctx, conn); err != nil {
 			return err
 		}
@@ -1265,7 +1265,7 @@ func correctRetainedCodexExclusions(ctx context.Context, conn *sql.Conn) error {
 		return err
 	}
 	for _, e := range exclusions {
-		id, err := readRetainedCodexSessionID(ctx, e.path)
+		id, err := parser.ReadCodexRolloutSessionID(ctx, e.path)
 		if err != nil || id == "" {
 			continue
 		}
@@ -1475,10 +1475,9 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying session labels: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-            INSERT INTO main.session_labels (session_id,label,created_at)
+            INSERT OR IGNORE INTO main.session_labels (session_id,label,created_at)
             SELECT mapped.target_id, label, created_at FROM old_db.session_labels labels
-            JOIN _codex_session_ids mapped ON mapped.source_id = labels.session_id AND mapped.is_thread_correction = 1
-            WHERE NOT EXISTS (SELECT 1 FROM main.session_labels existing WHERE existing.session_id = mapped.target_id)`); err != nil {
+            JOIN _codex_session_ids mapped ON mapped.source_id = labels.session_id AND mapped.is_thread_correction = 1`); err != nil {
 			return fmt.Errorf("copying corrected Codex labels: %w", err)
 		}
 	}
@@ -2412,19 +2411,22 @@ func copySessionDataForIDs(
 	// page whose source file is gone is never parsed again to set it. Keep a
 	// retained continuation within that thread, which may name an earlier page.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
-		SET parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
-			parser_parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
+		SET parent_session_id = substr(r.page_id, 1, length(r.page_id) - 37),
+			parser_parent_session_id = substr(r.page_id, 1, length(r.page_id) - 37),
 			relationship_type = 'continuation'
 		FROM `+tempIDsTable+` copied
-		JOIN _codex_session_ids r ON (r.retired = 1 OR (r.is_thread_correction = 1 AND r.is_page = 1))
-		  AND r.source_id = copied.source_id
+		JOIN (
+			SELECT source_id, COALESCE(page_id, target_id) AS page_id
+			FROM _codex_session_ids
+			WHERE retired = 1 OR (is_thread_correction = 1 AND is_page = 1)
+		) r ON r.source_id = copied.source_id
 		WHERE sessions.id = copied.id AND copied.id != copied.source_id
 		  AND (COALESCE(sessions.parser_parent_session_id, '') != ''
 		    OR COALESCE(sessions.parent_session_id, '') = '')
 		  AND NOT (sessions.relationship_type = 'continuation' AND (
-			COALESCE(sessions.parser_parent_session_id, '') = substr(sessions.id, 1, length(sessions.id) - 37)
-			OR (length(COALESCE(sessions.parser_parent_session_id, '')) = length(sessions.id)
-			  AND substr(sessions.parser_parent_session_id, 1, length(sessions.id) - 36) = substr(sessions.id, 1, length(sessions.id) - 36))
+			COALESCE(sessions.parser_parent_session_id, '') = substr(r.page_id, 1, length(r.page_id) - 37)
+			OR (length(COALESCE(sessions.parser_parent_session_id, '')) = length(r.page_id)
+			  AND substr(sessions.parser_parent_session_id, 1, length(r.page_id) - 36) = substr(r.page_id, 1, length(r.page_id) - 36))
 		  ))`); err != nil {
 		return fmt.Errorf("linking corrected Codex pages: %w", err)
 	}
@@ -3069,7 +3071,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _codex_session_ids (
 			source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, is_page INTEGER NOT NULL,
-			retired INTEGER NOT NULL DEFAULT 0, is_thread_correction INTEGER NOT NULL DEFAULT 0
+			retired INTEGER NOT NULL DEFAULT 0, is_thread_correction INTEGER NOT NULL DEFAULT 0, page_id TEXT
 		);
 		CREATE TEMP VIEW _codex_page_metadata AS
 		SELECT source_id, target_id FROM _codex_session_ids
@@ -3082,7 +3084,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("reading Codex source version: %w", err)
 	}
 	version, _ = DecodeUserVersion(version)
-	if version >= codexThreadIdentityDataVersion && !includeLegacyForks {
+	if version >= CodexThreadIdentityDataVersion && !includeLegacyForks {
 		return version, nil
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
@@ -3114,6 +3116,20 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
+		if !retired {
+			var shared bool
+			if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+				SELECT 1 FROM old_db.sessions source JOIN old_db.sessions peer
+				ON peer.file_path IN `+codexSourcePathsSQL("source.file_path")+`
+				AND peer.agent = source.agent AND peer.id != source.id
+				WHERE source.id = ?
+			)`, sourceID).Scan(&shared); err != nil {
+				return 0, err
+			}
+			if shared {
+				continue
+			}
+		}
 		args = append(args, sourceID, targetID, headPage || retired, retired)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
@@ -3132,7 +3148,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		WHERE retired = 1 AND source_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
-	if version < codexThreadIdentityDataVersion {
+	if version < CodexThreadIdentityDataVersion {
 		if err := mapRetainedCodexThreads(ctx, conn); err != nil {
 			return 0, err
 		}
@@ -3220,7 +3236,7 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			id := key
 			var err error
 			if !archiveOnly {
-				id, err = readRetainedCodexSessionID(ctx, s.path)
+				id, err = parser.ReadCodexRolloutSessionID(ctx, s.path)
 			}
 			if archiveOnly || errors.Is(err, os.ErrNotExist) {
 				// A kept ID with no different source path is not evidence of a
@@ -3235,9 +3251,25 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 				if kept {
 					continue
 				}
+				// Archiving moves a rollout without changing its canonical key.
+				// A stale source path alone must not duplicate that identity.
+				if key != "" && s.id[prefixEnd:] == key {
+					var freshPath string
+					err := conn.QueryRowContext(ctx, `SELECT COALESCE(file_path, '') FROM main.sessions WHERE id = ?`, s.id).Scan(&freshPath)
+					if err != nil && !errors.Is(err, sql.ErrNoRows) {
+						return err
+					}
+					if parser.CodexSessionUUIDFromPath(freshPath) == key {
+						continue
+					}
+				}
 				id = key
 			} else if err != nil {
-				// An unreadable source provides no evidence of a new identity.
+				// An unreadable header leaves ownership unresolved. Preserve
+				// it under a source-bound storage ID until recovery is possible.
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				id = ""
 			} else if thread := parser.CodexThreadIDFromSessionKey(key); thread != key && thread == id {
 				id = key
@@ -3245,6 +3277,11 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			if id != "" {
 				target = s.id[:prefixEnd] + id
 			}
+		}
+		pageID := ""
+		targetKey := target[strings.LastIndex(target, ":")+1:]
+		if parser.CodexThreadIDFromSessionKey(targetKey) != targetKey {
+			pageID = target
 		}
 		if target == "" || target == s.id {
 			var displaced bool
@@ -3266,8 +3303,8 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
             AND NOT EXISTS (SELECT 1 FROM main.sessions fresh WHERE fresh.id = ?1
                 AND fresh.file_path IN `+codexSourcePathsSQL("?2")+`
-                AND fresh.data_version >= 136 AND fresh.deleted_at IS NULL)
-		)`, target, s.path).Scan(&occupied); err != nil {
+                AND fresh.data_version >= ?3 AND fresh.deleted_at IS NULL)
+		)`, target, s.path, CodexThreadIdentityDataVersion).Scan(&occupied); err != nil {
 			return err
 		}
 		if occupied {
@@ -3285,41 +3322,22 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 				return fmt.Errorf("cannot preserve Codex source: alternative identity %s belongs to another source", target)
 			}
 		}
-		targetKey := target[strings.LastIndex(target, ":")+1:]
-		isPage := parser.CodexThreadIDFromSessionKey(targetKey) != targetKey
 		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO _codex_session_ids (source_id, target_id, is_page, is_thread_correction)
-			VALUES (?, ?, ?, 1)`, s.id, target, isPage); err != nil {
+			INSERT INTO _codex_session_ids (source_id, target_id, is_page, is_thread_correction, page_id)
+			VALUES (?, ?, ?, 1, ?)`, s.id, target, pageID != "", pageID); err != nil {
 			return fmt.Errorf("mapping retained Codex transcript: %w", err)
 		}
 	}
 	return nil
 }
 
-// A rollout can be compressed or expanded while its archived path stays old.
-func readRetainedCodexSessionID(ctx context.Context, path string) (string, error) {
-	id, err := parser.ReadCodexRolloutSessionID(ctx, path)
-	if !errors.Is(err, os.ErrNotExist) {
-		return id, err
-	}
-	switch {
-	case strings.HasSuffix(path, ".jsonl.zst"):
-		path = strings.TrimSuffix(path, ".zst")
-	case strings.HasSuffix(path, ".jsonl"):
-		path += ".zst"
-	default:
-		return id, err
-	}
-	return parser.ReadCodexRolloutSessionID(ctx, path)
-}
-
 // codexRowsReparsedElsewhere maps each old Codex-format row to the id its
 // rollout file's name gives, when that id differs.
 func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `
-		SELECT id, file_path FROM old_db.sessions
-		WHERE agent IN (?, ?, ?)
-		  AND file_path IS NOT NULL`,
+		SELECT old_s.id, old_s.file_path FROM old_db.sessions old_s
+		WHERE old_s.agent IN (?, ?, ?)
+		  AND old_s.file_path IS NOT NULL`,
 		string(parser.AgentCodex), string(parser.AgentTraeX), string(parser.AgentAugureCode),
 	)
 	if err != nil {

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -108,13 +109,19 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				_, err = database.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_identity_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'forced delete failure'); END`)
 				require.NoError(t, err)
 			}
-			err = database.RecoverCodexSessionIdentity(ctx, oldID, id, path, "codex", "/work/sample")
+			recovered, err := database.RecoverCodexSessionIdentity(ctx, oldID, id, path, "codex", "/work/sample")
 			retainedID := id
 			if mode == "other_source" || mode == "delete_failure" {
-				require.Error(t, err)
+				assert.False(t, recovered)
+				if mode == "delete_failure" {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
 				retainedID = oldID
 			} else {
 				require.NoError(t, err)
+				assert.True(t, recovered)
 				requireSessionGone(t, database, oldID)
 			}
 			snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(ctx, []string{retainedID})
@@ -139,7 +146,7 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			assert.Equal(t, new("Saved name"), saved.DisplayName)
 			expectedProject, expectedLabels := "chosen", []string{"saved", "topic"}
 			if mode == "same_transcript" {
-				expectedProject, expectedLabels = "destination", []string{"destination"}
+				expectedProject, expectedLabels = "destination", []string{"destination", "saved", "topic"}
 			}
 			assert.Equal(t, expectedProject, saved.Project)
 			assert.True(t, saved.ProjectAssigned)
@@ -210,7 +217,24 @@ func TestCodexUpgradePreservesDestinationCuration(t *testing.T) {
 	got, err := destination.GetSession(ctx, "codex:new")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"destination"}, got.Labels)
+	assert.Equal(t, []string{"destination", "old"}, got.Labels)
 	assert.Equal(t, "destination_project", got.Project)
 	assert.True(t, got.ProjectAssigned)
+}
+
+func TestCodexUnreadableSourcePreservesUnresolvedHistory(t *testing.T) {
+	source, destination := testDB(t), testDB(t)
+	path := filepath.Join(t.TempDir(), "rollout-unreadable.jsonl.zst")
+	require.NoError(t, os.WriteFile(path, []byte("invalid compressed data"), 0o600))
+	const id = "codex:retained"
+	require.NoError(t, source.UpsertSession(t.Context(), Session{ID: id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path}))
+	require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: id, Role: "user", Content: "archived question"}}))
+	_, err := source.getWriter().ExecContext(t.Context(), "PRAGMA user_version = 135")
+	require.NoError(t, err)
+	_, err = destination.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, err)
+	messages, err := destination.GetAllMessages(t.Context(), parser.AltSessionID(id, path))
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived question", messages[0].Content)
 }

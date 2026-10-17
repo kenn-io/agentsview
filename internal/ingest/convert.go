@@ -77,7 +77,7 @@ func ConvertMessagesContext(
 		if err != nil {
 			return nil, err
 		}
-		if IsCodexFormatAgent(agent) {
+		if parser.IsCodexFormatAgent(agent) {
 			for j := range toolCalls {
 				for k := range toolCalls[j].ResultEvents {
 					db.PrepareToolResultEvent(&toolCalls[j].ResultEvents[k])
@@ -211,11 +211,6 @@ func ConvertToolResultsContext(
 		}
 	}
 	return results, ctx.Err()
-}
-
-// IsCodexFormatAgent reports agents using Codex rollout result identity rules.
-func IsCodexFormatAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentCodex || agent == parser.AgentTraeX || agent == parser.AgentAugureCode
 }
 
 // NextParsedOrdinal returns the resume ordinal after the final parsed row.

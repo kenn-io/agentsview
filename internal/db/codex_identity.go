@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -11,61 +10,61 @@ import (
 // RecoverCodexSessionIdentity moves a retained alternative to the identity
 // recovered from its returning source. Copy the archived transcript and its
 // curation before deleting the alternative, so a later parse failure loses
-// nothing. An occupied destination must belong to the same source and content.
-func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, agent, cwd string) error {
-	if oldID == id || (agent != "codex" && agent != "traex" && agent != "augure-code") {
-		return nil
+// nothing. An occupied destination must contain the archived transcript, possibly
+// with newer messages. Ambiguous histories stay separate and return false.
+func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, agent, cwd string) (bool, error) {
+	if oldID == id || !parser.IsCodexFormatAgent(parser.AgentType(agent)) {
+		return false, nil
 	}
 	if err := db.requireWritable(); err != nil {
-		return err
+		return false, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	source, err := db.GetArtifactExportSession(ctx, oldID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if source == nil || source.FilePath == nil || source.Agent != agent ||
 		oldID != parser.AltSessionID(parser.BaseSessionID(oldID), *source.FilePath) {
-		return nil
+		return false, nil
 	}
 	if source.DeletedAt != nil {
-		return ErrSessionTrashed
+		return false, nil
 	}
 	target, err := db.GetArtifactExportSession(ctx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
 	var sameSource bool
 	if err := tx.QueryRowContext(ctx, `SELECT file_path IN `+codexSourcePathsSQL("?1")+` FROM sessions WHERE id = ?2`, path, oldID).Scan(&sameSource); err != nil {
-		return err
+		return false, err
 	}
 	if !sameSource {
-		return fmt.Errorf("retained Codex identity %s belongs to another source", oldID)
+		return false, nil
 	}
 	stored, err := sessionMessagesTx(ctx, tx, oldID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	pins, err := savePinsTx(ctxTx, oldID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_project_assignments
         (session_id, project, original_project, created_at, updated_at)
         SELECT ?, project, original_project, created_at, updated_at FROM session_project_assignments WHERE session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO session_labels(session_id,label,created_at)
-        SELECT ?1,label,created_at FROM session_labels WHERE session_id = ?2
-        AND NOT EXISTS (SELECT 1 FROM session_labels WHERE session_id = ?1)`, id, oldID); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_labels(session_id,label,created_at)
+        SELECT ?1,label,created_at FROM session_labels WHERE session_id = ?2`, id, oldID); err != nil {
+		return false, err
 	}
 	var pending recallEvidenceRevocationEvents
 	if target == nil {
@@ -74,7 +73,7 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 		write.DataVersion = source.DataVersion
 		write.UsageEvents, err = usageEventsWithQuerier(ctx, tx, oldID, 0)
 		if err != nil {
-			return err
+			return false, err
 		}
 		for i := range write.UsageEvents {
 			write.UsageEvents[i].ID = 0
@@ -82,21 +81,21 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 		}
 		write = db.storageSessionBatchWrite(write)
 		if _, err := writeOneSessionBatchTx(ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), nil); err != nil {
-			return err
+			return false, err
 		}
 	} else {
 		if target.DeletedAt != nil {
-			return ErrSessionTrashed
+			return false, nil
 		}
 		if target.Agent != agent {
-			return fmt.Errorf("recovered Codex identity %s belongs to another agent", id)
+			return false, nil
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(file_path IN `+codexSourcePathsSQL("?1")+`, 0) FROM sessions WHERE id = ?2`, path, id).Scan(&sameSource); err != nil {
-			return err
+			return false, err
 		}
 		destination, err := sessionMessagesTx(ctx, tx, id)
 		if err != nil {
-			return err
+			return false, err
 		}
 		// Ignore the identity we are deliberately changing; compare the
 		// archived message and tool content before merging curation.
@@ -107,87 +106,89 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 				destination[i].ToolCalls[j].MessageID = 0
 			}
 		}
-		if !sameSource || !transcriptMessagesEqual(rekeyed, destination) {
-			return fmt.Errorf("recovered Codex identity %s already holds another transcript", id)
+		if !sameSource || len(destination) < len(rekeyed) || !transcriptMessagesEqual(rekeyed, destination[:len(rekeyed)]) {
+			return false, nil
 		}
 	}
 	snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, []string{oldID})
 	if err != nil {
-		return err
+		return false, err
 	}
-	if snapshot, ok := snapshots[oldID]; ok && cwd != "" && snapshot.RootPath == cwd {
+	if snapshot, ok := snapshots[oldID]; ok && cwd != "" && snapshot.RootPath != "" &&
+		storedSourcePathSameOrDescendant(cwd, snapshot.RootPath) &&
+		(snapshot.RootPath == cwd || source.Cwd != "" && storedSourcePathSameOrDescendant(source.Cwd, snapshot.RootPath)) {
 		// Reuse snapshot precedence: resolved destination evidence wins over
 		// history, and foreign metadata must not supply the corrected project.
 		snapshot.SessionID = id
 		if err := upsertProjectIdentityObservationTxContext(ctx, tx, snapshot); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := restorePinsTx(ctxTx, id, pins); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET display_name = COALESCE(display_name, ?),
         local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, source.DisplayName, id); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO starred_sessions(session_id,created_at)
         SELECT ?,created_at FROM starred_sessions WHERE session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET project = COALESCE(
         (SELECT project FROM session_project_assignments WHERE session_id = ?1), project) WHERE id = ?1`, id); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM session_project_assignments WHERE session_id = ?`, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM session_labels WHERE session_id = ?`, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_external_parents
         (session_id, parent_session_id, created_at, updated_at)
         SELECT ?,parent_session_id,created_at,updated_at FROM session_external_parents WHERE session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = ?`, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE session_external_parents SET parent_session_id = ? WHERE parent_session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
 	// The transcript is unchanged by this move. Keep reviewed entries and
 	// verify their evidence against the recovered rows before removing the source.
 	if _, err := tx.ExecContext(ctx, `UPDATE recall_entries SET source_session_id = ?,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE source_session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE recall_evidence SET session_id = ? WHERE session_id = ?`, id, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if err := reconcileRecallEvidenceForSessionTx(ctx, tx, id, &pending); err != nil {
-		return err
+		return false, err
 	}
 	if err := deleteSessionMessagesTx(ctxTx, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, oldID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, oldID}); err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return false, err
 	}
 	db.notifyUsageSessions([]string{oldID, id})
 	pending.flush()
-	return nil
+	return true, nil
 }
 
 // CorrectCodexSourceExclusions releases a misfiled ID only after parsing its
 // deleted source under a different identity. The deletion stays on that source.
 func (db *DB) CorrectCodexSourceExclusions(ctx context.Context, id, path, agent string) error {
-	if path == "" || (agent != "codex" && agent != "traex" && agent != "augure-code") {
+	if path == "" || !parser.IsCodexFormatAgent(parser.AgentType(agent)) {
 		return nil
 	}
 	if err := db.requireWritable(); err != nil {

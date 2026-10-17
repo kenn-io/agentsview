@@ -12,12 +12,12 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const codexIdentityCandidatesSQL = `
+var codexIdentityCandidatesSQL = fmt.Sprintf(`
 		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
 		FROM sessions
-		WHERE (id = ANY($1) OR (data_version < 136 AND file_path = ANY($2)))
+		WHERE (id = ANY($1) OR (data_version < %d AND file_path = ANY($2)))
 		  AND provenance_kind = 'legacy' AND agent IN ('codex', 'traex', 'augure-code')
-		ORDER BY id FOR UPDATE`
+		ORDER BY id FOR UPDATE`, db.CodexThreadIdentityDataVersion)
 
 // Before data version 131, a thread row could hold a revert page's messages.
 // Publish that page and move its remote pins before replacing the thread row.
@@ -130,7 +130,7 @@ func (s *Sync) migrateCodexPages(
 			migratePage = canonical != nil && canonical.Agent == old.agent
 		}
 		pageID := old.id[:prefixEnd] + key
-		if !migratePage && old.dataVersion < 136 {
+		if !migratePage && old.dataVersion < db.CodexThreadIdentityDataVersion {
 			corrected, err := s.local.CorrectedCodexSessionID(ctx, old.id, old.path, old.agent)
 			if err != nil {
 				return fmt.Errorf("finding corrected Codex source: %w", err)
@@ -203,8 +203,8 @@ func (s *Sync) migrateCodexPages(
 			threads[pageID] = *page
 			var dependency legacyPage
 			err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
-                FROM sessions WHERE id = $1 AND data_version < 136
-                AND provenance_kind = 'legacy' AND agent IN ('codex','traex','augure-code') FOR UPDATE`, pageID).
+                FROM sessions WHERE id = $1 AND data_version < $2
+                AND provenance_kind = 'legacy' AND agent IN ('codex','traex','augure-code') FOR UPDATE`, pageID, db.CodexThreadIdentityDataVersion).
 				Scan(&dependency.id, &dependency.path, &dependency.agent, &dependency.machine, &dependency.owner, &dependency.archive, &dependency.dataVersion)
 			if err == nil {
 				pages = append(pages, dependency)

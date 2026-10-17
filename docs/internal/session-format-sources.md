@@ -611,12 +611,18 @@ fixtures retain this field; missing identities remain source-local.
   gone. Missing noncanonical sources remain separate when the original rollout
   returns later. Trash retains its identity and deletion state across either
   compression direction. Shared-path archive restores preserve separate
-  historical transcripts, including when a rebuild reparses one active
-  identity. Returning-source regressions retain matching historical project
-  evidence after the checkout disappears and preserve resolved destination
-  evidence. Missing corrected pages retain their continuation links, valid
-  bases, and launcher overrides. Permanent deletions follow retained source
-  paths when files return, including noncanonical filenames and either plain or
+  historical transcripts across rebuilds and later parses, including trashed
+  siblings. Moving a canonical rollout into `archived_sessions` does not
+  create an alternative. Recovery merges labels and preserves distinct
+  transcripts without blocking later syncs. Returning-source regressions
+  retain matching historical project evidence after the checkout disappears,
+  including sessions launched in subdirectories, and preserve resolved
+  destination evidence. Missing corrected pages retain their continuation
+  links, valid bases, and launcher overrides even when a collision requires an
+  alternative storage ID. Resume resolves alternatives through the source
+  header; unavailable sources return an error instead of an invalid or
+  unrelated thread command. Permanent deletions follow retained source paths
+  when files return, including noncanonical filenames and either plain or
   compressed form; filename UUIDs alone cannot exclude an unrelated thread.
   Verified source metadata releases a wrongly excluded original ID while
   retaining the deleted source exclusion. Corrected sessions keep freshly
@@ -687,7 +693,7 @@ fixtures retain this field; missing identities remain source-local.
   ([rollout_lineage.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs#L65-L188)),
   so several pages can share one base. Each page lands in the dated folder
   for the day of the undo, and archiving moves every file of the thread into
-  `archived_sessions/`
+  `archived_sessions/` without changing its filename (rechecked 2026-10-16)
   ([archive_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/archive_thread.rs#L42-L113)).
   Resume and thread lookup take the thread id and open its newest file
   ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).

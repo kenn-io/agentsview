@@ -1127,10 +1127,10 @@ func EnsureSchema(
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
-func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
+func createPartialIndexesPG(ctx context.Context, conn pgSessionExecer) error {
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_sessions_codex_repair_source ON sessions(file_path)
-		 WHERE data_version < 136 AND provenance_kind = 'legacy'`,
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_sessions_codex_repair_source ON sessions(file_path)
+		 WHERE data_version < %d AND provenance_kind = 'legacy'`, db.CodexThreadIdentityDataVersion),
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
@@ -1175,11 +1175,11 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		 ON messages(session_id, role)`,
 	}
 	for _, ddl := range indexes {
-		if _, err := db.ExecContext(ctx, ddl); err != nil {
+		if _, err := conn.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating PG index: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx,
+	if _, err := conn.ExecContext(ctx,
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy PG usage index: %w", err)
