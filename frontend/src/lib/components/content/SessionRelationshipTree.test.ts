@@ -528,21 +528,54 @@ describe("SessionRelationshipTree", () => {
       expect(inputRow("moved input")?.textContent).toContain(m.session_input_tree_current());
     });
 
-    it("is not offered for a family linked by continuations alone", async () => {
+    it("is offered for a family linked by continuations alone", async () => {
       // root ─ moved (continuation)
       const tree = makeContinuedTree("moved");
       tree.root.children = tree.root.children[0]!.children;
       mocks.fetchSessionTree.mockResolvedValue(tree);
+      mocks.fetchSessionInputTree.mockResolvedValue({
+        active_session_id: "moved",
+        root_session_id: "root",
+        truncated: false,
+        nodes: [
+          inputNode(-1, "root", 0, "shared start", { on_active_path: true }),
+          inputNode(0, "root", 2, "root end", {
+            on_active_path: true,
+            end_session_ids: ["root"],
+          }),
+          inputNode(1, "moved", 0, "moved input", {
+            on_active_path: true,
+            active_ordinal: 0,
+            end_session_ids: ["moved"],
+          }),
+        ],
+        sessions: [
+          makeSession("root", { relationship_type: "" }),
+          makeSession("moved", { relationship_type: "continuation" }),
+        ],
+      } satisfies ServiceInputTree);
       ui.setSessionTreeView("inputs");
       component = mount(SessionRelationshipTree, {
         target: document.body,
         props: { sessionId: "moved" },
       });
       await flush();
+      await flush();
 
-      expect(radio(m.session_tree_view_inputs())).toBeUndefined();
-      expect(mocks.fetchSessionInputTree).not.toHaveBeenCalled();
-      expect(document.querySelector('a[href="/sessions/root"]')).not.toBeNull();
+      expect(radio(m.session_tree_view_inputs())).not.toBeUndefined();
+      expect(
+        document.querySelector(`[aria-label="${m.session_input_graph_open()}"]`),
+      ).not.toBeNull();
+      expect(mocks.fetchSessionInputTree).toHaveBeenCalledWith(
+        "moved",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(inputRow("root end")?.textContent).toContain(
+        m.session_tree_relationship_root(),
+      );
+      expect(inputRow("moved input")?.textContent).toContain(
+        m.session_input_tree_current(),
+      );
     });
 
     it("opens the session that holds an input a continuation carries on", async () => {

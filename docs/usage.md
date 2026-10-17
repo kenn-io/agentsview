@@ -438,10 +438,13 @@ In the sidebar, a group of related sessions always starts with the original
 session, as in the session tree. Expand the group to see its continuations,
 forks, and subagents below it.
 
-Open **Analysis** on a session with forks to see its session tree. Switch the
-tree to **Inputs** to see the prompts of the session's fork family as one tree.
-The family holds the forks and the continuations of a session, such as a Claude
-Code session you moved to the background:
+Open **Analysis** on a session with forks, continuations, or subagents to see
+its session tree. When the session has forks or continuations, switch the tree
+to **Inputs** to see the prompts of its fork family as one tree. The family
+holds the forks and the continuations of a session, such as a Claude Code
+session you moved to the background. A family linked only by continuations has
+no branches, so its tree is one path through the prompts of every session in
+it:
 
 - Prompts the sessions share appear once. The tree splits where a fork's
     prompts diverge, and each branch ends with a label for its session. A

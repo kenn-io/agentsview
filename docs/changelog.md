@@ -11,9 +11,9 @@ The latest published release is
 
 **New features**
 
-- See where a conversation branched. When a session has forks, the session
-  tree in the analysis panel has an **Inputs** view that shows every prompt in
-  the fork family as one tree. Prompts the sessions share appear once, the tree
+- See where a conversation branched. When a session has forks or
+  continuations, the session tree in the analysis panel has an **Inputs** view
+  that shows every prompt in the fork family as one tree. Prompts the sessions share appear once, the tree
   splits where a fork's prompts diverge, and each branch ends with a label for
   its session. Click a prompt on the open session's path to jump to it, or any
   other prompt to open the session that holds it. Long runs of prompts without
@@ -265,7 +265,8 @@ The latest published release is
   prompts were missing from its family's tree, and opening it offered no
   **Inputs** view. Its prompts now carry on below the session it continues, and
   its highlighted path includes the earlier prompts; click one of those to open
-  the session that holds it.
+  the session that holds it. A session and its continuations offer the
+  **Inputs** view and its full diagram even when none of them has a fork.
 - A prompt where one session ends and another carries on no longer folds into
   a run in the **Inputs** side panel, so that session's label stays visible.
 - Oversized telemetry requests return HTTP 413.
