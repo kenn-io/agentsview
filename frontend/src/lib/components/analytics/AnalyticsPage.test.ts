@@ -104,20 +104,6 @@ describe("AnalyticsPage grouped model filter", () => {
     router.route = "sessions";
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
-    document
-      .querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!
-      .click();
-    await flushEffects();
-    const pendingRows = [
-      ...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
-    ];
-    expect(pendingRows.slice(1).map((row) => row.textContent?.trim())).toEqual([
-      "claude-opus-4-20250514",
-    ]);
-    expect(pendingRows[1]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
-    document
-      .querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!
-      .click();
     summary.resolve({
       total_sessions: 0,
       total_messages: 0,

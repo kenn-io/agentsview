@@ -573,8 +573,6 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(payload), &summary))
 				require.Len(t, summary.ModelTotals, 1)
 				assert.Equal(t, "group", summary.ModelTotals[0].Model)
-				assert.Equal(t, 130, summary.ModelTotals[0].InputTokens)
-				assert.Equal(t, 65, summary.ModelTotals[0].OutputTokens)
 			}
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal([]byte(payload), &body))

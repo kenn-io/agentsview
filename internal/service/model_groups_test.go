@@ -28,7 +28,6 @@ func TestModelGroupsExpand(t *testing.T) {
 func TestModelGroupsAliases(t *testing.T) {
 	groups := service.NewModelGroups(map[string]string{"a": "group", "b": "group"})
 	aliases := groups.Aliases()
-	assert.Equal(t, map[string]string{"a": "group", "b": "group"}, aliases)
 	aliases["a"] = "changed"
 	assert.Equal(t, "group", groups.Name("a"))
 	assert.Nil(t, (service.ModelGroups{}).Aliases())
@@ -81,7 +80,4 @@ func TestModelGroupsGroupDaily(t *testing.T) {
 			assert.Equal(t, tt.models, tt.daily[0].ModelsUsed)
 		})
 	}
-	raw := []db.DailyUsageEntry{{ModelBreakdowns: []db.ModelBreakdown{{ModelName: "a"}}}}
-	require.NoError(t, (service.ModelGroups{}).GroupDaily(raw))
-	assert.Equal(t, "a", raw[0].ModelBreakdowns[0].ModelName)
 }

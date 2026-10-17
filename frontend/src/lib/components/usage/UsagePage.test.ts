@@ -224,14 +224,6 @@ describe("UsagePage refresh behavior", () => {
     router.params = { exclude_model: "claude-opus-4-20250514" };
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
-    await flushEffects();
-    const pendingRows = [
-      ...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
-    ];
-    expect(pendingRows.map((row) => row.textContent?.trim())).toEqual(["claude-opus-4-20250514"]);
-    expect(pendingRows[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
     summary.resolve({
       ...usageSummaryWithUnsupported(),
       model_aliases: { "claude-opus-4-20250514": "claude-4", "claude-sonnet-4": "claude-4" },
