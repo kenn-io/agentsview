@@ -26,7 +26,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
-	"go.kenn.io/kit/safefileio"
 )
 
 const (
@@ -90,15 +89,14 @@ func runtimeStore(dataDir string) daemonRuntimeStore {
 
 func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	records, err := s.RuntimeStore.List()
-	if s.Dir == s.legacyDir {
+	if err != nil || s.Dir == s.legacyDir {
 		return records, err
 	}
-	legacy, legacyErr := s.legacyRecords()
-	records = append(records, legacy...)
-	// Callers discard records on error, so preserve discovery from either dir.
-	if len(records) == 0 {
-		return records, errors.Join(err, legacyErr)
+	legacy, err := s.legacyRecords()
+	if err != nil {
+		return nil, err
 	}
+	records = append(records, legacy...)
 	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
 		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
 			return order
@@ -125,18 +123,10 @@ func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
 			continue
 		}
 		path := filepath.Join(s.legacyDir, name)
-		// Read without preparing run/, which may itself be inaccessible.
-		file, err := safefileio.OpenCurrentUserFile(path)
-		if err != nil {
-			continue
-		}
-		var rec daemon.RuntimeRecord
-		err = json.UnmarshalRead(file, &rec)
-		_ = file.Close()
+		rec, err := s.Read(path)
 		if err != nil || rec.PID != pid || rec.Address == "" {
 			continue
 		}
-		rec.SourcePath = path
 		records = append(records, rec)
 	}
 	return records, nil

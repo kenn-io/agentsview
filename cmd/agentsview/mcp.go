@@ -254,9 +254,8 @@ type mcpDaemonService struct {
 // mcpDaemonSelection is a resolved daemon backend. runtime is the record that
 // proved the daemon's identity when the selection was cached.
 type mcpDaemonSelection struct {
-	backend    service.SessionService
-	runtime    daemon.RuntimeRecord
-	sourcePath string
+	backend service.SessionService
+	runtime daemon.RuntimeRecord
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
@@ -298,8 +297,6 @@ func (s *mcpDaemonService) daemonSelection(
 		backend: servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 	}
 	if rec, ok := verifiedWritableDaemonRecord(tr); ok {
-		sel.sourcePath = rec.SourcePath
-		rec.SourcePath = ""
 		sel.runtime = rec
 		s.selected.Store(sel)
 	}
@@ -321,11 +318,10 @@ func verifiedWritableDaemonRecord(tr transport) (daemon.RuntimeRecord, bool) {
 // daemonUnchanged requires unchanged evidence before reusing cached credentials.
 func (sel *mcpDaemonSelection) daemonUnchanged(dataDir string) bool {
 	store := runtimeStore(dataDir)
-	rec, err := store.Read(sel.sourcePath)
+	rec, err := store.Read(sel.runtime.SourcePath)
 	if err != nil {
 		return false
 	}
-	rec.SourcePath = ""
 	return reflect.DeepEqual(rec, sel.runtime) &&
 		runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
