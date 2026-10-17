@@ -18,6 +18,7 @@ export interface UsageSummaryResponse {
   cacheStats: CacheStats;
   comparison?: Comparison;
   daily: DbDailyUsageEntry[];
+  exclude_model_filter?: string;
   from: string;
   modelTotals: ModelTotal[];
   pricing?: ExportPricingBlock;

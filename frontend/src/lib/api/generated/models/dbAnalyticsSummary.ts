@@ -10,6 +10,7 @@ export interface DbAnalyticsSummary {
   avg_messages: number;
   concentration: number;
   median_messages: number;
+  model_filter?: string;
   models: string[];
   most_active_project: string;
   p90_messages: number;

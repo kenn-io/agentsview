@@ -1200,11 +1200,20 @@ func TestAnalyticsModelGroups(t *testing.T) {
 	}{
 		{"group", "true", 3, []string{"group"}},
 		{"group", "false", 3, []string{"claude-3-5-sonnet", "gpt-4o"}},
+		{"gpt-4o", "true", 1, []string{"group"}},
+		{"gpt-4o", "false", 1, []string{"gpt-4o"}},
 	} {
 		w := te.get(t, buildURLWithRange("summary", map[string]string{"model": tt.model, "group_models": tt.grouped}))
 		assertStatus(t, w, http.StatusOK)
 		result := decode[db.AnalyticsSummary](t, w)
 		assert.Equal(t, tt.sessions, result.TotalSessions)
 		assert.Equal(t, tt.models, result.Models)
+		body := decode[map[string]any](t, w)
+		if tt.grouped == "true" {
+			assert.Equal(t, "group", result.ModelFilter)
+			assert.Contains(t, body, "model_filter")
+		} else {
+			assert.NotContains(t, body, "model_filter")
+		}
 	}
 }

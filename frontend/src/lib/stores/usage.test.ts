@@ -563,6 +563,63 @@ describe("UsageStore session filter params", () => {
     vi.clearAllMocks();
   });
 
+  it("adopts and saves a canonical exclusion and refetches once with the time range", async () => {
+    const { usage } = await loadStore();
+    usage.isPinned = true;
+    usage.from = "2024-01-01";
+    usage.to = "2024-01-31";
+    usage.selectedTimeRange = { from: "2024-01-10", to: "2024-01-15" };
+    usage.excludedModels = "claude-opus-4-20250514";
+    for (let i = 0; i < 4; i++) {
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
+        ...usageSummary(),
+        exclude_model_filter: "claude-4",
+      });
+    }
+    await usage.fetchAll({ preserveTimeRange: true });
+    await vi.waitFor(() => expect(usage.summary?.exclude_model_filter).toBe("claude-4"));
+    // One filtered and one full-window summary in each round.
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(4);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[2]?.[0]).toMatchObject({
+      exclude_model: "claude-4",
+      from: "2024-01-10",
+      to: "2024-01-15",
+    });
+    expect(usage.excludedModels).toBe("claude-4");
+    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-10", to: "2024-01-15" });
+    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toMatchObject({
+      excludedModels: "claude-4",
+    });
+  });
+
+  it("keeps a canonical exclusion in one request round", async () => {
+    const { usage } = await loadStore();
+    usage.excludedModels = "claude-4";
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
+      ...usageSummary(),
+      exclude_model_filter: "claude-4",
+    });
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't replace an exclusion changed while the summary was pending", async () => {
+    const { usage } = await loadStore();
+    let resolve!: (value: UsageSummaryResponse) => void;
+    usage.excludedModels = "claude-opus-4-20250514";
+    usageServiceMocks.getApiV1UsageSummary.mockReturnValueOnce(
+      new Promise<UsageSummaryResponse>((done) => {
+        resolve = done;
+      }),
+    );
+    const pending = usage.fetchSummary();
+    usage.excludedModels = "other";
+    resolve({ ...usageSummary(), exclude_model_filter: "claude-4" });
+    await pending;
+    expect(usage.excludedModels).toBe("other");
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1);
+  });
+
   it("requests grouped model rows", async () => {
     const { usage } = await loadStore();
     await usage.fetchSummary();

@@ -1181,6 +1181,15 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
+        if (
+          data.exclude_model_filter !== undefined &&
+          this.excludedModels === (params.exclude_model ?? "") &&
+          data.exclude_model_filter !== this.excludedModels
+        ) {
+          this.excludedModels = data.exclude_model_filter;
+          void this.fetchAll({ preserveTimeRange: true });
+          return null;
+        }
         const loaded = {
           version: v,
           summary: data,

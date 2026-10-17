@@ -213,6 +213,39 @@ describe("UsagePage refresh behavior", () => {
     usage.cancelInFlightReads();
   });
 
+  it("rewrites a saved member exclusion and shows one unticked group row", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue({
+      ...usageSummaryWithUnsupported(),
+      exclude_model_filter: "claude-4",
+    });
+    vi.spyOn(usage, "fetchAll").mockImplementation(async () => {
+      await usage.fetchSummary({ loadComparison: false });
+    });
+    router.route = "usage";
+    router.params = { exclude_model: "claude-opus-4-20250514" };
+    component = mount(UsagePage, { target: document.body });
+    await vi.waitFor(() => expect(usage.excludedModels).toBe("claude-4"));
+    await flushEffects();
+    expect(router.params.exclude_model).toBe("claude-4");
+    expect(new URL(window.location.href).searchParams.get("exclude_model")).toBe("claude-4");
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
+    await flushEffects();
+    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    const groups = rows.filter((row) => row.textContent?.trim() === "claude-4");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
+    expect(rows.some((row) => row.textContent?.includes("claude-opus-4-20250514"))).toBe(false);
+  });
+
   it("restores hidden models from a shared URL", async () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

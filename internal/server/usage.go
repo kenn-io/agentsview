@@ -65,39 +65,41 @@ type UnsupportedUsage struct {
 // GET /api/v1/usage/summary while the handler delegates assembly to
 // the transport-neutral service layer.
 type UsageSummaryResponse struct {
-	SchemaVersion    int                               `json:"schema_version,omitempty,omitzero"`
-	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects         map[string]export.ProjectMapEntry `json:"projects"`
-	From             string                            `json:"from"`
-	To               string                            `json:"to"`
-	Totals           db.UsageTotals                    `json:"totals"`
-	Daily            []db.DailyUsageEntry              `json:"daily"`
-	ProjectTotals    []ProjectTotal                    `json:"projectTotals"`
-	ModelTotals      []ModelTotal                      `json:"modelTotals"`
-	AgentTotals      []AgentTotal                      `json:"agentTotals"`
-	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
-	CacheStats       CacheStats                        `json:"cacheStats"`
-	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
-	Comparison       *Comparison                       `json:"comparison,omitempty"`
+	ExcludeModelFilter string                            `json:"exclude_model_filter,omitempty"`
+	SchemaVersion      int                               `json:"schema_version,omitempty,omitzero"`
+	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
+	Projects           map[string]export.ProjectMapEntry `json:"projects"`
+	From               string                            `json:"from"`
+	To                 string                            `json:"to"`
+	Totals             db.UsageTotals                    `json:"totals"`
+	Daily              []db.DailyUsageEntry              `json:"daily"`
+	ProjectTotals      []ProjectTotal                    `json:"projectTotals"`
+	ModelTotals        []ModelTotal                      `json:"modelTotals"`
+	AgentTotals        []AgentTotal                      `json:"agentTotals"`
+	SessionCounts      db.UsageSessionCounts             `json:"sessionCounts"`
+	CacheStats         CacheStats                        `json:"cacheStats"`
+	UnsupportedUsage   *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	Comparison         *Comparison                       `json:"comparison,omitempty"`
 }
 
 func usageSummaryResponseFromService(
 	res *service.UsageSummaryResult,
 ) UsageSummaryResponse {
 	return UsageSummaryResponse{
-		SchemaVersion:    res.SchemaVersion,
-		Pricing:          res.Pricing,
-		Projects:         res.Projects,
-		From:             res.From,
-		To:               res.To,
-		Totals:           res.Totals,
-		Daily:            res.Daily,
-		ProjectTotals:    projectTotalsFromService(res.ProjectTotals),
-		ModelTotals:      modelTotalsFromService(res.ModelTotals),
-		AgentTotals:      agentTotalsFromService(res.AgentTotals),
-		SessionCounts:    res.SessionCounts,
-		CacheStats:       cacheStatsFromService(res.CacheStats),
-		UnsupportedUsage: unsupportedUsageFromService(res.UnsupportedUsage),
+		ExcludeModelFilter: res.ExcludeModelFilter,
+		SchemaVersion:      res.SchemaVersion,
+		Pricing:            res.Pricing,
+		Projects:           res.Projects,
+		From:               res.From,
+		To:                 res.To,
+		Totals:             res.Totals,
+		Daily:              res.Daily,
+		ProjectTotals:      projectTotalsFromService(res.ProjectTotals),
+		ModelTotals:        modelTotalsFromService(res.ModelTotals),
+		AgentTotals:        agentTotalsFromService(res.AgentTotals),
+		SessionCounts:      res.SessionCounts,
+		CacheStats:         cacheStatsFromService(res.CacheStats),
+		UnsupportedUsage:   unsupportedUsageFromService(res.UnsupportedUsage),
 	}
 }
 

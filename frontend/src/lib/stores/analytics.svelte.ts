@@ -627,15 +627,21 @@ class AnalyticsStore {
   }
 
   async fetchSummary(): Promise<FetchResult> {
+    const params = { ...this.filterParams(), group_models: true };
+    const model = this.model;
     return await this.executeFetch(
       "summary",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsSummary(
-          { ...this.filterParams(), group_models: true },
-          options,
-        ),
+      (options) => AnalyticsService.getApiV1AnalyticsSummary(params, options),
       (data) => {
         this.summary = data;
+        if (
+          data.model_filter !== undefined &&
+          this.model === model &&
+          data.model_filter !== model
+        ) {
+          this.model = data.model_filter;
+          void this.fetchAll();
+        }
       },
       () => this.summary !== null,
     );

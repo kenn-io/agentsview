@@ -35,6 +35,20 @@ func (g ModelGroups) Name(model string) string {
 	return model
 }
 
+// Canonical maps filter tokens to group names, preserving order and unknown names.
+func (g ModelGroups) Canonical(csv string) string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, token := range splitCSVTokens(csv) {
+		name := g.Name(token)
+		if !seen[name] {
+			out = append(out, name)
+			seen[name] = true
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 // Expand includes group members while retaining raw member selections.
 func (g ModelGroups) Expand(csv string) string {
 	if len(g.names) == 0 {

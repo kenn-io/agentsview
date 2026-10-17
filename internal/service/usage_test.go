@@ -967,6 +967,17 @@ func TestUsageModelGroups(t *testing.T) {
 		assert.Contains(t, raw.Pricing.Models, "gpt-4o")
 		assert.Contains(t, raw.Pricing.Models, "claude-sonnet-4-20250514")
 		assert.NotContains(t, raw.Pricing.Models, "group")
+		excluded := base
+		excluded.ExcludeModel = "gpt-4o"
+		exact, err := be.UsageSummary(t.Context(), excluded)
+		require.NoError(t, err)
+		assert.Empty(t, exact.ExcludeModelFilter)
+		assert.Equal(t, 175, exact.Totals.InputTokens)
+		excluded.GroupModels = true
+		canonical, err := be.UsageSummary(t.Context(), excluded)
+		require.NoError(t, err)
+		assert.Equal(t, "group", canonical.ExcludeModelFilter)
+		assert.Equal(t, exact.Totals, canonical.Totals)
 		base.GroupModels = true
 		grouped, err := be.UsageSummary(t.Context(), base)
 		require.NoError(t, err)

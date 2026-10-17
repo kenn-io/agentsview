@@ -121,8 +121,7 @@
     }
   }
 
-  // Track every model we've seen in any summary response or
-  // model filter — never remove one. This keeps the model
+  // Track models from summary rows and canonical filters. This keeps the model
   // dropdown usable when landing on a shared filtered URL.
   let knownModels: string[] = $state([]);
 
@@ -145,16 +144,8 @@
   $effect(() => {
     const fromSummary = ((usage.attributionSummary ?? usage.summary)?.modelTotals ?? [])
       .map((m) => m.model);
-    untrack(() => mergeIntoKnownModels(fromSummary));
-  });
-
-  // Seed from URL/local model filters before a response arrives.
-  $effect(() => {
-    const filtered = usage.excludedModels;
-    untrack(() => {
-      if (!filtered) return;
-      mergeIntoKnownModels(filtered.split(","));
-    });
+    const canonical = usage.summary?.exclude_model_filter?.split(",") ?? [];
+    untrack(() => mergeIntoKnownModels([...fromSummary, ...canonical]));
   });
 
   const modelItems = $derived(

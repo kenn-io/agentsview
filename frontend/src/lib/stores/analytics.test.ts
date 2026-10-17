@@ -929,6 +929,47 @@ describe("AnalyticsStore automated scope params", () => {
 });
 
 describe("AnalyticsStore model filter", () => {
+  it("adopts a canonical model and refetches the panels once", async () => {
+    analytics.model = "claude-opus-4-20250514";
+    analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
+      ...makeSummary(),
+      model_filter: "claude-4",
+    });
+    await analytics.fetchAll();
+    await vi.waitFor(() =>
+      expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(2),
+    );
+    expect(analytics.model).toBe("claude-4");
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]?.model).toBe("claude-4");
+    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a canonical selection in one request round", async () => {
+    analytics.model = "claude-4";
+    analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
+      ...makeSummary(),
+      model_filter: "claude-4",
+    });
+    await analytics.fetchAll();
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't replace a model changed while the summary was pending", async () => {
+    let resolve!: (value: AnalyticsSummary) => void;
+    analytics.model = "claude-opus-4-20250514";
+    analyticsService.getApiV1AnalyticsSummary.mockReturnValueOnce(
+      new Promise<AnalyticsSummary>((done) => {
+        resolve = done;
+      }),
+    );
+    const pending = analytics.fetchSummary();
+    analytics.model = "other";
+    resolve({ ...makeSummary(), model_filter: "claude-4" });
+    await pending;
+    expect(analytics.model).toBe("other");
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { name: "summary", fn: () => analyticsService.getApiV1AnalyticsSummary },
     { name: "activity", fn: () => analyticsService.getApiV1AnalyticsActivity },

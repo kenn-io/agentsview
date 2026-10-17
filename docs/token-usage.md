@@ -512,6 +512,9 @@ Each variant keeps its own pricing before the totals are combined. Keys and
 names must be non-empty, have no surrounding whitespace or commas, and cannot
 form alias chains.
 
+Saved selections on Usage and Analytics that name a member become selections of
+its whole group. API filters keep their exact member meaning.
+
 Filters accept a group name anywhere a model filter is accepted. A raw member
 name selects just that variant unless it is also a group name, in which case
 it selects the whole group. API callers can request grouped report rows with

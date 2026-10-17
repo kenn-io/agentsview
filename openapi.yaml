@@ -942,6 +942,8 @@ components:
         median_messages:
           format: int64
           type: integer
+        model_filter:
+          type: string
         models:
           items:
             type: string
@@ -7809,6 +7811,8 @@ components:
           items:
             $ref: "#/components/schemas/DbDailyUsageEntry"
           type: array
+        exclude_model_filter:
+          type: string
         from:
           type: string
         modelTotals:

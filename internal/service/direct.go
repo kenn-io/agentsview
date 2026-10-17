@@ -943,6 +943,7 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
+	excludeModel := req.ExcludeModel
 	req.Model = b.modelGroups.Expand(req.Model)
 	req.ExcludeModel = b.modelGroups.Expand(req.ExcludeModel)
 	f, err := BuildUsageFilter(req)
@@ -963,6 +964,9 @@ func (b *directBackend) UsageSummary(
 	summary, err := buildUsageSummary(f, result)
 	if err != nil {
 		return nil, err
+	}
+	if req.GroupModels {
+		summary.ExcludeModelFilter = b.modelGroups.Canonical(excludeModel)
 	}
 	if parser.AgentFilterLacksPerMessageTokenData(f.Agent) &&
 		db.NoTokenData(result.Totals) {

@@ -16,6 +16,7 @@ import sourceRaw from "./AnalyticsPage.svelte?raw";
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
+import { AnalyticsService } from "../../api/generated/index.js";
 import { requestUrl } from "../../test-support/request-url.js";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
@@ -83,6 +84,54 @@ afterEach(() => {
   analyticsPageDates.clear();
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+});
+
+describe("AnalyticsPage grouped model filter", () => {
+  it("shows only the canonical group with its tick selected", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockResolvedValue({
+      total_sessions: 0,
+      total_messages: 0,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
+      models: ["claude-4"],
+      model_filter: "claude-4",
+      active_projects: 0,
+      active_days: 0,
+      avg_messages: 0,
+      median_messages: 0,
+      p90_messages: 0,
+      most_active_project: "",
+      concentration: 0,
+      agents: {},
+    });
+    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
+      await analytics.fetchSummary();
+    });
+    analytics.model = "claude-opus-4-20250514";
+    analytics.summary = null;
+    sessions.loading = false;
+    router.route = "sessions";
+    component = mount(AnalyticsPage, { target: document.body });
+    await vi.waitFor(() => expect(analytics.model).toBe("claude-4"));
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-4"]')!.click();
+    await flushEffects();
+    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    const groups = rows.filter((row) => row.textContent?.trim() === "claude-4");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    expect(rows.some((row) => row.textContent?.includes("claude-opus-4-20250514"))).toBe(false);
+  });
 });
 
 describe("AnalyticsPage outcome window", () => {

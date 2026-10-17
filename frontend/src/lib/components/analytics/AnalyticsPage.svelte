@@ -298,14 +298,8 @@
 
   $effect(() => {
     const fromSummary = analytics.summary?.models ?? [];
-    untrack(() => mergeIntoKnownModels(fromSummary));
-  });
-
-  $effect(() => {
-    const selected = analytics.model
-      .split(",")
-      .filter((model) => model.length > 0);
-    untrack(() => mergeIntoKnownModels(selected));
+    const canonical = analytics.summary?.model_filter?.split(",") ?? [];
+    untrack(() => mergeIntoKnownModels([...fromSummary, ...canonical]));
   });
 
   const modelItems = $derived(

@@ -1087,6 +1087,9 @@ func (b *httpBackend) UsageSummary(
 	if wire.SchemaVersion != nil {
 		out.SchemaVersion = int(*wire.SchemaVersion)
 	}
+	if wire.ExcludeModelFilter != nil {
+		out.ExcludeModelFilter = *wire.ExcludeModelFilter
+	}
 	return out, nil
 }
 
