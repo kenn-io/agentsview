@@ -3,7 +3,11 @@ package db
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // MachineLabelKeyPrefix identifies display labels in archive and mirror metadata.
@@ -52,25 +56,142 @@ func CanonicalMachineFilter(machine string, aliases map[string]string) string {
 	return strings.Join(machines, ",")
 }
 
-// ResolveMachineFilter reads aliases for direct archive and mirror queries.
-func ResolveMachineFilter(ctx context.Context, store Store, machine string) (string, error) {
+// ResolveMachineAliases resolves aliases without requiring sessions for a key.
+func ResolveMachineAliases(ctx context.Context, store Store, machine string) (string, error) {
 	if machine == "" {
 		return "", nil
 	}
-	aliases, err := store.GetMachineAliases(ctx)
+	aliases, err := machineFilterAliases(ctx, store)
 	if err != nil {
 		return "", err
 	}
+	return CanonicalMachineFilter(machine, aliases), nil
+}
+
+func machineFilterAliases(ctx context.Context, store Store) (map[string]string, error) {
+	aliases, err := store.GetMachineAliases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return localMachineAlias(ctx, store, aliases)
+}
+
+func localMachineAlias(ctx context.Context, store Store, aliases map[string]string) (map[string]string, error) {
 	if local, ok := store.(*DB); ok {
 		var identity string
 		err := local.getReader().QueryRowContext(ctx, `SELECT COALESCE(
 			(SELECT value FROM pg_sync_state WHERE key = ?), '')`, artifactLocalInstallationStateKey).Scan(&identity)
 		if err != nil {
-			return "", fmt.Errorf("reading local installation identity: %w", err)
+			return nil, fmt.Errorf("reading local installation identity: %w", err)
 		}
 		if identity != "" {
 			aliases["local"] = identity
 		}
 	}
-	return CanonicalMachineFilter(machine, aliases), nil
+	return aliases, nil
+}
+
+// MachineFilterError reports an unknown or ambiguous machine selector.
+type MachineFilterError struct {
+	Value      string
+	Candidates []string
+	Known      []string
+}
+
+func (e *MachineFilterError) Error() string {
+	display := func(values []string) string {
+		bounded := make([]string, min(len(values), 20))
+		for i := range bounded {
+			bounded[i] = stringutil.SafeTruncate(values[i], 128)
+		}
+		text := strings.Join(bounded, ", ")
+		if len(values) > len(bounded) {
+			text += fmt.Sprintf(" (+%d more)", len(values)-len(bounded))
+		}
+		return text
+	}
+	known := display(e.Known)
+	if len(e.Candidates) > 1 {
+		return fmt.Sprintf("ambiguous machine %.256q; matching IDs: %s; known machines: %s", e.Value, display(e.Candidates), known)
+	}
+	hint := ""
+	if strings.Contains(e.Value, ",") {
+		hint = "; comma-separated filters take machine IDs or aliases"
+	}
+	return fmt.Sprintf("unknown machine %.256q%s; known machines: %s", e.Value, hint, known)
+}
+
+// ResolveMachineFilter accepts aliases, exact IDs, and unique display labels.
+func ResolveMachineFilter(ctx context.Context, store Store, machine string) (string, error) {
+	machine = strings.TrimSpace(machine)
+	if machine == "" {
+		return "", nil
+	}
+	labels, err := store.GetMachineLabels(ctx)
+	if err != nil {
+		return "", err
+	}
+	aliases, err := machineFilterAliases(ctx, store)
+	if err != nil {
+		return "", err
+	}
+	return ResolveMachineFilterWithMetadata(ctx, store, machine, labels, aliases)
+}
+
+// ResolveMachineFilterWithMetadata reuses labels and aliases already read for a catalog response.
+func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine string, labels, aliases map[string]string) (string, error) {
+	machine = strings.TrimSpace(machine)
+	parts := splitCSV(CanonicalMachineFilter(machine, aliases))
+	known := make(map[string]bool, len(labels)+len(aliases))
+	for id := range labels {
+		known[id] = true
+	}
+	for _, id := range aliases {
+		known[id] = true
+	}
+	// Confirm identities absent from metadata against retained session rows.
+	var unconfirmed []string
+	for _, id := range parts {
+		if !known[id] {
+			unconfirmed = append(unconfirmed, id)
+		}
+	}
+	if len(unconfirmed) > 0 {
+		ids, err := store.GetMatchingMachineIDs(ctx, unconfirmed)
+		if err != nil {
+			return "", err
+		}
+		for _, id := range ids {
+			known[id] = true
+		}
+	}
+	if len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil }) {
+		return strings.Join(parts, ","), nil
+	}
+	var candidates []string
+	for id, label := range labels {
+		if label == machine {
+			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
+		}
+	}
+	slices.Sort(candidates)
+	candidates = slices.Compact(candidates)
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	names, err := store.GetMachines(ctx, false, false)
+	if err != nil {
+		return "", err
+	}
+	for _, id := range aliases {
+		names = append(names, id)
+	}
+	for id, label := range labels {
+		names = append(names, id)
+		if label != "" {
+			names = append(names, label)
+		}
+	}
+	slices.Sort(names)
+	return "", &MachineFilterError{Value: machine, Candidates: candidates, Known: slices.Compact(names)}
 }

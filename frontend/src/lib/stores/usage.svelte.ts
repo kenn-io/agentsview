@@ -1228,8 +1228,16 @@ class UsageStore {
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
       if (this.versions.summary === v) {
-        // Restore the parent window when the provisional brushed summary fails.
-        if (
+        // Rejected machine filters invalidate every cached scope.
+        if (e instanceof ApiError && e.code === "invalid_machine_filter") {
+          this.summary = null;
+          this.attributionSummary = null;
+          this.referenceSummary = null;
+          this.timeSeriesContextSummary = null;
+          this.isTimeRangeSummaryProvisional = false;
+          this.topSessions = null;
+          this.errors.summary = e.message;
+        } else if (
           this.isTimeRangeSummaryProvisional &&
           this.selectedTimeRange !== null &&
           this.timeSeriesContextSummary !== null
@@ -1403,6 +1411,8 @@ class UsageStore {
       }
       status = "error";
       if (this.versions.pairwise === pairwiseVersion) {
+        if (e instanceof ApiError && e.code === "invalid_machine_filter")
+          this.pairwiseComparison = null;
         if (this.pairwiseComparison === null) {
           this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
@@ -1497,7 +1507,11 @@ class UsageStore {
     } catch (error) {
       status = isAbortError(error) ? "aborted" : "error";
       if (status === "error" && this.versions[panel] === version) {
-        if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+        if (error instanceof ApiError && error.code === "invalid_machine_filter") {
+          if (panel === "zoom") this.zoomRows = null;
+          else this.topSessions = null;
+          this.errors[panel] = error.message;
+        } else if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
           this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
         } else console.warn(`usage.${panel} refetch failed:`, error);
       }

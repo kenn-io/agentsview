@@ -30,7 +30,9 @@ it("shows and searches machine labels while selecting the stored machine key", a
     machine_labels: { "installation-a": "Workstation A" },
     machine_aliases: {},
   };
-  vi.spyOn(MetadataService, "getApiV1Machines").mockResolvedValue(response);
+  vi.spyOn(MetadataService, "getApiV1Machines").mockImplementation(async (params) =>
+    params?.machine ? { ...response, machines: ["installation-a"] } : response,
+  );
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
   await sessions.loadMachines();

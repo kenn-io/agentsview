@@ -294,7 +294,7 @@ func (s *Server) humaListWorktreeMappings(
 	if machine == "" {
 		machine = localMachine
 	}
-	machine, err = db.ResolveMachineFilter(ctx, localDB, machine)
+	machine, err = db.ResolveMachineAliases(ctx, localDB, machine)
 	if err != nil {
 		return nil, serverError(err)
 	}

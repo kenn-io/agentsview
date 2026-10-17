@@ -291,6 +291,24 @@ describe("load", () => {
     expect(activity.lastUpdatedAt).toBe(stampedAt);
   });
 
+  it("clears the cached report after an invalid machine filter", async () => {
+    const diagnostic = 'unknown machine "Workstation"; known machines: id-a';
+    activity.setMachine("Workstation");
+    api.getActivityReport.mockResolvedValueOnce(makeReport());
+    await activity.load();
+    expect(activity.report).not.toBeNull();
+
+    api.getActivityReport.mockRejectedValueOnce(
+      new ApiError(400, diagnostic, "invalid_machine_filter"),
+    );
+    await activity.load({ background: true });
+
+    expect(activity.report).toBeNull();
+    expect(activity.error).toBe(diagnostic);
+    expect(activity.loading).toBe(false);
+    expect(activity.machine).toBe("Workstation");
+  });
+
   it("recomputes rolling custom ranges before refreshing", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

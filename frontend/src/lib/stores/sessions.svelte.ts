@@ -302,7 +302,6 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   machineLabels: Record<string, string> = $state({});
-  private machineAliases = new Map<string, string>();
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
@@ -347,6 +346,8 @@ class SessionsStore {
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
   private machinesVersion: number = 0;
+  private resolvedMachineSelectors = $state<Record<string, string>>(Object.create(null));
+  private machineResolutionInflight = new Map<string, Promise<boolean>>();
   private sidebarHydrationInflightByVersion = new Map<number, Map<string, Promise<void>>>();
   private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
@@ -463,7 +464,7 @@ class SessionsStore {
     this.filters = this.#savedFilters.filters;
     this.dateFiltersWindowDays = this.#savedFilters.windowDays;
     this.filterPersistenceHeld = false;
-    this.normalizeMachineFilter();
+    void this.normalizeMachineFilter();
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
       previous.includeAutomated !== this.filters.includeAutomated ||
@@ -497,7 +498,7 @@ class SessionsStore {
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
-    this.normalizeMachineFilter();
+    void this.normalizeMachineFilter();
     if (
       prevOneShot !== next.includeOneShot ||
       prevAutomated !== next.includeAutomated ||
@@ -779,6 +780,14 @@ class SessionsStore {
       this.total = index.total;
     } catch (error) {
       if (signal.aborted || isAbortError(error) || this.loadVersion !== version) return;
+      if (error instanceof ApiError && error.code === "invalid_machine_filter") {
+        this.sessions = [];
+        this.sidebarIndexIds = new Set();
+        this.nextCursor = null;
+        this.total = 0;
+        this.sidebarLoadError = error.message;
+        return;
+      }
       if (error instanceof ApiError && error.status === 400 && error.message === "invalid cursor") {
         this.nextCursor = null;
         await this.load({ force: true });
@@ -861,8 +870,8 @@ class SessionsStore {
   }
 
   async loadMachines() {
-    if (this.machinesLoaded) return;
     if (this.machinesPromise) return this.machinesPromise;
+    if (this.machinesLoaded) return;
     const ver = this.machinesVersion;
     this.machinesPromise = (async () => {
       try {
@@ -870,8 +879,6 @@ class SessionsStore {
         if (ver === this.machinesVersion) {
           this.machines = res.machines;
           this.machineLabels = res.machine_labels ?? {};
-          this.machineAliases = new Map(Object.entries(res.machine_aliases ?? {}));
-          this.normalizeMachineFilter();
           this.machinesLoaded = true;
         }
       } catch {
@@ -889,16 +896,36 @@ class SessionsStore {
     return this.machineLabels[machine] ?? machine;
   }
 
-  private normalizeMachineFilter(): void {
-    const machine = [
-      ...new Set(
-        this.filters.machine.split(",").map((key) => this.machineAliases.get(key.trim()) ?? key),
-      ),
-    ].join(",");
-    if (machine !== this.filters.machine) {
-      this.filters.machine = machine;
-      this.persistFiltersIfAllowed();
+  // Resolve whole selectors on the server, including identities omitted from
+  // the picker catalog, before splitting the selection for picker edits.
+  private async normalizeMachineFilter(): Promise<boolean> {
+    const selector = this.filters.machine;
+    if (!selector) return true;
+    let pending = this.machineResolutionInflight.get(selector);
+    if (!Object.hasOwn(this.resolvedMachineSelectors, selector) && !pending) {
+      pending = (async () => {
+        try {
+          const res = await MetadataService.getApiV1Machines({ machine: selector });
+          const machine = [...new Set(res.machines)].join(",");
+          this.resolvedMachineSelectors[selector] = machine;
+          this.resolvedMachineSelectors[machine] = machine;
+          return true;
+        } catch {
+          // The filtered request owns the error display; keep the whole selector.
+          return false;
+        } finally {
+          this.machineResolutionInflight.delete(selector);
+        }
+      })();
+      this.machineResolutionInflight.set(selector, pending);
     }
+    if (pending && !(await pending)) return false;
+    if (this.filters.machine !== selector) {
+      return this.filters.machine === this.resolvedMachineSelectors[selector];
+    }
+    this.filters.machine = this.resolvedMachineSelectors[selector]!;
+    this.persistFiltersIfAllowed();
+    return true;
   }
 
   private setActiveSession(id: string | null) {
@@ -1174,7 +1201,8 @@ class SessionsStore {
     void this.load();
   }
 
-  toggleMachineFilter(machine: string) {
+  async toggleMachineFilter(machine: string) {
+    if (!(await this.normalizeMachineFilter())) return;
     const current = this.filters.machine ? this.filters.machine.split(",") : [];
     const idx = current.indexOf(machine);
     if (idx >= 0) {
@@ -1183,6 +1211,7 @@ class SessionsStore {
       current.push(machine);
     }
     this.filters.machine = current.join(",");
+    this.resolvedMachineSelectors[this.filters.machine] = this.filters.machine;
     this.setActiveSession(null);
     void this.load();
   }
@@ -1194,7 +1223,9 @@ class SessionsStore {
 
   get selectedMachines(): string[] {
     if (!this.filters.machine) return [];
-    return this.filters.machine.split(",");
+    return Object.hasOwn(this.resolvedMachineSelectors, this.filters.machine)
+      ? this.filters.machine.split(",")
+      : [this.filters.machine];
   }
 
   setAgentFilter(agent: string) {

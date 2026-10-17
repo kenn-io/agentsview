@@ -40,7 +40,7 @@ type AnalyticsFilterInput struct {
 	From             string           `query:"from" format:"date" doc:"Range start date"`
 	To               string           `query:"to" format:"date" doc:"Range end date"`
 	Timezone         string           `query:"timezone" doc:"IANA timezone name"`
-	Machine          string           `query:"machine" doc:"Filter by machine"`
+	Machine          string           `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	Project          string           `query:"project" doc:"Filter by project"`
 	GitBranch        string           `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	Agent            string           `query:"agent" doc:"Filter by agent"`

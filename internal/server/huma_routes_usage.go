@@ -51,7 +51,7 @@ type UsageFilterInput struct {
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
 	ProjectKey        string `query:"project_key" doc:"Filter by an opaque project key"`
-	Machine           string `query:"machine" doc:"Filter by machine"`
+	Machine           string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
@@ -201,17 +201,10 @@ func usageSummaryAPIError(err error) error {
 func (s *Server) humaUsageSummaryStream(
 	ctx context.Context, in *UsageFilterInput,
 ) (*huma.StreamResponse, error) {
-	// Resolve project keys before the stream starts so an unknown key is a
-	// 400 like /usage/summary, not a 200 followed by an SSE error event.
-	// The resolved request has no keys left, so UsageSummary skips them.
-	req, err := service.ResolveUsageProjectKeys(
-		ctx, s.db, usageRequestFromInput(*in),
-	)
-	if err == nil {
-		_, err = service.BuildUsageFilter(req)
-	}
+	// Validate selectors before opening the stream, then use that same filter.
+	f, err := s.usageFilterFromInput(ctx, *in)
 	if err != nil {
-		return nil, usageSummaryAPIError(err)
+		return nil, err
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -220,13 +213,13 @@ func (s *Server) humaUsageSummaryStream(
 		}
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		req.Progress = func(phase string) {
+		f.Progress = func(phase string) {
 			if !stream.SendJSON("progress", map[string]string{"detail": phase}) {
 				cancel()
 			}
 		}
-		req.Progress("Preparing usage report from the archive")
-		summary, err := s.sessions.UsageSummary(ctx, req)
+		f.Progress("Preparing usage report from the archive")
+		summary, err := service.QueryUsageSummary(ctx, s.db, f)
 		if err != nil {
 			if err := usageSummaryAPIError(err); err != nil {
 				stream.SendJSON("error", map[string]string{"error": err.Error()})

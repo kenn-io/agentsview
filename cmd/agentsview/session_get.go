@@ -63,8 +63,9 @@ func newSessionGetCommand() *cobra.Command {
 		"machine", "local",
 		"Filter bare Codebuff/Freebuff timestamp resolution to a single "+
 			"machine identity. Use 'local' (default) to match this "+
-			"archive's own sessions, a machine name to match by exact "+
-			"sessions.machine value, or '*' to accept any. Does not "+
+			"archive's own sessions, an exact ID or alias, a unique whole "+
+			"display name, or '*' to accept any. "+
+			"Unknown or ambiguous values return an error. Does not "+
 			"affect canonical IDs or agents other than Codebuff/Freebuff.",
 	)
 	return cmd

@@ -7,6 +7,7 @@ export interface CannedSessionFiltersInput {
   agent?: string;
   automated_scope?: string;
   include_one_shot?: boolean;
+  /** Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Unknown or ambiguous values return HTTP 400 before streaming. */
   machine?: string;
   min_user_messages?: number;
   termination?: string;

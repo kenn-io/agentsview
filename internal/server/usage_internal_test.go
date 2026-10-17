@@ -52,6 +52,30 @@ type usageComparisonProjectKeySpy struct {
 	projectMap   map[string]export.ProjectMapEntry
 }
 
+type usageMachineResolutionSpy struct {
+	usageSummaryCountsSpy
+	machineLabelCalls int
+}
+
+func (s *usageMachineResolutionSpy) GetMachineLabels(ctx context.Context) (map[string]string, error) {
+	s.machineLabelCalls++
+	return s.Store.GetMachineLabels(ctx)
+}
+
+func TestUsageSummaryStreamResolvesMachineOnce(t *testing.T) {
+	s := testServer(t, 30)
+	require.NoError(t, s.db.(*db.DB).SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Workstation"))
+	spy := &usageMachineResolutionSpy{Store: s.db}
+	s.db = spy
+	s.sessions = service.NewReadOnlyBackend(spy)
+	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
+	assertRecorderStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Body.String(), "event: done\n")
+	assert.Equal(t, 1, spy.machineLabelCalls)
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, "id-a", spy.filters[0].Machine)
+}
+
 func (s *usageComparisonProjectKeySpy) GetActiveProjectLabels(
 	context.Context,
 ) ([]string, error) {

@@ -52,7 +52,7 @@ func TestActivityReportRejectsFilterWhoseSignedIDExceedsLimit(t *testing.T) {
 		"timezone":   {"UTC"},
 		"project":    {strings.Repeat("\"", 1024)},
 		"agent":      {strings.Repeat("\"", 1024)},
-		"machine":    {strings.Repeat("\"", 1024)},
+		"git_branch": {strings.Repeat("\"", 1024)},
 		"automation": {"all"},
 	}
 

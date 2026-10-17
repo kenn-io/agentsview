@@ -258,7 +258,7 @@ func (t *toolset) queryRecall(
 type listSessionsIn struct {
 	Project          string   `json:"project,omitempty" jsonschema:"Filter by project name."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
-	Machine          string   `json:"machine,omitempty" jsonschema:"Filter by machine name."`
+	Machine          string   `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
@@ -950,7 +950,7 @@ type usageSummaryIn struct {
 	To      string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD)."`
 	Project string `json:"project,omitempty" jsonschema:"Filter by project."`
 	Agent   string `json:"agent,omitempty" jsonschema:"Filter by agent."`
-	Machine string `json:"machine,omitempty" jsonschema:"Filter by machine."`
+	Machine string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
 }
 
 func (t *toolset) usageSummary(

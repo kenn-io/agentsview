@@ -34,3 +34,98 @@ func TestMachineLabelsPersistUpdatesAndSurviveResync(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"oldhost.example": "installation-a"}, aliases)
 }
+
+func TestResolveMachineFilter(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"id-a", "id-b", "legacy-host", id} {
+		require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project", Machine: id, Agent: "claude"}))
+	}
+	for key, value := range map[string]string{
+		MachineLabelKeyPrefix + "id-a":            "A",
+		MachineLabelKeyPrefix + "id-b":            "B",
+		MachineLabelKeyPrefix + "id-comma":        "A,B",
+		MachineAliasKeyPrefix + "old-owner":       "id-a",
+		MachineAliasKeyPrefix + "empty-alias":     "empty-target",
+		MachineLabelKeyPrefix + "id-alias-list":   "old-owner,id-b",
+		MachineLabelKeyPrefix + "id-shadow":       "id-a",
+		MachineLabelKeyPrefix + "id-alias":        "old-owner",
+		MachineLabelKeyPrefix + "old-owner":       "A",
+		MachineLabelKeyPrefix + "label-owner":     id,
+		MachineLabelKeyPrefix + "hex-label-owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		artifactLocalInstallationStateKey:         "id-a",
+	} {
+		require.NoError(t, d.SetSyncState(ctx, key, value))
+	}
+	for _, tt := range []struct{ input, want string }{
+		{id, id},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		// An installation ID without stored sessions stays an exact selector.
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a"},
+		{"", ""},
+		{" \t ", ""},
+		{"A", "id-a"},
+		{"id-a", "id-a"},
+		{"old-owner", "id-a"},
+		{"empty-alias", "empty-target"},
+		{"local", "id-a"},
+		{"legacy-host", "legacy-host"},
+		{" id-a, id-b ,old-owner ", "id-a,id-b,id-a"},
+		{"A,B", "id-comma"},
+		{"old-owner,id-b", "id-a,id-b"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ResolveMachineFilter(ctx, d, tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+	t.Run("ambiguous label", func(t *testing.T) {
+		d := testDB(t)
+		require.NoError(t, d.SetSyncState(ctx, MachineLabelKeyPrefix+"id-comma", "A,B"))
+		require.NoError(t, d.SetSyncState(ctx, MachineLabelKeyPrefix+"id-duplicate", "A,B"))
+		_, err := ResolveMachineFilter(ctx, d, "A,B")
+		var filterError *MachineFilterError
+		require.ErrorAs(t, err, &filterError)
+		assert.Equal(t, []string{"id-comma", "id-duplicate"}, filterError.Candidates)
+		assert.Contains(t, err.Error(), "ambiguous machine")
+	})
+	t.Run("unknown selectors", func(t *testing.T) {
+		for _, input := range []string{"missing", "a"} {
+			t.Run(input, func(t *testing.T) {
+				_, err := ResolveMachineFilter(ctx, d, input)
+				var filterError *MachineFilterError
+				require.ErrorAs(t, err, &filterError)
+				assert.Equal(t, input, filterError.Value)
+				assert.Contains(t, filterError.Known, "id-a")
+			})
+		}
+	})
+	t.Run("unknown list members", func(t *testing.T) {
+		for _, input := range []string{"id-a,id-gone", "old-owner,id-gone", "id-gone,missing", ", ,"} {
+			_, err := ResolveMachineFilter(ctx, d, input)
+			var filterError *MachineFilterError
+			require.ErrorAs(t, err, &filterError)
+			assert.Contains(t, err.Error(), "comma-separated filters take machine IDs or aliases")
+			assert.Contains(t, filterError.Known, "id-a")
+		}
+	})
+}
+
+func TestMatchingMachineIDsFindsQuotedAndTrashedIDs(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"id-b", "id'quoted"} {
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: id, Machine: id, Project: "project", Agent: "claude", ParentSessionID: new("missing-parent")}))
+	}
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "id-b"))
+	ids, err := d.GetMatchingMachineIDs(t.Context(), []string{"id-b", "id'quoted", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id'quoted", "id-b"}, ids)
+	for _, id := range ids {
+		resolved, err := ResolveMachineFilter(t.Context(), d, id)
+		require.NoError(t, err)
+		assert.Equal(t, id, resolved)
+	}
+}

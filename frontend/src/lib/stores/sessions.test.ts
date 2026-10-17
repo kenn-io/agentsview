@@ -2166,8 +2166,15 @@ describe("SessionsStore", () => {
   });
 
   describe("machine filter", () => {
+    beforeEach(() => {
+      api.getMachines.mockImplementation((params) =>
+        Promise.resolve({
+          machines: params.machine ? params.machine.split(",") : ["host-a", "host-b"],
+        }),
+      );
+    });
     it("should toggle one machine on and serialize it", async () => {
-      sessions.toggleMachineFilter("host-a");
+      await sessions.toggleMachineFilter("host-a");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalled();
       });
@@ -2179,12 +2186,12 @@ describe("SessionsStore", () => {
     });
 
     it("should allow multiple selected machines", async () => {
-      sessions.toggleMachineFilter("host-a");
+      await sessions.toggleMachineFilter("host-a");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       });
 
-      sessions.toggleMachineFilter("host-b");
+      await sessions.toggleMachineFilter("host-b");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       });
@@ -2200,7 +2207,7 @@ describe("SessionsStore", () => {
     it("should toggle an already-selected machine off", async () => {
       sessions.filters.machine = "host-a,host-b";
 
-      sessions.toggleMachineFilter("host-a");
+      await sessions.toggleMachineFilter("host-a");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalled();
       });
@@ -2214,7 +2221,7 @@ describe("SessionsStore", () => {
     it("should clear the filter when the last machine is removed", async () => {
       sessions.filters.machine = "host-a";
 
-      sessions.toggleMachineFilter("host-a");
+      await sessions.toggleMachineFilter("host-a");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalled();
       });
@@ -2522,27 +2529,134 @@ describe("SessionsStore", () => {
     expect(sessions.machineLabel("host-a.example")).toBe("host-a.example");
   });
 
-  it("upgrades saved and URL machine selections using recorded aliases only", async () => {
+  it("canonicalizes saved alias lists with the server before picker edits", async () => {
     localStorage.setItem(
       "session-filters",
       JSON.stringify({ version: 2, machine: "old-owner,installation-a,source-a" }),
     );
     sessions = createSessionsStore();
-    api.getMachines.mockResolvedValue({
-      machines: ["installation-a", "source-a"],
-      machine_labels: { "installation-a": "Laptop" },
-      machine_aliases: { "old-owner": "installation-a" },
+    api.getMachines.mockImplementation((params) => {
+      if (params.machine === "old-owner,installation-a,source-a") {
+        return Promise.resolve({ machines: ["installation-a", "installation-a", "source-a"] });
+      }
+      return Promise.resolve({
+        machines: ["installation-a", "source-a"],
+        machine_labels: { "installation-a": "Laptop" },
+      });
     });
 
-    await sessions.loadMachines();
+    sessions.restoreSavedFilters();
+    await sessions.toggleMachineFilter("id-b");
+    await sessions.toggleMachineFilter("id-b");
 
     expect(sessions.selectedMachines).toEqual(["installation-a", "source-a"]);
     expect(filtersToParams(sessions.filters).machine).toBe("installation-a,source-a");
     expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe(
       "installation-a,source-a",
     );
-    sessions.initFromParams({ machine: "old-owner,Laptop,constructor" });
-    expect(sessions.selectedMachines).toEqual(["installation-a", "Laptop", "constructor"]);
+  });
+
+  describe("machine names from a URL", () => {
+    const catalog = {
+      machines: ["id-a", "id-b"],
+      machine_labels: { "id-a": "Workstation", "id-b": "Secondary" },
+    };
+
+    it("resolves the whole selector once before picker edits", async () => {
+      api.getMachines.mockImplementation((params) =>
+        Promise.resolve(params.machine ? { machines: ["id-a"] } : catalog),
+      );
+      sessions.initFromParams({ machine: "Work, Linux" });
+      await sessions.loadMachines();
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("id-a,id-b");
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("id-a");
+      expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toEqual([
+        [{ machine: "Work, Linux" }],
+      ]);
+    });
+
+    it("keeps rejected constructor selectors intact", async () => {
+      api.getMachines.mockImplementation((params) =>
+        params.machine
+          ? Promise.reject(new ApiError(400, "invalid machine", "invalid_machine_filter"))
+          : Promise.resolve(catalog),
+      );
+      sessions.initFromParams({ machine: "constructor" });
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("constructor");
+    });
+
+    it("preserves a whole comma label after failed resolution and a picker click", async () => {
+      api.getMachines.mockImplementation((params) =>
+        params.machine ? Promise.reject(new Error("offline")) : Promise.resolve(catalog),
+      );
+      sessions.initFromParams({ machine: "Work, Linux" });
+      await sessions.loadMachines();
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("Work, Linux");
+      expect(sessions.selectedMachines).toEqual(["Work, Linux"]);
+    });
+
+    it("preserves a stale saved selector until the user clears it", async () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ version: 2, machine: "id-a,id-gone" }),
+      );
+      sessions = createSessionsStore();
+      api.getMachines.mockImplementation((params) =>
+        params.machine
+          ? Promise.reject(
+              new ApiError(400, "unknown machine; known machines: id-a", "invalid_machine_filter"),
+            )
+          : Promise.resolve(catalog),
+      );
+      sessions.restoreSavedFilters();
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("id-a,id-gone");
+      expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe("id-a,id-gone");
+      sessions.setMachineFilter("id-a,id-gone");
+      expect(sessions.filters.machine).toBe("");
+    });
+
+    it("ignores resolution of a URL selector after the selection changes", async () => {
+      let finish!: (value: { machines: string[] }) => void;
+      api.getMachines.mockImplementation((params) =>
+        params.machine
+          ? new Promise((resolve) => {
+              finish = resolve;
+            })
+          : Promise.resolve(catalog),
+      );
+      sessions.initFromParams({ machine: "Workstation" });
+      const editing = sessions.toggleMachineFilter("id-b");
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      sessions.filters.machine = "id-b";
+      finish({ machines: ["id-a"] });
+      await editing;
+      expect(sessions.filters.machine).toBe("id-b");
+    });
+  });
+
+  it("clears paginated rows when the machine filter is rejected", async () => {
+    sessions.initFromParams({ machine: "Shared" });
+    api.getSidebarSessionIndex.mockResolvedValueOnce({
+      sessions: [makeSkinnyRow({ id: "current" })],
+      total: 2,
+      next_cursor: "page-2",
+    });
+    await sessions.load();
+    expect(sessions.sessions).toHaveLength(1);
+    api.getSidebarSessionIndex.mockImplementationOnce((params) => {
+      expect(params.machine).toBe("Shared");
+      return Promise.reject(new ApiError(400, "ambiguous machine", "invalid_machine_filter"));
+    });
+    await sessions.loadMore();
+    expect(sessions.sessions).toEqual([]);
+    expect(sessions.nextCursor).toBeNull();
+    expect(sessions.total).toBe(0);
+    expect(sessions.sidebarLoadError).toBe("ambiguous machine");
   });
 
   describe("loadProjects dedup", () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -31,6 +32,11 @@ type statsInput struct {
 	BoolIncludeInput
 }
 
+type machinesInput struct {
+	BoolIncludeInput
+	Machine string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
+}
+
 type sessionStatsInput struct {
 	BoolIncludeInput
 	Since                 string   `query:"since" doc:"Start of window"`
@@ -48,7 +54,7 @@ type projectsResponse struct {
 }
 
 type machinesResponse struct {
-	Machines       []string          `json:"machines"`
+	Machines       []string          `json:"machines" doc:"Picker catalog filtered by visibility flags; with machine, canonical selector IDs regardless of visibility or stored sessions"`
 	MachineLabels  map[string]string `json:"machine_labels"`
 	MachineAliases map[string]string `json:"machine_aliases"`
 }
@@ -134,17 +140,24 @@ func (s *Server) humaListProjects(
 
 func (s *Server) humaListMachines(
 	ctx context.Context,
-	in *statsInput,
+	in *machinesInput,
 ) (*jsonOutput[machinesResponse], error) {
-	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
-	if err != nil {
-		return nil, serverError(err)
-	}
 	labels, err := s.db.GetMachineLabels(ctx)
 	if err != nil {
 		return nil, serverError(err)
 	}
 	aliases, err := s.machineAliases(ctx)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	var machines []string
+	if strings.TrimSpace(in.Machine) != "" {
+		var machine string
+		machine, err = db.ResolveMachineFilterWithMetadata(ctx, s.db, in.Machine, labels, aliases)
+		machines = strings.Split(machine, ",")
+	} else {
+		machines, err = s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
+	}
 	if err != nil {
 		return nil, serverError(err)
 	}

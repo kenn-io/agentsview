@@ -127,3 +127,7 @@ func (s Sessions) SecretFindingSource(
 	text, ok := db.FindingSourceFromMessages(msgs, f)
 	return text, ok, nil
 }
+
+func (s Sessions) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
+	return db.MatchingMachineIDs(ctx, s.backend, s.backend.Dialect(), candidates)
+}

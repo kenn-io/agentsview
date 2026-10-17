@@ -38,7 +38,7 @@ type generateInsightRequest struct {
 
 type cannedSessionFiltersInput struct {
 	Timezone        string `json:"timezone,omitempty"`
-	Machine         string `json:"machine,omitempty"`
+	Machine         string `json:"machine,omitempty" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Unknown or ambiguous values return HTTP 400 before streaming."`
 	Agent           string `json:"agent,omitempty"`
 	Termination     string `json:"termination,omitempty"`
 	MinUserMessages int    `json:"min_user_messages,omitempty"`

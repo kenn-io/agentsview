@@ -10,7 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestDirectMachineAliases(t *testing.T) {
+func TestDirectMachineDisplayName(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	for _, machine := range []string{"installation-a", "source-a"} {
 		msg := dbtest.AsstMsg(machine, 1, "needle")
@@ -25,41 +25,26 @@ func TestDirectMachineAliases(t *testing.T) {
 			s.EndedAt = new("2024-06-01T09:00:00Z")
 		})
 	}
-	require.NoError(t, d.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
-	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_installation_id", "installation-a"))
-	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "host-a.example"))
 	backend := service.NewDirectBackend(d, nil)
-	for _, tt := range []struct {
-		machine string
-		count   int
-		tokens  int
-	}{
-		{"old-owner", 1, 100},
-		{"old-owner,installation-a", 1, 100},
-		{"local", 1, 100},
-		{"Laptop", 0, 0},
-	} {
-		t.Run(tt.machine, func(t *testing.T) {
-			list, err := backend.List(t.Context(), service.ListFilter{Machine: tt.machine})
-			require.NoError(t, err)
-			assert.Len(t, list.Sessions, tt.count)
-			search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
-				Machine: tt.machine, Pattern: "needle", Mode: "substring",
-			})
-			require.NoError(t, err)
-			assert.Len(t, search.Matches, tt.count)
-			req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Machine: tt.machine}
-			summary, err := backend.UsageSummary(t.Context(), req)
-			require.NoError(t, err)
-			assert.Equal(t, tt.tokens, summary.Totals.InputTokens)
-			comparison, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-				UsageRequest:  req,
-				LeftDimension: "project", LeftValue: "project",
-				RightDimension: "project", RightValue: "project",
-			})
-			require.NoError(t, err)
-			assert.Equal(t, tt.tokens, comparison.Left.InputTokens)
-			assert.Equal(t, tt.tokens, comparison.Right.InputTokens)
-		})
-	}
+	list, err := backend.List(t.Context(), service.ListFilter{Machine: "host-a.example"})
+	require.NoError(t, err)
+	assert.Len(t, list.Sessions, 1)
+	search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
+		Machine: "host-a.example", Pattern: "needle", Mode: "substring",
+	})
+	require.NoError(t, err)
+	assert.Len(t, search.Matches, 1)
+	req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Machine: "host-a.example"}
+	summary, err := backend.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, 100, summary.Totals.InputTokens)
+	comparison, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		UsageRequest:  req,
+		LeftDimension: "project", LeftValue: "project",
+		RightDimension: "project", RightValue: "project",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 100, comparison.Left.InputTokens)
+	assert.Equal(t, 100, comparison.Right.InputTokens)
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
-import { attachResponseTiming } from "../api/runtime.js";
+import { ApiError, attachResponseTiming } from "../api/runtime.js";
 import { analytics } from "./analytics.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
@@ -1369,5 +1369,23 @@ describe("AnalyticsStore rolling default date range", () => {
         to: "2026-04-26",
       }),
     );
+  });
+});
+
+describe("invalid machine refetches", () => {
+  it("clears cached summary and shared quality signals on an input error", async () => {
+    analytics.machine = "host-a";
+    await analytics.fetchSummary();
+    await analytics.fetchSignals();
+    expect(analytics.summary?.total_sessions).toBe(10);
+    expect(analytics.signals).not.toBeNull();
+    analyticsService.getApiV1AnalyticsSummary.mockImplementationOnce((params) => {
+      expect(params.machine).toBe("host-a");
+      return Promise.reject(new ApiError(400, "unknown machine", "invalid_machine_filter"));
+    });
+    await analytics.fetchSummary();
+    expect(analytics.summary).toBeNull();
+    expect(analytics.signals).toBeNull();
+    expect(analytics.errors.summary).toBe("unknown machine");
   });
 });
