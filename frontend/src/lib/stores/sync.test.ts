@@ -35,7 +35,8 @@ vi.mock("../api/client.js", () => ({
   watchSession: api.watchSession,
 }));
 
-vi.mock("../api/runtime.js", () => ({
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   ApiError: api.ApiError,
 
   isRemoteConnection: api.isRemoteConnection,
@@ -402,8 +403,12 @@ describe("SyncStore.triggerResync", () => {
     expect(sync.syncing).toBe(false);
   });
 
-  it("ignores a cancelled resync attempt", async () => {
-    mockResyncFailure(new DOMException("Cancelled", "AbortError"));
+  it.each(["dom", "error"])("ignores a cancelled %s resync", async (kind) => {
+    mockResyncFailure(
+      kind === "dom"
+        ? new DOMException("Cancelled", "AbortError")
+        : Object.assign(new Error("Cancelled"), { name: "AbortError" }),
+    );
     sync.triggerResync();
     await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({
       name: "AbortError",

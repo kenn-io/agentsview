@@ -1,12 +1,13 @@
 import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { Virtualizer, type VirtualizerOptions } from "@tanstack/virtual-core";
 import { controlFrames } from "../../test/frames.js";
 import { realVirtualizer } from "../../test/virtualizer.js";
-import type { DbMessage as Message } from "../../api/generated/index.js";
+import { SessionsService, type DbMessage as Message } from "../../api/generated/index.js";
+import { ApiError } from "../../api/runtime.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -404,8 +405,17 @@ describe("MessageList follow cancellation", () => {
     },
   );
 
-  it("counts a missing session only when its empty transcript pane appears", async () => {
-    sessions.activeSessionNotFound = true;
+  it("counts a missing session once through a failed Retry, then again after recovery", async () => {
+    const previousSessions = sessions.sessions;
+    onTestFinished(() => {
+      sessions.sessions = previousSessions;
+    });
+    const session = { id: "s1" } as NonNullable<typeof sessions.activeSession>;
+    sessions.sessions = [session];
+    const request = vi
+      .spyOn(SessionsService, "getApiV1SessionsById")
+      .mockRejectedValue(new ApiError(404, "Missing"));
+    await sessions.refreshActiveSession();
     component = mount(MessageList, { target: document.body });
     await tick();
     expect(reportErrorShown).not.toHaveBeenCalled();
@@ -416,6 +426,19 @@ describe("MessageList follow cancellation", () => {
     messages.loading = false;
     await tick();
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
+    document.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await tick();
+    expect(request).toHaveBeenLastCalledWith({ id: "s1" }, { signal: expect.any(AbortSignal) });
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    request.mockResolvedValueOnce(session);
+    document.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(sessions.activeSessionNotFound).toBe(false));
+    await tick();
+    expect(document.querySelector("button")).toBeNull();
+    await sessions.refreshActiveSession();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(2);
   });
 
   it("renders empty and loading states in Simplified Chinese", async () => {

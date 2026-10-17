@@ -294,6 +294,7 @@ export class SearchStore {
       this.results = [];
       const detail = errorDetail(error);
       this.error = { detail, kind: failureKind(mode, error, detail) };
+      reportTelemetry("error_shown", { kind: "search" });
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;

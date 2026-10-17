@@ -24,7 +24,6 @@
 </script>
 
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
@@ -88,7 +87,6 @@ endpoint = "http://localhost:11434/v1"`;
     | "failed";
 
   let phase = $state<Phase>("probing");
-  const errorKind = $derived(phase === "probing" || phase === "building" ? undefined : "search");
   // Server-provided reason shown verbatim in the "disabled" and "failed"
   // phases.
   let detail = $state<string | null>(null);
@@ -243,7 +241,7 @@ endpoint = "http://localhost:11434/v1"`;
   }
 </script>
 
-<div class="semantic-setup" role="alert" {@attach errorTelemetry(errorKind, phase)}>
+<div class="semantic-setup" role="alert">
   {#if phase === "probing"}
     <div class="setup-row centered">
       <Spinner size={13} />

@@ -60,13 +60,11 @@ type remoteSyncRequest struct {
 	Hosts        []config.RemoteHost `json:"hosts"`
 }
 
-var errProcessingIncomplete = errors.New("local sync processing incomplete")
-
-func syncErrorPayload(err error) map[string]string {
+func syncErrorPayload(err error, stats syncpkg.SyncStats) map[string]string {
 	payload := map[string]string{"error": err.Error()}
 	if errors.Is(err, syncpkg.ErrSyncInProgress) {
 		payload["code"] = "sync_running"
-	} else if errors.Is(err, errProcessingIncomplete) {
+	} else if !stats.ProcessingComplete() {
 		payload["code"] = "incomplete"
 	}
 	return payload
@@ -76,7 +74,7 @@ func requireProcessingComplete(stats syncpkg.SyncStats) error {
 	if stats.ProcessingComplete() {
 		return nil
 	}
-	return errProcessingIncomplete
+	return errors.New("local sync processing incomplete")
 }
 
 type remoteSyncFailure struct {
@@ -303,7 +301,7 @@ func (s *Server) humaTriggerSync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", syncErrorPayload(err))
+			stream.SendJSON("error", syncErrorPayload(err, stats))
 			return
 		}
 		stream.SendJSON("done", stats)
@@ -431,7 +429,7 @@ func (s *Server) humaTriggerResync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", syncErrorPayload(err))
+			stream.SendJSON("error", syncErrorPayload(err, stats))
 			return
 		}
 		stream.SendJSON("done", stats)

@@ -2037,8 +2037,8 @@ Feature outcomes use fixed categories; unknown strings become `other`.
 | `error_shown`  | `kind`   | `search`, `session`, `insight`, `analytics`, `export`, `other`                            | Each appearance of a core-action error in search, session views, generated insights, or exports. Analytics counts each independently requested panel on Usage, Activity, Trends, and Quality. Continuous display counts once; hiding and showing the error counts again.                                                                                |
 | `sync_failed`  | `reason` | `request`, `partial`, `sign_in_required`, `browser_extension`, `already_running`, `other` | Each failed foreground attempt after its terminal result, without `error_shown`. `request` covers uncoded request or processing failures; unsupported explicit codes use `other`. `partial` includes local failed or deferred processing and completed Claude.ai imports with item errors. Cancellation, polling, and read-only refreshes send nothing. |
 
-Semantic setup or failure guidance counts after probing. Probing and build
-progress send no outcomes.
+Each accepted failed search counts once, including a semantic search that
+shows setup guidance. Internal setup probes and build retries add no events.
 
 Hidden failures, cached warnings, the Sessions dashboard, settings, data
 management, pins, stars, and in-session find send no outcomes. Query and error

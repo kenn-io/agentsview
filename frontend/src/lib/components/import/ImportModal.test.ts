@@ -1,7 +1,7 @@
-import { reportSyncFailed, reportTelemetry } from "../../utils/telemetry.js";
+import { reportSyncFailed, reportSyncFailedReason } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({
   reportSyncFailed: vi.fn(),
-  reportTelemetry: vi.fn(),
+  reportSyncFailedReason: vi.fn(),
 }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -118,6 +118,8 @@ it.each(["stop", "cancel"])(
     expect(p.onclose.mock.calls.length).toBe(exit === "stop" ? 0 : 1);
     reject(new Error("Stopped"));
     await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+    expect(reportSyncFailed).not.toHaveBeenCalled();
+    expect(reportSyncFailedReason).not.toHaveBeenCalled();
     if (exit === "stop") expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.queryByText("Stopped")).toBeNull();
   },
@@ -191,9 +193,7 @@ it("reports an incomplete Chrome sync", async () => {
   syncClaudeAI.mockResolvedValueOnce({ ...stats, errors: 1 });
   render(ImportModal, props());
   await clickSync();
-  await waitFor(() =>
-    expect(reportTelemetry).toHaveBeenCalledExactlyOnceWith("sync_failed", { reason: "partial" }),
-  );
+  await waitFor(() => expect(reportSyncFailedReason).toHaveBeenCalledExactlyOnceWith("partial"));
 });
 
 it("shows an overlapping Chrome Sync refusal", async () => {

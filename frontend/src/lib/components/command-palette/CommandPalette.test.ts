@@ -1,7 +1,5 @@
-import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({
   reportTelemetry: vi.fn(),
-  reportErrorShown: vi.fn(),
 }));
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
@@ -79,15 +77,7 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
   sessions: mockSessions,
 }));
 
-vi.mock("../../stores/search.svelte.js", async () => {
-  const { SvelteMap } = await import("svelte/reactivity");
-  const errors = new SvelteMap<string, typeof mockSearchStore.error>();
-  Object.defineProperty(mockSearchStore, "error", {
-    get: () => errors.get("error") ?? null,
-    set: (error: typeof mockSearchStore.error) => errors.set("error", error),
-  });
-  return { searchStore: mockSearchStore };
-});
+vi.mock("../../stores/search.svelte.js", () => ({ searchStore: mockSearchStore }));
 
 vi.mock("../../stores/router.svelte.js", () => ({
   router: mockRouter,
@@ -708,7 +698,6 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     const error = document.querySelector(".palette-error");
-    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(error?.querySelector("strong")?.textContent).toBe("Search took too long");
     expect(error?.querySelector("span")?.textContent).toBe(
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
@@ -722,12 +711,6 @@ describe("CommandPalette", () => {
     retry?.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
-    mockSearchStore.error = null;
-    await tick();
-    expect(document.querySelector(".palette-error")).toBeNull();
-    mockSearchStore.error = { kind: "timeout", detail: "request timed out" };
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(2);
 
     unmount(component);
   });
@@ -743,7 +726,6 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     expect(document.querySelector(".semantic-setup")).not.toBeNull();
-    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(document.querySelector(".palette-error")).toBeNull();
 
     unmount(component);

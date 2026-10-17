@@ -1,4 +1,4 @@
-import { isAbortError, orvalRequest } from "../api/runtime.js";
+import { orvalRequest } from "../api/runtime.js";
 
 export type TelemetryEvent =
   | "app_opened"
@@ -41,7 +41,6 @@ export function reportErrorShown(kind: ErrorKind): void {
 }
 
 export function reportSyncFailed(error: unknown): void {
-  if (isAbortError(error)) return;
   let reason: SyncFailureReason = "other";
   const code = error instanceof Error && "code" in error ? error.code : undefined;
   switch (code) {
@@ -62,5 +61,9 @@ export function reportSyncFailed(error: unknown): void {
     default:
       if (error instanceof Error && code === undefined) reason = "request";
   }
+  reportSyncFailedReason(reason);
+}
+
+export function reportSyncFailedReason(reason: SyncFailureReason): void {
   reportTelemetry("sync_failed", { reason });
 }

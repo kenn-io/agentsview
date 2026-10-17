@@ -338,8 +338,18 @@ describe("SearchStore", () => {
     await runDebounce();
 
     expect(store.error).toEqual({ detail, kind });
+    expect(reportTelemetry).toHaveBeenCalledWith("error_shown", { kind: "search" });
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
+    store.retry();
+    await flushMicrotasks();
+    expect(
+      vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "error_shown"),
+    ).toEqual([
+      ["error_shown", { kind: "search" }],
+      ["error_shown", { kind: "search" }],
+    ]);
   });
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
@@ -462,6 +472,7 @@ describe("SearchStore", () => {
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(store.error).toEqual({ detail: null, kind: "generic" });
+    expect(reportTelemetry).toHaveBeenCalledWith("error_shown", { kind: "search" });
     expect(store.isSearching).toBe(false);
   });
 
@@ -483,6 +494,7 @@ describe("SearchStore", () => {
     await flushMicrotasks();
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
+    expect(reportTelemetry).not.toHaveBeenCalledWith("error_shown", { kind: "search" });
     expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
     expect(store.error).toBeNull();
     expect(store.isSearching).toBe(false);
@@ -514,6 +526,7 @@ describe("SearchStore", () => {
     await flushMicrotasks();
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
+    expect(reportTelemetry).not.toHaveBeenCalledWith("error_shown", { kind: "search" });
     expect(wasCancelled).toBe(true);
     expect(store.results).toEqual([]);
     expect(store.query).toBe("");
@@ -598,6 +611,7 @@ describe("SearchStore telemetry", () => {
     expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
       ["search_run", { query_type: "text" }],
       ["search_run", { query_type: "semantic" }],
+      ["error_shown", { kind: "search" }],
     ]);
   });
 });
