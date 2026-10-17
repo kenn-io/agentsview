@@ -1937,6 +1937,39 @@ func (d *DB) CopySessionMetadataFrom(
 		  ))`); err != nil {
 		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)
 	}
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		// A removed checkout can change the discovered root to a nested cwd.
+		// Match recovered evidence by session, retaining the old key only
+		// while another surviving snapshot still supports it.
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.project_identity_observations
+			WHERE git_remote = ''
+			  AND EXISTS (
+				SELECT 1 FROM old_db.session_project_identity_snapshots old
+				JOIN old_db.sessions previous ON previous.id = old.session_id
+				LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = old.session_id
+				JOIN main.session_project_identity_snapshots fresh
+				  ON fresh.session_id = COALESCE(mapped.target_id, old.session_id)
+				WHERE old.machine = main.project_identity_observations.machine
+				  AND old.root_path = main.project_identity_observations.root_path
+				  AND old.git_remote = ''
+				  AND main.project_identity_observations.project IN (old.project, previous.project)
+				  AND fresh.recorded_git_remote != '' AND fresh.remote_resolution = 'resolved'
+				  AND fresh.git_remote != ''
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM main.session_project_identity_snapshots snap
+				JOIN main.sessions s ON s.id = snap.session_id
+				WHERE snap.machine = main.project_identity_observations.machine
+				  AND snap.root_path = main.project_identity_observations.root_path
+				  AND snap.git_remote = ''
+				  AND (snap.project = main.project_identity_observations.project
+				    OR s.project = main.project_identity_observations.project)
+			  )`); err != nil {
+			return fmt.Errorf("removing recovered project identity root fallbacks: %w", err)
+		}
+	}
 
 	// Copy persistent worktree project mappings. Omit id so
 	// primary-key values from old_db cannot shadow existing

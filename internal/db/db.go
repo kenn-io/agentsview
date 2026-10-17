@@ -1632,6 +1632,7 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     root_path          TEXT NOT NULL DEFAULT '',
     git_remote         TEXT NOT NULL DEFAULT '',
     git_remote_name    TEXT NOT NULL DEFAULT '',
+    recorded_git_remote TEXT NOT NULL DEFAULT '',
     repository_path    TEXT NOT NULL DEFAULT '',
     worktree_name      TEXT NOT NULL DEFAULT '',
     worktree_root_path TEXT NOT NULL DEFAULT '',
@@ -1673,6 +1674,7 @@ var exportIdentityColumnMigrations = []schemaColumnMigration{
 	{"project_identity_observations", "git_branch", "ALTER TABLE project_identity_observations ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "remote_resolution", "ALTER TABLE project_identity_observations ADD COLUMN remote_resolution TEXT NOT NULL DEFAULT 'unknown'"},
 	{"project_identity_observations", "remote_candidate_count", "ALTER TABLE project_identity_observations ADD COLUMN remote_candidate_count INTEGER NOT NULL DEFAULT 0"},
+	{"session_project_identity_snapshots", "recorded_git_remote", "ALTER TABLE session_project_identity_snapshots ADD COLUMN recorded_git_remote TEXT NOT NULL DEFAULT ''"},
 }
 
 var exportIdentityUpgradeTables = map[string]struct{}{

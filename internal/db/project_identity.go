@@ -1174,9 +1174,9 @@ func upsertSessionProjectIdentitySnapshotExec(
 	if obs.SessionID == "" {
 		return nil
 	}
-	var sessionExists int
-	if err := queryRow(ctx, `SELECT 1 FROM sessions WHERE id = ?`,
-		obs.SessionID).Scan(&sessionExists); err != nil {
+	var sessionProject string
+	if err := queryRow(ctx, `SELECT project FROM sessions WHERE id = ?`,
+		obs.SessionID).Scan(&sessionProject); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -1273,23 +1273,23 @@ func upsertSessionProjectIdentitySnapshotExec(
 	if err != nil {
 		return fmt.Errorf("upserting session project identity snapshot: %w", err)
 	}
-	if existing == export.ProjectResolutionAmbiguous && obs.SourceRecorded {
-		// An ambiguity belongs to the project only while another snapshot
-		// still supports it. The evidence index bounds this to the old root.
+	if existingMachine != "" && existingRemote == "" && obs.SourceRecorded {
+		// Reconcile the old evidence key across source and effective labels,
+		// even if the checkout disappeared and discovery now returns cwd.
 		if _, err := exec.ExecContext(ctx, `
 			DELETE FROM project_identity_observations
-			WHERE project IN (?, ?) AND machine = ? AND root_path = ?
-			  AND git_remote = '' AND remote_resolution = 'ambiguous'
+			WHERE project IN (?, ?, ?) AND machine = ? AND root_path = ?
+			  AND git_remote = ''
 			  AND NOT EXISTS (
 				SELECT 1 FROM session_project_identity_snapshots snap
 				JOIN sessions s ON s.id = snap.session_id
 				WHERE snap.machine = project_identity_observations.machine
 				  AND snap.root_path = project_identity_observations.root_path
-				  AND snap.git_remote = '' AND snap.remote_resolution = 'ambiguous'
+				  AND snap.git_remote = ''
 				  AND (snap.project = project_identity_observations.project
 				    OR s.project = project_identity_observations.project)
-			  )`, existingProject, obs.Project, existingMachine, existingRoot); err != nil {
-			return fmt.Errorf("removing superseded project identity ambiguity: %w", err)
+			  )`, existingProject, obs.Project, sessionProject, existingMachine, existingRoot); err != nil {
+			return fmt.Errorf("removing superseded project identity root: %w", err)
 		}
 	}
 	return nil

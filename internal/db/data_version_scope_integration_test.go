@@ -3,6 +3,7 @@ package db_test
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -339,15 +340,28 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 		remote, remoteName string
 		wantNormalized     string
 		fullRebuild        bool
-		otherAmbiguous     bool
+		otherUnresolved    bool
+		mapped, nested     bool
 	}{
+		{name: "mapped nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, mapped: true, nested: true},
+		{name: "full rebuild mapped nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, mapped: true, nested: true},
+		{name: "full rebuild retains mapped nested ambiguity", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, mapped: true, nested: true, otherUnresolved: true},
+		{name: "mapped project retains another ambiguous session", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, mapped: true, otherUnresolved: true},
+		{name: "scoped removed nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, nested: true},
+		{name: "scoped removed root-only checkout", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, nested: true},
+		{name: "full rebuild removed root-only checkout", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, fullRebuild: true, nested: true},
+		{name: "full rebuild retains another nested ambiguity", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, nested: true, otherUnresolved: true},
+		{name: "scoped repair retains another nested root", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, nested: true, otherUnresolved: true},
+		{name: "full rebuild retains another nested root", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, fullRebuild: true, nested: true, otherUnresolved: true},
+		{name: "mapped project", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, mapped: true},
+		{name: "full rebuild removed nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, nested: true},
 		{name: "unknown root only", resolution: export.ProjectResolutionUnknown, wantNormalized: recorded},
 		{name: "resolved root only", resolution: export.ProjectResolutionResolved, wantNormalized: recorded},
 		{name: "ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded},
 		{name: "full rebuild root only", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, fullRebuild: true},
 		{name: "full rebuild ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true},
-		{name: "another session remains ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherAmbiguous: true},
-		{name: "full rebuild retains another ambiguous session", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, otherAmbiguous: true},
+		{name: "another session remains ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true},
+		{name: "full rebuild retains another ambiguous session", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, otherUnresolved: true},
 		{
 			name: "full rebuild retains checkout remote", resolution: export.ProjectResolutionResolved,
 			remote: "https://example.com/team/other.git", remoteName: "origin",
@@ -363,10 +377,23 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			ctx := t.Context()
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
+			cwd := filepath.Join(root, "removed-checkout")
+			checkout := filepath.Join(root, ".codex", "worktrees", "abcd", "api")
+			if tc.nested {
+				cwd = filepath.Join(checkout, "internal", "parser")
+				require.NoError(t, os.MkdirAll(cwd, 0o755))
+				require.NoError(t, os.Mkdir(filepath.Join(checkout, ".git"), 0o755))
+			}
+			if tc.mapped {
+				_, err := database.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+					Machine: "local", PathPrefix: cwd, Project: "mapped-api", Enabled: true,
+				})
+				require.NoError(t, err)
+			}
 			id := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 			source := filepath.Join(root, "rollout-"+id+".jsonl")
 			meta := testjsonl.CodexSessionMetaWithFieldsJSON(
-				id, filepath.Join(root, "removed-checkout"), "codex_cli_rs", "2026-10-08T12:00:00Z",
+				id, cwd, "codex_cli_rs", "2026-10-08T12:00:00Z",
 				map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}},
 			)
 			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+
@@ -378,13 +405,17 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			before, err := database.GetSessionFull(ctx, "codex:"+id)
 			require.NoError(t, err)
 			require.NotNil(t, before)
+			priorSnapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, priorSnapshots, 1)
+			oldRoot := priorSnapshots[0].RootPath
 			// Older parsers discarded the URL and kept checkout-derived evidence.
 			version := 137
 			if tc.fullRebuild {
 				version = 135
 			}
 			oldIdentity := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
-				RootPath: before.Cwd, GitRemote: tc.remote, GitRemoteName: tc.remoteName,
+				RootPath: oldRoot, GitRemote: tc.remote, GitRemoteName: tc.remoteName,
 			})
 			if tc.resolution == export.ProjectResolutionAmbiguous {
 				oldIdentity = export.StoredProjectIdentity{}
@@ -405,19 +436,24 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 					"UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version, version))
 				return err
 			}))
-			if tc.otherAmbiguous {
+			if tc.otherUnresolved {
+				other := priorSnapshots[0]
+				other.SessionID = "unavailable-session"
+				other.Project = before.Project
+				other.GitRemote, other.GitRemoteName = "", ""
+				other.RemoteResolution = tc.resolution
+				other.ObservedAt = time.Now()
 				require.NoError(t, database.UpsertSessionWithProjectIdentity(ctx, db.Session{
 					ID: "unavailable-session", Project: before.Project, Machine: "local", Agent: "codex",
-				}, export.ProjectIdentityObservation{
-					SessionID: "unavailable-session", Project: before.Project, Machine: "local",
-					RootPath: before.Cwd, RemoteResolution: export.ProjectResolutionAmbiguous,
-					RemoteCandidateCount: 2, ObservedAt: time.Now(),
-				}, before.Project))
+				}, other, priorSnapshots[0].Project))
 			}
 			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), "ALTER TABLE session_project_identity_snapshots DROP COLUMN recorded_git_remote")
 				return err
 			}))
+			if tc.nested {
+				require.NoError(t, os.RemoveAll(checkout))
+			}
 			path := database.Path()
 			require.NoError(t, database.Close())
 			database, err = db.OpenIsolated(ctx, path)
@@ -456,14 +492,14 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			projects, err := database.BuildProjectIdentityMap(ctx, []string{after.Project})
 			require.NoError(t, err)
 			wantResolution := export.ProjectResolutionResolved
-			if tc.otherAmbiguous || tc.remote != "" {
+			if tc.otherUnresolved || tc.remote != "" {
 				wantResolution = export.ProjectResolutionAmbiguous
 			}
 			assert.Equal(t, wantResolution, projects[after.Project].Resolution)
 			var sessions int
 			require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 			wantSessions := 1
-			if tc.otherAmbiguous {
+			if tc.otherUnresolved {
 				wantSessions++
 			}
 			assert.Len(t, snapshots, wantSessions)
