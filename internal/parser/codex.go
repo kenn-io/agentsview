@@ -424,15 +424,23 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 	return false, nil
 }
 
+// codexAcceptSessionMetaID keeps the first nonempty ID as the file's owner.
+// Repeated metadata for that owner can still update the session.
+func codexAcceptSessionMetaID(sessionID *string, id string) bool {
+	if *sessionID != "" && id != *sessionID {
+		return false
+	}
+	*sessionID = id
+	return true
+}
+
 func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
-	sessionID := payload.Get("id").Str
 	// Legacy forks copy foreign metadata without explicit lineage fields.
-	if b.sessionID != "" && sessionID != b.sessionID {
+	if !codexAcceptSessionMetaID(&b.sessionID, payload.Get("id").Str) {
 		return false
 	}
-	b.sessionID = sessionID
 	b.metaSessionID = payload.Get("session_id").Str
 	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
 	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
@@ -1829,7 +1837,7 @@ func codexReplayParentIDContext(
 		}
 		payload := gjson.Get(line, "payload")
 		id := payload.Get("id").Str
-		if sessionID != "" && id != sessionID {
+		if !codexAcceptSessionMetaID(&sessionID, id) {
 			// Copied parent metadata proves replay only when the owning
 			// header already declared that parent. Its lineage is foreign.
 			if parentID != "" && id == parentID {
@@ -1837,7 +1845,6 @@ func codexReplayParentIDContext(
 			}
 			continue
 		}
-		sessionID = id
 		forkedFromID := strings.TrimSpace(payload.Get("forked_from_id").Str)
 		if forkedFromID != "" {
 			parentID = forkedFromID

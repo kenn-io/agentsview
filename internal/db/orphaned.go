@@ -2969,21 +2969,11 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	// Filename mappings remain available only for the older page/fork repair.
 	threads := make(map[string]string)
 	if version < codexThreadIdentityDataVersion {
-		var hasDeletedAt bool
-		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1 FROM pragma_table_info('sessions', 'old_db') WHERE name = 'deleted_at'
-		)`).Scan(&hasDeletedAt); err != nil {
-			return 0, fmt.Errorf("probing Codex trash: %w", err)
-		}
-		trashGuard := ""
-		if hasDeletedAt {
-			trashGuard = " AND old.deleted_at IS NULL"
-		}
 		rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
 			FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
 			WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
-			  AND old.id != fresh.id AND fresh.deleted_at IS NULL
-			  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`+trashGuard)
+			  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
+			  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
 		if err != nil {
 			return 0, fmt.Errorf("finding reparsed Codex threads: %w", err)
 		}
