@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -404,9 +405,9 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		FROM old_db.sessions old_s
 		JOIN _trashed_ids copied ON copied.source_id = old_s.id
 		WHERE copied.id != copied.source_id
-		  -- Only a pre-131 page keeps its thread's ID as the source. A page
-		  -- whose source ID was retired has no thread row under that ID.
-		  AND substr(copied.id, 1, length(old_s.id) + 1) = old_s.id || '_'`); err != nil {
+		  -- Pages and misfiled threads retain the original trash decision.
+		  AND EXISTS (SELECT 1 FROM _codex_session_ids mapped
+			WHERE mapped.source_id = copied.source_id AND mapped.retired = 0)`); err != nil {
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
 
@@ -1093,6 +1094,7 @@ const codexRevertPageDataVersion = 131
 // stored as codex:<rollout> instead of codex:<thread>_<rollout>.
 const codexLegacyPageHeaderDataVersion = 134
 
+// codexThreadIdentityDataVersion is the first version that preserves a rollout's first session_meta ID.
 const codexThreadIdentityDataVersion = 137
 
 // CopyExcludedSessionsFrom copies the excluded_sessions table
@@ -2255,13 +2257,14 @@ func copySessionDataForIDs(
 	// A page that retired its source ID has no head under that ID; it is
 	// linked below.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
-		SET parent_session_id = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN copied.source_id ELSE parent_session_id END,
-			parser_parent_session_id = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN copied.source_id ELSE parser_parent_session_id END,
-			relationship_type = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN 'continuation' ELSE relationship_type END,
+		SET parent_session_id = CASE WHEN copied.is_thread_page THEN copied.source_id ELSE parent_session_id END,
+			parser_parent_session_id = CASE WHEN copied.is_thread_page THEN copied.source_id ELSE parser_parent_session_id END,
+			relationship_type = CASE WHEN copied.is_thread_page THEN 'continuation' ELSE relationship_type END,
 			display_name = CASE WHEN EXISTS (
 				SELECT 1 FROM main.sessions head WHERE head.id = copied.source_id
 			) THEN NULL ELSE display_name END
-		FROM `+tempIDsTable+` copied
+		FROM (SELECT *, substr(id, 1, length(source_id)+1) = source_id || '_' AS is_thread_page
+			FROM `+tempIDsTable+`) copied
 		WHERE sessions.id = copied.id AND copied.id != copied.source_id
 		  AND EXISTS (
 			SELECT 1 FROM _codex_session_ids r
@@ -2936,7 +2939,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _codex_session_ids (
 			source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, is_page INTEGER NOT NULL,
-			retired INTEGER NOT NULL DEFAULT 0
+			retired INTEGER NOT NULL DEFAULT 0, misfiled_file_name TEXT
 		);
 		CREATE TEMP VIEW _codex_page_metadata AS
 		SELECT source_id, target_id FROM _codex_session_ids
@@ -2968,20 +2971,25 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		if len(args) == 0 {
 			return nil
 		}
-		_, err := conn.ExecContext(ctx, `INSERT INTO _codex_session_ids (source_id,target_id,is_page,retired) VALUES `+
-			strings.TrimSuffix(strings.Repeat("(?,?,?,?),", len(args)/4), ","), args...)
+		_, err := conn.ExecContext(ctx, `INSERT INTO _codex_session_ids (source_id,target_id,is_page,retired,misfiled_file_name) VALUES `+
+			strings.TrimSuffix(strings.Repeat("(?,?,?,?,?),", len(args)/5), ","), args...)
 		args = args[:0]
 		return err
 	}
-	for sourceID, targetID := range candidates {
+	for sourceID, path := range candidates {
 		prefixEnd := strings.LastIndex(sourceID, ":") + 1
+		targetID := sourceID[:prefixEnd] + parser.CodexSessionUUIDFromPath(path)
 		sourceKey, targetKey := sourceID[prefixEnd:], targetID[prefixEnd:]
 		thread := parser.CodexThreadIDFromSessionKey(targetKey)
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
 		misfiledThread := version < codexThreadIdentityDataVersion && thread == targetKey && targetKey != sourceKey
-		args = append(args, sourceID, targetID, headPage || retired || misfiledThread, retired)
+		var misfiledFileName any
+		if misfiledThread {
+			misfiledFileName = strings.TrimSuffix(filepath.Base(path), ".zst")
+		}
+		args = append(args, sourceID, targetID, headPage || retired || misfiledThread, retired, misfiledFileName)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
 				return 0, fmt.Errorf("mapping Codex session IDs: %w", err)
@@ -2996,22 +3004,43 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	// the file name is not a page), so migrating would duplicate it.
 	if _, err := conn.ExecContext(ctx, `
 		UPDATE _codex_session_ids SET is_page = 0, retired = 0
-		WHERE (retired = 1 AND source_id IN (SELECT id FROM main.sessions))
-		   OR EXISTS (
-			SELECT 1 FROM main.sessions live
-			JOIN old_db.sessions old_s ON old_s.id = live.id
-			WHERE live.id = _codex_session_ids.source_id
-			  AND (live.file_path = old_s.file_path
-				OR live.file_path = old_s.file_path || '.zst'
-				OR live.file_path || '.zst' = old_s.file_path)
-		   )`); err != nil {
+		WHERE retired = 1 AND source_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
+	}
+	// A misfiled thread moves only when the fresh parse proves ownership.
+	// Trash copies run before parsing and must retain their stored decisions.
+	trashGuard := ""
+	var hasDeletedAt bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pragma_table_info('sessions', 'old_db') WHERE name = 'deleted_at'
+	)`).Scan(&hasDeletedAt); err != nil {
+		return 0, fmt.Errorf("probing Codex trash: %w", err)
+	}
+	if hasDeletedAt {
+		trashGuard = ` AND source_id NOT IN (SELECT id FROM old_db.sessions WHERE deleted_at IS NOT NULL)`
+	}
+	if _, err := conn.ExecContext(ctx, `
+		WITH live_files AS (
+			SELECT id, '/' || replace(CASE WHEN substr(file_path, -4) = '.zst'
+				THEN substr(file_path, 1, length(file_path)-4) ELSE file_path END, char(92), '/') AS path
+			FROM main.sessions WHERE file_path IS NOT NULL
+		)
+		DELETE FROM _codex_session_ids
+		WHERE misfiled_file_name IS NOT NULL`+trashGuard+`
+		  AND NOT EXISTS (
+			SELECT 1 FROM live_files live
+			WHERE (live.id = target_id AND
+				substr(live.path, -length(misfiled_file_name)-1) = '/' || misfiled_file_name)
+			   OR (live.id = source_id AND
+				substr(live.path, -length(misfiled_file_name)-1) != '/' || misfiled_file_name)
+		  )`); err != nil {
+		return 0, fmt.Errorf("dropping unproven Codex thread moves: %w", err)
 	}
 	return version, nil
 }
 
-// codexRowsReparsedElsewhere maps each old Codex-format row to the id its
-// rollout file's name gives, when that id differs.
+// codexRowsReparsedElsewhere returns the stored paths of Codex-format rows
+// whose rollout file name gives a different session ID.
 func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, file_path FROM old_db.sessions
@@ -3032,7 +3061,7 @@ func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string
 		key := parser.CodexSessionUUIDFromPath(path)
 		prefixEnd := strings.LastIndex(id, ":") + 1
 		if key != "" && prefixEnd > 0 && id[prefixEnd:] != key {
-			liveIDs[id] = id[:prefixEnd] + key
+			liveIDs[id] = path
 		}
 	}
 	if err := rows.Err(); err != nil {

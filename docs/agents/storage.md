@@ -181,12 +181,17 @@ pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
 name kept with each deletion when the file is gone. Session and recall imports
 use the same exclusion check.
 
-Data version 137 separates misfiled Codex threads and retains transcripts whose
-files are gone. Pins, Recall entries, and export message IDs follow the corrected
-transcript, including moved source files. For live sessions, names and stars
-stay on a surviving original thread; when it is absent, they follow the
-corrected transcript. Trash and permanent deletions continue to hide the
-affected threads. PostgreSQL pins move on the next push.
+Data version 137 separates misfiled Codex threads when the fresh parse confirms
+which rollout owns each ID. A moved file matches by rollout file name, including
+changes between `.jsonl` and `.jsonl.zst`. If the file is gone, its transcript
+moves only when another rollout now owns the old ID; otherwise the archived row
+keeps its ID. Pins, Recall entries, and export message IDs follow the corrected
+transcript. For live sessions, names and stars stay on a surviving original
+thread; when it is absent, they follow the corrected transcript. Trash and
+permanent deletions continue to hide the affected threads. A trashed misfiled
+transcript also keeps an empty trashed row under its old ID, so its original
+rollout stays hidden if it returns. PostgreSQL pins move on the next push,
+including a push of only the corrected thread.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

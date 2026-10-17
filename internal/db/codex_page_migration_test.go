@@ -3,6 +3,7 @@ package db
 import (
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,17 +154,25 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 	const original = "codex:11111111-1111-7111-8111-111111111111"
 	const corrected = "codex:22222222-2222-7222-8222-222222222222"
 	for _, tc := range []struct {
-		name                                                                     string
-		moved, missing, originalAbsent, trash, deleted, headerOwnsID, compressed bool
+		name                                                                                                     string
+		moved, missing, originalAbsent, trash, deleted, headerOwnsID, compressed, unrelatedTarget, oldCompressed bool
 	}{
 		{name: "both_present"},
 		{name: "relocated", moved: true},
+		{name: "relocated_compressed", moved: true, compressed: true},
+		{name: "relocated_uncompressed", moved: true, oldCompressed: true},
+		{name: "unrelated_target", originalAbsent: true, unrelatedTarget: true},
 		{name: "missing", missing: true},
 		{name: "original_absent", originalAbsent: true},
 		{name: "both_missing", originalAbsent: true, missing: true},
 		{name: "trash", trash: true},
+		{name: "trash_original_absent", trash: true, originalAbsent: true},
 		{name: "permanent_deletion", deleted: true},
 		{name: "header_owns_id", headerOwnsID: true},
+		{name: "header_owns_id_relocated", headerOwnsID: true, moved: true},
+		{name: "header_owns_id_relocated_compressed", headerOwnsID: true, moved: true, compressed: true},
+		{name: "header_owns_id_relocated_uncompressed", headerOwnsID: true, moved: true, oldCompressed: true},
+		{name: "header_owns_id_missing", headerOwnsID: true, missing: true},
 		{name: "header_owns_id_compressed", headerOwnsID: true, compressed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,6 +180,9 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 			src := testDB(t)
 			seedRecallEvidenceWindow(t, src, original, 0, "saved", "")
 			path := filepath.Join(t.TempDir(), "rollout-2025-10-20T12-09-52-"+corrected[len("codex:"):]+".jsonl")
+			if tc.oldCompressed {
+				path += ".zst"
+			}
 			_, err := src.getWriter().Exec(ctx, `UPDATE sessions SET agent='codex', file_path=?, data_version=135 WHERE id=?`, path, original)
 			require.NoError(t, err)
 			selection := insertVerifiedRecallSelection(t, src, "saved-fact", original, 0, 1, []string{"tool-a"})
@@ -200,7 +212,7 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 			_, err = dst.CopyTrashedDataFrom(src.Path())
 			require.NoError(t, err)
 			// Model the fresh parse after exclusions and trash have been copied.
-			if !tc.deleted && !tc.headerOwnsID && !tc.originalAbsent {
+			if !tc.deleted && !tc.trash && !tc.headerOwnsID && !tc.originalAbsent {
 				seedRecallEvidenceWindow(t, dst, original, 0, "head", "changed")
 				_, err = dst.getWriter().Exec(ctx, `UPDATE sessions SET agent='codex', file_path=? WHERE id=?`, filepath.Join(filepath.Dir(path), "rollout-2025-10-20T12-00-00-"+original[len("codex:"):]+".jsonl"), original)
 				require.NoError(t, err)
@@ -210,9 +222,12 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 				if tc.headerOwnsID {
 					target = original
 				}
-				parsedPath := path
+				parsedPath := strings.TrimSuffix(path, ".zst")
 				if tc.moved {
-					parsedPath = filepath.Join(t.TempDir(), filepath.Base(path))
+					parsedPath = filepath.Join(t.TempDir(), filepath.Base(parsedPath))
+				}
+				if tc.unrelatedTarget {
+					parsedPath = filepath.Join(t.TempDir(), "rollout-2025-10-21T12-09-52-"+corrected[len("codex:"):]+".jsonl")
 				}
 				if tc.compressed {
 					parsedPath += ".zst"
@@ -238,11 +253,13 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 				return
 			}
 			wantID := corrected
-			if tc.headerOwnsID {
+			if tc.headerOwnsID || (tc.originalAbsent && tc.missing) || tc.unrelatedTarget {
 				wantID = original
 				duplicate, err := dst.GetSession(ctx, corrected)
 				require.NoError(t, err)
-				assert.Nil(t, duplicate)
+				if !tc.unrelatedTarget {
+					assert.Nil(t, duplicate)
+				}
 			}
 			got, err := dst.GetSessionFull(ctx, wantID)
 			require.NoError(t, err)
@@ -279,6 +296,14 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 				assert.Equal(t, wantID, change.SessionID)
 			}
 			if tc.trash {
+				assert.True(t, dst.IsSessionTrashed(ctx, original), "the original thread must stay hidden when its own rollout returns")
+				if tc.originalAbsent {
+					require.ErrorIs(t, dst.UpsertSession(ctx, Session{ID: original, Agent: "codex", Project: "agentsview", Machine: "local"}), ErrSessionTrashed)
+					assert.True(t, dst.IsSessionTrashed(ctx, original))
+					returning, err := dst.GetAllMessages(ctx, original)
+					require.NoError(t, err)
+					assert.Empty(t, returning)
+				}
 				return
 			}
 
