@@ -2142,6 +2142,81 @@ describe("UsageStore time-series range selection", () => {
     },
   );
 
+  it("keeps plan-only model rows when deriving a selected range", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const context = usageSummary(15);
+    context.modelTotals = [
+      {
+        model: "model-priced",
+        inputTokens: 40,
+        outputTokens: 4,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(4),
+        planOnlySessions: 2,
+      },
+      {
+        model: "model-plan-only",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(0),
+        planOnlySessions: 3,
+      },
+    ];
+    context.daily = [
+      {
+        date: "2026-06-08",
+        inputTokens: 10,
+        outputTokens: 1,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalCost: testMoney(1),
+        modelsUsed: ["model-priced"],
+        projectBreakdowns: [],
+        modelBreakdowns: [
+          {
+            modelName: "model-priced",
+            inputTokens: 10,
+            outputTokens: 1,
+            cacheCreationTokens: 0,
+            cacheReadTokens: 0,
+            cost: testMoney(1),
+          },
+        ],
+        agentBreakdowns: [],
+        machineBreakdowns: [],
+      },
+    ];
+    usage.summary = context;
+
+    usage.setTimeRange("2026-06-08", "2026-06-09");
+
+    expect(usage.summary?.modelTotals).toEqual([
+      {
+        model: "model-priced",
+        inputTokens: 10,
+        outputTokens: 1,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(1),
+        planOnlySessions: 2,
+      },
+      {
+        model: "model-plan-only",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(0),
+        planOnlySessions: 3,
+      },
+    ]);
+    usage.cancelInFlightReads();
+  });
+
   it("restores the parent summary when the selected-range request fails", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");

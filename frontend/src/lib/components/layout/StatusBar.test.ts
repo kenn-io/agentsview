@@ -5,9 +5,20 @@ import { mount, tick, unmount } from "svelte";
 import StatusBar from "./StatusBar.svelte";
 import { sync } from "../../stores/sync.svelte.js";
 import { formatTimestamp } from "../../utils/format.js";
+import { ApiError, setServerUrl } from "../../api/runtime.js";
+
+const { getCodexCloudStatus } = vi.hoisted(() => ({
+  getCodexCloudStatus: vi.fn(),
+}));
+
+vi.mock("../../api/generated/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/generated/index")>()),
+  CodexCloudService: { getApiV1CodexCloudStatus: getCodexCloudStatus },
+}));
 
 describe("StatusBar", () => {
   beforeEach(() => {
+    getCodexCloudStatus.mockReset().mockResolvedValue([]);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-08T05:00:00Z"));
     sync.archiveStale = false;
@@ -88,7 +99,7 @@ describe("StatusBar", () => {
 
     expect(document.body.textContent).toContain("synced 1m ago");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("shows a remote-unreachable indicator only when flagged", async () => {
@@ -103,7 +114,7 @@ describe("StatusBar", () => {
     await tick();
     expect(document.body.textContent).not.toContain("remote server unreachable");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("shows a sync-not-ready indicator when backend is degraded", async () => {
@@ -121,7 +132,7 @@ describe("StatusBar", () => {
     await tick();
     expect(document.body.textContent).not.toContain("sync not ready");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("renders detailed sync progress with a hint", async () => {
@@ -147,6 +158,148 @@ describe("StatusBar", () => {
     expect(progress?.textContent).toContain("Rebuilding search index");
     expect(progress?.getAttribute("title")).toContain("may take a while");
 
-    unmount(component);
+    void unmount(component);
+  });
+
+  describe("codex-cloud status", () => {
+    const upToDate = {
+      key: "account-a",
+      homes: ["/synthetic/codex-home"],
+      state: "up_to_date",
+      last_success: "2026-04-08T04:55:00Z",
+      live: "Live tokens: listening in on 1 running chat.",
+      plan_usage: "Plan usage: not checked yet",
+    };
+
+    async function mountWithRows(): Promise<ReturnType<typeof mount>> {
+      const component = mount(StatusBar, { target: document.body });
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      return component;
+    }
+
+    it("shows nothing when the source is not configured", async () => {
+      const component = await mountWithRows();
+
+      expect(getCodexCloudStatus).toHaveBeenCalled();
+      expect(document.querySelector(".codex-cloud-status")).toBeNull();
+      void unmount(component);
+    });
+
+    // Focus opens the tooltip at once, so keyboard users can read it.
+    async function focusTooltip(line: Element | null): Promise<string | undefined> {
+      const trigger = line?.closest<HTMLElement>(".kit-tooltip-trigger");
+      expect(trigger?.tabIndex).toBe(0);
+      trigger!.focus();
+      await tick();
+      return document.querySelector('[role="tooltip"]')?.textContent?.trim();
+    }
+
+    it("shows the state with each line in its tooltip", async () => {
+      getCodexCloudStatus.mockResolvedValue([upToDate]);
+      const component = await mountWithRows();
+
+      const line = document.querySelector(".codex-cloud-status");
+      expect(line?.textContent?.trim()).toBe(
+        `Codex Cloud: up to date as of ${formatTimestamp("2026-04-08T04:55:00Z")}`,
+      );
+      expect(line?.classList.contains("codex-cloud-status--warn")).toBe(false);
+      expect((await focusTooltip(line))?.split("\n")).toEqual([
+        "Codex homes: /synthetic/codex-home",
+        `Codex Cloud: up to date as of ${formatTimestamp("2026-04-08T04:55:00Z")}`,
+        "Live tokens: listening in on 1 running chat.",
+        "Plan usage: not checked yet",
+      ]);
+      void unmount(component);
+    });
+
+    it("marks the status when live capture needs the user while sync is fine", async () => {
+      getCodexCloudStatus.mockResolvedValue([
+        {
+          ...upToDate,
+          live: "Live tokens: listening in on 1 running chat. Token counts for 1 chat are not saved yet.",
+          live_warn: true,
+        },
+      ]);
+      const component = await mountWithRows();
+
+      const line = document.querySelector(".codex-cloud-status");
+      expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
+      // The warning is in words, not only in color.
+      expect(line?.textContent?.trim()).toBe("Codex Cloud: live tokens need attention");
+      void unmount(component);
+    });
+
+    it("summarizes the row that needs attention", async () => {
+      // The server appends these sentences to a retrying row's message.
+      const retrySentences =
+        "AgentsView retries a failed chat for 7 days; a change to the chat in OpenAI restarts the 7 days. " +
+        "The AgentsView log, debug.log in its data directory, lists each chat by its ID. Chats already imported are not affected.";
+      getCodexCloudStatus.mockResolvedValue([
+        upToDate,
+        {
+          key: "account-b",
+          homes: ["/synthetic/other-home"],
+          state: "retrying",
+          retry_count: 2,
+          oldest_failure: "2026-04-08T03:00:00Z",
+          message: `Can't reach OpenAI. AgentsView retries automatically. ${retrySentences}`,
+        },
+      ]);
+      const component = await mountWithRows();
+
+      const line = document.querySelector(".codex-cloud-status");
+      expect(line?.textContent?.trim()).toBe("Codex Cloud: 2 chats could not be imported");
+      expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
+      const detail = await focusTooltip(line);
+      expect(detail).toContain(
+        "Codex homes: /synthetic/other-home\n" +
+          "Codex Cloud: 2 chats could not be imported\n" +
+          `Oldest failure: ${formatTimestamp("2026-04-08T03:00:00Z")}\n` +
+          `Can't reach OpenAI. AgentsView retries automatically. ${retrySentences}`,
+      );
+      expect(detail?.split("retries a failed chat for 7 days")).toHaveLength(2);
+      void unmount(component);
+    });
+
+    it("drops the previous server's status as soon as the server changes", async () => {
+      getCodexCloudStatus.mockResolvedValue([upToDate]);
+      const component = await mountWithRows();
+      expect(document.querySelector(".codex-cloud-status")).not.toBeNull();
+
+      let answer!: (rows: (typeof upToDate)[]) => void;
+      getCodexCloudStatus.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      try {
+        setServerUrl("http://other.example:8080");
+        await tick();
+        expect(document.querySelector(".codex-cloud-status")).toBeNull();
+
+        answer([{ ...upToDate, state: "waiting" }]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(document.querySelector(".codex-cloud-status")?.textContent?.trim()).toBe(
+          "Codex Cloud: waiting for first sync",
+        );
+      } finally {
+        setServerUrl("");
+        void unmount(component);
+      }
+    });
+
+    // Keep this test last: the store remembers the 404 for the page's life.
+    it("stops asking a server without the status route", async () => {
+      getCodexCloudStatus.mockRejectedValue(new ApiError(404, "not found"));
+      const component = await mountWithRows();
+      const calls = getCodexCloudStatus.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(getCodexCloudStatus.mock.calls.length).toBe(calls);
+      expect(document.querySelector(".codex-cloud-status")).toBeNull();
+      void unmount(component);
+    });
   });
 });

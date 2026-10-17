@@ -224,6 +224,13 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err := bulkInsertUsageEvents(ctx, tx, p.UsageEvents); err != nil {
 		return err
 	}
+	// counted_under keeps the source session ID; hosted reads map it to a
+	// public ID through the usage_root link that writeRawLinks records.
+	if p.PlanUsage != nil {
+		if err := insertPlanUsage(ctx, tx, id, p.PlanUsage); err != nil {
+			return err
+		}
+	}
 	if err := bulkInsertSecretFindings(ctx, tx, id, p.Findings); err != nil {
 		return err
 	}

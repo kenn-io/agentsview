@@ -2753,5 +2753,105 @@
   "usage_all_projects": "所有專案",
   "usage_clear_selection": "清除選擇",
   "usage_open_project": "開啟",
-  "usage_loading": "正在載入..."
+  "usage_loading": "正在載入...",
+  "plan_usage_title": "方案用量",
+  "plan_usage_trigger_weekly": "方案用量：每週 {percent}%",
+  "plan_usage_as_of": "方案用量（截至 {time}）",
+  "plan_usage_not_checked": "方案用量：尚未檢查",
+  "plan_usage_still_updating": "方案用量：仍在更新（截至 {time}）",
+  "plan_usage_not_reported_yet": "方案用量：尚未回報（截至 {time}）",
+  "plan_usage_partial": "部分方案用量（截至 {time}）",
+  "plan_usage_not_reported": "OpenAI 未回報",
+  "plan_usage_too_many_subagents": "子代理聊天過多，OpenAI 用量報告無法納入",
+  "plan_usage_could_not_check": "AgentsView 無法檢查方案用量",
+  "plan_usage_account_unavailable": "此帳戶無法取得用量",
+  "plan_usage_counted_under": "計入聊天 {title}",
+  "plan_usage_stale": "此後：{reason}（{time}）。這些數字可能已過時。",
+  "plan_usage_left_out_later": "OpenAI 用量報告未納入此聊天",
+  "plan_usage_weekly_share": "Codex 每週上限的 {percent}%",
+  "plan_usage_five_hour_share": "Codex 五小時上限的 {percent}%",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 點數"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "點數依 OpenAI 用量報告提供的數值顯示。",
+  "plan_usage_col_split": "模型、推理強度、速度",
+  "plan_usage_col_weekly": "每週",
+  "plan_usage_col_five_hour": "5 小時",
+  "plan_usage_col_credits": "點數",
+  "capture_tokens_live": "即時擷取 token（截至 {time}）",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 輪未擷取"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input time",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 輪未擷取；{time} 之前的輪次已計入方案用量"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 個對話以方案用量計費，未計價"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 個對話僅部分擷取；其 token 數偏低。"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud：等待首次同步",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud：匯入中，目前已找到 {countLabel} 個聊天"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud：正在匯入 {imported}/{total} 個聊天",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud：截至 {time} 已是最新",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud：{countLabel} 個聊天無法匯入"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud：錯誤",
+  "status_bar_codex_cloud_off": "Codex Cloud：已關閉",
+  "status_bar_codex_cloud_config_error": "Codex Cloud：設定錯誤",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud：即時權杖需要處理",
+  "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
+  "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
+  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"
 }

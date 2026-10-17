@@ -120,6 +120,32 @@ SELECT
         ARRAY['server_tool_use', 'web_search_requests'],
         'web_search_requests')`
 
+// sessionPlanUsageDDL mirrors SQLite's session_plan_usage. Times stay
+// the archive's RFC 3339 text and groups its JSON text, so every backend
+// returns the same values; nothing range-queries these columns.
+const sessionPlanUsageDDL = `
+CREATE TABLE IF NOT EXISTS session_plan_usage (
+    session_id TEXT PRIMARY KEY,
+    has_plan_usage BOOLEAN NOT NULL DEFAULT FALSE,
+    data_as_of TEXT,
+    data_status TEXT NOT NULL DEFAULT '',
+    usage_source TEXT NOT NULL DEFAULT '',
+    weekly_percent DOUBLE PRECISION,
+    five_hour_percent DOUBLE PRECISION,
+    credits TEXT,
+    groups_json TEXT NOT NULL DEFAULT '[]',
+    is_final BOOLEAN NOT NULL DEFAULT FALSE,
+    outcome_kind TEXT NOT NULL DEFAULT '',
+    outcome_at TEXT,
+    counted_under TEXT NOT NULL DEFAULT '',
+    has_coverage BOOLEAN NOT NULL DEFAULT FALSE,
+    last_capture_at TEXT,
+    uncaptured_turns INT NOT NULL DEFAULT 0,
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+`
+
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
 //
@@ -279,7 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
-
+` + sessionPlanUsageDDL + `
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id BIGSERIAL PRIMARY KEY,
     occurred_at TIMESTAMPTZ NOT NULL,
@@ -2241,6 +2267,16 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"usage_events table missing required columns: %w",
+			err,
+		)
+	}
+
+	_, err = db.ExecContext(ctx,
+		`SELECT session_id, `+planUsageColumns+`
+		 FROM session_plan_usage LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"session_plan_usage table missing required columns: %w",
 			err,
 		)
 	}

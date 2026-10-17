@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -748,6 +749,19 @@ func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 		"usage_events table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresPlanUsage(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "from session_plan_usage",
+		err:      &pgconn.PgError{Code: "42P01", Message: `relation "session_plan_usage" does not exist`},
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session_plan_usage table missing required columns")
+}
+
 func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.execErrors = []schemaProbeQueryError{{
@@ -1173,4 +1187,24 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// Already-present raw job columns are probed without issuing a redundant ALTER.
 	assert.Equal(t, 6, state.alterTableExecCount(), "ALTER TABLE execs")
 	assert.Contains(t, state.alterTableSQL(), "ADD COLUMN IF NOT EXISTS observed_outcome TEXT, ADD COLUMN IF NOT EXISTS observed_repeat TEXT, ADD COLUMN IF NOT EXISTS sequence_ending TEXT")
+}
+
+func TestServeSchemaErrorAsksForAGrantWhenReadIsDenied(t *testing.T) {
+	denied := fmt.Errorf("session_plan_usage table missing required columns: %w",
+		&pgconn.PgError{Code: "42501", Message: "permission denied for table session_plan_usage"})
+
+	err := serveSchemaError(denied, "agentsview")
+
+	require.ErrorIs(t, err, denied)
+	assert.Contains(t, err.Error(), `GRANT USAGE ON SCHEMA "agentsview" TO <serve role>;`,
+		"a denial on the schema itself needs USAGE, not only SELECT")
+	assert.Contains(t, err.Error(), `GRANT SELECT ON ALL TABLES IN SCHEMA "agentsview" TO <serve role>;`)
+	assert.NotContains(t, err.Error(), "Drop and recreate")
+}
+
+func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
+	missing := fmt.Errorf("session_plan_usage table missing required columns: %w",
+		&pgconn.PgError{Code: "42703", Message: `column "credits" does not exist`})
+
+	assert.Contains(t, serveSchemaError(missing, "agentsview").Error(), "Drop and recreate the PG schema")
 }

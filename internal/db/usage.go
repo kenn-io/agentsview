@@ -2967,6 +2967,12 @@ type SessionUsage struct {
 	// presentation-time combining in internal/service sets it.
 	SubagentCount int                          `json:"subagent_count,omitzero"`
 	Breakdown     []SessionUsageBreakdownEntry `json:"breakdown"`
+	// PlanUsage is the session's plan usage and live-capture coverage
+	// row, nil when it has none. Responses carry it as the separate
+	// plan_usage and capture_coverage objects (see
+	// SessionPlanUsage.PlanUsageView), so the token and cost fields above
+	// keep their meaning.
+	PlanUsage *SessionPlanUsage `json:"-"`
 }
 
 type SessionUsageBreakdownEntry struct {
@@ -3336,6 +3342,10 @@ func (db *DB) getSessionUsageLegacy(
 		out.AICredits = AICreditsFromCost(sess.Agent, out.Cost)
 	}
 	out.CostUSD = CostUSDFromCost(out.HasCost, out.Cost)
+	out.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, db.getReader(), sess.ID)
+	if err != nil {
+		return nil, err
+	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels, err = sortedSetKeysContext(ctx, unpricedSet)
 		if err != nil {

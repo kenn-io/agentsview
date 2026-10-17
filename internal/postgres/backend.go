@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -133,19 +135,79 @@ func (Backend) OpenServeStore(
 	return store, nil
 }
 
+// serveSchemaError explains a failed schema check to the serve operator.
+// A role without access to the schema or a table needs grants; recreating
+// the schema would not help and would discard the pushed data.
+func serveSchemaError(err error, schema string) error {
+	if isInsufficientPrivilege(err) {
+		return serveGrantError(err, schema)
+	}
+	return fmt.Errorf(
+		"schema incompatible: %w\n"+
+			"Drop and recreate the PG schema, then run "+
+			"'agentsview pg push --full' to repopulate",
+		err,
+	)
+}
+
+// serveGrantError asks for the grants a serve role needs to read the
+// schema. A denial can name the schema itself, which SELECT on its tables
+// does not fix, so the advice names both grants. The serve role usually
+// cannot grant them to itself.
+func serveGrantError(err error, schema string) error {
+	ident, identErr := quoteIdentifier(schema)
+	if identErr != nil {
+		ident = "<schema>"
+	}
+	return fmt.Errorf(
+		"serve role cannot read the schema: %w\n"+
+			"Ask the schema owner or a database administrator to grant the serve role\n"+
+			"USAGE on the schema and SELECT on its tables:\n"+
+			"  GRANT USAGE ON SCHEMA %s TO <serve role>;\n"+
+			"  GRANT SELECT ON ALL TABLES IN SCHEMA %s TO <serve role>;\n"+
+			"then run 'agentsview pg serve' again",
+		err, ident, ident,
+	)
+}
+
+var errNoSchemaUsage = errors.New("the role has no USAGE privilege on the schema")
+
+// checkSchemaUsage fails when the role cannot use an existing schema.
+// PostgreSQL leaves such a schema out of the search path, so the schema
+// check would see missing tables and functions and ask for a rebuild. A
+// schema that does not exist passes; the schema check reports it.
+func checkSchemaUsage(ctx context.Context, pg *sql.DB, schema string) error {
+	var usable bool
+	err := pg.QueryRowContext(ctx,
+		`SELECT has_schema_privilege(oid, 'USAGE') FROM pg_namespace WHERE nspname = $1`,
+		schema,
+	).Scan(&usable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking access to the PG schema: %w", err)
+	}
+	if !usable {
+		return errNoSchemaUsage
+	}
+	return nil
+}
+
 func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 	if err := EnsureSchema(ctx, store.DB(), schema); err != nil {
 		if !IsReadOnlyError(err) {
 			return fmt.Errorf("schema migration failed: %w", err)
 		}
 	}
+	if err := checkSchemaUsage(ctx, store.DB(), schema); err != nil {
+		if errors.Is(err, errNoSchemaUsage) {
+			return serveGrantError(err, schema)
+		}
+		return err
+	}
 	if err := CheckSchemaCompat(ctx, store.DB()); err != nil {
-		return fmt.Errorf(
-			"schema incompatible: %w\n"+
-				"Drop and recreate the PG schema, then run "+
-				"'agentsview pg push --full' to repopulate",
-			err,
-		)
+		return serveSchemaError(err, schema)
 	}
 	if err := CheckDataVersionCompat(ctx, store.DB()); err != nil {
 		return err

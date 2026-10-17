@@ -467,22 +467,24 @@ func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.
 	}
 }
 
-func TestUsageExitCode_TokenData(t *testing.T) {
-	u := &db.SessionUsage{HasTokenData: true}
-	assert.Equal(t, tokenUseExitOK, usageExitCode(u))
-}
-
-func TestUsageExitCode_CostOnly(t *testing.T) {
-	u := &db.SessionUsage{HasTokenData: false, HasCost: true}
-	assert.Equal(t, tokenUseExitOK, usageExitCode(u),
-		"cost-only must not be exit 3")
-}
-
-func TestUsageExitCode_NoData(t *testing.T) {
-	u := &db.SessionUsage{}
-	assert.Equal(t, tokenUseExitNoTokenData, usageExitCode(u))
-}
-
-func TestUsageExitCode_NotFound(t *testing.T) {
-	assert.Equal(t, tokenUseExitNotFound, usageExitCode(nil))
+func TestUsageExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  *sessionUsageOutput
+		want int
+	}{
+		{"token data", &sessionUsageOutput{HasTokenData: true}, tokenUseExitOK},
+		{"cost only", &sessionUsageOutput{HasCost: true}, tokenUseExitOK},
+		{"nothing", &sessionUsageOutput{}, tokenUseExitNoTokenData},
+		{
+			"plan usage without figures",
+			&sessionUsageOutput{Plan: &db.PlanUsageView{OutcomeKind: "left_out"}},
+			tokenUseExitNoTokenData,
+		},
+		{"not found", nil, tokenUseExitNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, usageExitCode(tc.out))
+		})
+	}
 }

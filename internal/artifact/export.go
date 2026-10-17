@@ -512,6 +512,7 @@ func exportLoadedSessionToStore(
 	sess *db.Session,
 	messages []db.Message,
 	usageEvents []db.UsageEvent,
+	planUsage *db.SessionPlanUsage,
 	limits artifactLimits,
 ) (string, bool, error) {
 	if sess.ID == "" || strings.Contains(sess.ID, "~") {
@@ -532,6 +533,13 @@ func exportLoadedSessionToStore(
 			sess.ID, len(usageEvents), limits.manifestUsageEvents,
 		)
 	}
+	wirePlanUsage, wireCoverage := manifestPlanUsageFromDB(planUsage)
+	if wirePlanUsage != nil && len(wirePlanUsage.Groups) > limits.planUsageGroups {
+		return "", false, rejectArtifactExportf(
+			"manifest plan usage group limit exceeded for %s: got %d, limit %d",
+			sess.ID, len(wirePlanUsage.Groups), limits.planUsageGroups,
+		)
+	}
 	if err := validateExportNestedCollections(messages, limits); err != nil {
 		return "", false, fmt.Errorf("validating nested collections for %s: %w", sess.ID, err)
 	}
@@ -548,6 +556,9 @@ func exportLoadedSessionToStore(
 	normalizeManifestSessionLocalState(&wireSession)
 	version := 5
 	if len(wireSession.PRLinks) > 0 {
+		version = manifestPRLinksVersion
+	}
+	if wirePlanUsage != nil || wireCoverage != nil {
 		version = manifestFormatVersion
 	}
 	m := manifest{
@@ -558,6 +569,8 @@ func exportLoadedSessionToStore(
 		SessionHasToolCalls:   sess.HasToolCalls,
 		SessionHasContextData: sess.HasContextData,
 		SessionQualitySignals: manifestQualitySignalsFromDB(sess.StoredQualitySignals()),
+		PlanUsage:             wirePlanUsage,
+		CaptureCoverage:       wireCoverage,
 	}
 	data, err := canonicalJSON(m)
 	if err != nil {
@@ -607,7 +620,8 @@ func exportClaimedSessionToStore(
 		)
 	}
 	return exportLoadedSessionToStore(
-		ctx, store, origin, sess, data.Messages, data.UsageEvents, limits,
+		ctx, store, origin, sess, data.Messages, data.UsageEvents,
+		data.PlanUsage, limits,
 	)
 }
 

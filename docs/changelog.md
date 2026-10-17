@@ -76,6 +76,30 @@ The latest release is
 - Antigravity sessions show the conversation title Antigravity saves in
   `conversation_summaries.db`, and follow renames there, including for
   conversations whose transcript is gone. Names set in AgentsView still win.
+- Import ChatGPT dot, Codex web, and Codex cloud task chats that live only on
+  OpenAI's servers. Turn it on with `[agents.codex-cloud] enabled = true` in
+  `config.toml`; it uses the ChatGPT login of your local Codex homes. Live
+  capture is opt-in: with `live_tokens = true`, AgentsView connects to a running
+  chat on OpenAI's side to listen in and record its token usage, so its cost
+  appears in usage totals. Connecting to a chat whose turn just ended can make
+  Codex continue the chat, so AgentsView skips chats with an active goal; see
+  the configuration guide for the remaining case. Chats that ran while
+  AgentsView was not listening in show their share of your plan's weekly and
+  five-hour limits instead, and token totals say how many chats were left out
+  for that reason. The endpoints are private and undocumented, so a change on
+  OpenAI's side can stop the import until AgentsView is updated. Enable the
+  source, or at least live capture, on one machine only. Every machine gives a
+  chat the same session ID. A second machine listens in on the same chats, and
+  its copies of them can conflict when synced to PostgreSQL or ClickHouse. See
+  [Codex Cloud](/docs/configuration/#codex-cloud) for what it sends to OpenAI,
+  how listening in can show on OpenAI's side, such as AgentsView appearing as a
+  chat's client, and its limits. `agentsview export sessions` now reports schema
+  version 7, because `model_usage` is `null` for a Codex cloud chat whose token
+  counts are unknown; update consumers that expect an object there.
+  [Artifact folder sync](/docs/artifact-sync/) now carries each Codex cloud
+  chat's plan usage, so the receiving archive shows the same plan shares and the
+  same count of chats left out of usage totals. Upgrade the receiving AgentsView
+  as well. An older version does not import these chats until it is upgraded.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on

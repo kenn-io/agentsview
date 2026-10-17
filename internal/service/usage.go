@@ -266,6 +266,9 @@ type ProjectTotal struct {
 }
 
 // ModelTotal holds range-wide token and cost totals per model.
+// PlanOnlySessions counts the model's sessions billed as plan usage, which
+// the token and cost figures leave out; a model used only in such sessions
+// has a row with zero tokens and cost and a nonzero PlanOnlySessions.
 type ModelTotal struct {
 	Model               string      `json:"model"`
 	InputTokens         int         `json:"inputTokens"`
@@ -273,6 +276,7 @@ type ModelTotal struct {
 	CacheCreationTokens int         `json:"cacheCreationTokens"`
 	CacheReadTokens     int         `json:"cacheReadTokens"`
 	Cost                money.Money `json:"cost"`
+	PlanOnlySessions    int         `json:"planOnlySessions,omitempty"`
 }
 
 // AgentTotal holds range-wide token and cost totals per agent.
@@ -335,6 +339,12 @@ type UsageSummaryResult struct {
 	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
 	CacheStats       CacheStats                        `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	// PlanOnlySessions counts matching sessions billed as plan usage, which
+	// the token and cost figures leave out.
+	PlanOnlySessions int `json:"planOnlySessions,omitempty"`
+	// PartlyCapturedSessions counts matching sessions whose token counts
+	// miss turns live capture did not see.
+	PartlyCapturedSessions int `json:"partlyCapturedSessions,omitempty"`
 }
 
 // UsagePairwiseComparisonSide holds aggregate and derived
@@ -412,7 +422,11 @@ func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value st
 func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, leftValue, rightDimension, rightValue string) {
 	var models, projects []string
 	for _, total := range summary.ModelTotals {
-		if total.Model != "" {
+		// A model with only plan usage has no token data to compare, so the
+		// default pair skips it. Picking it explicitly still works.
+		planOnly := total.PlanOnlySessions > 0 && total.Cost.Microdollars == 0 &&
+			total.InputTokens+total.OutputTokens+total.CacheCreationTokens+total.CacheReadTokens == 0
+		if total.Model != "" && !planOnly {
 			models = append(models, total.Model)
 		}
 	}
@@ -437,17 +451,20 @@ func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, 
 // query result over the [from, to] range.
 func buildUsageSummary(
 	f db.UsageFilter, result db.DailyUsageResult,
+	planUsage db.PlanUsageSessionCounts,
 ) (*UsageSummaryResult, error) {
 	out := &UsageSummaryResult{
-		SchemaVersion: result.SchemaVersion,
-		Pricing:       result.Pricing,
-		Projects:      result.Projects,
-		From:          f.From,
-		To:            f.To,
-		Totals:        result.Totals,
-		Daily:         result.Daily,
-		SessionCounts: result.SessionCounts,
-		CacheStats:    computeCacheStats(result.Totals),
+		PlanOnlySessions:       planUsage.PlanOnly,
+		PartlyCapturedSessions: planUsage.PartlyCaptured,
+		SchemaVersion:          result.SchemaVersion,
+		Pricing:                result.Pricing,
+		Projects:               result.Projects,
+		From:                   f.From,
+		To:                     f.To,
+		Totals:                 result.Totals,
+		Daily:                  result.Daily,
+		SessionCounts:          result.SessionCounts,
+		CacheStats:             computeCacheStats(result.Totals),
 	}
 	if f.Breakdowns {
 		var err error
@@ -455,7 +472,7 @@ func buildUsageSummary(
 		if err != nil {
 			return nil, err
 		}
-		out.ModelTotals, err = foldModelTotals(result.Daily)
+		out.ModelTotals, err = foldModelTotals(result.Daily, planUsage.PlanOnlyByModel)
 		if err != nil {
 			return nil, err
 		}
@@ -513,9 +530,15 @@ func foldProjectTotals(daily []db.DailyUsageEntry) ([]ProjectTotal, error) {
 }
 
 // foldModelTotals sums daily model breakdowns into range-wide totals
-// sorted by cost descending.
-func foldModelTotals(daily []db.DailyUsageEntry) ([]ModelTotal, error) {
+// sorted by cost descending, and marks each model's plan-only sessions,
+// adding a row for a model used only in them.
+func foldModelTotals(
+	daily []db.DailyUsageEntry, planOnlyByModel map[string]int,
+) ([]ModelTotal, error) {
 	m := make(map[string]*ModelTotal)
+	for model, sessions := range planOnlyByModel {
+		m[model] = &ModelTotal{Model: model, PlanOnlySessions: sessions}
+	}
 	for _, d := range daily {
 		for _, mb := range d.ModelBreakdowns {
 			mt, ok := m[mb.ModelName]

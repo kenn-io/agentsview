@@ -68,10 +68,17 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if err != nil {
 		return "", err
 	}
+	planUsage, err := sessionPlanUsageWithQuerier(ctx, tx, id)
+	if err != nil {
+		return "", err
+	}
 
-	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
+	// The batch writer replaces a session's usage events and plan usage, so keep the stored ones unless the import supplies its own.
 	if len(write.UsageEvents) == 0 {
 		write.UsageEvents = events
+	}
+	if write.PlanUsage == nil {
+		write.PlanUsage = planUsage
 	}
 	externalParent, err := loadSessionExternalParent(ctx, tx, id)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -101,6 +108,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 			ev.ID, ev.SessionID = 0, copyID
 			copyWrite.UsageEvents[i] = ev
 		}
+		copyWrite.PlanUsage = planUsage
 		if _, err := writeOneSessionBatchTx(
 			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(), nil,
 		); err != nil {

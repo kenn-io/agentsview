@@ -807,6 +807,49 @@ describe("UsagePage refresh behavior", () => {
     expect(document.body.textContent).not.toContain("Copilot sessions matched this range");
   });
 
+  it.each([
+    [1, 0, ["1 session billed as plan usage, not priced"]],
+    [
+      38,
+      2,
+      [
+        "38 sessions billed as plan usage, not priced",
+        "2 sessions partly captured; their token counts are low.",
+      ],
+    ],
+    [0, 1, ["1 session partly captured; its token counts are low."]],
+  ])(
+    "notes %i plan-only and %i partly captured sessions",
+    async (planOnlySessions, partlyCapturedSessions, notes) => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+      router.route = "usage";
+      router.params = {};
+      usage.summary = {
+        ...usageSummaryWithUnsupported(),
+        planOnlySessions,
+        partlyCapturedSessions,
+      };
+
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+
+      const shown = Array.from(
+        document.querySelectorAll(".usage-note [role=status] > div"),
+        (note) => note.textContent?.trim(),
+      );
+      expect(shown).toEqual(notes);
+    },
+  );
+
   it("does not auto-refresh usage scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
     expect(source).not.toContain("REFRESH_MS");

@@ -19,6 +19,9 @@ func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
 		{"changed message", func(p *ingest.PreparedSession) { p.Messages[0].Content = "different" }, false},
 		{"changed usage", func(p *ingest.PreparedSession) { p.Messages[0].OutputTokens = 3; p.Messages[0].HasOutputTokens = true }, false},
 		{"changed title", func(p *ingest.PreparedSession) { p.Session.SessionName = new("renamed") }, false},
+		{"newer plan usage", func(p *ingest.PreparedSession) {
+			p.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(2.5), HasCoverage: true, UncapturedTurns: 1}
+		}, true},
 		{"changed tool", func(p *ingest.PreparedSession) { p.Messages[0].ToolCalls[0].InputJSON = `{"command":"false"}` }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

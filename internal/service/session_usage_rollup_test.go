@@ -24,6 +24,17 @@ type rollupStore struct {
 	rowsErr  error
 }
 
+// GetSessionPlanUsage returns the plan usage of the session's scripted
+// usage, which the rollup reads for each descendant's capture coverage.
+func (s *rollupStore) GetSessionPlanUsage(
+	_ context.Context, id string,
+) (*db.SessionPlanUsage, error) {
+	if usage := s.usages[id]; usage != nil {
+		return usage.PlanUsage, nil
+	}
+	return nil, nil
+}
+
 func (s *rollupStore) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) (*activity.SessionUsageRows, error) {

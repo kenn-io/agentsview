@@ -480,10 +480,19 @@ to publish its runtime record. The five-second readiness window measures startup
 inactivity, so continuing startup progress can keep the parent waiting longer.
 It then prints the URL, PID, and log path. Background server output is written
 to `~/.agentsview/serve.log`. `serve status` reports the preferred managed
-process, URL, version, uptime, and read-only mode when available. `serve stop`
-retains its broad lifecycle scope: it gracefully terminates confirmed writable
-SQLite and read-only PostgreSQL or DuckDB server processes for the data
-directory and cleans up their runtime records.
+process, URL, version, uptime, and read-only mode when available. For a writable
+server, `serve status` also asks for the
+[Codex Cloud](/docs/configuration/#codex-cloud) source's status. When the
+source is configured, it prints a status line for each ChatGPT account or Codex
+home, each followed by its live tokens and plan usage lines when they have
+something to report. When the source is off or its settings are wrong, it
+prints one status line for the whole source, followed by a "Live tokens: off."
+line. If the server cannot return the status, or fails while answering,
+`serve status` prints one line saying why, even when the source is not
+configured. Read-only servers, and older servers without this status, add no
+lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
+confirmed writable SQLite and read-only PostgreSQL or DuckDB server processes
+for the data directory and cleans up their runtime records.
 
 `serve restart` is intentionally narrower and config-driven. It restarts only
 the writable SQLite daemon, leaves read-only servers alive, and starts the
@@ -1012,6 +1021,12 @@ agentsview usage daily [flags]
 | `--offline`   | `false`       | Read the archive directly without sync or pricing fetches                |
 | `--no-sync`   | `false`       | Skip source refresh; a new daemon starts without automatic sync          |
 | `--timezone`  | system        | IANA timezone name for date bucketing                                    |
+
+When the window includes Codex Cloud sessions that have only plan usage, the
+report leaves them out of the totals and prints "note: N sessions billed as plan
+usage, not priced, are left out of these totals." Sessions whose turns were
+captured only in part add a second note that their token counts are low. With
+`--json`, the counts are `planOnlySessions` and `partlyCapturedSessions`.
 
 **Examples:**
 

@@ -14,6 +14,7 @@ describe("KNOWN_AGENTS", () => {
       "claude",
       "cowork",
       "codex",
+      "codex-cloud",
       "traex",
       "augure-code",
       "augure-desktop",
@@ -157,6 +158,12 @@ describe("entrypointBadge", () => {
     expect(entrypointBadge("   ")).toBeNull();
     expect(entrypointBadge(null)).toBeNull();
     expect(entrypointBadge(undefined)).toBeNull();
+  });
+
+  it("names the codex-cloud origins", () => {
+    expect(entrypointBadge("codex-web")).toBe("Codex web");
+    expect(entrypointBadge("codex-cloud")).toBe("Codex cloud");
+    expect(entrypointBadge("dot")).toBe("dot");
   });
 });
 

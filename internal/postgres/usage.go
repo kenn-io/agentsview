@@ -1502,6 +1502,10 @@ func (s *Store) GetSessionUsage(
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = db.SortedKeys(unpricedSet)
 	}
+	out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID)
+	if err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

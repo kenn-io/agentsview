@@ -883,7 +883,10 @@ request.
 
 - `?subagents=true` folds descendant usage into `cost`, `total_output_tokens`,
   `models`, `breakdown`, and `breakdown_count`, and adds `subagent_count`.
-  This is what the CLI requests.
+  For a Codex Cloud chat it also folds `capture_coverage`: `uncaptured_turns`
+  is the sum across the root and its sub-agents, and `last_capture_at` is the
+  newest of theirs. `plan_usage` stays the root's report, which already counts
+  its sub-agents. This is what the CLI requests.
 - `?rollup=true` keeps the totals own-session and reports the combined cost in
   the separate `rollup_*` fields below. The session detail header uses this
   form. When both `rollup=true` and `subagents=true` are passed, the handler
@@ -966,6 +969,20 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
+| `plan_usage`            | Codex Cloud only; omitted for other agents and until AgentsView has stored a report or a check outcome for the chat. OpenAI's plan usage report for the chat: `data_as_of`, `data_status` (`available`, `partial`, or `unavailable`), `weekly_percent`, `five_hour_percent`, `credits` (a decimal string), per-model `groups`, `final`, and the newest `outcome_kind` and `outcome_at`. An outcome-only object, such as one with `outcome_kind` `account_unavailable`, has no figures. A sub-agent chat has `outcome_kind` `counted_under` and the root session ID in `counted_under`|
+| `capture_coverage`      | Codex Cloud only; omitted when live capture never saw the chat. `last_capture_at`, when AgentsView last received a token update for the chat, and `uncaptured_turns`, the number of finished turns live capture did not fully see: no token update covers them directly or through a later turn's running total |
+
+A Codex Cloud session that live capture never saw has `has_token_data` and
+`has_cost` set to `false` and carries its figures in `plan_usage` instead. The
+CLI's human output shows `n/a` for output and peak context, and "billed as plan
+usage" for cost when the session has plan usage figures. A `Plan usage:` line
+follows, and, when live capture saw the chat, a `Captured:` line. When a later
+check left the chat out or failed, the `Plan usage:` line says what that check
+found and that the figures may be out of date. For missed turns, the `Captured:`
+line says some of their tokens may be missing from the totals. When the newest
+report is complete and no later check failed, it adds that plan usage counts the
+turns that ran before the report's data time; AgentsView does not know whether
+each missed turn ran before that time, so it does not claim more.
 
 Claude Code echoes some parent turns into a subagent's sidechain transcript, so
 the same message can appear in two sessions. Every combined figure counts it
@@ -1048,16 +1065,18 @@ Unexpected usage-query failures return `500` with
 
 **Exit codes**:
 
-| Code | Meaning                                            |
-| ---- | -------------------------------------------------- |
-| `0`  | Token data or cost present and reported            |
+| Code | Meaning                                                                        |
+| ---- | ------------------------------------------------------------------------------ |
+| `0`  | Token data, cost, or Codex Cloud plan usage figures present                    |
 | `1`  | Query error or session unavailable during startup ingestion or archive rebuild |
 | `2`  | Session missing after startup or rebuild, or from an archive-only/direct lookup |
-| `3`  | Session exists but has neither token data nor cost |
+| `3`  | Session exists but has no token data, cost, or plan usage figures              |
 
 The codes classify the reported document, so a session whose only token data
 lives in its subagents exits `0`, not `3`. With `--own-only` it exits `3`, as it
-did before.
+did before. A Codex Cloud session with plan usage figures but no captured tokens
+exits `0`. A sub-agent chat counted under its root, or a session whose plan
+usage has not been reported, exits `3`.
 
 Combined usage refreshes a known session and nearby Claude subagent transcripts
 without waiting for startup ingestion. The CLI requests this with

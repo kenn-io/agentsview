@@ -4,15 +4,19 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
@@ -157,6 +161,11 @@ func runServeStatus(cfg config.Config) {
 			for _, line := range serveStatusLines(rt) {
 				fmt.Println(line)
 			}
+			for _, line := range codexCloudStatusLines(
+				context.Background(), urlFromDaemonRuntime(rt), cfg.AuthToken,
+			) {
+				fmt.Println(line)
+			}
 			return
 		}
 	}
@@ -194,6 +203,62 @@ func runServeStatus(cfg config.Config) {
 		return
 	}
 	fmt.Println("No agentsview server is running.")
+}
+
+// codexCloudStatusTimeout bounds the codex-cloud status request.
+const codexCloudStatusTimeout = 5 * time.Second
+
+// codexCloudStatusLines reads the daemon's codex-cloud status rows. An
+// older daemon has no such route and adds no lines. A failure gets a plain
+// sentence; the request's own error is noise next to the daemon lines.
+func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []string {
+	unavailable := func(reason string) []string {
+		return []string{"  codex-cloud status unavailable: " + reason}
+	}
+	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: codexCloudStatusTimeout})
+	if err != nil {
+		return unavailable(fmt.Sprintf("the server address %s could not be used.", baseURL))
+	}
+	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+	if resp == nil {
+		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+			return unavailable(fmt.Sprintf("the server did not answer within %d seconds. It may be busy; "+
+				"run `agentsview serve status` again in a moment.", int(codexCloudStatusTimeout.Seconds())))
+		}
+		return unavailable("the server could not be reached. It may have just stopped; " +
+			"run `agentsview serve status` again to check.")
+	}
+	if resp.HTTPResponse != nil {
+		defer resp.HTTPResponse.Body.Close()
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return nil
+	case http.StatusUnauthorized:
+		if authToken == "" {
+			return unavailable("the server needs an auth token, and this command has none. " +
+				"Set auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, to the server's token.")
+		}
+		return unavailable("the server did not accept this command's auth token. " +
+			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
+	default:
+		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The AgentsView log, "+
+			"debug.log in its data directory, may say why.", resp.StatusCode))
+	}
+	var rows []codexcloud.HomeStatus
+	if err := json.Unmarshal(resp.Body, &rows); err != nil {
+		return unavailable("the server's reply could not be read. " +
+			"The server may run a different AgentsView version than this command; " +
+			"after an upgrade, restart the server so both match.")
+	}
+	var lines []string
+	for _, row := range rows {
+		for _, line := range codexcloud.StatusLines(row) {
+			lines = append(lines, "  "+line)
+		}
+	}
+	return lines
 }
 
 // serveStatusLines renders the human-readable status of a discovered daemon.

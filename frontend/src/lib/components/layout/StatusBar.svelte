@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { StatusBar } from "@kenn-io/kit-ui";
+  import { StatusBar, Tooltip } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { perf } from "../../stores/perf.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { codexCloudStatus } from "../../stores/codexCloud.svelte.js";
+  import { SERVER_URL_CHANGE_EVENT } from "../../api/runtime.js";
+  import { codexCloudStatusLine } from "../../utils/codexCloudStatus.js";
   import { ActivityIcon } from "../../icons.js";
   import {
     formatNumber,
@@ -14,6 +17,7 @@
   } from "../../utils/format.js";
 
   const RELATIVE_TIME_REFRESH_MS = 10_000;
+  const CODEX_CLOUD_STATUS_REFRESH_MS = 10_000;
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? "⌘" : "Ctrl";
   let relativeTimeTick = $state(0);
@@ -65,11 +69,26 @@
     sync.lastSync ? formatTimestamp(sync.lastSync) : null,
   );
 
+  let codexCloudLine = $derived(codexCloudStatusLine(codexCloudStatus.rows));
+
   onMount(() => {
     const interval = window.setInterval(() => {
       relativeTimeTick = Date.now();
     }, RELATIVE_TIME_REFRESH_MS);
-    return () => window.clearInterval(interval);
+    const loadCodexCloudStatus = () => void codexCloudStatus.load();
+    loadCodexCloudStatus();
+    const codexCloudInterval = window.setInterval(
+      loadCodexCloudStatus,
+      CODEX_CLOUD_STATUS_REFRESH_MS,
+    );
+    // Some server switches skip the page reload; load at once so the
+    // previous server's rows do not linger until the next poll.
+    window.addEventListener(SERVER_URL_CHANGE_EVENT, loadCodexCloudStatus);
+    return () => {
+      window.clearInterval(interval);
+      window.clearInterval(codexCloudInterval);
+      window.removeEventListener(SERVER_URL_CHANGE_EVENT, loadCodexCloudStatus);
+    };
   });
 </script>
 
@@ -125,6 +144,23 @@
       >
         {m.status_bar_sync_not_ready()}
       </button>
+      <span class="sep">&middot;</span>
+    {/if}
+    {#if codexCloudLine}
+      {@const detail = codexCloudLine.detail}
+      <!-- The tooltip class opts the bubble into the fixed overlay zoom
+           compensation in app.css. -->
+      <Tooltip focusable align="end" class="tooltip">
+        {#snippet content()}
+          <span class="codex-cloud-detail">{detail}</span>
+        {/snippet}
+        <span
+          class="codex-cloud-status"
+          class:codex-cloud-status--warn={codexCloudLine.warn}
+        >
+          {codexCloudLine.summary}
+        </span>
+      </Tooltip>
       <span class="sep">&middot;</span>
     {/if}
     {#if sync.isDesktop}
@@ -230,6 +266,24 @@
 
   .sync-progress {
     color: var(--accent-green);
+  }
+
+  .codex-cloud-status {
+    font-size: 10px;
+    white-space: nowrap;
+    cursor: default;
+  }
+
+  .codex-cloud-status--warn {
+    color: var(--accent-red);
+    font-weight: 500;
+  }
+
+  /* The detail is one line per fact; long home paths break anywhere to
+   * stay inside the bubble. */
+  .codex-cloud-detail {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
   }
 
   .perf-toggle {

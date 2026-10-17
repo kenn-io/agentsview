@@ -608,6 +608,52 @@ components:
         - status
         - body
       type: object
+    CodexcloudHomeStatus:
+      additionalProperties: false
+      properties:
+        found:
+          format: int64
+          type: integer
+        homes:
+          items:
+            type: string
+          type: array
+        imported:
+          format: int64
+          type: integer
+        key:
+          type: string
+        last_success:
+          format: date-time
+          type:
+            - string
+            - "null"
+        live:
+          type: string
+        live_warn:
+          type: boolean
+        message:
+          type: string
+        oldest_failure:
+          format: date-time
+          type:
+            - string
+            - "null"
+        plan_usage:
+          type: string
+        retry_count:
+          format: int64
+          type: integer
+        state:
+          type: string
+        total:
+          format: int64
+          type: integer
+      required:
+        - key
+        - homes
+        - state
+      type: object
     Comparison:
       additionalProperties: false
       properties:
@@ -1035,6 +1081,17 @@ components:
         - duration_ms
         - is_parallel
         - input_preview
+      type: object
+    DbCaptureCoverageView:
+      additionalProperties: false
+      properties:
+        last_capture_at:
+          type: string
+        uncaptured_turns:
+          format: int64
+          type: integer
+      required:
+        - uncaptured_turns
       type: object
     DbCategoryTotal:
       additionalProperties: false
@@ -1773,6 +1830,39 @@ components:
         - message_id
         - ordinal
         - created_at
+      type: object
+    DbPlanUsageView:
+      additionalProperties: false
+      properties:
+        counted_under:
+          type: string
+        credits:
+          type: string
+        data_as_of:
+          type: string
+        data_status:
+          type: string
+        final:
+          type: boolean
+        five_hour_percent:
+          format: double
+          type: number
+        groups:
+          items:
+            $ref: "#/components/schemas/DbSessionPlanUsageGroup"
+          type: array
+        outcome_at:
+          type: string
+        outcome_kind:
+          type: string
+        usage_source:
+          type: string
+        weekly_percent:
+          format: double
+          type: number
+      required:
+        - groups
+        - final
       type: object
     DbProjectAnalytics:
       additionalProperties: false
@@ -2740,6 +2830,40 @@ components:
       required:
         - sessions
         - total
+      type: object
+    DbSessionPlanUsageGroup:
+      additionalProperties: false
+      properties:
+        credits:
+          type:
+            - string
+            - "null"
+        five_hour_percent:
+          format: double
+          type:
+            - number
+            - "null"
+        model:
+          type: string
+        product_experience:
+          type: string
+        reasoning_effort:
+          type: string
+        speed:
+          type: string
+        weekly_percent:
+          format: double
+          type:
+            - number
+            - "null"
+      required:
+        - model
+        - reasoning_effort
+        - speed
+        - product_experience
+        - weekly_percent
+        - five_hour_percent
+        - credits
       type: object
     DbSessionProjectAssignment:
       additionalProperties: false
@@ -4972,6 +5096,9 @@ components:
         outputTokens:
           format: int64
           type: integer
+        planOnlySessions:
+          format: int64
+          type: integer
       required:
         - model
         - inputTokens
@@ -6553,6 +6680,8 @@ components:
           type: string
         agent_label:
           type: string
+        capture_coverage:
+          $ref: "#/components/schemas/DbCaptureCoverageView"
         compaction_count:
           format: int64
           type: integer
@@ -6664,6 +6793,8 @@ components:
         peak_context_tokens:
           format: int64
           type: integer
+        plan_usage:
+          $ref: "#/components/schemas/DbPlanUsageView"
         pr_links:
           items:
             $ref: "#/components/schemas/ParserPRLink"
@@ -7214,6 +7345,8 @@ components:
         breakdown_count:
           format: int64
           type: integer
+        capture_coverage:
+          $ref: "#/components/schemas/DbCaptureCoverageView"
         cost:
           $ref: "#/components/schemas/MoneyMoney"
         cost_source:
@@ -7234,6 +7367,8 @@ components:
         peak_context_tokens:
           format: int64
           type: integer
+        plan_usage:
+          $ref: "#/components/schemas/DbPlanUsageView"
         project:
           type: string
         rollup_cost:
@@ -7815,6 +7950,12 @@ components:
           items:
             $ref: "#/components/schemas/ModelTotal"
           type: array
+        partlyCapturedSessions:
+          format: int64
+          type: integer
+        planOnlySessions:
+          format: int64
+          type: integer
         pricing:
           $ref: "#/components/schemas/ExportPricingBlock"
         projectTotals:
@@ -11486,6 +11627,81 @@ paths:
       summary: List branches
       tags:
         - Metadata
+  /api/v1/codex-cloud/status:
+    get:
+      operationId: get-api-v1-codex-cloud-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CodexcloudHomeStatus"
+                type: array
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Read codex-cloud import status
+      tags:
+        - CodexCloud
   /api/v1/config/github:
     get:
       operationId: get-api-v1-config-github

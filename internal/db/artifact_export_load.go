@@ -31,6 +31,7 @@ type ArtifactExportLoadLimits struct {
 type ArtifactExportData struct {
 	Messages    []Message
 	UsageEvents []UsageEvent
+	PlanUsage   *SessionPlanUsage // nil when the session has none
 }
 
 const artifactMessageRawBytesSQL = `
@@ -142,11 +143,17 @@ func (db *DB) LoadArtifactExportData(
 			"session %s usage count exceeds %d", sessionID, limits.UsageEvents,
 		)
 	}
+	planUsage, err := sessionPlanUsageWithQuerier(ctx, tx, sessionID)
+	if err != nil {
+		return ArtifactExportData{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ArtifactExportData{}, fmt.Errorf("committing artifact export snapshot: %w", err)
 	}
 	committed = true
-	return ArtifactExportData{Messages: messages, UsageEvents: usage}, nil
+	return ArtifactExportData{
+		Messages: messages, UsageEvents: usage, PlanUsage: planUsage,
+	}, nil
 }
 
 func attachArtifactNestedCollectionsTx(

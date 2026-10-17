@@ -10,4 +10,5 @@ export interface ModelTotal {
   inputTokens: number;
   model: string;
   outputTokens: number;
+  planOnlySessions?: number;
 }

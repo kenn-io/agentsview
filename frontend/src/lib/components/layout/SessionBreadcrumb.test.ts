@@ -22,6 +22,7 @@ import { ui } from "../../stores/ui.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 const { generateForSession, getTiming } = vi.hoisted(() => ({
   generateForSession: vi.fn(),
@@ -1617,6 +1618,181 @@ describe("SessionBreadcrumb", () => {
     } finally {
       await unmount(component);
     }
+  });
+
+  describe("plan usage", () => {
+    const cloudSession = () => makeSession("codex-cloud", { id: "codex-cloud:thread-a" });
+
+    async function openPlanUsage(): Promise<string> {
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")).not.toBeNull();
+      });
+      const details = document.querySelector<HTMLDetailsElement>(".plan-usage")!;
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+      await tick();
+      return document.querySelector(".plan-usage-menu")?.textContent ?? "";
+    }
+
+    it("says not checked yet once the usage read answers without a row", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
+        makeUsage({ agent: "codex-cloud" }),
+      );
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      expect(await openPlanUsage()).toContain("Plan usage: not checked yet");
+    });
+
+    it("shows no plan usage control for a session from another agent", async () => {
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await vi.waitFor(() => {
+        expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalled();
+      });
+      await flushPromises();
+
+      expect(document.querySelector(".plan-usage")).toBeNull();
+    });
+
+    it("shows the figures, their split, the credits note, and capture coverage", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          data_as_of: "2026-03-02T09:15:00Z",
+          data_status: "available",
+          weekly_percent: 4.125,
+          credits: "0E-10",
+          final: false,
+          groups: [
+            {
+              model: "model-a",
+              reasoning_effort: "high",
+              speed: "standard",
+              product_experience: "",
+              weekly_percent: 4.125,
+              five_hour_percent: null,
+              credits: "0E-10",
+            },
+          ],
+        },
+        capture_coverage: {
+          last_capture_at: "2026-03-02T09:00:00Z",
+          uncaptured_turns: 2,
+        },
+      });
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")?.textContent).toContain(
+          "Plan usage: 4.13% weekly",
+        );
+      });
+      // The closed trigger explains its warning icon to sighted and
+      // screen-reader users alike.
+      const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
+      const missed = `2 turns not captured; plan usage counts the ones that ran before ${formatTimestamp("2026-03-02T09:15:00Z")}`;
+      expect(trigger.title.split("\n")).toEqual([
+        `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`,
+        missed,
+      ]);
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(
+        `, Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}, ${missed}`,
+      );
+      const menu = await openPlanUsage();
+      expect(menu).toContain("4.13% of the weekly Codex limit");
+      expect(menu).toContain("0 credits");
+      expect(document.querySelector(".plan-usage-menu tbody tr")?.textContent).toContain(
+        "model-a · high · standard",
+      );
+      expect(menu).toContain("Credits are shown as OpenAI's usage report gives them.");
+      expect(menu).toContain(missed);
+    });
+
+    it("warns on the closed trigger when a later check makes the figures stale", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          data_as_of: "2026-03-02T09:15:00Z",
+          data_status: "available",
+          weekly_percent: 4.125,
+          credits: "0E-10",
+          final: false,
+          groups: [],
+          outcome_kind: "could_not_check",
+          outcome_at: "2026-03-03T10:30:00Z",
+        },
+      });
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")).not.toBeNull();
+      });
+      const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
+      const headline = `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`;
+      const stale =
+        `Since then: AgentsView could not check plan usage (${formatTimestamp("2026-03-03T10:30:00Z")}). ` +
+        "These figures may be out of date.";
+      expect(trigger.title.split("\n")).toEqual([headline, stale]);
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(`, ${headline}, ${stale}`);
+      expect(trigger.querySelector("svg"), "the warning icon shows").not.toBeNull();
+    });
+
+    it("links a counted-under thread to its usage root by title", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          outcome_kind: "counted_under",
+          outcome_at: "2026-03-02T09:15:00Z",
+          counted_under: "codex-cloud:root-thread",
+          final: false,
+          groups: [],
+        },
+      });
+      sessionsService.getApiV1SessionsById.mockResolvedValue(
+        makeSession("codex-cloud", {
+          id: "codex-cloud:root-thread",
+          display_name: "Root task",
+        }),
+      );
+      const navigateSpy = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector<HTMLElement>(".plan-usage-trigger")?.title).toBe(
+          "Counted under chat Root task",
+        );
+      });
+      // Screen readers hear where the figures live without opening the menu.
+      expect(document.querySelector(".plan-usage-trigger .kit-sr-only")?.textContent).toBe(
+        ", Counted under chat Root task",
+      );
+      await openPlanUsage();
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-root")?.textContent?.trim()).toBe(
+          "Counted under chat Root task",
+        );
+      });
+      expect(sessionsService.getApiV1SessionsById.mock.lastCall?.[0]).toEqual({
+        id: "codex-cloud:root-thread",
+      });
+      document.querySelector<HTMLElement>(".plan-usage-root")!.click();
+      expect(navigateSpy).toHaveBeenCalledWith("codex-cloud:root-thread");
+      navigateSpy.mockRestore();
+    });
   });
 
   describe("cost badge", () => {

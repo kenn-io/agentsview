@@ -112,7 +112,8 @@ GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_manifest_entries, hosted_sessions.raw_manifest_objects,
   hosted_sessions.messages, hosted_sessions.tool_calls,
   hosted_sessions.tool_result_events, hosted_sessions.usage_events,
-  hosted_sessions.secret_findings, hosted_sessions.excluded_sessions,
+  hosted_sessions.session_plan_usage, hosted_sessions.secret_findings,
+  hosted_sessions.excluded_sessions,
   hosted_sessions.raw_projection_generations,
   hosted_sessions.raw_source_contributions,
   hosted_sessions.raw_session_public_aliases,
@@ -462,6 +463,32 @@ Hosted sessions projected before the upgrade show as not analyzed in tool rate
 coverage. They gain rates when their source changes and the new transcript
 replaces the stored one. Uploading an unchanged transcript keeps the stored row
 and its older signal version, so its calls stay not analyzed.
+
+This release stores Codex Cloud plan usage in a new `session_plan_usage` table.
+A `GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so
+earlier grants do not reach this table. After
+`agentsview pg hosted-provision provision` or `agentsview pg push` creates the
+table, run the grants below as the schema owner. Replace the schema names
+(`hosted_sessions`, `agentsview`) and the role names (`hosted_runtime`,
+`agentsview_reader`) with your own.
+
+In explicit hosted mode, the runtime role needs `SELECT` and `INSERT`. Until it
+has them, hosted startup fails with
+`projection privileges for session_plan_usage are incomplete`:
+
+```sql
+GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
+```
+
+Each read-only role that serves the PostgreSQL UI, such as the reader of a
+legacy schema, needs `SELECT`. Until it has it, `agentsview pg serve` with that
+role fails to start with `serve role cannot read the schema` and
+`permission denied for table session_plan_usage`. The schema owner or a database
+administrator grants it:
+
+```sql
+GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
+```
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.

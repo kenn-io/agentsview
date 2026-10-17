@@ -155,7 +155,14 @@ func (b *directBackend) Get(
 		return nil, err
 	}
 	hideStaleSecretCount(s, secrets.ActiveRulesVersions())
-	return buildSessionDetail(s), nil
+	detail := buildSessionDetail(s)
+	planUsage, err := b.db.GetSessionPlanUsage(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	detail.PlanUsage = planUsage.PlanUsageView()
+	detail.CaptureCoverage = planUsage.CaptureCoverageView()
+	return detail, nil
 }
 
 func (b *directBackend) FindSessionIDsByPartial(
@@ -934,7 +941,11 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	summary, err := buildUsageSummary(f, result)
+	planUsage, err := b.db.GetPlanUsageSessionCounts(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := buildUsageSummary(f, result, planUsage)
 	if err != nil {
 		return nil, err
 	}
@@ -986,7 +997,11 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		summary, err := buildUsageSummary(rankingFilter, rankingResult)
+		rankingPlanUsage, err := b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := buildUsageSummary(rankingFilter, rankingResult, rankingPlanUsage)
 		if err != nil {
 			return nil, err
 		}

@@ -91,6 +91,10 @@ func (s *Scheduler) Status() []Status {
 
 var ErrUnknownJob = errors.New("poller: unknown job")
 
+// ErrTriggerPending reports that a trigger is already queued for the job.
+// The queued trigger still runs, so callers can treat this as success.
+var ErrTriggerPending = errors.New("poller: trigger already pending")
+
 // TriggerNow bypasses timing limits and waits for a serialized attempt.
 // One trigger may queue behind a running attempt; shutdown cancels both.
 func (s *Scheduler) TriggerNow(name string) error {
@@ -104,7 +108,7 @@ func (s *Scheduler) TriggerNow(name string) error {
 		case <-s.ctx.Done():
 			return s.ctx.Err()
 		default:
-			return fmt.Errorf("poller: %q already has a trigger pending", name)
+			return fmt.Errorf("%w: %q", ErrTriggerPending, name)
 		}
 		select {
 		case err := <-reply:

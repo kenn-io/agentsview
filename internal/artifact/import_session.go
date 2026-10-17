@@ -336,6 +336,7 @@ func rewriteManifestForImport(
 		Session:         session,
 		Messages:        messages,
 		UsageEvents:     importedUsageEvents(m.UsageEvents, importedID),
+		PlanUsage:       importedPlanUsage(m),
 		Signals:         signals,
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,

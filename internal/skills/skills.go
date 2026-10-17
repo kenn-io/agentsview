@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 //go:embed templates/*.md.tmpl templates/LICENSE
@@ -121,36 +123,17 @@ func (r Remote) Validate() error {
 	return nil
 }
 
-// shellSafe reports whether c can appear unquoted in a POSIX shell word.
-func shellSafe(c rune) bool {
-	switch {
-	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		return true
-	}
-	return strings.ContainsRune("@%+=:,./-_~", c)
-}
-
-// shellQuote returns s as a single shell word, quoting only when needed so
-// the common case stays readable. Generated examples are meant to be run
-// verbatim, so a token path with a space must survive as one argument.
-func shellQuote(s string) string {
-	if s != "" && strings.IndexFunc(s, func(c rune) bool { return !shellSafe(c) }) < 0 {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // Args returns the leading-space CLI flags to append to example commands,
 // or empty when no remote is configured.
 func (r Remote) Args() string {
 	var b strings.Builder
 	if s := strings.TrimSpace(r.Server); s != "" {
 		b.WriteString(" --server ")
-		b.WriteString(shellQuote(s))
+		b.WriteString(shellquote.POSIX(s))
 	}
 	if f := strings.TrimSpace(r.TokenFile); f != "" {
 		b.WriteString(" --server-token-file ")
-		b.WriteString(shellQuote(f))
+		b.WriteString(shellquote.POSIX(f))
 	}
 	return b.String()
 }

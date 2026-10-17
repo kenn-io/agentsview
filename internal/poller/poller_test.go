@@ -177,7 +177,9 @@ func TestTriggersSerializeAndStop(t *testing.T) {
 		}
 		assert.Equal(t, time.Now(), s.Status()[0].LastAttempt)
 		assert.Equal(t, int32(1), calls.Load(), "pending trigger must not overlap Run")
-		require.ErrorContains(t, s.TriggerNow("vendor"), "trigger pending")
+		pending := s.TriggerNow("vendor")
+		require.ErrorIs(t, pending, ErrTriggerPending)
+		require.ErrorContains(t, pending, `"vendor"`)
 		require.ErrorIs(t, s.TriggerNow("missing"), ErrUnknownJob)
 
 		release <- struct{}{}

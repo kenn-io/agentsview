@@ -16,6 +16,7 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 		Origin      string         `json:"origin"`
 		Segments    jsontext.Value `json:"segments"`
 		UsageEvents jsontext.Value `json:"usage_events"`
+		PlanUsage   jsontext.Value `json:"plan_usage"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return manifest{}, err
@@ -33,8 +34,16 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 			"manifest has unsupported artifact version %d", envelope.Version,
 		)
 	}
+	var planUsage struct {
+		Groups jsontext.Value `json:"groups"`
+	}
+	if len(envelope.PlanUsage) > 0 {
+		if err := json.Unmarshal(envelope.PlanUsage, &planUsage); err != nil {
+			return manifest{}, err
+		}
+	}
 	if err := preflightManifestCollections(
-		envelope.Segments, envelope.UsageEvents, limits,
+		envelope.Segments, envelope.UsageEvents, planUsage.Groups, limits,
 	); err != nil {
 		return manifest{}, err
 	}
@@ -46,14 +55,19 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 }
 
 func preflightManifestCollections(
-	segments, usageEvents jsontext.Value,
+	segments, usageEvents, planUsageGroups jsontext.Value,
 	limits artifactLimits,
 ) error {
 	if err := preflightSegmentReferences(segments, limits.manifestSegments); err != nil {
 		return err
 	}
-	return preflightJSONArrayCount(
+	if err := preflightJSONArrayCount(
 		usageEvents, "manifest usage event", limits.manifestUsageEvents,
+	); err != nil {
+		return err
+	}
+	return preflightJSONArrayCount(
+		planUsageGroups, "manifest plan usage group", limits.planUsageGroups,
 	)
 }
 

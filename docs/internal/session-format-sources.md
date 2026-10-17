@@ -3225,6 +3225,94 @@ schemas keep their existing ordering behavior.
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.
 
+## Codex Cloud (`codex-cloud`)
+
+- **Format:** AgentsView-written mirror files,
+  `{dataDir}/sources/codex-cloud/<accountKey>/<threadId>.jsonl.zstd`. Each
+  file holds JSON lines in independent zstd frames with content checksums.
+  Each line is `{kind, fetched_at, data}`, where `data` is a thread, turn, or
+  item object exactly as OpenAI's hosted Codex app-server returned it, or a
+  token usage, turn completion, or plan usage record AgentsView writes.
+- **Evidence:** `no-public-source`.
+- **Upstream:** The hosted service at `codex-cloud-backend.chatgpt.com` speaks
+  the Codex app-server JSON-RPC protocol over a websocket. It has no public
+  documentation or source. The thread, turn, and item shapes and the handshake
+  were checked 2026-10-12 with read-only probes against the maintainer's own
+  login; recorded replies were replaced by synthetic fixtures. The open-source
+  Codex app-server shares the protocol types but not the hosted defaults: the
+  hosted turn listing returns every item unless `itemsView` is sent, and every
+  probed thread had `historyMode: "legacy"`. A read-only gate probe on
+  2026-10-13 found: `thread/turns/list` accepts `itemsView: "notLoaded"` and
+  returns turns with no items, but rejects `summary`; `thread/list` with
+  `sortKey: "updated_at"` and `sortDirection: "desc"` returns rows whose
+  `updatedAt` never increases, within and across pages; `thread/list` rejects
+  `modelProviders` with `-32602` ("unsupported thread/list parameter(s):
+  model_providers"), so AgentsView sends no provider filter and gets the
+  server's default (`modelProvider: "local"` on every probed thread); the
+  server accepts `codex-client.agentsview` and selects `codex-app-server`; the
+  sub-agent listings (`sourceKinds`) are accepted and returned no threads for
+  that account. A read-only probe on 2026-10-13 found that ChatGPT dot's
+  delegated threads name one parent thread with `threadSource: "aeon"`. That
+  parent is the dot orchestrator: `thread/read` returns it with no turns and
+  an empty preview, and the default `thread/list` never returns it. AgentsView
+  never imports it, so its delegated threads show as top-level sessions whose
+  parent is not in the archive.
+- **Usage and cost:** The hosted thread history carries no token counts. Token
+  counts come only from `thread/tokenUsage/updated` notifications while
+  AgentsView is joined to a running thread; counters arrive as JSON numbers
+  such as `4603049.0`. Plan usage (weekly and five-hour percentages, credits)
+  comes from `wham/usage/thread_usage/query_v2` per root thread and has no
+  token or dollar figures. On 2026-10-13 the report answered `unavailable` for
+  the dot orchestrator thread alone. With its 26 delegated threads as
+  descendants it answered one `partial` row whose weekly percentage equals the
+  sum of the delegated threads' own rows, so the orchestrator carries no usage
+  of its own and asking for each delegated thread as its own root loses
+  nothing. Each token record stores the notification's `total` (the chat's
+  running total) and `last` (the latest model call). The parser reads the
+  records in file order and turns each increase in `total`, field by field,
+  into one usage event dated when the record was observed. A record with no
+  increase adds nothing. An increase equal to `last` is one model call: it
+  gets the `codex-cloud-request` source, so request price bands apply. Any other
+  increase spans several calls, such as the chat's first recorded total or a
+  record after updates were missed while AgentsView was not listening in. It
+  is a chat-level `session` event priced at base rates, which can understate
+  the cost of long-context calls inside it. A fall in any counter starts a new
+  baseline, and that baseline's first record adds its whole total; no negative
+  event is recorded. A record that exactly repeats an earlier one (same join
+  ID, turn ID, observation time, and counts) is skipped, because a retried
+  save can write one batch twice. Counters map as for
+  [Codex (`codex`)](#codex-codex): input includes cached reads and cache
+  writes. Uncached input is input minus cached input, floored at zero; cache
+  writes are capped at that amount; the input field is uncached input minus
+  those cache writes. Cached input becomes cache-read tokens, and reasoning
+  stays inside output. That entry holds the upstream evidence for the mapping.
+  The hosted-only behavior (`total` as a chat-wide running total, `last` as
+  one call, and whole-number counters written as JSON floats such as
+  `4603049.0`; a true fraction is rejected) is `no-public-source`: it comes
+  from the 2026-10-12 read-only probes. These rules were written down on
+  2026-10-13. No probe has shown a counter restart, so the baseline rule is a
+  guard, not observed behavior.
+- **Resume side effects:** Checked 2026-10-16 against open-source Codex at
+  `openai/codex@b5115cd`. `thread/resume` sends its reply and then runs the
+  thread's idle step whenever no turn is running, on the cold path
+  (`codex-rs/app-server/src/request_processors/thread_processor.rs`) and the
+  loaded path (`thread_lifecycle.rs`); `excludeTurns` does not skip it. The
+  goal extension then continues an active goal with a new turn
+  (`codex-rs/ext/goal/src/runtime.rs`, `continue_if_idle`), and the queue
+  extension sends queued user input unless the turn was interrupted
+  (`codex-rs/ext/queue/src/service.rs`). `thread/goal/get` returns
+  `{"goal": null}` or a goal whose `status` is `active`, `paused`, `blocked`,
+  `usageLimited`, `budgetLimited`, or `complete`, and answers `-32600` "goals
+  feature is disabled" when goals are off. `thread/queue/list` is experimental
+  and refused without the experimental API. The hosted server is
+  `no-public-source`. A read-only probe on 2026-10-16 with the maintainer's
+  login found it answers `thread/goal/get`: both chats it listed returned
+  `{"goal": null}`. AgentsView assumes the hosted resume runs the same idle
+  step.
+- **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
+  `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
+  limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).
+
 ## ChatGPT Export (`chatgpt`)
 
 - **Format:** `conversations.json` and numbered `conversations-*.json` export

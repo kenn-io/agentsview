@@ -71,6 +71,22 @@ have no catalog price, so token-based cost estimates remain unpriced unless you
 add [custom model pricing](#custom-model-pricing). Recorded authoritative costs
 are retained when the source provides them.
 
+Codex Cloud chats (ChatGPT dot, Codex web, and Codex cloud tasks) get token
+counts only from live capture, which is off unless `live_tokens = true`:
+AgentsView must listen in on a chat at least once while it runs. Each token
+update from OpenAI carries the chat's running total, so one update also covers
+the turns that finished before it, back to the last time OpenAI restarted that
+total. Chats AgentsView never listened in on carry plan usage instead. OpenAI's
+usage report gives each one's share of your ChatGPT plan's weekly and five-hour
+limits, and a credits figure. Those chats are left out of token and cost totals.
+The Usage page and `agentsview usage daily` say how many were left out, and
+per-model rows show "Plan usage" where those chats are the model's only usage. A
+chat that AgentsView has not asked about yet is counted too, and its session
+details say "Plan usage: not checked yet". A chat with recorded token counts and
+a finished turn that live capture did not fully see stays in the totals, and the
+totals note that its token counts are low. See
+[Codex Cloud](/docs/configuration/#codex-cloud) for setup and limits.
+
 Junie coverage is for CLI sessions; it excludes tool calls and IDE-only
 conversations. Antigravity plaintext-only transcripts include conversation,
 reasoning, and tool calls but no token usage or cost. Antigravity sessions with

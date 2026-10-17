@@ -106,6 +106,16 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	})
 }
 
+func TestFutureManifestWithOtherPlanUsageShapeWaits(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeManifestWithLimits(
+		fmt.Appendf(nil, `{"origin":"contract-a1b2c3","plan_usage":[],"v":%d}`, manifestFormatVersion+1),
+		productionArtifactLimits(),
+	)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+}
+
 func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	t.Parallel()
 
@@ -160,6 +170,28 @@ func TestImportCollectionBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		_, err = decodeManifestWithLimits(body, limits)
 		require.Error(t, err)
+	})
+
+	t.Run("manifest plan usage groups", func(t *testing.T) {
+		limits := productionArtifactLimits()
+		limits.planUsageGroups = 2
+		m := importTestManifest("session")
+		m.PlanUsage = &artifactPlanUsage{
+			Groups: make([]db.SessionPlanUsageGroup, 2),
+		}
+		body, err := canonicalJSON(m)
+		require.NoError(t, err)
+		decoded, err := decodeManifestWithLimits(body, limits)
+		require.NoError(t, err)
+		require.NotNil(t, decoded.PlanUsage)
+		assert.Len(t, decoded.PlanUsage.Groups, 2)
+
+		m.PlanUsage.Groups = append(m.PlanUsage.Groups, db.SessionPlanUsageGroup{})
+		body, err = canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "manifest plan usage group limit exceeded")
 	})
 
 	t.Run("manifest segments", func(t *testing.T) {
