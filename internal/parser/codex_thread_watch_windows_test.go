@@ -12,6 +12,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// A completed file operation can precede delivery of its change notification.
+func waitForCodexThreadDirectoryChange(t *testing.T, directory *codexThreadDirectory) {
+	t.Helper()
+	status, err := windows.WaitForSingleObject(directory.watch.handle, 10000)
+	require.NoError(t, err)
+	require.Equal(t, uint32(windows.WAIT_OBJECT_0), status, "directory change notification")
+}
+
 func TestCodexThreadWatchPath(t *testing.T) {
 	tail := strings.Repeat(`directory\`, 30)
 	for _, tc := range []struct{ name, path, want string }{
