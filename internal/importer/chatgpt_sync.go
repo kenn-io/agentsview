@@ -80,6 +80,11 @@ func waitChatGPTDetailGap(ctx context.Context) error {
 // chatGPTMaxConsecutiveDetailFailures stops a sync whose detail requests keep failing.
 const chatGPTMaxConsecutiveDetailFailures = 3
 
+// ErrBrowserDisconnected marks a fetch that failed because the browser's native
+// host is gone. Failures that leave the host connected, such as a page timeout
+// or an error reported by the extension, must not wrap it.
+var ErrBrowserDisconnected = errors.New("chrome host disconnected")
+
 // chatGPTTransportError marks a failure to reach the browser at all, such as a
 // disconnected native host, as opposed to an HTTP status from ChatGPT.
 type chatGPTTransportError struct{ err error }
@@ -297,7 +302,12 @@ func fetchChatGPT(ctx context.Context, fetch func(context.Context, string) (Clau
 	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
 		if err != nil {
-			return nil, backoff.Permanent(&chatGPTTransportError{err: err})
+			if errors.Is(err, ErrBrowserDisconnected) {
+				return nil, backoff.Permanent(&chatGPTTransportError{err: err})
+			}
+			// The host is still connected, so this is one page's failure and the
+			// consecutive-failure limit decides whether to keep going.
+			return nil, backoff.Permanent(err)
 		}
 		if len(response.Body) > ChatGPTResponseLimit {
 			return nil, backoff.Permanent(ErrChatGPTResponseTooLarge)
