@@ -12,6 +12,59 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 )
 
+func TestCodexMisfiledPageUpgradeRetainsTranscriptMetadata(t *testing.T) {
+	const oldID = "codex:33333333-3333-4333-8333-333333333333"
+	const page = "codex:11111111-1111-4111-8111-111111111111_22222222-2222-4222-8222-222222222222"
+	for _, version := range []int{135, 136} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			ctx := t.Context()
+			src := testDB(t)
+			path := filepath.Join(t.TempDir(), "rollout-2026-09-01T10-00-00-"+page[len("codex:"):]+".jsonl")
+			insertSession(t, src, oldID, "project", func(s *Session) {
+				s.Agent, s.FilePath = "codex", &path
+			})
+			insertMessages(t, src, Message{SessionID: oldID, Role: "user", Content: "Page question"})
+			messages, err := src.GetAllMessages(ctx, oldID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			_, err = src.PinMessage(ctx, oldID, messages[0].ID, new("Saved page note"))
+			require.NoError(t, err)
+			insertVerifiedRecallSelection(t, src, "saved-page", oldID, 0, 0, nil)
+			before, err := src.ExportConversationChanges(ctx, ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, before.Changes, 1)
+			_, err = src.getWriter().Exec(ctx, "PRAGMA user_version="+strconv.Itoa(version))
+			require.NoError(t, err)
+
+			dst := testDB(t)
+			require.NoError(t, dst.CopyArchiveIdentityFrom(src.Path()))
+			insertSession(t, dst, page, "project", func(s *Session) {
+				s.Agent, s.FilePath = "codex", &path
+			})
+			insertMessages(t, dst, Message{SessionID: page, Role: "user", Content: "Page question"})
+			_, err = dst.CopyOrphanedDataFrom(src.Path())
+			require.NoError(t, err)
+			require.NoError(t, dst.CopyRecallEntriesFrom(src.Path()))
+			require.NoError(t, dst.CopySessionMetadataFrom(src.Path()))
+			pins, err := dst.ListPinnedMessages(ctx, page, "")
+			require.NoError(t, err)
+			assert.Len(t, pins, 1)
+			recall, err := dst.GetRecallEntry(ctx, "saved-page")
+			require.NoError(t, err)
+			require.NotNil(t, recall)
+			assert.Equal(t, page, recall.SourceSessionID)
+			require.Len(t, recall.Evidence, 1)
+			assert.Equal(t, page, recall.Evidence[0].SessionID)
+			after, err := dst.ExportConversationChanges(ctx, ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, after.Changes, 1)
+			assert.Equal(t, before.Changes[0].MessageID, after.Changes[0].MessageID)
+			assert.Equal(t, page, after.Changes[0].SessionID)
+			assert.False(t, after.Changes[0].Deleted)
+		})
+	}
+}
+
 func TestCodexPageUpgradeRetainsRecallEvidence(t *testing.T) {
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"

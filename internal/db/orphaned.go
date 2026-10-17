@@ -2983,10 +2983,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 			if err := rows.Scan(&source, &target); err != nil {
 				return 0, fmt.Errorf("scanning reparsed Codex threads: %w", err)
 			}
-			key := target[strings.LastIndex(target, ":")+1:]
-			if parser.CodexThreadIDFromSessionKey(key) == key {
-				threads[source] = target
-			}
+			threads[source] = target
 		}
 		if err := rows.Err(); err != nil {
 			return 0, fmt.Errorf("reading reparsed Codex threads: %w", err)
