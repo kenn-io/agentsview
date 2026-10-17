@@ -231,8 +231,9 @@ a chat, but a deleted file rebuilt around a usage record does.
 
 A hosted hub that receives raw captures applies the same rules when it projects
 a capture over the previous one. For the hub, the previous projection counts as
-current when it ran at the same processing version. The rules live in
-`internal/ingest/codex_cloud_history.go`.
+current when it ran at the same processing version. After a carry, the hub
+derives the session's signals again, so context signals see the saved peak. The
+rules live in `internal/ingest/codex_cloud_history.go`.
 
 A descendants or waiting file that does not decode is rebuilt from the saved
 thread files. A descendants list collects the threads counted under that root. A

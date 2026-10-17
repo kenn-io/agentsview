@@ -85,6 +85,7 @@ func TestRawProjectionCodexCloudRebuiltMirrorKeepsHistory(t *testing.T) {
 	require.NotNil(t, session)
 	assert.True(t, session.HasTotalOutputTokens)
 	assert.Equal(t, 100, session.TotalOutputTokens)
+	assert.True(t, session.HasContextData, "the signals see the carried peak context")
 
 	rows, err := f.runtime.QueryContext(t.Context(), `SELECT manifest_id,prior_contributed FROM raw_source_contributions ORDER BY projection_generation`)
 	require.NoError(t, err)

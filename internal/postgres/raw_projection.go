@@ -201,6 +201,12 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 			if codexCloud != nil && ingest.CarryCodexCloudUsage(&prepared, *codexCloud) {
 				decision.PriorContributed = true
+				// Finalize derived the signals before the carry put back the
+				// saved peak context, which the context signals read.
+				prepared.Signals, prepared.Findings = ingest.ComputeSignalsAndSecrets(prepared.Session, prepared.Messages)
+				if s.options.Content.ArchiveContent.OmitsToolContent() {
+					prepared.Signals.ToolObservations = []db.ToolObservation{}
+				}
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
