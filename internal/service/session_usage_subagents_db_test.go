@@ -718,3 +718,39 @@ func TestSessionUsageWithSubagentsReadsCoverageOnlyForCodexCloud(t *testing.T) {
 	assert.NotContains(t, store.ids, "claude:child-b")
 	assert.Contains(t, store.ids, "codex-cloud:child-a")
 }
+
+// TestSessionUsageWithSubagentsCountsTokenlessChildTurns checks that a
+// captured codex-cloud chat whose sub-agent was never captured reports the
+// sub-agent's turns as missed. Live capture never joins a sub-agent chat,
+// so it has no token records and no coverage row of its own.
+func TestSessionUsageWithSubagentsCountsTokenlessChildTurns(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	ctx := t.Context()
+	started := subagentUsageDay + "T09:00:00Z"
+	root := "codex-cloud:root"
+	dbtest.SeedSession(t, d, root, "proj", func(s *db.Session) {
+		s.Agent = "codex-cloud"
+		s.StartedAt = &started
+	})
+	child := "codex-cloud:child"
+	dbtest.SeedSession(t, d, child, "proj", func(s *db.Session) {
+		s.Agent = "codex-cloud"
+		s.StartedAt = &started
+		s.ParentSessionID = &root
+		s.RelationshipType = "subagent"
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.ReplaceSessionPlanUsage(ctx, root, &db.SessionPlanUsage{
+		HasCoverage: true, LastCaptureAt: "2026-05-20T10:00:00Z",
+	}))
+	require.NoError(t, d.ReplaceSessionPlanUsage(ctx, child, &db.SessionPlanUsage{
+		HasPlanUsage: true, OutcomeKind: "counted_under", CountedUnder: root,
+	}))
+
+	got, err := service.SessionUsageWithSubagents(ctx, d, root, false)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.PlanUsage)
+	assert.Equal(t, &db.CaptureCoverageView{LastCaptureAt: "2026-05-20T10:00:00Z", UncapturedTurns: 2},
+		got.PlanUsage.CaptureCoverageView(), "the child's two turns were never captured")
+}

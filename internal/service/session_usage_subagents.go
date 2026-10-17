@@ -191,7 +191,9 @@ func sessionUsageWithDescendants(
 // already counts a chat's sub-agents in its root's report. Coverage is per
 // session, so the combined token totals miss every descendant's
 // uncaptured turns too: the result counts them all and keeps the newest
-// capture time.
+// capture time. Live capture never joins a sub-agent chat, which then has
+// no token records and no coverage row; once the result has coverage, each
+// such chat counts its user messages as uncaptured turns, one per turn.
 func withDescendantCoverage(
 	ctx context.Context, store db.Store, out *db.SessionUsage, descendants []db.Session,
 ) (*db.SessionUsage, error) {
@@ -200,6 +202,7 @@ func withDescendantCoverage(
 		merged = *out.PlanUsage
 	}
 	changed := false
+	uncounted := 0
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -214,6 +217,7 @@ func withDescendantCoverage(
 			return nil, err
 		}
 		if p == nil || !p.HasCoverage {
+			uncounted += descendant.UserMessageCount
 			continue
 		}
 		newer, err := laterCaptureTime(merged.LastCaptureAt, p.LastCaptureAt)
@@ -223,6 +227,10 @@ func withDescendantCoverage(
 		merged.HasCoverage = true
 		merged.UncapturedTurns += p.UncapturedTurns
 		merged.LastCaptureAt = newer
+		changed = true
+	}
+	if merged.HasCoverage && uncounted > 0 {
+		merged.UncapturedTurns += uncounted
 		changed = true
 	}
 	if changed {
