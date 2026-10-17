@@ -593,11 +593,8 @@ fixtures retain this field; missing identities remain source-local.
   for the shape reported in
   [issue #2248](https://github.com/kenn-io/agentsview/issues/2248); the
   particular file's history remains unverified.
-  Archive regressions cover this shape in
-  `TestCodexMisfiledPageUpgradeRetainsTranscriptMetadata` and
-  `TestSeededReparseRetainsMisfiledCodexSession`: a proven page correction
-  preserves transcript metadata during upgrade; explicit raw reparse keeps
-  the stored identity and its curation alongside the newly parsed identity.
+  `TestCodexMisfiledPageUpgradeRetainsTranscriptMetadata` verifies that a proven
+  page correction preserves transcript metadata during upgrade.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

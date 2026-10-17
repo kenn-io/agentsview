@@ -1855,9 +1855,6 @@ func codexReplayParentIDContext(
 			parentID = codexSubagentParentThreadID(payload)
 			continue
 		}
-		if payload.Get("id").Str == parentID {
-			resolutionNeeded = true
-		}
 	}
 	if scanner.Err() != nil || parentID == "" || !resolutionNeeded {
 		return "", false

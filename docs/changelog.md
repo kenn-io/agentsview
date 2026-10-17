@@ -161,6 +161,10 @@ The latest release is
 
 **Bug fixes**
 
+- Codex rollouts that carry another thread's metadata stay under their own
+  thread. Upgrading runs a one-time full archive rebuild at data version 137.
+  Pins, Recall entries, and export message IDs move from misfiled rows when a
+  fresh parse at the stored source path proves the corrected thread.
 - A ClickHouse push that restores a wider project scope after a filtered push
   stopped with session errors now runs a full push, and pushes stay full until
   one finishes without errors. Sessions the filtered push removed from the

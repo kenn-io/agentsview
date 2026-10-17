@@ -2992,13 +2992,12 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 			return 0, err
 		}
 	}
-	// Neither end of a correction chain moves its saved metadata.
 	targets := make(map[string]bool, len(threads))
 	for _, target := range threads {
 		targets[target] = true
 	}
 	for source, target := range threads {
-		if threads[target] == "" && !targets[source] {
+		if isCodexThreadCorrection(threads, targets, source, target) {
 			candidates[source] = target
 		}
 	}
@@ -3020,7 +3019,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
-		misfiledThread := threads[sourceID] == targetID && threads[targetID] == "" && !targets[sourceID]
+		misfiledThread := isCodexThreadCorrection(threads, targets, sourceID, targetID)
 		args = append(args, sourceID, targetID, headPage || retired || misfiledThread, retired)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
@@ -3040,6 +3039,11 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
+}
+
+// isCodexThreadCorrection excludes both ends of a correction chain.
+func isCodexThreadCorrection(threads map[string]string, targets map[string]bool, source, target string) bool {
+	return threads[source] == target && threads[target] == "" && !targets[source]
 }
 
 // codexRowsReparsedElsewhere maps each old Codex-format row to the id its

@@ -301,8 +301,10 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 			seen[id] = true
 		}
 	}
-	if err := retainActiveReparseSessions(ctx, scratch, root, source.SourceKey, active, seen, suppressed); err != nil {
-		return err
+	for id := range active {
+		if !seen[id] || suppressed[id] {
+			return fmt.Errorf("provider did not retain existing active session %s", id)
+		}
 	}
 	if len(seen) == 0 {
 		return errors.New("provider produced no archived sessions")
@@ -330,68 +332,6 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		}
 	}
 	return nil
-}
-
-// retainActiveReparseSessions leaves an old Codex identity and its curation
-// intact when the same exact source now parses under another identity.
-func retainActiveReparseSessions(ctx context.Context, scratch *db.DB, root db.RawArchiveRoot, sourceKey string, active, seen, suppressed map[string]bool) error {
-	for id := range active {
-		if !seen[id] && !suppressed[id] {
-			retained, err := hasReparsedCodexSource(ctx, scratch, root.Provider, id, active, seen, suppressed)
-			if err != nil {
-				return err
-			}
-			if retained {
-				native := strings.TrimPrefix(id, root.DeviceID+"~")
-				if _, err := scratch.BindRawArchiveSession(ctx, root, sourceKey, native, id); err != nil {
-					return err
-				}
-				seen[id] = true
-			}
-		}
-		if !seen[id] || suppressed[id] {
-			return fmt.Errorf("provider did not retain existing active session %s", id)
-		}
-	}
-	return nil
-}
-
-func hasReparsedCodexSource(ctx context.Context, scratch *db.DB, provider, id string, active, seen, suppressed map[string]bool) (bool, error) {
-	if provider != "codex" && provider != "traex" && provider != "augure-code" {
-		return false, nil
-	}
-	old, err := scratch.GetSessionFull(ctx, id)
-	if err != nil || old == nil || old.FilePath == nil {
-		return false, err
-	}
-	for parsedID := range seen {
-		if parsedID == id || suppressed[parsedID] {
-			continue
-		}
-		parsed, err := scratch.GetSessionFull(ctx, parsedID)
-		if err != nil {
-			return false, err
-		}
-		if parsed != nil && parsed.FilePath != nil && *parsed.FilePath == *old.FilePath && parsed.Agent == old.Agent {
-			return retainedReparseBinding(ctx, scratch, id, parsedID, active)
-		}
-	}
-	return false, nil
-}
-
-// An existing parsed sibling alone does not prove an identity correction.
-// A prior successful correction records the retained ID's source binding.
-func retainedReparseBinding(ctx context.Context, scratch *db.DB, id, parsedID string, active map[string]bool) (bool, error) {
-	if !active[parsedID] {
-		return true, nil
-	}
-	var known bool
-	err := scratch.Reader().QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM raw_archive_sessions old JOIN raw_archive_sessions parsed
-		  ON parsed.root_id = old.root_id AND parsed.source_key = old.source_key
-		WHERE old.session_id = ? AND parsed.session_id = ?
-	)`, id, parsedID).Scan(&known)
-	return known, err
 }
 
 // equivalentSourcePaths adds each recorded alias spelling of paths beneath the
