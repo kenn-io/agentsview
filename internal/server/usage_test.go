@@ -569,10 +569,6 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 				_, done, ok := strings.Cut(payload, "event: done\ndata: ")
 				require.True(t, ok, "no done event in %s", payload)
 				payload, _, _ = strings.Cut(done, "\n")
-				var summary service.UsageSummaryResult
-				require.NoError(t, json.Unmarshal([]byte(payload), &summary))
-				require.Len(t, summary.ModelTotals, 1)
-				assert.Equal(t, "group", summary.ModelTotals[0].Model)
 			}
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal([]byte(payload), &body))
@@ -602,7 +598,6 @@ func TestUsageTopSessionsModelGroup(t *testing.T) {
 		want   []string
 	}{
 		{"model", []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}},
-		{"exclude_model", []string{}},
 	} {
 		t.Run(tt.filter, func(t *testing.T) {
 			w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{

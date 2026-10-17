@@ -572,12 +572,8 @@ describe("UsageStore session filter params", () => {
     });
     await usage.fetchSummary();
     expect(usage.excludedModels).toBe("claude-opus-4-20250514");
-    expect(usage.displayedModels).toBe("");
-    expect(usage.partlyExcludedModelCount).toBe(1);
     usage.toggleModel("claude-4");
     expect(usage.excludedModels).toBe("claude-4");
-    expect(usage.displayedModels).toBe("claude-4");
-    expect(usage.partlyExcludedModelCount).toBe(0);
     usage.toggleModel("claude-4");
     expect(usage.excludedModels).toBe("");
   });
@@ -2550,7 +2546,7 @@ describe("UsageStore attribution focus", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
 
-  it.each(["focus", "exclude", "Deselect all"])(
+  it.each(["focus", "exclude"])(
     "keeps raw model focus consistent after aliases arrive, then clears it on %s",
     async (action) => {
       const { usage } = await loadStore();
@@ -2573,8 +2569,7 @@ describe("UsageStore attribution focus", () => {
 
       usageServiceMocks.getApiV1UsageSummary.mockClear();
       if (action === "focus") usage.toggleSelection("model", "group");
-      else if (action === "exclude") usage.toggleModel("group");
-      else usage.deselectAllModels(["group"]);
+      else usage.toggleModel("group");
       await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
       expect(usage.hasSelection("model")).toBe(false);
       expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();

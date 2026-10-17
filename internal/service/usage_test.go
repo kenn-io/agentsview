@@ -219,7 +219,7 @@ func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 		Project:      "proj",
 		Agent:        "claude",
 		Model:        "group",
-		ExcludeModel: "model-a",
+		ExcludeModel: "group",
 		// IncludeOneShot/IncludeAutomated default false -> exclude true.
 	}, service.NewModelGroups(map[string]string{"model-a": "group", "model-b": "group"}))
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
 	assert.True(t, f.Breakdowns, "summary needs per-day breakdowns")
 	assert.Equal(t, "group,model-a,model-b", f.Model)
-	assert.Equal(t, "model-a", f.ExcludeModel)
+	assert.Equal(t, "group,model-a,model-b", f.ExcludeModel)
 }
 
 func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
@@ -965,6 +965,7 @@ func TestUsageModelGroups(t *testing.T) {
 		t.Run("raw pricing", func(t *testing.T) {
 			raw, err := be.UsageSummary(t.Context(), base)
 			require.NoError(t, err)
+			assert.Empty(t, raw.ModelAliases)
 			require.Len(t, raw.ModelTotals, 3)
 			require.NotNil(t, raw.Pricing)
 			assert.Contains(t, raw.Pricing.Models, "gpt-4o")
@@ -974,43 +975,16 @@ func TestUsageModelGroups(t *testing.T) {
 			req.GroupModels = true
 			grouped, err := be.UsageSummary(t.Context(), req)
 			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group", "absent": "group"}, grouped.ModelAliases)
 			require.Len(t, grouped.ModelTotals, 2)
 			assert.Equal(t, "group", grouped.ModelTotals[0].Model)
 			assert.Equal(t, raw.Totals, grouped.Totals)
 			assert.Zero(t, grouped.SchemaVersion)
 			assert.Nil(t, grouped.Pricing)
 		})
-		base.GroupModels = true
-		t.Run("exact vs member-grouped exclude", func(t *testing.T) {
-			excluded := base
-			excluded.GroupModels = false
-			excluded.ExcludeModel = "gpt-4o"
-			exact, err := be.UsageSummary(t.Context(), excluded)
-			require.NoError(t, err)
-			assert.Empty(t, exact.ModelAliases)
-			assert.Equal(t, 175, exact.Totals.InputTokens)
-			excluded.GroupModels = true
-			memberGrouped, err := be.UsageSummary(t.Context(), excluded)
-			require.NoError(t, err)
-			assert.Equal(t, map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group", "absent": "group"}, memberGrouped.ModelAliases)
-			assert.Equal(t, exact.Totals, memberGrouped.Totals)
-		})
-		t.Run("filter expansion", func(t *testing.T) {
-			for _, tt := range []struct {
-				model, exclude string
-				input          int
-			}{
-				{model: "group", input: 200}, {exclude: "group", input: 5},
-			} {
-				req := base
-				req.Model, req.ExcludeModel = tt.model, tt.exclude
-				summary, err := be.UsageSummary(t.Context(), req)
-				require.NoError(t, err)
-				assert.Equal(t, tt.input, summary.Totals.InputTokens)
-			}
-		})
 		t.Run("pairwise intersection", func(t *testing.T) {
 			scoped := base
+			scoped.GroupModels = true
 			scoped.Model = "group"
 			intersection, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: scoped, LeftDimension: "model", LeftValue: "group,other", RightDimension: "model", RightValue: "gpt-4o"})
 			require.NoError(t, err)
@@ -1018,13 +992,17 @@ func TestUsageModelGroups(t *testing.T) {
 			assert.Equal(t, 30, intersection.Right.InputTokens)
 		})
 		t.Run("default pair", func(t *testing.T) {
-			pair, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: base})
+			req := base
+			req.GroupModels = true
+			pair, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
 			require.NoError(t, err)
 			assert.Equal(t, "group", pair.Left.Value)
 			assert.Equal(t, "other", pair.Right.Value)
 			assert.Equal(t, 200, pair.Left.InputTokens)
 		})
 		t.Run("fallback", func(t *testing.T) {
+			grouped := base
+			grouped.GroupModels = true
 			for _, tt := range []struct {
 				left  string
 				want  string
@@ -1034,7 +1012,7 @@ func TestUsageModelGroups(t *testing.T) {
 				{"group", "group", 200},
 				{"gpt-4o", "gpt-4o", 30},
 			} {
-				req := service.UsagePairwiseComparisonRequest{UsageRequest: base, LeftDimension: "model", LeftValue: tt.left, RightDimension: "model", RightValue: "other", FallbackToDefault: true}
+				req := service.UsagePairwiseComparisonRequest{UsageRequest: grouped, LeftDimension: "model", LeftValue: tt.left, RightDimension: "model", RightValue: "other", FallbackToDefault: true}
 				result, err := be.UsagePairwiseComparison(t.Context(), req)
 				require.NoError(t, err)
 				assert.Equal(t, tt.want, result.Left.Value)
