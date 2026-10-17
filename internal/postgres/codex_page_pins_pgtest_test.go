@@ -20,6 +20,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 		{"full_push", "codex:", "codex"},
 		{"misfiled_thread", "codex:", "codex"},
 		{"misfiled_thread_only", "codex:", "codex"},
+		{"misfiled_thread_only_moved", "codex:", "codex"},
 		{"misfiled_thread_only_compressed", "codex:", "codex"},
 		{"misfiled_thread_only_uncompressed", "codex:", "codex"},
 		{"head_first", "host~traex:", "traex"},
@@ -107,6 +108,9 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					continue
 				}
 				if row.id == page {
+					if tc.name == "misfiled_thread_only_moved" {
+						row.path = filepath.Join(t.TempDir(), "archived_sessions", filepath.Base(row.path))
+					}
 					if tc.name == "misfiled_thread_only_compressed" {
 						row.path += ".zst"
 					}
@@ -190,12 +194,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					require.True(t, result.ok)
 				}
 			}
-			if tc.name == "misfiled_thread_only" {
-				require.True(t, pushSchemaCurrent(ctx, upgraded.pg))
-				_, err = upgraded.pg.ExecContext(ctx, `DROP INDEX idx_sessions_legacy_codex_file`)
-				require.NoError(t, err)
-				assert.False(t, pushSchemaCurrent(ctx, upgraded.pg))
-			}
+
 			result, err = upgraded.Push(ctx, true, nil)
 			if blocked {
 				require.Error(t, err)

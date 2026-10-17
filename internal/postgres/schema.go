@@ -1130,7 +1130,8 @@ func EnsureSchema(
 func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_sessions_legacy_codex_file
-		 ON sessions(file_path) WHERE provenance_kind = 'legacy' AND data_version < 137`,
+		 ON sessions ((regexp_replace(regexp_replace(replace(file_path, chr(92), '/'), '^.*/', ''), '\.zst$', '')))
+		 WHERE provenance_kind = 'legacy' AND data_version < 137`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.

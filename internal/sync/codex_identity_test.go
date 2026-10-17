@@ -1,12 +1,15 @@
 package sync
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -72,5 +75,182 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 				assert.Equal(t, []string{"other question", "other answer"}, messageContents(t, database, "codex:"+identityThreadB))
 			})
 		}
+	}
+}
+
+func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
+	const a = "codex:" + identityThreadA
+	const b = "codex:" + identityThreadB
+	aMessages := []string{"first question", "first answer", "second question", "second answer"}
+	bMessages := []string{"other question"}
+	for _, tc := range []struct {
+		name         string
+		absent       []string
+		storedPath   string
+		disposition  string
+		wantA, wantB []string
+		pinOwner     string
+		nameOwner    string
+		excludeB     bool
+	}{
+		{name: "both_present", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
+		{name: "a_only", absent: []string{b}, wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
+		{name: "b_only", absent: []string{a}, wantB: bMessages, pinOwner: b, nameOwner: b},
+		{name: "neither", absent: []string{a, b}, wantA: bMessages, pinOwner: a, nameOwner: a},
+		{name: "b_moved", storedPath: "moved", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
+		{name: "backslash_path", storedPath: "backslash", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
+		{name: "trashed", disposition: "trash", wantA: bMessages, pinOwner: a, nameOwner: a},
+		{name: "deleted_b_present", disposition: "delete", excludeB: true},
+		{name: "deleted_b_missing", absent: []string{b}, disposition: "delete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			root, pathA, pathB := writeCodexIdentityRollouts(t)
+			// Keep discovery nonempty even when both affected files are gone.
+			writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-10-00-33333333-3333-7333-8333-333333333333.jsonl", testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON("33333333-3333-7333-8333-333333333333", "/work/other", "codex_cli_rs", "2025-10-20T19:10:00Z"),
+				testjsonl.CodexMsgJSON("user", "unrelated", "2025-10-20T19:10:01Z"),
+			))
+			storedPath := pathB
+			dirs := []string{root}
+			switch tc.storedPath {
+			case "moved":
+				moved := filepath.Join(root, "archived_sessions", filepath.Base(pathB))
+				require.NoError(t, os.MkdirAll(filepath.Dir(moved), 0o700))
+				require.NoError(t, os.Rename(pathB, moved))
+				dirs = append(dirs, filepath.Dir(moved))
+			case "backslash":
+				storedPath = `C:\sessions\` + filepath.Base(pathB)
+			}
+			for _, id := range tc.absent {
+				path := pathA
+				if id == b {
+					path = pathB
+				}
+				require.NoError(t, os.Remove(path))
+			}
+
+			database := openTestDB(t)
+			require.NoError(t, database.UpsertSession(ctx, db.Session{
+				ID: a, Agent: "codex", Project: "project-b", Machine: "local",
+				FilePath: &storedPath, MessageCount: 1,
+			}))
+			require.NoError(t, database.InsertMessages(ctx, []db.Message{{
+				SessionID: a, Role: "user", Content: "other question",
+			}}))
+			messages, err := database.GetAllMessages(ctx, a)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			_, err = database.PinMessage(ctx, a, messages[0].ID, new("saved note"))
+			require.NoError(t, err)
+			require.NoError(t, database.RenameSession(ctx, a, new("saved name")))
+			_, err = database.StarSession(ctx, a)
+			require.NoError(t, err)
+			window, err := database.BuildRecallEvidenceWindow(ctx, a, 0, 0)
+			require.NoError(t, err)
+			selection, err := window.BindSelection(db.RecallEvidenceSelection{MessageStartOrdinal: 0, MessageEndOrdinal: 0})
+			require.NoError(t, err)
+			_, err = database.InsertRecallEntry(ctx, db.RecallEntry{
+				ID: "saved-fact", Type: "fact", Scope: "project", Status: "accepted",
+				Title: "saved fact", Body: "saved evidence", SourceSessionID: a, Agent: "codex",
+				ProvenanceOK: true, Evidence: []db.RecallEvidence{{
+					SessionID: a, MessageStartOrdinal: 0, MessageEndOrdinal: 0, ContentDigest: selection.ContentDigest,
+				}},
+			})
+			require.NoError(t, err)
+			before, err := database.ExportConversationChanges(ctx, db.ConversationExportOptions{})
+			require.NoError(t, err)
+			require.NotEmpty(t, before.Changes)
+			switch tc.disposition {
+			case "trash":
+				require.NoError(t, database.SoftDeleteSession(ctx, a))
+			case "delete":
+				require.NoError(t, database.DeleteSession(ctx, a))
+			}
+			path := database.Path()
+			require.NoError(t, database.Close())
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, `UPDATE sessions SET data_version=135`)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, "PRAGMA user_version=135")
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+
+			reopened, err := db.OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+			require.True(t, reopened.NeedsResync())
+			engine := NewEngine(ctx, reopened, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: dirs}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			stats, err := engine.SyncThenRun(ctx, false, nil, func(bool) error { return nil })
+			require.NoError(t, err)
+			require.Zero(t, stats.Failed)
+			require.False(t, stats.Aborted)
+			if tc.storedPath == "moved" {
+				assert.Equal(t, filepath.Join(root, "archived_sessions", filepath.Base(pathB)), reopened.GetSessionFilePath(ctx, b))
+			}
+			for _, want := range []struct {
+				id       string
+				contents []string
+			}{{a, tc.wantA}, {b, tc.wantB}} {
+				session, err := reopened.GetSessionFull(ctx, want.id)
+				require.NoError(t, err)
+				if want.contents == nil {
+					assert.Nil(t, session)
+					continue
+				}
+				require.NotNil(t, session)
+				assert.Equal(t, want.contents, messageContents(t, reopened, want.id))
+				if want.id != tc.nameOwner {
+					assert.Nil(t, session.DisplayName)
+				}
+			}
+			if tc.disposition == "delete" {
+				assert.True(t, reopened.IsSessionExcluded(ctx, a))
+				assert.Equal(t, tc.excludeB, reopened.IsSessionExcluded(ctx, b))
+				return
+			}
+			assert.Equal(t, tc.disposition == "trash", reopened.IsSessionTrashed(ctx, a))
+			pins, err := reopened.ListPinnedMessages(ctx, tc.pinOwner, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, tc.pinOwner, pins[0].SessionID)
+			assert.Equal(t, new("saved note"), pins[0].Note)
+			owner, err := reopened.GetSessionFull(ctx, tc.nameOwner)
+			require.NoError(t, err)
+			require.NotNil(t, owner)
+			assert.Equal(t, new("saved name"), owner.DisplayName)
+			stars, err := reopened.ListStarredSessionIDs(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.nameOwner}, stars)
+			recall, err := reopened.GetRecallEntry(ctx, "saved-fact")
+			require.NoError(t, err)
+			require.NotNil(t, recall)
+			assert.Equal(t, tc.pinOwner, recall.SourceSessionID)
+			require.Len(t, recall.Evidence, 1)
+			assert.Equal(t, tc.pinOwner, recall.Evidence[0].SessionID)
+			assert.Equal(t, selection.ContentDigest, recall.Evidence[0].ContentDigest)
+			assert.True(t, recall.ProvenanceOK)
+			if tc.disposition == "trash" {
+				return
+			}
+			after, err := reopened.ExportConversationChanges(ctx, db.ConversationExportOptions{})
+			require.NoError(t, err)
+			byID := make(map[string]db.ConversationChange)
+			for _, change := range after.Changes {
+				byID[change.MessageID] = change
+			}
+			for _, old := range before.Changes {
+				if old.MessageID == "" {
+					continue
+				}
+				change, found := byID[old.MessageID]
+				require.True(t, found, "exported message ID must survive")
+				assert.Equal(t, tc.pinOwner, change.SessionID)
+			}
+		})
 	}
 }

@@ -189,9 +189,12 @@ keeps its ID. Pins, Recall entries, and export message IDs follow the corrected
 transcript. For live sessions, names and stars stay on a surviving original
 thread; when it is absent, they follow the corrected transcript. Trash and
 permanent deletions continue to hide the affected threads. A trashed misfiled
-transcript also keeps an empty trashed row under its old ID, so its original
-rollout stays hidden if it returns. PostgreSQL pins move on the next push,
-including a push of only the corrected thread.
+transcript stays under its saved ID; its saved path also hides the other
+rollout. Permanent deletion excludes the corrected thread only if the fresh
+parse produced it from that rollout. With that file missing, the deletion stays
+on its saved ID. An archive-only capture keeps its old ID when retained-source
+reparse would change it; its archived transcript remains available. PostgreSQL
+pins move on the next push, including a push of only the corrected thread.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

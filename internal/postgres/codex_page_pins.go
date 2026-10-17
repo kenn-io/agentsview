@@ -40,9 +40,9 @@ func (s *Sync) migrateCodexPages(
 				}
 				threads[id] = sess
 				if sess.FilePath != nil {
-					path := strings.TrimSuffix(*sess.FilePath, ".zst")
+					path := strings.TrimSuffix((*sess.FilePath)[strings.LastIndexAny(*sess.FilePath, `/\`)+1:], ".zst")
 					byFile[path] = sess
-					files = append(files, path, path+".zst")
+					files = append(files, path)
 				}
 				// Also key by the id a legacy page held before data version 134
 				// (the filename without its thread). The old data version is
@@ -63,7 +63,7 @@ func (s *Sync) migrateCodexPages(
 		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
 		FROM sessions
 		WHERE provenance_kind = 'legacy'
-		  AND (id = ANY($1) OR (data_version < 137 AND file_path = ANY($2)))
+		  AND (id = ANY($1) OR (data_version < 137 AND regexp_replace(regexp_replace(replace(file_path, chr(92), '/'), '^.*/', ''), '\.zst$', '') = ANY($2)))
 		ORDER BY id FOR UPDATE`, mapKeys(threads), files)
 	if err != nil {
 		return fmt.Errorf("finding legacy Codex pages: %w", err)
@@ -80,7 +80,7 @@ func (s *Sync) migrateCodexPages(
 			return fmt.Errorf("reading legacy Codex pages: %w", err)
 		}
 		if _, selected := threads[page.id]; !selected {
-			threads[page.id] = byFile[strings.TrimSuffix(page.path, ".zst")]
+			threads[page.id] = byFile[strings.TrimSuffix(page.path[strings.LastIndexAny(page.path, `/\`)+1:], ".zst")]
 		}
 		pages = append(pages, page)
 	}

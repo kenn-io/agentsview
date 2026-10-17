@@ -577,7 +577,7 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Repeated session metadata (checked 2026-10-16 at rust-v0.47.0,
+- **Repeated session metadata (checked 2026-10-17 at rust-v0.47.0,
   `c71297b9a9b3f7995445eff8d768837814ac06f8`):** The
   [reader](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/rollout/recorder.rs#L223-L229)
   uses the first `session_meta` as the canonical conversation identity.
@@ -591,8 +591,10 @@ fixtures retain this field; missing identities remain source-local.
   metadata can still update the working directory and branch; existing fork
   replay filtering and revert-page identities remain in effect. Data version
   137 uses the preservation rebuild because session identities change.
-  Saved transcript metadata follows the corrected thread, including when its
-  source moved or is absent. For live sessions, names and stars stay on a
+  Saved transcript metadata follows the corrected thread when a fresh parse
+  proves ownership, including when its source moved or is absent. Trash stays
+  on its saved ID. Permanent deletion follows a corrected thread only when
+  its rollout was reparsed. For live sessions, names and stars stay on a
   surviving original thread; otherwise they follow the corrected transcript.
   Synthetic parser and SQLite sync regressions cover conflicting headers,
   either sync order, appended metadata, and repair of a misfiled session while
