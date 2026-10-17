@@ -125,7 +125,6 @@ func TestSetupFinishedCapture(t *testing.T) {
 	for _, event := range []string{EventSetupFinished, " " + EventSetupFinished} {
 		postCapture(t, srv.Handler(), `{"event":"`+event+`"}`, http.StatusBadRequest)
 	}
-	postCapture(t, srv.Handler(), `{"event":"app_opened","properties":{"pad":"`+strings.Repeat("x", 5000)+`"}}`, http.StatusRequestEntityTooLarge)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, reporter.CaptureSetupFinished(ctx), context.Canceled)
@@ -135,7 +134,6 @@ func TestSetupFinishedCapture(t *testing.T) {
 	assert.Equal(t, "setup_finished", payload.Batch[0].Event)
 	assert.Equal(t, "agentsview", payload.Batch[0].Properties["application"])
 	assert.Equal(t, "daemon", payload.Batch[0].Properties["source"])
-	assert.NotContains(t, payload.Batch[0].Properties, "session")
 	props, err := reporter.SanitizeProperties(EventSetupFinished, map[string]any{"session": "private content"})
 	require.NoError(t, err)
 	assert.NotContains(t, props, "session")

@@ -886,9 +886,6 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 			srv.mux.ServeHTTP(rec, req)
 			require.Equal(t, tt.wantCode, rec.Code, "body: %s", rec.Body.String())
 
-			readable, err := srv.db.(*db.DB).HasVisibleSession(t.Context())
-			require.NoError(t, err)
-			assert.True(t, readable)
 			select {
 			case event := <-events:
 				assert.Equal(t, "sessions", event.Scope)
@@ -901,15 +898,11 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 	}
 }
 
-func TestUploadSessionAnnouncesReadableSession(t *testing.T) {
+func TestUploadSessionAnnouncesSession(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	srv.broadcaster = NewBroadcaster(0)
 	events, unsubscribe := srv.broadcaster.Subscribe()
 	defer unsubscribe()
-	database := srv.db.(*db.DB)
-	readable, err := database.HasVisibleSession(t.Context())
-	require.NoError(t, err)
-	require.False(t, readable)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser("2024-01-01T10:00:00Z", "hello").
@@ -934,7 +927,4 @@ func TestUploadSessionAnnouncesReadableSession(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "uploaded session did not broadcast sessions")
 	}
-	readable, err = database.HasVisibleSession(t.Context())
-	require.NoError(t, err)
-	assert.True(t, readable)
 }

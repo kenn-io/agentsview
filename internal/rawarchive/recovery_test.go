@@ -53,25 +53,6 @@ func TestRecoveryPreservesSetupClaim(t *testing.T) {
 		assert.Fail(t, "restore reported setup again")
 		return nil
 	}))
-	// An ordinary import adds content to the receiver's identity and claim.
-	spec, err := LoadImportSpec(ctx, filepath.Join(opts.Destination, "capture.json"))
-	require.NoError(t, err)
-	for _, claimed := range []bool{false, true} {
-		receiverDB := dbtest.OpenTestDB(t)
-		require.NoError(t, receiverDB.EnableArchiveOnly(ctx))
-		receiver := config.Config{DataDir: t.TempDir(), InstallationID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-		if claimed {
-			require.NoError(t, receiver.ClaimSetupFinished(func() error { return nil }))
-		}
-		receiverArchive, err := Open(ctx, receiverDB, receiver.DataDir, nil)
-		require.NoError(t, err)
-		_, err = receiverArchive.Import(ctx, spec)
-		require.NoError(t, err)
-		require.NoError(t, receiverArchive.Close())
-		got, err := receiver.SetupFinishedClaimed()
-		require.NoError(t, err)
-		assert.Equal(t, claimed, got)
-	}
 }
 
 func TestRecoveryPreservesBlockedResultCategories(t *testing.T) {

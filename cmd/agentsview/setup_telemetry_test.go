@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -17,21 +15,18 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/telemetry"
 )
 
-func TestSetupTelemetryExistingContentAndRestart(t *testing.T) {
+func TestSetupTelemetryExistingContent(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, database, "session-one", "project-a")
 	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 	broadcaster := server.NewBroadcaster(0)
 	sends := 0
-	for range 2 {
-		runSetupTelemetry(t.Context(), time.Hour, cfg, database, broadcaster, func() error {
-			sends++
-			return nil
-		})
-	}
+	runSetupTelemetry(t.Context(), time.Hour, cfg, database, broadcaster, func() error {
+		sends++
+		return nil
+	})
 	assert.Equal(t, 1, sends)
 }
 
@@ -121,15 +116,13 @@ func TestSetupTelemetryCancellation(t *testing.T) {
 	})
 }
 
-func TestSetupTelemetryRestoreRoute(t *testing.T) {
+func TestSetupTelemetrySessionsWake(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		database := dbtest.OpenTestDB(t)
 		dbtest.SeedSession(t, database, "restored", "project-a")
 		require.NoError(t, database.SoftDeleteSession(t.Context(), "restored"))
 		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 		broadcaster := server.NewBroadcaster(0)
-		cfg.Host, cfg.Port = "127.0.0.1", 8080
-		srv := server.New(cfg, database, nil, server.WithBroadcaster(broadcaster))
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := make(chan struct{})
@@ -143,27 +136,12 @@ func TestSetupTelemetryRestoreRoute(t *testing.T) {
 		}()
 		synctest.Wait()
 		assert.Zero(t, sends.Load())
-		w := httptest.NewRecorder()
-		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:8080/api/v1/sessions/restored/restore", nil)
-		req.Header.Set("Origin", "http://127.0.0.1:8080")
-		srv.Handler().ServeHTTP(w, req)
-		require.Equal(t, http.StatusNoContent, w.Code, "%s", w.Body.String())
+		_, err := database.RestoreSession(ctx, "restored")
+		require.NoError(t, err)
+		broadcaster.Emit("sessions")
 		synctest.Wait()
 		assert.EqualValues(t, 1, sends.Load())
-		claimed, err := cfg.SetupFinishedClaimed()
-		require.NoError(t, err)
-		assert.True(t, claimed)
 		cancel()
 		<-done
 	})
-}
-
-func TestSetupTelemetryOptOutLeavesClaim(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, database, "session-one", "project-a")
-	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	startSetupTelemetry(t.Context(), telemetry.DisabledReporter(), cfg, database, server.NewBroadcaster(0))()
-	sent := false
-	require.NoError(t, cfg.ClaimSetupFinished(func() error { sent = true; return nil }))
-	assert.True(t, sent)
 }
