@@ -4,6 +4,9 @@ import { flushSync, mount, unmount } from "svelte";
 import { EmbeddingsService } from "../../api/generated/index.js";
 import type { VectorBuildStatus } from "../../api/generated/index.js";
 import { ApiError } from "../../api/runtime.js";
+import { reportErrorShown } from "../../utils/telemetry.js";
+
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 
 const { mockCopyToClipboard } = vi.hoisted(() => ({
   mockCopyToClipboard: vi.fn(),
@@ -84,6 +87,7 @@ function completedResult(): VectorBuildStatus["last_result"] {
 
 describe("SemanticSetupHelp", () => {
   beforeEach(() => {
+    vi.mocked(reportErrorShown).mockClear();
     vi.useFakeTimers();
     // The one-auto-retry-per-build ledger is module-level, so isolate it.
     __resetResolvedBuildIds();
@@ -117,14 +121,17 @@ describe("SemanticSetupHelp", () => {
   }
 
   it("shows the config walkthrough when the daemon has no embeddings manager", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
-      new ApiError(501, "embeddings manager not available"),
-    );
+    const probe = Promise.withResolvers<VectorBuildStatus>();
+    embeddingsService.getApiV1EmbeddingsStatus.mockReturnValueOnce(probe.promise);
 
     const { component } = mountHelp();
     await settle();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    probe.reject(new ApiError(501, "embeddings manager not available"));
+    await settle();
 
     expect(text()).toContain("Semantic search isn't set up");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(text()).toContain("[vector]");
     expect(text()).toContain("enabled = true");
     expect(text()).toContain("agentsview embeddings build");
@@ -153,6 +160,7 @@ describe("SemanticSetupHelp", () => {
     await settle();
 
     expect(text()).toContain("Semantic search is disabled");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(text()).toContain(reason);
     expect(text()).not.toContain("enabled = true");
 
@@ -200,6 +208,7 @@ describe("SemanticSetupHelp", () => {
     await settle();
 
     expect(text()).toContain("Semantic index not built yet");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     const build = [...document.body.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Build embeddings"),
     );
@@ -213,6 +222,7 @@ describe("SemanticSetupHelp", () => {
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
     expect(text()).toContain("Building embeddings index...");
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
 
     await settle(2000);
     expect(text()).toContain("50%");
@@ -279,23 +289,7 @@ describe("SemanticSetupHelp", () => {
 
   it("retries the search when the initial status probe sees a completed build", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      idleStatus({
-        last_result: {
-          Fingerprint: "fp-1",
-          Activated: true,
-          Refresh: { Upserted: 1, Deleted: 0, Unchanged: 0 },
-          Repair: {
-            scanned: false,
-            scan_complete: false,
-            documents: 0,
-            chunks: 0,
-            failed: 0,
-            remaining: 0,
-            remaining_known: false,
-          },
-          Fill: { Documents: 1, Chunks: 2, Skipped: 0, Stale: 0 },
-        },
-      }),
+      idleStatus({ last_result: completedResult() }),
     );
 
     const { component, onResolved } = mountHelp();
@@ -303,6 +297,7 @@ describe("SemanticSetupHelp", () => {
 
     expect(onResolved).toHaveBeenCalledOnce();
     expect(text()).not.toContain("Build embeddings");
+    expect(reportErrorShown).not.toHaveBeenCalled();
 
     unmount(component);
   });
@@ -350,6 +345,7 @@ describe("SemanticSetupHelp", () => {
     const { component, onResolved } = mountHelp();
     await settle();
     expect(text()).toContain("Scanning the archive...");
+    expect(reportErrorShown).not.toHaveBeenCalled();
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "embeddings endpoint refused the connection" }),
@@ -358,6 +354,7 @@ describe("SemanticSetupHelp", () => {
 
     expect(text()).toContain("Embeddings build failed");
     expect(text()).toContain("embeddings endpoint refused the connection");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(onResolved).not.toHaveBeenCalled();
 
     unmount(component);
@@ -448,7 +445,7 @@ describe("SemanticSetupHelp", () => {
     unmount(second.component);
   });
 
-  it("recovers from a persisted build error by starting a new build on retry", async () => {
+  it.each([undefined, "retry failed"])("retries a failed build: %s", async (last_error) => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "background build failed" }),
     );
@@ -456,6 +453,7 @@ describe("SemanticSetupHelp", () => {
     const { component, onResolved } = mountHelp();
     await settle();
     expect(text()).toContain("Embeddings build failed");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
 
     const retry = [...document.body.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Retry"),
@@ -471,34 +469,45 @@ describe("SemanticSetupHelp", () => {
     // last_error; re-probing alone could never clear it.
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
     expect(text()).toContain("Building embeddings index...");
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
 
-    // The new build finishes cleanly (a later build_id, no last_error), which
-    // resolves despite the stale last_error that first put us in "failed".
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus({ build_id: 5 }));
+    // A later build can succeed or fail again after clearing the old error.
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ build_id: 5, last_error }),
+    );
     await settle(2000);
-    expect(onResolved).toHaveBeenCalledOnce();
+    expect(onResolved).toHaveBeenCalledTimes(last_error ? 0 : 1);
+    expect(reportErrorShown).toHaveBeenCalledTimes(last_error ? 2 : 1);
+    if (last_error) expect(text()).toContain(last_error);
 
     unmount(component);
   });
 
-  it("re-probes rather than building when the failure came from the status call", async () => {
+  it.each([false, true])("re-probes a failed status call, with retry failure %s", async (fails) => {
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(new Error("network down"));
 
     const { component } = mountHelp();
     await settle();
     expect(text()).toContain("Embeddings build failed");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
 
     const retry = [...document.body.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Retry"),
     );
     expect(retry).toBeDefined();
 
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
+    const probe = Promise.withResolvers<VectorBuildStatus>();
+    embeddingsService.getApiV1EmbeddingsStatus.mockReturnValueOnce(probe.promise);
     retry!.click();
+    await settle();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    if (fails) probe.reject(new Error("retry failed"));
+    else probe.resolve(idleStatus());
     await settle();
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     expect(embeddingsService.postApiV1EmbeddingsBuild).not.toHaveBeenCalled();
-    expect(text()).toContain("Semantic index not built yet");
+    expect(text()).toContain(fails ? "retry failed" : "Semantic index not built yet");
+    expect(reportErrorShown).toHaveBeenCalledTimes(2);
 
     unmount(component);
   });

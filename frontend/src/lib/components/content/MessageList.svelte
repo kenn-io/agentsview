@@ -889,11 +889,11 @@
     {#snippet icon()}
       <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
     {/snippet}
-    <div style="display: contents" {@attach errorTelemetry("session")}>
-      <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
+    <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
+      <span {@attach errorTelemetry("session")}>
         {m.message_list_session_not_found_retry()}
-      </Button>
-    </div>
+      </span>
+    </Button>
   </EmptyState>
 {:else}
   <SessionFindView

@@ -1,11 +1,12 @@
 import { reportSyncFailed } from "../utils/telemetry.js";
-vi.mock("../utils/telemetry.js", () => ({ reportSyncFailed: vi.fn() }));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
   UpdateCheckResponse as UpdateCheck,
 } from "../api/generated/index.js";
+
+vi.mock("../utils/telemetry.js", () => ({ reportSyncFailed: vi.fn() }));
 
 const api = vi.hoisted(() => ({
   triggerSync: vi.fn(),
@@ -404,8 +405,9 @@ describe("SyncStore.triggerResync", () => {
   it("ignores a cancelled resync attempt", async () => {
     mockResyncFailure(new DOMException("Cancelled", "AbortError"));
     sync.triggerResync();
-    await Promise.resolve();
-    await Promise.resolve();
+    await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({
+      name: "AbortError",
+    });
     expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 

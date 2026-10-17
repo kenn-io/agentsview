@@ -88,6 +88,7 @@ endpoint = "http://localhost:11434/v1"`;
     | "failed";
 
   let phase = $state<Phase>("probing");
+  const errorKind = $derived(phase === "probing" || phase === "building" ? undefined : "search");
   // Server-provided reason shown verbatim in the "disabled" and "failed"
   // phases.
   let detail = $state<string | null>(null);
@@ -242,7 +243,7 @@ endpoint = "http://localhost:11434/v1"`;
   }
 </script>
 
-<div class="semantic-setup" role="alert" {@attach errorTelemetry("search")}>
+<div class="semantic-setup" role="alert" {@attach errorTelemetry(errorKind, phase)}>
   {#if phase === "probing"}
     <div class="setup-row centered">
       <Spinner size={13} />

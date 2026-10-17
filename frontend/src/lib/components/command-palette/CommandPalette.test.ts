@@ -743,7 +743,7 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     expect(document.querySelector(".semantic-setup")).not.toBeNull();
-    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(document.querySelector(".palette-error")).toBeNull();
 
     unmount(component);
