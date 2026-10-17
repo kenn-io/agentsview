@@ -559,6 +559,29 @@ describe("session paging", () => {
 });
 
 describe("loadFilterOptions", () => {
+  it("resolves a whole machine URL label containing a comma to its ID", async () => {
+    await activity.loadFilterOptions();
+    activity.hydrateFromUrl({ machine: "Work, Linux" });
+    api.getMachines.mockResolvedValueOnce({
+      machines: ["id-a"],
+      resolved_machines: ["id-a"],
+    });
+
+    await activity.loadFilterOptions();
+
+    expect(api.getMachines.mock.lastCall?.[0]).toEqual({
+      include_one_shot: true,
+      include_automated: true,
+      machine: "Work, Linux",
+    });
+    expect(activity.machine).toBe("id-a");
+    expect(routerMod.router.replaceParams).toHaveBeenLastCalledWith({
+      preset: "day",
+      date: activity.date,
+      machine: "id-a",
+    });
+  });
+
   it("fetches options with one-shot + automated included and stores them", async () => {
     api.getProjects.mockResolvedValueOnce({
       projects: [{ name: "proj-a", count: 1 }],

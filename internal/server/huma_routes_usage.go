@@ -210,11 +210,13 @@ func usagePreflightAPIError(err error) error {
 func (s *Server) humaUsageSummaryStream(
 	ctx context.Context, in *UsageFilterInput,
 ) (*huma.StreamResponse, error) {
-	// Validate selectors before opening the stream, then use that same filter.
+	// Validate selectors before opening the stream.
 	f, err := s.usageFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, usagePreflightAPIError(err)
 	}
+	req := usageRequestFromInput(*in)
+	req.Machine = f.Machine
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -222,13 +224,13 @@ func (s *Server) humaUsageSummaryStream(
 		}
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		f.Progress = func(phase string) {
+		req.Progress = func(phase string) {
 			if !stream.SendJSON("progress", map[string]string{"detail": phase}) {
 				cancel()
 			}
 		}
-		f.Progress("Preparing usage report from the archive")
-		summary, err := service.QueryUsageSummary(ctx, s.db, f)
+		req.Progress("Preparing usage report from the archive")
+		summary, err := s.sessions.UsageSummary(ctx, req)
 		if err != nil {
 			if err := usageSummaryAPIError(err); err != nil {
 				stream.SendJSON("error", map[string]string{"error": err.Error()})

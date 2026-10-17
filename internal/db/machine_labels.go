@@ -152,8 +152,7 @@ func knownMachineIDs(labels, aliases map[string]string) map[string]bool {
 
 // keepMachineList reports whether every part resolves as an ID.
 func keepMachineList(parts []string, known map[string]bool) bool {
-	isID := func(id string) bool { return config.ValidateInstallationID(id) == nil }
-	return len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && !isID(id) })
+	return len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] })
 }
 
 // ResolveMachineFilterWithMetadata reuses labels and aliases already read for a catalog response.
@@ -164,9 +163,14 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 	// Confirm identities absent from metadata against retained session rows.
 	var unconfirmed []string
 	for _, id := range parts {
-		if !known[id] && config.ValidateInstallationID(id) != nil {
-			unconfirmed = append(unconfirmed, id)
+		if known[id] {
+			continue
 		}
+		if id == strings.ToLower(id) && config.ValidateInstallationID(id) == nil {
+			known[id] = true
+			continue
+		}
+		unconfirmed = append(unconfirmed, id)
 	}
 	if len(unconfirmed) > 0 {
 		ids, err := store.GetMatchingMachineIDs(ctx, unconfirmed)

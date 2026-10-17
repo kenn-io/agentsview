@@ -407,6 +407,7 @@ class ActivityStore {
     if (this.#filterOptionsPromise) return this.#filterOptionsPromise;
     const ver = this.#filterOptionsVersion;
     const signal = this.filterOptionsRead.begin();
+    const machine = this.machine;
     const opts = { include_one_shot: true, include_automated: true };
     let request!: Promise<boolean>;
     request = (async () => {
@@ -428,9 +429,17 @@ class ActivityStore {
         ok = false;
       }
       try {
-        const res = await MetadataService.getApiV1Machines(opts, { signal });
-        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
+        const res = await MetadataService.getApiV1Machines(
+          { ...opts, machine: machine || undefined },
+          { signal },
+        );
+        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal)) {
           this.machines = res.machines;
+          if (machine && this.machine === machine && res.resolved_machines?.length) {
+            this.machine = [...new Set(res.resolved_machines)].join(",");
+            this.writeUrl();
+          }
+        }
       } catch (e) {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
@@ -481,6 +490,7 @@ class ActivityStore {
     this.hydrateFromUrl(router.params);
     const onPop = () => {
       this.hydrateFromUrl(router.params);
+      void this.loadFilterOptions();
       void this.load();
     };
     window.addEventListener("popstate", onPop);
@@ -519,7 +529,9 @@ class ActivityStore {
     this.bucket = params.bucket ?? "";
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
-    this.machine = params.machine ?? "";
+    const machine = params.machine ?? "";
+    if (this.machine !== machine) this.invalidateFilterOptions();
+    this.machine = machine;
     this.automation = AUTOMATIONS.has(params.automation ?? "")
       ? (params.automation as Automation)
       : "all";

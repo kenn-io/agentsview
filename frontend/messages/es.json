@@ -444,6 +444,7 @@
   "sidebar_filters_no_match": "Sin coincidencias",
   "sidebar_filters_no_agents": "Sin agentes",
   "sidebar_filters_machine": "Máquina",
+  "sidebar_filters_machine_loading": "Cargando máquinas...",
   "sidebar_filters_machine_update_failed": "No se pudo actualizar el filtro de máquinas. Inténtalo de nuevo.",
   "sidebar_filters_search_machines": "Buscar máquinas...",
   "sidebar_filters_no_machines": "Sin máquinas",

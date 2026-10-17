@@ -76,12 +76,13 @@ it("shows a temporary machine failure, disables rows, and retries", async () => 
   sessions.machines = ["retry-machine", "another-machine"];
   component = mount(SessionFilterControl, { target: document.body });
   await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  expect(screen.getByRole("status").textContent).toBe("Loading machines...");
   expect(
     (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
   ).toBe(true);
   fail(new ApiError(500, "internal error"));
   expect((await screen.findByRole("alert")).textContent).toContain(
-    "Couldn’t update the machine filter. Try again.",
+    "Couldn't update the machine filter. Try again.",
   );
   expect(sessions.filters.machine).toBe("Retry label");
   expect(

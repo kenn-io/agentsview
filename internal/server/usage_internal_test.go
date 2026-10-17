@@ -53,15 +53,28 @@ type usageComparisonProjectKeySpy struct {
 	projectMap   map[string]export.ProjectMapEntry
 }
 
+type usageSummaryServiceSpy struct {
+	service.SessionService
+	request service.UsageRequest
+}
+
+func (s *usageSummaryServiceSpy) UsageSummary(ctx context.Context, req service.UsageRequest) (*service.UsageSummaryResult, error) {
+	s.request = req
+	return s.SessionService.UsageSummary(ctx, req)
+}
+
 func TestUsageSummaryStreamUsesResolvedMachine(t *testing.T) {
 	s := testServer(t, 30)
 	require.NoError(t, s.db.(*db.DB).SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Workstation"))
 	spy := &usageSummaryCountsSpy{Store: s.db}
 	s.db = spy
-	s.sessions = service.NewReadOnlyBackend(spy)
+	backend := &usageSummaryServiceSpy{SessionService: service.NewReadOnlyBackend(spy)}
+	s.sessions = backend
 	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
 	assertRecorderStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Body.String(), "event: done\n")
+	assert.Equal(t, "id-a", backend.request.Machine)
+	assert.NotNil(t, backend.request.Progress)
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, "id-a", spy.filters[0].Machine)
 }

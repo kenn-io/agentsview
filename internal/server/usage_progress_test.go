@@ -79,6 +79,7 @@ func TestUsageSummaryStreamReportsBeforeQueryFinishesAndCancels(t *testing.T) {
 	s.db = &waitingUsageStore{
 		Store: s.db, entered: entered, canceled: canceled,
 	}
+	s.sessions = service.NewReadOnlyBackend(s.db)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	ctx, cancel := context.WithCancel(t.Context())

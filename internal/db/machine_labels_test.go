@@ -42,7 +42,7 @@ func TestResolveMachineFilter(t *testing.T) {
 	localArchive := testDB(t)
 	require.NoError(t, localArchive.UpsertSession(ctx, Session{ID: "local-session", Machine: "local", Project: "project", Agent: "claude"}))
 
-	for _, id := range []string{"id-a", "id-b", "legacy-host", id} {
+	for _, id := range []string{"id-a", "id-b", "legacy-host", id, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"} {
 		require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project", Machine: id, Agent: "claude"}))
 	}
 	for key, value := range map[string]string{
@@ -59,15 +59,20 @@ func TestResolveMachineFilter(t *testing.T) {
 		MachineLabelKeyPrefix + "label-owner":     id,
 		MachineLabelKeyPrefix + "hex-label-owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MachineLabelKeyPrefix + "padded-owner":    "  Padded workstation \t",
+		MachineLabelKeyPrefix + "uppercase-owner": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
 		artifactLocalInstallationStateKey:         "id-a",
 	} {
 		require.NoError(t, d.SetSyncState(ctx, key, value))
 	}
+	require.NoError(t, d.SetSyncState(ctx, MachineAliasKeyPrefix+"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "id-a"))
 	for _, tt := range []struct {
 		input, want string
 		store       Store
 	}{
 		{id, id, d},
+		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", d},
+		{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "uppercase-owner", d},
+		{"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "id-a", d},
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", d},
 		// An installation ID without stored sessions stays an exact selector.
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", d},
@@ -105,7 +110,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		assert.Contains(t, err.Error(), "ambiguous machine")
 	})
 	t.Run("unknown selectors", func(t *testing.T) {
-		for _, input := range []string{"missing", "a"} {
+		for _, input := range []string{"missing", "a", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"} {
 			t.Run(input, func(t *testing.T) {
 				_, err := ResolveMachineFilter(ctx, d, input)
 				var filterError *MachineFilterError

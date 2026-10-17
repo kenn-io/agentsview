@@ -442,7 +442,7 @@
       <Typeahead
         options={machineOptions}
         value={activity.machine}
-        fallbackLabel={m.activity_all_machines()}
+        fallbackLabel={activity.machine || m.activity_all_machines()}
         placeholder={m.activity_filter_machines_placeholder()}
         title={m.activity_filter_by_machine()}
         emptyLabel={m.activity_no_matching_machines()}

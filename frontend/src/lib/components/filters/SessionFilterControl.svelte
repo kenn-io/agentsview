@@ -370,7 +370,7 @@
           <button class="filter-toggle" onclick={() => sessions.retryMachineFilter()}>{m.shared_retry()}</button>
         {/if}
         {#if sessions.machineFilterError}<p role="alert">{sessions.machineFilterError}</p>{/if}
-        {#if sessions.machineFilterPending}<p role="status">{m.subagent_inline_loading()}</p>{/if}
+        {#if sessions.machineFilterPending}<p class="agent-select-empty" role="status">{m.sidebar_filters_machine_loading()}</p>{/if}
         {#if sessions.machines.length > 5}
           <input
             class="agent-search"
