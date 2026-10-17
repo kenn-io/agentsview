@@ -85,4 +85,18 @@ func TestRawProjectionCodexCloudRebuiltMirrorKeepsHistory(t *testing.T) {
 	require.NotNil(t, session)
 	assert.True(t, session.HasTotalOutputTokens)
 	assert.Equal(t, 100, session.TotalOutputTokens)
+
+	rows, err := f.runtime.QueryContext(t.Context(), `SELECT manifest_id,prior_contributed FROM raw_source_contributions ORDER BY projection_generation`)
+	require.NoError(t, err)
+	defer rows.Close()
+	contributed := map[string]bool{}
+	for rows.Next() {
+		var manifest string
+		var prior bool
+		require.NoError(t, rows.Scan(&manifest, &prior))
+		contributed[manifest] = prior
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string]bool{m1.ManifestID: false, m2.ManifestID: true, m3.ManifestID: true}, contributed,
+		"the kept transcript and the carried token counts come from the previous projection")
 }

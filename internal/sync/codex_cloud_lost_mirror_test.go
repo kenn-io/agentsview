@@ -521,3 +521,136 @@ func TestCodexCloudTruncatedMirrorKeepsNewestTokenCounts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, events, 2, "the archived usage events stay")
 }
+
+// A mirror cut short after an older plan report keeps the archived, newer
+// report figures. An outcome from before the newer report stays dropped;
+// one written after it applies.
+func TestCodexCloudTruncatedMirrorKeepsNewerPlanUsage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	ctx := t.Context()
+	root := t.TempDir()
+	path := filepath.Join(root, "account-key", "thread-a.jsonl.zstd")
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	record := func(kind mirror.Kind, data string) mirror.Record {
+		return mirror.Record{Kind: kind, FetchedAt: fetched, Data: jsontext.Value(data)}
+	}
+	planRow := func(weekly, asOf string) mirror.Record {
+		return record(mirror.KindPlanUsageRow, `{"row":{"thread_id":"thread-a","data_status":"available","usage_source":"wham",`+
+			`"weekly_limit_percent":`+weekly+`,"five_hour_limit_percent":null,"balance_usage_credits":"0","groups":[]},`+
+			`"data_as_of":"`+asOf+`"}`)
+	}
+	first, err := mirror.Append(path, 0, []mirror.Record{
+		record(mirror.KindThread, `{"id":"thread-a","createdAt":1759320000,"updatedAt":1759323600,"cwd":"/workspace/project-a"}`),
+		record(mirror.KindTurn, `{"id":"turn-1","status":"completed","startedAt":1759320000}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320000000,"completedAtMs":1759320000500,`+
+			`"item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"Fix the build","text_elements":[]}]}}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320001000,"completedAtMs":1759320001500,`+
+			`"item":{"type":"agentMessage","id":"a1","text":"Fixed.","phase":"final_answer"}}`),
+		planRow("2.25", "2026-10-02T09:30:00Z"),
+		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-02T12:00:00Z"}`),
+	})
+	require.NoError(t, err)
+	_, err = mirror.Append(path, first.Offset, []mirror.Record{planRow("3.5", "2026-10-03T09:30:00Z")})
+	require.NoError(t, err)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodexCloud: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	plan := func() *db.SessionPlanUsage {
+		t.Helper()
+		plan, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		require.True(t, plan.HasPlanUsage)
+		return plan
+	}
+	require.Equal(t, new(3.5), plan().WeeklyPercent)
+	require.Empty(t, plan().OutcomeKind)
+
+	require.NoError(t, os.Truncate(path, first.Offset))
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.Equal(t, new(3.5), plan().WeeklyPercent, "the archived, newer figures stay")
+	assert.Empty(t, plan().OutcomeKind, "the outcome from before the newer report stays dropped")
+
+	_, err = mirror.Append(path, first.Offset, []mirror.Record{
+		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-04T08:00:00Z"}`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.Equal(t, new(3.5), plan().WeeklyPercent, "the newer figures stay under a newer outcome")
+	assert.Equal(t, "left_out", plan().OutcomeKind, "an outcome after the newer report applies")
+}
+
+// A mirror cut short after a record that added only input tokens has the
+// archived output total, but only some of the archived usage events; the
+// archived counts stay. A rebuilt mirror's first live record starts new
+// usage events, so its running total still replaces them.
+func TestCodexCloudTruncatedMirrorAfterInputOnlyIncreaseKeepsTokenCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	ctx := t.Context()
+	root := t.TempDir()
+	path := filepath.Join(root, "account-key", "thread-a.jsonl.zstd")
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	record := func(kind mirror.Kind, data string) mirror.Record {
+		return mirror.Record{Kind: kind, FetchedAt: fetched, Data: jsontext.Value(data)}
+	}
+	tokens := func(input, output int, observed string) mirror.Record {
+		counts := `{"input":` + strconv.Itoa(input) + `,"output":` + strconv.Itoa(output) +
+			`,"total":` + strconv.Itoa(input+output) + `}`
+		return record(mirror.KindTokenUsage, `{"join_id":"join-a","turn_id":"turn-1","total":`+counts+
+			`,"last":`+counts+`,"observed_at":"`+observed+`"}`)
+	}
+	history := []mirror.Record{
+		record(mirror.KindThread, `{"id":"thread-a","createdAt":1759320000,"updatedAt":1759323600,"cwd":"/workspace/project-a"}`),
+		record(mirror.KindTurn, `{"id":"turn-1","status":"completed","startedAt":1759320000}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320000000,"completedAtMs":1759320000500,`+
+			`"item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"Fix the build","text_elements":[]}]}}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320001000,"completedAtMs":1759320001500,`+
+			`"item":{"type":"agentMessage","id":"a1","text":"Fixed.","phase":"final_answer"}}`),
+	}
+	first, err := mirror.Append(path, 0, append(slices.Clone(history), tokens(1000, 100, "2026-10-01T12:05:00Z")))
+	require.NoError(t, err)
+	_, err = mirror.Append(path, first.Offset, []mirror.Record{tokens(1500, 100, "2026-10-01T12:06:00Z")})
+	require.NoError(t, err)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodexCloud: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	inputTokens := func() []int {
+		t.Helper()
+		events, err := database.GetUsageEvents(ctx, "codex-cloud:thread-a")
+		require.NoError(t, err)
+		var inputs []int
+		for _, ev := range events {
+			inputs = append(inputs, ev.InputTokens)
+		}
+		return inputs
+	}
+	require.Equal(t, []int{1000, 500}, inputTokens())
+
+	require.NoError(t, os.Truncate(path, first.Offset))
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.Equal(t, []int{1000, 500}, inputTokens(), "the archived usage events stay")
+
+	require.NoError(t, os.Remove(path))
+	_, err = mirror.Append(path, 0, append(slices.Clone(history), tokens(2000, 200, "2026-10-01T13:00:00Z")))
+	require.NoError(t, err)
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.Equal(t, []int{2000}, inputTokens(), "the new running total replaces them")
+	session, err := database.GetSessionFull(ctx, "codex-cloud:thread-a")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 200, session.TotalOutputTokens)
+}
