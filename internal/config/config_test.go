@@ -3191,6 +3191,8 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 		{name: "quoted names", data: "[model_aliases]\n\"qwen/qwen3.6\" = \"qwen3.6\"\n\"qwen3.6-mlx\" = \"qwen3.6\"", want: map[string]string{"qwen/qwen3.6": "qwen3.6", "qwen3.6-mlx": "qwen3.6"}},
 		{name: "absent"},
 		{name: "self alias", data: "[model_aliases]\n\"a\" = \"a\"", want: map[string]string{"a": "a"}},
+		{name: "reserved key", data: "[model_aliases]\n__all__ = \"group\"", badKey: `"__all__"`},
+		{name: "reserved name", data: "[model_aliases]\na = \"__all__\"", badKey: `"a"`},
 		{name: "empty key", data: "[model_aliases]\n\"\" = \"group\"", badKey: `""`},
 		{name: "empty name", data: "[model_aliases]\na = \"\"", badKey: `"a"`},
 		{name: "comma key", data: "[model_aliases]\n\"a,b\" = \"group\"", badKey: `"a,b"`},

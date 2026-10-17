@@ -6,6 +6,7 @@ const aliases = { a: "group", b: "group" };
 describe("grouped model filters", () => {
   it.each([
     ["a,b,group,other", "group,other"],
+    [" a, b, , other ", "group,other"],
     ["constructor", "constructor"],
     ["toString", "toString"],
     ["__proto__", "__proto__"],
@@ -17,6 +18,7 @@ describe("grouped model filters", () => {
 
   it.each([
     ["a,b,other", "group", "other"],
+    [" a, b, , other ", "group", "other"],
     ["a,b,other", "a", "b,other"],
     ["group,a,other", "group", "other"],
     ["a", "other", "a,other"],
@@ -36,6 +38,10 @@ describe("grouped model filters", () => {
   });
 
   it("groups and sorts picker items while describing selected members", () => {
+    expect(modelPickerItems(["group"], " a, , other ", aliases)).toEqual([
+      { name: "group", description: "a" },
+      { name: "other", description: undefined },
+    ]);
     expect(modelPickerItems(["z", "b", "a", "other"], "b,a,unknown", aliases)).toEqual([
       { name: "group", description: "b, a" },
       { name: "other", description: undefined },

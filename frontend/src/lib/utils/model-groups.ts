@@ -1,6 +1,6 @@
 export function groupedModelCsv(csv: string, aliases: Record<string, string>): string {
   const names = csv
-    .split(",")
+    .split(",").map((token) => token.trim())
     .filter(Boolean)
     .map((name) => (Object.hasOwn(aliases, name) ? aliases[name] : name));
   return [...new Set(names)].join(",");
@@ -11,7 +11,7 @@ export function toggleGroupedModel(
   name: string,
   aliases: Record<string, string>,
 ): string {
-  const tokens = csv.split(",").filter(Boolean);
+  const tokens = csv.split(",").map((token) => token.trim()).filter(Boolean);
   const remaining = tokens.filter(
     (token) => token !== name && !(Object.hasOwn(aliases, token) && aliases[token] === name),
   );
@@ -23,7 +23,7 @@ export function modelPickerItems(
   selectedCsv: string,
   aliases: Record<string, string>,
 ) {
-  const selected = selectedCsv.split(",").filter(Boolean);
+  const selected = selectedCsv.split(",").map((token) => token.trim()).filter(Boolean);
   return groupedModelCsv([...known, selectedCsv].join(","), aliases)
     .split(",")
     .filter(Boolean)
