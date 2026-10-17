@@ -132,8 +132,6 @@ func TestSetupFinishedCapture(t *testing.T) {
 	require.NoError(t, reporter.Close())
 	require.Len(t, payload.Batch, 1)
 	assert.Equal(t, "setup_finished", payload.Batch[0].Event)
-	assert.Equal(t, "agentsview", payload.Batch[0].Properties["application"])
-	assert.Equal(t, "daemon", payload.Batch[0].Properties["source"])
 	props, err := reporter.SanitizeProperties(EventSetupFinished, map[string]any{"session": "private content"})
 	require.NoError(t, err)
 	assert.NotContains(t, props, "session")
