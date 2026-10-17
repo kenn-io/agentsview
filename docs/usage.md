@@ -433,15 +433,20 @@ forks (more than 3 user turns) appear as separate session entries grouped with
 their parent. Small retries fold into the main session.
 
 Open **Analysis** on a session with forks to see its session tree. Switch the
-tree to **Inputs** to see the prompts of the session and its forks as one tree:
+tree to **Inputs** to see the prompts of the session's fork family as one tree.
+The family holds the forks and the continuations of a session, such as a Claude
+Code session you moved to the background:
 
 - Prompts the sessions share appear once. The tree splits where a fork's
-    prompts diverge, and each branch ends with a label for its session.
-- The open session's path is highlighted. Click a prompt on it to scroll the
-    conversation there; click any other prompt to open the session that holds
-    it.
+    prompts diverge, and each branch ends with a label for its session. A
+    continuation's prompts carry on below the last prompt of the session it
+    continues.
+- The open session's path is highlighted. Click a prompt that the open
+    session shows to scroll the conversation there. Click any other prompt to
+    open the session that holds it, including the prompts a continuation
+    carries on from the session before it.
 - Runs of prompts without a split fold into one row. Click the row to show
-    them.
+    them. A prompt where a session ends always stays visible.
 
 For a closer look, click the expand button beside the **Sessions**/**Inputs**
 switch. It opens the same family as a full diagram:

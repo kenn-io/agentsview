@@ -106,7 +106,7 @@ interface DraftBase {
 }
 
 function isOnActivePath(node: InputTreeNode): boolean {
-  return node.active_ordinal !== undefined && node.active_ordinal !== null;
+  return node.on_active_path;
 }
 
 // Lays out input tree nodes, which arrive depth first with parents before

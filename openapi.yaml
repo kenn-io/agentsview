@@ -6039,6 +6039,8 @@ components:
           type: array
         is_shell:
           type: boolean
+        on_active_path:
+          type: boolean
         ordinal:
           format: int64
           type: integer
@@ -6057,6 +6059,7 @@ components:
         - ordinal
         - preview
         - is_shell
+        - on_active_path
         - end_session_ids
       type: object
     ServiceMemoryArchiveStatus:

@@ -114,13 +114,20 @@ export function layoutInputTree(
 }
 
 function isOnActivePath(node: InputTreeNode): boolean {
-  return node.active_ordinal !== undefined && node.active_ordinal !== null;
+  return node.on_active_path;
 }
 
 // An input is foldable when the inputs before and after it on its branch
 // are its only neighbours: it neither starts, ends, nor splits a branch.
+// An input where a session ends stays visible to show that session's label,
+// even when another session's path carries on below it.
 function isFoldable(row: InputTreeNodeRow): boolean {
-  return row.lineAbove && !row.isLeaf && !row.isBranchPoint;
+  return (
+    row.lineAbove &&
+    !row.isLeaf &&
+    !row.isBranchPoint &&
+    row.node.end_session_ids.length === 0
+  );
 }
 
 function foldRuns(
@@ -159,9 +166,18 @@ function foldRuns(
   return out;
 }
 
-// Counts the sessions in the active session's fork family: its nearest
-// ancestor that is not a fork, and every fork below that ancestor.
-export function forkFamilySize(root: SessionTreeNode, activeId: string): number {
+// Fork families are linked by forks, which branch from their parent's
+// inputs, and continuations, which carry them on.
+function isFamilyLink(node: SessionTreeNode): boolean {
+  const relationship = node.session.relationship_type;
+  return relationship === "fork" || relationship === "continuation";
+}
+
+// Reports whether the active session's fork family branches. The family is
+// the nearest ancestor not linked to its parent by a fork or continuation,
+// and every fork and continuation below it. Only a fork branches, so a
+// family linked by continuations alone is a single path.
+export function forkFamilyBranches(root: SessionTreeNode, activeId: string): boolean {
   const parents = new Map<SessionTreeNode, SessionTreeNode>();
   let active: SessionTreeNode | null = null;
   const stack = [root];
@@ -173,23 +189,20 @@ export function forkFamilySize(root: SessionTreeNode, activeId: string): number 
       stack.push(child);
     }
   }
-  if (!active) return 0;
+  if (!active) return false;
 
   let familyRoot = active;
-  while (familyRoot.session.relationship_type === "fork") {
+  while (isFamilyLink(familyRoot)) {
     const parent = parents.get(familyRoot);
     if (!parent) break;
     familyRoot = parent;
   }
 
-  let count = 0;
-  const pending = [familyRoot];
+  const pending = familyRoot.children.filter(isFamilyLink);
   while (pending.length > 0) {
     const node = pending.pop()!;
-    count++;
-    for (const child of node.children) {
-      if (child.session.relationship_type === "fork") pending.push(child);
-    }
+    if (node.session.relationship_type === "fork") return true;
+    pending.push(...node.children.filter(isFamilyLink));
   }
-  return count;
+  return false;
 }

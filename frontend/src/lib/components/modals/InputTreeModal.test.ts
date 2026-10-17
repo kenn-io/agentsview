@@ -63,6 +63,7 @@ function inputNode(
     ordinal,
     preview,
     is_shell: false,
+    on_active_path: false,
     end_session_ids: [],
     ...extra,
   };
@@ -71,9 +72,10 @@ function inputNode(
 // The fork "child" branched from "root" after their shared first input.
 function makeInputTree(
   nodes: ServiceInputTreeNode[] = [
-    inputNode(-1, "root", 0, "shared start", { active_ordinal: -5 }),
+    inputNode(-1, "root", 0, "shared start", { on_active_path: true, active_ordinal: -5 }),
     inputNode(0, "root", 2, "root follow-up", { end_session_ids: ["root"] }),
     inputNode(0, "child", 0, "fork input", {
+      on_active_path: true,
       active_ordinal: 0,
       end_session_ids: ["child"],
     }),
@@ -103,13 +105,14 @@ function makeInputTree(
 //                    └ "fork end"
 function runTree(): ServiceInputTree {
   return makeInputTree([
-    inputNode(-1, "root", 0, "input 0", { active_ordinal: -10 }),
-    inputNode(0, "root", 2, "input 1", { active_ordinal: -8 }),
-    inputNode(1, "root", 4, "input 2", { active_ordinal: -6 }),
-    inputNode(2, "root", 6, "input 3", { active_ordinal: -4 }),
-    inputNode(3, "root", 8, "input 4", { active_ordinal: -2 }),
+    inputNode(-1, "root", 0, "input 0", { on_active_path: true, active_ordinal: -10 }),
+    inputNode(0, "root", 2, "input 1", { on_active_path: true, active_ordinal: -8 }),
+    inputNode(1, "root", 4, "input 2", { on_active_path: true, active_ordinal: -6 }),
+    inputNode(2, "root", 6, "input 3", { on_active_path: true, active_ordinal: -4 }),
+    inputNode(3, "root", 8, "input 4", { on_active_path: true, active_ordinal: -2 }),
     inputNode(4, "root", 10, "root end", { end_session_ids: ["root"] }),
     inputNode(4, "child", 0, "fork end", {
+      on_active_path: true,
       active_ordinal: 0,
       end_session_ids: ["child"],
     }),
@@ -161,11 +164,11 @@ describe("InputTreeModal", () => {
     document.body.innerHTML = "";
   });
 
-  async function open(inputTree: ServiceInputTree = makeInputTree()) {
+  async function open(inputTree: ServiceInputTree = makeInputTree(), sessionId = "child") {
     mocks.fetchSessionInputTree.mockResolvedValue(inputTree);
     component = mount(InputTreeModal, {
       target: document.body,
-      props: { sessionId: "child" },
+      props: { sessionId },
     });
     await flush();
     await flush();
@@ -233,6 +236,39 @@ describe("InputTreeModal", () => {
     expect(navigate).toHaveBeenCalledWith("root");
     expect(ui.pendingScrollOrdinal).toBe(2);
     expect(ui.pendingScrollSession).toBe("root");
+    expect(ui.activeModal).toBeNull();
+  });
+
+  it("keeps the inputs a continuation carries on on its path and opens their session", async () => {
+    // moved continues child, so its path holds child's input, which its
+    // message view does not show.
+    const inputTree = makeInputTree([
+      inputNode(-1, "root", 0, "shared start", { on_active_path: true }),
+      inputNode(0, "root", 2, "root follow-up", { end_session_ids: ["root"] }),
+      inputNode(0, "child", 0, "fork input", {
+        on_active_path: true,
+        end_session_ids: ["child"],
+      }),
+      inputNode(2, "moved", 2, "moved input", {
+        on_active_path: true,
+        active_ordinal: 2,
+        end_session_ids: ["moved"],
+      }),
+    ]);
+    inputTree.active_session_id = "moved";
+    inputTree.sessions.push(makeSession("moved", { relationship_type: "continuation" }));
+    await open(inputTree, "moved");
+
+    expect(inputCard("shared start")?.classList.contains("on-path")).toBe(true);
+    expect(inputCard("moved input")?.getAttribute("href")).toBe("/sessions/moved?msg=2");
+    const carried = inputCard("fork input")!;
+    expect(carried.classList.contains("on-path")).toBe(true);
+    expect(carried.getAttribute("href")).toBe("/sessions/child?msg=0");
+    carried.click();
+
+    expect(navigate).toHaveBeenCalledWith("child");
+    expect(ui.pendingScrollOrdinal).toBe(0);
+    expect(ui.pendingScrollSession).toBe("child");
     expect(ui.activeModal).toBeNull();
   });
 

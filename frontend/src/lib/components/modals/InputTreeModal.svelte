@@ -245,14 +245,15 @@
     );
   }
 
-  function isOnActivePath(node: ServiceInputTreeNode): boolean {
+  function isInActiveView(node: ServiceInputTreeNode): boolean {
     return node.active_ordinal !== undefined && node.active_ordinal !== null;
   }
 
-  // Inputs on the active path jump within the open session; the others
-  // open the session that holds them.
+  // Inputs the open session's message view shows jump within it; the
+  // others, including those a continuation carries on from the session it
+  // continues, open the session that holds them.
   function inputHref(node: ServiceInputTreeNode): string {
-    if (isOnActivePath(node)) {
+    if (isInActiveView(node)) {
       return router.buildSessionHref(sessionId, {
         msg: String(node.active_ordinal),
       });
@@ -263,7 +264,7 @@
   }
 
   function inputTitle(node: ServiceInputTreeNode): string {
-    return isOnActivePath(node)
+    return isInActiveView(node)
       ? m.session_input_tree_jump_to({ preview: node.preview })
       : m.session_input_tree_open({ preview: node.preview });
   }
@@ -271,7 +272,7 @@
   function openInput(event: MouseEvent, node: ServiceInputTreeNode) {
     if (!isPlainClick(event)) return;
     event.preventDefault();
-    if (isOnActivePath(node)) {
+    if (isInActiveView(node)) {
       ui.scrollToOrdinal(node.active_ordinal!);
     } else {
       ui.scrollToOrdinal(node.ordinal, node.session_id);

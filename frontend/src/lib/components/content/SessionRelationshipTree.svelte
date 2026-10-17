@@ -19,7 +19,7 @@
   import { ui, type SessionTreeView } from "../../stores/ui.svelte.js";
   import { formatNumber } from "../../utils/format.js";
   import SessionInputTree from "./SessionInputTree.svelte";
-  import { forkFamilySize } from "./input-tree.js";
+  import { forkFamilyBranches } from "./input-tree.js";
   import {
     SESSION_TREE_HEIGHT_MIN,
     SESSION_TREE_HEIGHT_STORAGE_MAX,
@@ -64,10 +64,10 @@
 
   let rows = $derived(tree ? flattenTree(tree.root) : []);
   let visible = $derived(rows.length > 1);
-  // The input view needs a fork to branch; other sessions show only the
-  // session view.
+  // The input view needs a fork in the family to branch; other sessions
+  // show only the session view.
   let hasForks = $derived(
-    tree ? forkFamilySize(tree.root, tree.active_session_id) > 1 : false,
+    tree ? forkFamilyBranches(tree.root, tree.active_session_id) : false,
   );
   let view = $derived<SessionTreeView>(
     hasForks ? ui.sessionTreeView : "sessions",

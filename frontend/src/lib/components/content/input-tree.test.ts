@@ -5,7 +5,7 @@ import type {
   SessionTreeNode,
 } from "../../api/generated/index.js";
 import {
-  forkFamilySize,
+  forkFamilyBranches,
   layoutInputTree,
   type InputTreeGapRow,
   type InputTreeNodeRow,
@@ -21,6 +21,7 @@ function inputNode(
     ordinal: 0,
     preview: "input",
     is_shell: false,
+    on_active_path: false,
     end_session_ids: [],
     ...extra,
   };
@@ -124,11 +125,13 @@ describe("layoutInputTree", () => {
   });
 
   it("marks the active session's path", () => {
+    // The first input is on the path but outside the active session's
+    // message view, as when the session continues another one.
     const rows = nodeRows(
       layoutInputTree([
-        inputNode(-1, { active_ordinal: -3 }),
-        inputNode(0),
-        inputNode(0, { active_ordinal: 0 }),
+        inputNode(-1, { on_active_path: true }),
+        inputNode(0, { active_ordinal: 3 }),
+        inputNode(0, { on_active_path: true, active_ordinal: 0 }),
       ]),
     );
 
@@ -141,8 +144,8 @@ describe("layoutInputTree", () => {
   it("follows the active path down a single branch", () => {
     const rows = nodeRows(
       layoutInputTree([
-        inputNode(-1, { active_ordinal: 0 }),
-        inputNode(0, { active_ordinal: 2 }),
+        inputNode(-1, { on_active_path: true }),
+        inputNode(0, { on_active_path: true }),
         inputNode(1),
       ]),
     );
@@ -155,7 +158,7 @@ describe("layoutInputTree", () => {
     const chain = [
       inputNode(-1),
       inputNode(0),
-      inputNode(1, { active_ordinal: 4 }),
+      inputNode(1, { on_active_path: true }),
       inputNode(2),
       inputNode(3),
       inputNode(4),
@@ -189,6 +192,26 @@ describe("layoutInputTree", () => {
       expect(rows.some((row) => row.kind === "gap")).toBe(false);
     });
 
+    it("keeps an input where a session ends visible while another path continues below it", () => {
+      // 0 - 1 - 2 - 3 - 4 ends one session - 5 - 6 - 7 - 8 ends the one
+      // that continued it.
+      const rows = layoutInputTree([
+        inputNode(-1),
+        inputNode(0),
+        inputNode(1),
+        inputNode(2),
+        inputNode(3, { end_session_ids: ["parent"] }),
+        inputNode(4),
+        inputNode(5),
+        inputNode(6),
+        inputNode(7, { end_session_ids: ["continued"] }),
+      ]);
+
+      expect(rows.map((row) => row.key)).toEqual(["n0", "g1", "n4", "g5", "n8"]);
+      expect(rows[1]).toMatchObject({ kind: "gap", runStart: 1, hidden: 3 });
+      expect(rows[3]).toMatchObject({ kind: "gap", runStart: 5, hidden: 3 });
+    });
+
     it("leaves short runs alone", () => {
       const rows = layoutInputTree([inputNode(-1), inputNode(0), inputNode(1), inputNode(2)]);
 
@@ -216,28 +239,69 @@ function treeNode(
   };
 }
 
-describe("forkFamilySize", () => {
+describe("forkFamilyBranches", () => {
   // root
   // ├ fork-a (fork)
   // │ └ fork-b (fork)
   // └ helper (subagent)
   //   └ fork-c (fork)
-  const root = treeNode("root", undefined, [
+  const forks = treeNode("root", undefined, [
     treeNode("fork-a", "fork", [treeNode("fork-b", "fork")]),
     treeNode("helper", "subagent", [treeNode("fork-c", "fork")]),
   ]);
 
-  it.each([
-    ["root", 3],
-    ["fork-b", 3],
-    ["helper", 2],
-    ["fork-c", 2],
-    ["missing", 0],
-  ])("counts the fork family of %s", (activeId, expected) => {
-    expect(forkFamilySize(root, activeId)).toBe(expected);
+  it.each(["root", "fork-b", "helper", "fork-c"])(
+    "finds the forks in the family of %s",
+    (activeId) => {
+      expect(forkFamilyBranches(forks, activeId)).toBe(true);
+    },
+  );
+
+  it("does not branch for a session that is missing from the tree", () => {
+    expect(forkFamilyBranches(forks, "missing")).toBe(false);
   });
 
-  it("counts a session without forks alone", () => {
-    expect(forkFamilySize(treeNode("solo"), "solo")).toBe(1);
+  it("does not branch for a session without forks", () => {
+    expect(forkFamilyBranches(treeNode("solo"), "solo")).toBe(false);
+  });
+
+  // base
+  // ├ main (fork)
+  // │ └ moved (continuation)
+  // │   └ helper (subagent)
+  // └ side (fork)
+  const continued = treeNode("base", undefined, [
+    treeNode("main", "fork", [
+      treeNode("moved", "continuation", [treeNode("helper", "subagent")]),
+    ]),
+    treeNode("side", "fork"),
+  ]);
+
+  it("follows a continuation up to the forks of its family", () => {
+    expect(forkFamilyBranches(continued, "moved")).toBe(true);
+  });
+
+  it("leaves a sub-agent of a continuation out of the family", () => {
+    expect(forkFamilyBranches(continued, "helper")).toBe(false);
+  });
+
+  it("does not branch for a family linked by continuations alone", () => {
+    // first ─ second (continuation) ─ third (continuation)
+    const chain = treeNode("first", undefined, [
+      treeNode("second", "continuation", [treeNode("third", "continuation")]),
+    ]);
+
+    for (const activeId of ["first", "second", "third"]) {
+      expect(forkFamilyBranches(chain, activeId), activeId).toBe(false);
+    }
+  });
+
+  it("finds a fork below a continuation", () => {
+    // first ─ second (continuation) ─ retry (fork)
+    const chain = treeNode("first", undefined, [
+      treeNode("second", "continuation", [treeNode("retry", "fork")]),
+    ]);
+
+    expect(forkFamilyBranches(chain, "first")).toBe(true);
   });
 });
