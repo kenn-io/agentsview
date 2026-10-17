@@ -18789,7 +18789,7 @@ func (e *Engine) keepCodexCloudUsage(
 		Session: *stored, UsageEvents: events, PlanUsage: plan,
 		Current: stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud),
 	}) {
-		log.Printf("codex-cloud: kept part of the saved usage of %s because the mirror file has fewer usage records than the saved copy", prepared.Session.ID)
+		log.Printf("codex-cloud: kept saved usage figures of %s that the mirror file no longer holds", prepared.Session.ID)
 	}
 	return nil
 }

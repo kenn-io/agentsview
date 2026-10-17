@@ -50,9 +50,12 @@ func CodexCloudKeepReason(messages int, prior CodexCloudPrior) string {
 //     newest records.
 //   - With no plan records, prepared takes the saved plan figures. With
 //     only an outcome other than "counted under", it keeps the saved
-//     report figures under the new outcome, as the parser does for a
-//     whole mirror. With a report no newer than a current saved copy's, it
-//     keeps what the cut took; see newerSavedPlan.
+//     report figures, under the new outcome when that outcome is newer
+//     than the saved report, as the parser does for a whole mirror. A
+//     parse with a report keeps its own plan figures: a file cut after a
+//     newer report shows the older one until the next usage answer.
+//     Report times come from OpenAI and can repeat across answers, so
+//     they cannot tell a cut file from a whole one.
 //
 // It reports whether prepared took anything from the saved copy.
 func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool {
@@ -78,16 +81,15 @@ func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool
 		row = *prepared.PlanUsage
 	}
 	switch {
-	case row.CountedUnder != "":
-	case hasPlanReport(prepared.PlanUsage):
-		if merged, ok := newerSavedPlan(row, prior); ok {
-			row = withCoverage(merged, row)
-			carried = true
-		}
+	case hasPlanReport(prepared.PlanUsage) || row.CountedUnder != "":
 	case hasPlanRecords(prepared.PlanUsage):
 		if hasPlanReport(prior.PlanUsage) {
 			merged := *prior.PlanUsage
-			merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
+			// An outcome from before the saved report is one the parser
+			// drops in a whole file, so it does not replace the saved one.
+			if planTime(row.OutcomeAt).After(planTime(merged.DataAsOf)) {
+				merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
+			}
 			row = withCoverage(merged, row)
 			carried = true
 		}
@@ -126,43 +128,6 @@ func dropsEvents(parsed, saved []db.UsageEvent) bool {
 		keys[ev.DedupKey] = true
 	}
 	return !slices.ContainsFunc(parsed, func(ev db.UsageEvent) bool { return !keys[ev.DedupKey] })
-}
-
-// newerSavedPlan returns the plan row to keep when a current saved copy's
-// report is not older than the parse's, which happens when the file was
-// cut short. With a newer saved report, the saved figures stay, and the
-// parse's outcome replaces the saved one only when it is newer than both
-// the saved report and the saved outcome. With the same report time, the
-// cut may have taken the copy of the report that settling writes again
-// marked final, and the outcome written after it, so the parse keeps the
-// final mark of either copy, and the newer saved outcome when only the
-// saved copy is final. A later answer can repeat a report time after a
-// left_out outcome; its row follows the outcome and clears it, and the
-// saved outcome must not return. The parser orders records by their place
-// in the file, but two copies share no file, so this falls back on times.
-// It reports whether the saved copy changed the row.
-func newerSavedPlan(row db.SessionPlanUsage, prior CodexCloudPrior) (db.SessionPlanUsage, bool) {
-	if !prior.Current || !hasPlanReport(prior.PlanUsage) {
-		return row, false
-	}
-	saved := *prior.PlanUsage
-	savedAsOf, asOf := planTime(saved.DataAsOf), planTime(row.DataAsOf)
-	switch {
-	case savedAsOf.Before(asOf):
-		return row, false
-	case savedAsOf.Equal(asOf):
-		merged := row
-		merged.Final = row.Final || saved.Final
-		if saved.Final && !row.Final && planTime(saved.OutcomeAt).After(planTime(row.OutcomeAt)) {
-			merged.OutcomeKind, merged.OutcomeAt = saved.OutcomeKind, saved.OutcomeAt
-		}
-		return merged, merged.Final != row.Final || merged.OutcomeAt != row.OutcomeAt
-	}
-	outcomeAt := planTime(row.OutcomeAt)
-	if outcomeAt.After(savedAsOf) && outcomeAt.After(planTime(saved.OutcomeAt)) {
-		saved.OutcomeKind, saved.OutcomeAt = row.OutcomeKind, row.OutcomeAt
-	}
-	return saved, true
 }
 
 // planTime parses a stored plan usage time. An empty or malformed time is
