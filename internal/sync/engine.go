@@ -14228,6 +14228,16 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
 		suppress := false
+		if isCodexFormatAgent(agent) {
+			var err error
+			suppress, err = e.db.HasExcludedCodexRollout(ctx, currentPrefixedID, lookupPath)
+			if err != nil {
+				res.err = err
+				res.noCacheSkip = true
+				res.results = kept[:0]
+				return
+			}
+		}
 		for _, agentStr := range agentsToQuery {
 			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
 				suppress = true
@@ -14269,6 +14279,11 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// Stale-row cleanup for live siblings the current parse supersedes.
 		for _, id := range existingIDs {
 			if id == currentID || id == currentPrefixedID {
+				continue
+			}
+			// A pre-137 Codex transcript retained while its source was missing
+			// still owns its saved metadata. Keep both identities on return.
+			if isCodexFormatAgent(agent) && e.db.GetSessionDataVersion(ctx, id) < 137 {
 				continue
 			}
 			addExclusion(id)

@@ -1352,6 +1352,33 @@ func (db *DB) IsSessionExcluded(ctx context.Context, id string) bool {
 	return n == 1
 }
 
+// HasExcludedCodexRollout finds permanent deletions by rollout identity within
+// the session's agent and machine prefix, even after a move or compression.
+func (db *DB) HasExcludedCodexRollout(ctx context.Context, sessionID, path string) (bool, error) {
+	key := parser.CodexSessionUUIDFromPath(path)
+	prefixEnd := strings.LastIndex(sessionID, ":") + 1
+	if key == "" || prefixEnd == 0 {
+		return false, nil
+	}
+	prefix := sessionID[:prefixEnd]
+	rows, err := db.getReader().QueryContext(ctx, `SELECT file_path FROM excluded_sessions
+		WHERE substr(id, 1, ?) = ? AND file_path IS NOT NULL`, prefixEnd, prefix)
+	if err != nil {
+		return false, fmt.Errorf("reading excluded Codex rollouts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var storedPath string
+		if err := rows.Scan(&storedPath); err != nil {
+			return false, fmt.Errorf("scanning excluded Codex rollout: %w", err)
+		}
+		if parser.CodexSessionUUIDFromPath(storedPath) == key {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 const sessionTrashedQuery = `SELECT EXISTS (
 	SELECT 1 FROM sessions
 	WHERE deleted_at IS NOT NULL AND (

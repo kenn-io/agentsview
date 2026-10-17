@@ -19,6 +19,11 @@ const (
 	identityThreadB = "22222222-2222-7222-8222-222222222222"
 )
 
+var (
+	aMessages = []string{"first question", "first answer", "second question", "second answer"}
+	bMessages = []string{"other question"}
+)
+
 func writeCodexIdentityRollouts(t *testing.T) (root, pathA, pathB string) {
 	t.Helper()
 	root = t.TempDir()
@@ -58,8 +63,8 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 				for _, path := range paths {
 					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
 				}
-				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, database, "codex:"+identityThreadA))
-				assert.Equal(t, []string{"other question"}, messageContents(t, database, "codex:"+identityThreadB))
+				assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
+				assert.Equal(t, bMessages, messageContents(t, database, "codex:"+identityThreadB))
 
 				// A later foreign header forces a full parse even after a checkpoint.
 				f, err := os.OpenFile(pathB, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -71,7 +76,7 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
-				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, database, "codex:"+identityThreadA))
+				assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
 				assert.Equal(t, []string{"other question", "other answer"}, messageContents(t, database, "codex:"+identityThreadB))
 			})
 		}
@@ -81,8 +86,6 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 	const a = "codex:" + identityThreadA
 	const b = "codex:" + identityThreadB
-	aMessages := []string{"first question", "first answer", "second question", "second answer"}
-	bMessages := []string{"other question"}
 	for _, tc := range []struct {
 		name         string
 		absent       []string
@@ -91,7 +94,7 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 		wantA, wantB []string
 		pinOwner     string
 		nameOwner    string
-		excludeB     bool
+		returnForm   string
 	}{
 		{name: "both_present", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
 		{name: "a_only", absent: []string{b}, wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
@@ -100,12 +103,16 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 		{name: "b_moved", storedPath: "moved", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
 		{name: "backslash_path", storedPath: "backslash", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
 		{name: "trashed", disposition: "trash", wantA: bMessages, pinOwner: a, nameOwner: a},
-		{name: "deleted_b_present", disposition: "delete", excludeB: true},
-		{name: "deleted_b_missing", absent: []string{b}, disposition: "delete"},
+		{name: "deleted_b_present", disposition: "delete"},
+		{name: "deleted_b_missing", absent: []string{b}, disposition: "delete", returnForm: "plain"},
+		{name: "deleted_b_missing_moved", absent: []string{b}, disposition: "delete", returnForm: "moved"},
+		{name: "deleted_b_missing_compressed", absent: []string{b}, disposition: "delete", storedPath: "backslash", returnForm: "compressed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			root, pathA, pathB := writeCodexIdentityRollouts(t)
+			returningB, err := os.ReadFile(pathB)
+			require.NoError(t, err)
 			// Keep discovery nonempty even when both affected files are gone.
 			writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-10-00-33333333-3333-7333-8333-333333333333.jsonl", testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON("33333333-3333-7333-8333-333333333333", "/work/other", "codex_cli_rs", "2025-10-20T19:10:00Z"),
@@ -210,7 +217,33 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 			}
 			if tc.disposition == "delete" {
 				assert.True(t, reopened.IsSessionExcluded(ctx, a))
-				assert.Equal(t, tc.excludeB, reopened.IsSessionExcluded(ctx, b))
+				assert.False(t, reopened.IsSessionExcluded(ctx, b), "the rollout guard preserves the saved exclusion on A")
+				if tc.returnForm != "" {
+					returnedPath := pathB
+					if tc.returnForm != "plain" {
+						returnedPath = filepath.Join(root, "archived_sessions", filepath.Base(pathB))
+						require.NoError(t, os.MkdirAll(filepath.Dir(returnedPath), 0o700))
+					}
+					if tc.returnForm == "compressed" {
+						returnedPath += ".zst"
+						returningB = zstdCompressString(t, string(returningB))
+					}
+					require.NoError(t, os.WriteFile(returnedPath, returningB, 0o600))
+					for range 2 {
+						require.NoError(t, engine.SyncPathsContext(ctx, []string{returnedPath}))
+						session, err := reopened.GetSessionFull(ctx, b)
+						require.NoError(t, err)
+						assert.Nil(t, session, "a returning permanently deleted rollout stays hidden")
+						assert.True(t, reopened.IsSessionExcluded(ctx, a))
+					}
+					stats, err := engine.SyncThenRun(ctx, true, nil, func(bool) error { return nil })
+					require.NoError(t, err)
+					require.False(t, stats.Aborted)
+					session, err := reopened.GetSessionFull(ctx, b)
+					require.NoError(t, err)
+					assert.Nil(t, session, "a later rebuild also preserves the deletion")
+					assert.True(t, reopened.IsSessionExcluded(ctx, a))
+				}
 				return
 			}
 			assert.Equal(t, tc.disposition == "trash", reopened.IsSessionTrashed(ctx, a))
@@ -250,6 +283,19 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 				change, found := byID[old.MessageID]
 				require.True(t, found, "exported message ID must survive")
 				assert.Equal(t, tc.pinOwner, change.SessionID)
+			}
+			if tc.name == "neither" {
+				require.NoError(t, os.WriteFile(pathB, returningB, 0o600))
+				for range 2 {
+					require.NoError(t, engine.SyncPathsContext(ctx, []string{pathB}))
+					assert.Equal(t, bMessages, messageContents(t, reopened, a))
+					assert.Equal(t, bMessages, messageContents(t, reopened, b))
+					pins, err := reopened.ListPinnedMessages(ctx, a, "")
+					require.NoError(t, err)
+					require.Len(t, pins, 1)
+					assert.Equal(t, new("saved note"), pins[0].Note)
+					assert.False(t, reopened.IsSessionExcluded(ctx, a))
+				}
 			}
 		})
 	}

@@ -444,6 +444,32 @@ func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {
 	assert.True(t, plan.Entries[0].Appendable)
 }
 
+func TestCodexReplayParentIDUsesOwningMetadata(t *testing.T) {
+	const own = `{"type":"session_meta","payload":{"id":"child"}}`
+	const foreignFork = `{"type":"session_meta","payload":{"id":"foreign","forked_from_id":"parent"}}`
+	const foreignSubagent = `{"type":"session_meta","payload":{"id":"foreign","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}`
+	const parent = `{"type":"session_meta","payload":{"id":"parent"}}`
+	const ownFork = `{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent"}}`
+	const ownSubagent = `{"type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}`
+	for _, tc := range []struct {
+		name, content, want string
+	}{
+		{name: "foreign_fork", content: own + "\n" + foreignFork},
+		{name: "foreign_subagent", content: own + "\n" + foreignSubagent + "\n" + parent},
+		{name: "empty_foreign_id", content: own + "\n" + `{"type":"session_meta","payload":{"forked_from_id":"parent"}}`},
+		{name: "first_nonempty_id", content: `{"type":"session_meta","payload":{}}` + "\n" + ownFork, want: "parent"},
+		{name: "same_thread_fork", content: own + "\n" + ownFork, want: "parent"},
+		{name: "copied_parent_signal", content: ownSubagent + "\n" + parent, want: "parent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeCodexProviderSessionContent(t, t.TempDir(), "child", tc.content+"\n")
+			got, needed := CodexReplayParentID(path)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want != "", needed)
+		})
+	}
+}
+
 func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sessions")

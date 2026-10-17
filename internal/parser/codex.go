@@ -1811,6 +1811,7 @@ func codexReplayParentIDContext(
 	}
 	defer f.Close()
 
+	sessionID := ""
 	parentID := ""
 	resolutionNeeded := false
 	scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
@@ -1827,6 +1828,16 @@ func codexReplayParentIDContext(
 			continue
 		}
 		payload := gjson.Get(line, "payload")
+		id := payload.Get("id").Str
+		if sessionID != "" && id != sessionID {
+			// Copied parent metadata proves replay only when the owning
+			// header already declared that parent. Its lineage is foreign.
+			if parentID != "" && id == parentID {
+				resolutionNeeded = true
+			}
+			continue
+		}
+		sessionID = id
 		forkedFromID := strings.TrimSpace(payload.Get("forked_from_id").Str)
 		if forkedFromID != "" {
 			parentID = forkedFromID

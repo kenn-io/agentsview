@@ -185,14 +185,18 @@ Data version 137 separates misfiled Codex threads when the fresh parse confirms
 which rollout owns each ID. A moved file matches by rollout file name, including
 changes between `.jsonl` and `.jsonl.zst`. If the file is gone, its transcript
 moves only when another rollout now owns the old ID; otherwise the archived row
-keeps its ID. Pins, Recall entries, and export message IDs follow the corrected
+keeps its ID. If that file returns later, normal sync keeps the saved row and
+its metadata under that ID alongside the freshly parsed thread.
+Pins, Recall entries, and export message IDs follow the corrected
 transcript. For live sessions, names and stars stay on a surviving original
 thread; when it is absent, they follow the corrected transcript. Trash and
 permanent deletions continue to hide the affected threads. A trashed misfiled
 transcript stays under its saved ID; its saved path also hides the other
 rollout. Permanent deletion excludes the corrected thread only if the fresh
 parse produced it from that rollout. With that file missing, the deletion stays
-on its saved ID. An archive-only capture keeps its old ID when retained-source
+on its saved ID. Its saved rollout file name also suppresses a later return,
+including after a move or compression.
+An archive-only capture keeps its old ID when retained-source
 reparse would change it; its archived transcript remains available. PostgreSQL
 pins move on the next push, including a push of only the corrected thread.
 

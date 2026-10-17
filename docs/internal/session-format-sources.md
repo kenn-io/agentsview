@@ -589,17 +589,9 @@ fixtures retain this field; missing identities remain source-local.
   has no `forked_from_id`. AgentsView keeps the first nonempty metadata ID
   and ignores later metadata with a different or empty ID. Same-thread
   metadata can still update the working directory and branch; existing fork
-  replay filtering and revert-page identities remain in effect. Data version
-  137 uses the preservation rebuild because session identities change.
-  Saved transcript metadata follows the corrected thread when a fresh parse
-  proves ownership, including when its source moved or is absent. Trash stays
-  on its saved ID. Permanent deletion follows a corrected thread only when
-  its rollout was reparsed. For live sessions, names and stars stay on a
-  surviving original thread; otherwise they follow the corrected transcript.
-  Synthetic parser and SQLite sync regressions cover conflicting headers,
-  either sync order, appended metadata, and repair of a misfiled session while
-  retaining sessions whose sources are absent. This establishes a producer
-  path for the shape reported in [issue #2248](https://github.com/kenn-io/agentsview/issues/2248);
+  replay filtering and revert-page identities remain in effect. This establishes
+  a producer path for the shape reported in
+  [issue #2248](https://github.com/kenn-io/agentsview/issues/2248);
   the particular file's history remains unverified.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
