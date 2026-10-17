@@ -1061,9 +1061,9 @@ func TestUsageModelGroups(t *testing.T) {
 					left, right           string
 					leftInput, rightInput int
 				}{
-					{name: "grouping omitted", dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 170, rightInput: 30},
+					{name: "grouping omitted", dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 200, rightInput: 30},
 					{name: "grouping enabled", grouped: true, dimension: "project", leftInput: 100, rightInput: 100},
-					{name: "fallback requested", fallback: true, dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 170, rightInput: 30},
+					{name: "fallback requested", fallback: true, dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 200, rightInput: 30},
 					{name: "grouped fallback requested", grouped: true, fallback: true, dimension: "project", leftInput: 100, rightInput: 100},
 				} {
 					t.Run(tt.name, func(t *testing.T) {
@@ -1087,6 +1087,12 @@ func TestUsageModelGroups(t *testing.T) {
 						}
 						assert.Equal(t, tt.leftInput, result.Left.InputTokens)
 						assert.Equal(t, tt.rightInput, result.Right.InputTokens)
+						req.LeftDimension, req.LeftValue = result.Left.Dimension, result.Left.Value
+						req.RightDimension, req.RightValue = result.Right.Dimension, result.Right.Value
+						req.FallbackToDefault = false
+						replayed, err := be.UsagePairwiseComparison(t.Context(), req)
+						require.NoError(t, err)
+						assert.Equal(t, result, replayed)
 					})
 				}
 				result, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{

@@ -1055,13 +1055,10 @@ func (b *directBackend) UsagePairwiseComparison(
 		return nil, err
 	}
 	query := req
-	if !useDefault {
-		query.LeftValue, query.RightValue = left, right
-	}
-	if query.LeftDimension == "model" && useDefault && req.GroupModels {
+	if query.LeftDimension == "model" {
 		query.LeftValue = b.modelGroups.Expand(query.LeftValue)
 	}
-	if query.RightDimension == "model" && useDefault && req.GroupModels {
+	if query.RightDimension == "model" {
 		query.RightValue = b.modelGroups.Expand(query.RightValue)
 	}
 	leftFilter, leftEmpty, rightFilter, rightEmpty, err := buildUsagePairwiseFilters(query, base)
