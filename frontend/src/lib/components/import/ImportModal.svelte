@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reportSyncFailed, reportTelemetry } from "../../utils/telemetry.js";
   import { ImportService, type ClaudeAIChromeOutputBody, type ImporterImportStats as ImportStats } from "../../api/generated/index.js";
   import { Button, Card, Chip, CodeBlock, Modal, Notice, Spinner } from "@kenn-io/kit-ui";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -132,9 +133,13 @@
     syncController = controller;
     try {
       const stats = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
-      if (!controller.signal.aborted) result = stats;
+      if (!controller.signal.aborted) {
+        result = stats;
+        if (stats.errors > 0) reportTelemetry("sync_failed", { reason: "partial" });
+      }
     } catch (e) {
       if (controller.signal.aborted) return;
+      reportSyncFailed(e);
       if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
         return;
       } else if (e instanceof ApiError && ["claude_ai_auth_required", "claude_ai_chrome_host_update_required"].includes(e.code ?? "")) {

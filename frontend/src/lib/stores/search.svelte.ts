@@ -285,6 +285,7 @@ export class SearchStore {
 
       if (requestVersion !== this.requestVersion || signal.aborted) return;
       this.results = results;
+      if (results.length === 0) reportTelemetry("search_empty");
       this.error = null;
     } catch (error: unknown) {
       if (requestVersion !== this.requestVersion || signal.aborted || isAbortError(error)) {

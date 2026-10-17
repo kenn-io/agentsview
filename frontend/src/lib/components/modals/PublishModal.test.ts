@@ -36,7 +36,8 @@ const services = vi.hoisted(() => {
 });
 
 const reportTelemetry = vi.hoisted(() => vi.fn());
-vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry }));
+const reportErrorShown = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry, reportErrorShown }));
 
 const sessionState = vi.hoisted(() => ({
   sessions: {
@@ -105,6 +106,17 @@ describe("PublishModal", () => {
     ui.clearPublishTarget();
     ui.publishSecret = false;
     document.body.innerHTML = "";
+  });
+
+  it("counts a displayed publish failure", async () => {
+    reportErrorShown.mockClear();
+    services.postApiV1SessionsByIdPublish.mockRejectedValueOnce(new Error("Publish failed"));
+    ui.activeModal = "publish";
+    component = mount(PublishModal, { target: document.body });
+    services.resolveConfig({ configured: true });
+    await flushAsync();
+    expect(document.querySelector(".modal-error-text")?.textContent).toBe("Publish failed");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("export");
   });
 
   it.each([

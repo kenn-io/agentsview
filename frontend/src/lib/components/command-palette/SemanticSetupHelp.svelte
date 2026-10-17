@@ -24,6 +24,7 @@
 </script>
 
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
@@ -241,7 +242,7 @@ endpoint = "http://localhost:11434/v1"`;
   }
 </script>
 
-<div class="semantic-setup" role="alert">
+<div class="semantic-setup" role="alert" {@attach errorTelemetry("search")}>
   {#if phase === "probing"}
     <div class="setup-row centered">
       <Spinner size={13} />

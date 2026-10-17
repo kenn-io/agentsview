@@ -30,6 +30,11 @@ func TestCoreActionAllowlist(t *testing.T) {
 		event, key, value string
 		kept              bool
 	}{
+		{EventSearchEmpty, "query", "secret", false},
+		{EventErrorShown, "kind", "search", true},
+		{EventSyncFailed, "reason", "partial", true},
+		{EventErrorShown, "kind", "unknown", true},
+		{EventSyncFailed, "reason", "unknown", true},
 		{EventSearchRun, "query_type", "semantic", true},
 		{EventSearchRun, "query_type", "regex", false},
 		{EventSessionViewed, "agent", "freebuff", true},
@@ -96,7 +101,11 @@ func TestCoreActionAllowlist(t *testing.T) {
 			}
 		}
 		if c.kept {
-			assert.Equal(t, c.value, sent[i][c.key])
+			want := c.value
+			if c.value == "unknown" {
+				want = "other"
+			}
+			assert.Equal(t, want, sent[i][c.key])
 		} else {
 			assert.NotContains(t, sent[i], c.key)
 		}

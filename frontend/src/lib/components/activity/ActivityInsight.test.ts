@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { render, screen, fireEvent } from "@testing-library/svelte";
@@ -77,6 +79,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) {
     if (typeof m === "function") m.mockReset();
   }
+  vi.mocked(reportErrorShown).mockClear();
   mocks.serverVersion = { read_only: false };
   mocks.agent = "claude";
   mocks.requestAgent = undefined;
@@ -88,6 +91,24 @@ function settle() {
 }
 
 describe("ActivityInsight", () => {
+  it("counts a generation failure again after retry", async () => {
+    mocks.generateInsight.mockImplementation(() => ({
+      abort: vi.fn(),
+      done: Promise.reject(new Error("Generation failed")),
+    }));
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    for (const [name, count] of [
+      ["Generate", 1],
+      ["Retry", 2],
+    ] as const) {
+      await fireEvent.click(screen.getByRole("button", { name }));
+      await settle();
+      expect(screen.getByText("Generation failed")).toBeDefined();
+      expect(reportErrorShown).toHaveBeenCalledTimes(count);
+    }
+  });
+
   it("fetches insights with both date bounds (full identity)", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();

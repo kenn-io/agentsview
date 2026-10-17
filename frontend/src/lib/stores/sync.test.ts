@@ -1,3 +1,5 @@
+import { reportSyncFailed } from "../utils/telemetry.js";
+vi.mock("../utils/telemetry.js", () => ({ reportSyncFailed: vi.fn() }));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type {
@@ -360,6 +362,7 @@ describe("SyncStore.triggerSync", () => {
     expect(sync.lastSyncStats).toEqual(MOCK_STATS);
     expect(sync.stats).toEqual(stats);
     expect(sync.syncing).toBe(false);
+    expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 });
 
@@ -393,8 +396,17 @@ describe("SyncStore.triggerResync", () => {
 
     await vi.waitFor(() => {
       expect(onError).toHaveBeenCalledWith(error);
+      expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(error);
     });
     expect(sync.syncing).toBe(false);
+  });
+
+  it("ignores a cancelled resync attempt", async () => {
+    mockResyncFailure(new DOMException("Cancelled", "AbortError"));
+    sync.triggerResync();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 
   it("resets syncing on non-Error rejection", async () => {
@@ -603,6 +615,7 @@ describe("SyncStore.remoteUnreachable", () => {
     });
 
     await sync.loadStatus();
+    expect(reportSyncFailed).not.toHaveBeenCalled();
 
     expect(sync.syncing).toBe(true);
     expect(sync.progress?.phase).toBe("rebuilding_search");

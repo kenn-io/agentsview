@@ -1706,6 +1706,7 @@ func TestHumaTriggerResyncWorkerRunnerErrorRejectsStream(t *testing.T) {
 	body := w.Body.String()
 	assert.Contains(t, body, "event: error")
 	assert.Contains(t, body, "resync build reported failed")
+	assert.NotContains(t, body, `"code"`)
 	assert.NotContains(t, body, "event: done",
 		"a failed worker resync must not be reported as a completed resync")
 }
@@ -1722,6 +1723,7 @@ func TestForegroundSyncWorkerDeferredProcessingRejectsStream(t *testing.T) {
 	body := w.Body.String()
 	assert.Contains(t, body, "event: error")
 	assert.Contains(t, body, "local sync processing incomplete")
+	assert.Contains(t, body, `"code":"incomplete"`)
 	assert.NotContains(t, body, "event: done")
 }
 
@@ -1737,6 +1739,7 @@ func TestForegroundResyncWorkerDeferredProcessingRejectsStream(t *testing.T) {
 	body := w.Body.String()
 	assert.Contains(t, body, "event: error")
 	assert.Contains(t, body, "local sync processing incomplete")
+	assert.Contains(t, body, `"code":"incomplete"`)
 	assert.NotContains(t, body, "event: done")
 }
 
@@ -2652,4 +2655,13 @@ func TestUsageRefreshValidationPrecedesStartupGate(t *testing.T) {
 		"path": "session.jsonl", "usage_refresh": true,
 	})
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+func TestForegroundSyncBusyCode(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalSyncRunner(func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress
+	}))
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync", nil)
+	assert.Contains(t, w.Body.String(), `"code":"sync_running"`)
+	assert.NotContains(t, w.Body.String(), "event: done")
 }

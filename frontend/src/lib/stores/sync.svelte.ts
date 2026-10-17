@@ -1,3 +1,4 @@
+import { reportSyncFailed } from "../utils/telemetry.js";
 import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
@@ -302,6 +303,7 @@ class SyncStore {
           return;
         }
         finalizeSync();
+        reportSyncFailed(err);
         if (err instanceof Error) {
           onError?.(err);
         } else {

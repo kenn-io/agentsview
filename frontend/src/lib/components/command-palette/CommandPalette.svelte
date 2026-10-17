@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import { m } from "../../i18n/index.js";
   import {
     Button,
@@ -335,7 +336,7 @@
             searchDetail={searchStore.error.detail}
           />
         {:else if searchStore.error}
-          <div class="palette-error" role="alert">
+          <div class="palette-error" role="alert" {@attach errorTelemetry("search")}>
             {#if searchStore.error.kind === "timeout"}
               <strong>{m.command_palette_search_timeout_title()}</strong>
               <span>{m.command_palette_search_timeout_detail()}</span>

@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -353,9 +355,6 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    mocks.getApiV1TrendsTerms.mockRejectedValueOnce(
-      new Error("at least one trend term is required"),
-    );
     const textarea = document.querySelector<HTMLTextAreaElement>("#trend-terms");
     expect(textarea).not.toBeNull();
     textarea!.value = "";
@@ -365,10 +364,21 @@ describe("TrendsPage", () => {
       (button) => button.textContent?.trim() === "Refresh",
     );
     expect(refreshButton).not.toBeNull();
-    refreshButton!.click();
-    await flushPromises();
-
-    expect(document.body.textContent).toContain("at least one trend term is required");
+    for (const count of [1, 2]) {
+      let reject!: (error: Error) => void;
+      mocks.getApiV1TrendsTerms.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, fail) => {
+            reject = fail;
+          }),
+      );
+      refreshButton!.click();
+      await tick();
+      expect(document.querySelector(".error")).toBeNull();
+      reject(new Error("at least one trend term is required"));
+      await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(count));
+      expect(document.body.textContent).toContain("at least one trend term is required");
+    }
     warn.mockRestore();
   });
 

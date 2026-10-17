@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -163,6 +165,7 @@ describe("MessageList follow cancellation", () => {
     inSessionSearch.close();
     inSessionSearch.clearQuery();
     messages.clear();
+    sessions.activeSessionNotFound = false;
     sessions.activeSessionId = "s1";
     messages.sessionId = "s1";
     messages.messages = [makeMessage(10)];
@@ -400,6 +403,20 @@ describe("MessageList follow cancellation", () => {
       expect(ui.selectedOrdinal).toBe(ordinal);
     },
   );
+
+  it("counts a missing session only when its empty transcript pane appears", async () => {
+    sessions.activeSessionNotFound = true;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    messages.messages = [];
+    messages.loading = true;
+    await tick();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    messages.loading = false;
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
+  });
 
   it("renders empty and loading states in Simplified Chinese", async () => {
     setLocale("zh-CN");

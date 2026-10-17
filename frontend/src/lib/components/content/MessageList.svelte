@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import { onDestroy, tick, untrack } from "svelte";
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
@@ -888,9 +889,11 @@
     {#snippet icon()}
       <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
     {/snippet}
-    <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
-      {m.message_list_session_not_found_retry()}
-    </Button>
+    <div style="display: contents" {@attach errorTelemetry("session")}>
+      <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
+        {m.message_list_session_not_found_retry()}
+      </Button>
+    </div>
   </EmptyState>
 {:else}
   <SessionFindView

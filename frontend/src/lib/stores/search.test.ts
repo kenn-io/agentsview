@@ -460,6 +460,7 @@ describe("SearchStore", () => {
     store.search("unknown failure");
     await runDebounce();
 
+    expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(store.error).toEqual({ detail: null, kind: "generic" });
     expect(store.isSearching).toBe(false);
   });
@@ -477,9 +478,10 @@ describe("SearchStore", () => {
     store.setMode("semantic");
     await flushMicrotasks();
 
-    stale.reject(new Error("late stale failure"));
+    stale.resolve(fullTextResponse("stale", 0));
     await flushMicrotasks();
 
+    expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
     expect(store.error).toBeNull();
     expect(store.isSearching).toBe(false);
@@ -507,9 +509,10 @@ describe("SearchStore", () => {
     store.search("cancel me");
     await runDebounce();
     store.clear();
-    completeRequest(fullTextResponse("cancel me", 2));
+    completeRequest(fullTextResponse("cancel me", 0));
     await flushMicrotasks();
 
+    expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(wasCancelled).toBe(true);
     expect(store.results).toEqual([]);
     expect(store.query).toBe("");
@@ -522,7 +525,28 @@ describe("SearchStore telemetry", () => {
     vi.useFakeTimers();
     vi.mocked(reportTelemetry).mockClear();
     searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
-    searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
+    searchService.getApiV1SearchContent.mockResolvedValue(
+      contentResult([contentMatch("match", 1, 1)]),
+    );
+  });
+
+  it("counts accepted empty results across queries", async () => {
+    const store = createSearchStore(null);
+    for (const [query, count] of [
+      ["missing", 1],
+      ["found", 1],
+      ["missing again", 2],
+      [" ", 2],
+    ] as const) {
+      searchService.getApiV1Search.mockResolvedValue(
+        fullTextResponse(query, query === "found" ? 1 : 0),
+      );
+      store.search(query);
+      await runDebounce();
+      expect(
+        vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "search_empty"),
+      ).toHaveLength(count);
+    }
   });
 
   afterEach(() => {

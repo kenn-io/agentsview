@@ -1,10 +1,13 @@
-import { orvalRequest } from "../api/runtime.js";
+import { ApiError, isAbortError, orvalRequest } from "../api/runtime.js";
 
 export type TelemetryEvent =
   | "app_opened"
   | "visit_ended"
   | "screen_viewed"
   | "search_run"
+  | "search_empty"
+  | "error_shown"
+  | "sync_failed"
   | "session_viewed"
   | "export_run"
   | "insight_generated"
@@ -22,4 +25,42 @@ export function reportTelemetry(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ event, properties }),
   }).catch(() => {});
+}
+
+export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export" | "other";
+export type SyncFailureReason =
+  | "request"
+  | "partial"
+  | "sign_in_required"
+  | "browser_extension"
+  | "already_running"
+  | "other";
+
+export function reportErrorShown(kind: ErrorKind): void {
+  reportTelemetry("error_shown", { kind });
+}
+
+export function reportSyncFailed(error: unknown): void {
+  if (isAbortError(error)) return;
+  let reason: SyncFailureReason = "other";
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
+  switch (code) {
+    case "sync_running":
+    case "claude_ai_sync_running":
+      reason = "already_running";
+      break;
+    case "incomplete":
+      reason = "partial";
+      break;
+    case "claude_ai_auth_required":
+      reason = "sign_in_required";
+      break;
+    case "claude_ai_chrome_host_required":
+    case "claude_ai_chrome_host_update_required":
+      reason = "browser_extension";
+      break;
+    default:
+      if (error instanceof ApiError) reason = "request";
+  }
+  reportTelemetry("sync_failed", { reason });
 }

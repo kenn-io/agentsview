@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -61,6 +63,7 @@ describe("GoToSessionModal", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
+    vi.mocked(reportErrorShown).mockClear();
     document.body.innerHTML = "";
     ui.activeModal = "goToSession";
     harness.resolveSessionIds.mockReset();
@@ -155,6 +158,7 @@ describe("GoToSessionModal", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(message);
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.sessions.navigateToSession).not.toHaveBeenCalled();
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();
     if (_name === "empty") {
       expect(harness.resolveSessionIds).not.toHaveBeenCalled();
@@ -173,6 +177,7 @@ describe("GoToSessionModal", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
     );
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();
   });
@@ -203,6 +208,7 @@ describe("GoToSessionModal", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not look up that session. Try again.",
     );
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
     expect(input().value).toBe(UUID);
     expect(ui.activeModal).toBe("goToSession");
   });

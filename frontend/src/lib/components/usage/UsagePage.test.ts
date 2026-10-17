@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { router } from "../../stores/router.svelte.js";
@@ -154,6 +156,24 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("keeps a cached summary refresh failure out of displayed error counts", async () => {
+    vi.mocked(reportErrorShown).mockClear();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    usage.summary = usageSummaryWithUnsupported();
+    usage.referenceSummary = usage.summary;
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockRejectedValueOnce(
+      new Error("Cached refresh failed"),
+    );
+    await usage.fetchSummary();
+    await flushEffects();
+    expect(document.querySelector(".error-bar")).toBeNull();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+  });
+
   it("keeps session-list label and pull request filters when the URL sets a shared filter", async () => {
     vi.stubGlobal(
       "ResizeObserver",

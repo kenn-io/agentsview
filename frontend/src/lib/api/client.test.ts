@@ -393,6 +393,13 @@ describe("triggerSync SSE parsing", () => {
     return { handle, progress };
   }
 
+  it.each(["sync_running", "incomplete"])("preserves failure code %s", async (code) => {
+    const { handle } = startSync([
+      `event: error\ndata: {"error":"Sync failed","code":"${code}"}\n\n`,
+    ]);
+    await expect(handle.done).rejects.toMatchObject({ message: "Sync failed", code });
+  });
+
   it("should parse CRLF-terminated SSE frames", async () => {
     const { handle, progress } = startSync([
       'event: progress\r\ndata: {"phase":"scanning","projects_total":1,"projects_done":0,"sessions_total":0,"sessions_done":0,"messages_indexed":0}\r\n\r\n',

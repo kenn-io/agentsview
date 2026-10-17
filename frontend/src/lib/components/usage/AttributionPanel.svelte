@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import {
     usage,
     type GroupBy,
@@ -270,7 +271,7 @@
     </div>
   </div>
   {#if zoomedProject && usage.errors.zoom}
-    <div class="empty">{usage.errors.zoom}</div>
+    <div class="empty" {@attach errorTelemetry("analytics")}>{usage.errors.zoom}</div>
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
