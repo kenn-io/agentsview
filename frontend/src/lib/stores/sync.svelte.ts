@@ -285,6 +285,7 @@ class SyncStore {
       this.progress = p;
     });
 
+    let doneRejected = false;
     handle.done
       .then((s: SyncStats) => {
         this.lastSyncStats = s;
@@ -297,13 +298,16 @@ class SyncStore {
         this.pendingHydration = true;
         void this.loadStatus();
         onComplete?.();
+      }, (err: unknown) => {
+        doneRejected = true;
+        throw err;
       })
       .catch((err: unknown) => {
         if (isAbortError(err)) {
           return;
         }
         finalizeSync();
-        reportSyncFailed(err);
+        if (doneRejected) reportSyncFailed(err);
         if (err instanceof Error) {
           onError?.(err);
         } else {

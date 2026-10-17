@@ -460,6 +460,30 @@ describe("SyncStore.triggerResync", () => {
     expect(sync.lastSyncStats).toEqual(MOCK_STATS);
   });
 
+  it("does not report a sync failure when onComplete throws after success", async () => {
+    mockResyncSuccess();
+    api.getVersion.mockResolvedValue({
+      build_date: "",
+      commit: "abc123",
+      read_only: false,
+      version: "dev",
+    });
+    const error = new Error("completion callback failed");
+    const onComplete = vi.fn(() => {
+      throw error;
+    });
+    const onError = vi.fn();
+    sync.triggerResync(onComplete, onError);
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(sync.syncing).toBe(false);
+    expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+    expect(reportSyncFailed).not.toHaveBeenCalled();
+  });
+
   it("rejects full resync for read-only backends", () => {
     const s = sync as unknown as Record<string, unknown>;
     s.serverVersion = {

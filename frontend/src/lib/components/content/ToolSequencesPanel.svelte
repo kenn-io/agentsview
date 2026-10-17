@@ -23,7 +23,7 @@
     loading: boolean;
     failed: boolean;
     unavailable?: boolean;
-    errorTelemetryKind?: ErrorKind;
+    errorTelemetryKind: ErrorKind;
     onretry?: (() => void) | undefined;
     /** Drops the panel's own background and scroll so a page section can host it. */
     embedded?: boolean;
@@ -37,7 +37,7 @@
     loading,
     failed,
     unavailable = false,
-    errorTelemetryKind = undefined,
+    errorTelemetryKind,
     onretry = undefined,
     embedded = false,
     timing = null,
