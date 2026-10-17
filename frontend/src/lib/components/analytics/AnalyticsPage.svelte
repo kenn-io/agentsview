@@ -669,6 +669,7 @@
     />
     <FilterDropdown
       label={m.analytics_model()}
+      selectedLabel={analytics.model !== analytics.displayedModels ? analytics.model : ""}
       items={modelItems}
       excludedCsv={analytics.displayedModels}
       mode="include"

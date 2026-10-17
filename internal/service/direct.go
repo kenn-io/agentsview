@@ -943,9 +943,7 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	req.Model = b.modelGroups.Expand(req.Model)
-	req.ExcludeModel = b.modelGroups.Expand(req.ExcludeModel)
-	f, err := BuildUsageFilter(req)
+	f, err := BuildUsageFilter(req, b.modelGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -994,20 +992,11 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	req.Model = b.modelGroups.Expand(req.Model)
-	req.ExcludeModel = b.modelGroups.Expand(req.ExcludeModel)
-	base, err := BuildUsageFilter(req.UsageRequest)
+	base, err := BuildUsageFilter(req.UsageRequest, b.modelGroups)
 	if err != nil {
 		return nil, err
 	}
 	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
-	left, right := req.LeftValue, req.RightValue
-	if req.LeftDimension == "model" {
-		left = b.modelGroups.Expand(left)
-	}
-	if req.RightDimension == "model" {
-		right = b.modelGroups.Expand(right)
-	}
 	if req.FallbackToDefault && !useDefault {
 		if err := validatePairwiseDimension(req.LeftDimension, req.LeftValue, "left"); err != nil {
 			return nil, err
@@ -1017,6 +1006,13 @@ func (b *directBackend) UsagePairwiseComparison(
 		}
 	}
 	if useDefault || req.FallbackToDefault {
+		left, right := req.LeftValue, req.RightValue
+		if req.LeftDimension == "model" {
+			left = b.modelGroups.Expand(left)
+		}
+		if req.RightDimension == "model" {
+			right = b.modelGroups.Expand(right)
+		}
 		rankingFilter := base
 		rankingFilter.Breakdowns = true
 		rankingFilter.SkipSessionCounts = true

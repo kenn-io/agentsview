@@ -980,7 +980,10 @@ func wrapSemanticTransient(message string) error {
 func (b *httpBackend) UsageSummary(
 	ctx context.Context, req service.UsageRequest,
 ) (*service.UsageSummaryResult, error) {
-	q := &apiclient.GetAPIV1UsageSummaryQuery{GroupModels: new(req.GroupModels)}
+	q := &apiclient.GetAPIV1UsageSummaryQuery{}
+	if req.GroupModels {
+		q.GroupModels = new(true)
+	}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
 		if err != nil {
@@ -1094,7 +1097,10 @@ func (b *httpBackend) UsageSummary(
 func (b *httpBackend) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {
-	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{GroupModels: new(req.GroupModels)}
+	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
+	if req.GroupModels {
+		q.GroupModels = new(true)
+	}
 	if req.FallbackToDefault {
 		q.FallbackToDefault = new(true)
 	}

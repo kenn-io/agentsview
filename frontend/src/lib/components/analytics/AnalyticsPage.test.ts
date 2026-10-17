@@ -122,7 +122,9 @@ describe("AnalyticsPage grouped model filter", () => {
     });
     await vi.waitFor(() => expect(analytics.displayedModels).toBe("claude-4"));
     await flushEffects();
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-4"]')!.click();
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!
+      .click();
     await flushEffects();
     const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
     const groups = rows.filter(

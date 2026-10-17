@@ -214,12 +214,14 @@ func assistantUsageMsg(
 func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	t.Parallel()
 	f, err := service.BuildUsageFilter(service.UsageRequest{
-		From:    "2024-06-01",
-		To:      "2024-06-15",
-		Project: "proj",
-		Agent:   "claude",
+		From:         "2024-06-01",
+		To:           "2024-06-15",
+		Project:      "proj",
+		Agent:        "claude",
+		Model:        "group",
+		ExcludeModel: "model-a",
 		// IncludeOneShot/IncludeAutomated default false -> exclude true.
-	})
+	}, service.NewModelGroups(map[string]string{"model-a": "group", "model-b": "group"}))
 	require.NoError(t, err)
 	assert.Equal(t, "2024-06-01", f.From)
 	assert.Equal(t, "2024-06-15", f.To)
@@ -228,6 +230,8 @@ func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	assert.True(t, f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
 	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
 	assert.True(t, f.Breakdowns, "summary needs per-day breakdowns")
+	assert.Equal(t, "group,model-a,model-b", f.Model)
+	assert.Equal(t, "model-a", f.ExcludeModel)
 }
 
 func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
@@ -237,7 +241,7 @@ func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
 		To:               "2024-06-02",
 		IncludeOneShot:   true,
 		IncludeAutomated: true,
-	})
+	}, service.ModelGroups{})
 	require.NoError(t, err)
 	assert.False(t, f.ExcludeOneShot)
 	assert.False(t, f.ExcludeAutomated)
@@ -259,7 +263,7 @@ func TestBuildUsageFilter_Validation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := service.BuildUsageFilter(tc.req)
+			_, err := service.BuildUsageFilter(tc.req, service.ModelGroups{})
 			require.Error(t, err)
 			var ue *service.UsageInputError
 			assert.ErrorAs(t, err, &ue,

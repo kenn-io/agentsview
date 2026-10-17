@@ -578,11 +578,20 @@ describe("UsageStore session filter params", () => {
     expect(usage.excludedModels).toBe("");
   });
 
-  it("requests grouped model rows", async () => {
+  it("requests grouped model rows only from summary and pairwise endpoints", async () => {
     const { usage } = await loadStore();
-    await usage.fetchSummary();
+    await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ group_models: true }),
+    );
+    expect(usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ group_models: true }),
+    );
+    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).not.toHaveProperty(
+      "group_models",
+    );
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).not.toHaveProperty(
+      "group_models",
     );
   });
 
@@ -2536,6 +2545,41 @@ describe("UsageStore attribution focus", () => {
     vi.clearAllMocks();
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
+
+  it.each(["focus", "exclude", "Deselect all"])(
+    "keeps raw model focus consistent after aliases arrive, then clears it on %s",
+    async (action) => {
+      const { usage } = await loadStore();
+      usage.setAttributionGroupBy("model");
+      usage.toggleSelection("model", "gpt-4o");
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      expect(usage.isSelected("model", "gpt-4o")).toBe(true);
+      usageServiceMocks.getApiV1UsageSummary.mockClear();
+
+      // A server restart adds aliases while the same tab retains its focus.
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue({
+        ...usageSummary(),
+        modelTotals: [{ ...usageSummary().modelTotals[0]!, model: "group" }],
+        model_aliases: { "gpt-4o": "group", "claude-sonnet": "group" },
+      });
+      await usage.fetchAll();
+      expect(usage.selectedModel).toBe("gpt-4o");
+      expect(usage.isSelected("model", "group")).toBe(true);
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0].model).toBe("gpt-4o");
+
+      usageServiceMocks.getApiV1UsageSummary.mockClear();
+      if (action === "focus") usage.toggleSelection("model", "group");
+      else if (action === "exclude") usage.toggleModel("group");
+      else usage.deselectAllModels(["group"]);
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      expect(usage.hasSelection("model")).toBe(false);
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
+      for (const [params] of usageServiceMocks.getApiV1UsageSummary.mock.calls) {
+        expect(params.model).toBeUndefined();
+        expect(params.exclude_model).toBe(action === "focus" ? undefined : "group");
+      }
+    },
+  );
 
   it.each([
     ["project", "picker"],

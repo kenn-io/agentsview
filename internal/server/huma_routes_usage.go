@@ -167,14 +167,12 @@ func (s *Server) usageFilterFromInput(
 	}
 	in.Machine = machine
 	req := usageRequestFromInput(in)
-	req.Model = s.modelGroups.Expand(req.Model)
-	req.ExcludeModel = s.modelGroups.Expand(req.ExcludeModel)
 	req, err = service.ResolveUsageProjectKeys(
 		ctx, s.db, req,
 	)
 	if err == nil {
 		var f db.UsageFilter
-		f, err = service.BuildUsageFilter(req)
+		f, err = service.BuildUsageFilter(req, s.modelGroups)
 		if err == nil {
 			return f, nil
 		}
@@ -221,7 +219,7 @@ func (s *Server) humaUsageSummaryStream(
 		ctx, s.db, usageSummaryRequestFromInput(*in),
 	)
 	if err == nil {
-		_, err = service.BuildUsageFilter(req)
+		_, err = service.BuildUsageFilter(req, s.modelGroups)
 	}
 	if err != nil {
 		return nil, usageSummaryAPIError(err)

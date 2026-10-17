@@ -167,7 +167,7 @@ func (e *UsageInputError) Error() string { return e.Msg }
 // comparison/top-sessions handlers. Date defaulting matches the
 // server's analytics range (last 30 days through today, UTC) unless
 // NoDefaultRange is set.
-func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
+func BuildUsageFilter(req UsageRequest, groups ModelGroups) (db.UsageFilter, error) {
 	tz := req.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -216,8 +216,8 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 			req.ExcludeProject, req.ExcludeProjectLabels,
 		),
 		ExcludeAgent:      req.ExcludeAgent,
-		ExcludeModel:      req.ExcludeModel,
-		Model:             req.Model,
+		ExcludeModel:      groups.Expand(req.ExcludeModel),
+		Model:             groups.Expand(req.Model),
 		Timezone:          tz,
 		MinUserMessages:   req.MinUserMessages,
 		ExcludeOneShot:    !req.IncludeOneShot,

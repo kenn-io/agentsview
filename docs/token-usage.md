@@ -515,6 +515,7 @@ form alias chains or use the reserved names `__all__` and `__other__`.
 A saved filter naming one model variant keeps its one-variant meaning after you
 configure an alias. The picker shows that selection on the group row. The
 selected variant names appear on hover and are available to screen readers.
+On Analytics, the trigger also shows the selected variant names.
 Clicking the row clears those variants; clicking again applies the whole group.
 On Usage, excluding variants individually keeps the group row ticked, and the
 trigger counts the hidden variants. A raw model sharing the group's name can
