@@ -3199,8 +3199,7 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 		{name: "comma name", data: "[model_aliases]\na = \"b,c\"", badKey: `"a"`},
 		{name: "padded key", data: "[model_aliases]\n\" a \" = \"group\"", badKey: `" a "`},
 		{name: "padded name", data: "[model_aliases]\na = \" group \"", badKey: `"a"`},
-		{name: "chain", data: "[model_aliases]\na = \"b\"\nb = \"c\"", badKey: `"a"`},
-		{name: "two-cycle", data: "[model_aliases]\n\"a\" = \"b\"\n\"b\" = \"a\"", badKey: "alias chains are unsupported"},
+		{name: "chain", data: "[model_aliases]\na = \"b\"\nb = \"c\"", badKey: "alias chains are unsupported"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newConfigFixture(t)

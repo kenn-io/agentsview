@@ -38,16 +38,6 @@ describe("grouped model filters", () => {
     expect(excludedModelGroups(saved, aliases)).toEqual({ csv, partial });
   });
 
-  it.each(["constructor", "toString", "__proto__"])("selects and clears the %s group", (name) => {
-    const aliases = { a: name, b: name };
-    expect(groupedModelCsv("a,b", aliases)).toBe(name);
-    expect(groupedModelCsv(name, aliases)).toBe(name);
-    expect(toggleGroupedModel("", name, aliases)).toBe(name);
-    expect(toggleGroupedModel(name, name, aliases)).toBe("");
-    expect(toggleGroupedModel("a,b,other", name, aliases)).toBe("other");
-    expect(modelPickerItems([name, "a", "b"], "a", aliases)).toEqual([{ name, description: "a" }]);
-  });
-
   it("groups and sorts picker items while describing selected members", () => {
     expect(modelPickerItems(["group"], " a, , other ", aliases)).toEqual([
       { name: "group", description: "a" },

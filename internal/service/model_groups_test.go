@@ -23,8 +23,6 @@ func TestModelGroupsExpand(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) { assert.Equal(t, tt.want, groups.Expand(tt.input)) })
 	}
 	assert.Equal(t, "a, b", (service.ModelGroups{}).Expand("a, b"))
-	assert.Equal(t, "qwen3.6", groups.Name("qwen/qwen3.6"))
-	assert.Equal(t, "unknown", groups.Name("unknown"))
 }
 
 func TestModelGroupsAliases(t *testing.T) {

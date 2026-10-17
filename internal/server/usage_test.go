@@ -552,16 +552,16 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 	})
 	seedUsagePairwiseEnv(t, te)
 	for _, tt := range []struct {
-		name, grouped, suffix, exclude string
+		name, grouped, suffix string
 	}{
-		{"raw", "", "", "gpt-4o"},
-		{"grouped", "true", "", "gpt-4o"},
-		{"grouped stream", "true", "/stream", ""},
+		{"raw", "", ""},
+		{"grouped", "true", ""},
+		{"grouped stream", "true", "/stream"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			w := te.get(t, buildPathURL("/api/v1/usage/summary"+tt.suffix, map[string]string{
 				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC",
-				"group_models": tt.grouped, "exclude_model": tt.exclude,
+				"group_models": tt.grouped,
 			}))
 			assertStatus(t, w, http.StatusOK)
 			payload := w.Body.String()

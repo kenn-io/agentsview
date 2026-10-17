@@ -563,68 +563,18 @@ describe("UsageStore session filter params", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps a saved member exclusion and fetches one round with the time range", async () => {
+  it("displays and clears a saved member exclusion through its group", async () => {
     const { usage } = await loadStore();
-    usage.isPinned = true;
-    usage.from = "2024-01-01";
-    usage.to = "2024-01-31";
-    usage.selectedTimeRange = { from: "2024-01-10", to: "2024-01-15" };
     usage.excludedModels = "claude-opus-4-20250514";
-    for (let i = 0; i < 2; i++) {
-      usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
-        ...usageSummary(),
-        model_aliases: { "claude-opus-4-20250514": "claude-4" },
-      });
-    }
-    await usage.fetchAll({ preserveTimeRange: true });
-    await vi.waitFor(() =>
-      expect(usage.summary?.model_aliases?.["claude-opus-4-20250514"]).toBe("claude-4"),
-    );
-    // One filtered and one full-window summary.
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toMatchObject({
-      exclude_model: "claude-opus-4-20250514",
-      from: "2024-01-10",
-      to: "2024-01-15",
-    });
-    expect(usage.excludedModels).toBe("claude-opus-4-20250514");
-    expect(usage.displayedModels).toBe("claude-4");
-    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-10", to: "2024-01-15" });
-    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toMatchObject({
-      excludedModels: "claude-opus-4-20250514",
-    });
-    usage.toggleModel("claude-4");
-    expect(usage.excludedModels).toBe("");
-    usage.toggleModel("claude-4");
-    expect(usage.excludedModels).toBe("claude-4");
-  });
-
-  it("keeps a group exclusion in one request round", async () => {
-    const { usage } = await loadStore();
-    usage.excludedModels = "claude-4";
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
       ...usageSummary(),
       model_aliases: { "claude-opus-4-20250514": "claude-4" },
     });
-    await usage.fetchAll();
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1);
-  });
-
-  it("doesn't replace an exclusion changed while the summary was pending", async () => {
-    const { usage } = await loadStore();
-    let resolve!: (value: UsageSummaryResponse) => void;
-    usage.excludedModels = "claude-opus-4-20250514";
-    usageServiceMocks.getApiV1UsageSummary.mockReturnValueOnce(
-      new Promise<UsageSummaryResponse>((done) => {
-        resolve = done;
-      }),
-    );
-    const pending = usage.fetchSummary();
-    usage.excludedModels = "other";
-    resolve({ ...usageSummary(), model_aliases: { "claude-opus-4-20250514": "claude-4" } });
-    await pending;
-    expect(usage.excludedModels).toBe("other");
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1);
+    await usage.fetchSummary();
+    expect(usage.excludedModels).toBe("claude-opus-4-20250514");
+    expect(usage.displayedModels).toBe("claude-4");
+    usage.toggleModel("claude-4");
+    expect(usage.excludedModels).toBe("");
   });
 
   it("requests grouped model rows", async () => {

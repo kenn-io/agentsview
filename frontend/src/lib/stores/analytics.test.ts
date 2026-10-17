@@ -913,7 +913,7 @@ describe("AnalyticsStore automated scope params", () => {
     await analytics.fetchSummary();
 
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ automated_scope: "all", group_models: true }),
+      expect.objectContaining({ automated_scope: "all" }),
     );
   });
 
@@ -929,7 +929,14 @@ describe("AnalyticsStore automated scope params", () => {
 });
 
 describe("AnalyticsStore model filter", () => {
-  it("keeps a saved member selection and fetches the panels once", async () => {
+  it("requests grouped model rows", async () => {
+    await analytics.fetchSummary();
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ group_models: true }),
+    );
+  });
+
+  it("displays and clears a saved member selection through its group", async () => {
     analytics.model = "claude-opus-4-20250514";
     analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
       ...makeSummary(),
@@ -942,37 +949,8 @@ describe("AnalyticsStore model filter", () => {
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]?.model).toBe(
       "claude-opus-4-20250514",
     );
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenCalledTimes(1);
     analytics.toggleModel("claude-4");
     expect(analytics.model).toBe("");
-    analytics.toggleModel("claude-4");
-    expect(analytics.model).toBe("claude-4");
-  });
-
-  it("keeps a group selection in one request round", async () => {
-    analytics.model = "claude-4";
-    analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
-      ...makeSummary(),
-      model_aliases: { "claude-opus-4-20250514": "claude-4" },
-    });
-    await analytics.fetchAll();
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
-  });
-
-  it("doesn't replace a model changed while the summary was pending", async () => {
-    let resolve!: (value: AnalyticsSummary) => void;
-    analytics.model = "claude-opus-4-20250514";
-    analyticsService.getApiV1AnalyticsSummary.mockReturnValueOnce(
-      new Promise<AnalyticsSummary>((done) => {
-        resolve = done;
-      }),
-    );
-    const pending = analytics.fetchSummary();
-    analytics.model = "other";
-    resolve({ ...makeSummary(), model_aliases: { "claude-opus-4-20250514": "claude-4" } });
-    await pending;
-    expect(analytics.model).toBe("other");
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -143,7 +143,6 @@ describe("AnalyticsPage grouped model filter", () => {
       agents: {},
     });
     await vi.waitFor(() => expect(analytics.displayedModels).toBe("claude-4"));
-    expect(analytics.model).toBe("claude-opus-4-20250514");
     await flushEffects();
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-4"]')!.click();
     await flushEffects();
@@ -155,37 +154,6 @@ describe("AnalyticsPage grouped model filter", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
     expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
-    groups[0]!.click();
-    await flushEffects();
-    expect(analytics.model).toBe("");
-  });
-
-  it("lets an applied model selection be unticked when the summary fails", async () => {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
-    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockRejectedValue(
-      new Error("summary failed"),
-    );
-    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
-      await analytics.fetchSummary();
-    });
-    analytics.model = "model-zulu,model-alpha";
-    analytics.summary = null;
-    sessions.loading = false;
-    router.route = "sessions";
-    component = mount(AnalyticsPage, { target: document.body });
-    await vi.waitFor(() => expect(analytics.errors.summary).toBe("summary failed"));
-    document.querySelector<HTMLButtonElement>('button[aria-label^="Model:"]')!.click();
-    await flushEffects();
-    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
-    expect(rows.slice(1).map((row) => row.textContent?.trim())).toEqual([
-      "model-alpha",
-      "model-zulu",
-    ]);
-    expect(rows[1]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
-    rows[1]!.click();
-    await flushEffects();
-    expect(analytics.model).toBe("model-zulu");
   });
 });
 

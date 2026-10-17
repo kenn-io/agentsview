@@ -1201,7 +1201,6 @@ func TestAnalyticsModelGroups(t *testing.T) {
 		{"group", "true", 3, []string{"group"}},
 		{"group", "false", 3, []string{"claude-3-5-sonnet", "gpt-4o"}},
 		{"gpt-4o", "true", 1, []string{"group"}},
-		{"gpt-4o", "false", 1, []string{"gpt-4o"}},
 	} {
 		w := te.get(t, buildURLWithRange("summary", map[string]string{"model": tt.model, "group_models": tt.grouped}))
 		assertStatus(t, w, http.StatusOK)

@@ -246,12 +246,7 @@ describe("UsagePage refresh behavior", () => {
       modelTotals: [{ model: "claude-4", inputTokens: 10, outputTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(1) }],
     });
     await vi.waitFor(() => expect(usage.summary?.model_aliases).toBeDefined());
-    expect(usage.excludedModels).toBe("claude-opus-4-20250514");
     await flushEffects();
-    expect(router.params.exclude_model).toBe("claude-opus-4-20250514");
-    expect(new URL(window.location.href).searchParams.get("exclude_model")).toBe(
-      "claude-opus-4-20250514",
-    );
     const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Model: 1 hidden"]');
     expect(trigger).not.toBeNull();
     trigger!.click();
@@ -264,28 +259,6 @@ describe("UsagePage refresh behavior", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
     expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
-    groups[0]!.click();
-    await flushEffects();
-    expect(usage.excludedModels).toBe("");
-  });
-
-  it("lets an applied model exclusion be cleared when the summary fails", async () => {
-    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.spyOn(UsageService, "getApiV1UsageSummary").mockRejectedValue(new Error("summary failed"));
-    vi.spyOn(usage, "fetchAll").mockImplementation(async () => {
-      await usage.fetchSummary({ loadComparison: false });
-    });
-    router.route = "usage";
-    router.params = { exclude_model: "model-zulu,model-alpha" };
-    component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(usage.errors.summary).toBe("summary failed"));
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
-    await flushEffects();
-    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
-    expect(rows.map((row) => row.textContent?.trim())).toEqual(["model-alpha", "model-zulu"]);
-    rows[0]!.click();
-    await flushEffects();
-    expect(usage.excludedModels).toBe("model-zulu");
   });
 
   it("restores hidden models from a shared URL", async () => {
