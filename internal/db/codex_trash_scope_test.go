@@ -39,6 +39,19 @@ func upgradedCodexTrash(t *testing.T) *DB {
 	return d
 }
 
+func TestFindPruneCandidatesLegacyCodexTrash(t *testing.T) {
+	d := upgradedCodexTrash(t)
+	ctx := t.Context()
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET ended_at =
+		CASE WHEN id = ? THEN '2025-02-01' ELSE '2024-01-01' END`, legacyTrashPage)
+	require.NoError(t, err)
+
+	candidates, err := d.FindPruneCandidates(ctx, PruneFilter{Agent: "codex", Before: "2025-01-01"})
+	require.NoError(t, err)
+	ids := collectIDs(candidates)
+	assert.ElementsMatch(t, []string{legacyTrashSibling}, ids, "a kept page must protect its thread anchor")
+}
+
 func TestLegacyCodexTrashBlocksAbsentPageWrites(t *testing.T) {
 	d := upgradedCodexTrash(t)
 	ctx := t.Context()
