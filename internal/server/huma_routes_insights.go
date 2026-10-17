@@ -486,7 +486,7 @@ func (s *Server) humaGenerateInsight(
 			promptPtr = &req.Prompt
 		}
 		var id int64
-		err = s.serializeArchiveWrite(genCtx, func() error {
+		err = s.SerializeArchiveWrite(genCtx, func() error {
 			var insertErr error
 			id, insertErr = s.db.InsertInsight(genCtx, db.Insight{
 				Type:           req.Type,

@@ -1471,7 +1471,7 @@ func TestArchiveMaintenanceNoSyncSharesBarrier(t *testing.T) {
 		run  func(*Server, context.Context, func() error) error
 	}{
 		{"foreground", (*Server).tryArchiveWrite},
-		{"background", (*Server).serializeArchiveWrite},
+		{"background", (*Server).SerializeArchiveWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSyncRouteFixture(t)
