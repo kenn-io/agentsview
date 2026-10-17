@@ -6,6 +6,7 @@ export interface ServiceInputTreeNode {
   active_ordinal?: number;
   end_session_ids: string[];
   is_shell: boolean;
+  on_active_path: boolean;
   ordinal: number;
   parent: number;
   preview: string;

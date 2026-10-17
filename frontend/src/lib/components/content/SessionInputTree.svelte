@@ -106,14 +106,15 @@
     expandedRuns = new Set([...expandedRuns, runStart]);
   }
 
-  function isOnActivePath(node: ServiceInputTreeNode): boolean {
+  function isInActiveView(node: ServiceInputTreeNode): boolean {
     return node.active_ordinal !== undefined && node.active_ordinal !== null;
   }
 
-  // Inputs on the active path jump within the open session; the others
-  // open the session that holds them.
+  // Inputs the open session's message view shows jump within it; the
+  // others, including those a continuation carries on from the session it
+  // continues, open the session that holds them.
   function nodeHref(node: ServiceInputTreeNode): string {
-    if (isOnActivePath(node)) {
+    if (isInActiveView(node)) {
       return router.buildSessionHref(sessionId, {
         msg: String(node.active_ordinal),
       });
@@ -124,7 +125,7 @@
   }
 
   function nodeTitle(node: ServiceInputTreeNode): string {
-    return isOnActivePath(node)
+    return isInActiveView(node)
       ? m.session_input_tree_jump_to({ preview: node.preview })
       : m.session_input_tree_open({ preview: node.preview });
   }
@@ -140,7 +141,7 @@
       return;
     }
     event.preventDefault();
-    if (isOnActivePath(node)) {
+    if (isInActiveView(node)) {
       ui.scrollToOrdinal(node.active_ordinal!);
       return;
     }
@@ -150,9 +151,14 @@
 
   function relationshipLabel(id: string): string {
     if (id === tree?.active_session_id) return m.session_input_tree_current();
-    return sessionsById.get(id)?.relationship_type === "fork"
-      ? m.session_tree_relationship_fork()
-      : m.session_tree_relationship_root();
+    switch (sessionsById.get(id)?.relationship_type) {
+      case "fork":
+        return m.session_tree_relationship_fork();
+      case "continuation":
+        return m.session_tree_relationship_continuation();
+      default:
+        return m.session_tree_relationship_root();
+    }
   }
 
   function sessionTitle(id: string): string {

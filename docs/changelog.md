@@ -259,6 +259,12 @@ The latest published release is
   fork loaded ahead of the rest of the sidebar, it could stay hidden inside
   that session's collapsed group. A group you collapse yourself still stays
   collapsed.
+- The session tree's **Inputs** view now includes continued sessions, such as a
+  Claude Code session moved to the background. Before, the continued session's
+  prompts were missing from its family's tree, and opening it offered no
+  **Inputs** view. Its prompts now carry on below the session it continues, and
+  its highlighted path includes the earlier prompts; click one of those to open
+  the session that holds it.
 - Oversized telemetry requests return HTTP 413.
 - Tool calls whose input is a raw script or patch, such as Codex `exec` and
   `apply_patch` calls, now show that input when expanded. Copy input, Copy

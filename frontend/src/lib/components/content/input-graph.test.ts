@@ -17,6 +17,7 @@ function inputNode(
     ordinal: 0,
     preview: "input",
     is_shell: false,
+    on_active_path: false,
     end_session_ids: [],
     ...extra,
   };
@@ -52,10 +53,11 @@ describe("layoutInputGraph", () => {
     //    └ 2 ends child
     const layout = layoutInputGraph(
       [
-        inputNode(-1, { active_ordinal: -5 }),
+        inputNode(-1, { on_active_path: true, active_ordinal: -5 }),
         inputNode(0, { end_session_ids: ["root"] }),
         inputNode(0, {
           session_id: "child",
+          on_active_path: true,
           active_ordinal: 0,
           end_session_ids: ["child"],
         }),
@@ -90,8 +92,8 @@ describe("layoutInputGraph", () => {
   it("draws edges that split below the parent and puts the active path last", () => {
     const layout = layoutInputGraph(
       [
-        inputNode(-1, { active_ordinal: 0 }),
-        inputNode(0, { active_ordinal: 2, end_session_ids: ["root"] }),
+        inputNode(-1, { on_active_path: true, active_ordinal: 0 }),
+        inputNode(0, { on_active_path: true, active_ordinal: 2, end_session_ids: ["root"] }),
         inputNode(0, { session_id: "child", end_session_ids: ["child"] }),
       ],
       { activeSessionId: "root", sessionOrder: ["root", "child"] },
@@ -150,8 +152,33 @@ describe("layoutInputGraph", () => {
     expect(centerX(item(layout, "s1:root"))).toBeLessThan(centerX(item(layout, "n2")));
   });
 
+  it("marks the inputs a continuation carries on from its parent as on its path", () => {
+    // 0 ─ 1 ends parent ─ 2 ends continued. Only input 2 is in the
+    // continued session's message view.
+    const layout = layoutInputGraph(
+      [
+        inputNode(-1, { on_active_path: true }),
+        inputNode(0, { on_active_path: true, end_session_ids: ["parent"] }),
+        inputNode(1, {
+          session_id: "continued",
+          on_active_path: true,
+          active_ordinal: 2,
+          end_session_ids: ["continued"],
+        }),
+      ],
+      { activeSessionId: "continued", sessionOrder: ["parent", "continued"] },
+    );
+
+    expect(layout.items.filter((entry) => entry.onActivePath).map((entry) => entry.key)).toEqual([
+      "n0",
+      "n1",
+      "n2",
+      "s2:continued",
+    ]);
+  });
+
   it("folds a run of inputs that neither start, end, nor split a branch", () => {
-    const layout = layoutInputGraph(longRun({ active_ordinal: 3 }), {
+    const layout = layoutInputGraph(longRun({ on_active_path: true }), {
       activeSessionId: "child",
       sessionOrder: ["root", "child"],
     });

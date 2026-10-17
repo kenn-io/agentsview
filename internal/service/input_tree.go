@@ -16,10 +16,12 @@ const (
 )
 
 // InputTree is the branch structure of the user inputs in a session's fork
-// family. Each node is one input. A session's inputs, including the prefix
-// it inherits as a fork, form one path that starts at a top-level node.
-// Inputs that sessions share appear once, so the tree branches where a
-// fork's inputs diverge from the session it was forked from.
+// family: the sessions linked by forks and continuations. Each node is one
+// input. A session's inputs, including the prefix it inherits as a fork or
+// continuation, form one path that starts at a top-level node. Inputs that
+// sessions share appear once, so the tree branches where a fork's inputs
+// diverge from the session it was forked from, and a continuation's inputs
+// extend the path of the session it continues.
 type InputTree struct {
 	ActiveSessionID string `json:"active_session_id"`
 	// RootSessionID is the session the fork family starts from.
@@ -44,9 +46,12 @@ type InputTreeNode struct {
 	Timestamp string `json:"timestamp,omitempty"`
 	Preview   string `json:"preview"`
 	IsShell   bool   `json:"is_shell"`
+	// OnActivePath marks the inputs on the active session's path.
+	OnActivePath bool `json:"on_active_path"`
 	// ActiveOrdinal is the input's ordinal in the active session's message
-	// view, which includes the context a fork inherits. It is set only on
-	// the active session's path.
+	// view, which includes the context a fork inherits. It is set only for
+	// the inputs on the active session's path that its message view shows,
+	// so it is unset for the inputs a continuation inherits.
 	ActiveOrdinal *int `json:"active_ordinal,omitempty"`
 	// EndSessionIDs lists the sessions whose path ends at this input. Every
 	// leaf ends at least one session.
@@ -87,7 +92,11 @@ func (b *directBackend) InputTree(
 		if err != nil {
 			return nil, err
 		}
-		steps := inputPathSteps(inherited, own, session.ID == id)
+		continued, err := continuedContext(ctx, src, session, own, inherited)
+		if err != nil {
+			return nil, err
+		}
+		steps := inputPathSteps(continued, inherited, own, session.ID == id)
 		if !tree.insert(session.ID, steps) {
 			truncated = true
 			break
@@ -107,17 +116,18 @@ func (b *directBackend) InputTree(
 	}, nil
 }
 
-// forkFamily returns the sessions linked to active by fork relationships:
-// the nearest ancestor that is not a fork, and every fork below it. The root
-// comes first, then the rest in the order they started. The active session
-// and its ancestors are kept when the family is larger than the limit.
+// forkFamily returns the sessions linked to active by fork and continuation
+// relationships: the nearest ancestor that is neither, and every fork and
+// continuation below it. The root comes first, then the rest in the order
+// they started. The active session and its ancestors are kept when the
+// family is larger than the limit.
 func forkFamily(
 	ctx context.Context, src inputTreeStore, active *db.Session,
 ) ([]*db.Session, bool, error) {
 	chain := []*db.Session{active}
 	seen := map[string]bool{active.ID: true}
 	truncated := false
-	for current := active; isForkWithParent(current); {
+	for current := active; isInputTreeLink(current); {
 		parentID := *current.ParentSessionID
 		if seen[parentID] {
 			truncated = true
@@ -147,7 +157,8 @@ collect:
 		queue = queue[1:]
 		for i := range children {
 			child := &children[i]
-			if child.RelationshipType != "fork" || seen[child.ID] {
+			if !isInputTreeRelationship(child.RelationshipType) ||
+				seen[child.ID] {
 				continue
 			}
 			if len(family) >= inputTreeMaxSessions {
@@ -169,6 +180,62 @@ collect:
 	return family, truncated, nil
 }
 
+// isInputTreeLink reports whether a session's inputs follow on from its
+// parent's: a fork branches from them and a continuation carries them on.
+func isInputTreeLink(s *db.Session) bool {
+	return isInputTreeRelationship(s.RelationshipType) &&
+		s.ParentSessionID != nil &&
+		*s.ParentSessionID != ""
+}
+
+func isInputTreeRelationship(relationship string) bool {
+	return relationship == "fork" || relationship == "continuation"
+}
+
+// continuedContext returns the messages a session's path inherits beyond
+// the fork context its message view shows. That context follows forks up
+// to the first ancestor that is not one. When that ancestor, or the session
+// itself, is a continuation, the path goes on with the session it continues,
+// up to where the continuation took over, and so on through any forks and
+// continuations above it.
+func continuedContext(
+	ctx context.Context,
+	src forkMessageSource,
+	session *db.Session,
+	own, inherited []db.Message,
+) ([]db.Message, error) {
+	top := session
+	visited := map[string]bool{session.ID: true}
+	for isForkWithParent(top) {
+		parent, err := src.GetSession(ctx, *top.ParentSessionID)
+		if err != nil || parent == nil || visited[parent.ID] {
+			return nil, err
+		}
+		visited[parent.ID] = true
+		top = parent
+	}
+	if !isInputTreeLink(top) {
+		return nil, nil
+	}
+
+	// The boundary is where top's messages on this path start: its own
+	// when it is the session, otherwise the part the fork context took.
+	topMsgs := own
+	if top.ID != session.ID {
+		topMsgs = nil
+		for _, msg := range inherited {
+			if msg.SessionID == top.ID {
+				topMsgs = append(topMsgs, msg)
+			}
+		}
+	}
+	boundary, hasBoundary := forkBoundaryTime(topMsgs, top.StartedAt)
+	return ancestorMessages(
+		ctx, src, *top.ParentSessionID, boundary, hasBoundary, visited,
+		isInputTreeLink,
+	)
+}
+
 // compareStartedAt orders sessions by start time and puts sessions without
 // one last.
 func compareStartedAt(a, b *string) int {
@@ -187,17 +254,19 @@ func compareStartedAt(a, b *string) int {
 type inputPathStep struct {
 	sessionID     string
 	item          InputOutlineItem
+	active        bool
 	activeOrdinal *int
 }
 
-// inputPathSteps lists the inputs on a session's path: those in the context
-// it inherits as a fork, then its own. On the active session's path, each
-// step records the ordinal the message view shows for it.
+// inputPathSteps lists the inputs on a session's path: those it inherits
+// beyond its fork context, those in the fork context, then its own. On the
+// active session's path, each step the message view shows records the
+// ordinal it has there.
 func inputPathSteps(
-	inherited, own []db.Message, active bool,
+	continued, inherited, own []db.Message, active bool,
 ) []inputPathStep {
 	steps := make([]inputPathStep, 0)
-	add := func(msg db.Message, viewOrdinal int) {
+	add := func(msg db.Message, viewOrdinal *int) {
 		if !isOutlineInput(msg) {
 			return
 		}
@@ -205,17 +274,26 @@ func inputPathSteps(
 		if !ok {
 			return
 		}
-		step := inputPathStep{sessionID: msg.SessionID, item: item}
+		step := inputPathStep{
+			sessionID: msg.SessionID,
+			item:      item,
+			active:    active,
+		}
 		if active {
-			step.activeOrdinal = &viewOrdinal
+			step.activeOrdinal = viewOrdinal
 		}
 		steps = append(steps, step)
 	}
+	for _, msg := range continued {
+		add(msg, nil)
+	}
 	for i, msg := range inherited {
-		add(msg, forkContextOrdinal(i, len(inherited)))
+		viewOrdinal := forkContextOrdinal(i, len(inherited))
+		add(msg, &viewOrdinal)
 	}
 	for _, msg := range own {
-		add(msg, msg.Ordinal)
+		viewOrdinal := msg.Ordinal
+		add(msg, &viewOrdinal)
 	}
 	return steps
 }
@@ -281,6 +359,9 @@ func (t *inputTreeBuilder) insert(
 					t.nodes[parent].children, idx,
 				)
 			}
+		}
+		if step.active {
+			t.nodes[idx].node.OnActivePath = true
 		}
 		if step.activeOrdinal != nil {
 			t.nodes[idx].node.ActiveOrdinal = step.activeOrdinal

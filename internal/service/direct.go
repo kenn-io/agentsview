@@ -656,13 +656,14 @@ func (b *directBackend) forkContext(
 	}
 
 	boundary, hasBoundary := forkBoundaryTime(currentMsgs, current.StartedAt)
-	contextMsgs, err := forkAncestorMessages(
+	contextMsgs, err := ancestorMessages(
 		ctx,
 		src,
 		*current.ParentSessionID,
 		boundary,
 		hasBoundary,
 		map[string]bool{id: true},
+		isForkWithParent,
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -721,13 +722,17 @@ func truncateForkContextToReplay(
 	return contextMsgs[:len(replay)]
 }
 
-func forkAncestorMessages(
+// ancestorMessages returns a session's messages before a boundary, after
+// those of its ancestors for as long as follow accepts the link to the next
+// one up.
+func ancestorMessages(
 	ctx context.Context,
 	src forkMessageSource,
 	sessionID string,
 	before time.Time,
 	hasBefore bool,
 	visited map[string]bool,
+	follow func(*db.Session) bool,
 ) ([]db.Message, error) {
 	if visited[sessionID] {
 		return nil, nil
@@ -744,17 +749,18 @@ func forkAncestorMessages(
 	}
 	msgs = messagesBefore(msgs, before, hasBefore)
 
-	if !isForkWithParent(session) {
+	if !follow(session) {
 		return msgs, nil
 	}
 	parentBoundary, parentHasBoundary := forkBoundaryTime(msgs, session.StartedAt)
-	parentMsgs, err := forkAncestorMessages(
+	parentMsgs, err := ancestorMessages(
 		ctx,
 		src,
 		*session.ParentSessionID,
 		parentBoundary,
 		parentHasBoundary,
 		visited,
+		follow,
 	)
 	if err != nil {
 		return nil, err
