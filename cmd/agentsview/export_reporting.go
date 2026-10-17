@@ -260,7 +260,7 @@ func validateReportingSchemaVersion(version int) error {
 func openReportingExportDB(
 	cmd *cobra.Command,
 ) (*db.DB, func(), error) {
-	appConfig, err := config.LoadPFlags(cmd.Flags())
+	appConfig, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("loading config: %w", err)
 	}

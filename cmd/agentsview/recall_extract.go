@@ -216,7 +216,7 @@ const extractReconcileDebounce = 2 * time.Second
 func openWritableExtractDB(
 	ctx context.Context, cfg config.Config,
 ) (*db.DB, *writeOwnerLock, error) {
-	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+	tr, err := detectClientTransportContext(ctx, &cfg, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -244,7 +244,7 @@ func loadExtractConfig(cmd *cobra.Command) (config.Config, error) {
 			"recall extract %s does not support --server: extraction runs "+
 				"against the local archive", cmd.Name())
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeRecall)
 	if err != nil {
 		return config.Config{}, fmt.Errorf("loading config: %w", err)
 	}

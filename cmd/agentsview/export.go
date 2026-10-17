@@ -124,7 +124,7 @@ func newExportStatusCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			appCfg, err := config.LoadPFlags(cmd.Flags())
+			appCfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
@@ -262,7 +262,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 			"--limit must be between 1 and %d", db.MaxSessionLimit)
 	}
 
-	appCfg, err := config.LoadPFlags(cmd.Flags())
+	appCfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

@@ -20,7 +20,7 @@ import (
 var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 func runProjects(ctx context.Context, jsonOutput bool) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}

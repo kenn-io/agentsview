@@ -109,7 +109,7 @@ func exportConversationChanges(command *cobra.Command, options db.ConversationEx
 // daemon, whose startup sync would change what the export reads.
 func initializeConversationExport(command *cobra.Command) error {
 	ctx := command.Context()
-	cfg, err := config.LoadPFlags(command.Flags())
+	cfg, err := config.LoadPFlagsFor(command.Flags(), config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -120,7 +120,7 @@ func initializeConversationExport(command *cobra.Command) error {
 	if waited && cfg.AuthToken == "" {
 		adoptBackgroundLaunchConfig(&cfg)
 	}
-	tr, err := detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, backgroundAutoStartReadyTimeout)
+	tr, err := detectClientTransportContext(ctx, &cfg, backgroundAutoStartReadyTimeout)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func initializeConversationExport(command *cobra.Command) error {
 }
 
 func openConversationExportDB(command *cobra.Command) (*db.DB, error) {
-	appConfig, err := config.LoadPFlags(command.Flags())
+	appConfig, err := config.LoadPFlagsFor(command.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}

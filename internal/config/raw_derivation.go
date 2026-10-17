@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"strings"
 )
 
@@ -29,6 +30,20 @@ func (p PGConfig) ValidateRawDerivation(requireAuth bool) error {
 		return errors.New("hosted raw worker bounds: poll 1-60 seconds, attempt 1-300 seconds, attempts 1-10; zero selects defaults")
 	}
 	return nil
+}
+
+// ValidatePGRawDerivation reads only the deployment authentication policy used
+// by hosted raw readers and workers. Direct PG connections do not use the
+// server's token file or model settings.
+func (c Config) ValidatePGRawDerivation(p PGConfig) error {
+	if (p.RawDerivation || p.RawTenant != "") && strings.TrimSpace(os.Getenv("AGENTSVIEW_MODE")) != "" {
+		if v, set, err := lookupEnvBool("AGENTSVIEW_REQUIRE_AUTH"); err != nil {
+			return err
+		} else if set {
+			c.RequireAuth = v
+		}
+	}
+	return p.ValidateRawDerivation(c.RequireAuth)
 }
 
 func (p PGConfig) RawWorkerBounds() (poll, attempt, attempts int) {

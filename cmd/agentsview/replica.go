@@ -86,7 +86,7 @@ func replicaVectorPushSource(
 func runReplicaPush(
 	backend storage.Replica, cfg ReplicaPushConfig, targetName string,
 ) error {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &cfg))
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -100,6 +100,17 @@ func runReplicaPush(
 	)
 	if err != nil {
 		return err
+	}
+	for _, ref := range targets {
+		target, err := backend.ResolveTarget(appCfg, ref)
+		if err != nil {
+			// The per-target push loop reports these errors so --all can
+			// attempt the remaining targets and aggregate their failures.
+			continue
+		}
+		if err := validateReplicaPushVectors(appCfg, cfg, target.Target.PushVectors); err != nil {
+			return err
+		}
 	}
 
 	applyClassifierConfig(appCfg)
@@ -148,6 +159,26 @@ func runReplicaPush(
 			len(failures), backend.Name(),
 			strings.Join(failures, "; "),
 		)
+	}
+	return nil
+}
+
+func replicaConfigScope(backend storage.Replica, push *ReplicaPushConfig) config.ValidationScope {
+	scope := config.ScopeLocal
+	if backend.Name() == "pg" {
+		scope |= config.ScopePG
+		if push != nil {
+			scope |= config.ScopeDeployment
+		}
+	} else if backend.Name() == "clickhouse" {
+		scope |= config.ScopeClickHouse
+	}
+	return scope
+}
+
+func validateReplicaPushVectors(appCfg config.Config, cfg ReplicaPushConfig, pushVectors bool) error {
+	if cfg.Embed || (pushVectors && !cfg.NoVectors) {
+		return appCfg.Vector.Validate()
 	}
 	return nil
 }
@@ -359,7 +390,7 @@ func runReplicaStatus(
 	ctx context.Context, backend storage.Replica, targetName string,
 	cfg ReplicaStatusConfig,
 ) error {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(replicaConfigScope(backend, nil))
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

@@ -189,6 +189,23 @@ installation IDs to select machines unambiguously in a shared mirror.
 The config file at `~/.agentsview/config.toml` is auto-created on first run. It
 stores persistent settings that survive restarts.
 
+Commands validate the settings they use. For example, `export sessions` warns on
+stderr about invalid insights, vector, recall-extraction, or public/proxy settings
+and still exports the archive. It preserves those settings in `config.toml`.
+TOML syntax and type errors still fail loading, and unknown-key handling is
+unchanged. Server startup and reloads validate the complete configuration, so
+starting `serve` also checks settings unused by exports.
+
+The full container deployment environment applies to `serve`, remote `serve`
+commands, and `pg push`, including its watch mode. Other PostgreSQL clients honor
+`AGENTSVIEW_PG_ALLOW_INSECURE` for the default target. Hosted raw reads and reparse
+commands honor `AGENTSVIEW_REQUIRE_AUTH` without reading the server token file.
+MCP HTTP listeners and daemon clients load the deployment authentication they
+use. Semantic and hybrid PostgreSQL reads, including `mcp --pg`, load deployment
+embeddings for published recipe adoption without reading listener token files.
+Direct archive exports skip deployment token files and
+`AGENTSVIEW_EMBEDDINGS_*` settings.
+
 !!! note
 
     The config format changed from JSON to TOML. Existing `config.json` files are

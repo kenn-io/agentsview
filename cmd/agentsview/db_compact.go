@@ -43,7 +43,7 @@ func newDBCompactCommand() *cobra.Command {
 			if jsonOutput && !yes && !dryRun {
 				return errors.New("--format json requires --yes for db compact")
 			}
-			cfg, err := config.LoadMinimal()
+			cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
@@ -129,8 +129,8 @@ func runDBCompact(
 	// only for maintenance would still run its deferred startup sync at
 	// archive scale and then stay resident. With no daemon, the command owns
 	// the archive directly through the write lock.
-	tr, err := detectTransportContext(
-		ctx, cfg.DataDir, cfg.AuthToken, backgroundAutoStartReadyTimeout,
+	tr, err := detectClientTransportContext(
+		ctx, &cfg, backgroundAutoStartReadyTimeout,
 	)
 	if err != nil {
 		return db.CompactResult{}, fmt.Errorf("resolving archive transport: %w", err)

@@ -85,7 +85,7 @@ func newPGVectorsDropCommand() *cobra.Command {
 // (storage.SelectTargets + postgres.Open, no --all), opening a connection
 // to it. The returned cleanup closes the pool.
 func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopePG)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}

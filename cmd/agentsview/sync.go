@@ -53,7 +53,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	if err := validateArtifactSyncConfig(cfg); err != nil {
 		fatal("%v", err)
 	}
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}

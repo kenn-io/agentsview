@@ -41,7 +41,7 @@ func newDBImageCommand(
 			if jsonOutput && !yes && !dryRun {
 				return fmt.Errorf("--format json requires --yes for db %s --images", name)
 			}
-			cfg, err := config.LoadReadOnly()
+			cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
