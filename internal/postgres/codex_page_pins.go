@@ -59,35 +59,14 @@ func (s *Sync) migrateCodexPages(
 	}
 	// Purge inventories pages under the thread lock. Keep that same lock
 	// through publication, including after the thread's migration or retirement.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
-		FROM sessions
-		WHERE provenance_kind = 'legacy'
-		  AND (id = ANY($1) OR (data_version < 137 AND regexp_replace(regexp_replace(replace(file_path, chr(92), '/'), '^.*/', ''), '\.zst$', '') = ANY($2)))
-		ORDER BY id FOR UPDATE`, mapKeys(threads), files)
+	pages, err := lockLegacyCodexPages(ctx, tx, threads, byFile, files)
 	if err != nil {
-		return fmt.Errorf("finding legacy Codex pages: %w", err)
+		return err
 	}
-	defer rows.Close()
-	type legacyPage struct {
-		id, path, agent, machine, owner, archive string
-		dataVersion                              int
-	}
-	var pages []legacyPage
-	for rows.Next() {
-		var page legacyPage
-		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion); err != nil {
-			return fmt.Errorf("reading legacy Codex pages: %w", err)
-		}
-		if _, selected := threads[page.id]; !selected {
-			threads[page.id] = byFile[strings.TrimSuffix(page.path[strings.LastIndexAny(page.path, `/\`)+1:], ".zst")]
-		}
-		pages = append(pages, page)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("reading legacy Codex pages: %w", err)
-	}
-	if err := rows.Close(); err != nil {
+	// Corrections can chain (A to B and B to C), so publishing one page may
+	// replace another source's row. Capture every source's pins first.
+	pagePins, err := snapshotLegacyCodexPagePins(ctx, tx, pages)
+	if err != nil {
 		return err
 	}
 	for _, old := range pages {
@@ -141,10 +120,7 @@ func (s *Sync) migrateCodexPages(
 		if !migratePage {
 			continue
 		}
-		pins, err := snapshotPinnedMessages(ctx, tx, old.id)
-		if err != nil {
-			return err
-		}
+		pins := pagePins[old.id]
 		// An unpinned thread with a real original rollout is replaced normally,
 		// even if the old page has since been removed or filtered out locally.
 		hasHead := head != nil && head.FilePath != nil
@@ -203,6 +179,61 @@ func (s *Sync) migrateCodexPages(
 		}
 	}
 	return nil
+}
+
+type legacyCodexPage struct {
+	id, path, agent, machine, owner, archive string
+	dataVersion                              int
+}
+
+// lockLegacyCodexPages locks the legacy rows a batch may migrate: rows under a
+// selected thread or legacy page ID, and pre-137 rows filed under a selected
+// rollout. A row found by its rollout joins threads under that rollout's
+// session.
+func lockLegacyCodexPages(
+	ctx context.Context, tx *sql.Tx, threads, byFile map[string]db.Session, files []string,
+) ([]legacyCodexPage, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
+		FROM sessions
+		WHERE provenance_kind = 'legacy'
+		  AND (id = ANY($1) OR (data_version < 137 AND regexp_replace(regexp_replace(replace(file_path, chr(92), '/'), '^.*/', ''), '\.zst$', '') = ANY($2)))
+		ORDER BY id FOR UPDATE`, mapKeys(threads), files)
+	if err != nil {
+		return nil, fmt.Errorf("finding legacy Codex pages: %w", err)
+	}
+	defer rows.Close()
+	var pages []legacyCodexPage
+	for rows.Next() {
+		var page legacyCodexPage
+		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion); err != nil {
+			return nil, fmt.Errorf("reading legacy Codex pages: %w", err)
+		}
+		if _, selected := threads[page.id]; !selected {
+			threads[page.id] = byFile[strings.TrimSuffix(page.path[strings.LastIndexAny(page.path, `/\`)+1:], ".zst")]
+		}
+		pages = append(pages, page)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading legacy Codex pages: %w", err)
+	}
+	return pages, rows.Close()
+}
+
+// snapshotLegacyCodexPagePins captures each locked legacy row's pins before
+// any page is published.
+func snapshotLegacyCodexPagePins(
+	ctx context.Context, tx *sql.Tx, pages []legacyCodexPage,
+) (map[string][]savedPostgresPin, error) {
+	pins := make(map[string][]savedPostgresPin, len(pages))
+	for _, page := range pages {
+		saved, err := snapshotPinnedMessages(ctx, tx, page.id)
+		if err != nil {
+			return nil, err
+		}
+		pins[page.id] = saved
+	}
+	return pins, nil
 }
 
 func retireCodexPageThread(ctx context.Context, tx *sql.Tx, threadID, pageID string, pageExists bool) error {

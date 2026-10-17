@@ -254,3 +254,108 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
+	ctx := t.Context()
+	const (
+		a      = "codex:11111111-1111-4111-8111-111111111111"
+		b      = "codex:22222222-2222-4222-8222-222222222222"
+		c      = "codex:33333333-3333-4333-8333-333333333333"
+		schema = "agentsview_codex_chained_pin_test"
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	root := t.TempDir()
+	pathB := filepath.Join(root, "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
+	pathC := filepath.Join(root, "rollout-2026-09-25T13-00-00-33333333-3333-4333-8333-333333333333.jsonl")
+	source := testDB(t)
+	sourcePath := source.Path()
+	// Model the old parser's last-header result: rollout B has headers B, A;
+	// rollout C has headers C, B. Their corrected identities overlap at B.
+	for _, row := range []struct{ id, path, content, uuid string }{
+		{a, pathB, "answer for B", "answer-b"},
+		{b, pathC, "answer for C", "answer-c"},
+	} {
+		require.NoError(t, source.UpsertSession(ctx, db.Session{
+			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
+			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+		}))
+		require.NoError(t, source.InsertMessages(ctx, []db.Message{{
+			SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
+		}}))
+		require.NoError(t, source.SetSessionDataVersion(ctx, row.id, 135))
+	}
+	syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	store := &Store{pg: syncer.pg}
+	_, err = store.PinMessage(ctx, a, 0, new("saved B remotely"))
+	require.NoError(t, err)
+	_, err = store.PinMessage(ctx, b, 0, new("saved C remotely"))
+	require.NoError(t, err)
+	before, err := store.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	require.NoError(t, source.Close())
+	raw, err := sql.Open("sqlite3", sourcePath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, "PRAGMA user_version=135")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	rebuilt := testDB(t)
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
+	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+	for _, row := range []struct{ id, path, content, uuid string }{
+		{b, pathB, "answer for B", "answer-b"},
+		{c, pathC, "answer for C", "answer-c"},
+	} {
+		require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{
+			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
+			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+		}))
+		require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{
+			SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
+		}}))
+		require.NoError(t, rebuilt.SetSessionDataVersion(ctx, row.id, db.CurrentDataVersion()))
+	}
+	_, err = rebuilt.CopyOrphanedDataFromExcluding(sourcePath, nil)
+	require.NoError(t, err)
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
+	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	result, err = upgraded.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	for _, row := range []struct{ id, content string }{{b, "answer for B"}, {c, "answer for C"}} {
+		messages, err := store.GetMessages(ctx, row.id, 0, 10, true)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		require.Equal(t, row.content, messages[0].Content)
+	}
+	after, err := store.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	assert.Len(t, after, 2, "both remote-only pins must survive overlapping identity corrections")
+	for _, old := range before {
+		wantSession := b
+		if old.SessionID == b {
+			wantSession = c
+		}
+		var found bool
+		for _, pin := range after {
+			if pin.ID == old.ID {
+				found = true
+				assert.Equal(t, wantSession, pin.SessionID)
+				assert.Equal(t, old.Note, pin.Note)
+				assert.Equal(t, old.Content, pin.Content)
+				assert.Equal(t, old.CreatedAt, pin.CreatedAt)
+			}
+		}
+		assert.True(t, found, "pin for %s must survive under %s", old.SessionID, wantSession)
+	}
+}
