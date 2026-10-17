@@ -340,26 +340,8 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 	if !oldDBHasTable(ctx, tx, "conversation_messages") {
 		return nil
 	}
-	// Trash was copied without reparsing, so keep its original projection and gaps.
-	rows, err := tx.QueryContext(ctx, `SELECT s.id, COALESCE(mapped.source_id, s.id) FROM main.sessions s
-	 LEFT JOIN _codex_page_metadata mapped ON mapped.target_id = s.id
-	 WHERE deleted_at IS NULL
-	 AND EXISTS (SELECT 1 FROM old_db.conversation_messages c WHERE c.session_id=COALESCE(mapped.source_id, s.id))
-	 AND NOT EXISTS (SELECT 1 FROM _codex_session_ids old WHERE old.source_id=s.id AND old.is_page=1)`)
+	ids, err := conversationResyncSessionsTx(ctx, tx)
 	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	type mappedSession struct{ id, sourceID string }
-	var ids []mappedSession
-	for rows.Next() {
-		var id mappedSession
-		if err := rows.Scan(&id.id, &id.sourceID); err != nil {
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
 	for _, mapped := range ids {
@@ -382,4 +364,33 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		}
 	}
 	return nil
+}
+
+type conversationResyncSession struct{ id, sourceID string }
+
+// conversationResyncSessionsTx lists live sessions whose old projection, under
+// their own ID or a corrected Codex ID, should seed their rebuilt projection.
+// Trash was copied without reparsing, so it keeps its original projection and
+// gaps. A page source keeps its old rows only when it is itself a destination
+// (a chained correction), since those rows moved to its own destination.
+func conversationResyncSessionsTx(ctx context.Context, tx *sql.Tx) ([]conversationResyncSession, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT s.id, COALESCE(mapped.source_id, s.id) FROM main.sessions s
+	 LEFT JOIN _codex_page_metadata mapped ON mapped.target_id = s.id
+	 WHERE deleted_at IS NULL
+	 AND EXISTS (SELECT 1 FROM old_db.conversation_messages c WHERE c.session_id=COALESCE(mapped.source_id, s.id))
+	 AND (mapped.source_id IS NOT NULL
+	  OR NOT EXISTS (SELECT 1 FROM _codex_session_ids old WHERE old.source_id=s.id AND old.is_page=1))`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []conversationResyncSession
+	for rows.Next() {
+		var id conversationResyncSession
+		if err := rows.Scan(&id.id, &id.sourceID); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, errors.Join(rows.Err(), rows.Close())
 }

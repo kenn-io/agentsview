@@ -310,3 +310,85 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexChainedIdentityUpgradePreservesExportedMessageIDs(t *testing.T) {
+	ctx := t.Context()
+	const (
+		a       = "codex:" + identityThreadA
+		b       = "codex:" + identityThreadB
+		threadC = "33333333-3333-7333-8333-333333333333"
+		c       = "codex:" + threadC
+		ts      = "2025-10-20T19:00:00Z"
+	)
+	root := t.TempDir()
+	metaB := testjsonl.CodexSessionMetaJSON(identityThreadB, "/work/project-b", "codex_cli_rs", ts)
+	pathB := writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-00-00-"+identityThreadB+".jsonl", testjsonl.JoinJSONL(
+		metaB,
+		testjsonl.CodexSessionMetaJSON(identityThreadA, "/work/project-a", "codex_cli_rs", ts),
+		testjsonl.CodexMsgJSON("user", "question for B", ts),
+	))
+	pathC := writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-09-52-"+threadC+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(threadC, "/work/project-c", "codex_cli_rs", ts),
+		metaB,
+		testjsonl.CodexMsgJSON("user", "question for C", ts),
+	))
+	database := openTestDB(t)
+	// The old parser filed B under A and C under B, taking the last header.
+	for _, row := range []struct{ id, path, content string }{
+		{a, pathB, "question for B"},
+		{b, pathC, "question for C"},
+	} {
+		require.NoError(t, database.UpsertSession(ctx, db.Session{
+			ID: row.id, Agent: "codex", Project: "sample", Machine: "local",
+			FilePath: new(row.path), MessageCount: 1,
+		}))
+		require.NoError(t, database.InsertMessages(ctx, []db.Message{{
+			SessionID: row.id, Role: "user", Content: row.content, Timestamp: ts,
+		}}))
+	}
+	before, err := database.ExportConversationChanges(ctx, db.ConversationExportOptions{})
+	require.NoError(t, err)
+	exported := make(map[string]string)
+	for _, change := range before.Changes {
+		if change.MessageID != "" {
+			exported[change.SessionID] = change.MessageID
+		}
+	}
+	require.Len(t, exported, 2)
+	path := database.Path()
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `UPDATE sessions SET data_version=135`)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, "PRAGMA user_version=135")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	reopened, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.True(t, reopened.NeedsResync())
+	engine := NewEngine(ctx, reopened, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	stats, err := engine.SyncThenRun(ctx, false, nil, func(bool) error { return nil })
+	require.NoError(t, err)
+	require.Zero(t, stats.Failed)
+	require.False(t, stats.Aborted)
+	require.Equal(t, []string{"question for B"}, messageContents(t, reopened, b))
+	require.Equal(t, []string{"question for C"}, messageContents(t, reopened, c))
+	after, err := reopened.ExportConversationChanges(ctx, db.ConversationExportOptions{})
+	require.NoError(t, err)
+	byID := make(map[string]db.ConversationChange)
+	for _, change := range after.Changes {
+		byID[change.MessageID] = change
+	}
+	for _, pair := range []struct{ old, corrected string }{{a, b}, {b, c}} {
+		change, found := byID[exported[pair.old]]
+		if assert.True(t, found, "exported message ID from %s must survive under %s", pair.old, pair.corrected) {
+			assert.Equal(t, pair.corrected, change.SessionID)
+			assert.False(t, change.Deleted)
+		}
+	}
+}
