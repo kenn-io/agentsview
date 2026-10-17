@@ -63,6 +63,15 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			require.Len(t, messages, 1)
 			_, err = database.PinMessage(ctx, oldID, messages[0].ID, new("saved note"))
 			require.NoError(t, err)
+			insertSession(t, database, "manager", "sample")
+			_, err = database.SetSessionExternalParent(ctx, oldID, "manager")
+			require.NoError(t, err)
+			insertSession(t, database, "child", "sample")
+			_, err = database.SetSessionExternalParent(ctx, "child", oldID)
+			require.NoError(t, err)
+			insertVerifiedRecallSelection(t, database, "saved-recall", oldID, 0, 0, nil)
+			_, err = database.ReviewRecallEntry(ctx, "saved-recall", RecallReviewApprove)
+			require.NoError(t, err)
 			if mode == "same_transcript" || mode == "other_source" {
 				destinationPath := path
 				if mode == "other_source" {
@@ -75,6 +84,9 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				_, err = database.AssignSessionProject(ctx, id, "destination")
 				require.NoError(t, err)
 				_, err = database.SetSessionLabels(ctx, id, []string{"destination"})
+				require.NoError(t, err)
+				insertSession(t, database, "destination-manager", "sample")
+				_, err = database.SetSessionExternalParent(ctx, id, "destination-manager")
 				require.NoError(t, err)
 			}
 			if mode == "delete_failure" {
@@ -106,6 +118,28 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			assert.Equal(t, expectedProject, saved.Project)
 			assert.True(t, saved.ProjectAssigned)
 			assert.Equal(t, expectedLabels, saved.Labels)
+			parent := "manager"
+			if mode == "same_transcript" {
+				parent = "destination-manager"
+			}
+			assert.Equal(t, &parent, saved.ParentSessionID)
+			link, err := database.GetSessionExternalParent(ctx, retainedID)
+			require.NoError(t, err)
+			assert.Equal(t, parent, link.ParentSessionID)
+			assert.True(t, link.Applied)
+			child, err := database.GetSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			assert.Equal(t, retainedID, child.ParentSessionID)
+			assert.True(t, child.Applied)
+			entry, err := database.GetRecallEntry(ctx, "saved-recall")
+			require.NoError(t, err)
+			require.NotNil(t, entry)
+			assert.Equal(t, retainedID, entry.SourceSessionID)
+			assert.Equal(t, "accepted", entry.Status)
+			assert.Equal(t, "human_reviewed", entry.ReviewState)
+			assert.True(t, entry.ProvenanceOK)
+			require.Len(t, entry.Evidence, 1)
+			assert.Equal(t, retainedID, entry.Evidence[0].SessionID)
 			if retainedID == id {
 				require.NoError(t, database.UpsertSession(ctx, Session{ID: id, Agent: "codex", Project: "parsed", Machine: "local", FilePath: &path}))
 				reparsed, err := database.GetSession(ctx, id)
@@ -127,4 +161,30 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexUpgradePreservesDestinationCuration(t *testing.T) {
+	ctx := t.Context()
+	source, destination := testDB(t), testDB(t)
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	require.NoError(t, source.UpsertSession(ctx, Session{ID: "codex:old", Agent: "codex", Project: "sample", Machine: "local", FilePath: &path}))
+	_, err := source.getWriter().ExecContext(ctx, "PRAGMA user_version = 135")
+	require.NoError(t, err)
+	_, err = source.SetSessionLabels(ctx, "codex:old", []string{"old"})
+	require.NoError(t, err)
+	_, err = source.AssignSessionProject(ctx, "codex:old", "old-project")
+	require.NoError(t, err)
+	// A launcher can label the destination before the source is discovered.
+	_, err = source.SetSessionLabels(ctx, "codex:new", []string{"destination"})
+	require.NoError(t, err)
+	require.NoError(t, destination.UpsertSession(ctx, Session{ID: "codex:new", Agent: "codex", Project: "parsed", Machine: "local", FilePath: &path, DataVersion: 136}))
+	_, err = destination.AssignSessionProject(ctx, "codex:new", "destination-project")
+	require.NoError(t, err)
+	require.NoError(t, destination.CopySessionMetadataFrom(source.Path()))
+	got, err := destination.GetSession(ctx, "codex:new")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"destination"}, got.Labels)
+	assert.Equal(t, "destination_project", got.Project)
+	assert.True(t, got.ProjectAssigned)
 }

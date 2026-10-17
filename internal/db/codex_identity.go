@@ -132,10 +132,36 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM session_labels WHERE session_id = ?`, oldID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_external_parents
+        (session_id, parent_session_id, created_at, updated_at)
+        SELECT ?,parent_session_id,created_at,updated_at FROM session_external_parents WHERE session_id = ?`, id, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = ?`, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE session_external_parents SET parent_session_id = ? WHERE parent_session_id = ?`, id, oldID); err != nil {
+		return err
+	}
+	// The transcript is unchanged by this move. Keep reviewed entries and
+	// verify their evidence against the recovered rows before removing the source.
+	if _, err := tx.ExecContext(ctx, `UPDATE recall_entries SET source_session_id = ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE source_session_id = ?`, id, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE recall_evidence SET session_id = ? WHERE session_id = ?`, id, oldID); err != nil {
+		return err
+	}
+	if err := reconcileRecallEvidenceForSessionTx(ctx, tx, id, &pending); err != nil {
+		return err
+	}
 	if err := deleteSessionMessagesTx(ctxTx, oldID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, oldID); err != nil {
+		return err
+	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, oldID}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

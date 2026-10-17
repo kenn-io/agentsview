@@ -193,16 +193,21 @@ pages retain their full page identity. When the canonical identity is
 unavailable or already belongs to another source, a stable alternative ID
 preserves the archived transcript and pins. When that source returns, its
 archived content and curation move to the recovered identity in one transaction
-before the alternative is removed, including labels and explicit project
-assignments. Existing destination choices take precedence. Recovery also finds
-sources marked missing and sources whose compression changed. Renames and stars
-follow verified thread corrections even when the original thread returns.
-Freshly parsed destinations take precedence over displaced historical occupants
-in correction chains and cycles. A destination owned by another source is left
-intact. Plain and compressed paths identify the same rollout during correction
-and ownership checks. Multiple archived identities sharing a path remain
-separate. Archive-only rebuilds do not consult files on the receiving host.
-Empty trash anchors are limited to verified historical page mappings.
+before the alternative is removed, including labels, explicit project
+assignments, reviewed Recall entries and evidence, and launcher parent links.
+Existing destination choices take precedence. Recovery also finds sources marked
+missing and sources whose compression changed. Renames and stars follow verified
+thread corrections even when the original thread returns, as do labels and
+assigned projects. An unresolved missing source keeps an alternative identity
+even when the original rollout is also missing, so that rollout can return
+without overwriting the archive. Trash checks treat plain and compressed sources
+as the same file. Freshly parsed destinations take precedence over displaced
+historical occupants in correction chains and cycles. A destination owned by
+another source is left intact. Plain and compressed paths identify the same
+rollout during correction and ownership checks. Multiple archived identities
+sharing a path remain separate. Archive-only rebuilds do not consult files on
+the receiving host. Empty trash anchors are limited to verified historical page
+mappings.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

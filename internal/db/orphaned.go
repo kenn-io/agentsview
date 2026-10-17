@@ -1260,14 +1260,7 @@ func correctRetainedCodexExclusions(ctx context.Context, conn *sql.Conn) error {
 		return err
 	}
 	for _, e := range exclusions {
-		id, err := parser.ReadCodexRolloutSessionID(ctx, e.path)
-		if errors.Is(err, os.ErrNotExist) {
-			alternate := strings.TrimSuffix(e.path, ".zst")
-			if alternate == e.path && strings.HasSuffix(e.path, ".jsonl") {
-				alternate += ".zst"
-			}
-			id, err = parser.ReadCodexRolloutSessionID(ctx, alternate)
-		}
+		id, err := readRetainedCodexSessionID(ctx, e.path)
 		if err != nil || id == "" {
 			continue
 		}
@@ -1472,8 +1465,16 @@ func (d *DB) CopySessionMetadataFrom(
 			INSERT OR IGNORE INTO main.session_labels
 				(session_id, label, created_at)
 			SELECT COALESCE(`+retiredCodexTargetSQL("session_id")+`, session_id), label, created_at
-			FROM old_db.session_labels`); err != nil {
+			FROM old_db.session_labels
+            WHERE session_id NOT IN (SELECT source_id FROM _codex_session_ids WHERE is_thread_correction = 1)`); err != nil {
 			return fmt.Errorf("copying session labels: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+            INSERT INTO main.session_labels (session_id,label,created_at)
+            SELECT mapped.target_id, label, created_at FROM old_db.session_labels labels
+            JOIN _codex_session_ids mapped ON mapped.source_id = labels.session_id AND mapped.is_thread_correction = 1
+            WHERE NOT EXISTS (SELECT 1 FROM main.session_labels existing WHERE existing.session_id = mapped.target_id)`); err != nil {
+			return fmt.Errorf("copying corrected Codex labels: %w", err)
 		}
 	}
 	// CopySyncStateFrom copied the raw archive's parser bindings verbatim, so a
@@ -1499,12 +1500,20 @@ func (d *DB) CopySessionMetadataFrom(
 				COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id),
 				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
-			WHERE true
+			WHERE ep.session_id NOT IN (SELECT source_id FROM _codex_session_ids WHERE is_thread_correction = 1)
 			ON CONFLICT(session_id) DO UPDATE SET
 				parent_session_id = excluded.parent_session_id,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying session parents: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+            INSERT OR IGNORE INTO main.session_external_parents
+                (session_id, parent_session_id, created_at, updated_at)
+            SELECT mapped.target_id, COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id), ep.created_at, ep.updated_at
+            FROM old_db.session_external_parents ep
+            JOIN _codex_session_ids mapped ON mapped.source_id = ep.session_id AND mapped.is_thread_correction = 1`); err != nil {
+			return fmt.Errorf("copying corrected Codex parents: %w", err)
 		}
 		if _, err := applySessionExternalParents(ctx, tx); err != nil {
 			return err
@@ -1906,6 +1915,7 @@ func (d *DB) CopySessionMetadataFrom(
 			LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = assignment.session_id
 				AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = assignment.session_id AND file_path IS NOT NULL)
 			WHERE COALESCE(mapped.target_id, assignment.session_id) IN (SELECT id FROM main.sessions)
+			  AND assignment.session_id NOT IN (SELECT source_id FROM _codex_session_ids WHERE is_thread_correction = 1)
 			ON CONFLICT(session_id) DO UPDATE SET
 				project = excluded.project,
 				original_project = excluded.original_project,
@@ -1913,12 +1923,22 @@ func (d *DB) CopySessionMetadataFrom(
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying session project assignments: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `
+            INSERT OR IGNORE INTO main.session_project_assignments
+                (session_id, project, original_project, created_at, updated_at)
+            SELECT mapped.target_id, assignment.project, `+originalProjectExpr+`, assignment.created_at, assignment.updated_at
+            FROM old_db.session_project_assignments assignment
+            JOIN _codex_session_ids mapped ON mapped.source_id = assignment.session_id AND mapped.is_thread_correction = 1
+            WHERE mapped.target_id IN (SELECT id FROM main.sessions)`); err != nil {
+			return fmt.Errorf("copying corrected Codex project assignments: %w", err)
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT current.id, previous.project, current.project,
 				assignment.project
 			FROM old_db.sessions previous
 			LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = previous.id
-				AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = previous.id AND file_path IS NOT NULL)
+				AND (EXISTS (SELECT 1 FROM _codex_session_ids correction WHERE correction.source_id = previous.id AND correction.is_thread_correction = 1)
+                    OR NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = previous.id AND file_path IS NOT NULL))
 			JOIN main.sessions current ON current.id = COALESCE(mapped.target_id, previous.id)
 			LEFT JOIN main.session_project_assignments assignment
 				ON assignment.session_id = current.id
@@ -3177,7 +3197,7 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			id := key
 			var err error
 			if !archiveOnly {
-				id, err = parser.ReadCodexRolloutSessionID(ctx, s.path)
+				id, err = readRetainedCodexSessionID(ctx, s.path)
 			}
 			if archiveOnly || errors.Is(err, os.ErrNotExist) {
 				// A kept ID with no different source path is not evidence of a
@@ -3210,11 +3230,11 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 			)`, s.id, s.path).Scan(&displaced); err != nil {
 				return err
 			}
-			if !displaced {
+			if !displaced && (target != "" || s.shared || archiveOnly) {
 				continue
 			}
-			// The original thread owns this ID again. Keep the other archived
-			// source under the same stable alternative used for source collisions.
+			// An unresolved source must not occupy a native ID that a different
+			// rollout can reclaim later, even if both files are missing today.
 			target = parser.AltSessionID(parser.BaseSessionID(s.id), s.path)
 		}
 		var occupied bool
@@ -3249,6 +3269,23 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		}
 	}
 	return nil
+}
+
+// A rollout can be compressed or expanded while its archived path stays old.
+func readRetainedCodexSessionID(ctx context.Context, path string) (string, error) {
+	id, err := parser.ReadCodexRolloutSessionID(ctx, path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return id, err
+	}
+	switch {
+	case strings.HasSuffix(path, ".jsonl.zst"):
+		path = strings.TrimSuffix(path, ".zst")
+	case strings.HasSuffix(path, ".jsonl"):
+		path += ".zst"
+	default:
+		return id, err
+	}
+	return parser.ReadCodexRolloutSessionID(ctx, path)
 }
 
 // codexRowsReparsedElsewhere maps each old Codex-format row to the id its

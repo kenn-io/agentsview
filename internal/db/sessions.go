@@ -1381,8 +1381,13 @@ const hasTrashedSessionByFilePathQuery = "SELECT 1 FROM sessions" +
 // to a trashed row for this agent. Use the path index so each parsed source
 // checks only its own rows, rather than scanning every session for the agent.
 func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent string) bool {
+	query := hasTrashedSessionByFilePathQuery
+	if agent == "codex" || agent == "traex" || agent == "augure-code" {
+		query = "SELECT 1 FROM sessions INDEXED BY idx_sessions_file_path WHERE file_path IN " +
+			codexSourcePathsSQL("?1") + " AND agent = ?2 AND deleted_at IS NOT NULL LIMIT 1"
+	}
 	var n int
-	_ = db.getReader().QueryRow(ctx, hasTrashedSessionByFilePathQuery, path, agent).Scan(&n)
+	_ = db.getReader().QueryRow(ctx, query, path, agent).Scan(&n)
 	return n == 1
 }
 

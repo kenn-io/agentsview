@@ -605,11 +605,14 @@ fixtures retain this field; missing identities remain source-local.
   set before restoration preserves distinct notes on equal message text
   without removing unrelated destination pins. Active plain/compressed source
   changes retain one identity; returning noncanonical sources transfer
-  curation, labels, and project assignments from their alternative identity,
-  including sources marked missing. Shared-path archive restores preserve
-  separate historical transcripts. Permanent deletions follow retained source
-  paths when files return, including noncanonical filenames and either plain
-  or compressed form; filename UUIDs alone cannot exclude an unrelated thread.
+  curation, labels, project assignments, reviewed Recall evidence, and
+  launcher parents from their alternative identity, including sources marked
+  missing. Missing noncanonical sources remain separate when the original
+  rollout returns later. Trash retains its identity and deletion state across
+  either compression direction. Shared-path archive restores preserve separate
+  historical transcripts. Permanent deletions follow retained source paths
+  when files return, including noncanonical filenames and either plain or
+  compressed form; filename UUIDs alone cannot exclude an unrelated thread.
   Verified source metadata releases a wrongly excluded original ID while
   retaining the deleted source exclusion. Corrected sessions keep freshly
   resolved project evidence when the historical snapshot describes a different
