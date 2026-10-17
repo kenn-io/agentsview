@@ -43,6 +43,8 @@ type PushProgress struct {
 	// a full push this covers every local session and can run for minutes),
 	// "" during the session/message push, and "vectors" during the vector
 	// phase, whose progress is carried by the Vector* fields.
+	// PushPhaseWaiting means a daemon push is waiting for another push to
+	// finish.
 	Phase            string
 	SessionsDone     int
 	SessionsTotal    int
@@ -154,3 +156,7 @@ func (r *VectorPushResult) DeferSession(sessionID string) {
 	r.SessionsDeferred++
 	r.DeferredSessionIDs = append(r.DeferredSessionIDs, sessionID)
 }
+
+// PushPhaseWaiting is the progress phase a daemon push reports while it
+// waits for another push to finish. The daemon runs one push at a time.
+const PushPhaseWaiting = "waiting"

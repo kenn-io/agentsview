@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	stdsync "sync"
 	"testing"
 	"testing/synctest"
@@ -66,7 +67,7 @@ func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"PostgreSQL", newReplicaPushProgressPrinter(),
+				"PostgreSQL", pushProgressPhase, newReplicaPushProgressPrinter(),
 			)
 			onProgress(storage.PushProgress{SessionsDone: 1, SessionsTotal: 2})
 			synctest.Sleep(150 * time.Millisecond)
@@ -78,6 +79,32 @@ func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
 	assert.Contains(t, out, "Pushing... 1/2 sessions")
 	assert.NotContains(t, out, "still pushing",
 		"heartbeat must stay silent after the first progress event")
+}
+
+// A push waiting for another push on the daemon says so once. The heartbeat
+// keeps running, because the wait can be long and sends no progress.
+func TestDaemonPushProgressReportsWaitingForAnotherPush(t *testing.T) {
+	out := captureStdout(t, func() {
+		synctest.Test(t, func(t *testing.T) {
+			orig := daemonPushHeartbeatInterval
+			daemonPushHeartbeatInterval = 50 * time.Millisecond
+			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+
+			onProgress, finish := daemonPushProgress(
+				"DuckDB", mirrorPushProgressPhase,
+				func(storage.MirrorPushProgress) {
+					assert.Fail(t, "a waiting report is not push progress")
+				},
+			)
+			onProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaiting})
+			onProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaiting})
+			synctest.Sleep(75 * time.Millisecond)
+			finish()
+		})
+	})
+
+	assert.Equal(t, 1, strings.Count(out, "Waiting for another push on the daemon to finish"))
+	assert.Contains(t, out, "still pushing to DuckDB via the daemon")
 }
 
 // syncBuffer is a mutex-guarded bytes.Buffer: the heartbeat goroutine writes
@@ -370,6 +397,8 @@ type pushWatchOwnerCase struct {
 	run  func(context.Context, *archivePushWatchHooks) error
 	// runFull runs the watch with --full. Set for local owners only.
 	runFull func(context.Context, *archivePushWatchHooks) error
+	// database is the archive a local owner writes. Set for local owners only.
+	database *db.DB
 }
 
 func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
@@ -412,7 +441,9 @@ func localDuckDBCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
 			)
 		}
 	}
-	return pushWatchOwnerCase{name: "local DuckDB", run: run(false), runFull: run(true)}
+	return pushWatchOwnerCase{
+		name: "local DuckDB", run: run(false), runFull: run(true), database: backend.database,
+	}
 }
 
 func localPostgreSQLCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
@@ -426,7 +457,9 @@ func localPostgreSQLCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
 			)
 		}
 	}
-	return pushWatchOwnerCase{name: "local PostgreSQL", run: run(false), runFull: run(true)}
+	return pushWatchOwnerCase{
+		name: "local PostgreSQL", run: run(false), runFull: run(true), database: backend.database,
+	}
 }
 
 func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {

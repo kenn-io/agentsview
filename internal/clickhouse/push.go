@@ -57,7 +57,10 @@ func (s *Sync) PushWithOptions(
 		onProgress(storage.PushProgress{Phase: "preparing"})
 	}
 	version := newPushVersion()
-	cutoff := s.local.MirrorPushCutoff()
+	cutoff, err := s.local.MirrorPushCutoff(ctx)
+	if err != nil {
+		return result, err
+	}
 
 	meta, err := readMetadata(ctx, conn,
 		s.archiveKey(lastPushCutoffKeyBase),

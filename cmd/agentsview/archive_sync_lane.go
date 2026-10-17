@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -21,9 +22,11 @@ import (
 // the archive, engine is nil: the daemon syncs before each push, and watcher
 // batches travel with the push requests.
 type archivePushWatch struct {
-	hooks              *archivePushWatchHooks
-	appCfg             config.Config
-	engine             *syncpkg.Engine
+	hooks  *archivePushWatchHooks
+	appCfg config.Config
+	engine *syncpkg.Engine
+	// database is the archive engine writes. Set it with engine.
+	database           *db.DB
 	label              string
 	debounce, interval time.Duration
 	full               bool
@@ -40,6 +43,7 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		retry:    w.debounce,
 		requests: make(chan struct{}, 1),
 	}
+	lane.fullPending.Store(w.full)
 	loop, stopLoop := newArchivePushLoop(
 		w.hooks, w.label, w.debounce, w.interval,
 		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
@@ -78,29 +82,24 @@ func (w archivePushWatch) run(ctx context.Context) error {
 	}
 
 	wake := w.wake
-	if w.engine == nil {
-		lane.fullPending.Store(w.full)
-	} else {
-		startupSync := runPGWatchStartupSync
+	if w.engine != nil {
+		lane.startupSync = runPGWatchStartupSync
 		if w.hooks != nil && w.hooks.startupSync != nil {
-			startupSync = w.hooks.startupSync
+			lane.startupSync = w.hooks.startupSync
 		}
-		didResync, startupErr := startupSync(ctx, w.engine, w.full)
-		if startupErr != nil && errors.Is(startupErr, context.Canceled) {
+		lane.full = w.full
+		lane.database = w.database
+		startDatabaseID, err := w.database.GetDatabaseID(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("reading archive database id: %w", err)
+		}
+		lane.startDatabaseID = startDatabaseID
+		lane.syncStartup(ctx)
+		if ctx.Err() != nil {
 			return nil
-		}
-		// The first push that runs resends every session when the user asked
-		// for --full or startup rebuilt the archive. A failed startup sync
-		// reports no rebuild, so --full survives it only through w.full.
-		lane.fullPending.Store(w.full || didResync)
-		if startupErr != nil {
-			log.Printf(
-				"%s: startup sync failed: %v; remote pushes stay paused until a "+
-					"local sync completes; retrying every %s",
-				w.label, startupErr, w.debounce,
-			)
-		} else if ctx.Err() == nil {
-			lane.markReady()
 		}
 
 		ticker := time.NewTicker(w.interval)
@@ -145,6 +144,15 @@ type archiveSyncLane struct {
 	retry        time.Duration
 	openDispatch func()
 	requests     chan struct{}
+	// startupSync runs the startup sync, including any archive rebuild it
+	// needs. The lane retries it until one completes. full is the watch's
+	// --full request. Local owners only.
+	startupSync func(context.Context, *syncpkg.Engine, bool) (bool, error)
+	full        bool
+	// database and startDatabaseID detect a rebuild since the watch started:
+	// a rebuild gives the archive a new database ID. Local owners only.
+	database        *db.DB
+	startDatabaseID string
 	// ready is set once the archive has caught up: after a complete local
 	// sync, or after the first successful push when the daemon owns the
 	// archive and syncs before it pushes. Watcher dispatch opens then. A local
@@ -153,11 +161,20 @@ type archiveSyncLane struct {
 	// sync left incomplete.
 	ready atomic.Bool
 	// fullPending asks the next push to resend every session. The first
-	// push that runs clears it, even if that push fails: each mirror
-	// records an unfinished full push and resumes it on the next push,
-	// and asking for a full push again would start it over.
+	// push that reaches the destination clears it, even if that push fails:
+	// each mirror records an unfinished full push and resumes it on the next
+	// push, and asking for a full push again would start it over. A push that
+	// fails before it reaches the destination recorded nothing to resume, so
+	// the request stays.
 	fullPending atomic.Bool
 }
+
+// pushNotStartedError marks a push that failed before it reached the
+// destination.
+type pushNotStartedError struct{ err error }
+
+func (e pushNotStartedError) Error() string { return e.err.Error() }
+func (e pushNotStartedError) Unwrap() error { return e.err }
 
 // markReady opens watcher dispatch the first time the archive catches up and
 // reports whether this call did so.
@@ -184,8 +201,8 @@ func (l *archiveSyncLane) push(
 	if !l.canPush() {
 		// Skipping instead of failing keeps the loop from retrying on its
 		// debounce. The sync that sets ready queues a push.
-		log.Printf("%s: push (%s) skipped: remote pushes stay paused until a "+
-			"local sync finishes without errors", l.label, reason)
+		log.Printf("%s: push (%s) skipped: waiting for a local sync that "+
+			"finishes without errors", l.label, reason)
 		return nil
 	}
 	if l.engine != nil {
@@ -197,7 +214,11 @@ func (l *archiveSyncLane) push(
 			return fmt.Errorf("starting push: %w", err)
 		}
 	}
-	if err := push(ctx, reason, l.fullPending.Swap(false), batch); err != nil {
+	full := l.fullPending.Swap(false)
+	if err := push(ctx, reason, full, batch); err != nil {
+		if _, notStarted := errors.AsType[pushNotStartedError](err); full && notStarted {
+			l.fullPending.Store(true)
+		}
 		return err
 	}
 	if l.engine == nil {
@@ -242,7 +263,12 @@ func (l *archiveSyncLane) run(
 		if !l.wait(ctx, tick, &wake) {
 			return
 		}
-		l.syncAll(ctx)
+		if l.ready.Load() {
+			l.syncAll(ctx)
+		} else if l.syncStartup(ctx) {
+			// Queue the push that startup skipped.
+			l.loop.NotifyDirty()
+		}
 	}
 }
 
@@ -273,29 +299,63 @@ func (l *archiveSyncLane) wait(
 	}
 }
 
+// syncStartup runs the startup sync and marks the archive ready when it
+// completes, reporting whether this call did so. Retries run the same sync,
+// so an archive rebuild that an earlier attempt did not finish runs again.
+func (l *archiveSyncLane) syncStartup(ctx context.Context) bool {
+	rebuilt, err := l.archiveRebuilt(ctx)
+	var didResync bool
+	if err == nil {
+		// Once a rebuild has replaced the archive, --full on a retry would
+		// rebuild it again.
+		didResync, err = l.startupSync(ctx, l.engine, l.full && !rebuilt)
+	}
+	if err == nil {
+		// A rebuild can replace the archive and still report failures, so
+		// check again after the sync.
+		rebuilt, err = l.archiveRebuilt(ctx)
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		log.Printf("%s: startup sync failed: %v. Remote pushes stay paused. "+
+			"Retrying in %s.", l.label, err, l.retry)
+		return false
+	}
+	// Only a full push removes remote rows that a rebuild dropped locally.
+	if didResync || rebuilt {
+		l.fullPending.Store(true)
+	}
+	return l.markReady()
+}
+
+// archiveRebuilt reports whether a rebuild replaced the archive since the
+// watch started.
+func (l *archiveSyncLane) archiveRebuilt(ctx context.Context) (bool, error) {
+	id, err := l.database.GetDatabaseID(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading archive database id: %w", err)
+	}
+	return id != l.startDatabaseID, nil
+}
+
+// syncAll runs a periodic sync after the archive is ready.
 func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	stats := l.engine.SyncAll(ctx, nil)
 	if ctx.Err() != nil {
 		return
 	}
-	// Before the first complete sync, an incomplete one keeps remote pushes
-	// paused. After it, pushes continue and the next sync retries.
-	next := "the next sync retries"
-	if !l.ready.Load() {
-		next = fmt.Sprintf("remote pushes stay paused; retrying in %s", l.retry)
-	}
-	opened := false
 	switch {
 	case !stats.AuthoritativeDiscoveryComplete():
-		log.Printf("%s: local sync could not list every session; %s", l.label, next)
+		log.Printf("%s: local sync could not list every session. "+
+			"The next local sync will try again.", l.label)
 	case !stats.ProcessingComplete():
-		log.Printf("%s: local sync failed to process some sessions; %s", l.label, next)
-	default:
-		opened = l.markReady()
+		log.Printf("%s: local sync failed to process some sessions. "+
+			"The next local sync will try again.", l.label)
 	}
-	// The first complete sync queues the push that startup skipped. After
-	// that, a sync that wrote nothing leaves the push loop alone.
-	if opened || (l.ready.Load() && stats.ChangedArchive()) {
+	// A sync that wrote nothing leaves the push loop alone.
+	if stats.ChangedArchive() {
 		l.loop.NotifyDirty()
 	}
 }

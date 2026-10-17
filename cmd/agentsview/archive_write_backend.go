@@ -439,16 +439,23 @@ func startDaemonPushHeartbeatTo(w io.Writer, label string) func() {
 // daemonPushProgress pairs a running heartbeat with a streamed-progress
 // renderer: the heartbeat covers the daemon-side phases that emit no
 // progress events (local sync, schema migration), and the first streamed
-// event silences it for good so heartbeat lines never interleave with the
-// in-place progress line. The returned finish func stops the heartbeat (if
-// no event ever arrived) and clears the in-place line.
+// progress event silences it for good so heartbeat lines never interleave
+// with the in-place progress line. A push that waits for another push prints
+// one line saying so and keeps the heartbeat. The returned finish func stops
+// the heartbeat (if no event ever arrived) and clears the in-place line.
 func daemonPushProgress[P any](
-	label string, render func(P),
+	label string, phase func(P) string, render func(P),
 ) (onProgress func(P), finish func()) {
 	stop := startDaemonPushHeartbeat(label)
-	var once stdsync.Once
+	var once, waitOnce stdsync.Once
 	stopHeartbeat := func() { once.Do(stop) }
 	onProgress = func(p P) {
+		if phase(p) == storage.PushPhaseWaiting {
+			waitOnce.Do(func() {
+				fmt.Println("Waiting for another push on the daemon to finish...")
+			})
+			return
+		}
 		stopHeartbeat()
 		render(p)
 	}
@@ -457,6 +464,12 @@ func daemonPushProgress[P any](
 		fmt.Print("\r\033[K")
 	}
 }
+
+// pushProgressPhase and mirrorPushProgressPhase read a progress report's
+// phase for daemonPushProgress.
+func pushProgressPhase(p storage.PushProgress) string { return p.Phase }
+
+func mirrorPushProgressPhase(p storage.MirrorPushProgress) string { return p.Phase }
 
 func (b daemonArchiveWriteBackend) ReplicaPush(
 	ctx context.Context,
@@ -474,7 +487,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 		return storage.PushResult{}, err
 	}
 	onProgress, finish := daemonPushProgress(
-		backend.DisplayName(), newReplicaPushProgressPrinter(),
+		backend.DisplayName(), pushProgressPhase, newReplicaPushProgressPrinter(),
 	)
 	defer finish()
 	return postDaemonPush[storage.PushResult](
@@ -545,7 +558,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		} else {
 			writer, cleanup, werr := pushWriter(pctx)
 			if werr != nil {
-				return werr
+				return pushNotStartedError{werr}
 			}
 			defer cleanup()
 			res, err = writer.DuckDBPush(
@@ -586,7 +599,7 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	// non-path fields (machine name, filters) still apply.
 	duckCfg.Path = ""
 	onProgress, finish := daemonPushProgress(
-		mirrorBackend.DisplayName(), func(p storage.MirrorPushProgress) {
+		mirrorBackend.DisplayName(), mirrorPushProgressPhase, func(p storage.MirrorPushProgress) {
 			fmt.Printf(
 				"\rPushing... %d/%d sessions, %d messages\x1b[K",
 				p.SessionsDone, p.SessionsTotal, p.MessagesDone,
@@ -654,7 +667,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 				}
 				writer, cleanup, err := pushWriter(pctx)
 				if err != nil {
-					return storage.PushResult{}, err
+					return storage.PushResult{}, pushNotStartedError{err}
 				}
 				defer cleanup()
 				return writer.ReplicaPush(
@@ -934,6 +947,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		hooks:    b.watchHooks,
 		appCfg:   b.appCfg,
 		engine:   engine,
+		database: b.database,
 		label:    "duckdb watch",
 		debounce: debounce,
 		interval: interval,
@@ -1060,6 +1074,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		hooks:    b.watchHooks,
 		appCfg:   b.appCfg,
 		engine:   engine,
+		database: b.database,
 		label:    name + " watch",
 		debounce: debounce,
 		interval: interval,

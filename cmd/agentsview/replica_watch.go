@@ -42,13 +42,25 @@ func (p *replicaPusher) push(
 			// Name the step that failed: a connect error needs a different
 			// fix than an error partway through the copy.
 			var stage archivepush.Stage
+			onStage := p.session.OnStage
+			defer func() { p.session.OnStage = onStage }()
 			p.session.OnStage = func(s archivepush.Stage) func() {
 				stage = s
+				if onStage != nil {
+					return onStage(s)
+				}
 				return nil
 			}
 			res, err := p.session.Push(ctx, opts, nil)
-			if err != nil && (stage == archivepush.StageConnect || stage == archivepush.StagePush) {
+			if err == nil {
+				return res, nil
+			}
+			if stage == archivepush.StageConnect || stage == archivepush.StagePush {
 				err = fmt.Errorf("%s: %w", stage, err)
+			}
+			// The replica records a full push only once the copy starts.
+			if stage != archivepush.StagePush {
+				err = pushNotStartedError{err}
 			}
 			return res, err
 		},

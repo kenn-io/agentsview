@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -188,4 +189,41 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 
 func daemonEventStream(body io.Reader) *runtime.Stream[[]byte] {
 	return runtime.NewEventStream[[]byte](&http.Response{Body: io.NopCloser(body)})
+}
+
+// A push the daemon refused or never received did not start, so a push watch
+// keeps its --full request for the retry. An error the daemon streams after
+// it accepted the push may come from a push that already started.
+func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(refused.Close)
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: error\ndata: {\"error\":\"push: conn reset\"}\n\n"))
+	}))
+	t.Cleanup(failed.Close)
+	unreachable := httptest.NewServer(http.NotFoundHandler())
+	unreachable.Close()
+
+	for _, tt := range []struct {
+		name    string
+		url     string
+		started bool
+	}{
+		{"daemon refused", refused.URL, false},
+		{"daemon unreachable", unreachable.URL, false},
+		{"push failed", failed.URL, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := postDaemonPush[storage.PushResult, storage.PushProgress](
+				t.Context(), transport{URL: tt.url}, "", replicaPushOperations["pg"],
+				apiclient.DaemonPushRequest{}, nil,
+			)
+			require.Error(t, err)
+			_, notStarted := errors.AsType[pushNotStartedError](err)
+			assert.Equal(t, !tt.started, notStarted)
+		})
+	}
 }

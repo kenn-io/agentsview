@@ -583,7 +583,7 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 			t.Cleanup(engine.Close)
 
 			err := f.srv.syncThenRunForPush(
-				t.Context(), engine, f.db, tt.full, nil, nil,
+				t.Context(), engine, f.db, tt.full, nil, nil, nil,
 				func(forceFull bool) error {
 					workCalls++
 					assert.Equal(t, tt.wantForceFull, forceFull)
@@ -612,7 +612,7 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after a failed worker pass")
 			return nil
@@ -647,7 +647,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
 			runPushStream(hctx, func(_ func(storage.PushProgress)) (any, error) {
 				var result storage.PushResult
-				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 					func(forceFull bool) error {
 						assert.False(t, forceFull)
 						session, err := f.db.GetSession(t.Context(), "healthy")
@@ -677,7 +677,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 		})
 	}
 	pushFailure := errors.New("mirror write failed")
-	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 		func(bool) error { return pushFailure })
 	require.ErrorIs(t, err, pushFailure)
 }
@@ -689,7 +689,7 @@ func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
-	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 		func(bool) error {
 			return engine.TryRunExclusive(func() error { return nil })
 		})
@@ -698,14 +698,9 @@ func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
 }
 
 // Daemon pushes take turns, so an older push can never overwrite what a newer
-// push to the same destination wrote.
+// push to the same destination wrote. A push takes its turn before its own
+// sync, so its archive rebuild never replaces the archive another push reads.
 func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
-	t.Cleanup(engine.Close)
-	waiting := make(chan struct{}, 1)
-	f.srv.pushTurn.onWait = func() { waiting <- struct{}{} }
-
 	var mu sync.Mutex
 	var events []string
 	record := func(event string) {
@@ -713,11 +708,20 @@ func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
 		defer mu.Unlock()
 		events = append(events, event)
 	}
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		record("second rebuild")
+		return syncpkg.SyncStats{}, nil
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	first := make(chan error, 1)
 	go func() {
-		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 			func(bool) error {
 				close(firstStarted)
 				<-releaseFirst
@@ -726,9 +730,11 @@ func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
 			})
 	}()
 	<-firstStarted
+	waiting := make(chan struct{})
 	second := make(chan error, 1)
 	go func() {
-		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, true, nil, nil,
+			func() { close(waiting) },
 			func(bool) error {
 				record("second start")
 				return nil
@@ -739,7 +745,7 @@ func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
 	close(releaseFirst)
 	require.NoError(t, <-first)
 	require.NoError(t, <-second)
-	assert.Equal(t, []string{"first done", "second start"}, events)
+	assert.Equal(t, []string{"first done", "second rebuild", "second start"}, events)
 }
 
 // A push waiting for its turn stops when its request ends.
@@ -747,17 +753,17 @@ func TestSyncThenRunForPushStopsWaitingForTurnWhenContextEnds(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
-	waiting := make(chan struct{}, 1)
-	f.srv.pushTurn.onWait = func() { waiting <- struct{}{} }
-	endTurn, err := f.srv.pushTurn.take(t.Context())
+	endTurn, err := f.srv.pushTurn.take(t.Context(), nil)
 	require.NoError(t, err)
 	t.Cleanup(endTurn)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	waiting := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		done <- f.srv.syncThenRunForPush(ctx, engine, f.db, false, nil, nil,
+			func() { close(waiting) },
 			func(bool) error {
 				assert.Fail(t, "a push must not run while another push holds the turn")
 				return nil
@@ -778,7 +784,7 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after deferred worker processing")
 			return nil
@@ -798,7 +804,7 @@ func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
 	batch := syncpkg.WatchBatch{Paths: []string{changed}}
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil,
+		t.Context(), engine, f.db, false, &batch, nil, nil,
 		func(forceFull bool) error {
 			assert.False(t, forceFull)
 			changedSession, getErr := f.db.GetSession(t.Context(), "changed")
@@ -833,7 +839,7 @@ func TestSyncThenRunForPushStaleArchiveIgnoresBatchAndUsesWorker(t *testing.T) {
 	workCalls := 0
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil,
+		t.Context(), engine, f.db, false, &batch, nil, nil,
 		func(forceFull bool) error {
 			workCalls++
 			assert.True(t, forceFull)
@@ -1129,4 +1135,75 @@ func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 	assert.Contains(t, err.Error(), "allow_insecure")
+}
+
+// A daemon push that waits for another push tells its client, so the CLI can
+// say why nothing is happening.
+func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	f.srv.cfg.DuckDB = config.DuckDBConfig{
+		Path:        filepath.Join(t.TempDir(), "mirror.duckdb"),
+		MachineName: "daemon",
+	}
+	endTurn, err := f.srv.pushTurn.take(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(endTurn)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := f.srv.humaMirrorPush(ctx, &daemonPushInput{})
+	require.NoError(t, err)
+	writer := newSignalingRecorder(`"Phase":"waiting"`)
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/push/duckdb", nil)
+	request.Header.Set("Accept", "text/event-stream")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stream.Body(humago.NewContext(&huma.Operation{}, request, writer))
+	}()
+
+	<-writer.matched
+	cancel()
+	<-done
+	assert.Contains(t, writer.String(), "event: progress\n")
+}
+
+// signalingRecorder is a goroutine-safe flushing ResponseWriter that closes
+// matched once its body contains want.
+type signalingRecorder struct {
+	*httptest.ResponseRecorder
+	mu      sync.Mutex
+	want    string
+	matched chan struct{}
+	once    sync.Once
+}
+
+func newSignalingRecorder(want string) *signalingRecorder {
+	return &signalingRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		want:             want,
+		matched:          make(chan struct{}),
+	}
+}
+
+func (r *signalingRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n, err := r.ResponseRecorder.Write(p)
+	if strings.Contains(r.Body.String(), r.want) {
+		r.once.Do(func() { close(r.matched) })
+	}
+	return n, err
+}
+
+func (r *signalingRecorder) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ResponseRecorder.Flush()
+}
+
+func (r *signalingRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Body.String()
 }

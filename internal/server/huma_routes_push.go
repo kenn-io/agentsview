@@ -471,14 +471,12 @@ func watchPathWithinRoots(path string, roots []string) bool {
 type pushTurn struct {
 	once gosync.Once
 	turn chan struct{}
-	// onWait, when set, is called when a push must wait for another push.
-	// Tests use it.
-	onWait func()
 }
 
-// take waits for this push's turn and returns the func that ends it. It
-// returns ctx's error if ctx ends first.
-func (p *pushTurn) take(ctx context.Context) (func(), error) {
+// take waits for this push's turn and returns the func that ends it. It calls
+// onWait, when set, if the push must wait for another push. It returns ctx's
+// error if ctx ends first.
+func (p *pushTurn) take(ctx context.Context, onWait func()) (func(), error) {
 	p.once.Do(func() { p.turn = make(chan struct{}, 1) })
 	end := func() { <-p.turn }
 	select {
@@ -486,8 +484,8 @@ func (p *pushTurn) take(ctx context.Context) (func(), error) {
 		return end, nil
 	default:
 	}
-	if p.onWait != nil {
-		p.onWait()
+	if onWait != nil {
+		onWait()
 	}
 	select {
 	case p.turn <- struct{}{}:
@@ -501,9 +499,11 @@ func (p *pushTurn) take(ctx context.Context) (func(), error) {
 // work. The push runs after the sync, not under its lock: watcher and periodic
 // syncs keep writing the archive while a long push copies it, and each push
 // takes its cutoff under the archive write lock so later pushes pick those
-// writes up. Pushes still take turns (see pushTurn). Before the work it waits
-// for any running sync and flushes deferred signal recomputes, so the push
-// copies settled sessions.
+// writes up. Pushes take turns (see pushTurn), and a push takes its turn
+// before its own sync, so its archive rebuild never replaces the archive
+// while another push reads it. onWait, when set, is called if the push must
+// wait for its turn. Before the work it waits for any running sync and
+// flushes deferred signal recomputes, so the push copies settled sessions.
 //
 // Full and stale-archive pushes are archive-scale: with the worker-backed
 // resync runner wired they route the rebuild through the worker (matching
@@ -519,19 +519,20 @@ func (s *Server) syncThenRunForPush(
 	full bool,
 	watchBatch *syncpkg.WatchBatch,
 	watchRecovery *syncpkg.WatchRecoveryScope,
+	onWait func(),
 	work func(forceFull bool) error,
 ) error {
+	endTurn, err := s.pushTurn.take(ctx, onWait)
+	if err != nil {
+		return err
+	}
+	defer endTurn()
 	forceFull, incomplete, err := s.syncForPush(
 		ctx, engine, local, full, watchBatch, watchRecovery,
 	)
 	if err != nil {
 		return err
 	}
-	endTurn, err := s.pushTurn.take(ctx)
-	if err != nil {
-		return err
-	}
-	defer endTurn()
 	if err := engine.SettleForPush(ctx); err != nil {
 		return err
 	}
@@ -674,6 +675,12 @@ func (s *Server) humaReplicaPush(
 			var result storage.PushResult
 			err := s.syncThenRunForPush(
 				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
+				func() {
+					log.Printf("%s push: waiting for another push to finish", name)
+					if streamProgress != nil {
+						streamProgress(storage.PushProgress{Phase: storage.PushPhaseWaiting})
+					}
+				},
 				func(forceFull bool) error {
 					var err error
 					result, err = session.Push(ctx, storage.PushOptions{
@@ -737,6 +744,12 @@ func (s *Server) humaMirrorPush(
 			)
 			var result storage.MirrorPushResult
 			err := s.syncThenRunForPush(ctx, engine, local, body.Full, nil, nil,
+				func() {
+					log.Printf("%s push: waiting for another push to finish", name)
+					if streamProgress != nil {
+						streamProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaiting})
+					}
+				},
 				func(forceFull bool) error {
 					var pushErr error
 					result, pushErr = push.Push(ctx, forceFull, onProgress)

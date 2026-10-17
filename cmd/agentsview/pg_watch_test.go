@@ -519,12 +519,33 @@ func TestPgPusherErrorsNameTheFailedStep(t *testing.T) {
 	err := p.push(t.Context(), reasonChange, false)
 	require.ErrorIs(t, err, connectErr)
 	assert.Equal(t, "connect: connection refused", err.Error())
+	_, notStarted := errors.AsType[pushNotStartedError](err)
+	assert.True(t, notStarted, "a connect failure never reached the replica")
 
 	pushErr := errors.New("conn reset")
 	p, _ = newTestReplicaPusher(&fakeTarget{pushErr: pushErr})
 	err = p.push(t.Context(), reasonChange, false)
 	require.ErrorIs(t, err, pushErr)
 	assert.Equal(t, "push: conn reset", err.Error())
+	_, notStarted = errors.AsType[pushNotStartedError](err)
+	assert.False(t, notStarted, "a copy failure may have started a full push")
+}
+
+// The watch records the push stage with its own progress hook. A hook the
+// caller set must keep firing, once per stage.
+func TestPgPusherKeepsTheCallerStageHook(t *testing.T) {
+	p, _ := newTestReplicaPusher(&fakeTarget{})
+	var stages []archivepush.Stage
+	p.session.OnStage = func(s archivepush.Stage) func() {
+		stages = append(stages, s)
+		return nil
+	}
+	require.NoError(t, p.push(t.Context(), reasonChange, false))
+	require.NoError(t, p.push(t.Context(), reasonChange, false))
+	assert.Equal(t, []archivepush.Stage{
+		archivepush.StageConnect, archivepush.StageSchema, archivepush.StagePush,
+		archivepush.StageSchema, archivepush.StagePush,
+	}, stages)
 }
 
 func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
@@ -542,15 +563,6 @@ func TestPgPusher_ReconnectsAfterPushError(t *testing.T) {
 
 func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
 	requireReconnectAfterTargetError(t, &fakeTarget{ensureErr: errors.New("schema down")})
-}
-
-func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
-	p := testReplicaPusher(archivepush.ReplicaSession{
-		Connect: func(context.Context) (storage.Pusher, error) {
-			return nil, errors.New("dial timeout")
-		},
-	})
-	require.Error(t, p.push(t.Context(), reasonChange, false))
 }
 
 func TestPgPusher_LogsPartialPushErrors(t *testing.T) {

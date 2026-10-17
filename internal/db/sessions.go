@@ -6772,11 +6772,31 @@ func (db *DB) CountSessionsForMirrorScope(
 // is stamped at or after the cutoff. A cutoff read without the lock can fall
 // after the stamp of a write that commits only after the push lists sessions;
 // no later window would list that write.
-func (db *DB) MirrorPushCutoff() string {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	return time.Now().UTC().Format(mirrorWindowBoundLayout)
+//
+// It also waits while the writer is closed for a worker handoff. A sync-worker
+// child writes the archive then, outside this process's write lock, so a
+// cutoff taken during the handoff has the same gap. MirrorPushCutoff returns
+// ctx.Err() if ctx ends first.
+func (db *DB) MirrorPushCutoff(ctx context.Context) (string, error) {
+	for {
+		db.mu.Lock()
+		if !db.writerClosed.Load() {
+			cutoff := time.Now().UTC().Format(mirrorWindowBoundLayout)
+			db.mu.Unlock()
+			return cutoff, nil
+		}
+		db.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(writerHandoffPollInterval):
+		}
+	}
 }
+
+// writerHandoffPollInterval spaces MirrorPushCutoff's checks for the end of a
+// worker handoff. Handoffs last seconds to minutes.
+const writerHandoffPollInterval = 50 * time.Millisecond
 
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the

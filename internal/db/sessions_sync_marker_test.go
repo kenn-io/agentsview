@@ -3,10 +3,12 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -519,7 +521,10 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 	}
 	listed := make(chan listing, 1)
 	go func() {
-		database.MirrorPushCutoff()
+		if _, err := database.MirrorPushCutoff(ctx); err != nil {
+			listed <- listing{err: err}
+			return
+		}
 		sessions, err := database.ListSessionsForMirrorWindow(ctx, since, nil, nil)
 		ids := make([]string, 0, len(sessions))
 		for _, s := range sessions {
@@ -548,4 +553,77 @@ func TestMirrorPushCutoffCoversOpenWriteTransaction(t *testing.T) {
 
 	assert.Contains(t, got.ids, "written",
 		"the push must list the transaction that was open when it started")
+}
+
+// A sync-worker child writes the archive while this process has its writer
+// closed. A push that starts then must list the child's open transaction once
+// it commits, so the cutoff waits for the writer to reopen.
+func TestMirrorPushCutoffWaitsForWorkerHandoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		database := testDB(t)
+		ctx := t.Context()
+		insertSession(t, database, "child-written", "proj")
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+				local_modified_at = '2026-07-01T10:00:00.000Z' WHERE id = 'child-written'`)
+		require.NoError(t, err)
+		since := "2026-07-02T00:00:00Z"
+		stamp := "2026-07-03T00:00:00.000Z"
+
+		require.NoError(t, database.CloseWriter())
+		child, err := sql.Open(sqliteArchiveDriverName, makeDSN(database.path, false))
+		require.NoError(t, err)
+		defer child.Close()
+		tx, err := child.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx,
+			`UPDATE sessions SET local_modified_at = ? WHERE id = 'child-written'`, stamp)
+		require.NoError(t, err)
+
+		type listing struct {
+			ids []string
+			err error
+		}
+		listed := make(chan listing, 1)
+		go func() {
+			if _, err := database.MirrorPushCutoff(ctx); err != nil {
+				listed <- listing{err: err}
+				return
+			}
+			sessions, err := database.ListSessionsForMirrorWindow(ctx, since, nil, nil)
+			ids := make([]string, 0, len(sessions))
+			for _, s := range sessions {
+				ids = append(ids, s.ID)
+			}
+			listed <- listing{ids, err}
+		}()
+		// A push that ignores the handoff lists before the child commits.
+		synctest.Wait()
+		var got listing
+		received := false
+		select {
+		case got = <-listed:
+			received = true
+		default:
+		}
+		require.NoError(t, tx.Commit())
+		require.NoError(t, child.Close())
+		require.NoError(t, database.ReopenWriter())
+		if !received {
+			got = <-listed
+		}
+		require.NoError(t, got.err)
+		assert.Contains(t, got.ids, "child-written",
+			"the push must list the worker write that was open when it started")
+	})
+}
+
+func TestMirrorPushCutoffStopsWaitingWhenContextEnds(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.CloseWriter())
+	t.Cleanup(func() { require.NoError(t, database.ReopenWriter()) })
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := database.MirrorPushCutoff(ctx)
+	require.ErrorIs(t, err, context.Canceled)
 }

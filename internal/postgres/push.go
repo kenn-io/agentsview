@@ -421,7 +421,10 @@ func (s *Sync) pushWithOptions(
 	// Take the cutoff before any listing. A sync that commits after an
 	// earlier listing but stamps before the cutoff would otherwise be missed
 	// by this push and skipped by every later one.
-	cutoff := s.local.MirrorPushCutoff()
+	cutoff, err := s.local.MirrorPushCutoff(ctx)
+	if err != nil {
+		return result, err
+	}
 	if s.isFiltered() {
 		scopeMoveCandidates, scopeErr := listPGProjectScopeMoveCandidates(
 			ctx, s.local, lastPush,

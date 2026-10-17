@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -223,26 +224,27 @@ func TestLocalPushWatchOpensDispatchBeforeStartupPush(t *testing.T) {
 	}
 }
 
-// When startup sync fails, local owners keep dispatch closed and skip pushes
-// until a periodic local sync completes. The --full request survives the
-// failure: the first push after that resends every session, and later pushes
-// do not.
+// When startup sync fails, local owners keep dispatch closed, skip pushes,
+// and retry the startup sync, with its --full rebuild, until one completes.
+// The --full request survives the failure: the first push after that resends
+// every session, and later pushes do not.
 func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 	for _, owner := range localPushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(1)
 				hooks := h.hooks()
-				// The real startup sync reports a rebuild only when it
-				// finished, so a failure always reports none.
-				failedStartup := func(
+				var attempts atomic.Int32
+				hooks.startupSync = func(
 					_ context.Context, _ *syncpkg.Engine, full bool,
 				) (bool, error) {
 					h.record("startup-sync")
-					assert.True(t, full, "startup sync must get the --full request")
-					return false, errors.New("startup sync discovery incomplete")
+					assert.True(t, full, "each startup sync attempt must get the --full request")
+					if attempts.Add(1) == 1 {
+						return false, errors.New("startup sync discovery incomplete")
+					}
+					return false, nil
 				}
-				hooks.startupSync = failedStartup
 				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
@@ -265,6 +267,8 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 				time.Sleep(localPushWatchTestDebounce)
 				synctest.Wait()
 				receiveArchiveTest(t, h.opened)
+				assert.Equal(t, int32(2), attempts.Load(),
+					"the retry reruns the startup sync, so a rebuild it needs still runs")
 
 				h.fire <- time.Now()
 				first := receiveArchiveTest(t, h.attempts)
@@ -283,8 +287,56 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 	}
 }
 
-// A periodic local sync queues a push only when it writes the archive, or
-// when it is the first complete sync and startup never pushed.
+// A startup rebuild can replace the archive and still report failures. The
+// watch must then make its first push full, because only a full push removes
+// remote rows that the rebuild dropped. A --full retry must not rebuild the
+// archive a second time.
+func TestLocalPushWatchPushesFullAfterStartupRebuildWithFailures(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		for _, owner := range localPushWatchOwnerCases(t) {
+			t.Run(fmt.Sprintf("%s full=%t", owner.name, full), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					h := newPushWatchOwnerHarness()
+					hooks := h.hooks()
+					var fullArgs []bool
+					hooks.startupSync = func(
+						ctx context.Context, _ *syncpkg.Engine, fullArg bool,
+					) (bool, error) {
+						fullArgs = append(fullArgs, fullArg)
+						if len(fullArgs) == 1 {
+							require.NoError(t, owner.database.SetDatabaseIDForTest(ctx, "rebuilt"))
+							return false, errors.New("startup sync processing incomplete")
+						}
+						return false, nil
+					}
+					run := owner.run
+					if full {
+						run = owner.runFull
+					}
+					ctx, cancel := context.WithCancel(t.Context())
+					t.Cleanup(cancel)
+					done := make(chan error, 1)
+					go func() { done <- run(ctx, hooks) }()
+
+					synctest.Wait()
+					time.Sleep(localPushWatchTestDebounce)
+					synctest.Wait()
+					receiveArchiveTest(t, h.opened)
+					h.fire <- time.Now()
+					first := receiveArchiveTest(t, h.attempts)
+					assert.True(t, first.full, "the first push after a rebuild must be full")
+					assert.Equal(t, []bool{full, false}, fullArgs,
+						"a retry after a rebuild must not rebuild again")
+
+					cancel()
+					require.NoError(t, receiveArchiveTest(t, done))
+				})
+			})
+		}
+	}
+}
+
+// A periodic local sync queues a push only when it writes the archive.
 func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	codexRoot := t.TempDir()
@@ -295,6 +347,7 @@ func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	lane := &archiveSyncLane{
 		label: "test watch", engine: engine, openDispatch: func() {},
 	}
+	lane.ready.Store(true)
 	newLoop := func() {
 		loop, ticker := newPushLoopWithLabel("test watch", time.Hour, time.Hour,
 			func(context.Context, pushReason, *syncpkg.WatchBatch) error { return nil })
@@ -308,8 +361,8 @@ func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	ctx := t.Context()
 
 	newLoop()
+	// The first sync of a new archive records its baseline.
 	lane.syncAll(ctx)
-	assert.True(t, queued(), "the first complete sync queues the skipped push")
 
 	newLoop()
 	lane.syncAll(ctx)
@@ -375,6 +428,30 @@ func TestArchiveSyncLaneSettlesBeforePush(t *testing.T) {
 	require.NoError(t, <-syncDone)
 	require.NoError(t, <-pushDone)
 	assert.True(t, pushed.Load())
+}
+
+// A --full push that fails before it reaches the destination recorded no
+// full push to resume, so the next push stays full. A push that fails after
+// it started resumes on its own, so asking for full again would restart it.
+func TestArchiveSyncLaneKeepsFullUntilAPushReachesTheDestination(t *testing.T) {
+	lane := &archiveSyncLane{label: "test watch", openDispatch: func() {}}
+	lane.fullPending.Store(true)
+	var fullArgs []bool
+	push := func(results ...error) {
+		for _, result := range results {
+			err := lane.push(t.Context(), reasonChange, nil, func(
+				_ context.Context, _ pushReason, full bool, _ *syncpkg.WatchBatch,
+			) error {
+				fullArgs = append(fullArgs, full)
+				return result
+			})
+			require.ErrorIs(t, err, result)
+		}
+	}
+	unreachable := errors.New("daemon unreachable")
+	copyFailed := errors.New("copy failed")
+	push(pushNotStartedError{unreachable}, copyFailed, copyFailed)
+	assert.Equal(t, []bool{true, true, false}, fullArgs)
 }
 
 // Shutdown stops the watcher before the final push. A watcher batch can hold

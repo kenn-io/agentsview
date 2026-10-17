@@ -112,7 +112,7 @@ func postDaemonPush[T, P any](
 		}
 		resp, payload, stream, err := operation(ctx, api, &body)
 		if resp == nil {
-			return zero, err
+			return zero, pushNotStartedError{err}
 		}
 		if resp.StatusCode != http.StatusOK {
 			msg := payload
@@ -124,7 +124,8 @@ func postDaemonPush[T, P any](
 				fallbackAttempted = true
 				continue
 			}
-			return zero, errors.New(daemonErrorMessage(resp.StatusCode, msg))
+			// The daemon answers before it starts the push.
+			return zero, pushNotStartedError{errors.New(daemonErrorMessage(resp.StatusCode, msg))}
 		}
 		defer resp.Body.Close()
 		if strings.HasPrefix(
