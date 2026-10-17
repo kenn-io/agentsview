@@ -1648,9 +1648,6 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil, ""},
 			{"busy", syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress, "sync_running"},
 		} {
-			if path == "/api/v1/resync" && tc.code != "" {
-				continue
-			}
 			t.Run(path+"/"+tc.name, func(t *testing.T) {
 				runner := func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) { return tc.stats, tc.err }
 				f := newSyncRouteFixture(t, withLocalSyncRunner(runner), withLocalResyncRunner(runner))

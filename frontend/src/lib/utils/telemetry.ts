@@ -27,7 +27,7 @@ export function reportTelemetry(
   }).catch(() => {});
 }
 
-export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export";
+export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export" | "other";
 export type SyncFailureReason =
   | "request"
   | "sign_in_required"

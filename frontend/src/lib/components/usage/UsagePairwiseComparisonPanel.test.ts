@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
@@ -149,6 +151,14 @@ describe("UsagePairwiseComparisonPanel", () => {
     usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+  });
+
+  it("reports the analytics kind for a visible comparison error", async () => {
+    usage.errors.pairwise = "Comparison failed";
+    const component = mount(UsagePairwiseComparisonPanel, { target: document.body });
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+    unmount(component);
   });
 
   it.each(["first default", "comparison before totals", "remembered refresh"] as const)(

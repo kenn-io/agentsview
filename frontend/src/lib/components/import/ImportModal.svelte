@@ -12,7 +12,7 @@
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
-  import { ApiError, isAbortError, isRemoteConnection } from "../../api/runtime.js";
+  import { ApiError, isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -133,11 +133,9 @@
     syncController = controller;
     try {
       const stats = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
-      if (!controller.signal.aborted) {
-        result = stats;
-      }
+      if (!controller.signal.aborted) result = stats;
     } catch (e) {
-      if (controller.signal.aborted || isAbortError(e)) return;
+      if (controller.signal.aborted) return;
       reportSyncFailed(e);
       if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
         return;

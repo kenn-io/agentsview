@@ -68,7 +68,7 @@ function streamSyncSSE(
         if (event === "done") return JSON.parse(data);
         if (event === "error") {
           const failure = JSON.parse(data);
-          throw new ApiError(response.status, failure.error ?? "Sync failed", failure.code);
+          throw new ApiError(failure.code === "sync_running" ? 409 : 500, failure.error ?? "Sync failed", failure.code);
         }
       },
       "Sync stream ended without done event",

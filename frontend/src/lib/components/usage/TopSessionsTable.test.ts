@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import { testMoney } from "../../test/money.js";
@@ -19,6 +21,14 @@ afterEach(() => {
 });
 
 describe("TopSessionsTable", () => {
+  it("reports the analytics kind for a visible ranking error", async () => {
+    usage.errors.topSessions = "Ranking failed";
+    component = mount(TopSessionsTable, { target: document.body });
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+    usage.errors.topSessions = null;
+  });
+
   it("renders and labels the selected output-token ranking", async () => {
     usage.mode = "token";
     usage.setSelectedTokenTypes(["output"]);
