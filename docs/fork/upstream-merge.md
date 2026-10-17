@@ -108,18 +108,37 @@ fork 给共享接口加的方法（例如 `db.Store.GetInputOutline`）要在 up
   upstream 的 Pull Requests 一节有"除非用户要求，不要监控 GitHub Actions"的两条
   规则，与它相反，合并时不要把这两条加回来。
 
-### CI workflow 在 fork 里的跳过条件
+### CI workflow 的 runner
 
-fork 在 `ci.yml` 和 `cjk-fts.yml` 的每个 job 上加了
-`if: github.repository == 'kenn-io/agentsview'`。这两个 workflow 用的 Namespace
-runner 只有 upstream 有，不加的话，fork 里的 job 会一直排队，直到 GitHub 取消。
-`fork-checks.yml` 在 GitHub 托管 runner 上跑其中的 lint、Go、脚本、前端和 CJK FTS
-检查。
+Namespace runner 只有 upstream 有，fork 里用它的 job 会一直排队，直到 GitHub
+取消。fork 分两种情况处理：
 
-upstream 从 #2236（`65006001`）起把这些 job 全部改到了 GitHub 托管 runner。合并
-到包含 #2236 的 upstream 时：
+- `ci.yml` 和 `cjk-fts.yml` 的每个 job 加了
+  `if: github.repository == 'kenn-io/agentsview'`，在 fork 里跳过。
+  `fork-checks.yml` 在 GitHub 托管 runner 上跑其中的 lint、Go、脚本、前端和 CJK
+  FTS 检查。
+- 桌面安装包（`desktop-artifacts.yml`、`desktop-artifacts-pr.yml` 和
+  `.github/actions/build-desktop-artifact`）、`ci-macos-main.yml`、`fuzz.yml` 和
+  `msys2-update-check.yml` 已经改用 GitHub 托管 runner。`msys2-update-check.yml`
+  直接取自 upstream main，其余文件只移植了 upstream #2236 的改动。没有跟进
+  #2242：它让桌面构建跳过 Windows 上的 Rust 测试，而 fork 跳过了 `ci.yml`，这些
+  测试只在桌面构建里运行。
+- `.github/actionlint.yaml` 保留，因为 `ci.yml` 和 `cjk-fts.yml` 仍引用 Namespace
+  标签。
 
-1. `ci.yml` 和 `cjk-fts.yml` 取 upstream 的版本，不再保留这些 `if` 条件。
+fork 只通过命令行安装 AgentsView，不发布桌面安装包，所以 `desktop-artifacts.yml`
+和 `desktop-macos-main.yml` 的 `build` job 也加了同样的 `if` 条件，在 fork 里跳过。
+PR 上的桌面构建通过 `desktop-artifacts-pr.yml` 调用 `desktop-artifacts.yml`，所以
+一并跳过。这个跳过和 Namespace 无关；需要桌面安装包时，去掉这两处 `if` 即可，它们
+已经使用托管 runner。
+
+upstream 从 #2236（`65006001`）起把所有 job 改到了 GitHub 托管 runner。合并到包含
+#2236 的 upstream 时：
+
+1. 上面列出的 workflow 和 action 都取 upstream 的版本，`ci.yml` 和 `cjk-fts.yml`
+   不再保留 `if` 条件；`.github/actionlint.yaml` 随 upstream 删除。
+1. 只要 fork 仍不需要桌面安装包，就在 upstream 版本的 `desktop-artifacts.yml` 和
+   `desktop-macos-main.yml` 上重新加回 `build` job 的 `if` 条件。
 1. 删掉 `fork-checks.yml` 里和 upstream CI 重复的 job。整个 workflow 都重复时，
    删掉这个文件，并更新上文"基本做法"里提到它的那句话。
 
