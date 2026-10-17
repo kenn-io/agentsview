@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
@@ -79,7 +82,7 @@ type daemonRuntimeStore struct {
 
 func runtimeStore(dataDir string) daemonRuntimeStore {
 	return daemonRuntimeStore{
-		Dir:       runtimeDir(dataDir),
+		Dir:       config.RuntimeDir(dataDir),
 		legacyDir: dataDir,
 	}
 }
@@ -93,7 +96,14 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(records, legacy...), nil
+	records = append(records, legacy...)
+	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
+		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.PID, b.PID)
+	})
+	return records, nil
 }
 
 func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
@@ -964,7 +974,7 @@ func isDaemonStarting(dataDir string) bool {
 }
 
 func daemonStartingWithLockProbe(dataDir string, external bool) bool {
-	if runtimeDir(dataDir) != dataDir {
+	if config.RuntimeDir(dataDir) != dataDir {
 		// Remove this bridge the release after the Windows runtime subdirectory ships.
 		path := filepath.Join(dataDir, "daemon.lock")
 		if _, err := os.Stat(path); err == nil {
