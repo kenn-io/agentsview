@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +103,37 @@ func TestCoreActionAllowlist(t *testing.T) {
 		}
 		i++
 	}
+}
+
+func TestSetupFinishedCapture(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+	var payload struct {
+		Batch []struct {
+			Event      string         `json:"event"`
+			Properties map[string]any `json:"properties"`
+		} `json:"batch"`
+	}
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		assert.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+	reporter := captureReporter(t, collector.URL, Options{})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, reporter.CaptureSetupFinished(ctx), context.Canceled)
+	require.NoError(t, reporter.CaptureSetupFinished(t.Context()))
+	require.NoError(t, reporter.Close())
+	require.Len(t, payload.Batch, 1)
+	assert.Equal(t, "setup_finished", payload.Batch[0].Event)
+	assert.Equal(t, "agentsview", payload.Batch[0].Properties["application"])
+	assert.Equal(t, "daemon", payload.Batch[0].Properties["source"])
+	assert.NotContains(t, payload.Batch[0].Properties, "session")
+	props, err := reporter.SanitizeProperties(EventSetupFinished, map[string]any{"session": "private content"})
+	require.NoError(t, err)
+	assert.NotContains(t, props, "session")
+	require.Error(t, DisabledReporter().CaptureSetupFinished(t.Context()))
 }
 
 func TestScreenViewWithoutScreenLeavesValidRetry(t *testing.T) {

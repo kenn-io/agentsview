@@ -24,6 +24,12 @@ The latest release is
 
 **New features**
 
+- Anonymous usage reports now distinguish installs waiting for their first
+  session. The server sends `setup_finished` once per installation when the
+  archive has a session with messages, excluding subagents, forks, and trash.
+  The event follows the existing telemetry opt-out and includes no session
+  details.
+
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which

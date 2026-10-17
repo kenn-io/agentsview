@@ -17,6 +17,7 @@ const (
 	GenericEnabledEnv     = kittelemetry.GenericEnabledEnv
 	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive     = "daemon_active"
+	EventSetupFinished    = "setup_finished"
 	EventAppOpened        = "app_opened"
 	EventVisitEnded       = "visit_ended"
 	EventScreenViewed     = "screen_viewed"
@@ -108,6 +109,21 @@ func (r *Reporter) EventAllowed(event string) bool {
 	return r != nil && r.client != nil && r.client.EventAllowed(event)
 }
 
+// CaptureSetupFinished queues the daemon's first readable archive milestone.
+func (r *Reporter) CaptureSetupFinished(ctx context.Context) error {
+	if !r.Enabled() {
+		return errors.New("telemetry disabled")
+	}
+	status, err := r.client.Report(ctx, EventSetupFinished, nil)
+	if err != nil {
+		return err
+	}
+	if status != kittelemetry.StatusQueued {
+		return errors.New("setup telemetry was not queued")
+	}
+	return nil
+}
+
 // CaptureHandler lets the web UI report allowlisted events through this reporter.
 func (r *Reporter) CaptureHandler() http.Handler {
 	var client *kittelemetry.Reporter
@@ -154,6 +170,7 @@ func newKitReporter(opts Options) (*kittelemetry.Reporter, error) {
 func allowedEventOptions(opts Options) []kittelemetry.Option {
 	return []kittelemetry.Option{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
+		kittelemetry.WithAllowedEvent(EventSetupFinished),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),

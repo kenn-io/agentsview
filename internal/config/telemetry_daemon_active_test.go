@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -112,4 +113,84 @@ func TestClaimDaemonActiveConcurrent(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.EqualValues(t, 1, sends.Load())
+}
+
+func TestClaimSetupFinished(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, telemetrySetupFinishedFilename)
+	queueErr := errors.New("queue full")
+	for _, tc := range []struct {
+		name, id, record string
+		sendErr          error
+		wantSent         bool
+	}{
+		{"failed first send", "install-one", "", queueErr, true},
+		{"first content", "install-one", "install-one\n", nil, true},
+		{"restart", "install-one", "install-one\n", nil, false},
+		{"changed identity fails", "install-two", "install-one\n", queueErr, true},
+		{"changed identity retries", "install-two", "install-two\n", nil, true},
+	} {
+		cfg := Config{DataDir: dir, InstallationID: tc.id}
+		sent := false
+		err := cfg.ClaimSetupFinished(func() error {
+			sent = true
+			return tc.sendErr
+		})
+		require.ErrorIs(t, err, tc.sendErr, tc.name)
+		assert.Equal(t, tc.wantSent, sent, tc.name)
+		if tc.record == "" {
+			assert.NoFileExists(t, path)
+		} else {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.record, string(data))
+		}
+	}
+}
+
+func TestClaimSetupFinishedConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	var wg sync.WaitGroup
+	var sends atomic.Int32
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			cfg := Config{DataDir: dir, InstallationID: "install-one"}
+			errs <- cfg.ClaimSetupFinished(func() error {
+				sends.Add(1)
+				return nil
+			})
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.EqualValues(t, 1, sends.Load())
+}
+
+func TestClaimSetupFinishedAcrossProcesses(t *testing.T) {
+	if dir := os.Getenv("AGENTSVIEW_TEST_SETUP_CLAIM_DIR"); dir != "" {
+		cfg := Config{DataDir: dir, InstallationID: "install-one"}
+		require.NoError(t, cfg.ClaimSetupFinished(func() error {
+			file, err := os.OpenFile(filepath.Join(dir, "sent"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			_, err = file.WriteString("setup_finished\n")
+			return errors.Join(err, file.Close())
+		}))
+		return
+	}
+	dir := t.TempDir()
+	for range 2 {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClaimSetupFinishedAcrossProcesses$")
+		cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_SETUP_CLAIM_DIR="+dir)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "sent"))
+	require.NoError(t, err)
+	assert.Equal(t, "setup_finished\n", string(data))
 }

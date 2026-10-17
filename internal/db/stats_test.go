@@ -7,6 +7,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHasReadableSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session *Session
+		want    bool
+	}{
+		{name: "empty archive"},
+		{name: "empty session", session: &Session{}},
+		{name: "subagent", session: &Session{MessageCount: 1, RelationshipType: "subagent"}},
+		{name: "fork", session: &Session{MessageCount: 1, RelationshipType: "fork"}},
+		{name: "trash", session: &Session{MessageCount: 1, DeletedAt: new("2026-01-01T00:00:00Z")}},
+		{name: "root", session: &Session{MessageCount: 1}, want: true},
+		{name: "continuation", session: &Session{MessageCount: 1, RelationshipType: "continuation"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			if tc.session != nil {
+				insertSession(t, d, "session-one", "project-a", func(s *Session) {
+					s.MessageCount = tc.session.MessageCount
+					s.RelationshipType = tc.session.RelationshipType
+				})
+				if tc.session.DeletedAt != nil {
+					require.NoError(t, d.SoftDeleteSession(t.Context(), "session-one"))
+				}
+			}
+			got, err := d.HasReadableSessions(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestFileBackedSessionCount_ExcludesNonDevinNonFileBackedAgents(
 	t *testing.T,
 ) {
