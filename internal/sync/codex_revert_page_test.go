@@ -142,7 +142,7 @@ func writeCodexUsagePageAs(t *testing.T, root string, page int, crossDay, previo
 		))
 }
 
-func TestCodexReturningLegacyPageRemovesStaleRolloutRow(t *testing.T) {
+func TestCodexRetainedMisfiledRowGuardAllowsLegacyPage(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
 	path := writeCodexLegacyUsagePage(t, root, 1, false, false)
@@ -156,7 +156,7 @@ func TestCodexReturningLegacyPageRemovesStaleRolloutRow(t *testing.T) {
 		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "Request 1"},
 		{SessionID: oldID, Ordinal: 1, Role: "assistant", Content: "Response 1"},
 	}))
-	// A retained row can predate the archive's current parser version.
+	// The retained-misfiled-row guard must let a legacy page be reparsed.
 	dbPath := database.Path()
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", dbPath)

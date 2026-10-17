@@ -9,12 +9,16 @@ import (
 )
 
 func TestCodexSessionIdentityIgnoresForeignMetadata(t *testing.T) {
-	for _, laterID := range []string{"other-thread", ""} {
-		t.Run("later_id="+laterID, func(t *testing.T) {
+	for _, tc := range []struct{ name, firstID, laterID, cwd, branch string }{
+		{"foreign_id", "own-thread", "other-thread", "/work/project-a", "feature-a"},
+		{"empty_later_id", "own-thread", "", "/work/project-a", "feature-a"},
+		{"empty_first_id", "", "own-thread", "/work/project-b", "feature-b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			content := testjsonl.JoinJSONL(
-				`{"type":"session_meta","payload":{"id":"own-thread","cwd":"/work/project-a","git":{"branch":"feature-a"}}}`,
+				testjsonl.CodexSessionMetaWithFieldsJSON(tc.firstID, "/work/project-a", "user", tsEarly, map[string]any{"git": map[string]any{"branch": "feature-a"}}),
 				testjsonl.CodexMsgJSON("user", "own question", tsEarly),
-				testjsonl.CodexSessionMetaWithFieldsJSON(laterID, "/work/project-b", "codex_exec", tsEarlyS1, map[string]any{
+				testjsonl.CodexSessionMetaWithFieldsJSON(tc.laterID, "/work/project-b", "codex_exec", tsEarlyS1, map[string]any{
 					"git":              map[string]any{"branch": "feature-b"},
 					"parent_thread_id": "other-parent", "thread_source": "subagent",
 				}),
@@ -23,26 +27,16 @@ func TestCodexSessionIdentityIgnoresForeignMetadata(t *testing.T) {
 			sess, msgs := runCodexParserTest(t, "restored.jsonl", content, false)
 			require.NotNil(t, sess)
 			assert.Equal(t, "codex:own-thread", sess.ID)
-			assert.Equal(t, "/work/project-a", sess.Cwd)
-			assert.Equal(t, "feature-a", sess.GitBranch)
-			assert.Empty(t, sess.ParentSessionID)
-			assert.Empty(t, sess.RelationshipType)
-			assert.Empty(t, sess.SessionKind)
+			assert.Equal(t, tc.cwd, sess.Cwd)
+			assert.Equal(t, tc.branch, sess.GitBranch)
+			if tc.firstID != "" {
+				assert.Empty(t, sess.ParentSessionID)
+				assert.Empty(t, sess.RelationshipType)
+				assert.Empty(t, sess.SessionKind)
+			}
 			require.Len(t, msgs, 2)
 			assert.Equal(t, "own question", msgs[0].Content)
 			assert.Equal(t, "own answer", msgs[1].Content)
 		})
 	}
-}
-
-func TestCodexSessionIdentityUsesFirstNonemptyID(t *testing.T) {
-	content := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON("", "/work/project-a", "user", tsEarly),
-		testjsonl.CodexSessionMetaJSON("own-thread", "/work/project-b", "user", tsEarlyS1),
-		testjsonl.CodexMsgJSON("user", "question", tsEarlyS5),
-	)
-	sess, _ := runCodexParserTest(t, "restored.jsonl", content, false)
-	require.NotNil(t, sess)
-	assert.Equal(t, "codex:own-thread", sess.ID)
-	assert.Equal(t, "/work/project-b", sess.Cwd)
 }

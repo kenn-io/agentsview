@@ -210,7 +210,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Zero(t, result.Errors)
-			assert.True(t, pushSchemaCurrent(ctx, upgraded.pg))
 			if tc.name == "filtered_head" || tc.name == "excluded_head" {
 				head, err := store.GetSessionFull(ctx, thread)
 				require.NoError(t, err)

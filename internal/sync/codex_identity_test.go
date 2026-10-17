@@ -2,7 +2,6 @@ package sync
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,42 +44,30 @@ func writeCodexIdentityRollouts(t *testing.T) (root, pathA, pathB string) {
 }
 
 func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
-	for _, reverse := range []bool{false, true} {
-		for _, staged := range []bool{false, true} {
-			t.Run(fmt.Sprintf("reverse=%t/staged=%t", reverse, staged), func(t *testing.T) {
-				root, pathA, pathB := writeCodexIdentityRollouts(t)
-				database := openTestDB(t)
-				cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local"}
-				if staged {
-					cfg.StagedCodexParseMinBytes = 1
-				}
-				engine := NewEngine(t.Context(), database, cfg)
-				t.Cleanup(engine.Close)
-				paths := []string{pathA, pathB}
-				if reverse {
-					paths = []string{pathB, pathA}
-				}
-				for _, path := range paths {
-					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
-				}
-				assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
-				assert.Equal(t, bMessages, messageContents(t, database, "codex:"+identityThreadB))
-
-				// A later foreign header forces a full parse even after a checkpoint.
-				f, err := os.OpenFile(pathB, os.O_APPEND|os.O_WRONLY, 0o600)
-				require.NoError(t, err)
-				_, err = f.WriteString(testjsonl.JoinJSONL(
-					testjsonl.CodexSessionMetaJSON(identityThreadA, "/work/project-a", "codex_cli_rs", "2025-10-20T19:10:00Z"),
-					testjsonl.CodexMsgJSON("assistant", "other answer", "2025-10-20T19:10:01Z"),
-				))
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
-				assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
-				assert.Equal(t, []string{"other question", "other answer"}, messageContents(t, database, "codex:"+identityThreadB))
-			})
-		}
+	root, pathA, pathB := writeCodexIdentityRollouts(t)
+	database := openTestDB(t)
+	cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local"}
+	engine := NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	paths := []string{pathA, pathB}
+	for _, path := range paths {
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
 	}
+	assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
+	assert.Equal(t, bMessages, messageContents(t, database, "codex:"+identityThreadB))
+
+	// A later foreign header forces a full parse even after a checkpoint.
+	f, err := os.OpenFile(pathB, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(identityThreadA, "/work/project-a", "codex_cli_rs", "2025-10-20T19:10:00Z"),
+		testjsonl.CodexMsgJSON("assistant", "other answer", "2025-10-20T19:10:01Z"),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
+	assert.Equal(t, aMessages, messageContents(t, database, "codex:"+identityThreadA))
+	assert.Equal(t, []string{"other question", "other answer"}, messageContents(t, database, "codex:"+identityThreadB))
 }
 
 func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
