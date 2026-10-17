@@ -14227,13 +14227,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// shares it, or when any alternate identity for the path (the
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
-		suppress, err := e.codexRolloutDeleted(ctx, agent, currentPrefixedID, lookupPath)
-		if err != nil {
-			res.err = err
-			res.noCacheSkip = true
-			res.results = kept[:0]
-			return
-		}
+		suppress := false
 		for _, agentStr := range agentsToQuery {
 			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
 				suppress = true
@@ -14277,25 +14271,12 @@ func (e *Engine) applyProviderFilePathPolicies(
 			if id == currentID || id == currentPrefixedID {
 				continue
 			}
-			// A retained misfiled transcript keeps its ID until a rebuild proves its owner.
-			if isCodexFormatAgent(agent) && e.db.IsRetainedMisfiledCodexRow(ctx, id) {
-				continue
-			}
 			addExclusion(id)
 		}
 		kept = append(kept, result)
 	}
 	res.results = kept
 	e.stageProviderStatHash(agent, filePath, res)
-}
-
-// codexRolloutDeleted reports whether a Codex-format source belongs to a
-// rollout the user trashed or permanently deleted, under any ID or path form.
-func (e *Engine) codexRolloutDeleted(ctx context.Context, agent parser.AgentType, sessionID, path string) (bool, error) {
-	if !isCodexFormatAgent(agent) {
-		return false, nil
-	}
-	return e.db.HasDeletedCodexRollout(ctx, sessionID, path)
 }
 
 // stageProviderStatHash stages the per-component provider_freshness digest for

@@ -586,19 +586,13 @@ fixtures retain this field; missing identities remain source-local.
   [persistence policy](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/rollout/policy.rs#L6-L15).
   Its
   [metadata schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/protocol.rs#L971-L980)
-  has no `forked_from_id`. AgentsView keeps the first nonempty metadata ID
-  and ignores later metadata with a different or empty ID. Same-thread
-  metadata can still update the working directory and branch; existing fork
-  replay filtering and revert-page identities remain in effect. This establishes
-  a producer path for the shape reported in
-  [issue #2248](https://github.com/kenn-io/agentsview/issues/2248);
-  the particular file's history remains unverified.
-  Archive corrections reverified on 2026-10-17 with a missing intermediate
-  rollout, identical pinned messages, and corrections spanning PostgreSQL push
-  batches. Retained transcripts keep their own project evidence. PostgreSQL
-  snapshots the full correction chain and clears outgoing pins before restoring
-  each note to its corrected session. Deletion checks also cover non-ASCII host
-  prefixes after a rollout moves or becomes compressed.
+  has no `forked_from_id`. AgentsView keeps the first nonempty metadata ID and
+  ignores later metadata with a different or empty ID. Same-thread metadata can
+  still update the working directory and branch; existing fork replay filtering
+  and revert-page identities remain in effect. This establishes a producer path
+  for the shape reported in
+  [issue #2248](https://github.com/kenn-io/agentsview/issues/2248); the
+  particular file's history remains unverified.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

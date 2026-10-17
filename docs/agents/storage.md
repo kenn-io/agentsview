@@ -181,27 +181,15 @@ pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
 name kept with each deletion when the file is gone. Session and recall imports
 use the same exclusion check.
 
-Data version 137 separates misfiled Codex threads when the fresh parse confirms
-which rollout owns each ID. A moved file matches by rollout file name, including
-changes between `.jsonl` and `.jsonl.zst`. If the file is gone, its transcript
-moves only when another rollout now owns the old ID; otherwise the archived row
-keeps its ID. If that file returns later, normal sync keeps the saved row and
-its metadata under that ID alongside the freshly parsed thread. The next
-rebuild then moves that row's metadata to the thread, judging each retained
-row by the parser version that stored it.
-Pins, Recall entries, and export message IDs follow the corrected
-transcript. For live sessions, names and stars stay on a surviving original
-thread; when it is absent, they follow the corrected transcript. Trash and
-permanent deletions continue to hide the affected threads. A trashed misfiled
-transcript stays under its saved ID; its saved rollout file name also hides the
-other rollout, including after a move or compression. Permanent deletion
-excludes the corrected thread only if the fresh parse produced it from that
-rollout. With that file missing, the deletion stays
-on its saved ID. Its saved rollout file name also suppresses a later return,
-including after a move or compression.
-An archive-only capture keeps its old ID when retained-source
-reparse would change it; its archived transcript remains available. PostgreSQL
-pins move on the next push, including a push of only the corrected thread.
+Data version 137 rebuilds the archive so each Codex rollout keeps its first
+session metadata ID. During this upgrade, pins, Recall entries and export
+message IDs follow a misfiled transcript only when a fresh parse at its exact
+stored path proves the corrected thread. Names and stars stay on a surviving
+original thread. Missing, moved or compressed files, trashed or deleted misfiled
+rows, and chains of misfiled rows follow the existing rebuild behavior. If
+another file reparses under the saved ID, its messages replace the old
+transcript. PostgreSQL-only pins on a misfiled row's messages are dropped on the
+next push.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

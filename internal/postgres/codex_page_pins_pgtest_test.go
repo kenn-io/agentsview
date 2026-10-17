@@ -4,9 +4,7 @@ package postgres
 
 import (
 	"database/sql"
-	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,11 +16,6 @@ import (
 func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 	for _, tc := range []struct{ name, prefix, agent string }{
 		{"full_push", "codex:", "codex"},
-		{"misfiled_thread", "codex:", "codex"},
-		{"misfiled_thread_only", "codex:", "codex"},
-		{"misfiled_thread_only_moved", "codex:", "codex"},
-		{"misfiled_thread_only_compressed", "codex:", "codex"},
-		{"misfiled_thread_only_uncompressed", "codex:", "codex"},
 		{"head_first", "host~traex:", "traex"},
 		{"page_first", "augure-code:", "augure-code"},
 		{"page_only", "codex:", "codex"},
@@ -42,11 +35,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			const threadUUID = "11111111-1111-4111-8111-111111111111"
 			thread := tc.prefix + threadUUID
 			page := thread + "_22222222-2222-4222-8222-222222222222"
-			version := 130
-			if strings.HasPrefix(tc.name, "misfiled_thread") {
-				page = tc.prefix + "22222222-2222-4222-8222-222222222222"
-				version = 135
-			}
 			const schema = "agentsview_codex_page_pin_test"
 			ctx := t.Context()
 			pgURL := testPGURL(t)
@@ -55,12 +43,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+threadUUID+"_22222222-2222-4222-8222-222222222222.jsonl")
-			if strings.HasPrefix(tc.name, "misfiled_thread") {
-				pagePath = filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
-			}
-			if tc.name == "misfiled_thread_only_uncompressed" {
-				pagePath += ".zst"
-			}
 			headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
 			require.NoError(t, source.UpsertSession(ctx, db.Session{
 				ID: thread, Agent: tc.agent, Project: "sample", Machine: "machine",
@@ -69,7 +51,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NoError(t, source.InsertMessages(ctx, []db.Message{{
 				SessionID: thread, Role: "assistant", Content: "answer saved only on page", SourceUUID: "page-answer",
 			}}))
-			require.NoError(t, source.SetSessionDataVersion(ctx, thread, version))
+			require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
 			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -93,7 +75,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NoError(t, source.Close())
 			raw, err := sql.Open("sqlite3", sourcePath)
 			require.NoError(t, err)
-			_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version))
+			_, err = raw.ExecContext(ctx, "PRAGMA user_version = 130")
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 
@@ -104,19 +86,8 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				{thread, headPath, "original answer", "head-answer"},
 				{page, pagePath, "answer saved only on page", "page-answer"},
 			} {
-				if (tc.name == "page_only" || strings.HasPrefix(tc.name, "misfiled_thread_only")) && row.id == thread {
+				if tc.name == "page_only" && row.id == thread {
 					continue
-				}
-				if row.id == page {
-					if tc.name == "misfiled_thread_only_moved" {
-						row.path = filepath.Join(t.TempDir(), "archived_sessions", filepath.Base(row.path))
-					}
-					if tc.name == "misfiled_thread_only_compressed" {
-						row.path += ".zst"
-					}
-					if tc.name == "misfiled_thread_only_uncompressed" {
-						row.path = strings.TrimSuffix(row.path, ".zst")
-					}
 				}
 				if tc.name == "changed_page" && row.id == page {
 					row.content, row.uuid = "unrelated replacement", "replacement-answer"
@@ -194,7 +165,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					require.True(t, result.ok)
 				}
 			}
-
 			result, err = upgraded.Push(ctx, true, nil)
 			if blocked {
 				require.Error(t, err)
@@ -234,11 +204,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				assert.Empty(t, after, "a removed message must not pin an unrelated replacement")
 				return
 			}
-			if strings.HasPrefix(tc.name, "misfiled_thread_only") {
-				old, err := store.GetSessionFull(ctx, thread)
-				require.NoError(t, err)
-				assert.Nil(t, old, "the duplicate remote transcript must be retired")
-			}
 			require.Len(t, after, 1, "the remote-only pin must survive the page split and a later full push")
 			wantSession := page
 			if tc.name == "other_owner" {
@@ -252,163 +217,5 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NotNil(t, after[0].Content)
 			assert.Equal(t, "answer saved only on page", *after[0].Content)
 		})
-	}
-}
-
-func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
-	testCodexChainedPins(t, false, false)
-}
-
-func TestCodexChainedIdenticalMessagesPreservePostgresPins(t *testing.T) {
-	testCodexChainedPins(t, true, false)
-}
-
-func TestCodexChainedPostgresPinsAcrossBatches(t *testing.T) {
-	testCodexChainedPins(t, false, true)
-}
-
-func testCodexChainedPins(t *testing.T, identical, separateBatches bool) {
-	t.Helper()
-	ctx := t.Context()
-	const (
-		a      = "codex:11111111-1111-4111-8111-111111111111"
-		b      = "codex:22222222-2222-4222-8222-222222222222"
-		d      = "codex:44444444-4444-4444-8444-444444444444"
-		c      = "codex:33333333-3333-4333-8333-333333333333"
-		schema = "agentsview_codex_chained_pin_test"
-	)
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	root := t.TempDir()
-	pathB := filepath.Join(root, "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
-	pathC := filepath.Join(root, "rollout-2026-09-25T13-00-00-33333333-3333-4333-8333-333333333333.jsonl")
-	pathD := filepath.Join(root, "rollout-2026-09-25T14-00-00-44444444-4444-4444-8444-444444444444.jsonl")
-	source := testDB(t)
-	sourcePath := source.Path()
-	// Model the old parser's last-header result: rollout B has headers B, A;
-	// rollout C has headers C, B. Their corrected identities overlap at B.
-	legacy := []struct{ id, path, content, uuid string }{
-		{a, pathB, "answer for B", "answer-b"},
-		{b, pathC, "answer for C", "answer-c"},
-	}
-	if separateBatches {
-		legacy = append(legacy, struct{ id, path, content, uuid string }{c, pathD, "answer for D", "answer-d"})
-	}
-	for _, row := range legacy {
-		if identical {
-			row.content, row.uuid = "identical answer", ""
-		}
-		require.NoError(t, source.UpsertSession(ctx, db.Session{
-			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
-			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
-		}))
-		require.NoError(t, source.InsertMessages(ctx, []db.Message{{
-			SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
-		}}))
-		require.NoError(t, source.SetSessionDataVersion(ctx, row.id, 135))
-	}
-	syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-	result, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Zero(t, result.Errors)
-	store := &Store{pg: syncer.pg}
-	_, err = store.PinMessage(ctx, a, 0, new("saved B remotely"))
-	require.NoError(t, err)
-	_, err = store.PinMessage(ctx, b, 0, new("saved C remotely"))
-	require.NoError(t, err)
-	if separateBatches {
-		_, err = store.PinMessage(ctx, c, 0, new("saved D remotely"))
-		require.NoError(t, err)
-	}
-	before, err := store.ListPinnedMessages(ctx, "", "")
-	require.NoError(t, err)
-	require.Len(t, before, len(legacy))
-	require.NoError(t, source.Close())
-	raw, err := sql.Open("sqlite3", sourcePath)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, "PRAGMA user_version=135")
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-
-	rebuilt := testDB(t)
-	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
-	for i, row := range legacy {
-		row.id = []string{b, c, d}[i]
-		if identical {
-			row.content, row.uuid = "identical answer", ""
-		}
-		require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{
-			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
-			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
-		}))
-		require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{
-			SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
-		}}))
-		require.NoError(t, rebuilt.SetSessionDataVersion(ctx, row.id, db.CurrentDataVersion()))
-	}
-	_, err = rebuilt.CopyOrphanedDataFromExcluding(sourcePath, nil)
-	require.NoError(t, err)
-	require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
-	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
-	if separateBatches {
-		upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
-		require.NoError(t, err)
-		upgraded.databaseGeneration, err = rebuilt.GetDatabaseID(ctx)
-		require.NoError(t, err)
-		marker, err := upgraded.pushMarkerID(ctx)
-		require.NoError(t, err)
-		sess, err := rebuilt.GetSessionFull(ctx, b)
-		require.NoError(t, err)
-		require.NotNil(t, sess)
-		var pushed []db.Session
-		batchResult, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, &pushed)
-		require.NoError(t, err)
-		require.True(t, batchResult.ok)
-		pins, err := store.ListPinnedMessages(ctx, d, "")
-		require.NoError(t, err)
-		require.Len(t, pins, 1, "the first batch must preserve the last legacy destination")
-		assert.Equal(t, new("saved D remotely"), pins[0].Note)
-	}
-	result, err = upgraded.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Zero(t, result.Errors)
-	for _, row := range []struct{ id, content string }{{b, "answer for B"}, {c, "answer for C"}} {
-		messages, err := store.GetMessages(ctx, row.id, 0, 10, true)
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		want := row.content
-		if identical {
-			want = "identical answer"
-		}
-		require.Equal(t, want, messages[0].Content)
-	}
-	after, err := store.ListPinnedMessages(ctx, "", "")
-	require.NoError(t, err)
-	assert.Len(t, after, len(legacy), "both remote-only pins must survive overlapping identity corrections")
-	for _, old := range before {
-		wantSession := b
-		if old.SessionID == b {
-			wantSession = c
-		}
-		if old.SessionID == c {
-			wantSession = d
-		}
-		var found bool
-		for _, pin := range after {
-			if pin.ID == old.ID {
-				found = true
-				assert.Equal(t, wantSession, pin.SessionID)
-				assert.Equal(t, old.Note, pin.Note)
-				assert.Equal(t, old.Content, pin.Content)
-				assert.Equal(t, old.CreatedAt, pin.CreatedAt)
-			}
-		}
-		assert.True(t, found, "pin for %s must survive under %s", old.SessionID, wantSession)
 	}
 }

@@ -24,8 +24,6 @@ func (s *Sync) migrateCodexPages(
 	markerID string, legacyMarkerMachines []string,
 ) error {
 	threads := make(map[string]db.Session)
-	byFile := make(map[string]db.Session)
-	var files []string
 	for _, sess := range batch {
 		switch sess.Agent {
 		case "codex", "traex", "augure-code":
@@ -39,11 +37,6 @@ func (s *Sync) migrateCodexPages(
 					continue
 				}
 				threads[id] = sess
-				if sess.FilePath != nil {
-					path := strings.TrimSuffix((*sess.FilePath)[strings.LastIndexAny(*sess.FilePath, `/\`)+1:], ".zst")
-					byFile[path] = sess
-					files = append(files, path)
-				}
 				// Also key by the id a legacy page held before data version 134
 				// (the filename without its thread). The old data version is
 				// only known after the query below, so this stays unrestricted;
@@ -59,82 +52,145 @@ func (s *Sync) migrateCodexPages(
 	}
 	// Purge inventories pages under the thread lock. Keep that same lock
 	// through publication, including after the thread's migration or retirement.
-	pages, err := s.lockCodexCorrectionChain(ctx, tx, threads, byFile, files)
-	if err != nil {
-		return err
-	}
-	// Corrections can chain (A to B and B to C), so publishing one page may
-	// replace another source's row. Capture every source's pins first.
-	pagePins, err := snapshotLegacyCodexPagePins(ctx, tx, pages)
-	if err != nil {
-		return err
-	}
-	var migrations []codexPageMigration
-	for _, old := range pages {
-		migration, err := s.prepareCodexPageMigration(ctx, tx, old, batch, threads, pagePins[old.id], markerID, legacyMarkerMachines)
-		if err != nil {
-			return err
-		}
-		if migration != nil {
-			migrations = append(migrations, *migration)
-		}
-	}
-	return s.publishCodexPageMigrations(ctx, tx, migrations, batch, markerID, legacyMarkerMachines)
-}
-
-type legacyCodexPage struct {
-	id, path, agent, machine, owner, archive string
-	dataVersion                              int
-}
-
-// lockLegacyCodexPages locks the legacy rows a batch may migrate: rows under a
-// selected thread or legacy page ID, and pre-137 rows filed under a selected
-// rollout. A row found by its rollout joins threads under that rollout's
-// session.
-func lockLegacyCodexPages(
-	ctx context.Context, tx *sql.Tx, threads, byFile map[string]db.Session, files []string,
-) ([]legacyCodexPage, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
 		FROM sessions
-		WHERE provenance_kind = 'legacy'
-		  AND (id = ANY($1) OR (data_version < 137 AND regexp_replace(regexp_replace(replace(file_path, chr(92), '/'), '^.*/', ''), '\.zst$', '') = ANY($2)))
-		ORDER BY id FOR UPDATE`, mapKeys(threads), files)
+		WHERE id = ANY($1) AND provenance_kind = 'legacy'
+		ORDER BY id FOR UPDATE`, mapKeys(threads))
 	if err != nil {
-		return nil, fmt.Errorf("finding legacy Codex pages: %w", err)
+		return fmt.Errorf("finding legacy Codex pages: %w", err)
 	}
 	defer rows.Close()
-	var pages []legacyCodexPage
+	type legacyPage struct {
+		id, path, agent, machine, owner, archive string
+		dataVersion                              int
+	}
+	var pages []legacyPage
 	for rows.Next() {
-		var page legacyCodexPage
+		var page legacyPage
 		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion); err != nil {
-			return nil, fmt.Errorf("reading legacy Codex pages: %w", err)
-		}
-		if _, selected := threads[page.id]; !selected {
-			threads[page.id] = byFile[strings.TrimSuffix(page.path[strings.LastIndexAny(page.path, `/\`)+1:], ".zst")]
+			return fmt.Errorf("reading legacy Codex pages: %w", err)
 		}
 		pages = append(pages, page)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("reading legacy Codex pages: %w", err)
+		return fmt.Errorf("reading legacy Codex pages: %w", err)
 	}
-	return pages, rows.Close()
-}
-
-// snapshotLegacyCodexPagePins captures each locked legacy row's pins before
-// any page is published.
-func snapshotLegacyCodexPagePins(
-	ctx context.Context, tx *sql.Tx, pages []legacyCodexPage,
-) (map[string][]savedPostgresPin, error) {
-	pins := make(map[string][]savedPostgresPin, len(pages))
-	for _, page := range pages {
-		saved, err := snapshotPinnedMessages(ctx, tx, page.id)
-		if err != nil {
-			return nil, err
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, old := range pages {
+		syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
+		prefixEnd := strings.LastIndex(old.id, ":") + 1
+		key := parser.CodexSessionUUIDFromPath(old.path)
+		oldKey := old.id[prefixEnd:]
+		keyThread := parser.CodexThreadIDFromSessionKey(key)
+		threadShape := old.dataVersion < 131 && keyThread == oldKey
+		rolloutShape := old.dataVersion < 134 && keyThread != key && key == keyThread+"_"+oldKey
+		migratePage := old.path != "" && key != "" && key != oldKey && (threadShape || rolloutShape)
+		if migratePage && rolloutShape && !threadShape {
+			// The filename alone cannot tell a legacy page from one the parser
+			// rejected (header session_id differs from the filename thread). The
+			// local archive agrees with the fresh parse: only a legacy page has
+			// a canonical row here. Otherwise the remote row is a plain session.
+			canonical, err := s.local.GetArtifactExportSession(ctx, old.id[:prefixEnd]+key)
+			if err != nil {
+				return fmt.Errorf("reading retained Codex page: %w", err)
+			}
+			migratePage = canonical != nil && canonical.Agent == old.agent
 		}
-		pins[page.id] = saved
+		if !syncScope && !migratePage {
+			continue
+		}
+		if !sameSessionOwner(
+			old.owner, old.machine, markerID,
+			db.MirroredSessionMachine(threads[old.id], s.machine), legacyMarkerMachines,
+		) {
+			continue
+		}
+		head, err := s.local.GetArtifactExportSession(ctx, old.id)
+		if err != nil {
+			return fmt.Errorf("reading original Codex rollout: %w", err)
+		}
+		if syncScope && head != nil && head.Agent == old.agent && threads[old.id].Agent == old.agent &&
+			(old.archive == "" || old.archive == s.archiveID) && projectFailsFilter(head.Project, s.projects, s.excludeProjects) {
+			// A filtered page restore still ends its source's thread scope.
+			// Publish that dependency without the excluded project's content.
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET
+				trash_includes_codex_pages = CASE
+					WHEN deleted_at IS DISTINCT FROM source_deleted_at
+						OR trash_includes_codex_pages IS DISTINCT FROM source_trash_includes_codex_pages
+					THEN trash_includes_codex_pages ELSE $2 END,
+				source_trash_includes_codex_pages = $2, updated_at = NOW()
+				WHERE id = $1 AND source_trash_includes_codex_pages IS DISTINCT FROM $2`, old.id, head.TrashIncludesCodexPages); err != nil {
+				return fmt.Errorf("publishing Codex source trash scope: %w", err)
+			}
+		}
+		if !migratePage {
+			continue
+		}
+		pins, err := snapshotPinnedMessages(ctx, tx, old.id)
+		if err != nil {
+			return err
+		}
+		// An unpinned thread with a real original rollout is replaced normally,
+		// even if the old page has since been removed or filtered out locally.
+		hasHead := head != nil && head.FilePath != nil
+		if hasHead && len(pins) == 0 {
+			continue
+		}
+		if old.archive != "" && old.archive != s.archiveID {
+			return errors.New("cannot migrate Codex pages from another source archive")
+		}
+		pageID := old.id[:prefixEnd] + key
+		// Keep parser-owned names separate from user renames when publishing.
+		page, err := s.local.GetArtifactExportSession(ctx, pageID)
+		if err != nil {
+			return fmt.Errorf("reading retained Codex page: %w", err)
+		}
+		if page == nil || page.Agent != old.agent {
+			return fmt.Errorf("cannot replace legacy Codex thread: retained page %s is unavailable", pageID)
+		}
+		if projectFailsFilter(page.Project, s.projects, s.excludeProjects) {
+			return fmt.Errorf("preserving the Codex page requires including project %q in the push", page.Project)
+		}
+		var pageExists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, pageID).Scan(&pageExists); err != nil {
+			return fmt.Errorf("checking retained Codex page: %w", err)
+		}
+		// Apply a selected empty anchor's current trash scope before the page
+		// can inherit it. Its messages remain available for pin matching.
+		if head != nil && !hasHead && slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id }) {
+			if err := s.pushSession(ctx, tx, *head, markerID, legacyMarkerMachines); err != nil {
+				return fmt.Errorf("publishing Codex trash anchor metadata: %w", err)
+			}
+		}
+		if err := s.pushSession(ctx, tx, *page, markerID, legacyMarkerMachines); err != nil {
+			return fmt.Errorf("publishing retained Codex page: %w", err)
+		}
+		if _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
+			return err
+		}
+		if _, err := s.pushSecretFindings(ctx, tx, pageID); err != nil {
+			return err
+		}
+		// The page row now carries current friction metadata, so the batch
+		// loop would treat its findings as already pushed.
+		if _, err := s.pushFrictionFindings(ctx, tx, pageID); err != nil {
+			return err
+		}
+		if err := restorePinnedMessages(ctx, tx, pageID, pins); err != nil {
+			return err
+		}
+		// SQLite may keep a thread row without a file as a trash-scope anchor.
+		// It does not represent a surviving original rollout.
+		if !hasHead {
+			if err := retireCodexPageThread(ctx, tx, old.id, pageID, pageExists); err != nil {
+				return err
+			}
+		}
 	}
-	return pins, nil
+	return nil
 }
 
 func retireCodexPageThread(ctx context.Context, tx *sql.Tx, threadID, pageID string, pageExists bool) error {
@@ -181,208 +237,6 @@ func retireCodexPageThread(ctx context.Context, tx *sql.Tx, threadID, pageID str
 		FROM retired WHERE trash_includes_codex_pages AND deleted_at IS NOT NULL`, threadID)
 	if err != nil {
 		return fmt.Errorf("retiring duplicate Codex thread: %w", err)
-	}
-	return nil
-}
-
-type codexPageMigration struct {
-	old                 legacyCodexPage
-	page                db.Session
-	head                *db.Session
-	pins                []savedPostgresPin
-	hasHead, pageExists bool
-}
-
-// Every outgoing pin is removed before any destination can reuse its ordinal.
-// Restore only after all message writes, so later corrections cannot move it again.
-func (s *Sync) publishCodexPageMigrations(
-	ctx context.Context, tx *sql.Tx, migrations []codexPageMigration, batch []db.Session,
-	markerID string, legacyMarkerMachines []string,
-) error {
-	for _, migration := range migrations {
-		if err := clearSnapshottedPins(ctx, tx, migration.pins); err != nil {
-			return err
-		}
-	}
-	for _, migration := range migrations {
-		if err := s.publishCodexPageMigration(ctx, tx, migration, batch, markerID, legacyMarkerMachines); err != nil {
-			return err
-		}
-	}
-	for _, migration := range migrations {
-		if err := restorePinnedMessages(ctx, tx, migration.page.ID, migration.pins); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (old legacyCodexPage) correction() (id string, threadShape bool) {
-	prefixEnd := strings.LastIndex(old.id, ":") + 1
-	key := parser.CodexSessionUUIDFromPath(old.path)
-	oldKey := old.id[prefixEnd:]
-	thread := parser.CodexThreadIDFromSessionKey(key)
-	threadShape = old.dataVersion < 131 && thread == oldKey
-	rolloutShape := old.dataVersion < 134 && thread != key && key == thread+"_"+oldKey
-	misfiled := old.dataVersion < 137 && thread == key
-	if old.path == "" || key == "" || key == oldKey || !threadShape && !rolloutShape && !misfiled {
-		return "", false
-	}
-	return old.id[:prefixEnd] + key, threadShape
-}
-
-// Follow destinations before publication can overwrite a legacy source row.
-func (s *Sync) lockCodexCorrectionChain(
-	ctx context.Context, tx *sql.Tx, threads, byFile map[string]db.Session, files []string,
-) ([]legacyCodexPage, error) {
-	for {
-		pages, err := lockLegacyCodexPages(ctx, tx, threads, byFile, files)
-		if err != nil {
-			return nil, err
-		}
-		expanded := false
-		for _, old := range pages {
-			id, _ := old.correction()
-			if _, seen := threads[id]; id == "" || seen {
-				continue
-			}
-			page, err := s.local.GetArtifactExportSession(ctx, id)
-			if err != nil {
-				return nil, fmt.Errorf("reading chained Codex destination: %w", err)
-			}
-			if page == nil || page.Agent != old.agent {
-				continue
-			}
-			threads[id] = *page
-			expanded = true
-		}
-		if !expanded {
-			return pages, nil
-		}
-	}
-}
-
-func (s *Sync) prepareCodexPageMigration(
-	ctx context.Context, tx *sql.Tx, old legacyCodexPage, batch []db.Session,
-	threads map[string]db.Session, pins []savedPostgresPin, markerID string, legacyMarkerMachines []string,
-) (*codexPageMigration, error) {
-	syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
-	pageID, threadShape := old.correction()
-	migratePage := pageID != ""
-	if migratePage && !threadShape {
-		// The filename alone cannot tell a legacy page from one the parser
-		// rejected (header session_id differs from the filename thread). The
-		// local archive must hold the destination for a legacy page or a
-		// misfiled thread before its remote pins can move there.
-		canonical, err := s.local.GetArtifactExportSession(ctx, pageID)
-		if err != nil {
-			return nil, fmt.Errorf("reading retained Codex page: %w", err)
-		}
-		migratePage = canonical != nil && canonical.Agent == old.agent
-	}
-	if !syncScope && !migratePage {
-		return nil, nil
-	}
-	if !sameSessionOwner(
-		old.owner, old.machine, markerID,
-		db.MirroredSessionMachine(threads[old.id], s.machine), legacyMarkerMachines,
-	) {
-		return nil, nil
-	}
-	head, err := s.local.GetArtifactExportSession(ctx, old.id)
-	if err != nil {
-		return nil, fmt.Errorf("reading original Codex rollout: %w", err)
-	}
-	if err := s.syncCodexPageTrashScope(ctx, tx, old, head, threads[old.id], syncScope); err != nil {
-		return nil, err
-	}
-	if !migratePage {
-		return nil, nil
-	}
-
-	return s.prepareCodexPageDestination(ctx, tx, old, head, pins, pageID)
-}
-
-func (s *Sync) prepareCodexPageDestination(
-	ctx context.Context, tx *sql.Tx, old legacyCodexPage, head *db.Session,
-	pins []savedPostgresPin, pageID string,
-) (*codexPageMigration, error) {
-	// An unpinned thread with a real original rollout is replaced normally,
-	// even if the old page has since been removed or filtered out locally.
-	hasHead := head != nil && head.FilePath != nil
-	if hasHead && len(pins) == 0 {
-		return nil, nil
-	}
-	if old.archive != "" && old.archive != s.archiveID {
-		return nil, errors.New("cannot migrate Codex pages from another source archive")
-	}
-	// Keep parser-owned names separate from user renames when publishing.
-	page, err := s.local.GetArtifactExportSession(ctx, pageID)
-	if err != nil {
-		return nil, fmt.Errorf("reading retained Codex page: %w", err)
-	}
-	if page == nil || page.Agent != old.agent {
-		return nil, fmt.Errorf("cannot replace legacy Codex thread: retained page %s is unavailable", pageID)
-	}
-	if projectFailsFilter(page.Project, s.projects, s.excludeProjects) {
-		return nil, fmt.Errorf("preserving the Codex page requires including project %q in the push", page.Project)
-	}
-	var pageExists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, pageID).Scan(&pageExists); err != nil {
-		return nil, fmt.Errorf("checking retained Codex page: %w", err)
-	}
-	return &codexPageMigration{old: old, page: *page, head: head, pins: pins, hasHead: hasHead, pageExists: pageExists}, nil
-}
-
-func (s *Sync) syncCodexPageTrashScope(ctx context.Context, tx *sql.Tx, old legacyCodexPage, head *db.Session, selected db.Session, syncScope bool) error {
-	if syncScope && head != nil && head.Agent == old.agent && selected.Agent == old.agent &&
-		(old.archive == "" || old.archive == s.archiveID) && projectFailsFilter(head.Project, s.projects, s.excludeProjects) {
-		// A filtered page restore still ends its source's thread scope.
-		// Publish that dependency without the excluded project's content.
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET
-			trash_includes_codex_pages = CASE
-				WHEN deleted_at IS DISTINCT FROM source_deleted_at
-					OR trash_includes_codex_pages IS DISTINCT FROM source_trash_includes_codex_pages
-				THEN trash_includes_codex_pages ELSE $2 END,
-			source_trash_includes_codex_pages = $2, updated_at = NOW()
-			WHERE id = $1 AND source_trash_includes_codex_pages IS DISTINCT FROM $2`, old.id, head.TrashIncludesCodexPages); err != nil {
-			return fmt.Errorf("publishing Codex source trash scope: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *Sync) publishCodexPageMigration(
-	ctx context.Context, tx *sql.Tx, migration codexPageMigration, batch []db.Session,
-	markerID string, legacyMarkerMachines []string,
-) error {
-	// Apply a selected empty anchor's current trash scope before the page
-	// can inherit it. Its messages remain available for pin matching.
-	if migration.head != nil && !migration.hasHead && slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == migration.old.id }) {
-		if err := s.pushSession(ctx, tx, *migration.head, markerID, legacyMarkerMachines); err != nil {
-			return fmt.Errorf("publishing Codex trash anchor metadata: %w", err)
-		}
-	}
-	if err := s.pushSession(ctx, tx, migration.page, markerID, legacyMarkerMachines); err != nil {
-		return fmt.Errorf("publishing retained Codex page: %w", err)
-	}
-	if _, err := s.pushMessages(ctx, tx, migration.page.ID, true, nil, nil); err != nil {
-		return err
-	}
-	if _, err := s.pushSecretFindings(ctx, tx, migration.page.ID); err != nil {
-		return err
-	}
-	// The page row now carries current friction metadata, so the batch
-	// loop would treat its findings as already pushed.
-	if _, err := s.pushFrictionFindings(ctx, tx, migration.page.ID); err != nil {
-		return err
-	}
-	// SQLite may keep a thread row without a file as a trash-scope anchor.
-	// It does not represent a surviving original rollout.
-	if !migration.hasHead {
-		if err := retireCodexPageThread(ctx, tx, migration.old.id, migration.page.ID, migration.pageExists); err != nil {
-			return err
-		}
 	}
 	return nil
 }
