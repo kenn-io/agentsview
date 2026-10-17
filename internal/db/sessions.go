@@ -4263,11 +4263,14 @@ func (db *DB) GetFileHashByAgentPath(ctx context.Context,
 // and agent. Used by parsers whose canonical session ID can change while the
 // underlying source file remains the same.
 func (db *DB) ListSessionIDsByFilePath(ctx context.Context, path, agent string) ([]string, error) {
+	source := "file_path = ?1 AND source_missing_at IS NULL"
+	if agent == "codex" || agent == "traex" || agent == "augure-code" {
+		// A returning rollout must recover retained alternatives even when
+		// reconciliation marked the source missing or compression changed.
+		source = "file_path IN " + codexSourcePathsSQL("?1")
+	}
 	rows, err := db.getReader().Query(ctx,
-		"SELECT id FROM sessions"+
-			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
-			" AND source_missing_at IS NULL"+
-			" ORDER BY id",
+		"SELECT id FROM sessions WHERE "+source+" AND agent = ?2 AND deleted_at IS NULL ORDER BY id",
 		path, agent,
 	)
 	if err != nil {

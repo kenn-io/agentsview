@@ -52,7 +52,11 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			require.NoError(t, database.UpsertSession(ctx, Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135}))
 			require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: oldID, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
 			require.NoError(t, database.RenameSession(ctx, oldID, new("Saved name")))
-			_, err := database.StarSession(ctx, oldID)
+			_, err := database.SetSessionLabels(ctx, oldID, []string{"saved", "topic"})
+			require.NoError(t, err)
+			_, err = database.AssignSessionProject(ctx, oldID, "chosen")
+			require.NoError(t, err)
+			_, err = database.StarSession(ctx, oldID)
 			require.NoError(t, err)
 			messages, err := database.GetAllMessages(ctx, oldID)
 			require.NoError(t, err)
@@ -66,6 +70,12 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				}
 				require.NoError(t, database.UpsertSession(ctx, Session{ID: id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &destinationPath}))
 				require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
+			}
+			if mode == "same_transcript" {
+				_, err = database.AssignSessionProject(ctx, id, "destination")
+				require.NoError(t, err)
+				_, err = database.SetSessionLabels(ctx, id, []string{"destination"})
+				require.NoError(t, err)
 			}
 			if mode == "delete_failure" {
 				_, err = database.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_identity_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'forced delete failure'); END`)
@@ -89,6 +99,22 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, saved)
 			assert.Equal(t, new("Saved name"), saved.DisplayName)
+			expectedProject, expectedLabels := "chosen", []string{"saved", "topic"}
+			if mode == "same_transcript" {
+				expectedProject, expectedLabels = "destination", []string{"destination"}
+			}
+			assert.Equal(t, expectedProject, saved.Project)
+			assert.True(t, saved.ProjectAssigned)
+			assert.Equal(t, expectedLabels, saved.Labels)
+			if retainedID == id {
+				require.NoError(t, database.UpsertSession(ctx, Session{ID: id, Agent: "codex", Project: "parsed", Machine: "local", FilePath: &path}))
+				reparsed, err := database.GetSession(ctx, id)
+				require.NoError(t, err)
+				assert.Equal(t, expectedProject, reparsed.Project)
+				var retainedLabels int
+				require.NoError(t, database.getReader().QueryRowContext(ctx, "SELECT COUNT(*) FROM session_labels WHERE session_id = ?", oldID).Scan(&retainedLabels))
+				assert.Zero(t, retainedLabels)
+			}
 			stars, err := database.ListStarredSessionIDs(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, []string{retainedID}, stars)

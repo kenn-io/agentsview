@@ -595,21 +595,26 @@ fixtures retain this field; missing identities remain source-local.
   either sync order, appended metadata, and repair of a misfiled session while
   retaining sessions whose sources are absent. Upgrade regressions also check
   that pins and notes follow the corrected transcript, including archived
-  sources that are missing or in trash, and that renames and stars survive.
-  Missing noncanonical sources retain a stable alternative identity; missing
-  revert pages keep their full page identity. PostgreSQL transfers remote-only
-  pins and notes using verified source paths before replacing old transcripts.
-  Connected corrections snapshot their original remote pins before publishing
-  any destination, including cycles and corrections outside the current push
-  batch. Active plain/compressed source changes retain one identity; returning
-  noncanonical sources transfer curation from their alternative identity.
-  Shared-path archive restores preserve separate historical transcripts.
-  Permanent deletions follow retained source paths when files return,
-  including noncanonical filenames and either plain or compressed form;
-  filename UUIDs alone cannot exclude an unrelated thread. Corrected sessions
-  keep freshly resolved project evidence when the historical snapshot
-  describes a different root. This establishes a producer path for the shape
-  reported in #2248, not the history of that particular file.
+  sources that are missing or in trash, and that renames and stars follow the
+  corrected transcript. Missing noncanonical sources retain a stable
+  alternative identity; missing revert pages keep their full page identity.
+  PostgreSQL transfers remote-only pins and notes using verified source paths
+  before replacing old transcripts. Connected corrections snapshot their
+  original remote pins before publishing any destination, including cycles and
+  corrections outside the current push batch. Clearing the whole migrating pin
+  set before restoration preserves distinct notes on equal message text
+  without removing unrelated destination pins. Active plain/compressed source
+  changes retain one identity; returning noncanonical sources transfer
+  curation, labels, and project assignments from their alternative identity,
+  including sources marked missing. Shared-path archive restores preserve
+  separate historical transcripts. Permanent deletions follow retained source
+  paths when files return, including noncanonical filenames and either plain
+  or compressed form; filename UUIDs alone cannot exclude an unrelated thread.
+  Verified source metadata releases a wrongly excluded original ID while
+  retaining the deleted source exclusion. Corrected sessions keep freshly
+  resolved project evidence when the historical snapshot describes a different
+  root. This establishes a producer path for the shape reported in #2248, not
+  the history of that particular file.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

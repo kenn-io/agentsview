@@ -3391,26 +3391,11 @@ func restorePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 	pins []savedPostgresPin,
 ) error {
-	// Delete only rows captured and locked by the snapshot. The session
-	// row lock taken before the snapshot (lockPinnedMessagesSession)
-	// serializes PinMessage/UnpinMessage against this window, so no
-	// same-binary writer can commit a pin between snapshot and restore.
-	// The ON CONFLICT DO NOTHING below is defense-in-depth for writers
-	// that do not take that lock (e.g. an older binary sharing the same
-	// database): such a pin survives and wins any target conflict
-	// because it represents the newer user action.
-	for _, pin := range pins {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM pinned_messages
-			WHERE session_id = $1 AND id = $2`,
-			pin.sessionID, pin.id,
-		); err != nil {
-			return fmt.Errorf(
-				"clearing snapshotted pg pin id=%d: %w", pin.id, err,
-			)
-		}
+	if err := clearSnapshottedPins(ctx, tx, pins); err != nil {
+		return err
 	}
 
+	// Existing destination pins win a conflict as the newer user action.
 	resolved := make(map[int]resolvedPostgresPin)
 	for _, pin := range pins {
 		target, sourceUUID, ok, err := resolvePinnedMessageTarget(
@@ -3457,6 +3442,27 @@ func restorePinnedMessages(
 			)
 		}
 	}
+	return nil
+}
+
+// clearSnapshottedPins removes only the locked rows being transferred.
+func clearSnapshottedPins(ctx context.Context, tx *sql.Tx, pins []savedPostgresPin) error {
+	// Delete only rows captured and locked by the snapshot. The session
+	// row lock taken before the snapshot (lockPinnedMessagesSession)
+	// serializes PinMessage/UnpinMessage against this window, so no
+	// same-binary writer can commit a pin between snapshot and restore.
+	for _, pin := range pins {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM pinned_messages
+			WHERE session_id = $1 AND id = $2`,
+			pin.sessionID, pin.id,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing snapshotted pg pin id=%d: %w", pin.id, err,
+			)
+		}
+	}
+
 	return nil
 }
 

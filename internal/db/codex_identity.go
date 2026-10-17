@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -54,6 +55,16 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 	}
 	pins, err := savePinsTx(ctxTx, oldID)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_project_assignments
+        (session_id, project, original_project, created_at, updated_at)
+        SELECT ?, project, original_project, created_at, updated_at FROM session_project_assignments WHERE session_id = ?`, id, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_labels(session_id,label,created_at)
+        SELECT ?1,label,created_at FROM session_labels WHERE session_id = ?2
+        AND NOT EXISTS (SELECT 1 FROM session_labels WHERE session_id = ?1)`, id, oldID); err != nil {
 		return err
 	}
 	var pending recallEvidenceRevocationEvents
@@ -111,6 +122,16 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
         SELECT ?,created_at FROM starred_sessions WHERE session_id = ?`, id, oldID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET project = COALESCE(
+        (SELECT project FROM session_project_assignments WHERE session_id = ?1), project) WHERE id = ?1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_project_assignments WHERE session_id = ?`, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_labels WHERE session_id = ?`, oldID); err != nil {
+		return err
+	}
 	if err := deleteSessionMessagesTx(ctxTx, oldID); err != nil {
 		return err
 	}
@@ -123,4 +144,67 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 	db.notifyUsageSessions([]string{oldID, id})
 	pending.flush()
 	return nil
+}
+
+// CorrectCodexSourceExclusions releases a misfiled ID only after parsing its
+// deleted source under a different identity. The deletion stays on that source.
+func (db *DB) CorrectCodexSourceExclusions(ctx context.Context, id, path, agent string) error {
+	if path == "" || (agent != "codex" && agent != "traex" && agent != "augure-code") {
+		return nil
+	}
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT id,file_path FROM excluded_sessions WHERE file_path IN `+codexSourcePathsSQL("?1")+`
+        AND include_codex_pages = 0 AND id != ?2 AND (id GLOB ?3 OR id GLOB ?4)`, path, id, agent+":*", "*~"+agent+":*")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type exclusion struct{ id, path string }
+	var exclusions []exclusion
+	for rows.Next() {
+		var e exclusion
+		if err := rows.Scan(&e.id, &e.path); err != nil {
+			return err
+		}
+		exclusions = append(exclusions, e)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, e := range exclusions {
+		if err := retainCodexSourceExclusion(ctx, tx, e.id, id, e.path); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func retainCodexSourceExclusion(ctx context.Context, conn sqlContextExecer, oldID, parsedID, path string) error {
+	oldKey := oldID[strings.LastIndex(oldID, ":")+1:]
+	key := parsedID[strings.LastIndex(parsedID, ":")+1:]
+	// Historical bare-rollout deletions still cover their canonical pages.
+	if oldID == parsedID || (parser.CodexThreadIDFromSessionKey(key) != key && strings.HasSuffix(key, "_"+oldKey)) {
+		return nil
+	}
+	retainedID := parser.AltSessionID(parser.BaseSessionID(oldID), path)
+	if retainedID == oldID {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO excluded_sessions(id,file_path,created_at,include_codex_pages)
+        SELECT ?,file_path,created_at,0 FROM excluded_sessions WHERE id = ? AND file_path = ? AND include_codex_pages = 0`, retainedID, oldID, path); err != nil {
+		return err
+	}
+	_, err := conn.ExecContext(ctx, `DELETE FROM excluded_sessions WHERE id = ? AND file_path = ? AND include_codex_pages = 0`, oldID, path)
+	return err
 }

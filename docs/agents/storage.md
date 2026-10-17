@@ -183,19 +183,26 @@ Codex-format deletions retain their source paths and reject that file even if it
 returns with a corrected identity, a noncanonical filename, or the other
 `.jsonl`/`.jsonl.zst` representation. Dropping an excluded source cannot delete
 an unrelated archive row with the same parsed ID. A filename UUID alone does not
-exclude another thread. Trash is corrected before parsing, so restoring it keeps
-its transcript, pins, notes, rename, and star. Missing sources can use a
-recoverable filename identity to preserve their archived transcript without
-replacing another source. Revert pages retain their full page identity. When the
-canonical identity is unavailable or already belongs to another source, a stable
-alternative ID preserves the archived transcript and pins. When that source
-returns, its archived content and curation move to the recovered identity in one
-transaction before the alternative is removed. A destination owned by another
-source is left intact. Plain and compressed paths identify the same rollout
-during correction and ownership checks. Multiple archived identities sharing a
-path remain separate. Archive-only rebuilds do not consult files on the
-receiving host. Empty trash anchors are limited to verified historical page
-mappings.
+exclude another thread. When the retained header or a later parse proves that an
+exclusion used the wrong ID, the deletion stays attached to its source and the
+original thread can return. Without that evidence, the ID remains excluded.
+Trash is corrected before parsing, so restoring it keeps its transcript, pins,
+notes, rename, and star. Missing sources can use a recoverable filename identity
+to preserve their archived transcript without replacing another source. Revert
+pages retain their full page identity. When the canonical identity is
+unavailable or already belongs to another source, a stable alternative ID
+preserves the archived transcript and pins. When that source returns, its
+archived content and curation move to the recovered identity in one transaction
+before the alternative is removed, including labels and explicit project
+assignments. Existing destination choices take precedence. Recovery also finds
+sources marked missing and sources whose compression changed. Renames and stars
+follow verified thread corrections even when the original thread returns.
+Freshly parsed destinations take precedence over displaced historical occupants
+in correction chains and cycles. A destination owned by another source is left
+intact. Plain and compressed paths identify the same rollout during correction
+and ownership checks. Multiple archived identities sharing a path remain
+separate. Archive-only rebuilds do not consult files on the receiving host.
+Empty trash anchors are limited to verified historical page mappings.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
@@ -231,14 +238,17 @@ legacy writes. Retries stop after five attempts or when the request is canceled.
 When an old PostgreSQL thread row held a revert page, the next push moves its
 remote pins and notes to that page before replacing the original thread. Both
 writes share a transaction, including when the page belongs to a later batch.
-When the original rollout is absent locally, the push also moves remote names,
-stars, and trash state to a newly published page, then removes the duplicate
-thread transcript and usage. Existing page curation takes precedence. An empty
-thread row retains any inherited trash scope for restore and purge. If the
-retained page cannot be published, the push stops and keeps the original row. A
-filtered push must include the page's project for this migration. A surviving
-original rollout without remote pins can still be pushed when its old page has
-been removed or filtered out.
+For connected corrections, all migrating pins are snapshotted and cleared before
+any transferred pin is restored. Equal message text cannot let an intermediate
+pin block another transfer, and unrelated destination pins remain intact. When
+the original rollout is absent locally, the push also moves remote names, stars,
+and trash state to a newly published page, then removes the duplicate thread
+transcript and usage. Existing page curation takes precedence. An empty thread
+row retains any inherited trash scope for restore and purge. If the retained
+page cannot be published, the push stops and keeps the original row. A filtered
+push must include the page's project for this migration. A surviving original
+rollout without remote pins can still be pushed when its old page has been
+removed or filtered out.
 
 If the original rollout moves outside a filtered push's project scope, the
 curation transfer and removal of the old thread row share a transaction. A

@@ -14247,6 +14247,12 @@ func (e *Engine) applyProviderFilePathPolicies(
 			}
 		}
 		if sourceExcluded {
+			if err := e.db.CorrectCodexSourceExclusions(ctx, currentPrefixedID, lookupPath, string(agent)); err != nil {
+				res.err = err
+				res.noCacheSkip = true
+				res.results = nil
+				return
+			}
 			// The exclusion owns a source, not every row with its parsed ID.
 			// Only clean up rows whose stored path proves that ownership.
 			for _, id := range existingIDs {

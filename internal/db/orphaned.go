@@ -1216,6 +1216,66 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return err
 		}
 	}
+	if hasFilePath && sourceVersion < codexThreadIdentityDataVersion {
+		if err := correctRetainedCodexExclusions(ctx, conn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Retained headers are evidence; filenames alone cannot release an excluded ID.
+func correctRetainedCodexExclusions(ctx context.Context, conn *sql.Conn) error {
+	var hasMetadata bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='archive_metadata')`).Scan(&hasMetadata); err != nil {
+		return err
+	}
+	if hasMetadata {
+		var archiveOnly bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key='archive_only' AND value='1')`).Scan(&archiveOnly); err != nil {
+			return err
+		}
+		if archiveOnly {
+			return nil
+		}
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT id,file_path FROM excluded_sessions WHERE file_path != '' AND include_codex_pages = 0
+        AND (id GLOB 'codex:*' OR id GLOB '*~codex:*' OR id GLOB 'traex:*' OR id GLOB '*~traex:*' OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*')`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type exclusion struct{ id, path string }
+	var exclusions []exclusion
+	for rows.Next() {
+		var e exclusion
+		if err := rows.Scan(&e.id, &e.path); err != nil {
+			return err
+		}
+		exclusions = append(exclusions, e)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, e := range exclusions {
+		id, err := parser.ReadCodexRolloutSessionID(ctx, e.path)
+		if errors.Is(err, os.ErrNotExist) {
+			alternate := strings.TrimSuffix(e.path, ".zst")
+			if alternate == e.path && strings.HasSuffix(e.path, ".jsonl") {
+				alternate += ".zst"
+			}
+			id, err = parser.ReadCodexRolloutSessionID(ctx, alternate)
+		}
+		if err != nil || id == "" {
+			continue
+		}
+		parsedID := e.id[:strings.LastIndex(e.id, ":")+1] + id
+		if err := retainCodexSourceExclusion(ctx, conn, e.id, parsedID, e.path); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1358,20 +1418,21 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE main.sessions.id = old_s.id
 			  AND NOT EXISTS (SELECT 1 FROM _codex_session_ids correction
 				JOIN main.sessions target ON target.id = correction.target_id
-				WHERE correction.source_id = old_s.id AND correction.is_thread_correction = 1
-				  AND target.deleted_at IS NOT NULL)
+				WHERE correction.source_id = old_s.id AND correction.is_thread_correction = 1)
 			  AND old_s.display_name IS NOT NULL`); err != nil {
 			return fmt.Errorf("copying user display_name: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
-			SET display_name = old_s.display_name
+			SET display_name = COALESCE(main.sessions.display_name, old_s.display_name)
 			FROM old_db.sessions old_s
 			JOIN _codex_page_metadata mapped ON mapped.source_id = old_s.id
 			WHERE main.sessions.id = mapped.target_id
 			  AND old_s.display_name IS NOT NULL
-			  AND (main.sessions.deleted_at IS NOT NULL
-				OR NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_s.id))`); err != nil {
+			  AND (EXISTS (SELECT 1 FROM _codex_session_ids correction
+                    WHERE correction.source_id = old_s.id AND correction.is_thread_correction = 1)
+                OR main.sessions.deleted_at IS NOT NULL
+                OR NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_s.id))`); err != nil {
 			return fmt.Errorf("copying Codex page display_name: %w", err)
 		}
 	}
@@ -1388,7 +1449,7 @@ func (d *DB) CopySessionMetadataFrom(
 			) AND NOT EXISTS (SELECT 1 FROM _codex_session_ids correction
 				JOIN main.sessions target ON target.id = correction.target_id
 				WHERE correction.source_id = old_db.starred_sessions.session_id
-				  AND correction.is_thread_correction = 1 AND target.deleted_at IS NOT NULL)`); err != nil {
+				  AND correction.is_thread_correction = 1)`); err != nil {
 			return fmt.Errorf("copying starred sessions: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -1396,7 +1457,9 @@ func (d *DB) CopySessionMetadataFrom(
 			SELECT mapped.target_id, old_star.created_at
 			FROM old_db.starred_sessions old_star
 			JOIN _codex_page_metadata mapped ON mapped.source_id = old_star.session_id
-			WHERE NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_star.session_id)
+			WHERE EXISTS (SELECT 1 FROM _codex_session_ids correction
+                WHERE correction.source_id = old_star.session_id AND correction.is_thread_correction = 1)
+               OR NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_star.session_id)
 			   OR EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.target_id AND deleted_at IS NOT NULL)`); err != nil {
 			return fmt.Errorf("copying Codex page stars: %w", err)
 		}
@@ -3158,6 +3221,9 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM main.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
 			UNION ALL SELECT 1 FROM old_db.sessions WHERE id = ?1 AND (file_path IS NULL OR file_path NOT IN `+codexSourcePathsSQL("?2")+`)
+            AND NOT EXISTS (SELECT 1 FROM main.sessions fresh WHERE fresh.id = ?1
+                AND fresh.file_path IN `+codexSourcePathsSQL("?2")+`
+                AND fresh.data_version >= 136 AND fresh.deleted_at IS NULL)
 		)`, target, s.path).Scan(&occupied); err != nil {
 			return err
 		}

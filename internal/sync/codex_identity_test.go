@@ -94,6 +94,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 		page            bool
 		occupied        bool
 		compression     string
+		returning       string
 	}{
 		{name: "plain_to_compressed", originalPresent: true, compression: "compress", version: 135},
 		{name: "compressed_to_plain", originalPresent: true, compression: "decompress", version: 135},
@@ -103,6 +104,9 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 		{name: "noncanonical_filename", originalPresent: true, renamedFile: true, version: 134},
 		{name: "version_135", version: 135},
 		{name: "corrected_source_missing", originalPresent: true, missing: true, version: 135},
+		{name: "returning_plain", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "plain"},
+		{name: "returning_compressed", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "compressed"},
+		{name: "returning_source_missing", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "source_missing"},
 		{name: "missing_noncanonical_source", originalPresent: true, renamedFile: true, missing: true, version: 135},
 		{name: "missing_misfiled_page", originalPresent: true, page: true, missing: true, version: 135},
 		{name: "missing_page_destination_owned", originalPresent: true, page: true, missing: true, occupied: true, version: 135},
@@ -153,7 +157,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 					testjsonl.CodexSessionMetaJSON("unrelated", "/work/other", "codex_cli_rs", "2025-10-20T19:00:00Z"),
 					testjsonl.CodexMsgJSON("user", "unrelated", "2025-10-20T19:00:01Z")))
 			}
-			if tc.compression == "decompress" {
+			if tc.compression == "decompress" || tc.returning == "plain" {
 				pathB += ".zst"
 			}
 			database := openTestDB(t)
@@ -203,7 +207,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			if tc.compression != "" {
 				oldIDs, err := reopened.ListSessionIDsByFilePath(t.Context(), pathB, "codex")
 				require.NoError(t, err)
-				assert.Empty(t, oldIDs, "one source must not leave a duplicate under its old representation")
+				assert.Equal(t, []string{correctedID}, oldIDs, "both representations must resolve to one corrected source")
 				if tc.compression == "compress" {
 					pathB += ".zst"
 				} else {
@@ -265,9 +269,6 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			require.Len(t, corrected, 1)
 			assert.Equal(t, corrected[0].ID, pins[0].MessageID)
 			curatedID := correctedID
-			if tc.originalPresent && !tc.trash {
-				curatedID = legacyID
-			}
 			curated, err := reopened.GetSession(t.Context(), curatedID)
 			require.NoError(t, err)
 			require.NotNil(t, curated)
@@ -290,6 +291,19 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 				require.NoError(t, again.RenameSession(t.Context(), correctedID, &recoveredName))
 				_, err = again.StarSession(t.Context(), correctedID)
 				require.NoError(t, err)
+				if tc.returning == "source_missing" {
+					require.NoError(t, again.BaselineActiveSessionSourcePaths(t.Context(), "local", []db.SessionSourcePath{{Agent: "codex", FilePath: pathB}}))
+					changed, err := again.MarkSessionSourceMissing(t.Context(), "local", "codex", correctedID, pathB)
+					require.NoError(t, err)
+					require.True(t, changed)
+				}
+				if tc.returning == "plain" {
+					pathB = strings.TrimSuffix(pathB, ".zst")
+				}
+				if tc.returning == "compressed" {
+					pathB += ".zst"
+					contentB = zstdCompressString(t, string(contentB))
+				}
 				require.NoError(t, os.WriteFile(pathB, contentB, 0o600))
 				require.NoError(t, againEngine.SyncPathsContext(t.Context(), []string{pathB}))
 				retainedPins, err = again.ListPinnedMessages(t.Context(), "", "")
@@ -337,7 +351,7 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 		{true, 135, true},
 	} {
 		t.Run(fmt.Sprintf("version=%d/missing=%t/renamed=%t", tc.version, tc.missing, tc.renamed), func(t *testing.T) {
-			root, _, pathB := writeCodexIdentityRollouts(t)
+			root, pathA, pathB := writeCodexIdentityRollouts(t)
 			if tc.renamed {
 				renamed := filepath.Join(filepath.Dir(pathB), "rollout-restored.jsonl")
 				require.NoError(t, os.Rename(pathB, renamed))
@@ -360,7 +374,9 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			}))
 			require.NoError(t, database.DeleteSession(t.Context(), legacyID))
 			reopened, engine := rebuildCodexIdentityArchive(t, database, root, tc.version)
-			assert.True(t, reopened.IsSessionExcluded(t.Context(), legacyID), "the original exclusion remains")
+			if !tc.missing {
+				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
+			}
 			excludedPath, err := reopened.HasExcludedCodexSource(t.Context(), pathB, "codex")
 			require.NoError(t, err)
 			assert.True(t, excludedPath, "the deleted source stays excluded")
@@ -374,6 +390,8 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			deleted, err = reopened.GetSession(t.Context(), correctedID)
 			require.NoError(t, err)
 			assert.Nil(t, deleted, "a later sync must not resurrect the deleted transcript")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathA}))
+			assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
 		})
 	}
 }
@@ -450,7 +468,7 @@ func TestCodexDeletedSourceChangesCompressionDuringUpgrade(t *testing.T) {
 	for _, compressedFirst := range []bool{false, true} {
 		for _, returnsLater := range []bool{false, true} {
 			t.Run(fmt.Sprintf("compressed_first=%t/returns_later=%t", compressedFirst, returnsLater), func(t *testing.T) {
-				root, _, plain := writeCodexIdentityRollouts(t)
+				root, original, plain := writeCodexIdentityRollouts(t)
 				raw, err := os.ReadFile(plain)
 				require.NoError(t, err)
 				compressed := plain + ".zst"
@@ -474,7 +492,11 @@ func TestCodexDeletedSourceChangesCompressionDuringUpgrade(t *testing.T) {
 				restored, err := rebuilt.GetSessionFull(t.Context(), "codex:"+identityThreadB)
 				require.NoError(t, err)
 				assert.Nil(t, restored)
-				assert.True(t, rebuilt.IsSessionExcluded(t.Context(), "codex:"+identityThreadA))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{original}))
+				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, rebuilt, "codex:"+identityThreadA))
+				excluded, err := rebuilt.HasExcludedCodexSource(t.Context(), newPath, "codex")
+				require.NoError(t, err)
+				assert.True(t, excluded)
 			})
 		}
 	}
@@ -509,4 +531,52 @@ func TestCodexCanonicalTrashedLegacyPageSurvivesUpgrade(t *testing.T) {
 	assert.Equal(t, pageID, pins[0].SessionID)
 	assert.Equal(t, new("saved note"), pins[0].Note)
 	assert.Equal(t, []string{"archived page"}, messageContents(t, rebuilt, pageID))
+}
+
+func TestCodexConnectedIdentityCorrections(t *testing.T) {
+	for _, cycle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cycle=%t", cycle), func(t *testing.T) {
+			ctx := t.Context()
+			root, pathA, pathB := writeCodexIdentityRollouts(t)
+			const threadC = "33333333-3333-7333-8333-333333333333"
+			pathC := writeCodexRollout(t, root, "02", "rollout-2025-10-20T13-00-00-"+threadC+".jsonl", testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(threadC, "/work/project-c", "codex_cli_rs", "2025-10-20T19:00:00Z"),
+				testjsonl.CodexMsgJSON("user", "third question", "2025-10-20T19:00:00Z")))
+			database := openTestDB(t)
+			secondPath, secondContent, secondID := pathC, "third question", "codex:"+threadC
+			if cycle {
+				secondPath, secondContent, secondID = pathA, "first question", "codex:"+identityThreadA
+			}
+			for _, old := range []struct{ id, path, content, note string }{
+				{"codex:" + identityThreadA, pathB, "other question", "note B"},
+				{"codex:" + identityThreadB, secondPath, secondContent, "note next"},
+			} {
+				require.NoError(t, database.UpsertSession(ctx, db.Session{ID: old.id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &old.path, DataVersion: 135, MessageCount: 1}))
+				require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: old.id, Role: "user", Content: old.content}}))
+				messages, err := database.GetAllMessages(ctx, old.id)
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				_, err = database.PinMessage(ctx, old.id, messages[0].ID, &old.note)
+				require.NoError(t, err)
+			}
+			rebuilt, _ := rebuildCodexIdentityArchive(t, database, root, 135)
+			for _, source := range []struct{ path, id string }{{pathA, "codex:" + identityThreadA}, {pathB, "codex:" + identityThreadB}, {pathC, "codex:" + threadC}} {
+				ids, err := rebuilt.ListSessionIDsByFilePath(ctx, source.path, "codex")
+				require.NoError(t, err)
+				assert.Equal(t, []string{source.id}, ids, "a freshly parsed source must have only its canonical identity")
+				corrected, err := rebuilt.CorrectedCodexSessionID(ctx, "codex:old", source.path, "codex")
+				require.NoError(t, err)
+				assert.Equal(t, source.id, corrected, "remote curation must have an unambiguous target")
+			}
+			pins, err := rebuilt.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			notes := map[string]string{}
+			for _, pin := range pins {
+				if pin.Note != nil {
+					notes[pin.SessionID] = *pin.Note
+				}
+			}
+			assert.Equal(t, map[string]string{"codex:" + identityThreadB: "note B", secondID: "note next"}, notes)
+		})
+	}
 }

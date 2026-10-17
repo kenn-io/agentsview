@@ -240,6 +240,13 @@ func (s *Sync) migrateCodexPages(
 			return err
 		}
 	}
+	// A matching old pin at an intermediate destination must not block
+	// the incoming pin before it moves to its own corrected transcript.
+	for _, correction := range corrections {
+		if err := clearSnapshottedPins(ctx, tx, correction.pins); err != nil {
+			return err
+		}
+	}
 	for _, correction := range corrections {
 		if err := restorePinnedMessages(ctx, tx, correction.page.ID, correction.pins); err != nil {
 			return err

@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"encoding/json/v2"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -379,7 +380,7 @@ func TestCodexCorrectionLookupStaysBounded(t *testing.T) {
 }
 
 func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
-	for _, mode := range []string{"chain", "cycle", "chain_first_batch", "cycle_first_batch", "chain_destination_first"} {
+	for _, mode := range []string{"chain", "cycle", "chain_first_batch", "cycle_first_batch", "chain_destination_first", "chain_shared", "cycle_shared", "chain_first_batch_shared", "chain_shared_destination"} {
 		t.Run(mode, func(t *testing.T) {
 			const schema = "agentsview_codex_pin_chain"
 			ctx := t.Context()
@@ -399,9 +400,17 @@ func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
 				{"codex:a", pathB, "transcript B", "message-b"},
 				{"codex:b", lastPath, lastContent, lastUUID},
 			} {
+				if strings.Contains(mode, "shared") {
+					old.content, old.uuid = "shared pinned message", ""
+				}
 				require.NoError(t, source.UpsertSession(ctx, db.Session{ID: old.id, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &old.path, MessageCount: 1}))
 				require.NoError(t, source.InsertMessages(ctx, []db.Message{{SessionID: old.id, Role: "user", Content: old.content, SourceUUID: old.uuid}}))
 				require.NoError(t, source.SetSessionDataVersion(ctx, old.id, 135))
+			}
+			if mode == "chain_shared_destination" {
+				require.NoError(t, source.UpsertSession(ctx, db.Session{ID: "codex:c", Agent: "codex", Project: "sample", Machine: "machine", FilePath: &pathC, MessageCount: 2}))
+				require.NoError(t, source.InsertMessages(ctx, []db.Message{{SessionID: "codex:c", Role: "user", Content: "shared pinned message"}, {SessionID: "codex:c", Ordinal: 1, Role: "user", Content: "unrelated destination message"}}))
+				require.NoError(t, source.SetSessionDataVersion(ctx, "codex:c", db.CurrentDataVersion()))
 			}
 			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
@@ -414,6 +423,10 @@ func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
 			require.NoError(t, err)
 			_, err = store.PinMessage(ctx, "codex:b", 0, &lastNote)
 			require.NoError(t, err)
+			if mode == "chain_shared_destination" {
+				_, err = store.PinMessage(ctx, "codex:c", 1, new("destination note"))
+				require.NoError(t, err)
+			}
 			require.NoError(t, source.Close())
 			rebuilt := testDB(t)
 			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
@@ -426,8 +439,14 @@ func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
 				if strings.HasPrefix(mode, "cycle") && corrected.id == "codex:c" {
 					continue
 				}
+				if strings.Contains(mode, "shared") {
+					corrected.content, corrected.uuid = "shared pinned message", ""
+				}
 				require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{ID: corrected.id, Agent: "codex", Project: "sample", Machine: "machine", FilePath: &corrected.path, MessageCount: 1}))
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: corrected.id, Role: "user", Content: corrected.content, SourceUUID: corrected.uuid}}))
+				if mode == "chain_shared_destination" && corrected.id == "codex:c" {
+					require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: "codex:c", Ordinal: 1, Role: "user", Content: "unrelated destination message"}}))
+				}
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, corrected.id, db.CurrentDataVersion()))
 			}
 			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
@@ -460,10 +479,14 @@ func TestCodexOverlappingCorrectionsPreserveRemotePins(t *testing.T) {
 			notes := map[string]string{}
 			for _, pin := range pins {
 				if pin.Note != nil {
-					notes[pin.SessionID] = *pin.Note
+					notes[fmt.Sprintf("%s:%d", pin.SessionID, pin.Ordinal)] = *pin.Note
 				}
 			}
-			assert.Equal(t, map[string]string{"codex:b": "note B", lastID: lastNote}, notes)
+			expected := map[string]string{"codex:b:0": "note B", lastID + ":0": lastNote}
+			if mode == "chain_shared_destination" {
+				expected["codex:c:1"] = "destination note"
+			}
+			assert.Equal(t, expected, notes)
 		})
 	}
 }
