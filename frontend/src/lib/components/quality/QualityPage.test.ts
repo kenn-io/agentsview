@@ -29,7 +29,7 @@ describe("QualityPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads quality once with the resolved machine from a label deep link", async () => {
+  it("loads quality once with the already-selected machine from a label deep link", async () => {
     const requests: string[] = [];
     vi.mocked(analytics.fetchSignalsForQuality).mockImplementation(async () => {
       requests.push(analytics.machine);
@@ -41,11 +41,14 @@ describe("QualityPage", () => {
     vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(metadata.promise);
     router.params = { machine: "Workstation", date_from: "2026-03-01", date_to: "2026-03-31" };
     const savedFilters = sessions.filters;
+    const savedMachine = analytics.machine;
+    analytics.machine = "id-a";
     sessions.initFromParams(router.params);
 
     try {
       component = mount(QualityPage, { target: document.body });
       await tick();
+      expect(requests).toEqual([]);
 
       metadata.resolve({
         machines: ["id-a"],
@@ -61,6 +64,7 @@ describe("QualityPage", () => {
       if (component) await unmount(component);
       component = undefined;
       sessions.filters = savedFilters;
+      analytics.machine = savedMachine;
     }
   });
 

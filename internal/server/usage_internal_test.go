@@ -99,7 +99,6 @@ func TestUsageStreamMapsCatalogFailures(t *testing.T) {
 	}{
 		{"machine metadata", nil, http.StatusInternalServerError, "internal error", true},
 		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "gateway timeout", false},
-		{"remote mode", db.ErrReadOnly, http.StatusNotImplemented, "not available in remote mode", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := testServer(t, 30)

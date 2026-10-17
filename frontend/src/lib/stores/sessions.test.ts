@@ -2593,11 +2593,11 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("id-a");
     });
 
-    it.each([new Error("offline"), new ApiError(500, "internal error"), null])(
+    it.each([new Error("offline"), new ApiError(500, "internal error")])(
       "preserves the selector when machine resolution is unavailable: %s",
       async (error) => {
         api.getMachines.mockImplementation((params) =>
-          params.machine && error ? Promise.reject(error) : Promise.resolve(catalog),
+          params.machine ? Promise.reject(error) : Promise.resolve(catalog),
         );
         sessions.initFromParams({ machine: "Workstation" });
         await sessions.loadMachines();

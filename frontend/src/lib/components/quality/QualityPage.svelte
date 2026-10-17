@@ -52,6 +52,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   >[0]>;
 
   let unsubEvents: (() => void) | undefined;
+  let initialFetchPending = $state(false);
   let selectedSignalId: string | null = $state(null);
   let signalExamples: SignalSessionExample[] = $state([]);
   let signalExamplesLoading = $state(false);
@@ -486,7 +487,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     seedQualityYoke();
     sessions.loadProjects();
     sessions.loadAgents();
-    if (!sessions.machineFilterPending) fetchQualitySignals();
+    initialFetchPending = sessions.machineFilterPending;
+    if (!initialFetchPending) fetchQualitySignals();
     unsubEvents = events.subscribeDebounced(() => {
       fetchQualitySignals();
     });
@@ -524,7 +526,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       untrack(() => analytics.automatedScope) !==
         headerAutomatedScope;
 
-    if (changed && !sessions.machineFilterPending) {
+    if ((changed || initialFetchPending) && !sessions.machineFilterPending) {
+      initialFetchPending = false;
       analytics.project = headerProject;
       analytics.machine = headerMachine;
       analytics.agent = headerAgent;
