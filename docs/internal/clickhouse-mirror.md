@@ -281,6 +281,16 @@ does not create the view, drops one an earlier version created, and creates the
 first rebuild lock if none exists. Probe tables that a killed push left behind
 are dropped once they are an hour old.
 
+A failed probe logs an `UNSUPPORTED_METHOD` error on the server, and a push
+watch runs the schema step before every push. The answer depends on the
+filesystem under the server's metadata directory, which changes only across a
+restart. The schema step therefore records the answer and the server time of the
+probe under `agentsview_table_exchange_probe` in `sync_metadata`, and probes
+again only when the server started after that time. The start comes from
+`now() - uptime()`, which counts whole seconds, so a probe up to a second before
+the computed start still counts. A record that a restore copied from another
+server is older than this server's start, so it is probed again.
+
 The lock table is what tells pushes to rebuild. A push without the view rebuilds
 only while a lock exists and the newest one is not retired. A database that can
 swap tables has no lock. A push there that finds the view missing, as while a
