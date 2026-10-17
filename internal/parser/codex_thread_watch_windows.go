@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -14,6 +15,70 @@ type codexThreadWatch struct {
 	handle  windows.Handle
 	info    os.FileInfo
 	cleanup runtime.Cleanup
+}
+
+// Windows signals a change notification handle from an APC queued to the
+// thread that issued FindFirstChangeNotification or FindNextChangeNotification.
+// Until that thread runs the APC, a wait from another thread times out even
+// though the change has finished. A wait on the issuing thread runs its pending
+// APCs first, so one locked thread issues and polls every notification. The
+// thread lives for the rest of the process: exiting it would cancel pending
+// notification requests.
+var codexThreadWatcher struct {
+	once     sync.Once
+	mu       sync.Mutex
+	requests chan codexThreadWatchRequest
+	replies  chan codexThreadWatchReply
+}
+
+// A request with a path opens a watch; otherwise it polls and rearms handle.
+type codexThreadWatchRequest struct {
+	path   string
+	handle windows.Handle
+}
+
+type codexThreadWatchReply struct {
+	handle  windows.Handle
+	changed bool
+	err     error
+}
+
+func codexThreadWatchCall(request codexThreadWatchRequest) codexThreadWatchReply {
+	w := &codexThreadWatcher
+	w.once.Do(func() {
+		w.requests = make(chan codexThreadWatchRequest)
+		w.replies = make(chan codexThreadWatchReply)
+		go func() {
+			runtime.LockOSThread()
+			for request := range w.requests {
+				w.replies <- serveCodexThreadWatch(request)
+			}
+		}()
+	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.requests <- request
+	return <-w.replies
+}
+
+func serveCodexThreadWatch(request codexThreadWatchRequest) codexThreadWatchReply {
+	if request.path != "" {
+		handle, err := windows.FindFirstChangeNotification(request.path, false,
+			windows.FILE_NOTIFY_CHANGE_FILE_NAME|windows.FILE_NOTIFY_CHANGE_DIR_NAME)
+		return codexThreadWatchReply{handle: handle, err: err}
+	}
+	status, err := windows.WaitForSingleObject(request.handle, 0)
+	if err == nil && status == uint32(windows.WAIT_TIMEOUT) {
+		return codexThreadWatchReply{}
+	}
+	if err == nil && status != windows.WAIT_OBJECT_0 {
+		err = fmt.Errorf("unexpected notification wait status %d", status)
+	}
+	if err == nil {
+		// Rearm before enumeration so changes during the scan remain pending.
+		err = windows.FindNextChangeNotification(request.handle)
+	}
+	return codexThreadWatchReply{changed: true, err: err}
 }
 
 // Directory timestamps can stay unchanged after entries move on Windows.
@@ -29,32 +94,24 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
 		if err != nil {
 			return err
 		}
-		handle, err := windows.FindFirstChangeNotification(codexThreadWatchPath(path), false,
-			windows.FILE_NOTIFY_CHANGE_FILE_NAME|windows.FILE_NOTIFY_CHANGE_DIR_NAME)
-		if err != nil {
-			return &os.PathError{Op: "watch", Path: d.path, Err: err}
+		reply := codexThreadWatchCall(codexThreadWatchRequest{path: codexThreadWatchPath(path)})
+		if reply.err != nil {
+			return &os.PathError{Op: "watch", Path: d.path, Err: reply.err}
 		}
-		d.watch = codexThreadWatch{handle: handle, info: info}
+		d.watch = codexThreadWatch{handle: reply.handle, info: info}
 		d.watch.cleanup = runtime.AddCleanup(d, func(handle windows.Handle) {
 			_ = windows.FindCloseChangeNotification(handle)
-		}, handle)
+		}, reply.handle)
 		return nil
 	}
-	status, err := windows.WaitForSingleObject(d.watch.handle, 0)
-	if err == nil && status == uint32(windows.WAIT_TIMEOUT) {
+	reply := codexThreadWatchCall(codexThreadWatchRequest{handle: d.watch.handle})
+	if !reply.changed {
 		return nil
 	}
 	d.info = nil
-	if err == nil && status != windows.WAIT_OBJECT_0 {
-		err = fmt.Errorf("unexpected notification wait status %d", status)
-	}
-	if err == nil {
-		// Rearm before enumeration so changes during the scan remain pending.
-		err = windows.FindNextChangeNotification(d.watch.handle)
-	}
-	if err != nil {
+	if reply.err != nil {
 		d.watch.close()
-		return &os.PathError{Op: "watch", Path: d.path, Err: err}
+		return &os.PathError{Op: "watch", Path: d.path, Err: reply.err}
 	}
 	return nil
 }
