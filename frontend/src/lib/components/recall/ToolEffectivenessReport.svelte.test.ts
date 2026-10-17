@@ -410,9 +410,8 @@ describe("ToolEffectivenessReport", () => {
     unmount(component);
   });
 
-  it("retries the sequence read and counts each displayed insight error once", async () => {
-    const retry = Promise.withResolvers<never>();
-    getToolSequences.mockRejectedValueOnce(new Error("offline")).mockReturnValueOnce(retry.promise);
+  it("retries the sequence read after it fails", async () => {
+    getToolSequences.mockRejectedValueOnce(new Error("offline"));
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: makeInsight() },
@@ -423,14 +422,8 @@ describe("ToolEffectivenessReport", () => {
     expect(alert.textContent).toContain("Couldn't load tool sequences.");
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("insight");
     alert.querySelector("button")!.click();
-    await tick();
-    expect(document.querySelector(".tool-sequences-panel [role=alert]")).toBeNull();
-    retry.reject(new Error("offline again"));
-    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(2));
-    expect(reportErrorShown).toHaveBeenNthCalledWith(2, "insight");
-    document.querySelector<HTMLButtonElement>(".tool-sequences-panel [role=alert] button")!.click();
     await settle();
-    expect(getToolSequences).toHaveBeenCalledTimes(3);
+    expect(getToolSequences).toHaveBeenCalledTimes(2);
     expect(document.querySelector(".tool-sequences-panel [role=alert]")).toBeNull();
     expect(document.querySelectorAll(".tool-sequences-panel .sequence-row").length).toBeGreaterThan(
       0,

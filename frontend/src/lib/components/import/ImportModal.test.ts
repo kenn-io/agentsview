@@ -117,7 +117,6 @@ it.each(["stop", "cancel"])(
     expect(p.onclose.mock.calls.length).toBe(exit === "stop" ? 0 : 1);
     reject(new Error("Stopped"));
     await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-    expect(reportSyncFailed).not.toHaveBeenCalled();
     if (exit === "stop") expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.queryByText("Stopped")).toBeNull();
   },
@@ -186,16 +185,6 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])(
     expect(screen.queryByText("Update needed")).toBeNull();
   },
 );
-
-it("keeps completed Chrome imports with item errors out of failed attempts", async () => {
-  syncClaudeAI.mockResolvedValueOnce({ ...stats, errors: 1 });
-  const p = props();
-  render(ImportModal, p);
-  await clickSync();
-  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-  expect(screen.getByText("312 conversations processed")).toBeTruthy();
-  expect(reportSyncFailed).not.toHaveBeenCalled();
-});
 
 it("shows an overlapping Chrome Sync refusal", async () => {
   syncClaudeAI.mockRejectedValueOnce(

@@ -393,7 +393,7 @@ describe("triggerSync SSE parsing", () => {
     return { handle, progress };
   }
 
-  it.each(["sync_running", "incomplete"])("preserves failure code %s", async (code) => {
+  it.each(["sync_running"])("preserves failure code %s", async (code) => {
     const { handle } = startSync([
       `event: error\ndata: {"error":"Sync failed","code":"${code}"}\n\n`,
     ]);

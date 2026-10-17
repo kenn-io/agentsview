@@ -83,9 +83,19 @@ func TestCoreActionAllowlist(t *testing.T) {
 		}
 		postCapture(t, srv.Handler(), string(body), status)
 	}
+	for _, tc := range []struct{ event, key string }{{EventErrorShown, "kind"}, {EventSyncFailed, "reason"}} {
+		body, err := json.Marshal(map[string]any{"event": tc.event})
+		require.NoError(t, err)
+		postCapture(t, srv.Handler(), string(body), http.StatusBadRequest)
+		for _, value := range []any{42, "unknown"} {
+			body, err := json.Marshal(map[string]any{"event": tc.event, "properties": map[string]any{tc.key: value}})
+			require.NoError(t, err)
+			postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
+		}
+	}
 	require.NoError(t, reporter.Close())
 	sent := captured()
-	require.Len(t, sent, len(cases)-1)
+	require.Len(t, sent, len(cases)+3)
 	i := 0
 	for _, c := range cases {
 		if c.event == EventScreenViewed && c.key == "screen" && !c.kept {
@@ -105,31 +115,10 @@ func TestCoreActionAllowlist(t *testing.T) {
 		}
 		i++
 	}
-}
-
-func TestOutcomeCategoriesRequirePropertyAndNormalizeValues(t *testing.T) {
-	t.Setenv(EnabledEnv, "1")
-	t.Setenv(GenericEnabledEnv, "1")
-	endpoint, captured := captureCollector(t)
-	reporter := captureReporter(t, endpoint, Options{})
-	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
-	for _, tc := range []struct{ event, key string }{{EventErrorShown, "kind"}, {EventSyncFailed, "reason"}} {
-		body, err := json.Marshal(map[string]any{"event": tc.event})
-		require.NoError(t, err)
-		postCapture(t, srv.Handler(), string(body), http.StatusBadRequest)
-		for _, value := range []any{42, "unknown"} {
-			body, err := json.Marshal(map[string]any{"event": tc.event, "properties": map[string]any{tc.key: value}})
-			require.NoError(t, err)
-			postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
-		}
-	}
-	require.NoError(t, reporter.Close())
-	sent := captured()
-	require.Len(t, sent, 4)
-	for _, properties := range sent[:2] {
+	for _, properties := range sent[i : i+2] {
 		assert.Equal(t, "other", properties["kind"])
 	}
-	for _, properties := range sent[2:] {
+	for _, properties := range sent[i+2:] {
 		assert.Equal(t, "other", properties["reason"])
 	}
 }

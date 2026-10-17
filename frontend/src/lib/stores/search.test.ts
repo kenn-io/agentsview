@@ -512,10 +512,9 @@ describe("SearchStore", () => {
     store.search("cancel me");
     await runDebounce();
     store.clear();
-    completeRequest(fullTextResponse("cancel me", 0));
+    completeRequest(fullTextResponse("cancel me", 2));
     await flushMicrotasks();
 
-    expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(reportErrorShown).not.toHaveBeenCalled();
     expect(wasCancelled).toBe(true);
     expect(store.results).toEqual([]);

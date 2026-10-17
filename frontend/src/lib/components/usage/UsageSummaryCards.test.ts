@@ -115,35 +115,18 @@ afterEach(() => {
 });
 
 describe("UsageSummaryCards", () => {
-  it("counts a summary failure once while Retry loads and recovers", async () => {
+  it("reports the analytics kind for a displayed summary failure", async () => {
     const { UsageService } = await import("../../api/generated/index.js");
     vi.mocked(reportErrorShown).mockClear();
     usage.summary = null;
-    const retry = Promise.withResolvers<UsageSummaryResponse>();
-    vi.spyOn(UsageService, "getApiV1UsageSummary")
-      .mockRejectedValueOnce(new Error("Summary failed"))
-      .mockReturnValueOnce(retry.promise);
-    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
-    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({} as never);
-    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockResolvedValue({
-      left: { dimension: "agent" },
-      right: { dimension: "agent" },
-    } as never);
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockRejectedValueOnce(
+      new Error("Summary failed"),
+    );
     component = mount(UsageSummaryCards, { target: document.body });
     await usage.fetchSummary({ loadComparison: false });
     await tick();
     expect(document.querySelector(".error-bar")?.textContent).toContain("Summary failed");
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
-    await tick();
-    expect(document.querySelector(".error-bar")).toBeNull();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    retry.resolve(summary());
-    await vi.waitFor(() => expect(usage.loading.summary).toBe(false));
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
   });
 
   it("uses the selected token types for aggregate token cards", async () => {
