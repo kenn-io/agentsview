@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";

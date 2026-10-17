@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";

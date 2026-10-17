@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, onMount } from "svelte";
   import {
     Button,

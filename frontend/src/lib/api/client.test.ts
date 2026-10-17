@@ -393,13 +393,6 @@ describe("triggerSync SSE parsing", () => {
     return { handle, progress };
   }
 
-  it.each(["sync_running"])("preserves failure code %s", async (code) => {
-    const { handle } = startSync([
-      `event: error\ndata: {"error":"Sync failed","code":"${code}"}\n\n`,
-    ]);
-    await expect(handle.done).rejects.toMatchObject({ message: "Sync failed", code });
-  });
-
   it("should parse CRLF-terminated SSE frames", async () => {
     const { handle, progress } = startSync([
       'event: progress\r\ndata: {"phase":"scanning","projects_total":1,"projects_done":0,"sessions_total":0,"sessions_done":0,"messages_indexed":0}\r\n\r\n',
@@ -465,10 +458,13 @@ describe("triggerSync SSE parsing", () => {
 
   it("should reject when the stream reports an error event", async () => {
     const { handle } = startSync([
-      'event: error\ndata: {"error":"sync worker pass reported failed"}\n\n',
+      'event: error\ndata: {"error":"sync worker pass reported failed","code":"sync_running"}\n\n',
     ]);
 
-    await expect(handle.done).rejects.toThrow("sync worker pass reported failed");
+    await expect(handle.done).rejects.toMatchObject({
+      message: "sync worker pass reported failed",
+      code: "sync_running",
+    });
   });
 
   it("should reject for non-ok responses", async () => {

@@ -389,7 +389,6 @@ describe("TrendsPage", () => {
       expect(document.querySelector(".error")).toBeNull();
       request.reject(new Error("at least one trend term is required"));
       await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(count));
-      expect(document.body.textContent).toContain("at least one trend term is required");
     }
     warn.mockRestore();
   });

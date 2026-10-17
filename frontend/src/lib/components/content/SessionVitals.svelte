@@ -1,6 +1,6 @@
 <!-- ABOUTME: Session Vital Signs panel — replaces ActivityMinimap on the right column. -->
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy } from "svelte";
   import { Chip, CopyButton, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";

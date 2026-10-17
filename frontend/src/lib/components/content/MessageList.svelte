@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, tick, untrack } from "svelte";
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
@@ -882,7 +882,7 @@
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
 {:else if sessions.activeSessionNotFound && messages.messages.length === 0}
-  <div class="missing-session" role="alert" {@attach errorTelemetry("session")}>
+  <div class="missing-session" {@attach errorTelemetry("session")}>
     <EmptyState
       title={m.message_list_session_not_found()}
       description={m.message_list_session_not_found_hint()}
@@ -971,8 +971,7 @@
 
 <style>
   .missing-session {
-    width: 100%;
-    margin: auto;
+    display: contents;
   }
 
   .message-list-scroll {

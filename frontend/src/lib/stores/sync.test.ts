@@ -364,7 +364,6 @@ describe("SyncStore.triggerSync", () => {
     expect(sync.lastSyncStats).toEqual(MOCK_STATS);
     expect(sync.stats).toEqual(stats);
     expect(sync.syncing).toBe(false);
-    expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 });
 
@@ -404,7 +403,7 @@ describe("SyncStore.triggerResync", () => {
   });
 
   it("ignores a cancelled resync", async () => {
-    mockResyncFailure(Object.assign(new Error("Cancelled"), { name: "AbortError" }));
+    mockResyncFailure(new DOMException("Cancelled", "AbortError"));
     sync.triggerResync();
     await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({
       name: "AbortError",

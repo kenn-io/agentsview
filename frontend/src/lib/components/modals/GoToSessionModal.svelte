@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Button, Modal, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";

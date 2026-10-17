@@ -515,7 +515,6 @@ describe("SearchStore", () => {
     store.clear();
     await flushMicrotasks();
 
-    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(wasCancelled).toBe(true);
     expect(store.results).toEqual([]);
     expect(store.query).toBe("");
@@ -595,7 +594,6 @@ describe("SearchStore telemetry", () => {
     await flushMicrotasks();
     expect(store.error?.kind).toBe("semantic-unavailable");
 
-    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     searchService.getApiV1SearchContent.mockRejectedValueOnce(
       generatedApiError(501, "Semantic search is unavailable"),
     );

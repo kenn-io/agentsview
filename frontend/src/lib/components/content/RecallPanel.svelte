@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Button, Card } from "@kenn-io/kit-ui";
   import { RecallService } from "../../api/generated/index.js";
   import type {
