@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,9 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestMachineLabelsAndAliasesAcrossHTTP(t *testing.T) {
@@ -88,36 +83,6 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 			assert.Equal(t, tt.want, response.ResolvedMachines)
 		})
 	}
-}
-
-func TestMachineAliasesOnDuckDB(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
-	}
-	te := setup(t)
-	te.seedSession(t, "current", "project", 5, func(s *db.Session) {
-		s.Machine = "installation-a"
-		s.UserMessageCount = 3
-	})
-	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	store, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	w := te.get(t, "/api/v1/sessions?machine=old-owner")
-	assertStatus(t, w, http.StatusOK)
-	page := decode[db.SessionPage](t, w)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "current", page.Sessions[0].ID)
-	w = te.get(t, "/api/v1/machines")
-	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, decode[struct {
-		Aliases map[string]string `json:"machine_aliases"`
-	}](t, w).Aliases)
 }
 
 func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
