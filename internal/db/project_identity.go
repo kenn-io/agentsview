@@ -1185,17 +1185,25 @@ func upsertSessionProjectIdentitySnapshotExec(
 	var existing export.ProjectResolution
 	var existingKey string
 	var existingProject string
+	var existingRemote string
 	err := queryRow(ctx, `
-		SELECT remote_resolution, key, project
+		SELECT remote_resolution, key, project, git_remote
 		FROM session_project_identity_snapshots
 		WHERE session_id = ?`, obs.SessionID).Scan(
-		&existing, &existingKey, &existingProject,
+		&existing, &existingKey, &existingProject, &existingRemote,
 	)
 	if err == nil {
-		preserveExisting := existing == export.ProjectResolutionResolved ||
-			existing == export.ProjectResolutionAmbiguous ||
-			(obs.RemoteResolution == export.ProjectResolutionUnknown &&
-				(obs.Key == "" || strings.TrimSpace(existingKey) != ""))
+		// A source-recorded repository URL repairs a checkout-derived
+		// snapshot that never had a remote, but never replaces one that did.
+		recordedRepair := obs.SourceRecorded && obs.GitRemote != "" &&
+			(existing == export.ProjectResolutionAmbiguous ||
+				(existing == export.ProjectResolutionResolved &&
+					strings.TrimSpace(existingRemote) == ""))
+		preserveExisting := !recordedRepair &&
+			(existing == export.ProjectResolutionResolved ||
+				existing == export.ProjectResolutionAmbiguous ||
+				(obs.RemoteResolution == export.ProjectResolutionUnknown &&
+					(obs.Key == "" || strings.TrimSpace(existingKey) != "")))
 		if preserveExisting {
 			if allowProjectCorrection && existingProject != obs.Project {
 				if _, err := exec.ExecContext(ctx, `

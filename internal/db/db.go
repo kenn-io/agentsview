@@ -586,7 +586,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // gain the corrected Edit category without changing session identities.)
 // (137: rebuild Codex rollouts under their first session_meta identity.
 // Version 136 was used by unreleased builds of this fix and is skipped.)
-const dataVersion = 137
+// (138: preserve the repository URL recorded in Codex-format session_meta.
+// Re-parse those sources in place to repair missing session identity evidence
+// even when the original checkout is gone. Source and session IDs are unchanged.)
+const dataVersion = 138
 
 const archiveOnlyVersionBase = 1 << 20
 

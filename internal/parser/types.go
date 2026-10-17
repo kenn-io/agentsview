@@ -1455,11 +1455,14 @@ type ParsedSession struct {
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
 	// interactive sessions and for agents that do not emit one.
-	SessionKind        string
-	ParentSessionID    string
-	RelationshipType   RelationshipType
-	Cwd                string
-	GitBranch          string
+	SessionKind      string
+	ParentSessionID  string
+	RelationshipType RelationshipType
+	Cwd              string
+	GitBranch        string
+	// GitRemote is the sanitized repository URL recorded by the provider.
+	// It remains evidence when the original checkout is no longer available.
+	GitRemote          string
 	SourceSessionID    string
 	SourceVersion      string
 	GroupKey           string `json:"group_key,omitempty"`

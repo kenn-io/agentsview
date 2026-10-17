@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -325,4 +326,101 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	var sessions int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
+}
+
+func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+		db.ScopedDataVersionProviders(137, 138))
+	const recorded = "example.com/team/api"
+	for _, tc := range []struct {
+		name               string
+		resolution         export.ProjectResolution
+		remote, remoteName string
+		wantNormalized     string
+	}{
+		{name: "unknown root only", resolution: export.ProjectResolutionUnknown, wantNormalized: recorded},
+		{name: "resolved root only", resolution: export.ProjectResolutionResolved, wantNormalized: recorded},
+		{name: "ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded},
+		{
+			name: "resolved checkout remote", resolution: export.ProjectResolutionResolved,
+			remote: "https://example.com/team/other.git", remoteName: "origin",
+			wantNormalized: "example.com/team/other",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			id := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			source := filepath.Join(root, "rollout-"+id+".jsonl")
+			meta := testjsonl.CodexSessionMetaWithFieldsJSON(
+				id, filepath.Join(root, "removed-checkout"), "codex_cli_rs", "2026-10-08T12:00:00Z",
+				map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}},
+			)
+			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+
+				testjsonl.CodexMsgJSON("user", "add rate limiting", "2026-10-08T12:00:01Z")+"\n"))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+			engine := sync.NewEngine(ctx, database, cfg)
+			require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+			engine.Close()
+			before, err := database.GetSessionFull(ctx, "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			// Simulate version 137, which discarded the URL in these unchanged
+			// bytes and kept whatever identity checkout discovery produced.
+			oldIdentity := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
+				RootPath: before.Cwd, GitRemote: tc.remote, GitRemoteName: tc.remoteName,
+			})
+			if tc.resolution == export.ProjectResolutionAmbiguous {
+				oldIdentity = export.StoredProjectIdentity{}
+			}
+			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE session_project_identity_snapshots SET git_remote=?, git_remote_name=?,
+					    normalized_remote=?, key=?, key_source=?, remote_resolution=?,
+					    remote_candidate_count=0`,
+					tc.remote, tc.remoteName, oldIdentity.NormalizedRemote,
+					oldIdentity.Key, oldIdentity.KeySource, tc.resolution)
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, `
+					DELETE FROM project_identity_observations;
+					UPDATE sessions SET data_version=137;
+					PRAGMA user_version=137`)
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			assert.True(t, needsSync)
+			assert.False(t, fullRebuild)
+			engine = sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+			after, err := database.GetSessionFull(ctx, "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, before.FilePath, after.FilePath)
+			assert.Equal(t, before.FileHash, after.FileHash)
+			assert.Equal(t, before.SourceSessionID, after.SourceSessionID)
+			assert.Equal(t, db.CurrentDataVersion(), after.DataVersion)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, after.ID, snapshots[0].SessionID)
+			assert.Equal(t, tc.wantNormalized, snapshots[0].NormalizedRemote)
+			assert.Equal(t, export.ProjectResolutionResolved, snapshots[0].RemoteResolution)
+			var sessions int
+			require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+			assert.Equal(t, 1, sessions)
+			assert.Zero(t, engine.SyncAll(ctx, nil).Synced, "unchanged sources must stop reparsing after the upgrade")
+		})
+	}
 }

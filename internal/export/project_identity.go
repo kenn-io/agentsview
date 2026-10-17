@@ -155,6 +155,33 @@ func SanitizeGitRemoteForStorage(raw string) string {
 	return sanitized
 }
 
+// WithRecordedGitRemote applies a repository URL that the session source
+// recorded at session time. The source names no git config remote, which is
+// how RecordsSourceGitRemote recognizes this evidence after it is stored.
+func WithRecordedGitRemote(
+	obs ProjectIdentityObservation, remote string,
+) ProjectIdentityObservation {
+	remote = SanitizeGitRemoteForStorage(remote)
+	if remote == "" {
+		return obs
+	}
+	obs.GitRemote = remote
+	obs.GitRemoteName = ""
+	obs.RemoteResolution = ProjectResolutionResolved
+	obs.RemoteCandidateCount = 1
+	obs.SourceRecorded = true
+	return obs
+}
+
+// RecordsSourceGitRemote reports whether a stored snapshot carries a
+// source-recorded repository URL. Checkout discovery always names the
+// selected remote.
+func RecordsSourceGitRemote(obs ProjectIdentityObservation) bool {
+	return obs.RemoteResolution == ProjectResolutionResolved &&
+		strings.TrimSpace(obs.GitRemote) != "" &&
+		strings.TrimSpace(obs.GitRemoteName) == ""
+}
+
 func SanitizeStoredProjectIdentityObservation(
 	obs ProjectIdentityObservation,
 ) ProjectIdentityObservation {

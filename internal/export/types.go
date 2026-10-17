@@ -210,6 +210,9 @@ type ProjectIdentityObservation struct {
 	NormalizedRemote     string               `json:"normalized_remote"`
 	KeySource            string               `json:"key_source"`
 	Key                  string               `json:"key"`
+	// SourceRecorded marks a repository URL the session source recorded,
+	// which may repair a stored snapshot that lacks one. It is not stored.
+	SourceRecorded bool `json:"-"`
 }
 
 type SessionExportCursor struct {

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -3056,6 +3057,7 @@ type IncrementalInfo struct {
 	AgentLabel           string
 	Entrypoint           string
 	SessionKind          string
+	RecordedGitRemote    string // source-recorded URL from the identity snapshot
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -3175,8 +3177,11 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	var fs, fm, fi, fd, pendingUsageOrdinal sql.NullInt64
 	var firstMsg, lastEntryUUID sql.NullString
 	var linearParse sql.NullBool
+	var snapshot export.ProjectIdentityObservation
 	err = db.getReader().QueryRow(ctx,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
+			COALESCE(snap.remote_resolution, ''), COALESCE(snap.git_remote, ''),
+			COALESCE(snap.git_remote_name, ''),
 			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
 			file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
@@ -3207,6 +3212,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		path, agent,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
+		&snapshot.RemoteResolution, &snapshot.GitRemote, &snapshot.GitRemoteName,
 		&info.Machine, &info.Cwd,
 		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
 		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
@@ -3219,6 +3225,9 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	)
 	if err != nil {
 		return nil, false
+	}
+	if export.RecordsSourceGitRemote(snapshot) {
+		info.RecordedGitRemote = snapshot.GitRemote
 	}
 	if firstMsg.Valid {
 		info.FirstMessage = firstMsg.String

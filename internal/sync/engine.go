@@ -11520,6 +11520,7 @@ type incrementalUpdate struct {
 	sourceProject       string
 	machine             string
 	cwd                 string
+	recordedGitRemote   string // appended lines never carry the source's URL
 	msgs                []parser.ParsedMessage
 	links               []parser.ClaudeSubagentLink
 	toolCallUpdates     []parser.ParsedToolCallUpdate
@@ -16625,6 +16626,7 @@ func (e *Engine) tryIncrementalJSONL(
 					sourceProject:        inc.SourceProject,
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
+					recordedGitRemote:    inc.RecordedGitRemote,
 					links:                links,
 					toolCallUpdates:      toolCallUpdates,
 					messageUsageUpdates:  messageUsageUpdates,
@@ -16759,6 +16761,7 @@ func (e *Engine) tryIncrementalJSONL(
 			sourceProject:        inc.SourceProject,
 			machine:              inc.Machine,
 			cwd:                  inc.Cwd,
+			recordedGitRemote:    inc.RecordedGitRemote,
 			msgs:                 newMsgs,
 			links:                links,
 			toolCallUpdates:      toolCallUpdates,
@@ -16850,6 +16853,7 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 		sourceProject:      inc.SourceProject,
 		machine:            inc.Machine,
 		cwd:                inc.Cwd,
+		recordedGitRemote:  inc.RecordedGitRemote,
 		msgs:               suffix,
 		links:              links,
 		endedAt:            endedAt,
@@ -19297,7 +19301,13 @@ func (e *Engine) projectIdentityObservationForWrite(
 	if pw.sourceIdentityUnverified {
 		return export.ProjectIdentityObservation{}, false
 	}
-	return e.projectIdentityObservation(s)
+	obs, ok := e.projectIdentityObservation(s)
+	if !ok {
+		return obs, false
+	}
+	// The source records the repository at session time. A checkout may
+	// since have disappeared or changed remotes, so prefer that evidence.
+	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
@@ -19361,19 +19371,23 @@ func (e *Engine) writeProjectIdentityObservation(
 	ctx context.Context, s db.Session,
 ) error {
 	return e.writeProjectIdentityObservationWithSnapshotProject(
-		ctx, s, s.Project,
+		ctx, s, s.Project, "",
 	)
 }
 
+// writeProjectIdentityObservationWithSnapshotProject prefers recordedRemote,
+// the session's source-recorded repository URL, over checkout discovery.
 func (e *Engine) writeProjectIdentityObservationWithSnapshotProject(
 	ctx context.Context,
 	s db.Session,
 	snapshotProject string,
+	recordedRemote string,
 ) error {
 	obs, ok := e.projectIdentityObservation(s)
 	if !ok {
 		return nil
 	}
+	obs = export.WithRecordedGitRemote(obs, recordedRemote)
 	snapshot := obs
 	snapshot.Project = snapshotProject
 	fingerprint := projectIdentityObservationFingerprint(obs) + "\x00" +
@@ -19400,28 +19414,16 @@ func (e *Engine) writeProjectIdentityObservationWithSnapshotProject(
 	return nil
 }
 
-func (e *Engine) upsertSessionPendingContentWithProjectIdentity(ctx context.Context,
-	s db.Session,
-	snapshotProject string,
-) (bool, error) {
-	obs, ok := e.projectIdentityObservation(s)
-	if !ok {
-		return e.db.UpsertSessionPendingContent(ctx, s)
-	}
-	return e.db.UpsertSessionPendingContentWithProjectIdentity(ctx,
-		s, obs, snapshotProject,
-	)
-}
-
 func (e *Engine) upsertSessionPendingContentForWrite(ctx context.Context,
 	pw pendingWrite,
 	s db.Session,
 ) (bool, error) {
-	if pw.sourceIdentityUnverified {
+	obs, ok := e.projectIdentityObservationForWrite(pw, s)
+	if !ok {
 		return e.db.UpsertSessionPendingContent(ctx, s)
 	}
-	return e.upsertSessionPendingContentWithProjectIdentity(ctx,
-		s, pw.sess.Project,
+	return e.db.UpsertSessionPendingContentWithProjectIdentity(ctx,
+		s, obs, pw.sess.Project,
 	)
 }
 
@@ -19983,6 +19985,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		context.Background(),
 		identitySession,
 		inc.sourceProject,
+		inc.recordedGitRemote,
 	); err != nil {
 		log.Printf(
 			"incremental project identity observation %s: %v",
