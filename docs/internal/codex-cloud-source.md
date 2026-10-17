@@ -257,7 +257,9 @@ Each root keeps its group's stored change time, so a root that changed more than
 7 days ago settles on its first answer. A root whose files cannot be read is
 logged and left out until its chat changes again. A root whose mirror file is
 missing has no plan records, so it is pending again, and its next plan usage
-write rebuilds the file and fetches the history.
+write rebuilds the file and fetches the history. Any thread whose mirror file is
+missing is marked to check again, so the next pass fetches it even when its
+listing has not changed.
 
 The same rebuild restores the chats that a pass fetches again although their
 listing has not changed. A chat with a running turn, or whose newest turn ended
@@ -650,7 +652,10 @@ docs recommend enabling the source on one machine.
   usage counts each sub-agent's user messages as missed turns, one per turn.
 - **Counter restarts.** A reset is detected only as a decrease. A restart that
   grows past the old total before the next join undercounts. No probe has seen
-  a reset.
+  a reset. A mirror rebuilt after a reset starts below the saved total, so
+  sync keeps the saved counts until the new total passes them, then drops the
+  earlier counter's tokens. The archive does not record whether a new counter
+  continues the old one.
 - **Model changes.** A change reported only by `thread/settings/updated`, which
   needs the experimental API, and a reroute before the join both go to the
   earlier model.

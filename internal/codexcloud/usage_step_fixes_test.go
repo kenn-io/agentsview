@@ -588,3 +588,23 @@ func TestLostAccountStateRequeuesRootWithLostMirror(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"m"}, recordedItemIDs(records), "the history is fetched again")
 }
+
+// An idle chat whose account state and mirror file are both lost is
+// fetched again even though its listing has not changed.
+func TestLostAccountStateFetchesIdleChatWithLostMirror(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("idle", ago(10*24*time.Hour), message("m", "hi")))
+	env.usage.SetRow("idle", codexcloudtest.Row("idle", "available", pct(2), nil))
+	env.run(t)
+	require.NoError(t, os.Remove(env.mirrorPath(t, "idle")))
+
+	env.loseAccount(t, false)
+	env.clock.Advance(time.Hour)
+	fetchFrom := len(env.host.Requests())
+	env.run(t)
+
+	assert.Contains(t, env.fetchedThreads(fetchFrom), "idle", "the unchanged chat is fetched again")
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "idle"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m"}, recordedItemIDs(records))
+}

@@ -275,6 +275,19 @@ func (s *Store) restoreFollowUps(key AccountKey, acct *AccountState, id string) 
 	if st.UpdatedAt != 0 && now.Sub(time.Unix(st.UpdatedAt, 0)) < checkAgainWindow {
 		acct.CheckAgain[id] = true
 	}
+	// An unchanged listing never selects a thread whose mirror file went
+	// missing with account.json, so its history would wait for its next
+	// change. A damaged file that is still there is left to the pass that
+	// next selects the thread.
+	path, err := s.MirrorPath(key, id)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		acct.CheckAgain[id] = true
+	} else if err != nil {
+		return fmt.Errorf("codex-cloud: stat mirror: %w", err)
+	}
 	return nil
 }
 
