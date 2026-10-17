@@ -18,22 +18,30 @@ import (
 // in the stored parents.
 const maxParentDepth = 256
 
-// known reports whether a thread is mirrored. A usage root is a thread
-// with no known ancestor.
+// known reports whether a thread is mirrored: its mirror file or its
+// saved state exists. Only a fetch's commit creates a thread's state, so a
+// mirror file that went missing leaves the thread known, and its children
+// keep counting under it until the next fetch rebuilds the file. A usage
+// root is a thread with no known ancestor.
 func (s *Store) known(key AccountKey, threadID string) (bool, error) {
-	path, err := s.MirrorPath(key, threadID)
+	mirrorPath, err := s.MirrorPath(key, threadID)
 	if err != nil {
 		return false, err
 	}
-	_, err = os.Stat(path)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, fs.ErrNotExist):
-		return false, nil
-	default:
-		return false, fmt.Errorf("codex-cloud: stat mirror: %w", err)
+	statePath, err := s.path(key, threadID, threadStateSuffix)
+	if err != nil {
+		return false, err
 	}
+	for _, path := range []string{mirrorPath, statePath} {
+		_, err := os.Stat(path)
+		switch {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return false, fmt.Errorf("codex-cloud: stat mirror: %w", err)
+		}
+	}
+	return false, nil
 }
 
 // RootOf follows a thread's resolved parents through known threads and
