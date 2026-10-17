@@ -136,12 +136,13 @@ func TestResolveMachineFilter(t *testing.T) {
 		}
 	})
 	t.Run("unknown list members", func(t *testing.T) {
-		for _, input := range []string{"id-a,id-gone", "old-owner,id-gone", "id-gone,missing", id + ",missing", ", ,"} {
+		for _, input := range []string{"id-a,id-gone", "old-owner,id-gone", "id-gone,missing", id + ",missing", id + ",A", ", ,"} {
 			_, err := ResolveMachineFilter(ctx, d, input)
 			var filterError *MachineFilterError
 			require.ErrorAs(t, err, &filterError)
 			assert.Empty(t, filterError.Candidates)
 			assert.Contains(t, err.Error(), "unknown machine")
+			assert.Contains(t, err.Error(), "comma-separated filters take machine IDs or aliases")
 			assert.Contains(t, filterError.Known, "A")
 		}
 	})

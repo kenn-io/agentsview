@@ -102,7 +102,11 @@ func (e *MachineFilterError) Error() string {
 	if len(e.Candidates) > 1 {
 		return fmt.Sprintf("ambiguous machine %q; matching IDs: %s; known machines: %s", e.Value, strings.Join(e.Candidates, ", "), known)
 	}
-	return fmt.Sprintf("unknown machine %q; known machines: %s", e.Value, known)
+	hint := ""
+	if strings.Contains(e.Value, ",") {
+		hint = "; comma-separated filters take machine IDs or aliases"
+	}
+	return fmt.Sprintf("unknown machine %q%s; known machines: %s", e.Value, hint, known)
 }
 
 // ResolveMachineFilter accepts aliases, exact IDs, and unique display labels.
