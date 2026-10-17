@@ -45,6 +45,7 @@ type usageSummaryCountsSpy struct {
 	matchingSessionCount int
 	filters              []db.UsageFilter
 	result               db.DailyUsageResult
+	machineCatalogCalls  int
 }
 
 type usageComparisonProjectKeySpy struct {
@@ -53,14 +54,9 @@ type usageComparisonProjectKeySpy struct {
 	projectMap   map[string]export.ProjectMapEntry
 }
 
-type usageSummaryServiceSpy struct {
-	service.SessionService
-	request service.UsageRequest
-}
-
-func (s *usageSummaryServiceSpy) UsageSummary(ctx context.Context, req service.UsageRequest) (*service.UsageSummaryResult, error) {
-	s.request = req
-	return s.SessionService.UsageSummary(ctx, req)
+func (s *usageSummaryCountsSpy) GetMachineLabels(ctx context.Context) (map[string]string, error) {
+	s.machineCatalogCalls++
+	return s.Store.GetMachineLabels(ctx)
 }
 
 func TestUsageSummaryStreamUsesResolvedMachine(t *testing.T) {
@@ -68,15 +64,14 @@ func TestUsageSummaryStreamUsesResolvedMachine(t *testing.T) {
 	require.NoError(t, s.db.(*db.DB).SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Workstation"))
 	spy := &usageSummaryCountsSpy{Store: s.db}
 	s.db = spy
-	backend := &usageSummaryServiceSpy{SessionService: service.NewReadOnlyBackend(spy)}
-	s.sessions = backend
 	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
 	assertRecorderStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Body.String(), "event: done\n")
-	assert.Equal(t, "id-a", backend.request.Machine)
-	assert.NotNil(t, backend.request.Progress)
+	assert.Equal(t, 1, spy.machineCatalogCalls)
+	assert.Contains(t, w.Body.String(), "event: progress\n")
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, "id-a", spy.filters[0].Machine)
+	assert.NotNil(t, spy.filters[0].Progress)
 }
 
 type usageMachineCatalogFailureStore struct{ db.Store }

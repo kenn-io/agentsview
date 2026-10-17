@@ -366,6 +366,7 @@
 
   function onMachineChange(value: string) {
     activity.setMachine(value);
+    if (!activity.machines.length) activity.loadFilterOptions();
     activity.load();
   }
 

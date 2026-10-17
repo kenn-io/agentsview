@@ -150,7 +150,7 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 		if known[id] {
 			continue
 		}
-		if id == strings.ToLower(id) && config.ValidateInstallationID(id) == nil {
+		if config.ValidateInstallationID(id) == nil {
 			known[id] = true
 			continue
 		}

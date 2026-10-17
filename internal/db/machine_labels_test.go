@@ -71,7 +71,8 @@ func TestResolveMachineFilter(t *testing.T) {
 	}{
 		{id, id, d},
 		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", d},
-		{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "uppercase-owner", d},
+		{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", d},
+		{"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", d},
 		{"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "id-a", d},
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", d},
 		// An installation ID without stored sessions stays an exact selector.
@@ -110,7 +111,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		assert.EqualError(t, err, `ambiguous machine "A,B"; matching IDs: id-comma, id-duplicate; known machines: A,B`)
 	})
 	t.Run("unknown selectors", func(t *testing.T) {
-		for _, input := range []string{"missing", "a", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"} {
+		for _, input := range []string{"missing", "a"} {
 			t.Run(input, func(t *testing.T) {
 				_, err := ResolveMachineFilter(ctx, d, input)
 				var filterError *MachineFilterError

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"slices"
-	"strings"
 )
 
 // MatchingMachineIDs returns stored identities that exactly match candidates.
@@ -16,11 +15,8 @@ func MatchingMachineIDs(ctx context.Context, reader messageRowsQuerier, dialect 
 	var ids []string
 	err := queryChunked(candidates, func(chunk []string) error {
 		b := NewQueryBuilder(dialect, 0)
-		placeholders := make([]string, len(chunk))
-		for i, candidate := range chunk {
-			placeholders[i] = b.Add(candidate)
-		}
-		rows, err := reader.QueryContext(ctx, "SELECT DISTINCT machine FROM sessions WHERE machine IN ("+strings.Join(placeholders, ",")+") ORDER BY machine", b.Args()...)
+		predicate := b.ValuesPredicate("machine", chunk, true)
+		rows, err := reader.QueryContext(ctx, "SELECT DISTINCT machine FROM sessions WHERE "+predicate+" ORDER BY machine", b.Args()...)
 		if err != nil {
 			return err
 		}

@@ -443,6 +443,17 @@ class ActivityStore {
       } catch (e) {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
+        if (e instanceof ApiError && e.code === "invalid_machine_filter") {
+          const catalog = await MetadataService.getApiV1Machines(opts, { signal }).catch(
+            () => null,
+          );
+          if (
+            catalog &&
+            ver === this.#filterOptionsVersion &&
+            this.filterOptionsRead.isCurrent(signal)
+          )
+            this.machines = catalog.machines;
+        }
       }
       const current =
         ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);

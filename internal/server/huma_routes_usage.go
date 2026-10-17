@@ -215,8 +215,6 @@ func (s *Server) humaUsageSummaryStream(
 	if err != nil {
 		return nil, usagePreflightAPIError(err)
 	}
-	req := usageRequestFromInput(*in)
-	req.Machine = f.Machine
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -224,13 +222,13 @@ func (s *Server) humaUsageSummaryStream(
 		}
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		req.Progress = func(phase string) {
+		f.Progress = func(phase string) {
 			if !stream.SendJSON("progress", map[string]string{"detail": phase}) {
 				cancel()
 			}
 		}
-		req.Progress("Preparing usage report from the archive")
-		summary, err := s.sessions.UsageSummary(ctx, req)
+		f.Progress("Preparing usage report from the archive")
+		summary, err := service.QueryUsageSummary(ctx, s.db, f)
 		if err != nil {
 			if err := usageSummaryAPIError(err); err != nil {
 				stream.SendJSON("error", map[string]string{"error": err.Error()})

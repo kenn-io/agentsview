@@ -332,7 +332,7 @@
   const INITIAL_LOAD_CEILING_MS = 2000;
   let initialLoadTimer: ReturnType<typeof setTimeout> | undefined;
   // Child mount effects run before the page's first-load effect.
-  let initialLoadDeferred = $state(sessions.loading);
+  let initialLoadDeferred = $state(sessions.loading || sessions.machineFilterPending);
 
   function cancelInitialLoad() {
     clearTimeout(initialLoadTimer);
@@ -398,7 +398,7 @@
   });
 
   $effect(() => {
-    if (initialLoadDeferred && !sessions.loading) {
+    if (initialLoadDeferred && !sessions.loading && !sessions.machineFilterPending) {
       untrack(() => {
         clearTimeout(initialLoadTimer);
         initialLoadTimer = setTimeout(releaseInitialLoad, 0);
@@ -419,6 +419,7 @@
   // the sidebar filters change. Uses untrack on analytics state
   // so that local drill-downs don't re-trigger.
   $effect(() => {
+    if (sessions.machineFilterPending) return;
     const headerProject = sessions.filters.project;
     const headerMachine = sessions.filters.machine;
     const headerAgent = sessions.filters.agent;
@@ -505,6 +506,7 @@
   });
 
   $effect(() => {
+    if (sessions.machineFilterPending) return;
     const route = router.route;
     const params = router.params;
     const earliestSession = sync.stats?.earliest_session ?? undefined;

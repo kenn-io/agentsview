@@ -559,6 +559,23 @@ describe("session paging", () => {
 });
 
 describe("loadFilterOptions", () => {
+  it("loads machine choices after a rejected selector without clearing it", async () => {
+    activity.hydrateFromUrl({ machine: "unknown" });
+    api.getMachines
+      .mockRejectedValueOnce(new ApiError(400, "unknown machine", "invalid_machine_filter"))
+      .mockResolvedValueOnce({ machines: ["id-a"] });
+
+    await activity.loadFilterOptions();
+
+    expect(activity.machine).toBe("unknown");
+    expect(activity.machines).toEqual(["id-a"]);
+    expect(api.getMachines).toHaveBeenCalledTimes(2);
+    expect(api.getMachines.mock.lastCall?.[0]).toEqual({
+      include_one_shot: true,
+      include_automated: true,
+    });
+  });
+
   it("resolves a whole machine URL label containing a comma to its ID", async () => {
     await activity.loadFilterOptions();
     activity.hydrateFromUrl({ machine: "Work, Linux" });
