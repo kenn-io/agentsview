@@ -81,7 +81,7 @@ func newSyncWorkerCommand() *cobra.Command {
 			// Load config the same flag-aware way `serve` does so config flags
 			// the daemon forwarded into the child argv (see syncWorkerChildArgs)
 			// override env/config.toml identically to a serve --background child.
-			cfg, err := config.LoadPFlags(cmd.Flags())
+			cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("sync-worker: loading config: %w", err)
 			}

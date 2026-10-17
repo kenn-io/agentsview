@@ -54,8 +54,7 @@ func pgServeSelected() bool {
 }
 
 // applyDeploymentEnv runs after the file layer and before explicit flags.
-// It is the only reader of the container deployment variables and applies
-// nothing unless AGENTSVIEW_MODE is set. It never sets HostExplicit, so a
+// It applies nothing unless AGENTSVIEW_MODE is set. It never sets HostExplicit, so a
 // persistent non-loopback host from the environment still needs auth.
 func (c *Config) applyDeploymentEnv() error {
 	if _, set, err := DeploymentMode(); err != nil || !set {
@@ -68,10 +67,8 @@ func (c *Config) applyDeploymentEnv() error {
 		}
 		c.Host = host
 	}
-	if v, set, err := lookupEnvBool("AGENTSVIEW_REQUIRE_AUTH"); err != nil {
+	if err := c.ApplyDeploymentAuth(); err != nil {
 		return err
-	} else if set {
-		c.RequireAuth = v
 	}
 	if v, set, err := lookupEnvBool("AGENTSVIEW_NO_BROWSER"); err != nil {
 		return err
@@ -82,6 +79,20 @@ func (c *Config) applyDeploymentEnv() error {
 		return err
 	} else if set {
 		c.pgEnvOverrides.AllowInsecure = &v
+	}
+	return c.ApplyDeploymentEmbeddings()
+}
+
+// ApplyDeploymentAuth loads the deployment authentication used by listeners
+// and daemon clients. Serving entry points validate deployment mode selection.
+func (c *Config) ApplyDeploymentAuth() error {
+	if strings.TrimSpace(os.Getenv("AGENTSVIEW_MODE")) == "" {
+		return nil
+	}
+	if v, set, err := lookupEnvBool("AGENTSVIEW_REQUIRE_AUTH"); err != nil {
+		return err
+	} else if set {
+		c.RequireAuth = v
 	}
 	if path, set := os.LookupEnv("AGENTSVIEW_AUTH_TOKEN_FILE"); set {
 		if os.Getenv("AGENTSVIEW_AUTH_TOKEN") != "" {
@@ -94,13 +105,17 @@ func (c *Config) applyDeploymentEnv() error {
 		}
 		c.AuthToken = token
 	}
-	return c.applyDeploymentEmbeddings()
+	return nil
 }
 
-// applyDeploymentEmbeddings builds the embeddings server named by
-// AGENTSVIEW_EMBEDDINGS_ENDPOINT. A [vector] section owns the recipe and
-// its servers, so the two never combine.
-func (c *Config) applyDeploymentEmbeddings() error {
+// ApplyDeploymentEmbeddings loads only the transport needed by PostgreSQL
+// recipe adoption, without loading listener authentication or network settings.
+// It applies nothing unless AGENTSVIEW_MODE is non-blank.
+// A [vector] section owns its recipe and servers, so the two never combine.
+func (c *Config) ApplyDeploymentEmbeddings() error {
+	if strings.TrimSpace(os.Getenv("AGENTSVIEW_MODE")) == "" {
+		return nil
+	}
 	endpoint, endpointSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_ENDPOINT")
 	keyPath, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
 	batchSize, batchSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE")

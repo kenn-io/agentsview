@@ -224,7 +224,7 @@ func runRawSyncBackfill(
 	cfg rawSyncBackfillConfig,
 	credential string,
 ) error {
-	appCfg, err := config.LoadReadOnly()
+	appCfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 	if err != nil {
 		return errors.New("raw-sync backfill: configuration could not be loaded")
 	}

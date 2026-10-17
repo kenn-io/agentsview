@@ -235,7 +235,7 @@ func runTokenUse(ctx context.Context, args []string) {
 }
 
 func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutput, int, error) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
