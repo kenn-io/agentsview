@@ -23,6 +23,11 @@ type windowsFileBasicInfo struct {
 	_              uint32
 }
 
+// ChangeTime returns the Windows file change time in Unix nanoseconds.
+func ChangeTime(path string) (int64, bool) {
+	return fileChangeTime(path, nil)
+}
+
 func fileChangeTime(path string, _ os.FileInfo) (int64, bool) {
 	file, err := os.Open(path)
 	if err != nil {

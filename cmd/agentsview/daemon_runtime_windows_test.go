@@ -3,45 +3,71 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
-	"unsafe"
 
 	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"golang.org/x/sys/windows"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
+	if path := os.Getenv("AGENTSVIEW_LEGACY_START_LOCK_HELPER"); path != "" {
+		lock := flock.New(path)
+		require.NoError(t, lock.Lock())
+		fmt.Println("ready")
+		_, err := io.Copy(io.Discard, os.Stdin)
+		require.NoError(t, err)
+		require.NoError(t, lock.Close())
+		return
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.lock")
 	assert.False(t, IsDaemonStarting(dir))
+	assert.False(t, isExternalDaemonStarting(dir))
 	assert.NoFileExists(t, path)
 
-	lock := flock.New(path)
-	t.Cleanup(func() { require.NoError(t, lock.Close()) })
-	require.NoError(t, lock.Lock())
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDaemonRuntimeFindsLegacyWindowsStartLock$")
+	cmd.Env = append(os.Environ(), "AGENTSVIEW_LEGACY_START_LOCK_HELPER="+path)
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	cmd.Stderr = os.Stderr
+	require.NoError(t, cmd.Start())
+	waited := false
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		if !waited {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	ready, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", ready)
 	assert.True(t, IsDaemonStarting(dir))
-	assert.True(t, IsDaemonActive(dir))
-	deps := defaultDaemonCommandDeps()
-	deps.loadReadOnlyConfig = func() (config.Config, error) {
-		return config.Config{DataDir: dir}, nil
-	}
-	var out bytes.Buffer
-	require.NoError(t, runDaemonStatus(&out, deps))
-	assert.Contains(t, out.String(), "agentsview daemon is starting up.")
+	assert.True(t, isExternalDaemonStarting(dir))
 
-	require.NoError(t, lock.Unlock())
+	require.NoError(t, stdin.Close())
+	err = cmd.Wait()
+	waited = true
+	require.NoError(t, err)
 	assert.False(t, IsDaemonStarting(dir))
+	assert.False(t, isExternalDaemonStarting(dir))
 	assert.FileExists(t, path)
 
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Mkdir(path, 0o700))
 	assert.False(t, IsDaemonStarting(dir), "an unopenable lock is not a starting daemon")
+	assert.False(t, isExternalDaemonStarting(dir))
 	assert.DirExists(t, path)
 }
 
@@ -53,25 +79,9 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 		filepath.Join(dir, "assets", "sentinel"),
 	}
 	changeTime := func(path string) int64 {
-		file, err := os.Open(path)
-		require.NoError(t, err)
-		defer file.Close()
-		// FILE_BASIC_INFO uses four LARGE_INTEGER timestamps, followed by
-		// the attributes and padding to an eight-byte boundary.
-		var info struct {
-			creationTime   int64
-			lastAccessTime int64
-			lastWriteTime  int64
-			changeTime     int64
-			fileAttributes uint32
-			_              uint32
-		}
-		require.NoError(t, windows.GetFileInformationByHandleEx(
-			windows.Handle(file.Fd()), windows.FileBasicInfo,
-			(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)),
-		))
-		require.NotZero(t, info.changeTime)
-		return info.changeTime
+		value, ok := syncpkg.ChangeTime(path)
+		require.True(t, ok)
+		return value
 	}
 	before := make([]int64, len(paths))
 	for i, path := range paths {

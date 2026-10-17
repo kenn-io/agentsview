@@ -3,7 +3,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,18 +108,8 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 		if err != nil || rec.PID != pid || rec.Address == "" {
 			continue
 		}
-		if !daemon.ProcessAlive(pid) || runtimeRecordIdentityState(rec) == processCreateTimeMismatch {
-			_ = os.Remove(path)
-			continue
-		}
 		records = append(records, rec)
 	}
-	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
-		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
-			return order
-		}
-		return cmp.Compare(a.PID, b.PID)
-	})
 	return records, nil
 }
 
@@ -967,6 +955,21 @@ func isDaemonStarting(dataDir string) bool {
 }
 
 func daemonStartingWithLockProbe(dataDir string, external bool) bool {
+	if runtimeDir(dataDir) != dataDir {
+		// Remove this bridge the release after the Windows runtime subdirectory ships.
+		path := filepath.Join(dataDir, "daemon.lock")
+		if _, err := os.Stat(path); err == nil {
+			lock := flock.New(path)
+			defer lock.Close()
+			acquired, err := lock.TryLock()
+			if err == nil {
+				if !acquired {
+					return true
+				}
+				_ = lock.Unlock()
+			}
+		}
+	}
 	path, err := runtimeStore(dataDir).LockPath()
 	if err != nil {
 		return false
@@ -1050,21 +1053,6 @@ func isExternalDaemonStarting(dataDir string) bool {
 const legacyStartupLockPrefix = "server.starting."
 
 func isLegacyDaemonStarting(dataDir string) bool {
-	if runtimeDir(dataDir) != dataDir {
-		// Remove this bridge the release after the Windows runtime subdirectory ships.
-		path := filepath.Join(dataDir, "daemon.lock")
-		if _, err := os.Stat(path); err == nil {
-			lock := flock.New(path)
-			defer lock.Close()
-			acquired, err := lock.TryLock()
-			if err == nil {
-				if !acquired {
-					return true
-				}
-				_ = lock.Unlock()
-			}
-		}
-	}
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false
