@@ -295,6 +295,10 @@ func (s *Server) importClaudeAIFromFileWithCallbacks(
 		stats, importErr = importer.ImportClaudeAIWithOptions(ctx, s.db, reader, cb, opts)
 		return importErr
 	})
+	// Announce committed sessions even when the export fails partway.
+	if stats.Imported+stats.Updated > 0 && s.broadcaster != nil {
+		s.broadcaster.Emit("sessions")
+	}
 	if err != nil {
 		if errors.Is(err, db.ErrWriterClosed) {
 			return importer.ImportStats{}, writerClosedError(s.archiveStale())
@@ -435,6 +439,10 @@ func (s *Server) importChatGPTFromFile(
 			filepath.Join(s.cfg.DataDir, "assets"), cb, opts)
 		return importErr
 	})
+	// Announce committed sessions even when the export fails partway.
+	if stats.Imported+stats.Updated > 0 && s.broadcaster != nil {
+		s.broadcaster.Emit("sessions")
+	}
 	if err != nil {
 		if errors.Is(err, db.ErrWriterClosed) {
 			return importer.ImportStats{}, writerClosedError(s.archiveStale())

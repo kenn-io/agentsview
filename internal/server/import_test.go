@@ -545,15 +545,17 @@ const chatGPTRefusalConvWithAppend = `[{
   }
 }]`
 
-// chatGPTExportZip packs conversations as a one-file ChatGPT export zip.
-func chatGPTExportZip(t *testing.T, conversations string) []byte {
+// chatGPTExportZip packs each conversations file as a numbered ChatGPT export shard.
+func chatGPTExportZip(t *testing.T, shards ...string) []byte {
 	t.Helper()
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
-	entry, err := zw.Create("conversations-000.json")
-	require.NoError(t, err)
-	_, err = entry.Write([]byte(conversations))
-	require.NoError(t, err)
+	for i, conversations := range shards {
+		entry, err := zw.Create(fmt.Sprintf("conversations-%03d.json", i))
+		require.NoError(t, err)
+		_, err = entry.Write([]byte(conversations))
+		require.NoError(t, err)
+	}
 	require.NoError(t, zw.Close())
 	return archive.Bytes()
 }
@@ -844,6 +846,57 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, "Committed chat", messages[0].Content)
+		})
+	}
+}
+
+func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
+	const claudeAIConv = `{"uuid":"announce-001","name":"Announce","created_at":"2026-03-01T10:00:00.000000Z",` +
+		`"updated_at":"2026-03-01T10:05:00.000000Z","chat_messages":[{"uuid":"m1","text":"hello","sender":"human",` +
+		`"content":[{"type":"text","text":"hello"}],"created_at":"2026-03-01T10:00:00.000000Z"}]}`
+	for _, tt := range []struct {
+		name, path, file string
+		data             []byte
+		wantCode         int
+	}{
+		{"claude-ai", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIConv + "]"), http.StatusOK},
+		{"claude-ai partial", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIConv + ",{"), http.StatusInternalServerError},
+		{"chatgpt", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv), http.StatusOK},
+		{"chatgpt partial", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv, "["), http.StatusInternalServerError},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mutations := make(chan struct{}, 2)
+			srv := testServer(t, 5*time.Second,
+				WithSessionMutationNotifier(func() { mutations <- struct{}{} }),
+				WithRecallCorpusMutationNotifier(func() { mutations <- struct{}{} }),
+			)
+			srv.broadcaster = NewBroadcaster(0)
+			events, unsubscribe := srv.broadcaster.Subscribe()
+			defer unsubscribe()
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			part, err := writer.CreateFormFile("file", tt.file)
+			require.NoError(t, err)
+			_, err = part.Write(tt.data)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tt.path, &body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			rec := httptest.NewRecorder()
+			srv.mux.ServeHTTP(rec, req)
+			require.Equal(t, tt.wantCode, rec.Code, "body: %s", rec.Body.String())
+
+			readable, err := srv.db.(*db.DB).HasReadableSessions(t.Context())
+			require.NoError(t, err)
+			assert.True(t, readable)
+			select {
+			case event := <-events:
+				assert.Equal(t, "sessions", event.Scope)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "committed upload did not broadcast sessions")
+			}
+			// Uploads wake only live views, not model-backed extraction or recall rebuilds.
+			assert.Empty(t, mutations)
 		})
 	}
 }

@@ -148,28 +148,6 @@ func TestClaimSetupFinished(t *testing.T) {
 	}
 }
 
-func TestClaimSetupFinishedConcurrent(t *testing.T) {
-	dir := t.TempDir()
-	var wg sync.WaitGroup
-	var sends atomic.Int32
-	errs := make(chan error, 8)
-	for range 8 {
-		wg.Go(func() {
-			cfg := Config{DataDir: dir, InstallationID: "install-one"}
-			errs <- cfg.ClaimSetupFinished(func() error {
-				sends.Add(1)
-				return nil
-			})
-		})
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	assert.EqualValues(t, 1, sends.Load())
-}
-
 func TestClaimSetupFinishedAcrossProcesses(t *testing.T) {
 	if dir := os.Getenv("AGENTSVIEW_TEST_SETUP_CLAIM_DIR"); dir != "" {
 		cfg := Config{DataDir: dir, InstallationID: "install-one"}

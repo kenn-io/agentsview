@@ -807,6 +807,8 @@ at most once per UTC day while the server runs, and an `app_opened` event when
 the web UI loads and on the first focus of a later UTC day.
 The server also sends `setup_finished` once per installation when the archive
 first contains a session with messages, excluding subagents, forks, and trash.
+Existing installs with such a session send it on their first start after
+upgrading.
 The web UI sends `visit_ended` with `surface: web` and visible visit duration
 in fixed buckets:
 `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also reports

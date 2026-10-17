@@ -120,6 +120,11 @@ func TestSetupFinishedCapture(t *testing.T) {
 	}))
 	defer collector.Close()
 	reporter := captureReporter(t, collector.URL, Options{})
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
+	// Browser posts cannot skip the daemon's archive check and claim.
+	for _, event := range []string{EventSetupFinished, " " + EventDaemonActive} {
+		postCapture(t, srv.Handler(), `{"event":"`+event+`"}`, http.StatusBadRequest)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, reporter.CaptureSetupFinished(ctx), context.Canceled)

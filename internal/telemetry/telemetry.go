@@ -1,8 +1,11 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -28,6 +31,8 @@ const (
 	EventAnalyticsViewed  = "analytics_viewed"
 	application           = "agentsview"
 	envPrefix             = "AGENTSVIEW"
+	// captureMaxBodyBytes matches kit's capture request limit.
+	captureMaxBodyBytes = 64 << 10
 )
 
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedEvent
@@ -111,9 +116,6 @@ func (r *Reporter) EventAllowed(event string) bool {
 
 // CaptureSetupFinished queues the daemon's first readable archive milestone.
 func (r *Reporter) CaptureSetupFinished(ctx context.Context) error {
-	if !r.Enabled() {
-		return errors.New("telemetry disabled")
-	}
 	status, err := r.client.Report(ctx, EventSetupFinished, nil)
 	if err != nil {
 		return err
@@ -125,12 +127,43 @@ func (r *Reporter) CaptureSetupFinished(ctx context.Context) error {
 }
 
 // CaptureHandler lets the web UI report allowlisted events through this reporter.
+// It rejects daemon events, whose conditions and claims only the daemon checks.
 func (r *Reporter) CaptureHandler() http.Handler {
 	var client *kittelemetry.Reporter
 	if r != nil {
 		client = r.client
 	}
-	return kittelemetry.NewCaptureHandler(client)
+	capture := kittelemetry.NewCaptureHandler(client)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(req.Body, captureMaxBodyBytes))
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			http.Error(w, "telemetry request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if err != nil {
+			http.Error(w, "invalid telemetry request", http.StatusBadRequest)
+			return
+		}
+		// Decode as kit does, so both read the same event name.
+		var event struct {
+			Event string `json:"event"`
+		}
+		if json.NewDecoder(bytes.NewReader(body)).Decode(&event) == nil {
+			switch strings.TrimSpace(event.Event) {
+			case EventDaemonActive, EventSetupFinished:
+				http.Error(w, ErrUnsupportedEvent.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		// Hand kit the bytes already read plus the rest, so its size and decode answers stay its own.
+		req.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(body), req.Body), Closer: req.Body}
+		capture.ServeHTTP(w, req)
+	})
+}
+
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func (r *Reporter) SanitizeProperties(

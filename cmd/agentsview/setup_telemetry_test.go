@@ -58,12 +58,12 @@ func TestSetupTelemetryImportAndRetry(t *testing.T) {
 		broadcaster.Emit("all")
 		synctest.Wait()
 		assert.Zero(t, sends.Load())
-		// Seed a readable session as an import does before publishing its event.
+		// Seed a readable session as an upload does before publishing its event.
 		dbtest.SeedSessionWithMessages(t, database, "imported", "project-a", []db.Message{
 			{SessionID: "imported", Ordinal: 0, Role: "user", Content: "hello"},
 		})
 		importedAt := time.Now()
-		broadcaster.Emit("all")
+		broadcaster.Emit("sessions")
 		first := <-attempts
 		second := <-attempts
 		<-done
@@ -90,11 +90,15 @@ func TestSetupTelemetryCancellation(t *testing.T) {
 		synctest.Wait()
 		cancel()
 		<-done
-		// The enabled gate must leave a readable archive unclaimed when opted out.
-		dbtest.SeedSession(t, database, "session-one", "project-a")
-		startSetupTelemetry(t.Context(), telemetry.DisabledReporter(), cfg, database, broadcaster)()
-		sent := false
-		require.NoError(t, cfg.ClaimSetupFinished(func() error { sent = true; return nil }))
-		assert.True(t, sent)
 	})
+}
+
+func TestSetupTelemetryOptOutLeavesClaim(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, database, "session-one", "project-a")
+	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+	startSetupTelemetry(t.Context(), telemetry.DisabledReporter(), cfg, database, server.NewBroadcaster(0))()
+	sent := false
+	require.NoError(t, cfg.ClaimSetupFinished(func() error { sent = true; return nil }))
+	assert.True(t, sent)
 }

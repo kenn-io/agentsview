@@ -1988,7 +1988,14 @@ contains a session with messages. Subagents, forks, and trashed sessions do not
 count. It checks at startup, after syncs and imports, and hourly for retries.
 The `telemetry-setup-finished` file beside the installation identity records the
 claim across restarts and servers sharing the data directory. The event carries
-no session details and follows the same telemetry opt-out.
+no session details and follows the same telemetry opt-out. Existing installs
+with such a session send it on their first start after upgrading.
+
+The claim records that the event entered the telemetry queue, not that PostHog
+received it. Delivery is best effort: if the server stops or the network fails
+before the queue flushes, the event is lost and is not sent again. Only the
+server sends `setup_finished` and `daemon_active`; the web UI's telemetry route
+rejects both.
 
 The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
 of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
