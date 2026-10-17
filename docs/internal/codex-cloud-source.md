@@ -213,18 +213,17 @@ neither, so a parse without them where the archive has them comes from a rebuilt
 file. Such a parse still imports its messages, but keeps the archived token
 counts, usage events, and capture coverage until new live counts arrive, and the
 archived plan figures until a newer report arrives. An outcome alone, other than
-"counted under", keeps the archived figures under it when it is newer than the
-archived report, as a whole file would. Records only accumulate, so a parse
-whose output total is below the archived one, or that holds only some of the
-archived usage events, comes from a file cut short; it keeps the archived counts
-too. A rebuilt file starts a new running total, so its events never match
-archived ones. A parse that has a plan report keeps its own plan figures, even
-from a file cut short after a newer report; the next usage answer replaces them.
-Report times come from OpenAI and can repeat across answers, so they cannot tell
-a cut file from a whole one. Turns that ran while the mirror was missing do not
-count as uncaptured. When the first new live record arrives, its running total
-restores the token totals, and the larger of the archived and new peak context
-stays.
+"counted under", keeps the archived figures under it, as a whole file would.
+Records only accumulate, so a parse whose output total is below the archived
+one, or that holds only some of the archived usage events, comes from a file cut
+short; it keeps the archived counts too. A rebuilt file starts a new running
+total, so its events never match archived ones. A parse that has a plan report
+keeps its own plan figures, even from a file cut short after a newer report; the
+next usage answer replaces them. Report times come from OpenAI and can repeat
+across answers, so they cannot tell a cut file from a whole one. Turns that ran
+while the mirror was missing do not count as uncaptured. When the first new live
+record arrives, its running total restores the token totals, and the larger of
+the archived and new peak context stays.
 
 Sync replaces an archived copy from an older parser version, so a parser change
 still takes effect, unless the file holds no messages: no parser change empties

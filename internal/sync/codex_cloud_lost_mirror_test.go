@@ -338,16 +338,17 @@ func TestCodexCloudRebuiltMirrorKeepsPlanUsage(t *testing.T) {
 	assert.Len(t, messages, 3, "the new message imports")
 	assert.Equal(t, new(2.25), weekly(), "the archived plan figures stay")
 
-	// An outcome from before the archived report does not replace it.
+	// An outcome written after the rebuild applies even when its time,
+	// from the local clock, is before the report time from OpenAI's.
 	_, err = mirror.Append(path, 0, []mirror.Record{
 		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-02T08:00:00Z"}`),
 	})
 	require.NoError(t, err)
 	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
-	older, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
+	skewed, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
 	require.NoError(t, err)
-	require.NotNil(t, older)
-	assert.Empty(t, older.OutcomeKind, "an older outcome stays dropped")
+	require.NotNil(t, skewed)
+	assert.Equal(t, "left_out", skewed.OutcomeKind, "the outcome follows the report in the file")
 	assert.Equal(t, new(2.25), weekly())
 
 	// An outcome alone keeps the archived report figures under it.
