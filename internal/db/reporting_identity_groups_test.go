@@ -38,6 +38,8 @@ func TestReportingIdentityGroupsDoNotInventProjects(t *testing.T) {
 					require.NoError(t, err)
 					hour := day.Hours[12]
 					assert.Equal(t, tc.newProjects, hour.Activity.Totals.NewProjects)
+					assert.Len(t, hour.Activity.ByProject, tc.newProjects)
+					assert.Len(t, hour.Usage.ByProject, tc.newProjects)
 					assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
 					assert.InDelta(t, 2.0, hour.Activity.Totals.AgentMinutes, 0)
 					assert.Equal(t, int64(10), hour.Usage.Totals.OutputTokens)
@@ -88,6 +90,7 @@ func TestReportingIdentityGroupsKeepVerifiedContributionsSelectable(t *testing.T
 			require.Len(t, hour.Joint.Projects, 2)
 			require.Len(t, hour.Joint.Cells, 2)
 			assert.Equal(t, int64(20), hour.Usage.Totals.OutputTokens)
+			assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
 			var knownKey string
 			for key, entry := range hour.Joint.Projects {
 				assert.Equal(t, "api", entry.DisplayLabel)

@@ -255,7 +255,8 @@ Request `--schema-version 5` when a report needs to distinguish repositories
 that share a project name, or to select only activity with verified identity.
 Version 5 uses the same fields and accounting rules as version 4. It partitions
 activity and usage by each contributing session's saved identity before building
-project breakdowns and joint cells.
+project breakdowns and joint cells. `new_projects` still counts project names,
+not groups, and sessions without a project stay out of `by_project`.
 
 For example, two sessions named `api` can produce separate entries: ten minutes
 with a verified repository, and five minutes with missing evidence. Selecting
@@ -280,6 +281,12 @@ and never inspect live checkouts or modify the archive.
 Versions 3 and 4 remain available with their existing semantics. When moving to
 version 5, obtain new project keys and refresh saved digests; old label keys do
 not select the new groups.
+
+Version 5 keys follow the archive's saved evidence. When a sync, resync, or
+upgrade changes a session's saved identity, its contributions move to a
+different key, and a saved selector for the old key matches less or nothing.
+After such a change, read current keys from `joint.projects` and refresh saved
+selectors and digests.
 
 ### Cell measurements
 

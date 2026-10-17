@@ -23,17 +23,17 @@ func TestReportingDigestMatchesPerDateExport(t *testing.T) {
 		time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
 	}
-	scopedDay, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
-		Date: dates[1], Now: now, SchemaVersion: export.ReportingJointSchemaVersion,
-		Bucket: "5m",
-	})
-	require.NoError(t, err)
-	var projectKey string
-	for key := range scopedDay.Hours[23].Joint.Projects {
-		projectKey = key
-		break
+	projectKey := func(schema int) string {
+		scopedDay, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+			Date: dates[1], Now: now, SchemaVersion: schema, Bucket: "5m",
+		})
+		require.NoError(t, err)
+		for key := range scopedDay.Hours[23].Joint.Projects {
+			return key
+		}
+		require.FailNow(t, "no joint project")
+		return ""
 	}
-	require.NotEmpty(t, projectKey)
 	variants := []struct {
 		name        string
 		schema      int
@@ -45,7 +45,8 @@ func TestReportingDigestMatchesPerDateExport(t *testing.T) {
 		{name: "v4-1m", schema: export.ReportingJointSchemaVersion, bucket: "1m"},
 		{name: "v5-5m", schema: export.ReportingIdentitySchemaVersion, bucket: "5m"},
 		{name: "v5-1m", schema: export.ReportingIdentitySchemaVersion, bucket: "1m"},
-		{name: "v4-scoped", schema: export.ReportingJointSchemaVersion, bucket: "5m", projectKeys: []string{projectKey}},
+		{name: "v4-scoped", schema: export.ReportingJointSchemaVersion, bucket: "5m", projectKeys: []string{projectKey(export.ReportingJointSchemaVersion)}},
+		{name: "v5-scoped", schema: export.ReportingIdentitySchemaVersion, bucket: "5m", projectKeys: []string{projectKey(export.ReportingIdentitySchemaVersion)}},
 	}
 
 	for _, variant := range variants {
