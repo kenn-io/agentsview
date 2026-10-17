@@ -52,18 +52,11 @@ func runSetupTelemetry(ctx context.Context, interval time.Duration, cfg config.C
 		if err != nil && ctx.Err() == nil {
 			log.Printf("capture setup telemetry: %v", err)
 		}
-	wait:
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event := <-events:
-				if event.Scope == "sessions" || event.Scope == "sync" {
-					break wait
-				}
-			case <-ticker.C:
-				break wait
-			}
+		select {
+		case <-ctx.Done():
+			return
+		case <-events:
+		case <-ticker.C:
 		}
 	}
 }

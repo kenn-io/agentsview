@@ -24,6 +24,8 @@ func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 		{name: "initial visible content", initial: true},
 		{name: "sync and timer retry", scope: "sync", retry: true},
 		{name: "sessions", scope: "sessions"},
+		{name: "messages", scope: "messages"},
+		{name: "all", scope: "all"},
 		{name: "empty archive cancellation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,11 +61,6 @@ func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 						return
 					}
 					dbtest.SeedSession(t, database, "session-one", "project-a")
-					if tc.scope == "sync" {
-						broadcaster.Emit("all")
-						synctest.Wait()
-						assert.Zero(t, sends.Load(), "all leaves visible content pending")
-					}
 					broadcaster.Emit(tc.scope)
 					synctest.Wait()
 				}

@@ -1990,7 +1990,9 @@ parent is missing and the list shows them as roots. It checks at startup, after
 session changes, and hourly for retries.
 The `telemetry-setup-finished` file beside the installation identity records the
 claim across restarts and servers sharing the data directory. Captures, seeds,
-backups, and restores preserve the claim with the installation identity.
+backups, and restores preserve the claim with the installation identity when
+the snapshot contains it. Restoring a snapshot from before the claim can queue
+`setup_finished` again for the same installation ID.
 Ordinary imports keep the receiving installation's claim. The event carries
 no session details and follows the same telemetry opt-out. Existing installs
 with such a session send it on their first start after upgrading.
