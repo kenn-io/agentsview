@@ -319,11 +319,7 @@ func verifiedWritableDaemonRecord(tr transport) (daemon.RuntimeRecord, bool) {
 // daemonUnchanged requires unchanged evidence before reusing cached credentials.
 func (sel *mcpDaemonSelection) daemonUnchanged(dataDir string) bool {
 	store := runtimeStore(dataDir)
-	path, err := store.Path(sel.runtime.PID)
-	if err != nil {
-		return false
-	}
-	rec, err := store.Read(path)
+	rec, err := store.ReadPID(sel.runtime.PID)
 	if err != nil {
 		return false
 	}

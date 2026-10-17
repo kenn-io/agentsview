@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -12,12 +13,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -84,7 +87,7 @@ func runtimeStore(dataDir string) daemonRuntimeStore {
 }
 
 func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
-	records, err := listDaemonRuntimeRecords(s.RuntimeStore)
+	records, err := s.RuntimeStore.List()
 	if err != nil || s.Dir == s.legacyDir {
 		return records, err
 	}
@@ -92,10 +95,6 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	entries, err := os.ReadDir(s.legacyDir)
 	if err != nil {
 		return nil, fmt.Errorf("read legacy runtime dir: %w", err)
-	}
-	seen := make(map[int]bool, len(records))
-	for _, rec := range records {
-		seen[rec.PID] = true
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -115,12 +114,28 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 			_ = os.Remove(path)
 			continue
 		}
-		if !seen[pid] {
-			records = append(records, rec)
-			seen[pid] = true
-		}
+		records = append(records, rec)
 	}
+	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
+		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.PID, b.PID)
+	})
 	return records, nil
+}
+
+func (s daemonRuntimeStore) ReadPID(pid int) (daemon.RuntimeRecord, error) {
+	path, err := s.Path(pid)
+	if err != nil {
+		return daemon.RuntimeRecord{}, err
+	}
+	rec, err := s.Read(path)
+	if errors.Is(err, os.ErrNotExist) && s.Dir != s.legacyDir {
+		// Remove this bridge the release after the Windows runtime subdirectory ships.
+		return s.Read(filepath.Join(s.legacyDir, filepath.Base(path)))
+	}
+	return rec, err
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running
@@ -263,7 +278,7 @@ func RemoveDaemonRuntime(dataDir string) {
 	}
 }
 
-var listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+var listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 	return store.List()
 }
 
@@ -278,7 +293,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	_, _ = store.CleanupDead()
 
 	token := firstAuthToken(authToken)
-	records, err := store.List()
+	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
 		rt := findStartupStateFallback(dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) == nil {
@@ -467,7 +482,7 @@ func findIncompatibleDaemonRuntime(
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
-	records, err := store.List()
+	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
 		rt := findStartupStateFallback(dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) != nil {
@@ -1035,6 +1050,21 @@ func isExternalDaemonStarting(dataDir string) bool {
 const legacyStartupLockPrefix = "server.starting."
 
 func isLegacyDaemonStarting(dataDir string) bool {
+	if runtimeDir(dataDir) != dataDir {
+		// Remove this bridge the release after the Windows runtime subdirectory ships.
+		path := filepath.Join(dataDir, "daemon.lock")
+		if _, err := os.Stat(path); err == nil {
+			lock := flock.New(path)
+			defer lock.Close()
+			acquired, err := lock.TryLock()
+			if err == nil {
+				if !acquired {
+					return true
+				}
+				_ = lock.Unlock()
+			}
+		}
+	}
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false

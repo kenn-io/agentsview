@@ -608,7 +608,7 @@ func writeStartupFallbackFixture(
 func failRuntimeRecordListing(t *testing.T) {
 	t.Helper()
 	oldList := listDaemonRuntimeRecords
-	listDaemonRuntimeRecords = func(daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+	listDaemonRuntimeRecords = func(daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 		return nil, errors.New("store unavailable")
 	}
 	t.Cleanup(func() { listDaemonRuntimeRecords = oldList })
@@ -1079,13 +1079,11 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 		dead       bool
 		mismatched bool
 		wrongPID   bool
-		duplicate  bool
 	}{
 		{name: "live"},
 		{name: "dead", dead: true},
 		{name: "mismatched identity", mismatched: true},
 		{name: "filename PID mismatch", wrongPID: true},
-		{name: "duplicate", duplicate: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1114,11 +1112,6 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 			body, err := json.Marshal(rec)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(path, body, 0o600))
-			wantPath := path
-			if tt.duplicate {
-				wantPath, err = store.Write(rec)
-				require.NoError(t, err)
-			}
 
 			records, err := store.List()
 			require.NoError(t, err)
@@ -1127,12 +1120,47 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 			} else {
 				require.Len(t, records, 1)
 				assert.Equal(t, rec.PID, records[0].PID)
-				assert.Equal(t, wantPath, records[0].SourcePath)
+				assert.Equal(t, path, records[0].SourcePath)
+				cached, err := store.ReadPID(rec.PID)
+				require.NoError(t, err)
+				assert.Equal(t, path, cached.SourcePath)
 			}
 			if tt.dead || tt.mismatched {
 				assert.NoFileExists(t, path)
 			} else {
 				assert.FileExists(t, path)
+			}
+		})
+	}
+}
+
+func TestDaemonRuntimeStoreOrdersMergedRecords(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Hour, 0, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			store := daemonRuntimeStore{Dir: filepath.Join(dir, "run"), legacyDir: dir}
+			current := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
+				Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
+			})
+			_, err := store.Write(current)
+			require.NoError(t, err)
+			legacy := current
+			legacy.PID = os.Getppid()
+			legacy.ProcessIdentity = ""
+			legacy.ProcessIdentityV2 = ""
+			legacy.StartedAt = current.StartedAt.Add(offset)
+			body, err := json.Marshal(legacy)
+			require.NoError(t, err)
+			path := filepath.Join(dir, fmt.Sprintf("daemon.%d.json", legacy.PID))
+			require.NoError(t, os.WriteFile(path, body, 0o600))
+
+			records, err := store.List()
+			require.NoError(t, err)
+			require.Len(t, records, 2)
+			if offset == 0 {
+				assert.Less(t, records[0].PID, records[1].PID)
+			} else {
+				assert.True(t, records[0].StartedAt.Before(records[1].StartedAt))
 			}
 		})
 	}

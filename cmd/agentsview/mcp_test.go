@@ -290,23 +290,39 @@ func sessionTotalHandler(t *testing.T, total int) http.HandlerFunc {
 }
 
 func TestMCPDaemonServiceReusesVerifiedDaemon(t *testing.T) {
-	dir := runtimeTestDir(t)
-	forbidStartBackgroundServeForTransport(t, "MCP must reuse the running daemon")
-	host, port, pings := newMCPCacheDaemon(t, map[string]http.HandlerFunc{
-		"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-			sessionTotalHandler(t, 1)(w, r)
-		},
-	})
-	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-	svc := newMCPDaemonService(config.Config{DataDir: dir, AuthToken: "test-token"})
+	for _, legacy := range []bool{false, true} {
+		name := "current"
+		if legacy {
+			name = "legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			if legacy && runtimeDir("data") == "data" {
+				t.Skip("legacy runtime directory bridge is Windows-only")
+			}
+			dir := runtimeTestDir(t)
+			forbidStartBackgroundServeForTransport(t, "MCP must reuse the running daemon")
+			host, port, pings := newMCPCacheDaemon(t, map[string]http.HandlerFunc{
+				"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+					sessionTotalHandler(t, 1)(w, r)
+				},
+			})
+			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+			if legacy {
+				path, err := runtimeStore(dir).Path(os.Getpid())
+				require.NoError(t, err)
+				require.NoError(t, os.Rename(path, filepath.Join(dir, filepath.Base(path))))
+			}
+			svc := newMCPDaemonService(config.Config{DataDir: dir, AuthToken: "test-token"})
 
-	for range 3 {
-		result, err := svc.List(t.Context(), service.ListFilter{})
-		require.NoError(t, err)
-		assert.Equal(t, 1, result.Total)
+			for range 3 {
+				result, err := svc.List(t.Context(), service.ListFilter{})
+				require.NoError(t, err)
+				assert.Equal(t, 1, result.Total)
+			}
+			assert.Equal(t, int32(1), pings.Load(), "only the first call discovers the daemon")
+		})
 	}
-	assert.Equal(t, int32(1), pings.Load(), "only the first call discovers the daemon")
 }
 
 func TestMCPDaemonServiceDiscoversEachCallWithoutVerifiedDaemon(t *testing.T) {
@@ -554,7 +570,7 @@ func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
 	host, port = splitTestServerURL(t, readOnly.URL)
 	writeDaemonRuntimeForTest(t, readOnlyDir, host, port, "test", true)
 	oldList := listDaemonRuntimeRecords
-	listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 		records, err := store.List()
 		if err != nil {
 			return nil, err

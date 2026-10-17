@@ -3,15 +3,47 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"golang.org/x/sys/windows"
 )
+
+func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.lock")
+	assert.False(t, IsDaemonStarting(dir))
+	assert.NoFileExists(t, path)
+
+	lock := flock.New(path)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+	require.NoError(t, lock.Lock())
+	assert.True(t, IsDaemonStarting(dir))
+	assert.True(t, IsDaemonActive(dir))
+	deps := defaultDaemonCommandDeps()
+	deps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir}, nil
+	}
+	var out bytes.Buffer
+	require.NoError(t, runDaemonStatus(&out, deps))
+	assert.Contains(t, out.String(), "agentsview daemon is starting up.")
+
+	require.NoError(t, lock.Unlock())
+	assert.False(t, IsDaemonStarting(dir))
+	assert.FileExists(t, path)
+
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+	assert.False(t, IsDaemonStarting(dir), "an unopenable lock is not a starting daemon")
+	assert.DirExists(t, path)
+}
 
 func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 	dir := t.TempDir()
