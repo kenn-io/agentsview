@@ -1102,7 +1102,17 @@ func reconcileSessionProjectIdentityAggregatesTx(
 	if err != nil {
 		return fmt.Errorf("reading session project identity key: %w", err)
 	}
+	return reconcileProjectIdentityAggregateKeyExec(
+		ctx, tx, machine, rootPath, gitRemote, projects,
+	)
+}
 
+func reconcileProjectIdentityAggregateKeyExec(
+	ctx context.Context,
+	exec sqlContextExecer,
+	machine, rootPath, gitRemote string,
+	projects []string,
+) error {
 	seen := make(map[string]struct{}, len(projects))
 	for _, project := range projects {
 		project = strings.TrimSpace(project)
@@ -1114,7 +1124,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 		}
 		seen[project] = struct{}{}
 
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := exec.ExecContext(ctx, `
 			DELETE FROM project_identity_observations
 			WHERE project = ? AND machine = ?
 			  AND root_path = ? AND git_remote = ?`,
@@ -1125,7 +1135,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 			)
 		}
 
-		_, err := tx.ExecContext(ctx, `
+		_, err := exec.ExecContext(ctx, `
 			INSERT INTO project_identity_observations (
 				source_archive_id, source_archive_salt, project, machine,
 				root_path, git_remote, git_remote_name, repository_path,
@@ -1151,9 +1161,16 @@ func reconcileSessionProjectIdentityAggregatesTx(
 				WHERE s.id = snap.session_id AND s.deleted_at IS NULL
 				  AND s.machine = ? AND s.project = ?
 			  )
-			ORDER BY snap.observed_at DESC, snap.session_id
+			  AND (snap.git_remote != '' OR snap.remote_resolution = 'ambiguous'
+			    OR NOT EXISTS (
+				SELECT 1 FROM project_identity_observations remote
+				WHERE remote.project = ? AND remote.machine = snap.machine
+				  AND remote.root_path = snap.root_path AND remote.git_remote != ''
+			    ))
+			ORDER BY (snap.remote_resolution = 'ambiguous') DESC,
+				snap.observed_at DESC, snap.session_id
 			LIMIT 1`,
-			project, machine, rootPath, gitRemote, machine, project,
+			project, machine, rootPath, gitRemote, machine, project, project,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -1276,20 +1293,11 @@ func upsertSessionProjectIdentitySnapshotExec(
 	if existingMachine != "" && existingRemote == "" && obs.SourceRecorded {
 		// Reconcile the old evidence key across source and effective labels,
 		// even if the checkout disappeared and discovery now returns cwd.
-		if _, err := exec.ExecContext(ctx, `
-			DELETE FROM project_identity_observations
-			WHERE project IN (?, ?, ?) AND machine = ? AND root_path = ?
-			  AND git_remote = ''
-			  AND NOT EXISTS (
-				SELECT 1 FROM session_project_identity_snapshots snap
-				JOIN sessions s ON s.id = snap.session_id
-				WHERE snap.machine = project_identity_observations.machine
-				  AND snap.root_path = project_identity_observations.root_path
-				  AND snap.git_remote = ''
-				  AND (snap.project = project_identity_observations.project
-				    OR s.project = project_identity_observations.project)
-			  )`, existingProject, obs.Project, sessionProject, existingMachine, existingRoot); err != nil {
-			return fmt.Errorf("removing superseded project identity root: %w", err)
+		if err := reconcileProjectIdentityAggregateKeyExec(
+			ctx, exec, existingMachine, existingRoot, "",
+			[]string{existingProject, obs.Project, sessionProject},
+		); err != nil {
+			return fmt.Errorf("reconciling recovered project identity root: %w", err)
 		}
 	}
 	return nil

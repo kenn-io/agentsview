@@ -335,14 +335,26 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 		db.ScopedDataVersionProviders(137, 138))
 	const recorded = "example.com/team/api"
 	for _, tc := range []struct {
-		name               string
-		resolution         export.ProjectResolution
-		remote, remoteName string
-		wantNormalized     string
-		fullRebuild        bool
-		otherUnresolved    bool
-		mapped, nested     bool
+		name                         string
+		resolution                   export.ProjectResolution
+		remote, remoteName           string
+		wantNormalized               string
+		fullRebuild                  bool
+		otherUnresolved              bool
+		mapped, nested               bool
+		otherAssigned, otherRootOnly bool
+		additionalAmbiguous          bool
 	}{
+		{name: "reassigned sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherAssigned: true},
+		{name: "full rebuild reassigned sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherAssigned: true, fullRebuild: true},
+		{name: "root-only sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true},
+		{name: "full rebuild root-only sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true, fullRebuild: true},
+		{name: "mapped project reassigned sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherAssigned: true, mapped: true},
+		{name: "full rebuild nested reassigned sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherAssigned: true, nested: true, fullRebuild: true},
+		{name: "nested mixed sibling evidence", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true, additionalAmbiguous: true, nested: true},
+		{name: "full rebuild nested mixed sibling evidence", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true, additionalAmbiguous: true, nested: true, fullRebuild: true},
+		{name: "nested root-only sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true, nested: true},
+		{name: "full rebuild nested root-only sibling", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherUnresolved: true, otherRootOnly: true, nested: true, fullRebuild: true},
 		{name: "mapped nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, mapped: true, nested: true},
 		{name: "full rebuild mapped nested checkout", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, mapped: true, nested: true},
 		{name: "full rebuild retains mapped nested ambiguity", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, mapped: true, nested: true, otherUnresolved: true},
@@ -436,16 +448,35 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 					"UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version, version))
 				return err
 			}))
+			assignedProject := ""
 			if tc.otherUnresolved {
 				other := priorSnapshots[0]
 				other.SessionID = "unavailable-session"
 				other.Project = before.Project
 				other.GitRemote, other.GitRemoteName = "", ""
 				other.RemoteResolution = tc.resolution
+				if tc.otherRootOnly {
+					other.RemoteResolution = export.ProjectResolutionResolved
+					other.WorktreeRelationship = export.WorktreeMain
+				}
 				other.ObservedAt = time.Now()
+				if tc.additionalAmbiguous {
+					ambiguous := other
+					ambiguous.SessionID = "ambiguous-sibling"
+					ambiguous.RemoteResolution = export.ProjectResolutionAmbiguous
+					ambiguous.ObservedAt = other.ObservedAt.Add(-time.Hour)
+					require.NoError(t, database.UpsertSessionWithProjectIdentity(ctx, db.Session{
+						ID: ambiguous.SessionID, Project: before.Project, Machine: "local", Agent: "codex",
+					}, ambiguous, priorSnapshots[0].Project))
+				}
 				require.NoError(t, database.UpsertSessionWithProjectIdentity(ctx, db.Session{
 					ID: "unavailable-session", Project: before.Project, Machine: "local", Agent: "codex",
 				}, other, priorSnapshots[0].Project))
+				if tc.otherAssigned {
+					assignment, err := database.AssignSessionProject(ctx, other.SessionID, "separate-project")
+					require.NoError(t, err)
+					assignedProject = assignment.Project
+				}
 			}
 			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), "ALTER TABLE session_project_identity_snapshots DROP COLUMN recorded_git_remote")
@@ -492,14 +523,42 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			projects, err := database.BuildProjectIdentityMap(ctx, []string{after.Project})
 			require.NoError(t, err)
 			wantResolution := export.ProjectResolutionResolved
-			if tc.otherUnresolved || tc.remote != "" {
+			if (tc.otherUnresolved && !tc.otherAssigned && (!tc.otherRootOnly || tc.nested)) || tc.remote != "" {
 				wantResolution = export.ProjectResolutionAmbiguous
 			}
 			assert.Equal(t, wantResolution, projects[after.Project].Resolution)
+			if tc.otherAssigned {
+				assigned, err := database.BuildProjectIdentityMap(ctx, []string{assignedProject})
+				require.NoError(t, err)
+				assert.Equal(t, export.ProjectResolutionAmbiguous, assigned[assignedProject].Resolution)
+			}
+			if tc.otherRootOnly {
+				observations, err := database.ListProjectIdentityObservations(ctx, []string{after.Project})
+				require.NoError(t, err)
+				var fallbacks []export.ProjectIdentityObservation
+				for _, observation := range observations {
+					if observation.RootPath == oldRoot && observation.GitRemote == "" {
+						fallbacks = append(fallbacks, observation)
+					}
+				}
+				if tc.nested {
+					require.Len(t, fallbacks, 1, "the sibling still supports the previous root")
+					wantFallback := export.ProjectResolutionResolved
+					if tc.additionalAmbiguous {
+						wantFallback = export.ProjectResolutionAmbiguous
+					}
+					assert.Equal(t, wantFallback, fallbacks[0].RemoteResolution)
+				} else {
+					assert.Empty(t, fallbacks, "the recorded remote supersedes same-root fallbacks")
+				}
+			}
 			var sessions int
 			require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 			wantSessions := 1
 			if tc.otherUnresolved {
+				wantSessions++
+			}
+			if tc.additionalAmbiguous {
 				wantSessions++
 			}
 			assert.Len(t, snapshots, wantSessions)

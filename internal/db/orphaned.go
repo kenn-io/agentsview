@@ -1932,18 +1932,18 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE snap.machine = main.project_identity_observations.machine
 			  AND snap.root_path = main.project_identity_observations.root_path
 			  AND snap.git_remote = '' AND snap.remote_resolution = 'ambiguous'
-			  AND (snap.project = main.project_identity_observations.project
-			    OR s.project = main.project_identity_observations.project)
+			  AND s.project = main.project_identity_observations.project
 		  ))`); err != nil {
 		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)
 	}
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		// A removed checkout can change the discovered root to a nested cwd.
-		// Match recovered evidence by session, retaining the old key only
-		// while another surviving snapshot still supports it.
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM main.project_identity_observations
+		// Match recovered evidence by session, then rebuild the old key from
+		// surviving snapshots under their current project assignments.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT project, machine, root_path
+			FROM main.project_identity_observations
 			WHERE git_remote = ''
 			  AND EXISTS (
 				SELECT 1 FROM old_db.session_project_identity_snapshots old
@@ -1957,17 +1957,33 @@ func (d *DB) CopySessionMetadataFrom(
 				  AND main.project_identity_observations.project IN (old.project, previous.project)
 				  AND fresh.recorded_git_remote != '' AND fresh.remote_resolution = 'resolved'
 				  AND fresh.git_remote != ''
-			  )
-			  AND NOT EXISTS (
-				SELECT 1 FROM main.session_project_identity_snapshots snap
-				JOIN main.sessions s ON s.id = snap.session_id
-				WHERE snap.machine = main.project_identity_observations.machine
-				  AND snap.root_path = main.project_identity_observations.root_path
-				  AND snap.git_remote = ''
-				  AND (snap.project = main.project_identity_observations.project
-				    OR s.project = main.project_identity_observations.project)
-			  )`); err != nil {
-			return fmt.Errorf("removing recovered project identity root fallbacks: %w", err)
+			  )`)
+		if err != nil {
+			return fmt.Errorf("listing recovered project identity roots: %w", err)
+		}
+		defer rows.Close()
+		var roots []ProjectIdentityRootKey
+		for rows.Next() {
+			var root ProjectIdentityRootKey
+			if err := rows.Scan(&root.Project, &root.Machine, &root.RootPath); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning recovered project identity root: %w", err)
+			}
+			roots = append(roots, root)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating recovered project identity roots: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing recovered project identity roots: %w", err)
+		}
+		for _, root := range roots {
+			if err := reconcileProjectIdentityAggregateKeyExec(
+				ctx, tx, root.Machine, root.RootPath, "", []string{root.Project},
+			); err != nil {
+				return fmt.Errorf("reconciling recovered project identity root: %w", err)
+			}
 		}
 	}
 
