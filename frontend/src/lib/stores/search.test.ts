@@ -465,7 +465,7 @@ describe("SearchStore", () => {
     expect(store.isSearching).toBe(false);
   });
 
-  it("stale requests cannot overwrite newer results, loading, or error", async () => {
+  it.each(["empty", "error"])("ignores stale %s responses", async (outcome) => {
     const store = createSearchStore(memoryStorage());
     const stale = deferred<SearchResponse>();
     searchService.getApiV1Search.mockReturnValueOnce(stale.promise as never);
@@ -478,7 +478,8 @@ describe("SearchStore", () => {
     store.setMode("semantic");
     await flushMicrotasks();
 
-    stale.resolve(fullTextResponse("stale", 0));
+    if (outcome === "empty") stale.resolve(fullTextResponse("stale", 0));
+    else stale.reject(new Error("late stale failure"));
     await flushMicrotasks();
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");

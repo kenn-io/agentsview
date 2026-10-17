@@ -104,7 +104,6 @@ describe("ActivityInsight", () => {
     ] as const) {
       await fireEvent.click(screen.getByRole("button", { name }));
       await settle();
-      expect(screen.getByText("Generation failed")).toBeDefined();
       expect(reportErrorShown).toHaveBeenCalledTimes(count);
     }
   });

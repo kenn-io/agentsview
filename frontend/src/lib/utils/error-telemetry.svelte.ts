@@ -1,7 +1,7 @@
 import type { Attachment } from "svelte/attachments";
 import { reportErrorShown, type ErrorKind } from "./telemetry.js";
 
-/** Count each display of an error; identities stay local to the view. */
+/** _identity makes the attachment expression react to the displayed item's identity. */
 export function errorTelemetry(
   kind: ErrorKind | undefined,
   _identity?: string | null,

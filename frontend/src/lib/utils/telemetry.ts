@@ -1,4 +1,4 @@
-import { ApiError, isAbortError, orvalRequest } from "../api/runtime.js";
+import { isAbortError, orvalRequest } from "../api/runtime.js";
 
 export type TelemetryEvent =
   | "app_opened"
@@ -60,7 +60,7 @@ export function reportSyncFailed(error: unknown): void {
       reason = "browser_extension";
       break;
     default:
-      if (error instanceof ApiError) reason = "request";
+      if (error instanceof Error && code === undefined) reason = "request";
   }
   reportTelemetry("sync_failed", { reason });
 }

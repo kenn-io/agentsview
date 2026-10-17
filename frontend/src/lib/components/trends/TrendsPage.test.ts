@@ -365,17 +365,12 @@ describe("TrendsPage", () => {
     );
     expect(refreshButton).not.toBeNull();
     for (const count of [1, 2]) {
-      let reject!: (error: Error) => void;
-      mocks.getApiV1TrendsTerms.mockImplementationOnce(
-        () =>
-          new Promise((_resolve, fail) => {
-            reject = fail;
-          }),
-      );
+      const request = Promise.withResolvers<never>();
+      mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);
       refreshButton!.click();
       await tick();
       expect(document.querySelector(".error")).toBeNull();
-      reject(new Error("at least one trend term is required"));
+      request.reject(new Error("at least one trend term is required"));
       await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(count));
       expect(document.body.textContent).toContain("at least one trend term is required");
     }

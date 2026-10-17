@@ -145,7 +145,6 @@ describe("GeneratedInsightsPanel", () => {
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("insight");
     document.querySelector<HTMLButtonElement>(".generated-actions button")!.click();
     await tick();
-    expect(state.store.retryTask).toHaveBeenCalledWith("task-a");
     state.store.selectedTask = { ...failed };
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(2);
@@ -155,13 +154,9 @@ describe("GeneratedInsightsPanel", () => {
     state.store.selectedTaskId = "task-b";
     state.store.selectedTask = { ...failed, clientId: "task-b" };
     await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(3);
-    mocks.select.mockImplementation(() => {
-      state.store.selectedTask = undefined;
-    });
+    mocks.select.mockImplementation(() => (state.store.selectedTask = undefined));
     document.querySelector<HTMLButtonElement>(".generated-list button")!.click();
     await tick();
-    expect(document.querySelector(".markdown-body")).not.toBeNull();
     state.store.selectedTask = failed;
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(4);

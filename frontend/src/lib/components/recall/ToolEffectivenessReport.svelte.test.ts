@@ -6,6 +6,8 @@ import { ApiError } from "../../api/runtime.js";
 import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 
 const { getToolSequences, getSession, getTiming } = vi.hoisted(() => ({
   getToolSequences: vi.fn(),
@@ -150,6 +152,7 @@ async function settle() {
 }
 
 beforeEach(() => {
+  vi.mocked(reportErrorShown).mockClear();
   getToolSequences.mockReset().mockResolvedValue(makeFacts(3));
   getTiming.mockReset().mockResolvedValue(null);
   getSession.mockReset().mockResolvedValue(makeSession());
@@ -407,8 +410,9 @@ describe("ToolEffectivenessReport", () => {
     unmount(component);
   });
 
-  it("retries the sequence read after it fails", async () => {
-    getToolSequences.mockRejectedValueOnce(new Error("offline"));
+  it("retries the sequence read and counts each displayed insight error once", async () => {
+    const retry = Promise.withResolvers<never>();
+    getToolSequences.mockRejectedValueOnce(new Error("offline")).mockReturnValueOnce(retry.promise);
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: makeInsight() },
@@ -417,9 +421,16 @@ describe("ToolEffectivenessReport", () => {
 
     const alert = document.querySelector(".tool-sequences-panel [role=alert]")!;
     expect(alert.textContent).toContain("Couldn't load tool sequences.");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("insight");
     alert.querySelector("button")!.click();
+    await tick();
+    expect(document.querySelector(".tool-sequences-panel [role=alert]")).toBeNull();
+    retry.reject(new Error("offline again"));
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(2));
+    expect(reportErrorShown).toHaveBeenNthCalledWith(2, "insight");
+    document.querySelector<HTMLButtonElement>(".tool-sequences-panel [role=alert] button")!.click();
     await settle();
-    expect(getToolSequences).toHaveBeenCalledTimes(2);
+    expect(getToolSequences).toHaveBeenCalledTimes(3);
     expect(document.querySelector(".tool-sequences-panel [role=alert]")).toBeNull();
     expect(document.querySelectorAll(".tool-sequences-panel .sequence-row").length).toBeGreaterThan(
       0,

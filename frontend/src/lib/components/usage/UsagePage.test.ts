@@ -161,7 +161,6 @@ describe("UsagePage refresh behavior", () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     usage.summary = usageSummaryWithUnsupported();
-    usage.referenceSummary = usage.summary;
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
     vi.spyOn(console, "warn").mockImplementation(() => {});
