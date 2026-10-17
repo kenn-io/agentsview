@@ -260,7 +260,7 @@ func TestTokenCanary(t *testing.T) {
 			CodexCloud: config.CodexCloudConfig{
 				Present: true, Enabled: true, Endpoint: endpoint, UsageEndpoint: usageEndpoint,
 			},
-			Homes: []string{home},
+			Homes: []string{home}, DefaultHome: home,
 		}
 	}
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))

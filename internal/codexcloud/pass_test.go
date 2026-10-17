@@ -76,6 +76,11 @@ func newPassEnv(t *testing.T, homes ...string) *passEnv {
 			AuthModTime: fetchNow.Add(-time.Hour),
 		}
 	}
+	// The first test home stands for ~/.codex.
+	var defaultHome string
+	if len(homes) > 0 {
+		defaultHome = homes[0]
+	}
 	endpoint := host.URL()
 	env.syncer = &Syncer{
 		Store: NewStore(root), Waits: NewWaits(clock.Now), Status: NewStatusBoard(), Now: clock.Now,
@@ -83,7 +88,7 @@ func newPassEnv(t *testing.T, homes ...string) *passEnv {
 		Gates: func() Gates {
 			return Gates{
 				CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true, Endpoint: endpoint},
-				Homes:      homes,
+				Homes:      homes, DefaultHome: defaultHome,
 			}
 		},
 		ReadLogin: func(home string) (Login, HomeState, error) { return env.logins[home], HomeOK, nil },

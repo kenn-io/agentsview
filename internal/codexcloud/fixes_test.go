@@ -210,6 +210,26 @@ func TestNonDefaultHomeLoginNamesCodexHome(t *testing.T) {
 	assert.Contains(t, second.Message, "Run "+homeLoginCommand("/homes/b", runtime.GOOS))
 }
 
+// A daemon started with its own CODEX_HOME reads that home first, but a
+// plain `codex login` in the user's terminal signs in ~/.codex.
+func TestCustomDaemonCodexHomeLoginNamesCodexHome(t *testing.T) {
+	startup := config.Config{CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true}}
+	gates := NewGateSource("/data/config.toml", startup, func() (config.Config, error) {
+		return startup, nil
+	}, func(name string) string {
+		if name == "CODEX_HOME" {
+			return "/srv/codex"
+		}
+		return ""
+	}, "/users/a")()
+	require.Equal(t, "/srv/codex", gates.Homes[0])
+	require.NotEqual(t, gates.Homes[0], gates.DefaultHome)
+
+	message := "Run `codex login`."
+	assert.Equal(t, "Run "+homeLoginCommand("/srv/codex", runtime.GOOS)+".", withLoginCommand(gates, "/srv/codex", message))
+	assert.Equal(t, message, withLoginCommand(gates, gates.DefaultHome, message))
+}
+
 func TestHomeLoginCommand(t *testing.T) {
 	for _, tt := range []struct {
 		home, goos, want string
