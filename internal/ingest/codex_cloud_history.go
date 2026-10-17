@@ -51,8 +51,8 @@ func CodexCloudKeepReason(messages int, prior CodexCloudPrior) string {
 //   - With no plan records, prepared takes the saved plan figures. With
 //     only an outcome other than "counted under", it keeps the saved
 //     report figures under the new outcome, as the parser does for a
-//     whole mirror. With a report older than a current saved copy's, it
-//     keeps the saved figures; see newerSavedPlan.
+//     whole mirror. With a report no newer than a current saved copy's, it
+//     keeps what the cut took; see newerSavedPlan.
 //
 // It reports whether prepared took anything from the saved copy.
 func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool {
@@ -128,23 +128,39 @@ func dropsEvents(parsed, saved []db.UsageEvent) bool {
 	return !slices.ContainsFunc(parsed, func(ev db.UsageEvent) bool { return !keys[ev.DedupKey] })
 }
 
-// newerSavedPlan returns the plan row to keep when a parse's report is
-// older than a current saved copy's, which happens when the file was cut
-// short after an older report. The saved report figures stay. The parse's
-// outcome replaces the saved one only when it is newer than both the saved
-// report and the saved outcome. The parser orders records by their place
-// in the file, but two copies share no file, so this falls back on times.
+// newerSavedPlan returns the plan row to keep when a current saved copy's
+// report is not older than the parse's, which happens when the file was
+// cut short. With a newer saved report, the saved figures stay, and the
+// parse's outcome replaces the saved one only when it is newer than both
+// the saved report and the saved outcome. With the same report time, the
+// cut may have taken the copy of the report that settling writes again
+// marked final, or an outcome written after it, so the parse keeps the
+// final mark and the newer outcome of either copy. The parser orders
+// records by their place in the file, but two copies share no file, so
+// this falls back on times. It reports whether the saved copy changed the
+// row.
 func newerSavedPlan(row db.SessionPlanUsage, prior CodexCloudPrior) (db.SessionPlanUsage, bool) {
-	if !prior.Current || !hasPlanReport(prior.PlanUsage) ||
-		!planTime(prior.PlanUsage.DataAsOf).After(planTime(row.DataAsOf)) {
-		return db.SessionPlanUsage{}, false
+	if !prior.Current || !hasPlanReport(prior.PlanUsage) {
+		return row, false
 	}
-	merged := *prior.PlanUsage
+	saved := *prior.PlanUsage
+	savedAsOf, asOf := planTime(saved.DataAsOf), planTime(row.DataAsOf)
+	switch {
+	case savedAsOf.Before(asOf):
+		return row, false
+	case savedAsOf.Equal(asOf):
+		merged := row
+		merged.Final = row.Final || saved.Final
+		if planTime(saved.OutcomeAt).After(planTime(row.OutcomeAt)) {
+			merged.OutcomeKind, merged.OutcomeAt = saved.OutcomeKind, saved.OutcomeAt
+		}
+		return merged, merged.Final != row.Final || merged.OutcomeAt != row.OutcomeAt
+	}
 	outcomeAt := planTime(row.OutcomeAt)
-	if outcomeAt.After(planTime(merged.DataAsOf)) && outcomeAt.After(planTime(merged.OutcomeAt)) {
-		merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
+	if outcomeAt.After(savedAsOf) && outcomeAt.After(planTime(saved.OutcomeAt)) {
+		saved.OutcomeKind, saved.OutcomeAt = row.OutcomeKind, row.OutcomeAt
 	}
-	return merged, true
+	return saved, true
 }
 
 // planTime parses a stored plan usage time. An empty or malformed time is

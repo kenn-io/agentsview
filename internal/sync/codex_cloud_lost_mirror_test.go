@@ -654,3 +654,65 @@ func TestCodexCloudTruncatedMirrorAfterInputOnlyIncreaseKeepsTokenCounts(t *test
 	require.NotNil(t, session)
 	assert.Equal(t, 200, session.TotalOutputTokens)
 }
+
+// Settling writes the newest report again marked final, with the same
+// report time, and can add an outcome after it. A mirror cut short before
+// those records keeps the archived final mark and outcome.
+func TestCodexCloudTruncatedMirrorKeepsSettledPlanUsage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	ctx := t.Context()
+	root := t.TempDir()
+	path := filepath.Join(root, "account-key", "thread-a.jsonl.zstd")
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	record := func(kind mirror.Kind, data string) mirror.Record {
+		return mirror.Record{Kind: kind, FetchedAt: fetched, Data: jsontext.Value(data)}
+	}
+	planRow := func(final string) mirror.Record {
+		return record(mirror.KindPlanUsageRow, `{"row":{"thread_id":"thread-a","data_status":"available","usage_source":"wham",`+
+			`"weekly_limit_percent":2.25,"five_hour_limit_percent":null,"balance_usage_credits":"0","groups":[]},`+
+			`"data_as_of":"2026-10-02T09:30:00Z"`+final+`}`)
+	}
+	first, err := mirror.Append(path, 0, []mirror.Record{
+		record(mirror.KindThread, `{"id":"thread-a","createdAt":1759320000,"updatedAt":1759323600,"cwd":"/workspace/project-a"}`),
+		record(mirror.KindTurn, `{"id":"turn-1","status":"completed","startedAt":1759320000}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320000000,"completedAtMs":1759320000500,`+
+			`"item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"Fix the build","text_elements":[]}]}}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320001000,"completedAtMs":1759320001500,`+
+			`"item":{"type":"agentMessage","id":"a1","text":"Fixed.","phase":"final_answer"}}`),
+		planRow(""),
+	})
+	require.NoError(t, err)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodexCloud: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	plan := func() *db.SessionPlanUsage {
+		t.Helper()
+		plan, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		return plan
+	}
+	require.False(t, plan().Final)
+
+	_, err = mirror.Append(path, first.Offset, []mirror.Record{
+		planRow(`,"final":true`),
+		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-09T09:30:00Z"}`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	require.True(t, plan().Final, "the final copy of the same report applies")
+	require.Equal(t, "left_out", plan().OutcomeKind)
+
+	require.NoError(t, os.Truncate(path, first.Offset))
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.True(t, plan().Final, "the archived final mark stays")
+	assert.Equal(t, "left_out", plan().OutcomeKind, "the archived outcome stays")
+	assert.Equal(t, new(2.25), plan().WeeklyPercent)
+}
