@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -59,6 +58,11 @@ type AnalyticsFilterInput struct {
 type analyticsSummaryInput struct {
 	AnalyticsFilterInput
 	GroupModels bool `query:"group_models" doc:"Group model aliases in the model list"`
+}
+
+type analyticsSummaryResponse struct {
+	db.AnalyticsSummary
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
 }
 
 type analyticsActivityInput struct {
@@ -135,7 +139,7 @@ func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilte
 func (s *Server) humaAnalyticsSummary(
 	ctx context.Context,
 	in *analyticsSummaryInput,
-) (*jsonOutput[db.AnalyticsSummary], error) {
+) (*jsonOutput[analyticsSummaryResponse], error) {
 	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
@@ -144,15 +148,12 @@ func (s *Server) humaAnalyticsSummary(
 	if err != nil {
 		return nil, internalError("analytics error", err)
 	}
+	response := analyticsSummaryResponse{AnalyticsSummary: result}
 	if in.GroupModels {
-		result.ModelAliases = s.modelGroups.Aliases()
-		for i, model := range result.Models {
-			result.Models[i] = s.modelGroups.Name(model)
-		}
-		slices.Sort(result.Models)
-		result.Models = slices.Compact(result.Models)
+		response.ModelAliases = s.modelGroups.Aliases()
+		response.Models = s.modelGroups.GroupNames(result.Models)
 	}
-	return &jsonOutput[db.AnalyticsSummary]{Body: result}, nil
+	return &jsonOutput[analyticsSummaryResponse]{Body: response}, nil
 }
 
 func (s *Server) humaAnalyticsActivity(

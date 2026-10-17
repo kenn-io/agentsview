@@ -855,7 +855,6 @@ type AnalyticsSummary struct {
 	MostActive             string                   `json:"most_active_project"`
 	Concentration          float64                  `json:"concentration"`
 	Agents                 map[string]*AgentSummary `json:"agents"`
-	ModelAliases           map[string]string        `json:"model_aliases,omitempty"`
 }
 
 // GetAnalyticsSummary returns aggregate statistics.

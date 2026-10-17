@@ -5,7 +5,7 @@ import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
 
 import type {
-  DbAnalyticsSummary as AnalyticsSummary,
+  AnalyticsSummaryResponse as AnalyticsSummary,
   DbActivityResponse as ActivityResponse,
   DbHeatmapResponse as HeatmapResponse,
   DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,

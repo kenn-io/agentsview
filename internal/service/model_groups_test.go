@@ -36,6 +36,15 @@ func TestModelGroupsAliases(t *testing.T) {
 	assert.Nil(t, (service.ModelGroups{}).Aliases())
 }
 
+func TestModelGroupsGroupNames(t *testing.T) {
+	groups := service.NewModelGroups(map[string]string{"a": "group", "b": "group"})
+	models := []string{"z", "b", "a", "group", "other"}
+	assert.Equal(t, []string{"group", "other", "z"}, groups.GroupNames(models))
+	assert.Equal(t, []string{"z", "b", "a", "group", "other"}, models)
+	assert.Equal(t, []string{"a", "z"}, (service.ModelGroups{}).GroupNames([]string{"z", "a", "z"}))
+	assert.Empty(t, groups.GroupNames(nil))
+}
+
 func TestModelGroupsGroupDaily(t *testing.T) {
 	groups := service.NewModelGroups(map[string]string{"a": "group", "b": "group"})
 	for _, tt := range []struct {

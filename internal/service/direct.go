@@ -1001,6 +1001,13 @@ func (b *directBackend) UsagePairwiseComparison(
 		return nil, err
 	}
 	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
+	left, right := req.LeftValue, req.RightValue
+	if req.LeftDimension == "model" {
+		left = b.modelGroups.Expand(left)
+	}
+	if req.RightDimension == "model" {
+		right = b.modelGroups.Expand(right)
+	}
 	if req.FallbackToDefault && !useDefault {
 		if err := validatePairwiseDimension(req.LeftDimension, req.LeftValue, "left"); err != nil {
 			return nil, err
@@ -1020,13 +1027,6 @@ func (b *directBackend) UsagePairwiseComparison(
 		summary, err := buildUsageSummary(rankingFilter, rankingResult)
 		if err != nil {
 			return nil, err
-		}
-		left, right := req.LeftValue, req.RightValue
-		if req.LeftDimension == "model" {
-			left = b.modelGroups.Expand(left)
-		}
-		if req.RightDimension == "model" {
-			right = b.modelGroups.Expand(right)
 		}
 		useDefault = useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, left, len(b.modelGroups.names) > 0) || !usagePairwiseSideInRanking(summary, req.RightDimension, right, len(b.modelGroups.names) > 0)
 		if useDefault {
@@ -1055,10 +1055,13 @@ func (b *directBackend) UsagePairwiseComparison(
 		return nil, err
 	}
 	query := req
-	if query.LeftDimension == "model" && (!useDefault || req.GroupModels) {
+	if !useDefault {
+		query.LeftValue, query.RightValue = left, right
+	}
+	if query.LeftDimension == "model" && useDefault && req.GroupModels {
 		query.LeftValue = b.modelGroups.Expand(query.LeftValue)
 	}
-	if query.RightDimension == "model" && (!useDefault || req.GroupModels) {
+	if query.RightDimension == "model" && useDefault && req.GroupModels {
 		query.RightValue = b.modelGroups.Expand(query.RightValue)
 	}
 	leftFilter, leftEmpty, rightFilter, rightEmpty, err := buildUsagePairwiseFilters(query, base)

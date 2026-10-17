@@ -404,6 +404,68 @@ components:
       required:
         - agents
       type: object
+    AnalyticsSummaryResponse:
+      additionalProperties: false
+      properties:
+        active_days:
+          format: int64
+          type: integer
+        active_projects:
+          format: int64
+          type: integer
+        agents:
+          additionalProperties:
+            $ref: "#/components/schemas/DbAgentSummary"
+          type: object
+        avg_messages:
+          format: double
+          type: number
+        concentration:
+          format: double
+          type: number
+        median_messages:
+          format: int64
+          type: integer
+        model_aliases:
+          additionalProperties:
+            type: string
+          type: object
+        models:
+          items:
+            type: string
+          type: array
+        most_active_project:
+          type: string
+        p90_messages:
+          format: int64
+          type: integer
+        token_reporting_sessions:
+          format: int64
+          type: integer
+        total_messages:
+          format: int64
+          type: integer
+        total_output_tokens:
+          format: int64
+          type: integer
+        total_sessions:
+          format: int64
+          type: integer
+      required:
+        - total_sessions
+        - total_messages
+        - total_output_tokens
+        - token_reporting_sessions
+        - models
+        - active_projects
+        - active_days
+        - avg_messages
+        - median_messages
+        - p90_messages
+        - most_active_project
+        - concentration
+        - agents
+      type: object
     ApiErrorResponse:
       additionalProperties: false
       properties:
@@ -919,68 +981,6 @@ components:
       required:
         - sessions
         - messages
-      type: object
-    DbAnalyticsSummary:
-      additionalProperties: false
-      properties:
-        active_days:
-          format: int64
-          type: integer
-        active_projects:
-          format: int64
-          type: integer
-        agents:
-          additionalProperties:
-            $ref: "#/components/schemas/DbAgentSummary"
-          type: object
-        avg_messages:
-          format: double
-          type: number
-        concentration:
-          format: double
-          type: number
-        median_messages:
-          format: int64
-          type: integer
-        model_aliases:
-          additionalProperties:
-            type: string
-          type: object
-        models:
-          items:
-            type: string
-          type: array
-        most_active_project:
-          type: string
-        p90_messages:
-          format: int64
-          type: integer
-        token_reporting_sessions:
-          format: int64
-          type: integer
-        total_messages:
-          format: int64
-          type: integer
-        total_output_tokens:
-          format: int64
-          type: integer
-        total_sessions:
-          format: int64
-          type: integer
-      required:
-        - total_sessions
-        - total_messages
-        - total_output_tokens
-        - token_reporting_sessions
-        - models
-        - active_projects
-        - active_days
-        - avg_messages
-        - median_messages
-        - p90_messages
-        - most_active_project
-        - concentration
-        - agents
       type: object
     DbBranchInfo:
       additionalProperties: false
@@ -10516,7 +10516,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DbAnalyticsSummary"
+                $ref: "#/components/schemas/AnalyticsSummaryResponse"
           description: OK
         "400":
           content:

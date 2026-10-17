@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { groupedModelCsv } from "../../utils/model-groups.js";
+  import { modelPickerItems } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -303,15 +303,7 @@
   });
 
   const modelItems = $derived(
-    groupedModelCsv([...knownModels, analytics.model].join(","), analytics.modelAliases)
-      .split(",")
-      .filter(Boolean)
-      .sort()
-      .map((name) => ({
-        name,
-        description: analytics.model.split(",").includes(name) ? undefined :
-          analytics.model.split(",").filter((token) => token !== name && analytics.modelAliases[token] === name).join(", ") || undefined,
-      })),
+    modelPickerItems(knownModels, analytics.model, analytics.modelAliases),
   );
   function handleExportCSV() {
     exportAnalyticsCSV({

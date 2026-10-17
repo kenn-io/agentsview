@@ -3,4 +3,4 @@
  */
 import type { DbAgentSummary } from "./dbAgentSummary.ts";
 
-export type DbAnalyticsSummaryAgents = { [key: string]: DbAgentSummary };
+export type AnalyticsSummaryResponseAgents = { [key: string]: DbAgentSummary };

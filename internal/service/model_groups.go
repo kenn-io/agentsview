@@ -36,6 +36,16 @@ func (g ModelGroups) Name(model string) string {
 	return model
 }
 
+// GroupNames returns sorted, distinct display names for the reported models.
+func (g ModelGroups) GroupNames(models []string) []string {
+	names := make([]string, len(models))
+	for i, model := range models {
+		names[i] = g.Name(model)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // Aliases returns a copy of the configured model-to-group map.
 func (g ModelGroups) Aliases() map[string]string {
 	if len(g.names) == 0 {

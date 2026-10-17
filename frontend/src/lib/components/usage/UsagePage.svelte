@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { groupedModelCsv } from "../../utils/model-groups.js";
+  import { modelPickerItems } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
@@ -149,15 +149,7 @@
   });
 
   const modelItems = $derived(
-    groupedModelCsv([...knownModels, usage.excludedModels].join(","), usage.modelAliases)
-      .split(",")
-      .filter(Boolean)
-      .sort()
-      .map((name) => ({
-        name,
-        description: usage.excludedModels.split(",").includes(name) ? undefined :
-          usage.excludedModels.split(",").filter((token) => token !== name && usage.modelAliases[token] === name).join(", ") || undefined,
-      })),
+    modelPickerItems(knownModels, usage.excludedModels, usage.modelAliases),
   );
   const unsupportedUsageMessage = $derived.by(() => {
     const kind = usage.isTimeRangeSummaryProvisional
