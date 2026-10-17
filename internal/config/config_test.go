@@ -3182,3 +3182,31 @@ func TestResolveDirs_CodebuffRootEnvVar(t *testing.T) {
 			cfg.ResolveDirs(parser.AgentCodebuff))
 	})
 }
+
+func TestLoadFile_ModelAliases(t *testing.T) {
+	for _, tt := range []struct {
+		name, data, badKey string
+		want               map[string]string
+	}{
+		{name: "quoted names", data: "[model_aliases]\n\"qwen/qwen3.6\" = \"qwen3.6\"\n\"qwen3.6-mlx\" = \"qwen3.6\"", want: map[string]string{"qwen/qwen3.6": "qwen3.6", "qwen3.6-mlx": "qwen3.6"}},
+		{name: "absent"},
+		{name: "empty key", data: "[model_aliases]\n\"\" = \"group\"", badKey: `""`},
+		{name: "empty name", data: "[model_aliases]\na = \"\"", badKey: `"a"`},
+		{name: "comma key", data: "[model_aliases]\n\"a,b\" = \"group\"", badKey: `"a,b"`},
+		{name: "comma name", data: "[model_aliases]\na = \"b,c\"", badKey: `"a"`},
+		{name: "padded key", data: "[model_aliases]\n\" a \" = \"group\"", badKey: `" a "`},
+		{name: "padded name", data: "[model_aliases]\na = \" group \"", badKey: `"a"`},
+		{name: "chain", data: "[model_aliases]\na = \"b\"\nb = \"c\"", badKey: `"a"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, tt.data)
+			if tt.badKey != "" {
+				require.ErrorContains(t, f.LoadMinimalErr(t), tt.badKey)
+				return
+			}
+			cfg := f.LoadMinimal(t)
+			assert.Equal(t, tt.want, cfg.ModelAliases)
+		})
+	}
+}

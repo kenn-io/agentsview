@@ -753,6 +753,24 @@ type CustomModelRate struct {
 	CacheReadMicrodollarsPerMTok       int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
 }
 
+func decodeModelAliases(data string) (map[string]string, error) {
+	var decoded struct {
+		ModelAliases map[string]string `toml:"model_aliases"`
+	}
+	if _, err := toml.Decode(data, &decoded); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	for key, name := range decoded.ModelAliases {
+		if key == "" || name == "" || strings.ContainsAny(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
+			return nil, fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, and contain no commas", key)
+		}
+		if target, ok := decoded.ModelAliases[name]; ok && target != name {
+			return nil, fmt.Errorf("model_aliases.%q: alias chains are unsupported", key)
+		}
+	}
+	return decoded.ModelAliases, nil
+}
+
 func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 	var decoded struct {
 		CustomModelPricing map[string]CustomModelRate `toml:"custom_model_pricing"`
@@ -1013,6 +1031,7 @@ type Config struct {
 
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
+	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
 	// RemoteHosts is the config-file list of remote targets that
@@ -1755,6 +1774,10 @@ func (c *Config) applyConfigTOML(data string) error {
 			return err
 		}
 	}
+	modelAliases, err := decodeModelAliases(data)
+	if err != nil {
+		return err
+	}
 	customModelPricing, err := decodeCustomModelPricing(data)
 	if err != nil {
 		return err
@@ -2048,6 +2071,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			cfg.Binary = strings.TrimSpace(cfg.Binary)
 			c.Agent[name] = cfg
 		}
+	}
+	if modelAliases != nil {
+		c.ModelAliases = modelAliases
 	}
 	if len(customModelPricing) > 0 {
 		c.CustomModelPricing = customModelPricing

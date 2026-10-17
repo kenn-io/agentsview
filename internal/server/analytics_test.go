@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 )
@@ -1185,4 +1186,26 @@ func TestSessionCountConsistency(t *testing.T) {
 	require.Greater(t, summaryResp.TotalSessions, listResp.Total,
 		"analytics should count more than navigation: analytics=%d list=%d",
 		summaryResp.TotalSessions, listResp.Total)
+}
+
+func TestAnalyticsModelGroups(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.ModelAliases = map[string]string{"claude-3-5-sonnet": "group", "gpt-4o": "group"}
+	})
+	seedAnalyticsEnv(t, te)
+	for _, tt := range []struct {
+		model, grouped string
+		sessions       int
+		models         []string
+	}{
+		{"group", "true", 3, []string{"group"}},
+		{"group", "false", 3, []string{"claude-3-5-sonnet", "gpt-4o"}},
+		{"gpt-4o", "true", 1, []string{"group"}},
+	} {
+		w := te.get(t, buildURLWithRange("summary", map[string]string{"model": tt.model, "group_models": tt.grouped}))
+		assertStatus(t, w, http.StatusOK)
+		result := decode[db.AnalyticsSummary](t, w)
+		assert.Equal(t, tt.sessions, result.TotalSessions)
+		assert.Equal(t, tt.models, result.Models)
+	}
 }

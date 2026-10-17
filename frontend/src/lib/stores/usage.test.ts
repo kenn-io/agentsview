@@ -447,6 +447,14 @@ describe("UsageStore filter persistence", () => {
     expect(usage.excludedAgents).toBe("");
   });
 
+  it("requests grouped model rows", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ group_models: true }),
+    );
+  });
+
   it("preserves unsupported usage metadata when comparison data is merged", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
       ...usageSummary(0),

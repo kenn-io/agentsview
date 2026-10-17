@@ -629,7 +629,11 @@ class AnalyticsStore {
   async fetchSummary(): Promise<FetchResult> {
     return await this.executeFetch(
       "summary",
-      (options) => AnalyticsService.getApiV1AnalyticsSummary(this.filterParams(), options),
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsSummary(
+          { ...this.filterParams(), group_models: true },
+          options,
+        ),
       (data) => {
         this.summary = data;
       },

@@ -34,6 +34,7 @@ type UsageRequest struct {
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
 	ExcludeModel      string `json:"exclude_model,omitempty"`
 	Model             string `json:"model,omitempty"`
+	GroupModels       bool   `json:"group_models,omitempty"`
 	MinUserMessages   int    `json:"min_user_messages,omitempty"`
 	ActiveSince       string `json:"active_since,omitempty"`
 	Termination       string `json:"termination,omitempty"`
@@ -402,7 +403,8 @@ type UsagePairwiseComparisonRequest struct {
 func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
 	switch dimension {
 	case "model":
-		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return total.Model == value })
+		values := splitCSVTokens(value)
+		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return slices.Contains(values, total.Model) })
 	case "project":
 		return slices.ContainsFunc(summary.ProjectTotals, func(total ProjectTotal) bool { return total.ProjectKey == value })
 	}

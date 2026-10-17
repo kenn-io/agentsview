@@ -453,6 +453,7 @@ class UsageStore {
       to: this.to,
     };
     const p: UsageParams = {
+      group_models: true,
       from: range.from,
       to: range.to,
       timezone: this.timezone,

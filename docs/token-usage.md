@@ -496,6 +496,29 @@ another catalog. A custom row is flat and suppresses any fetched request bands
 for that model. Models without a custom entry continue to resolve through the
 stored catalog.
 
+### Model aliases
+
+Group variants of a model under one name in Usage and Analytics. Add quoted
+model keys to `~/.agentsview/config.toml`, then restart AgentsView:
+
+```toml
+[model_aliases]
+"qwen/qwen3.6" = "qwen3.6"
+"qwen3.6-mlx" = "qwen3.6"
+```
+
+Both variants appear as `qwen3.6`, with their tokens and costs added together.
+Each variant keeps its own pricing before the totals are combined. Keys and
+names must be non-empty, have no surrounding whitespace or commas, and cannot
+form alias chains.
+
+Filters accept a group name anywhere a model filter is accepted. A raw member
+name still selects just that variant. API callers can request grouped report
+rows with `group_models=true` on usage endpoints, or a grouped model list on the
+analytics summary. Grouped usage summaries omit `schema_version` and `pricing`.
+Without the flag, responses, `usage daily`, exports, and MCP keep raw model
+names and raw `pricing.models` entries.
+
 ### Posit Assistant Billing
 
 For usage rows whose stored provider ID is exactly `positai`, AgentsView

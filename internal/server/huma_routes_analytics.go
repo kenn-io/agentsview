@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -53,6 +54,11 @@ type AnalyticsFilterInput struct {
 	IncludeOneShot   bool             `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool             `query:"include_automated" doc:"Include automated sessions"`
 	Termination      string           `query:"termination" doc:"Filter by termination reason"`
+}
+
+type analyticsSummaryInput struct {
+	AnalyticsFilterInput
+	GroupModels bool `query:"group_models" doc:"Group model aliases in the model list"`
 }
 
 type analyticsActivityInput struct {
@@ -113,7 +119,7 @@ func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilte
 		Project:          in.Project,
 		GitBranch:        in.GitBranch,
 		Agent:            in.Agent,
-		Model:            in.Model,
+		Model:            s.modelGroups.Expand(in.Model),
 		Timezone:         tz,
 		DayOfWeek:        optionalIntValue(in.DayOfWeek),
 		Hour:             optionalIntValue(in.Hour),
@@ -128,15 +134,22 @@ func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilte
 
 func (s *Server) humaAnalyticsSummary(
 	ctx context.Context,
-	in *AnalyticsFilterInput,
+	in *analyticsSummaryInput,
 ) (*jsonOutput[db.AnalyticsSummary], error) {
-	f, err := s.analyticsFilterFromInput(ctx, *in)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
 	result, err := s.db.GetAnalyticsSummary(ctx, f)
 	if err != nil {
 		return nil, internalError("analytics error", err)
+	}
+	if in.GroupModels {
+		for i, model := range result.Models {
+			result.Models[i] = s.modelGroups.Name(model)
+		}
+		slices.Sort(result.Models)
+		result.Models = slices.Compact(result.Models)
 	}
 	return &jsonOutput[db.AnalyticsSummary]{Body: result}, nil
 }

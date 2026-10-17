@@ -944,3 +944,77 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 		}
 	})
 }
+
+func TestUsageModelGroups(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	started := "2024-06-01T12:00:00Z"
+	msg := dbtest.AsstMsg("other", 1, "done")
+	msg.Timestamp, msg.Model, msg.TokenUsage = started, "other", []byte(`{"input_tokens":5}`)
+	dbtest.SeedSessionWithMessages(t, d, "other", "gamma", []db.Message{dbtest.UserMsg("other", 0, "hello"), msg}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) { s.StartedAt, s.EndedAt = &started, &started })
+	groups := service.NewModelGroups(map[string]string{
+		"claude-sonnet-4-20250514": "group", "gpt-4o": "group", "absent": "group",
+	})
+	for _, be := range []service.SessionService{
+		service.NewDirectBackend(d, nil, service.WithModelGroups(groups)),
+		service.NewReadOnlyBackend(d, service.WithModelGroups(groups)),
+	} {
+		base := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", IncludeOneShot: true}
+		raw, err := be.UsageSummary(t.Context(), base)
+		require.NoError(t, err)
+		require.Len(t, raw.ModelTotals, 3)
+		require.NotNil(t, raw.Pricing)
+		assert.Contains(t, raw.Pricing.Models, "gpt-4o")
+		assert.Contains(t, raw.Pricing.Models, "claude-sonnet-4-20250514")
+		assert.NotContains(t, raw.Pricing.Models, "group")
+		base.GroupModels = true
+		grouped, err := be.UsageSummary(t.Context(), base)
+		require.NoError(t, err)
+		require.Len(t, grouped.ModelTotals, 2)
+		assert.Equal(t, "group", grouped.ModelTotals[0].Model)
+		assert.Equal(t, 200, grouped.ModelTotals[0].InputTokens)
+		assert.Equal(t, raw.Totals, grouped.Totals)
+		assert.Zero(t, grouped.SchemaVersion)
+		assert.Nil(t, grouped.Pricing)
+		for _, tt := range []struct {
+			model, exclude string
+			input          int
+		}{
+			{model: "group", input: 200}, {exclude: "group", input: 5}, {model: "gpt-4o", input: 30},
+		} {
+			req := base
+			req.Model, req.ExcludeModel = tt.model, tt.exclude
+			req.GroupModels = false
+			summary, err := be.UsageSummary(t.Context(), req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.input, summary.Totals.InputTokens)
+		}
+		scoped := base
+		scoped.Model = "group"
+		intersection, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: scoped, LeftDimension: "model", LeftValue: "group,other", RightDimension: "model", RightValue: "gpt-4o"})
+		require.NoError(t, err)
+		assert.Equal(t, 200, intersection.Left.InputTokens)
+		assert.Equal(t, 30, intersection.Right.InputTokens)
+		pair, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: base})
+		require.NoError(t, err)
+		assert.Equal(t, "group", pair.Left.Value)
+		assert.Equal(t, "other", pair.Right.Value)
+		assert.Equal(t, 200, pair.Left.InputTokens)
+		for _, tt := range []struct {
+			left  string
+			want  string
+			input int
+		}{
+			{"group,other", "group,other", 205},
+			{"group", "group", 200},
+			{"absent", "group", 200},
+			{"gpt-4o", "gpt-4o", 30},
+		} {
+			req := service.UsagePairwiseComparisonRequest{UsageRequest: base, LeftDimension: "model", LeftValue: tt.left, RightDimension: "model", RightValue: "other", FallbackToDefault: true}
+			result, err := be.UsagePairwiseComparison(t.Context(), req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result.Left.Value)
+			assert.Equal(t, tt.input, result.Left.InputTokens)
+		}
+	}
+}

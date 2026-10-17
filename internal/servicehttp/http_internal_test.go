@@ -327,3 +327,30 @@ func TestListEmptySessionSelectionReturnsEmptyWithoutRequest(t *testing.T) {
 	assert.Zero(t, page.Total)
 	assert.Zero(t, requests.Load())
 }
+
+func TestUsageModelGroupsQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "true", r.URL.Query().Get("group_models"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/usage/summary":
+			_, _ = w.Write([]byte(`{"modelTotals":[{"model":"group","inputTokens":200}]}`))
+		case "/api/v1/usage/pairwise-comparison":
+			_, _ = w.Write([]byte(`{"left":{"value":"group","inputTokens":200},"right":{"value":"other","inputTokens":5}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackend(srv.URL, "", false, "")
+	req := service.UsageRequest{GroupModels: true}
+	summary, err := backend.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, summary.ModelTotals, 1)
+	assert.Equal(t, "group", summary.ModelTotals[0].Model)
+	pair, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
+	require.NoError(t, err)
+	assert.Equal(t, "group", pair.Left.Value)
+	assert.Equal(t, 200, pair.Left.InputTokens)
+}

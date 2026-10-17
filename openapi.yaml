@@ -10496,6 +10496,13 @@ paths:
           schema:
             description: Filter by termination reason
             type: string
+        - description: Group model aliases in the model list
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in the model list
+            type: boolean
       responses:
         "200":
           content:
@@ -23249,6 +23256,13 @@ paths:
     get:
       operationId: get-api-v1-usage-comparison
       parameters:
+        - description: Group model aliases in report rows
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in report rows
+            type: boolean
         - description: Range start date
           explode: false
           in: query
@@ -23494,6 +23508,13 @@ paths:
     get:
       operationId: get-api-v1-usage-pairwise-comparison
       parameters:
+        - description: Group model aliases in report rows
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in report rows
+            type: boolean
         - description: Range start date
           explode: false
           in: query
@@ -23764,6 +23785,13 @@ paths:
     get:
       operationId: get-api-v1-usage-summary
       parameters:
+        - description: Group model aliases in report rows
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in report rows
+            type: boolean
         - description: Range start date
           explode: false
           in: query
@@ -23999,6 +24027,13 @@ paths:
     get:
       operationId: get-api-v1-usage-summary-stream
       parameters:
+        - description: Group model aliases in report rows
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in report rows
+            type: boolean
         - description: Range start date
           explode: false
           in: query
@@ -24234,6 +24269,13 @@ paths:
     get:
       operationId: get-api-v1-usage-top-sessions
       parameters:
+        - description: Group model aliases in report rows
+          explode: false
+          in: query
+          name: group_models
+          schema:
+            description: Group model aliases in report rows
+            type: boolean
         - description: Range start date
           explode: false
           in: query

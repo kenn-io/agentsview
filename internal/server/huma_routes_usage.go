@@ -45,6 +45,7 @@ func (s *Server) registerUsageRoutes() {
 }
 
 type UsageFilterInput struct {
+	GroupModels       bool   `query:"group_models" doc:"Group model aliases in report rows"`
 	From              string `query:"from" format:"date" doc:"Range start date"`
 	To                string `query:"to" format:"date" doc:"Range end date"`
 	Timezone          string `query:"timezone" doc:"IANA timezone name"`
@@ -107,6 +108,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		ExcludeAgent:      in.ExcludeAgent,
 		ExcludeModel:      in.ExcludeModel,
 		Model:             in.Model,
+		GroupModels:       in.GroupModels,
 		MinUserMessages:   in.MinUserMessages,
 		ActiveSince:       in.ActiveSince,
 		Termination:       in.Termination,
@@ -156,6 +158,8 @@ func (s *Server) usageFilterFromInput(
 	}
 	in.Machine = machine
 	req := usageRequestFromInput(in)
+	req.Model = s.modelGroups.Expand(req.Model)
+	req.ExcludeModel = s.modelGroups.Expand(req.ExcludeModel)
 	req, err = service.ResolveUsageProjectKeys(
 		ctx, s.db, req,
 	)
