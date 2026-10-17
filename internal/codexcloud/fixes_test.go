@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -222,11 +223,12 @@ func TestCustomDaemonCodexHomeLoginNamesCodexHome(t *testing.T) {
 		}
 		return ""
 	}, "/users/a")()
-	require.Equal(t, "/srv/codex", gates.Homes[0])
-	require.NotEqual(t, gates.Homes[0], gates.DefaultHome)
+	custom := gates.Homes[0]
+	require.Equal(t, filepath.Clean("/srv/codex"), custom)
+	require.NotEqual(t, custom, gates.DefaultHome)
 
 	message := "Run `codex login`."
-	assert.Equal(t, "Run "+homeLoginCommand("/srv/codex", runtime.GOOS)+".", withLoginCommand(gates, "/srv/codex", message))
+	assert.Equal(t, "Run "+homeLoginCommand(custom, runtime.GOOS)+".", withLoginCommand(gates, custom, message))
 	assert.Equal(t, message, withLoginCommand(gates, gates.DefaultHome, message))
 }
 
