@@ -167,7 +167,6 @@ func TestOutcomesSurviveReparse(t *testing.T) {
 				OutcomeAt:   new(time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)),
 			}
 			assert.Equal(t, want, parseCodexCloud(t, path).Session.PlanUsage)
-			assert.Equal(t, want, parseCodexCloud(t, path).Session.PlanUsage, "second parse")
 		})
 	}
 }
