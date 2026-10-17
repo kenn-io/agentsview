@@ -331,6 +331,40 @@ describe("AnalyticsPage outcome window", () => {
 });
 
 describe("AnalyticsPage initial load", () => {
+  it("loads unfiltered analytics while machine metadata is pending", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const fetch = vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const metadata =
+      Promise.withResolvers<Awaited<ReturnType<typeof MetadataService.getApiV1Machines>>>();
+    vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(metadata.promise);
+    router.isRootPath = true;
+    router.params = {};
+    sessions.initFromParams(router.params);
+    component = mount(AnalyticsPage, { target: document.body });
+
+    try {
+      await flushEffects();
+      expect(sessions.filters.machine).toBe("");
+      expect(sessions.machineFilterPending).toBe(false);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      metadata.resolve({
+        machines: [],
+        resolved_machines: [],
+        machine_labels: {},
+        machine_aliases: {},
+      });
+      await sessions.loadMachines();
+    }
+  });
+
   it("loads analytics once with the resolved machine from a label deep link", async () => {
     vi.stubGlobal(
       "ResizeObserver",

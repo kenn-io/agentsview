@@ -486,7 +486,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     seedQualityYoke();
     sessions.loadProjects();
     sessions.loadAgents();
-    fetchQualitySignals();
+    if (!sessions.machineFilterPending) fetchQualitySignals();
     unsubEvents = events.subscribeDebounced(() => {
       fetchQualitySignals();
     });
@@ -524,7 +524,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       untrack(() => analytics.automatedScope) !==
         headerAutomatedScope;
 
-    if (changed) {
+    if (changed && !sessions.machineFilterPending) {
       analytics.project = headerProject;
       analytics.machine = headerMachine;
       analytics.agent = headerAgent;

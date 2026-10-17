@@ -942,7 +942,7 @@ class SessionsStore {
   }
 
   get machineFilterPending(): boolean {
-    return this.machineResolution?.status === "pending";
+    return !!this.filters.machine && this.machineResolution?.status === "pending";
   }
   get machineFilterUpdateFailed(): boolean {
     return this.machineResolution?.status === "unavailable";
