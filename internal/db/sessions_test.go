@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -9,9 +11,88 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Capture the SQL at the driver boundary so EXPLAIN checks the real lookup.
+type codexExclusionPlanConnector struct {
+	path  string
+	query *string
+	args  *[]any
+}
+
+func (c codexExclusionPlanConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.Driver().Open(c.path)
+	if err != nil {
+		return nil, err
+	}
+	return &codexExclusionPlanConn{Conn: conn, query: c.query, args: c.args}, nil
+}
+
+func (codexExclusionPlanConnector) Driver() driver.Driver { return &sqlite3.SQLiteDriver{} }
+
+type codexExclusionPlanConn struct {
+	driver.Conn
+	query *string
+	args  *[]any
+}
+
+func (c *codexExclusionPlanConn) Prepare(query string) (driver.Stmt, error) {
+	*c.query = query
+	stmt, err := c.Conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	return &codexExclusionPlanStmt{Stmt: stmt, args: c.args}, nil
+}
+
+type codexExclusionPlanStmt struct {
+	driver.Stmt
+	args *[]any
+}
+
+func (s *codexExclusionPlanStmt) Query(values []driver.Value) (driver.Rows, error) {
+	*s.args = nil
+	for _, value := range values {
+		*s.args = append(*s.args, value)
+	}
+	return s.Stmt.Query(values)
+}
+
+func TestHasDeletedCodexRolloutUsesIndexedLookup(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	// Tombstones from unrelated rollouts must not require a full scan.
+	for i := range 100 {
+		_, err := d.getWriter().ExecContext(ctx,
+			"INSERT INTO excluded_sessions(id,file_path) VALUES (?,?)",
+			fmt.Sprintf("codex:%08d-1111-4111-8111-111111111111", i),
+			fmt.Sprintf("/archive/rollout-2026-09-01T10-00-00-%08d-1111-4111-8111-111111111111.jsonl", i))
+		require.NoError(t, err)
+	}
+	var query string
+	var args []any
+	reader := sql.OpenDB(codexExclusionPlanConnector{path: d.Path(), query: &query, args: &args})
+	reader.SetMaxOpenConns(1)
+	defer reader.Close()
+	previous := d.reader.Swap(reader)
+	defer d.reader.Store(previous)
+	excluded, err := d.HasDeletedCodexRollout(ctx,
+		"codex:ffffffff-ffff-4fff-8fff-ffffffffffff",
+		"/sessions/rollout-2026-09-01T10-00-00-ffffffff-ffff-4fff-8fff-ffffffffffff.jsonl")
+	require.NoError(t, err)
+	require.False(t, excluded)
+	require.NotEmpty(t, query)
+	rows, err := previous.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+	assert.Contains(t, plan, "SEARCH excluded_sessions", "rollout lookup must seek an index: %s", plan)
+	assert.Contains(t, plan, "SEARCH sessions", "trash lookup must seek an index: %s", plan)
+	assert.NotContains(t, plan, "SCAN", "rollout lookup must not scan: %s", plan)
+}
 
 func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 	if testing.Short() {

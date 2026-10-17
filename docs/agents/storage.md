@@ -193,9 +193,10 @@ Pins, Recall entries, and export message IDs follow the corrected
 transcript. For live sessions, names and stars stay on a surviving original
 thread; when it is absent, they follow the corrected transcript. Trash and
 permanent deletions continue to hide the affected threads. A trashed misfiled
-transcript stays under its saved ID; its saved path also hides the other
-rollout. Permanent deletion excludes the corrected thread only if the fresh
-parse produced it from that rollout. With that file missing, the deletion stays
+transcript stays under its saved ID; its saved rollout file name also hides the
+other rollout, including after a move or compression. Permanent deletion
+excludes the corrected thread only if the fresh parse produced it from that
+rollout. With that file missing, the deletion stays
 on its saved ID. Its saved rollout file name also suppresses a later return,
 including after a move or compression.
 An archive-only capture keeps its old ID when retained-source

@@ -14227,16 +14227,12 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// shares it, or when any alternate identity for the path (the
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
-		suppress := false
-		if isCodexFormatAgent(agent) {
-			var err error
-			suppress, err = e.db.HasExcludedCodexRollout(ctx, currentPrefixedID, lookupPath)
-			if err != nil {
-				res.err = err
-				res.noCacheSkip = true
-				res.results = kept[:0]
-				return
-			}
+		suppress, err := e.codexRolloutDeleted(ctx, agent, currentPrefixedID, lookupPath)
+		if err != nil {
+			res.err = err
+			res.noCacheSkip = true
+			res.results = kept[:0]
+			return
 		}
 		for _, agentStr := range agentsToQuery {
 			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
@@ -14291,6 +14287,15 @@ func (e *Engine) applyProviderFilePathPolicies(
 	}
 	res.results = kept
 	e.stageProviderStatHash(agent, filePath, res)
+}
+
+// codexRolloutDeleted reports whether a Codex-format source belongs to a
+// rollout the user trashed or permanently deleted, under any ID or path form.
+func (e *Engine) codexRolloutDeleted(ctx context.Context, agent parser.AgentType, sessionID, path string) (bool, error) {
+	if !isCodexFormatAgent(agent) {
+		return false, nil
+	}
+	return e.db.HasDeletedCodexRollout(ctx, sessionID, path)
 }
 
 // stageProviderStatHash stages the per-component provider_freshness digest for

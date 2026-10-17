@@ -1352,25 +1352,47 @@ func (db *DB) IsSessionExcluded(ctx context.Context, id string) bool {
 	return n == 1
 }
 
-// HasExcludedCodexRollout finds permanent deletions by rollout identity within
-// the session's agent and machine prefix, even after a move or compression.
-func (db *DB) HasExcludedCodexRollout(ctx context.Context, sessionID, path string) (bool, error) {
+// codexRolloutTailSQL is the last UUID in a Codex rollout file name. Indexing
+// it lets a lookup seek one rollout's rows across moves and compression.
+const codexRolloutTailSQL = `substr(file_path, CASE WHEN substr(file_path, -4) = '.zst' THEN -46 ELSE -42 END, 36)`
+
+// codexRolloutTailIndexes back HasDeletedCodexRollout.
+var codexRolloutTailIndexes = []string{
+	`CREATE INDEX IF NOT EXISTS idx_excluded_sessions_codex_rollout
+	 ON excluded_sessions(` + codexRolloutTailSQL + `) WHERE file_path IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_trashed_codex_rollout
+	 ON sessions(` + codexRolloutTailSQL + `) WHERE deleted_at IS NOT NULL`,
+}
+
+// HasDeletedCodexRollout finds trash and permanent deletions by rollout
+// identity within the session's agent and machine prefix, even after a move
+// or compression.
+func (db *DB) HasDeletedCodexRollout(ctx context.Context, sessionID, path string) (bool, error) {
 	key := parser.CodexSessionUUIDFromPath(path)
 	prefixEnd := strings.LastIndex(sessionID, ":") + 1
-	if key == "" || prefixEnd == 0 {
+	if len(key) < 36 || prefixEnd == 0 {
 		return false, nil
 	}
-	prefix := sessionID[:prefixEnd]
+	tail, prefix := key[len(key)-36:], sessionID[:prefixEnd]
 	rows, err := db.getReader().QueryContext(ctx, `SELECT file_path FROM excluded_sessions
-		WHERE substr(id, 1, ?) = ? AND file_path IS NOT NULL`, prefixEnd, prefix)
+		WHERE `+codexRolloutTailSQL+` = ? AND file_path IS NOT NULL AND substr(id, 1, ?) = ?
+		UNION ALL SELECT file_path FROM sessions
+		WHERE `+codexRolloutTailSQL+` = ? AND deleted_at IS NOT NULL AND substr(id, 1, ?) = ?`,
+		tail, prefixEnd, prefix, tail, prefixEnd, prefix)
 	if err != nil {
-		return false, fmt.Errorf("reading excluded Codex rollouts: %w", err)
+		return false, fmt.Errorf("reading deleted Codex rollouts: %w", err)
 	}
+	return anyCodexRolloutKey(rows, key)
+}
+
+// anyCodexRolloutKey reports whether a file_path row names the rollout key,
+// closing rows.
+func anyCodexRolloutKey(rows *sql.Rows, key string) (bool, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var storedPath string
 		if err := rows.Scan(&storedPath); err != nil {
-			return false, fmt.Errorf("scanning excluded Codex rollout: %w", err)
+			return false, fmt.Errorf("scanning deleted Codex rollout: %w", err)
 		}
 		if parser.CodexSessionUUIDFromPath(storedPath) == key {
 			return true, nil

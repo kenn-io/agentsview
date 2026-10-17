@@ -3798,7 +3798,7 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
 		 ON sessions(friction_rules_version)`,
 	}
-	for _, ddl := range indexes {
+	for _, ddl := range append(indexes, codexRolloutTailIndexes...) {
 		if _, err := w.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("creating index: %w", err)
 		}

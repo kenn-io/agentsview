@@ -103,6 +103,8 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 		{name: "b_moved", storedPath: "moved", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
 		{name: "backslash_path", storedPath: "backslash", wantA: aMessages, wantB: bMessages, pinOwner: b, nameOwner: a},
 		{name: "trashed", disposition: "trash", wantA: bMessages, pinOwner: a, nameOwner: a},
+		{name: "trashed_b_moved", storedPath: "moved", disposition: "trash", wantA: bMessages, pinOwner: a, nameOwner: a},
+		{name: "trashed_b_compressed", storedPath: "compressed", disposition: "trash", wantA: bMessages, pinOwner: a, nameOwner: a},
 		{name: "deleted_b_present", disposition: "delete"},
 		{name: "deleted_b_missing", absent: []string{b}, disposition: "delete", returnForm: "plain"},
 		{name: "deleted_b_missing_moved", absent: []string{b}, disposition: "delete", returnForm: "moved"},
@@ -121,6 +123,12 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 			storedPath := pathB
 			dirs := []string{root}
 			switch tc.storedPath {
+			case "compressed":
+				info, err := os.Stat(pathB)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(pathB+".zst", zstdCompressString(t, string(returningB)), 0o600))
+				require.NoError(t, os.Chtimes(pathB+".zst", info.ModTime(), info.ModTime()))
+				require.NoError(t, os.Remove(pathB))
 			case "moved":
 				moved := filepath.Join(root, "archived_sessions", filepath.Base(pathB))
 				require.NoError(t, os.MkdirAll(filepath.Dir(moved), 0o700))
@@ -196,7 +204,7 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, stats.Failed)
 			require.False(t, stats.Aborted)
-			if tc.storedPath == "moved" {
+			if tc.storedPath == "moved" && tc.disposition != "trash" {
 				assert.Equal(t, filepath.Join(root, "archived_sessions", filepath.Base(pathB)), reopened.GetSessionFilePath(ctx, b))
 			}
 			for _, want := range []struct {
