@@ -324,7 +324,7 @@ type UnsupportedUsage struct {
 // comparison is a separate endpoint, so it is intentionally absent here.
 type UsageSummaryResult struct {
 	ExcludeModelFilter string                            `json:"exclude_model_filter,omitempty"`
-	SchemaVersion      int                               `json:"schema_version,omitempty,omitzero"`
+	SchemaVersion      int                               `json:"schema_version,omitempty"`
 	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects           map[string]export.ProjectMapEntry `json:"projects"`
 	From               string                            `json:"from"`

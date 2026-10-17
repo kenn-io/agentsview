@@ -223,16 +223,25 @@ describe("UsagePage refresh behavior", () => {
       },
     );
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue({
-      ...usageSummaryWithUnsupported(),
-      exclude_model_filter: "claude-4",
-    });
+    const summary = Promise.withResolvers<UsageSummaryResponse>();
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockReturnValue(summary.promise);
     vi.spyOn(usage, "fetchAll").mockImplementation(async () => {
       await usage.fetchSummary({ loadComparison: false });
     });
     router.route = "usage";
     router.params = { exclude_model: "claude-opus-4-20250514" };
     component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
+    await flushEffects();
+    const pendingRows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    expect(pendingRows.map((row) => row.textContent?.trim())).toEqual(["claude-opus-4-20250514"]);
+    expect(pendingRows[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
+    summary.resolve({
+      ...usageSummaryWithUnsupported(),
+      exclude_model_filter: "claude-4",
+    });
     await vi.waitFor(() => expect(usage.excludedModels).toBe("claude-4"));
     await flushEffects();
     expect(router.params.exclude_model).toBe("claude-4");
@@ -244,6 +253,25 @@ describe("UsagePage refresh behavior", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
     expect(rows.some((row) => row.textContent?.includes("claude-opus-4-20250514"))).toBe(false);
+  });
+
+  it("lets an applied model exclusion be cleared when the summary fails", async () => {
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockRejectedValue(new Error("summary failed"));
+    vi.spyOn(usage, "fetchAll").mockImplementation(async () => {
+      await usage.fetchSummary({ loadComparison: false });
+    });
+    router.route = "usage";
+    router.params = { exclude_model: "model-zulu,model-alpha" };
+    component = mount(UsagePage, { target: document.body });
+    await vi.waitFor(() => expect(usage.errors.summary).toBe("summary failed"));
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
+    await flushEffects();
+    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["model-alpha", "model-zulu"]);
+    rows[0]!.click();
+    await flushEffects();
+    expect(usage.excludedModels).toBe("model-zulu");
   });
 
   it("restores hidden models from a shared URL", async () => {

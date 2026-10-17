@@ -303,7 +303,10 @@
   });
 
   const modelItems = $derived(
-    knownModels.map((name) => ({ name })),
+    [...new Set([...knownModels, ...analytics.model.split(",")])]
+      .filter(Boolean)
+      .sort()
+      .map((name) => ({ name })),
   );
   function handleExportCSV() {
     exportAnalyticsCSV({

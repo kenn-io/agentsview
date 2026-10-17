@@ -149,7 +149,10 @@
   });
 
   const modelItems = $derived(
-    knownModels.map((m) => ({ name: m })),
+    [...new Set([...knownModels, ...usage.excludedModels.split(",")])]
+      .filter(Boolean)
+      .sort()
+      .map((name) => ({ name })),
   );
   const unsupportedUsageMessage = $derived.by(() => {
     const kind = usage.isTimeRangeSummaryProvisional

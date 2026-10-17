@@ -98,7 +98,24 @@ describe("AnalyticsPage grouped model filter", () => {
     );
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(outcomeTotals, "load").mockResolvedValue();
-    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockResolvedValue({
+    const summary = Promise.withResolvers<Awaited<ReturnType<typeof AnalyticsService.getApiV1AnalyticsSummary>>>();
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockReturnValue(summary.promise);
+    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
+      await analytics.fetchSummary();
+    });
+    analytics.model = "claude-opus-4-20250514";
+    analytics.summary = null;
+    sessions.loading = false;
+    router.route = "sessions";
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!.click();
+    await flushEffects();
+    const pendingRows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    expect(pendingRows.slice(1).map((row) => row.textContent?.trim())).toEqual(["claude-opus-4-20250514"]);
+    expect(pendingRows[1]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!.click();
+    summary.resolve({
       total_sessions: 0,
       total_messages: 0,
       total_output_tokens: 0,
@@ -114,14 +131,6 @@ describe("AnalyticsPage grouped model filter", () => {
       concentration: 0,
       agents: {},
     });
-    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
-      await analytics.fetchSummary();
-    });
-    analytics.model = "claude-opus-4-20250514";
-    analytics.summary = null;
-    sessions.loading = false;
-    router.route = "sessions";
-    component = mount(AnalyticsPage, { target: document.body });
     await vi.waitFor(() => expect(analytics.model).toBe("claude-4"));
     await flushEffects();
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: claude-4"]')!.click();
@@ -131,6 +140,29 @@ describe("AnalyticsPage grouped model filter", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
     expect(rows.some((row) => row.textContent?.includes("claude-opus-4-20250514"))).toBe(false);
+  });
+
+  it("lets an applied model selection be unticked when the summary fails", async () => {
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockRejectedValue(new Error("summary failed"));
+    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
+      await analytics.fetchSummary();
+    });
+    analytics.model = "model-zulu,model-alpha";
+    analytics.summary = null;
+    sessions.loading = false;
+    router.route = "sessions";
+    component = mount(AnalyticsPage, { target: document.body });
+    await vi.waitFor(() => expect(analytics.errors.summary).toBe("summary failed"));
+    document.querySelector<HTMLButtonElement>('button[aria-label^="Model:"]')!.click();
+    await flushEffects();
+    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
+    expect(rows.slice(1).map((row) => row.textContent?.trim())).toEqual(["model-alpha", "model-zulu"]);
+    expect(rows[1]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    rows[1]!.click();
+    await flushEffects();
+    expect(analytics.model).toBe("model-zulu");
   });
 });
 
