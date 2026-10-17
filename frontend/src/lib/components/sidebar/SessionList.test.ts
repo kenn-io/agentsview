@@ -127,6 +127,30 @@ describe("SessionList filter dropdown", () => {
     }
   });
 
+  it("counts sidebar errors only while the sidebar is open", async () => {
+    const { SessionsService } = await import("../../api/generated/index.js");
+    const { ApiError } = await import("../../api/runtime.js");
+    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockRejectedValue(
+      new ApiError(400, "Sidebar failed"),
+    );
+    ui.sidebarOpen = false;
+    component = mount(SessionList, { target: document.body });
+    await sessions.load();
+    await tick();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    ui.sidebarOpen = true;
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
+    await sessions.load();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    ui.sidebarOpen = false;
+    await tick();
+    ui.sidebarOpen = true;
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds the filter menu to the viewport and lets it scroll", async () => {
     component = mount(SessionList, { target: document.body });
     await tick();

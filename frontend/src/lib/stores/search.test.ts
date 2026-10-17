@@ -4,9 +4,9 @@ import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
-import { reportTelemetry } from "../utils/telemetry.js";
+import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
-vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
+vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/generated/index.js")>();
@@ -338,18 +338,13 @@ describe("SearchStore", () => {
     await runDebounce();
 
     expect(store.error).toEqual({ detail, kind });
-    expect(reportTelemetry).toHaveBeenCalledWith("error_shown", { kind: "search" });
+    expect(reportErrorShown).toHaveBeenCalledWith("search");
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
     searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
     store.retry();
     await flushMicrotasks();
-    expect(
-      vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "error_shown"),
-    ).toEqual([
-      ["error_shown", { kind: "search" }],
-      ["error_shown", { kind: "search" }],
-    ]);
+    expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
   });
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
@@ -472,7 +467,7 @@ describe("SearchStore", () => {
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(store.error).toEqual({ detail: null, kind: "generic" });
-    expect(reportTelemetry).toHaveBeenCalledWith("error_shown", { kind: "search" });
+    expect(reportErrorShown).toHaveBeenCalledWith("search");
     expect(store.isSearching).toBe(false);
   });
 
@@ -494,7 +489,7 @@ describe("SearchStore", () => {
     await flushMicrotasks();
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
-    expect(reportTelemetry).not.toHaveBeenCalledWith("error_shown", { kind: "search" });
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
     expect(store.error).toBeNull();
     expect(store.isSearching).toBe(false);
@@ -526,7 +521,7 @@ describe("SearchStore", () => {
     await flushMicrotasks();
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
-    expect(reportTelemetry).not.toHaveBeenCalledWith("error_shown", { kind: "search" });
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(wasCancelled).toBe(true);
     expect(store.results).toEqual([]);
     expect(store.query).toBe("");
@@ -538,6 +533,7 @@ describe("SearchStore telemetry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(reportTelemetry).mockClear();
+    vi.mocked(reportErrorShown).mockClear();
     searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
     searchService.getApiV1SearchContent.mockResolvedValue(
       contentResult([contentMatch("match", 1, 1)]),
@@ -611,7 +607,6 @@ describe("SearchStore telemetry", () => {
     expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
       ["search_run", { query_type: "text" }],
       ["search_run", { query_type: "semantic" }],
-      ["error_shown", { kind: "search" }],
     ]);
   });
 });

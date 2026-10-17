@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({
+  reportErrorShown: vi.fn(),
+  reportTelemetry: vi.fn(),
+}));
 import { mount, tick, unmount } from "svelte";
 import type { DbTopSessionEntry, UsageSummaryResponse } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
@@ -441,6 +446,42 @@ describe("AttributionPanel job groups", () => {
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+  });
+
+  it("counts a project error once, then stays quiet when Back recovers", async () => {
+    usage.selectedProjectKey = "pl1:sha256:first";
+    const request = Promise.withResolvers<DbTopSessionEntry[]>();
+    usageServiceMocks.getApiV1UsageTopSessions.mockReturnValueOnce(request.promise);
+    const component = mountPanel();
+    try {
+      await tick();
+      expect(reportErrorShown).not.toHaveBeenCalled();
+      document
+        .querySelector<HTMLElement>(".list-row")!
+        .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await tick();
+      expect(usage.loading.zoom).toBe(true);
+      expect(reportErrorShown).not.toHaveBeenCalled();
+      request.reject(new Error("Project failed"));
+      await vi.waitFor(() => expect(usage.errors.zoom).toBe("Project failed"));
+      await tick();
+      expect(document.querySelector(".empty")?.textContent).toBe("Project failed");
+      expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+      await tick();
+      expect(reportErrorShown).toHaveBeenCalledTimes(1);
+      [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
+        .find((button) => button.textContent?.includes("All projects"))!
+        .click();
+      await tick();
+      expect(usage.zoomedProject).toBeNull();
+      expect(document.querySelector(".empty")).toBeNull();
+      expect(reportErrorShown).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() =>
+        expect(document.activeElement).toBe(document.querySelector(".list-row")),
+      );
+    } finally {
+      await unmount(component);
+    }
   });
 
   it.each(["with a summary", "after the summary fails on a date change"])(

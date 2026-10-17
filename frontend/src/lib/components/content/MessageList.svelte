@@ -882,19 +882,19 @@
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
 {:else if sessions.activeSessionNotFound && messages.messages.length === 0}
-  <EmptyState
-    title={m.message_list_session_not_found()}
-    description={m.message_list_session_not_found_hint()}
-  >
-    {#snippet icon()}
-      <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
-    {/snippet}
-    <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
-      <span {@attach errorTelemetry("session")}>
+  <div class="missing-session" role="alert" {@attach errorTelemetry("session")}>
+    <EmptyState
+      title={m.message_list_session_not_found()}
+      description={m.message_list_session_not_found_hint()}
+    >
+      {#snippet icon()}
+        <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
+      {/snippet}
+      <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
         {m.message_list_session_not_found_retry()}
-      </span>
-    </Button>
-  </EmptyState>
+      </Button>
+    </EmptyState>
+  </div>
 {:else}
   <SessionFindView
     items={displayItemsAsc}
@@ -970,6 +970,11 @@
 {/if}
 
 <style>
+  .missing-session {
+    width: 100%;
+    margin: auto;
+  }
+
   .message-list-scroll {
     flex: 1;
     overflow-y: auto;

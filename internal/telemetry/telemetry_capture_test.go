@@ -113,6 +113,33 @@ func TestCoreActionAllowlist(t *testing.T) {
 	}
 }
 
+func TestOutcomeCategoriesRequirePropertyAndNormalizeValues(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+	endpoint, captured := captureCollector(t)
+	reporter := captureReporter(t, endpoint, Options{})
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
+	for _, tc := range []struct{ event, key string }{{EventErrorShown, "kind"}, {EventSyncFailed, "reason"}} {
+		body, err := json.Marshal(map[string]any{"event": tc.event})
+		require.NoError(t, err)
+		postCapture(t, srv.Handler(), string(body), http.StatusBadRequest)
+		for _, value := range []any{nil, false, 42, map[string]any{"text": "private"}, "unknown"} {
+			body, err := json.Marshal(map[string]any{"event": tc.event, "properties": map[string]any{tc.key: value}})
+			require.NoError(t, err)
+			postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
+		}
+	}
+	require.NoError(t, reporter.Close())
+	sent := captured()
+	require.Len(t, sent, 10)
+	for _, properties := range sent[:5] {
+		assert.Equal(t, "other", properties["kind"])
+	}
+	for _, properties := range sent[5:] {
+		assert.Equal(t, "other", properties["reason"])
+	}
+}
+
 func TestScreenViewWithoutScreenLeavesValidRetry(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")

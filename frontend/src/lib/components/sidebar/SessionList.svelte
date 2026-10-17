@@ -551,7 +551,7 @@
 </div>
 
 {#if sessions.sidebarLoadError}
-  <div class="sidebar-load-error" role="alert" {@attach errorTelemetry("session")}>{sessions.sidebarLoadError}</div>
+  <div class="sidebar-load-error" role="alert" {@attach errorTelemetry(ui.sidebarOpen ? "session" : undefined)}>{sessions.sidebarLoadError}</div>
 {/if}
 
 {#if sessions.selectMode}

@@ -159,8 +159,8 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		kittelemetry.WithAllowedEvent(EventSearchEmpty),
-		kittelemetry.WithAllowedEvent(EventErrorShown, kittelemetry.AllowProperty("kind", outcomeValues("search", "session", "insight", "analytics", "export", "other"))),
-		kittelemetry.WithAllowedEvent(EventSyncFailed, kittelemetry.AllowProperty("reason", outcomeValues("request", "partial", "sign_in_required", "browser_extension", "already_running", "other"))),
+		kittelemetry.WithAllowedEvent(EventErrorShown, kittelemetry.RequireProperty("kind", outcomeValues("search", "session", "insight", "analytics", "export", "other"))),
+		kittelemetry.WithAllowedEvent(EventSyncFailed, kittelemetry.RequireProperty("reason", outcomeValues("request", "partial", "sign_in_required", "browser_extension", "already_running", "other"))),
 		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),
 			kittelemetry.AllowProperty("duration_bucket", kittelemetry.AllowStringValues("under_1m", "1_to_5m", "5_to_30m", "over_30m"))),
@@ -184,9 +184,6 @@ func oneOf(event, property string, values ...string) kittelemetry.Option {
 func outcomeValues(values ...string) kittelemetry.PropertyFilter {
 	allowed := kittelemetry.AllowStringValues(values...)
 	return func(value any) (any, bool) {
-		if _, ok := value.(string); !ok {
-			return nil, false
-		}
 		if filtered, ok := allowed(value); ok {
 			return filtered, true
 		}

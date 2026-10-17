@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({
+  reportErrorShown: vi.fn(),
+  reportTelemetry: vi.fn(),
+}));
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
@@ -91,6 +96,7 @@ function cardSub(label: string): string | undefined {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (component) {
     unmount(component);
     component = undefined;
@@ -109,6 +115,37 @@ afterEach(() => {
 });
 
 describe("UsageSummaryCards", () => {
+  it("counts a summary failure once while Retry loads and recovers", async () => {
+    const { UsageService } = await import("../../api/generated/index.js");
+    vi.mocked(reportErrorShown).mockClear();
+    usage.summary = null;
+    const retry = Promise.withResolvers<UsageSummaryResponse>();
+    vi.spyOn(UsageService, "getApiV1UsageSummary")
+      .mockRejectedValueOnce(new Error("Summary failed"))
+      .mockReturnValueOnce(retry.promise);
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({} as never);
+    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockResolvedValue({
+      left: { dimension: "agent" },
+      right: { dimension: "agent" },
+    } as never);
+    component = mount(UsageSummaryCards, { target: document.body });
+    await usage.fetchSummary({ loadComparison: false });
+    await tick();
+    expect(document.querySelector(".error-bar")?.textContent).toContain("Summary failed");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
+    await tick();
+    expect(document.querySelector(".error-bar")).toBeNull();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    retry.resolve(summary());
+    await vi.waitFor(() => expect(usage.loading.summary).toBe(false));
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the selected token types for aggregate token cards", async () => {
     usage.summary = summary();
     usage.mode = "token";
