@@ -18,6 +18,7 @@ import (
 
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/ctxio"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // Codex JSONL entry types.
@@ -83,6 +84,7 @@ type codexSessionBuilder struct {
 	sessionKind                 string
 	project                     string
 	gitBranch                   string
+	gitRemote                   string
 	callNames                   map[string]string
 	agentSpawnCalls             map[string]string
 	agentWaitCalls              map[string]string
@@ -467,6 +469,11 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		b.cwd = cwd
 		branch := payload.Get("git.branch").Str
 		b.gitBranch = branch
+		// Codex replays omit git to keep the previous repository; only a
+		// git object replaces the recorded URL.
+		if git := payload.Get("git"); git.Exists() {
+			b.gitRemote = export.SanitizeGitRemoteForStorage(git.Get("repository_url").Str)
+		}
 		if proj := ExtractProjectFromCwdWithBranchContext(
 			b.projectContext, cwd, branch,
 		); proj != "" {
@@ -2099,6 +2106,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		SessionKind:        b.sessionKind,
 		Cwd:                b.cwd,
 		GitBranch:          b.gitBranch,
+		GitRemote:          b.gitRemote,
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,

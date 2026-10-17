@@ -155,6 +155,23 @@ func SanitizeGitRemoteForStorage(raw string) string {
 	return sanitized
 }
 
+// WithRecordedGitRemote applies a repository URL that the session source
+// recorded at session time. The source names no git config remote.
+func WithRecordedGitRemote(
+	obs ProjectIdentityObservation, remote string,
+) ProjectIdentityObservation {
+	remote = SanitizeGitRemoteForStorage(remote)
+	if remote == "" {
+		return obs
+	}
+	obs.GitRemote = remote
+	obs.GitRemoteName = ""
+	obs.RemoteResolution = ProjectResolutionResolved
+	obs.RemoteCandidateCount = 1
+	obs.SourceRecorded = true
+	return obs
+}
+
 func SanitizeStoredProjectIdentityObservation(
 	obs ProjectIdentityObservation,
 ) ProjectIdentityObservation {

@@ -891,9 +891,10 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
-- **Git branch (2026-10-09):** Issue
-  [#2161](https://github.com/kenn-io/agentsview/issues/2161) reports that
-  Codex sessions never store `git_branch`. The pinned recorder's
+- **Git metadata (branch checked 2026-10-09, repository URL checked
+  2026-10-15):** Issue
+  [#2161](https://github.com/kenn-io/agentsview/issues/2161) reports that Codex
+  sessions never store `git_branch`. The pinned recorder's
   [`write_session_meta`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs#L1806-L1823)
   writes a
   [`SessionMetaLine`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs#L3157-L3161)
@@ -908,6 +909,18 @@ fixtures retain this field; missing identities remain source-local.
   clears it. When the branch is absent, project identity falls back to probing
   the local checkout. Reverified the same
   [`GitInfo` shape on upstream `main`](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/protocol/src/protocol.rs#L3534-L3549).
+  The optional
+  [`repository_url`](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/protocol.rs#L3106-L3121)
+  records the remote available at session time. AgentsView keeps its
+  sanitized URL and uses it for session project identity, even when that
+  checkout has since disappeared or changed remotes. A later metadata record
+  without `git` keeps the URL, matching
+  [Codex replay](https://github.com/openai/codex/blob/b5115cdd669d37a8635a9742851e97ba4fb1d42c/codex-rs/thread-store/src/local/update_thread_metadata.rs#L198-L206),
+  which keeps the previous git info when a memory-mode marker omits the
+  field. A later `git` object replaces it, and clears it when that object has
+  no `repository_url`. Data version 138 reparses Codex, TraeX, and Augure Code
+  sources in place to recover this evidence without changing source or session
+  IDs.
 
 - **Evidence:** `source`.
 

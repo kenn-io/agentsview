@@ -216,6 +216,18 @@ whole archive). `joint.cells` is a sparse array with these fields:
 
 ### Project identity evidence
 
+For Codex-format sessions, sync retains the repository URL recorded in session
+metadata. It can identify a session even after its checkout has been removed.
+After upgrading to data version 138, the next sync reparses readable Codex,
+TraeX, and Augure Code sources to recover previously omitted URLs. A recovered
+URL replaces a stored identity that had no remote or was ambiguous. It does not
+replace a remote that sync already found in the checkout. Sessions whose sources
+are unavailable keep their stored evidence. The archive stores the recovered URL
+separately from any preserved checkout identity, so later appends reuse it after
+a restart. Full archive rebuilds also retain recovered URLs. Repaired sessions
+no longer leave obsolete ambiguity in the project catalog; ambiguity supported
+by another session remains.
+
 `joint.projects` maps each nonempty cell project key to a safe `display_label`,
 `resolution`, and an `identity` when resolved. It is part of the hour's digest,
 read from the same SQLite transaction as the activity and usage. It contains no

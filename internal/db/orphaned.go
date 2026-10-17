@@ -1725,20 +1725,6 @@ func (d *DB) CopySessionMetadataFrom(
 			ON CONFLICT(project, machine, root_path, git_remote) DO NOTHING`); err != nil {
 			return fmt.Errorf("copying project identity observations: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM main.project_identity_observations
-			WHERE git_remote = ''
-			  AND EXISTS (
-				SELECT 1
-				FROM main.project_identity_observations remote
-				WHERE remote.project = main.project_identity_observations.project
-				  AND remote.machine = main.project_identity_observations.machine
-				  AND remote.root_path = main.project_identity_observations.root_path
-				  AND remote.git_remote != ''
-			  )`); err != nil {
-			return fmt.Errorf(
-				"removing stale project identity root fallbacks: %w", err)
-		}
 		if err := scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx); err != nil {
 			return err
 		}
@@ -1746,19 +1732,24 @@ func (d *DB) CopySessionMetadataFrom(
 
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		recordedRemote := "''"
+		if oldDBHasColumn(ctx, tx, "session_project_identity_snapshots", "recorded_git_remote") {
+			recordedRemote = "recorded_git_remote"
+		}
 		// An old thread row may contain a page's parser-source evidence.
 		// Move that evidence with the page instead of replacing the head's.
+		// Retain recovered source evidence when the old identity was unusable.
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_identity_snapshots (
 				session_id, project, machine, root_path, git_remote,
-				git_remote_name, repository_path, worktree_name,
+				git_remote_name, recorded_git_remote, repository_path, worktree_name,
 				worktree_root_path, worktree_relationship, checkout_state,
 				git_branch, remote_resolution, remote_candidate_count,
 				observed_at, normalized_remote, key_source, key
 			)
 			SELECT COALESCE(mapped.target_id, snapshot.session_id),
 				project, machine, root_path, git_remote,
-				git_remote_name, repository_path, worktree_name,
+				git_remote_name, `+recordedRemote+`, repository_path, worktree_name,
 				worktree_root_path, worktree_relationship, checkout_state,
 				git_branch, remote_resolution, remote_candidate_count,
 				observed_at, normalized_remote, key_source, key
@@ -1771,6 +1762,8 @@ func (d *DB) CopySessionMetadataFrom(
 				root_path = excluded.root_path,
 				git_remote = excluded.git_remote,
 				git_remote_name = excluded.git_remote_name,
+				recorded_git_remote = COALESCE(NULLIF(session_project_identity_snapshots.recorded_git_remote, ''),
+					excluded.recorded_git_remote),
 				repository_path = excluded.repository_path,
 				worktree_name = excluded.worktree_name,
 				worktree_root_path = excluded.worktree_root_path,
@@ -1782,7 +1775,11 @@ func (d *DB) CopySessionMetadataFrom(
 					observed_at = excluded.observed_at,
 					normalized_remote = excluded.normalized_remote,
 					key_source = excluded.key_source,
-					key = excluded.key`); err != nil {
+					key = excluded.key
+			WHERE NOT (
+				session_project_identity_snapshots.recorded_git_remote != ''
+				AND (excluded.remote_resolution = 'ambiguous' OR trim(excluded.git_remote) = '')
+			)`); err != nil {
 			return fmt.Errorf("copying session project identity snapshots: %w", err)
 		}
 	}
@@ -1914,6 +1911,79 @@ func (d *DB) CopySessionMetadataFrom(
 				"reconciling reparsed session project change %s: %w",
 				change.sessionID, err,
 			)
+		}
+	}
+
+	// Reconcile fallbacks after restoring snapshots and effective projects.
+	// An unavailable session can still support an ambiguous observation.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM main.project_identity_observations
+		WHERE git_remote = ''
+		  AND EXISTS (
+			SELECT 1 FROM main.project_identity_observations remote
+			WHERE remote.project = main.project_identity_observations.project
+			  AND remote.machine = main.project_identity_observations.machine
+			  AND remote.root_path = main.project_identity_observations.root_path
+			  AND remote.git_remote != ''
+		  )
+		  AND (remote_resolution != 'ambiguous' OR NOT EXISTS (
+			SELECT 1 FROM main.session_project_identity_snapshots snap
+			JOIN main.sessions s ON s.id = snap.session_id
+			WHERE snap.machine = main.project_identity_observations.machine
+			  AND snap.root_path = main.project_identity_observations.root_path
+			  AND snap.git_remote = '' AND snap.remote_resolution = 'ambiguous'
+			  AND s.project = main.project_identity_observations.project
+		  ))`); err != nil {
+		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)
+	}
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		// A removed checkout can change the discovered root to a nested cwd.
+		// Match recovered evidence by session, then rebuild the old key from
+		// surviving snapshots under their current project assignments.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT project, machine, root_path
+			FROM main.project_identity_observations
+			WHERE git_remote = ''
+			  AND EXISTS (
+				SELECT 1 FROM old_db.session_project_identity_snapshots old
+				JOIN old_db.sessions previous ON previous.id = old.session_id
+				LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = old.session_id
+				JOIN main.session_project_identity_snapshots fresh
+				  ON fresh.session_id = COALESCE(mapped.target_id, old.session_id)
+				WHERE old.machine = main.project_identity_observations.machine
+				  AND old.root_path = main.project_identity_observations.root_path
+				  AND old.git_remote = ''
+				  AND main.project_identity_observations.project IN (old.project, previous.project)
+				  AND fresh.recorded_git_remote != '' AND fresh.remote_resolution = 'resolved'
+				  AND fresh.git_remote != ''
+			  )`)
+		if err != nil {
+			return fmt.Errorf("listing recovered project identity roots: %w", err)
+		}
+		defer rows.Close()
+		var roots []ProjectIdentityRootKey
+		for rows.Next() {
+			var root ProjectIdentityRootKey
+			if err := rows.Scan(&root.Project, &root.Machine, &root.RootPath); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning recovered project identity root: %w", err)
+			}
+			roots = append(roots, root)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating recovered project identity roots: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing recovered project identity roots: %w", err)
+		}
+		for _, root := range roots {
+			if err := reconcileProjectIdentityAggregateKeyExec(
+				ctx, tx, root.Machine, root.RootPath, "", []string{root.Project},
+			); err != nil {
+				return fmt.Errorf("reconciling recovered project identity root: %w", err)
+			}
 		}
 	}
 

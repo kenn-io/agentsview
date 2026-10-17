@@ -3056,6 +3056,7 @@ type IncrementalInfo struct {
 	AgentLabel           string
 	Entrypoint           string
 	SessionKind          string
+	RecordedGitRemote    string // source-recorded URL, separate from preserved identity
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -3177,6 +3178,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	var linearParse sql.NullBool
 	err = db.getReader().QueryRow(ctx,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
+			COALESCE(snap.recorded_git_remote, ''),
 			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
 			file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
@@ -3207,6 +3209,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		path, agent,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
+		&info.RecordedGitRemote,
 		&info.Machine, &info.Cwd,
 		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
 		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,

@@ -1102,7 +1102,17 @@ func reconcileSessionProjectIdentityAggregatesTx(
 	if err != nil {
 		return fmt.Errorf("reading session project identity key: %w", err)
 	}
+	return reconcileProjectIdentityAggregateKeyExec(
+		ctx, tx, machine, rootPath, gitRemote, projects,
+	)
+}
 
+func reconcileProjectIdentityAggregateKeyExec(
+	ctx context.Context,
+	exec sqlContextExecer,
+	machine, rootPath, gitRemote string,
+	projects []string,
+) error {
 	seen := make(map[string]struct{}, len(projects))
 	for _, project := range projects {
 		project = strings.TrimSpace(project)
@@ -1114,7 +1124,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 		}
 		seen[project] = struct{}{}
 
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := exec.ExecContext(ctx, `
 			DELETE FROM project_identity_observations
 			WHERE project = ? AND machine = ?
 			  AND root_path = ? AND git_remote = ?`,
@@ -1125,7 +1135,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 			)
 		}
 
-		_, err := tx.ExecContext(ctx, `
+		_, err := exec.ExecContext(ctx, `
 			INSERT INTO project_identity_observations (
 				source_archive_id, source_archive_salt, project, machine,
 				root_path, git_remote, git_remote_name, repository_path,
@@ -1151,9 +1161,16 @@ func reconcileSessionProjectIdentityAggregatesTx(
 				WHERE s.id = snap.session_id AND s.deleted_at IS NULL
 				  AND s.machine = ? AND s.project = ?
 			  )
-			ORDER BY snap.observed_at DESC, snap.session_id
+			  AND (snap.git_remote != '' OR snap.remote_resolution = 'ambiguous'
+			    OR NOT EXISTS (
+				SELECT 1 FROM project_identity_observations remote
+				WHERE remote.project = ? AND remote.machine = snap.machine
+				  AND remote.root_path = snap.root_path AND remote.git_remote != ''
+			    ))
+			ORDER BY (snap.remote_resolution = 'ambiguous') DESC,
+				snap.observed_at DESC, snap.session_id
 			LIMIT 1`,
-			project, machine, rootPath, gitRemote, machine, project,
+			project, machine, rootPath, gitRemote, machine, project, project,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -1174,9 +1191,9 @@ func upsertSessionProjectIdentitySnapshotExec(
 	if obs.SessionID == "" {
 		return nil
 	}
-	var sessionExists int
-	if err := queryRow(ctx, `SELECT 1 FROM sessions WHERE id = ?`,
-		obs.SessionID).Scan(&sessionExists); err != nil {
+	var sessionProject string
+	if err := queryRow(ctx, `SELECT project FROM sessions WHERE id = ?`,
+		obs.SessionID).Scan(&sessionProject); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -1185,18 +1202,36 @@ func upsertSessionProjectIdentitySnapshotExec(
 	var existing export.ProjectResolution
 	var existingKey string
 	var existingProject string
+	var existingRemote string
+	var existingMachine, existingRoot string
 	err := queryRow(ctx, `
-		SELECT remote_resolution, key, project
+		SELECT remote_resolution, key, project, git_remote, machine, root_path
 		FROM session_project_identity_snapshots
 		WHERE session_id = ?`, obs.SessionID).Scan(
-		&existing, &existingKey, &existingProject,
+		&existing, &existingKey, &existingProject, &existingRemote, &existingMachine, &existingRoot,
 	)
 	if err == nil {
-		preserveExisting := existing == export.ProjectResolutionResolved ||
-			existing == export.ProjectResolutionAmbiguous ||
-			(obs.RemoteResolution == export.ProjectResolutionUnknown &&
-				(obs.Key == "" || strings.TrimSpace(existingKey) != ""))
+		// A source-recorded repository URL repairs a checkout-derived
+		// snapshot that never had a remote, but never replaces one that did.
+		recordedRepair := obs.SourceRecorded && obs.GitRemote != "" &&
+			(existing == export.ProjectResolutionAmbiguous ||
+				(existing == export.ProjectResolutionResolved &&
+					strings.TrimSpace(existingRemote) == ""))
+		preserveExisting := !recordedRepair &&
+			(existing == export.ProjectResolutionResolved ||
+				existing == export.ProjectResolutionAmbiguous ||
+				(obs.RemoteResolution == export.ProjectResolutionUnknown &&
+					(obs.Key == "" || strings.TrimSpace(existingKey) != "")))
 		if preserveExisting {
+			// Keep parser evidence even when the historical identity wins.
+			if obs.SourceRecorded {
+				if _, err := exec.ExecContext(ctx, `
+					UPDATE session_project_identity_snapshots
+					SET recorded_git_remote = ? WHERE session_id = ?`,
+					obs.GitRemote, obs.SessionID); err != nil {
+					return fmt.Errorf("saving recorded repository URL: %w", err)
+				}
+			}
 			if allowProjectCorrection && existingProject != obs.Project {
 				if _, err := exec.ExecContext(ctx, `
 					UPDATE session_project_identity_snapshots
@@ -1213,20 +1248,26 @@ func upsertSessionProjectIdentitySnapshotExec(
 		return fmt.Errorf("checking session project identity snapshot: %w", err)
 	}
 
+	recordedRemote := ""
+	if obs.SourceRecorded {
+		recordedRemote = obs.GitRemote
+	}
 	_, err = exec.ExecContext(ctx, `
 		INSERT INTO session_project_identity_snapshots (
 			session_id, project, machine, root_path, git_remote,
-			git_remote_name, repository_path, worktree_name,
+			git_remote_name, recorded_git_remote, repository_path, worktree_name,
 			worktree_root_path, worktree_relationship, checkout_state,
 			git_branch, remote_resolution, remote_candidate_count,
 			observed_at, normalized_remote, key_source, key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
 			root_path = excluded.root_path,
 			git_remote = excluded.git_remote,
 			git_remote_name = excluded.git_remote_name,
+			recorded_git_remote = COALESCE(NULLIF(excluded.recorded_git_remote, ''),
+				session_project_identity_snapshots.recorded_git_remote),
 			repository_path = excluded.repository_path,
 			worktree_name = excluded.worktree_name,
 			worktree_root_path = excluded.worktree_root_path,
@@ -1240,7 +1281,7 @@ func upsertSessionProjectIdentitySnapshotExec(
 			key_source = excluded.key_source,
 			key = excluded.key`,
 		obs.SessionID, obs.Project, obs.Machine, obs.RootPath,
-		obs.GitRemote, obs.GitRemoteName, obs.RepositoryPath,
+		obs.GitRemote, obs.GitRemoteName, recordedRemote, obs.RepositoryPath,
 		obs.WorktreeName, obs.WorktreeRootPath, obs.WorktreeRelationship,
 		obs.CheckoutState, obs.GitBranch, obs.RemoteResolution,
 		obs.RemoteCandidateCount, obs.ObservedAt.UTC().Format(time.RFC3339Nano),
@@ -1248,6 +1289,16 @@ func upsertSessionProjectIdentitySnapshotExec(
 	)
 	if err != nil {
 		return fmt.Errorf("upserting session project identity snapshot: %w", err)
+	}
+	if existingMachine != "" && existingRemote == "" && obs.SourceRecorded {
+		// Reconcile the old evidence key across source and effective labels,
+		// even if the checkout disappeared and discovery now returns cwd.
+		if err := reconcileProjectIdentityAggregateKeyExec(
+			ctx, exec, existingMachine, existingRoot, "",
+			[]string{existingProject, obs.Project, sessionProject},
+		); err != nil {
+			return fmt.Errorf("reconciling recovered project identity root: %w", err)
+		}
 	}
 	return nil
 }

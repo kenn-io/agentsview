@@ -143,6 +143,28 @@ func TestParseCodexSession_GitBranchFollowsLatestCwd(t *testing.T) {
 	assert.Empty(t, sess.GitBranch)
 }
 
+func TestParseCodexSession_RecordedRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name, remote, nextMeta, want string
+	}{
+		{name: "https", remote: "https://example.com/team/api.git", want: "https://example.com/team/api.git"},
+		{name: "ssh", remote: "git@example.com:team/api.git", want: "example.com:team/api.git"},
+		{name: "credentials removed", remote: "https://user:secret@example.com/team/api.git?token=secret#fragment", want: "https://example.com/team/api.git"},
+		{name: "local remote", remote: "/work/other"},
+		{name: "later meta omits git", remote: "https://example.com/team/api.git", nextMeta: `{"type":"session_meta","payload":{"id":"recorded-repository","cwd":"/work/scratch"}}`, want: "https://example.com/team/api.git"},
+		{name: "later git omits url", remote: "https://example.com/team/api.git", nextMeta: `{"type":"session_meta","payload":{"id":"recorded-repository","cwd":"/work/scratch","git":{"branch":"main"}}}`},
+		{name: "later git replaces url", remote: "https://example.com/team/api.git", nextMeta: `{"type":"session_meta","payload":{"id":"recorded-repository","cwd":"/work/api","git":{"repository_url":"https://example.com/team/web.git"}}}`, want: "https://example.com/team/web.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":"recorded-repository","cwd":"/work/api","git":{"repository_url":%q}}}`+"\n", tc.remote) +
+				`{"type":"response_item","timestamp":"2026-10-08T12:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"add rate limiting"}]}}` + "\n" + tc.nextMeta + "\n"
+			sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+			require.NotNil(t, sess)
+			assert.Equal(t, tc.want, sess.GitRemote)
+		})
+	}
+}
+
 func TestParseCodexSession_GuardianReviewIssue1644(t *testing.T) {
 	content := loadFixture(t, "codex/guardian_review_session.jsonl")
 	sess, msgs := runCodexParserTest(t, "guardian_review_session.jsonl", content, false)
