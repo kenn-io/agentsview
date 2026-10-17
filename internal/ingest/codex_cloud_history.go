@@ -134,11 +134,13 @@ func dropsEvents(parsed, saved []db.UsageEvent) bool {
 // parse's outcome replaces the saved one only when it is newer than both
 // the saved report and the saved outcome. With the same report time, the
 // cut may have taken the copy of the report that settling writes again
-// marked final, or an outcome written after it, so the parse keeps the
-// final mark and the newer outcome of either copy. The parser orders
-// records by their place in the file, but two copies share no file, so
-// this falls back on times. It reports whether the saved copy changed the
-// row.
+// marked final, and the outcome written after it, so the parse keeps the
+// final mark of either copy, and the newer saved outcome when only the
+// saved copy is final. A later answer can repeat a report time after a
+// left_out outcome; its row follows the outcome and clears it, and the
+// saved outcome must not return. The parser orders records by their place
+// in the file, but two copies share no file, so this falls back on times.
+// It reports whether the saved copy changed the row.
 func newerSavedPlan(row db.SessionPlanUsage, prior CodexCloudPrior) (db.SessionPlanUsage, bool) {
 	if !prior.Current || !hasPlanReport(prior.PlanUsage) {
 		return row, false
@@ -151,7 +153,7 @@ func newerSavedPlan(row db.SessionPlanUsage, prior CodexCloudPrior) (db.SessionP
 	case savedAsOf.Equal(asOf):
 		merged := row
 		merged.Final = row.Final || saved.Final
-		if planTime(saved.OutcomeAt).After(planTime(row.OutcomeAt)) {
+		if saved.Final && !row.Final && planTime(saved.OutcomeAt).After(planTime(row.OutcomeAt)) {
 			merged.OutcomeKind, merged.OutcomeAt = saved.OutcomeKind, saved.OutcomeAt
 		}
 		return merged, merged.Final != row.Final || merged.OutcomeAt != row.OutcomeAt

@@ -716,3 +716,55 @@ func TestCodexCloudTruncatedMirrorKeepsSettledPlanUsage(t *testing.T) {
 	assert.Equal(t, "left_out", plan().OutcomeKind, "the archived outcome stays")
 	assert.Equal(t, new(2.25), plan().WeeklyPercent)
 }
+
+// A later answer can bring back a chat a response left out, with the same
+// report time when OpenAI has not refreshed its figures. Its row follows
+// the left_out outcome in the file and clears it.
+func TestCodexCloudRepeatedReportClearsLeftOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	ctx := t.Context()
+	root := t.TempDir()
+	path := filepath.Join(root, "account-key", "thread-a.jsonl.zstd")
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	record := func(kind mirror.Kind, data string) mirror.Record {
+		return mirror.Record{Kind: kind, FetchedAt: fetched, Data: jsontext.Value(data)}
+	}
+	planRow := record(mirror.KindPlanUsageRow, `{"row":{"thread_id":"thread-a","data_status":"available","usage_source":"wham",`+
+		`"weekly_limit_percent":2.25,"five_hour_limit_percent":null,"balance_usage_credits":"0","groups":[]},`+
+		`"data_as_of":"2026-10-02T09:30:00Z"}`)
+	written, err := mirror.Append(path, 0, []mirror.Record{
+		record(mirror.KindThread, `{"id":"thread-a","createdAt":1759320000,"updatedAt":1759323600,"cwd":"/workspace/project-a"}`),
+		record(mirror.KindTurn, `{"id":"turn-1","status":"completed","startedAt":1759320000}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320000000,"completedAtMs":1759320000500,`+
+			`"item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"Fix the build","text_elements":[]}]}}`),
+		record(mirror.KindItem, `{"turnId":"turn-1","startedAtMs":1759320001000,"completedAtMs":1759320001500,`+
+			`"item":{"type":"agentMessage","id":"a1","text":"Fixed.","phase":"final_answer"}}`),
+		planRow,
+		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-02T10:00:00Z"}`),
+	})
+	require.NoError(t, err)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodexCloud: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	plan := func() *db.SessionPlanUsage {
+		t.Helper()
+		plan, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		return plan
+	}
+	require.Equal(t, "left_out", plan().OutcomeKind)
+
+	_, err = mirror.Append(path, written.Offset, []mirror.Record{planRow})
+	require.NoError(t, err)
+	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
+	assert.Empty(t, plan().OutcomeKind, "the repeated report clears the outcome")
+	assert.Equal(t, new(2.25), plan().WeeklyPercent)
+}

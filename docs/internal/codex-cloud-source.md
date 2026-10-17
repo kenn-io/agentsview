@@ -221,12 +221,14 @@ running total, so its events never match archived ones. A parse whose plan
 report is older than the archived one, as from a file cut short after an older
 report, keeps the archived figures. Its outcome applies only when it is newer
 than both the archived report and the archived outcome. At the same report time,
-the parse keeps the archived final mark and a newer archived outcome, because
-settling writes the newest report again marked final. Two copies share no file,
-so this compares times where the parser compares places in the file. Turns that
-ran while the mirror was missing do not count as uncaptured. When the first new
-live record arrives, its running total restores the token totals, and the larger
-of the archived and new peak context stays.
+the parse keeps the archived final mark, because settling writes the newest
+report again marked final. It takes a newer archived outcome only when the
+archived copy alone is final: a later answer can repeat the report time after a
+left_out outcome, and its row clears that outcome. Two copies share no file, so
+this compares times where the parser compares places in the file. Turns that ran
+while the mirror was missing do not count as uncaptured. When the first new live
+record arrives, its running total restores the token totals, and the larger of
+the archived and new peak context stays.
 
 Sync replaces an archived copy from an older parser version, so a parser change
 still takes effect, unless the file holds no messages: no parser change empties
