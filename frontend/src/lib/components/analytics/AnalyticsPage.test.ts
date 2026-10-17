@@ -109,7 +109,7 @@ describe("AnalyticsPage grouped model filter", () => {
       total_messages: 0,
       total_output_tokens: 0,
       token_reporting_sessions: 0,
-      models: ["claude-4"],
+      models: ["claude-opus-4-20250514"],
       model_aliases: { "claude-opus-4-20250514": "claude-4" },
       active_projects: 0,
       active_days: 0,
