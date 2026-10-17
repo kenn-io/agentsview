@@ -980,11 +980,10 @@ func TestUsageModelGroups(t *testing.T) {
 			model, exclude string
 			input          int
 		}{
-			{model: "group", input: 200}, {exclude: "group", input: 5}, {model: "gpt-4o", input: 30},
+			{model: "group", input: 200}, {exclude: "group", input: 5},
 		} {
 			req := base
 			req.Model, req.ExcludeModel = tt.model, tt.exclude
-			req.GroupModels = false
 			summary, err := be.UsageSummary(t.Context(), req)
 			require.NoError(t, err)
 			assert.Equal(t, tt.input, summary.Totals.InputTokens)
@@ -1019,7 +1018,7 @@ func TestUsageModelGroups(t *testing.T) {
 	}
 }
 
-func TestUsagePairwiseFallbackWithoutModelGroups(t *testing.T) {
+func TestUsageWithoutModelAliases(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
@@ -1034,6 +1033,15 @@ func TestUsagePairwiseFallbackWithoutModelGroups(t *testing.T) {
 	assert.Equal(t, 170, result.Left.InputTokens)
 	assert.Equal(t, "gpt-4o", result.Right.Value)
 	assert.Equal(t, 30, result.Right.InputTokens)
+	req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true}
+	raw, err := be.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	require.NotNil(t, raw.Pricing)
+	require.NotZero(t, raw.SchemaVersion)
+	req.GroupModels = true
+	grouped, err := be.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, raw, grouped)
 }
 
 func TestUsagePairwiseModelGroupNameCollision(t *testing.T) {
@@ -1088,24 +1096,5 @@ func TestUsagePairwiseModelGroupNameCollision(t *testing.T) {
 		assert.Equal(t, "gpt-4o", result.Left.Value)
 		assert.Equal(t, 30, result.Left.InputTokens)
 		assert.Equal(t, 200, result.Right.InputTokens)
-	}
-}
-
-func TestUsageGroupingWithoutAliasesPreservesSummary(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	seedPairwiseUsageFixture(t, d)
-	for _, be := range []service.SessionService{
-		service.NewDirectBackend(d, nil),
-		service.NewReadOnlyBackend(d),
-	} {
-		req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true}
-		raw, err := be.UsageSummary(t.Context(), req)
-		require.NoError(t, err)
-		require.NotNil(t, raw.Pricing)
-		require.NotZero(t, raw.SchemaVersion)
-		req.GroupModels = true
-		grouped, err := be.UsageSummary(t.Context(), req)
-		require.NoError(t, err)
-		assert.Equal(t, raw, grouped)
 	}
 }

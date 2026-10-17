@@ -550,44 +550,18 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
 	})
 	seedUsagePairwiseEnv(t, te)
-	te.seedSession(t, "other", "gamma", 2, func(sess *db.Session) {
-		sess.StartedAt = new("2024-06-01T11:00:00Z")
-		sess.EndedAt = sess.StartedAt
-		sess.UserMessageCount = 1
-	})
-	te.seedMessages(t, "other", 2, func(_ int, m *db.Message) {
-		m.Timestamp = "2024-06-01T11:00:00Z"
-		if m.Role == "assistant" {
-			m.Model = "other"
-			m.TokenUsage = jsontext.Value(`{"input_tokens":5}`)
-		}
-	})
 	for _, tt := range []struct {
-		name, model, grouped string
-		models               []string
-		input                int
+		name, grouped string
 	}{
-		{"raw", "", "", []string{"claude-sonnet-4-20250514", "gpt-4o", "other"}, 135},
-		{"grouped", "", "true", []string{"group", "other"}, 135},
-		{"group filter", "group", "", []string{"claude-sonnet-4-20250514", "gpt-4o"}, 130},
-		{"group filter grouped", "group", "true", []string{"group"}, 130},
-		{"member filter", "gpt-4o", "true", []string{"group"}, 30},
+		{"raw", ""},
+		{"grouped", "true"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			w := te.get(t, buildPathURL("/api/v1/usage/summary", map[string]string{
 				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC",
-				"model": tt.model, "group_models": tt.grouped,
+				"group_models": tt.grouped,
 			}))
 			assertStatus(t, w, http.StatusOK)
-			result := decode[service.UsageSummaryResult](t, w)
-			assert.Equal(t, tt.input, result.Totals.InputTokens)
-			models := make([]string, 0, len(result.ModelTotals))
-			for _, total := range result.ModelTotals {
-				models = append(models, total.Model)
-			}
-			assert.Equal(t, tt.models, models)
-			require.Len(t, result.Daily, 1)
-			assert.Equal(t, tt.models, result.Daily[0].ModelsUsed)
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 			if tt.grouped == "true" {

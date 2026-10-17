@@ -329,7 +329,7 @@ describe("AnalyticsStore.selectDate", () => {
     analytics.selectDate("2024-01-15");
 
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ from: "2024-01-15", to: "2024-01-15", group_models: true }),
+      expect.objectContaining({ from: "2024-01-15", to: "2024-01-15" }),
     );
     expect(analyticsService.getApiV1AnalyticsActivity).not.toHaveBeenCalled();
     expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(
@@ -913,7 +913,7 @@ describe("AnalyticsStore automated scope params", () => {
     await analytics.fetchSummary();
 
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ automated_scope: "all" }),
+      expect.objectContaining({ automated_scope: "all", group_models: true }),
     );
   });
 
