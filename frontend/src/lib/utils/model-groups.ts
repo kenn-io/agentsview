@@ -17,12 +17,9 @@ export function toggleGroupedModel(
   exclude = false,
 ): string {
   const tokens = parseCsv(csv);
-  const remaining = tokens.filter(
-    (token) => token !== name && !(Object.hasOwn(aliases, token) && aliases[token] === name),
-  );
-  return (exclude ? !tokens.includes(name) : remaining.length === tokens.length)
-    ? [...remaining, name].join(",")
-    : remaining.join(",");
+  const kept = tokens.filter((t) => ![t, Object.hasOwn(aliases, t) && aliases[t]].includes(name));
+  const add = exclude ? !tokens.includes(name) : kept.length === tokens.length;
+  return (add ? [...kept, name] : kept).join(",");
 }
 
 export function modelPickerItems(
