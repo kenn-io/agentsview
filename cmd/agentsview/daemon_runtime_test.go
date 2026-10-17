@@ -1071,28 +1071,18 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 
 func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		wrongPID    bool
-		dead        bool
-		unremovable bool
+		name     string
+		wrongPID bool
 	}{
 		{name: "live"},
-		{name: "dead", dead: true},
 		{name: "filename PID mismatch", wrongPID: true},
-		{name: "unremovable legacy file", dead: true, unremovable: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.unremovable && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
-				t.Skip("requires Unix directory permissions and a non-root user")
-			}
 			dir := t.TempDir()
 			store := daemonRuntimeStore{Dir: filepath.Join(dir, "run"), legacyDir: dir}
 			rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
 				Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
 			})
-			if tt.dead {
-				rec.PID = deadPID(t)
-			}
 			filenamePID := rec.PID
 			if tt.wrongPID {
 				filenamePID = deadPID(t)
@@ -1115,25 +1105,6 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 				assert.Equal(t, path, read.SourcePath)
 			}
 			assert.FileExists(t, path)
-			// Count dead records in both directories, leaving live and mismatched records alone.
-			current := rec
-			current.PID = deadPID(t)
-			currentPath, err := store.Write(current)
-			require.NoError(t, err)
-			if tt.unremovable {
-				t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
-				require.NoError(t, os.Chmod(dir, 0o500))
-			}
-			removed, err := store.CleanupDead()
-			require.NoError(t, err)
-			assert.NoFileExists(t, currentPath)
-			if tt.dead && !tt.unremovable {
-				assert.Equal(t, 2, removed)
-				assert.NoFileExists(t, path)
-			} else {
-				assert.Equal(t, 1, removed)
-				assert.FileExists(t, path)
-			}
 		})
 	}
 }

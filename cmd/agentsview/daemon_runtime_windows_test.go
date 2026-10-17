@@ -3,15 +3,42 @@
 package main
 
 import (
+	"encoding/json/v2"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/kit/daemon"
+	"golang.org/x/sys/windows"
 )
+
+func fileChangeTime(t *testing.T, path string) int64 {
+	t.Helper()
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, file.Close()) }()
+
+	// FILE_BASIC_INFO stores timestamps as 100-nanosecond ticks since 1601.
+	var info struct {
+		creationTime   int64
+		lastAccessTime int64
+		lastWriteTime  int64
+		changeTime     int64
+		fileAttributes uint32
+		_              uint32
+	}
+	require.NoError(t, windows.GetFileInformationByHandleEx(
+		windows.Handle(file.Fd()), windows.FileBasicInfo,
+		(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)),
+	))
+	require.NotZero(t, info.changeTime)
+	return info.changeTime
+}
 
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
 	dir := t.TempDir()
@@ -36,29 +63,36 @@ func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
 
 func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 	dir := t.TempDir()
+	legacyLock := filepath.Join(dir, "daemon.lock")
+	require.NoError(t, os.WriteFile(legacyLock, nil, 0o600))
+	// An upgraded data directory can contain a record from a crashed daemon.
+	rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
+		Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
+	})
+	rec.PID = deadPID(t)
+	legacyPath := filepath.Join(dir, fmt.Sprintf("daemon.%d.json", rec.PID))
+	body, err := json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(legacyPath, body, 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "assets"), 0o700))
 	paths := []string{
 		filepath.Join(dir, "sentinel"),
 		filepath.Join(dir, "assets", "sentinel"),
 	}
-	changeTime := func(path string) int64 {
-		value, ok := syncpkg.ChangeTime(path)
-		require.True(t, ok)
-		return value
-	}
 	before := make([]int64, len(paths))
 	for i, path := range paths {
 		require.NoError(t, os.WriteFile(path, []byte("archive content"), 0o600))
-		before[i] = changeTime(path)
+		before[i] = fileChangeTime(t, path)
 	}
 	assert.False(t, IsDaemonActive(dir))
 	assert.Nil(t, FindDaemonRuntime(dir))
 	assert.False(t, IsDaemonStarting(dir))
-	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
+	assert.FileExists(t, legacyPath, "legacy record should survive discovery")
+	_, err = WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
 	require.NoError(t, err)
 	RemoveDaemonRuntime(dir)
 	for i, path := range paths {
-		assert.Equal(t, before[i], changeTime(path), "%s ChangeTime changed", path)
+		assert.Equal(t, before[i], fileChangeTime(t, path), "%s ChangeTime changed", path)
 	}
 }
 

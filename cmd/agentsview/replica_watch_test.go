@@ -13,6 +13,22 @@ import (
 )
 
 func TestReplicaWatchLockLeavesDataDirPermissions(t *testing.T) {
+	dir, lockPath := replicaWatchLockFixture(t)
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(dir, 0o755))
+	}
+
+	err := runReplicaPushWatch(pgReplica{}, ReplicaPushConfig{}, "")
+	require.EqualError(t, err, "already locked ("+lockPath+")")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	}
+}
+
+func replicaWatchLockFixture(t *testing.T) (string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	isolateDeploymentEnv(t)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
@@ -33,15 +49,5 @@ allow_insecure = true
 	lock := flock.New(lockPath)
 	require.NoError(t, lock.Lock())
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })
-	if runtime.GOOS != "windows" {
-		require.NoError(t, os.Chmod(dir, 0o755))
-	}
-
-	err := runReplicaPushWatch(pgReplica{}, ReplicaPushConfig{}, "")
-	require.EqualError(t, err, "already locked ("+lockPath+")")
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(dir)
-		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
-	}
+	return dir, lockPath
 }

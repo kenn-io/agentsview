@@ -96,26 +96,6 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	return append(records, legacy...), nil
 }
 
-func (s daemonRuntimeStore) CleanupDead() (int, error) {
-	removed, err := s.RuntimeStore.CleanupDead()
-	if err != nil || s.Dir == s.legacyDir {
-		return removed, err
-	}
-	records, err := s.legacyRecords()
-	if err != nil {
-		return removed, err
-	}
-	for _, rec := range records {
-		if daemon.ProcessAlive(rec.PID) {
-			continue
-		}
-		if err := os.Remove(rec.SourcePath); err == nil {
-			removed++
-		}
-	}
-	return removed, nil
-}
-
 func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
 	// Remove this bridge the release after the Windows runtime subdirectory ships.
 	entries, err := os.ReadDir(s.legacyDir)
