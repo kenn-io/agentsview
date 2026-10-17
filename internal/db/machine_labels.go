@@ -138,17 +138,27 @@ func ResolveMachineFilter(ctx context.Context, store Store, machine string) (str
 	return ResolveMachineFilterWithMetadata(ctx, store, machine, labels, aliases)
 }
 
-// ResolveMachineFilterWithMetadata reuses labels and aliases already read for a catalog response.
-func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine string, labels, aliases map[string]string) (string, error) {
-	machine = strings.TrimSpace(machine)
-	parts := splitCSV(CanonicalMachineFilter(machine, aliases))
+// knownMachineIDs lists identities named by metadata. The archive also accepts
+// its legacy local selector even before it has persisted an identity.
+func knownMachineIDs(store Store, labels, aliases map[string]string) map[string]bool {
 	known := make(map[string]bool, len(labels)+len(aliases))
+	if _, local := store.(*DB); local {
+		known["local"] = true
+	}
 	for id := range labels {
 		known[id] = true
 	}
 	for _, id := range aliases {
 		known[id] = true
 	}
+	return known
+}
+
+// ResolveMachineFilterWithMetadata reuses labels and aliases already read for a catalog response.
+func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine string, labels, aliases map[string]string) (string, error) {
+	machine = strings.TrimSpace(machine)
+	parts := splitCSV(CanonicalMachineFilter(machine, aliases))
+	known := knownMachineIDs(store, labels, aliases)
 	// Confirm identities absent from metadata against retained session rows.
 	var unconfirmed []string
 	for _, id := range parts {

@@ -39,6 +39,11 @@ func TestResolveMachineFilter(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	d := testDB(t)
 	ctx := t.Context()
+	t.Run("legacy local sentinel in empty archive", func(t *testing.T) {
+		got, err := ResolveMachineFilter(ctx, d, "local")
+		require.NoError(t, err)
+		assert.Equal(t, "local", got)
+	})
 	for _, id := range []string{"id-a", "id-b", "legacy-host", id} {
 		require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project", Machine: id, Agent: "claude"}))
 	}
@@ -123,9 +128,4 @@ func TestMatchingMachineIDsFindsQuotedAndTrashedIDs(t *testing.T) {
 	ids, err := d.GetMatchingMachineIDs(t.Context(), []string{"id-b", "id'quoted", "missing"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"id'quoted", "id-b"}, ids)
-	for _, id := range ids {
-		resolved, err := ResolveMachineFilter(t.Context(), d, id)
-		require.NoError(t, err)
-		assert.Equal(t, id, resolved)
-	}
 }

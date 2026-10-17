@@ -198,13 +198,22 @@ func usageSummaryAPIError(err error) error {
 	return internalError("usage summary error", err)
 }
 
+// usagePreflightAPIError keeps already-classified input errors and maps the
+// rest like usage summary failures.
+func usagePreflightAPIError(err error) error {
+	if _, ok := errors.AsType[huma.StatusError](err); ok {
+		return err
+	}
+	return usageSummaryAPIError(err)
+}
+
 func (s *Server) humaUsageSummaryStream(
 	ctx context.Context, in *UsageFilterInput,
 ) (*huma.StreamResponse, error) {
 	// Validate selectors before opening the stream, then use that same filter.
 	f, err := s.usageFilterFromInput(ctx, *in)
 	if err != nil {
-		return nil, err
+		return nil, usagePreflightAPIError(err)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)

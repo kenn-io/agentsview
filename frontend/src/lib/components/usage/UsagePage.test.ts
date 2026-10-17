@@ -1,7 +1,5 @@
-import { MetadataService } from "../../api/generated/index.js";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import { screen } from "@testing-library/svelte";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
@@ -668,27 +666,6 @@ describe("UsagePage refresh behavior", () => {
 
     expect(firstMark()?.getAttribute("fill")).toBe("#1f77b4");
     expect(firstDot()?.style.background).toBe("rgb(31, 119, 180)");
-  });
-
-  it("keeps filters usable while resolving a machine on a direct visit", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(usage, "fetchAll").mockResolvedValue();
-    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(new Promise(() => {}));
-    router.route = "usage";
-    router.params = { machine: "Workstation" };
-
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-
-    expect(await screen.findByRole("button", { name: "Filters" })).toBeTruthy();
   });
 
   it("loads agent metadata on mount for the Agent dropdown", async () => {

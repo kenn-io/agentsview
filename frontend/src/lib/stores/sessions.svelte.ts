@@ -346,8 +346,8 @@ class SessionsStore {
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
   private machinesVersion: number = 0;
-  private resolvedMachineSelectors = $state<Record<string, string>>(Object.create(null));
-  private machineResolutionInflight = new Map<string, Promise<boolean>>();
+  private canonicalMachineSelectors = $state<Record<string, boolean>>(Object.create(null));
+  private machineResolutionInflight = new Map<string, Promise<string | null>>();
   private sidebarHydrationInflightByVersion = new Map<number, Map<string, Promise<void>>>();
   private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
@@ -900,30 +900,30 @@ class SessionsStore {
   // the picker catalog, before splitting the selection for picker edits.
   private async normalizeMachineFilter(): Promise<boolean> {
     const selector = this.filters.machine;
-    if (!selector) return true;
+    if (!selector || this.canonicalMachineSelectors[selector]) return true;
+    const ver = this.machinesVersion;
     let pending = this.machineResolutionInflight.get(selector);
-    if (!Object.hasOwn(this.resolvedMachineSelectors, selector) && !pending) {
+    if (!pending) {
       pending = (async () => {
         try {
           const res = await MetadataService.getApiV1Machines({ machine: selector });
+          if (ver !== this.machinesVersion) return null;
           const machine = [...new Set(res.machines)].join(",");
-          this.resolvedMachineSelectors[selector] = machine;
-          this.resolvedMachineSelectors[machine] = machine;
-          return true;
+          this.canonicalMachineSelectors[machine] = true;
+          return machine;
         } catch {
           // The filtered request owns the error display; keep the whole selector.
-          return false;
+          return null;
         } finally {
-          this.machineResolutionInflight.delete(selector);
+          if (ver === this.machinesVersion) this.machineResolutionInflight.delete(selector);
         }
       })();
       this.machineResolutionInflight.set(selector, pending);
     }
-    if (pending && !(await pending)) return false;
-    if (this.filters.machine !== selector) {
-      return this.filters.machine === this.resolvedMachineSelectors[selector];
-    }
-    this.filters.machine = this.resolvedMachineSelectors[selector]!;
+    const machine = await pending;
+    if (machine === null) return false;
+    if (this.filters.machine !== selector) return this.filters.machine === machine;
+    this.filters.machine = machine;
     this.persistFiltersIfAllowed();
     return true;
   }
@@ -1201,9 +1201,20 @@ class SessionsStore {
     void this.load();
   }
 
+  // Picker edits extend the resolved selection or replace a rejected selector;
+  // a concurrent filter change or metadata refresh abandons the edit.
+  private async machineSelectionForEdit(): Promise<string[] | null> {
+    const selector = this.filters.machine;
+    const ver = this.machinesVersion;
+    if (await this.normalizeMachineFilter()) {
+      return this.filters.machine ? this.filters.machine.split(",") : [];
+    }
+    return this.filters.machine === selector && ver === this.machinesVersion ? [] : null;
+  }
+
   async toggleMachineFilter(machine: string) {
-    if (!(await this.normalizeMachineFilter())) return;
-    const current = this.filters.machine ? this.filters.machine.split(",") : [];
+    const current = await this.machineSelectionForEdit();
+    if (!current) return;
     const idx = current.indexOf(machine);
     if (idx >= 0) {
       current.splice(idx, 1);
@@ -1211,7 +1222,7 @@ class SessionsStore {
       current.push(machine);
     }
     this.filters.machine = current.join(",");
-    this.resolvedMachineSelectors[this.filters.machine] = this.filters.machine;
+    this.canonicalMachineSelectors[this.filters.machine] = true;
     this.setActiveSession(null);
     void this.load();
   }
@@ -1223,7 +1234,7 @@ class SessionsStore {
 
   get selectedMachines(): string[] {
     if (!this.filters.machine) return [];
-    return Object.hasOwn(this.resolvedMachineSelectors, this.filters.machine)
+    return this.canonicalMachineSelectors[this.filters.machine]
       ? this.filters.machine.split(",")
       : [this.filters.machine];
   }
@@ -1505,12 +1516,18 @@ class SessionsStore {
     this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
-    this.machinesVersion++;
-    this.machinesLoaded = false;
-    this.machinesPromise = null;
+    this.resetMachineCatalog();
     void this.loadAgents();
     void this.loadMachines();
     void sync.loadStats(this.metadataParams);
+  }
+
+  // Newer metadata can make a previously resolved display name ambiguous.
+  private resetMachineCatalog() {
+    this.machinesVersion++;
+    this.machineResolutionInflight.clear();
+    this.machinesLoaded = false;
+    this.machinesPromise = null;
   }
 
   invalidateProjectCache() {

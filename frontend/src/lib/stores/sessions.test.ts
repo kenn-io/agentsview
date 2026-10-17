@@ -2562,10 +2562,14 @@ describe("SessionsStore", () => {
       machine_labels: { "id-a": "Workstation", "id-b": "Secondary" },
     };
 
-    it("resolves the whole selector once before picker edits", async () => {
-      api.getMachines.mockImplementation((params) =>
-        Promise.resolve(params.machine ? { machines: ["id-a"] } : catalog),
-      );
+    it("resolves the whole selector once before picker edits and revalidates after metadata changes", async () => {
+      let ambiguous = false;
+      api.getMachines.mockImplementation((params) => {
+        if (!params.machine) return Promise.resolve(catalog);
+        return ambiguous
+          ? Promise.reject(new ApiError(400, "ambiguous machine", "invalid_machine_filter"))
+          : Promise.resolve({ machines: ["id-a"] });
+      });
       sessions.initFromParams({ machine: "Work, Linux" });
       await sessions.loadMachines();
       await sessions.toggleMachineFilter("id-b");
@@ -2575,28 +2579,29 @@ describe("SessionsStore", () => {
       expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toEqual([
         [{ machine: "Work, Linux" }],
       ]);
+      ambiguous = true;
+      api.getProjects.mockResolvedValue({ projects: [] });
+      api.getAgents.mockResolvedValue({ agents: [] });
+      sessions.invalidateFilterCaches();
+      sessions.initFromParams({ machine: "Work, Linux" });
+      await sessions.loadMachines();
+      expect(sessions.filters.machine).toBe("Work, Linux");
+      expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toEqual([
+        [{ machine: "Work, Linux" }],
+        [{ machine: "Work, Linux" }],
+      ]);
     });
 
-    it("keeps rejected constructor selectors intact", async () => {
+    it("replaces a rejected selector with the clicked machine", async () => {
       api.getMachines.mockImplementation((params) =>
         params.machine
           ? Promise.reject(new ApiError(400, "invalid machine", "invalid_machine_filter"))
           : Promise.resolve(catalog),
       );
-      sessions.initFromParams({ machine: "constructor" });
+      sessions.initFromParams({ machine: "missing" });
       await sessions.toggleMachineFilter("id-b");
-      expect(sessions.filters.machine).toBe("constructor");
-    });
-
-    it("preserves a whole comma label after failed resolution and a picker click", async () => {
-      api.getMachines.mockImplementation((params) =>
-        params.machine ? Promise.reject(new Error("offline")) : Promise.resolve(catalog),
-      );
-      sessions.initFromParams({ machine: "Work, Linux" });
-      await sessions.loadMachines();
-      await sessions.toggleMachineFilter("id-b");
-      expect(sessions.filters.machine).toBe("Work, Linux");
-      expect(sessions.selectedMachines).toEqual(["Work, Linux"]);
+      expect(sessions.filters.machine).toBe("id-b");
+      expectSidebarIndexCalledWith({ machine: "id-b" });
     });
 
     it("preserves a stale saved selector until the user clears it", async () => {
@@ -2613,7 +2618,7 @@ describe("SessionsStore", () => {
           : Promise.resolve(catalog),
       );
       sessions.restoreSavedFilters();
-      await sessions.toggleMachineFilter("id-b");
+      await sessions.loadMachines();
       expect(sessions.filters.machine).toBe("id-a,id-gone");
       expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe("id-a,id-gone");
       sessions.setMachineFilter("id-a,id-gone");

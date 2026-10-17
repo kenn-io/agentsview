@@ -71,6 +71,9 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 		})
 	}
 	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Work, Linux"))
+	store := &machineMetadataCounter{Store: te.db}
+	cfg := config.Config{Host: "127.0.0.1"}
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	for _, tt := range []struct {
 		selector string
 		want     []string
@@ -79,11 +82,14 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 		{"Work, Linux", []string{"id-a"}},
 	} {
 		t.Run(tt.selector, func(t *testing.T) {
+			store.labelReads, store.aliasReads = 0, 0
 			w := te.get(t, "/api/v1/machines?machine="+url.QueryEscape(tt.selector))
 			assertStatus(t, w, http.StatusOK)
 			assert.ElementsMatch(t, tt.want, decode[struct {
 				Machines []string `json:"machines"`
 			}](t, w).Machines)
+			assert.Equal(t, 1, store.labelReads)
+			assert.Equal(t, 1, store.aliasReads)
 		})
 	}
 
@@ -117,6 +123,9 @@ func TestMachineAliasesOnDuckDB(t *testing.T) {
 	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, decode[struct {
 		Aliases map[string]string `json:"machine_aliases"`
 	}](t, w).Aliases)
+	w = te.get(t, "/api/v1/sessions?machine=local")
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
 }
 
 func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
@@ -160,19 +169,4 @@ func (s *machineMetadataCounter) GetMachineLabels(ctx context.Context) (map[stri
 func (s *machineMetadataCounter) GetMachineAliases(ctx context.Context) (map[string]string, error) {
 	s.aliasReads++
 	return s.Store.GetMachineAliases(ctx)
-}
-
-func TestMachinesReuseMetadataWithinRequest(t *testing.T) {
-	te := setup(t)
-	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Workstation"))
-	store := &machineMetadataCounter{Store: te.db}
-	cfg := config.Config{Host: "127.0.0.1"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	w := te.get(t, "/api/v1/machines?machine=Workstation")
-	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, []string{"id-a"}, decode[struct {
-		Machines []string `json:"machines"`
-	}](t, w).Machines)
-	assert.Equal(t, 1, store.labelReads)
-	assert.Equal(t, 1, store.aliasReads)
 }

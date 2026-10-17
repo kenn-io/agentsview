@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"net/http"
 	"net/url"
 	"sync"
@@ -74,6 +75,36 @@ func TestUsageSummaryStreamResolvesMachineOnce(t *testing.T) {
 	assert.Equal(t, 1, spy.machineLabelCalls)
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, "id-a", spy.filters[0].Machine)
+}
+
+type usageProjectCatalogFailureStore struct {
+	db.Store
+	err error
+}
+
+func (s usageProjectCatalogFailureStore) GetActiveProjectLabels(context.Context) ([]string, error) {
+	return nil, s.err
+}
+
+func TestUsageStreamMapsProjectCatalogFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		err     error
+		status  int
+		message string
+	}{
+		{"storage failure", errors.New("catalog lookup failed"), http.StatusInternalServerError, "internal error"},
+		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "gateway timeout"},
+		{"remote mode", db.ErrReadOnly, http.StatusNotImplemented, "not available in remote mode"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := testServer(t, 30)
+			s.db = usageProjectCatalogFailureStore{Store: s.db, err: tt.err}
+			w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&project_key=pl1:sha256:known")
+			assertRecorderStatus(t, w, tt.status)
+			assert.Contains(t, w.Body.String(), `"error":"`+tt.message+`"`)
+		})
+	}
 }
 
 func (s *usageComparisonProjectKeySpy) GetActiveProjectLabels(
