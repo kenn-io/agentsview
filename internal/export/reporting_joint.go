@@ -21,8 +21,8 @@ func ParseReportingBucket(version int, value string) (time.Duration, error) {
 	if value == "" {
 		return DefaultReportingBucket, nil
 	}
-	if !IsJointReportingSchemaVersion(version) {
-		return 0, errors.New("bucket selection requires reporting schema 4 or 5")
+	if version != ReportingJointSchemaVersion {
+		return 0, errors.New("bucket selection requires reporting schema 5")
 	}
 	bucket, err := time.ParseDuration(value)
 	if err != nil {
@@ -39,9 +39,9 @@ func validateReportingBucketDuration(bucket time.Duration) error {
 }
 
 func reportingBucketDuration(version, seconds int) (time.Duration, error) {
-	if !IsJointReportingSchemaVersion(version) {
+	if version != ReportingJointSchemaVersion {
 		if seconds != 0 {
-			return 0, errors.New("bucket_seconds requires reporting schema 4 or 5")
+			return 0, errors.New("bucket_seconds requires reporting schema 5")
 		}
 		return DefaultReportingBucket, nil
 	}
@@ -91,8 +91,8 @@ type ReportingCellPricing struct {
 
 // ValidateReportingProjectScope checks the scope before a caller opens SQLite.
 func ValidateReportingProjectScope(version int, keys []string) error {
-	if len(keys) > 0 && !IsJointReportingSchemaVersion(version) {
-		return errors.New("project scope requires reporting schema 4 or 5")
+	if len(keys) > 0 && version != ReportingJointSchemaVersion {
+		return errors.New("project scope requires reporting schema 5")
 	}
 	for _, key := range keys {
 		if strings.TrimSpace(key) == "" {
@@ -103,14 +103,14 @@ func ValidateReportingProjectScope(version int, keys []string) error {
 }
 
 func normalizeReportingJoint(hour ReportingHour) (*ReportingJoint, error) {
-	if !IsJointReportingSchemaVersion(hour.SchemaVersion) {
+	if hour.SchemaVersion != ReportingJointSchemaVersion {
 		if hour.Joint != nil {
-			return nil, errors.New("joint cells require reporting schema 4 or 5")
+			return nil, errors.New("joint cells require reporting schema 5")
 		}
 		return nil, nil
 	}
 	if hour.Joint == nil {
-		return nil, errors.New("reporting schema 4 or 5 requires joint cells")
+		return nil, errors.New("reporting schema 5 requires joint cells")
 	}
 	joint := *hour.Joint
 	if joint.Projects == nil {

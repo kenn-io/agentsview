@@ -11,7 +11,7 @@ import (
 
 func TestJointReportingCanonicalIdentity(t *testing.T) {
 	hour := reportingHourFixture("2026-07-29-13")
-	hour.SchemaVersion = 4
+	hour.SchemaVersion = ReportingJointSchemaVersion
 	hour.BucketSeconds = 300
 	hour.Joint = &ReportingJoint{ProjectKeys: []string{"b", "a", "a"}, Cells: []ReportingCell{
 		{BucketStart: "2026-07-29T13:00:00Z", ProjectKey: "b", Model: "model-b", Agent: "agent-a", Automation: "interactive", AgentMinutes: 1, MaxAgents: 1},
@@ -37,7 +37,7 @@ func TestJointReportingCanonicalIdentity(t *testing.T) {
 
 func TestJointReportingRejectsInconsistentResolution(t *testing.T) {
 	hour := reportingHourFixture("2026-07-29-13")
-	hour.SchemaVersion, hour.BucketSeconds = 4, 300
+	hour.SchemaVersion, hour.BucketSeconds = ReportingJointSchemaVersion, 300
 	hour.Joint = &ReportingJoint{Cells: []ReportingCell{{BucketStart: "2026-07-29T13:00:00Z"}}}
 	for _, tc := range []struct {
 		name    string
@@ -68,6 +68,6 @@ func TestJointReportingRejectsInconsistentResolution(t *testing.T) {
 	_, _, err = FinalizeReportingHour(hour)
 	require.NoError(t, err)
 	hour.Period = "2026-07-29-00"
-	_, _, err = FinalizeReportingDay(ReportingDay{SchemaVersion: 4, BucketSeconds: 300, Date: "2026-07-29", Hours: []ReportingHour{hour}})
+	_, _, err = FinalizeReportingDay(ReportingDay{SchemaVersion: ReportingJointSchemaVersion, BucketSeconds: 300, Date: "2026-07-29", Hours: []ReportingHour{hour}})
 	assert.ErrorContains(t, err, "share its schema and bucket resolution")
 }

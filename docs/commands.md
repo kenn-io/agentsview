@@ -1690,7 +1690,7 @@ fields, version rules, and correction workflow.
 agentsview export range
 agentsview export hour 2026-07-28-13
 agentsview export day 2026-07-28
-agentsview export day --schema-version 4 --bucket 1m 2026-07-28
+agentsview export day --schema-version 5 --bucket 1m 2026-07-28
 agentsview export digest --from 2026-06-28 --to 2026-07-27
 ```
 
@@ -1698,11 +1698,12 @@ Hour and date keys must be exact, zero-padded UTC values. Open and future hours
 are rejected. The current UTC date contains only closed hours and has no day
 digest. Digest ranges include both dates and are limited to 31 days.
 
-Version 3 is the default. Use `--schema-version 4` to group activity and usage
-by project, agent, model, and activity category together. Version 4 also accepts
-repeatable `--project-key` filters and a `--bucket` duration, such as `1m`,
-`5m`, or `15m`. The duration must be a positive whole-minute divisor of one
-hour. Version 3 rejects both options. Versions 1 and 2 are no longer available.
+Version 3 is the default. Use `--schema-version 5` to group activity and usage
+by project, agent, model, and activity category together. Version 5 keeps
+repositories that share a project name separate. It also accepts repeatable
+`--project-key` filters and a `--bucket` duration, such as `1m`, `5m`, or `15m`.
+The duration must be a positive whole-minute divisor of one hour. Version 3
+rejects both options. Versions 1, 2, and 4 are no longer available.
 Validate your chosen `schema_version` and content digest before accepting a
 document. Refresh saved digests when changing versions.
 

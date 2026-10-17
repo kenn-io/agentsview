@@ -30,7 +30,7 @@ func TestReportingIdentityGroupsDoNotInventProjects(t *testing.T) {
 				Message{SessionID: "session-a", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
 				Message{SessionID: "session-a", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:02:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
 			)
-			for _, version := range []int{3, 4, 5} {
+			for _, version := range []int{export.ReportingSchemaVersion, export.ReportingJointSchemaVersion} {
 				t.Run(strconv.Itoa(version), func(t *testing.T) {
 					day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
 						Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: version,
@@ -83,7 +83,7 @@ func TestReportingIdentityGroupsKeepVerifiedContributionsSelectable(t *testing.T
 					RemoteResolution: tc.resolution, ObservedAt: date,
 				}))
 			}
-			opts := ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: 5}
+			opts := ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: export.ReportingJointSchemaVersion}
 			day, err := d.ExportReportingDay(t.Context(), opts)
 			require.NoError(t, err)
 			hour := day.Hours[12]

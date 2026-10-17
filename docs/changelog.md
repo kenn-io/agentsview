@@ -26,7 +26,9 @@ The latest release is
 
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
-  evidence. Versions 3 and 4 retain their existing behavior.
+  evidence. It replaces version 4, which is no longer available: integrations
+  using version 4 must switch to version 5, obtain new project keys, and refresh
+  saved digests. Version 3 is unchanged.
 
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.

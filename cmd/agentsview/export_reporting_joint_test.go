@@ -16,63 +16,60 @@ import (
 )
 
 func TestExportJointProjectScopeAgreesAcrossHourDayAndDigest(t *testing.T) {
-	for _, version := range []int{4, 5} {
-		t.Run(strconv.Itoa(version), func(t *testing.T) {
-			seedExportReportingGoldenArchive(t)
-			now := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-			out, stderr, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
-				"export", "day", "--schema-version", strconv.Itoa(version), "2026-07-28")
-			require.NoError(t, err)
-			assert.Empty(t, stderr)
-			var all export.ReportingDay
-			require.NoError(t, json.Unmarshal([]byte(out), &all))
-			var key string
-			foundStandalone := false
-			for _, cell := range all.Hours[11].Joint.Cells {
-				if cell.Project == reportingGoldenProject {
-					key = cell.ProjectKey
-				}
-				if cell.Agent == "cursor" {
-					foundStandalone = true
-					assert.Empty(t, cell.ProjectKey)
-					assert.Equal(t, "unknown", cell.Automation)
-					assert.Equal(t, int64(4_000), cell.Pricing.ReportedCost.Microdollars)
-					assert.Zero(t, cell.AgentMinutes)
-				}
-			}
-			require.True(t, foundStandalone, "standalone cost must remain visible without invented attribution")
-			require.NotEmpty(t, key)
-			out, stderr, err = executeExportSessionsCommand(newExportReportingTestRoot(now),
-				"export", "day", "--schema-version", strconv.Itoa(version), "--project-key", key, "2026-07-28")
-			require.NoError(t, err)
-			assert.Empty(t, stderr)
-			var day export.ReportingDay
-			require.NoError(t, json.Unmarshal([]byte(out), &day))
-			assert.Equal(t, int64(200), day.Hours[11].Usage.Totals.OutputTokens)
-			assert.InEpsilon(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, 1e-9)
-			assert.NotContains(t, out, "fixture-cross")
-			assert.NotContains(t, out, `"content"`)
-			for _, cell := range day.Hours[11].Joint.Cells {
-				assert.Equal(t, key, cell.ProjectKey)
-			}
-
-			hourOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
-				"export", "hour", "--schema-version", strconv.Itoa(version), "--project-key", key, "2026-07-28-11")
-			require.NoError(t, err)
-			var hour export.ReportingHour
-			require.NoError(t, json.Unmarshal([]byte(hourOut), &hour))
-			assert.Equal(t, day.Hours[11], hour)
-			digestOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
-				"export", "digest", "--schema-version", strconv.Itoa(version), "--project-key", key,
-				"--from", "2026-07-28", "--to", "2026-07-28")
-			require.NoError(t, err)
-			var digest export.ReportingDigest
-			require.NoError(t, json.Unmarshal([]byte(digestOut), &digest))
-			require.Len(t, digest.Days, 1)
-			assert.Equal(t, day.Digest, digest.Days[0].DayDigest)
-			assert.Equal(t, hour.Digest, digest.Days[0].HourDigests[11])
-		})
+	version := export.ReportingJointSchemaVersion
+	seedExportReportingGoldenArchive(t)
+	now := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	out, stderr, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
+		"export", "day", "--schema-version", strconv.Itoa(version), "2026-07-28")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	var all export.ReportingDay
+	require.NoError(t, json.Unmarshal([]byte(out), &all))
+	var key string
+	foundStandalone := false
+	for _, cell := range all.Hours[11].Joint.Cells {
+		if cell.Project == reportingGoldenProject {
+			key = cell.ProjectKey
+		}
+		if cell.Agent == "cursor" {
+			foundStandalone = true
+			assert.Empty(t, cell.ProjectKey)
+			assert.Equal(t, "unknown", cell.Automation)
+			assert.Equal(t, int64(4_000), cell.Pricing.ReportedCost.Microdollars)
+			assert.Zero(t, cell.AgentMinutes)
+		}
 	}
+	require.True(t, foundStandalone, "standalone cost must remain visible without invented attribution")
+	require.NotEmpty(t, key)
+	out, stderr, err = executeExportSessionsCommand(newExportReportingTestRoot(now),
+		"export", "day", "--schema-version", strconv.Itoa(version), "--project-key", key, "2026-07-28")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	var day export.ReportingDay
+	require.NoError(t, json.Unmarshal([]byte(out), &day))
+	assert.Equal(t, int64(200), day.Hours[11].Usage.Totals.OutputTokens)
+	assert.InEpsilon(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, 1e-9)
+	assert.NotContains(t, out, "fixture-cross")
+	assert.NotContains(t, out, `"content"`)
+	for _, cell := range day.Hours[11].Joint.Cells {
+		assert.Equal(t, key, cell.ProjectKey)
+	}
+
+	hourOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
+		"export", "hour", "--schema-version", strconv.Itoa(version), "--project-key", key, "2026-07-28-11")
+	require.NoError(t, err)
+	var hour export.ReportingHour
+	require.NoError(t, json.Unmarshal([]byte(hourOut), &hour))
+	assert.Equal(t, day.Hours[11], hour)
+	digestOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
+		"export", "digest", "--schema-version", strconv.Itoa(version), "--project-key", key,
+		"--from", "2026-07-28", "--to", "2026-07-28")
+	require.NoError(t, err)
+	var digest export.ReportingDigest
+	require.NoError(t, json.Unmarshal([]byte(digestOut), &digest))
+	require.Len(t, digest.Days, 1)
+	assert.Equal(t, day.Digest, digest.Days[0].DayDigest)
+	assert.Equal(t, hour.Digest, digest.Days[0].HourDigests[11])
 }
 
 func TestExportJointRejectsScopeOnOldVersionBeforeOpening(t *testing.T) {
@@ -92,7 +89,7 @@ func TestExportJointRejectsScopeOnOldVersionBeforeOpening(t *testing.T) {
 			}
 			out, _, err := executeExportSessionsCommand(newExportReportingTestRootWithDeps(deps),
 				append(args, "--schema-version", "3", "--project-key", "synthetic-key")...)
-			require.ErrorContains(t, err, "project scope requires reporting schema 4")
+			require.ErrorContains(t, err, "project scope requires reporting schema 5")
 			assert.False(t, opened)
 			assert.Empty(t, out)
 		})
@@ -116,7 +113,7 @@ func TestExportJointBucketResolutionAcrossCommands(t *testing.T) {
 		{"1h", 3600, 1, "2026-07-28T11:00:00Z", 3},
 	} {
 		t.Run(tc.bucket, func(t *testing.T) {
-			flags := []string{"--schema-version", "4", "--bucket", tc.bucket}
+			flags := []string{"--schema-version", "5", "--bucket", tc.bucket}
 			out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 				append([]string{"export", "day", "2026-07-28"}, flags...)...)
 			require.NoError(t, err)
@@ -171,13 +168,13 @@ func TestExportJointRejectsInvalidBucketBeforeOpening(t *testing.T) {
 		{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"},
 	} {
 		for _, tc := range []struct{ version, bucket, message string }{
-			{"4", "0m", "whole-minute divisor"},
-			{"4", "-1m", "whole-minute divisor"},
-			{"4", "30s", "whole-minute divisor"},
-			{"4", "7m", "whole-minute divisor"},
-			{"4", "2h", "whole-minute divisor"},
-			{"4", "invalid", "invalid reporting bucket"},
-			{"3", "1m", "bucket selection requires reporting schema 4"},
+			{"5", "0m", "whole-minute divisor"},
+			{"5", "-1m", "whole-minute divisor"},
+			{"5", "30s", "whole-minute divisor"},
+			{"5", "7m", "whole-minute divisor"},
+			{"5", "2h", "whole-minute divisor"},
+			{"5", "invalid", "invalid reporting bucket"},
+			{"3", "1m", "bucket selection requires reporting schema 5"},
 		} {
 			t.Run(args[1]+"/v"+tc.version+"/"+tc.bucket, func(t *testing.T) {
 				opened := false

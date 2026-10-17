@@ -70,7 +70,7 @@ func partitionReportingProjects(sessions map[string]activity.SessionMeta, projec
 
 // Restore labels after the ordinary aggregator has used the opaque groups.
 // A nonempty selector does not turn a projectless session into a project, so
-// its groups stay out of the project breakdowns, as in version 4.
+// its groups stay out of the project breakdowns.
 func restoreReportingProjectLabels(hour *export.ReportingHour, projects map[string]export.ProjectMapEntry, groupLabels map[string]string) {
 	hour.Activity.ByProject = slices.DeleteFunc(hour.Activity.ByProject, func(row export.ReportingActivityProjectBreakdown) bool {
 		return groupLabels[row.ProjectKey] == ""

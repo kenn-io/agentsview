@@ -16,21 +16,15 @@ const (
 	// ReportingSchemaVersion is the current wire version for hour, day, and
 	// digest exports consumed by downstream integrations.
 	ReportingSchemaVersion = 3
-	// ReportingJointSchemaVersion adds opt-in session-free joint bucket cells.
-	ReportingJointSchemaVersion = 4
-	// ReportingIdentitySchemaVersion partitions project contributions by identity evidence.
-	ReportingIdentitySchemaVersion = 5
+	// ReportingJointSchemaVersion adds opt-in session-free joint bucket cells,
+	// with project contributions partitioned by identity evidence.
+	ReportingJointSchemaVersion = 5
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
 // still produce the requested wire semantics.
 func IsSupportedReportingSchemaVersion(version int) bool {
-	return version == ReportingSchemaVersion || IsJointReportingSchemaVersion(version)
-}
-
-// IsJointReportingSchemaVersion reports whether the schema includes joint cells.
-func IsJointReportingSchemaVersion(version int) bool {
-	return version == ReportingJointSchemaVersion || version == ReportingIdentitySchemaVersion
+	return version == ReportingSchemaVersion || version == ReportingJointSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
