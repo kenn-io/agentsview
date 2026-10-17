@@ -478,7 +478,7 @@ func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStop(t *testing.T) {
 	assert.Contains(t, string(out), "database data version")
 	assert.NoFileExists(t, stopMarker,
 		"too-new database must be rejected before stop")
-	runtimeFiles, err := filepath.Glob(filepath.Join(dir, "daemon.*.json"))
+	runtimeFiles, err := filepath.Glob(filepath.Join(config.RuntimeDir(dir), "daemon.*.json"))
 	require.NoError(t, err)
 	assert.Len(t, runtimeFiles, 1,
 		"old daemon runtime should remain when preflight fails")

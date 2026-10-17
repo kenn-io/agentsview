@@ -312,22 +312,16 @@ func verifiedWritableDaemonRecord(tr transport) (daemon.RuntimeRecord, bool) {
 		return daemon.RuntimeRecord{}, false
 	}
 	rec := tr.Runtime.Record
-	rec.SourcePath = ""
 	return rec, runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
 
 // daemonUnchanged requires unchanged evidence before reusing cached credentials.
 func (sel *mcpDaemonSelection) daemonUnchanged(dataDir string) bool {
 	store := runtimeStore(dataDir)
-	path, err := store.Path(sel.runtime.PID)
+	rec, err := store.Read(sel.runtime.SourcePath)
 	if err != nil {
 		return false
 	}
-	rec, err := store.Read(path)
-	if err != nil {
-		return false
-	}
-	rec.SourcePath = ""
 	return reflect.DeepEqual(rec, sel.runtime) &&
 		runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }

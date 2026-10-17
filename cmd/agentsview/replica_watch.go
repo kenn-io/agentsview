@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"syscall"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/kit/daemon"
 )
 
 // replicaPusher runs a local sync then pushes to a replica, lazily
@@ -319,13 +319,7 @@ func runReplicaPushWatch(
 	}
 
 	// Single-instance guard: only one watcher per data dir.
-	lockPath, err := (daemon.RuntimeStore{
-		Dir:    appCfg.DataDir,
-		Prefix: name + "-watch",
-	}).LockPath()
-	if err != nil {
-		return err
-	}
+	lockPath := filepath.Join(appCfg.DataDir, name+"-watch.lock")
 	lock := flock.New(lockPath)
 	locked, err := lock.TryLock()
 	if err != nil {
