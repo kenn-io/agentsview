@@ -560,3 +560,31 @@ func TestChildOfLostParentMirrorStaysCountedUnderParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"m"}, recordedItemIDs(records), "the parent's history is fetched again")
 }
+
+// A root whose account state and mirror file are both lost goes back in
+// the plan usage queue, and its next plan usage write rebuilds the file.
+func TestLostAccountStateRequeuesRootWithLostMirror(t *testing.T) {
+	env := newUsageEnv(t)
+	var logged bytes.Buffer
+	env.syncer.Store.Log = log.New(&logged, "", 0)
+	env.threads.Set(finishedThread("lost", ago(time.Hour), message("m", "hi")))
+	env.run(t)
+	st, err := env.syncer.Store.LoadThread(passKey, "lost")
+	require.NoError(t, err)
+	require.Equal(t, string(mirror.KindPlanUsageOutcome), st.LastPlanRecordKind,
+		"the newest record is read from the mirror file")
+	require.NoError(t, os.Remove(env.mirrorPath(t, "lost")))
+
+	env.loseAccount(t, false)
+	env.clock.Advance(time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+
+	assert.Contains(t, env.requestedSince(from), "lost", "the root is asked about again")
+	assert.NotContains(t, logged.String(), "chat lost")
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "lost"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m"}, recordedItemIDs(records), "the history is fetched again")
+}
