@@ -2,6 +2,7 @@ package codexcloud
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -18,6 +19,10 @@ type Gates struct {
 	Disabled bool
 	// Homes are the Codex homes to read logins from, in priority order.
 	Homes []string
+	// DefaultHome is the home a plain `codex login` signs in when
+	// CODEX_HOME is unset. The daemon's own CODEX_HOME puts a different
+	// home first in Homes, which the user's terminal may not have set.
+	DefaultHome string
 	// ReadErr is set when config.toml could not be read; the other fields
 	// then hold the last good read.
 	ReadErr error
@@ -40,10 +45,11 @@ func NewGateSource(
 	var mu sync.Mutex
 	gatesFor := func(cfg config.Config) Gates {
 		return Gates{
-			ConfigPath: configPath,
-			CodexCloud: cfg.CodexCloud,
-			Disabled:   cfg.AgentDisabled(parser.AgentCodexCloud),
-			Homes:      DiscoverHomes(getenv, userHome, cfg.ConfiguredAgentHomes(parser.AgentCodex)),
+			ConfigPath:  configPath,
+			CodexCloud:  cfg.CodexCloud,
+			Disabled:    cfg.AgentDisabled(parser.AgentCodexCloud),
+			Homes:       DiscoverHomes(getenv, userHome, cfg.ConfiguredAgentHomes(parser.AgentCodex)),
+			DefaultHome: filepath.Join(userHome, ".codex"),
 		}
 	}
 	last := gatesFor(initial)

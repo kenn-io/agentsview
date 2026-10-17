@@ -28,12 +28,13 @@ func newUsageEnv(t *testing.T, homes ...string) *usageEnv {
 	t.Helper()
 	env := &usageEnv{passEnv: newPassEnv(t, homes...), usage: codexcloudtest.NewUsageHost(t, fetchNow.Add(-time.Hour))}
 	endpoint, usageEndpoint, envHomes := env.host.URL(), env.usage.URL(), env.homes
+	defaultHome := env.syncer.Gates().DefaultHome
 	env.syncer.Gates = func() Gates {
 		return Gates{
 			CodexCloud: config.CodexCloudConfig{
 				Present: true, Enabled: true, Endpoint: endpoint, UsageEndpoint: usageEndpoint,
 			},
-			Homes: envHomes,
+			Homes: envHomes, DefaultHome: defaultHome,
 		}
 	}
 	return env

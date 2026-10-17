@@ -185,9 +185,10 @@ func (s *Syncer) homeRow(gates Gates, home, message string) {
 }
 
 // withLoginCommand points the `codex login` in message at home. A plain
-// `codex login` signs in the default home, not another one.
+// `codex login` signs in the default home, not another one, even when the
+// daemon's CODEX_HOME puts another home first.
 func withLoginCommand(gates Gates, home, message string) string {
-	if home == "" || len(gates.Homes) == 0 || home == gates.Homes[0] {
+	if home == "" || home == gates.DefaultHome {
 		return message
 	}
 	return strings.ReplaceAll(message, "`codex login`", homeLoginCommand(home, runtime.GOOS))
