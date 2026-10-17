@@ -1,5 +1,6 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
+  import type { ErrorKind } from "../../utils/telemetry.js";
   import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
@@ -22,7 +23,7 @@
     loading: boolean;
     failed: boolean;
     unavailable?: boolean;
-    errorTelemetryKind?: import("../../utils/telemetry.js").ErrorKind;
+    errorTelemetryKind?: ErrorKind;
     onretry?: (() => void) | undefined;
     /** Drops the panel's own background and scroll so a page section can host it. */
     embedded?: boolean;

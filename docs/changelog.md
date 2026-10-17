@@ -24,6 +24,10 @@ The latest release is
 
 **New features**
 
+- Anonymous telemetry now counts empty searches, visible errors in supported
+  workflows, and failed sync attempts. Query and error details stay local. The
+  existing [telemetry opt-out](https://agentsview.io/docs/configuration/#privacy-and-telemetry)
+  applies to these counts.
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which
