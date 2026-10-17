@@ -9,36 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/daemon"
-	"golang.org/x/sys/windows"
 )
-
-func fileChangeTime(t *testing.T, path string) int64 {
-	t.Helper()
-	file, err := os.Open(path)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, file.Close()) }()
-
-	// FILE_BASIC_INFO stores timestamps as 100-nanosecond ticks since 1601.
-	var info struct {
-		creationTime   int64
-		lastAccessTime int64
-		lastWriteTime  int64
-		changeTime     int64
-		fileAttributes uint32
-		_              uint32
-	}
-	require.NoError(t, windows.GetFileInformationByHandleEx(
-		windows.Handle(file.Fd()), windows.FileBasicInfo,
-		(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)),
-	))
-	require.NotZero(t, info.changeTime)
-	return info.changeTime
-}
 
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
 	dir := t.TempDir()
@@ -82,7 +58,7 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 	before := make([]int64, len(paths))
 	for i, path := range paths {
 		require.NoError(t, os.WriteFile(path, []byte("archive content"), 0o600))
-		before[i] = fileChangeTime(t, path)
+		before[i] = testutil.FileChangeTime(t, path)
 	}
 	IsDaemonActive(dir)
 	FindDaemonRuntime(dir)
@@ -91,6 +67,6 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 	require.NoError(t, err)
 	RemoveDaemonRuntime(dir)
 	for i, path := range paths {
-		assert.Equal(t, before[i], fileChangeTime(t, path), "%s ChangeTime changed", path)
+		assert.Equal(t, before[i], testutil.FileChangeTime(t, path), "%s ChangeTime changed", path)
 	}
 }

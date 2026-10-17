@@ -311,10 +311,14 @@ func testMCPDaemonServiceReusesVerifiedDaemon(t *testing.T, legacy bool) {
 	}
 	svc := newMCPDaemonService(config.Config{DataDir: dir, AuthToken: "test-token"})
 
-	for range 3 {
+	for i := range 3 {
 		result, err := svc.List(t.Context(), service.ListFilter{})
 		require.NoError(t, err)
 		assert.Equal(t, 1, result.Total)
+		if legacy && i == 0 {
+			// A record at the new location must not replace the cached evidence.
+			writeDaemonRuntimeForTest(t, dir, host, port, "replacement", false)
+		}
 	}
 	assert.Equal(t, int32(1), pings.Load(), "only the first call discovers the daemon")
 }

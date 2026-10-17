@@ -26,6 +26,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
+	"go.kenn.io/kit/safefileio"
 )
 
 const (
@@ -89,14 +90,15 @@ func runtimeStore(dataDir string) daemonRuntimeStore {
 
 func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	records, err := s.RuntimeStore.List()
-	if err != nil || s.Dir == s.legacyDir {
+	if s.Dir == s.legacyDir {
 		return records, err
 	}
-	legacy, err := s.legacyRecords()
-	if err != nil {
-		return nil, err
-	}
+	legacy, legacyErr := s.legacyRecords()
 	records = append(records, legacy...)
+	// Callers discard records on error, so preserve discovery from either dir.
+	if len(records) == 0 {
+		return records, errors.Join(err, legacyErr)
+	}
 	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
 		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
 			return order
@@ -123,26 +125,21 @@ func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
 			continue
 		}
 		path := filepath.Join(s.legacyDir, name)
-		rec, err := s.Read(path)
+		// Read without preparing run/, which may itself be inaccessible.
+		file, err := safefileio.OpenCurrentUserFile(path)
+		if err != nil {
+			continue
+		}
+		var rec daemon.RuntimeRecord
+		err = json.UnmarshalRead(file, &rec)
+		_ = file.Close()
 		if err != nil || rec.PID != pid || rec.Address == "" {
 			continue
 		}
+		rec.SourcePath = path
 		records = append(records, rec)
 	}
 	return records, nil
-}
-
-func (s daemonRuntimeStore) ReadPID(pid int) (daemon.RuntimeRecord, error) {
-	path, err := s.Path(pid)
-	if err != nil {
-		return daemon.RuntimeRecord{}, err
-	}
-	rec, err := s.Read(path)
-	if errors.Is(err, os.ErrNotExist) && s.Dir != s.legacyDir {
-		// Remove this bridge the release after the Windows runtime subdirectory ships.
-		return s.Read(filepath.Join(s.legacyDir, filepath.Base(path)))
-	}
-	return rec, err
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running

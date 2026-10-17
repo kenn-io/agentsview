@@ -1071,17 +1071,22 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 
 func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		wrongPID  bool
-		newRecord bool
+		name       string
+		wrongPID   bool
+		newRecord  bool
+		blockedRun bool
 	}{
-		{name: "live record is listed and readable by PID"},
+		{name: "live record is listed"},
 		{name: "record whose PID differs from its filename is ignored", wrongPID: true},
 		{name: "older legacy record precedes new runtime record", newRecord: true},
+		{name: "live legacy record is listed when run is a file", blockedRun: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			store := daemonRuntimeStore{Dir: filepath.Join(dir, "run"), legacyDir: dir}
+			if tt.blockedRun {
+				require.NoError(t, os.WriteFile(store.Dir, nil, 0o600))
+			}
 			rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
 				Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
 			})
@@ -1117,10 +1122,13 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 			}
 			assert.Equal(t, rec.PID, records[0].PID)
 			assert.Equal(t, path, records[0].SourcePath)
-			read, err := store.ReadPID(rec.PID)
-			require.NoError(t, err)
-			assert.Equal(t, path, read.SourcePath)
 			assert.FileExists(t, path)
+			if tt.blockedRun {
+				require.NoError(t, os.Remove(path))
+				records, err = store.List()
+				assert.Empty(t, records)
+				require.Error(t, err, "the run failure must surface without usable records")
+			}
 		})
 	}
 }

@@ -4,6 +4,6 @@ package main
 
 import "testing"
 
-func TestMCPDaemonServiceReusesVerifiedLegacyDaemon(t *testing.T) {
+func TestMCPDaemonServiceReusesVerifiedLegacyDaemonAtOriginalPath(t *testing.T) {
 	testMCPDaemonServiceReusesVerifiedDaemon(t, true)
 }
