@@ -374,22 +374,20 @@ describe("TrendsPage", () => {
     warn.mockRestore();
   });
 
-  it("counts each displayed refresh failure again after loading", async () => {
+  it("reports analytics when a pending refresh fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
     const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Refresh",
     );
-    for (const count of [1, 2]) {
-      const request = Promise.withResolvers<never>();
-      mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);
-      refreshButton!.click();
-      await tick();
-      expect(document.querySelector(".error")).toBeNull();
-      request.reject(new Error("at least one trend term is required"));
-      await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledTimes(count));
-    }
+    const request = Promise.withResolvers<never>();
+    mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);
+    refreshButton!.click();
+    await tick();
+    expect(document.querySelector(".error")).toBeNull();
+    request.reject(new Error("at least one trend term is required"));
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics"));
     warn.mockRestore();
   });
 

@@ -149,7 +149,7 @@ describe("GoToSessionModal", () => {
   it.each([
     ["empty", "", "Enter a session ID or UUID."],
     ["unknown", UUID, "No session matches that ID or UUID."],
-  ] as const)("keeps the dialog open for %s input", async (_name, value, message) => {
+  ] as const)("suppresses error telemetry for %s input", async (_name, value, message) => {
     await open();
     await setInput(value);
 
@@ -165,7 +165,7 @@ describe("GoToSessionModal", () => {
     }
   });
 
-  it("reports an ambiguous lookup result without changing the route", async () => {
+  it("shows an ambiguous lookup result without navigation or error telemetry", async () => {
     await open();
     harness.resolveSessionIds.mockResolvedValue({
       ids: [`codex:${UUID}`, `host~claude:${UUID}`],

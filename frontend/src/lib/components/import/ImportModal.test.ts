@@ -186,7 +186,7 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])(
   },
 );
 
-it("shows an overlapping Chrome Sync refusal", async () => {
+it("shows and reports an overlapping Chrome Sync refusal", async () => {
   syncClaudeAI.mockRejectedValueOnce(
     new ApiError(409, "Server conflict text", "claude_ai_sync_running"),
   );
@@ -196,7 +196,7 @@ it("shows an overlapping Chrome Sync refusal", async () => {
     expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
   );
   expect(screen.queryByText("Server conflict text")).toBeNull();
-  expect(reportSyncFailed).toHaveBeenCalledWith(
+  expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ code: "claude_ai_sync_running" }),
   );
   expect(syncButton().disabled).toBe(false);

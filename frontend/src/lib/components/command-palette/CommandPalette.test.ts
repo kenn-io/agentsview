@@ -1,6 +1,3 @@
-vi.mock("../../utils/telemetry.js", () => ({
-  reportTelemetry: vi.fn(),
-}));
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
@@ -77,7 +74,9 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
   sessions: mockSessions,
 }));
 
-vi.mock("../../stores/search.svelte.js", () => ({ searchStore: mockSearchStore }));
+vi.mock("../../stores/search.svelte.js", () => ({
+  searchStore: mockSearchStore,
+}));
 
 vi.mock("../../stores/router.svelte.js", () => ({
   router: mockRouter,
