@@ -2169,7 +2169,8 @@ describe("SessionsStore", () => {
     beforeEach(() => {
       api.getMachines.mockImplementation((params) =>
         Promise.resolve({
-          machines: params.machine ? params.machine.split(",") : ["host-a", "host-b"],
+          machines: ["host-a", "host-b"],
+          resolved_machines: params.machine ? params.machine.split(",") : undefined,
         }),
       );
     });
@@ -2537,7 +2538,10 @@ describe("SessionsStore", () => {
     sessions = createSessionsStore();
     api.getMachines.mockImplementation((params) => {
       if (params.machine === "old-owner,installation-a,source-a") {
-        return Promise.resolve({ machines: ["installation-a", "installation-a", "source-a"] });
+        return Promise.resolve({
+          machines: ["installation-a", "installation-a", "source-a"],
+          resolved_machines: ["installation-a", "installation-a", "source-a"],
+        });
       }
       return Promise.resolve({
         machines: ["installation-a", "source-a"],
@@ -2568,7 +2572,7 @@ describe("SessionsStore", () => {
         if (!params.machine) return Promise.resolve(catalog);
         return ambiguous
           ? Promise.reject(new ApiError(400, "ambiguous machine", "invalid_machine_filter"))
-          : Promise.resolve({ machines: ["id-a"] });
+          : Promise.resolve({ machines: ["id-a"], resolved_machines: ["id-a"] });
       });
       sessions.initFromParams({ machine: "Work, Linux" });
       await sessions.loadMachines();
@@ -2618,7 +2622,7 @@ describe("SessionsStore", () => {
     );
 
     it("applies overlapping picker clicks to the latest canonical selection", async () => {
-      let finish!: (value: { machines: string[] }) => void;
+      let finish!: (value: { machines: string[]; resolved_machines: string[] }) => void;
       api.getMachines.mockImplementation((params) =>
         params.machine
           ? new Promise((resolve) => {
@@ -2629,7 +2633,7 @@ describe("SessionsStore", () => {
       sessions.initFromParams({ machine: "Workstation" });
       const first = sessions.toggleMachineFilter("id-b");
       const second = sessions.toggleMachineFilter("id-c");
-      finish({ machines: ["id-a"] });
+      finish({ machines: ["id-a"], resolved_machines: ["id-a"] });
       await Promise.all([first, second]);
       expect(sessions.filters.machine).toBe("id-a,id-b,id-c");
     });
@@ -2638,7 +2642,9 @@ describe("SessionsStore", () => {
       "resolves a name after %s visibility flags refresh metadata",
       async (source) => {
         api.getMachines.mockImplementation((params) =>
-          Promise.resolve(params.machine ? { machines: ["id-a"] } : catalog),
+          Promise.resolve(
+            params.machine ? { machines: ["id-a"], resolved_machines: ["id-a"] } : catalog,
+          ),
         );
         api.getProjects.mockResolvedValue({ projects: [] });
         api.getAgents.mockResolvedValue({ agents: [] });
@@ -2655,6 +2661,48 @@ describe("SessionsStore", () => {
         await vi.waitFor(() => expect(sessions.filters.machine).toBe("id-a"));
       },
     );
+
+    it("treats a whitespace-only URL machine as unfiltered", async () => {
+      api.getMachines.mockResolvedValue(catalog);
+      sessions.initFromParams({ machine: " " });
+      await sessions.loadMachines();
+      expect(sessions.filters.machine).toBe("");
+      expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe("");
+    });
+
+    it("normalizes constructor-restored alias lists before showing picker state", async () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ version: 2, machine: "old-owner,id-b" }),
+      );
+      api.getMachines.mockImplementation((params) =>
+        Promise.resolve(
+          params.machine
+            ? { machines: ["id-a", "id-b"], resolved_machines: ["id-a", "id-b"] }
+            : catalog,
+        ),
+      );
+      sessions = createSessionsStore();
+      await sessions.loadMachines();
+      expect(sessions.selectedMachines).toEqual(["id-a", "id-b"]);
+      expect(sessions.isMachineSelected("id-a")).toBe(true);
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("id-a");
+    });
+
+    it("reads resolved machine IDs separately from the picker catalog", async () => {
+      api.getMachines.mockResolvedValue({ ...catalog, resolved_machines: ["id-a"] });
+      sessions.initFromParams({ machine: "Workstation" });
+      await sessions.loadMachines();
+      expect(sessions.filters.machine).toBe("id-a");
+    });
+
+    it("preserves the selector when a response omits resolved IDs", async () => {
+      api.getMachines.mockResolvedValue(catalog);
+      sessions.initFromParams({ machine: "Workstation" });
+      await sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("Workstation");
+    });
 
     it("preserves a stale saved selector until the user clears it", async () => {
       localStorage.setItem(
@@ -2678,7 +2726,7 @@ describe("SessionsStore", () => {
     });
 
     it("ignores resolution of a URL selector after the selection changes", async () => {
-      let finish!: (value: { machines: string[] }) => void;
+      let finish!: (value: { machines: string[]; resolved_machines: string[] }) => void;
       api.getMachines.mockImplementation((params) =>
         params.machine
           ? new Promise((resolve) => {
@@ -2690,7 +2738,7 @@ describe("SessionsStore", () => {
       const editing = sessions.toggleMachineFilter("id-b");
       await vi.waitFor(() => expect(finish).toBeDefined());
       sessions.setMachineFilter("id-b");
-      finish({ machines: ["id-a"] });
+      finish({ machines: ["id-a"], resolved_machines: ["id-a"] });
       await editing;
       expect(sessions.filters.machine).toBe("id-b");
     });

@@ -123,8 +123,9 @@ GET /api/v1/agents
 ```
 
 `GET /api/v1/machines` returns the picker catalog and applies the visibility
-flags. With `?machine=Workstation`, its `machines` array contains the canonical
-selector IDs, even when those IDs have no visible or stored sessions. Visibility
+flags in its `machines` array. With `?machine=Workstation`, the separate
+`resolved_machines` array contains the canonical selector IDs, even when those
+IDs have no visible or stored sessions. It is omitted without a selector. Visibility
 flags do not limit resolution. Unknown or ambiguous selectors return HTTP 400
 with known choices.
 

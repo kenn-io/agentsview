@@ -65,7 +65,7 @@ func TestResolveMachineFilter(t *testing.T) {
 	}
 	for _, tt := range []struct{ input, want string }{
 		{id, id},
-		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hex-label-owner"},
 		// An installation ID without stored sessions stays an exact selector.
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a"},

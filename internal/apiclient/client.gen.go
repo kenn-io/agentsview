@@ -24162,8 +24162,11 @@ type MachinesResponse struct {
 	MachineAliases map[string]string `json:"machine_aliases"`
 	MachineLabels  map[string]string `json:"machine_labels"`
 
-	// Machines Picker catalog filtered by visibility flags; with machine, canonical selector IDs regardless of visibility or stored sessions
+	// Machines Picker catalog filtered by visibility flags
 	Machines []string `json:"machines" validate:"required"`
+
+	// ResolvedMachines Canonical IDs for the machine selector, independent of catalog visibility
+	ResolvedMachines []string `json:"resolved_machines,omitempty"`
 }
 
 func (m MachinesResponse) Validate() error {

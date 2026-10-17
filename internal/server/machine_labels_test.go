@@ -78,16 +78,19 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 		selector string
 		want     []string
 	}{
-		{" \t ", []string{"id-a", "id-b"}},
+		{" \t ", nil},
 		{"Work, Linux", []string{"id-a"}},
 	} {
 		t.Run(tt.selector, func(t *testing.T) {
 			store.labelReads, store.aliasReads = 0, 0
 			w := te.get(t, "/api/v1/machines?machine="+url.QueryEscape(tt.selector))
 			assertStatus(t, w, http.StatusOK)
-			assert.ElementsMatch(t, tt.want, decode[struct {
-				Machines []string `json:"machines"`
-			}](t, w).Machines)
+			response := decode[struct {
+				Machines         []string `json:"machines"`
+				ResolvedMachines []string `json:"resolved_machines"`
+			}](t, w)
+			assert.ElementsMatch(t, []string{"id-a", "id-b"}, response.Machines)
+			assert.Equal(t, tt.want, response.ResolvedMachines)
 			assert.Equal(t, 1, store.labelReads)
 			assert.Equal(t, 1, store.aliasReads)
 		})

@@ -159,10 +159,16 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 	machine = strings.TrimSpace(machine)
 	parts := splitCSV(CanonicalMachineFilter(machine, aliases))
 	known := knownMachineIDs(store, labels, aliases)
+	var candidates []string
+	for id, label := range labels {
+		if label == machine {
+			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
+		}
+	}
 	// Confirm identities absent from metadata against retained session rows.
 	var unconfirmed []string
 	for _, id := range parts {
-		if !known[id] {
+		if !known[id] && (config.ValidateInstallationID(id) != nil || len(parts) == 1 && len(candidates) > 0) {
 			unconfirmed = append(unconfirmed, id)
 		}
 	}
@@ -175,19 +181,17 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 			known[id] = true
 		}
 	}
-	if len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil }) {
+	validIDs := len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil })
+	if len(parts) > 0 && (!slices.ContainsFunc(parts, func(id string) bool { return !known[id] }) || len(parts) > 1 && validIDs) {
 		return strings.Join(parts, ","), nil
-	}
-	var candidates []string
-	for id, label := range labels {
-		if label == machine {
-			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
-		}
 	}
 	slices.Sort(candidates)
 	candidates = slices.Compact(candidates)
 	if len(candidates) == 1 {
 		return candidates[0], nil
+	}
+	if len(candidates) == 0 && validIDs {
+		return strings.Join(parts, ","), nil
 	}
 	names, err := store.GetMachines(ctx, false, false)
 	if err != nil {

@@ -54,9 +54,10 @@ type projectsResponse struct {
 }
 
 type machinesResponse struct {
-	Machines       []string          `json:"machines" doc:"Picker catalog filtered by visibility flags; with machine, canonical selector IDs regardless of visibility or stored sessions"`
-	MachineLabels  map[string]string `json:"machine_labels"`
-	MachineAliases map[string]string `json:"machine_aliases"`
+	Machines         []string          `json:"machines" doc:"Picker catalog filtered by visibility flags"`
+	ResolvedMachines []string          `json:"resolved_machines,omitempty" doc:"Canonical IDs for the machine selector, independent of catalog visibility"`
+	MachineLabels    map[string]string `json:"machine_labels"`
+	MachineAliases   map[string]string `json:"machine_aliases"`
 }
 
 func (s *Server) machineAliases(ctx context.Context) (map[string]string, error) {
@@ -150,18 +151,19 @@ func (s *Server) humaListMachines(
 	if err != nil {
 		return nil, serverError(err)
 	}
-	var machines []string
-	if strings.TrimSpace(in.Machine) != "" {
-		var machine string
-		machine, err = db.ResolveMachineFilterWithMetadata(ctx, s.db, in.Machine, labels, aliases)
-		machines = strings.Split(machine, ",")
-	} else {
-		machines, err = s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
-	}
+	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
 	if err != nil {
 		return nil, serverError(err)
 	}
-	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, MachineLabels: labels, MachineAliases: aliases}}, nil
+	var resolved []string
+	if strings.TrimSpace(in.Machine) != "" {
+		machine, err := db.ResolveMachineFilterWithMetadata(ctx, s.db, in.Machine, labels, aliases)
+		if err != nil {
+			return nil, serverError(err)
+		}
+		resolved = strings.Split(machine, ",")
+	}
+	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, ResolvedMachines: resolved, MachineLabels: labels, MachineAliases: aliases}}, nil
 }
 
 func (s *Server) humaListBranches(

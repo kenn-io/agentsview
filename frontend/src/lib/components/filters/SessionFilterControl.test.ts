@@ -5,6 +5,7 @@ import { fireEvent, screen } from "@testing-library/svelte";
 import SessionFilterControl from "./SessionFilterControl.svelte";
 import SessionActiveFilters from "./SessionActiveFilters.svelte";
 import { sessions, filtersToParams } from "../../stores/sessions.svelte.js";
+import { ApiError } from "../../api/runtime.js";
 import { MetadataService } from "../../api/generated/index.js";
 
 let component: ReturnType<typeof mount> | undefined;
@@ -31,7 +32,7 @@ it("shows and searches machine labels while selecting the stored machine key", a
     machine_aliases: {},
   };
   vi.spyOn(MetadataService, "getApiV1Machines").mockImplementation(async (params) =>
-    params?.machine ? { ...response, machines: ["installation-a"] } : response,
+    params?.machine ? { ...response, resolved_machines: ["installation-a"] } : response,
   );
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
@@ -53,6 +54,32 @@ it("shows and searches machine labels while selecting the stored machine key", a
   component = mount(SessionActiveFilters, { target: document.body });
   await fireEvent.click(screen.getByRole("button", { name: "Workstation A" }));
   expect(sessions.filters.machine).toBe("");
+});
+
+it("shows a failed machine edit and clears the error after retry", async () => {
+  sessions.machines = ["retry-machine", "another-machine"];
+  sessions.filters.machine = "Retry label";
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  vi.spyOn(MetadataService, "getApiV1Machines")
+    .mockRejectedValueOnce(new ApiError(500, "internal error"))
+    .mockResolvedValue({
+      machines: ["retry-machine"],
+      resolved_machines: ["retry-machine"],
+      machine_labels: {},
+      machine_aliases: {},
+    });
+  component = mount(SessionFilterControl, { target: document.body });
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  await fireEvent.click(screen.getByRole("button", { name: "another-machine" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "Couldn’t update the machine filter. Try again.",
+  );
+  expect(sessions.filters.machine).toBe("Retry label");
+  await fireEvent.click(screen.getByRole("button", { name: "another-machine" }));
+  await vi.waitFor(() => expect(sessions.filters.machine).toBe("retry-machine,another-machine"));
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 describe("SessionFilterControl agent options", () => {

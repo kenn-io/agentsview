@@ -366,6 +366,9 @@
     {#if sessions.machines.length > 0}
       <div class="filter-section">
         <div class="filter-section-label">{m.sidebar_filters_machine()}</div>
+        {#if sessions.machineFilterUpdateFailed}
+          <p role="alert">{m.sidebar_filters_machine_update_failed()}</p>
+        {/if}
         {#if sessions.machines.length > 5}
           <input
             class="agent-search"

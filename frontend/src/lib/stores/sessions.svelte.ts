@@ -304,6 +304,7 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   machineLabels: Record<string, string> = $state({});
+  machineFilterUpdateFailed = $state(false);
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
@@ -448,6 +449,7 @@ class SessionsStore {
   resetFiltersForRoot(): void {
     const previous = this.filters;
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters = defaultFilters();
     this.dateFiltersWindowDays = null;
     starred.filterOnly = false;
@@ -466,6 +468,7 @@ class SessionsStore {
     const previous = this.filters;
     this.#savedFilters = loadSavedFilters();
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters = this.#savedFilters.filters;
     this.dateFiltersWindowDays = this.#savedFilters.windowDays;
     this.filterPersistenceHeld = false;
@@ -500,6 +503,7 @@ class SessionsStore {
     const prevAutomatedSet = this.filters.automatedFilterSet;
     const next = parseFiltersFromParams(params);
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters = next;
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
@@ -876,8 +880,16 @@ class SessionsStore {
   }
 
   async loadMachines() {
-    if (this.machinesPromise) return this.machinesPromise;
-    if (this.machinesLoaded) return;
+    const normalization = this.normalizeMachineFilter();
+    if (this.machinesPromise) {
+      await this.machinesPromise;
+      await normalization;
+      return;
+    }
+    if (this.machinesLoaded) {
+      await normalization;
+      return;
+    }
     const ver = this.machinesVersion;
     this.machinesPromise = (async () => {
       try {
@@ -895,7 +907,8 @@ class SessionsStore {
         }
       }
     })();
-    return this.machinesPromise;
+    await this.machinesPromise;
+    await normalization;
   }
 
   machineLabel(machine: string): string {
@@ -906,6 +919,11 @@ class SessionsStore {
   // the picker catalog, before splitting the selection for picker edits.
   private async normalizeMachineFilter(): Promise<"resolved" | "invalid" | "unavailable"> {
     const selector = this.filters.machine;
+    if (selector && !selector.trim()) {
+      this.filters.machine = "";
+      this.persistFiltersIfAllowed();
+      return "resolved";
+    }
     if (!selector || this.canonicalMachineSelectors[selector]) return "resolved";
     const revision = this.machineSelectorRevision;
     const key = `${revision}:${selector}`;
@@ -915,7 +933,8 @@ class SessionsStore {
         try {
           const res = await MetadataService.getApiV1Machines({ machine: selector });
           if (revision !== this.machineSelectorRevision) return { error: "unavailable" };
-          const machine = [...new Set(res.machines)].join(",");
+          if (!res.resolved_machines?.length) return { error: "unavailable" };
+          const machine = [...new Set(res.resolved_machines)].join(",");
           this.canonicalMachineSelectors[machine] = true;
           return { machine };
         } catch (error) {
@@ -1197,6 +1216,7 @@ class SessionsStore {
   setProjectFilter(project: string) {
     const prev = this.filters;
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters = { ...defaultFilters(), project, agent: prev.agent };
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
@@ -1212,6 +1232,7 @@ class SessionsStore {
 
   setMachineFilter(machine: string) {
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters.machine = this.filters.machine === machine ? "" : machine;
     this.activeSessionId = null;
     void this.load();
@@ -1220,7 +1241,9 @@ class SessionsStore {
   async toggleMachineFilter(machine: string) {
     const revision = this.machineSelectorRevision;
     const outcome = await this.normalizeMachineFilter();
-    if (revision !== this.machineSelectorRevision || outcome === "unavailable") return;
+    if (revision !== this.machineSelectorRevision) return;
+    this.machineFilterUpdateFailed = outcome === "unavailable";
+    if (this.machineFilterUpdateFailed) return;
     const current = this.canonicalMachineSelectors[this.filters.machine]
       ? this.filters.machine.split(",")
       : [];
@@ -1407,6 +1430,7 @@ class SessionsStore {
       filters.pr = this.filters.pr;
     }
     this.machineSelectorRevision++;
+    this.machineFilterUpdateFailed = false;
     this.filters = filters;
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
