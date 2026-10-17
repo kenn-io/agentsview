@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -326,7 +327,7 @@
 </div>
 
 {#if usage.errors.summary}
-  <div class="error-bar">
+  <div class="error-bar" {@attach errorTelemetry("analytics")}>
     <span>{usage.errors.summary}</span>
     <button
       class="retry-btn"

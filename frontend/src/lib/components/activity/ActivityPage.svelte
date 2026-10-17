@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { onMount, untrack } from "svelte";
   import {
@@ -520,7 +521,7 @@
     {:else if activity.loading}
       <div class="status">{m.activity_loading_report()}</div>
     {:else if activity.error}
-      <div class="status error">
+      <div class="status error" {@attach errorTelemetry("analytics")}>
         <span>{activity.error}</span>
         <button class="retry-btn" onclick={() => activity.load()}>
           {m.shared_retry()}

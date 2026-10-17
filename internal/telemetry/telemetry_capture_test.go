@@ -30,6 +30,9 @@ func TestCoreActionAllowlist(t *testing.T) {
 		event, key, value string
 		kept              bool
 	}{
+		{EventSearchEmpty, "query", "secret", false},
+		{EventErrorShown, "kind", "search", true},
+		{EventSyncFailed, "reason", "request", true},
 		{EventSearchRun, "query_type", "semantic", true},
 		{EventSearchRun, "query_type", "regex", false},
 		{EventSessionViewed, "agent", "freebuff", true},
@@ -80,9 +83,19 @@ func TestCoreActionAllowlist(t *testing.T) {
 		}
 		postCapture(t, srv.Handler(), string(body), status)
 	}
+	for _, tc := range []struct{ event, key string }{{EventErrorShown, "kind"}, {EventSyncFailed, "reason"}} {
+		body, err := json.Marshal(map[string]any{"event": tc.event})
+		require.NoError(t, err)
+		postCapture(t, srv.Handler(), string(body), http.StatusBadRequest)
+		for _, value := range []any{42, "unknown"} {
+			body, err := json.Marshal(map[string]any{"event": tc.event, "properties": map[string]any{tc.key: value}})
+			require.NoError(t, err)
+			postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
+		}
+	}
 	require.NoError(t, reporter.Close())
 	sent := captured()
-	require.Len(t, sent, len(cases)-1)
+	require.Len(t, sent, len(cases)+3)
 	i := 0
 	for _, c := range cases {
 		if c.event == EventScreenViewed && c.key == "screen" && !c.kept {
@@ -101,6 +114,12 @@ func TestCoreActionAllowlist(t *testing.T) {
 			assert.NotContains(t, sent[i], c.key)
 		}
 		i++
+	}
+	for _, properties := range sent[i : i+2] {
+		assert.Equal(t, "other", properties["kind"])
+	}
+	for _, properties := range sent[i+2:] {
+		assert.Equal(t, "other", properties["reason"])
 	}
 }
 

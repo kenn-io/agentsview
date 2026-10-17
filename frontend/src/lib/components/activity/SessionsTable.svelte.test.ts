@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, tick, unmount } from "svelte";
 import SessionsTable from "./SessionsTable.svelte";
@@ -383,6 +385,7 @@ describe("SessionsTable", () => {
 
       const error = document.querySelector(".page-error")!;
       expect(error.textContent).toContain("server down");
+      expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
       error.querySelector("button")!.click();
       expect(onRetry).toHaveBeenCalledOnce();
       expect(onLoadMore).not.toHaveBeenCalled();

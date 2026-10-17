@@ -24,6 +24,11 @@ The latest release is
 
 **New features**
 
+- Anonymous telemetry now counts empty searches, visible errors in supported
+  workflows, and failed sync attempts. Query and error details stay local. The
+  existing [telemetry opt-out](https://agentsview.io/docs/configuration/#privacy-and-telemetry)
+  applies to these counts.
+
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
   evidence. Versions 3 and 4 retain their existing behavior.

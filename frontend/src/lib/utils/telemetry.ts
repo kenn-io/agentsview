@@ -5,6 +5,9 @@ export type TelemetryEvent =
   | "visit_ended"
   | "screen_viewed"
   | "search_run"
+  | "search_empty"
+  | "error_shown"
+  | "sync_failed"
   | "session_viewed"
   | "export_run"
   | "insight_generated"
@@ -22,4 +25,44 @@ export function reportTelemetry(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ event, properties }),
   }).catch(() => {});
+}
+
+export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export";
+export type SyncFailureReason =
+  | "request"
+  | "sign_in_required"
+  | "browser_extension"
+  | "already_running"
+  | "other";
+
+export function reportErrorShown(kind: ErrorKind): void {
+  reportTelemetry("error_shown", { kind });
+}
+
+export function reportSyncFailed(error: unknown): void {
+  let reason: SyncFailureReason = "other";
+  let code: string | undefined;
+  if (error instanceof Error || error instanceof DOMException) {
+    const errorCode: unknown = "code" in error ? error.code : undefined;
+    if (typeof errorCode === "string") code = errorCode;
+  }
+  switch (code) {
+    case "sync_running":
+    case "claude_ai_sync_running":
+      reason = "already_running";
+      break;
+    case "claude_ai_auth_required":
+      reason = "sign_in_required";
+      break;
+    case "claude_ai_chrome_host_required":
+    case "claude_ai_chrome_host_update_required":
+      reason = "browser_extension";
+      break;
+    default:
+      if ((error instanceof Error || error instanceof DOMException) && code === undefined) {
+        reason = "request";
+      }
+  }
+
+  reportTelemetry("sync_failed", { reason });
 }

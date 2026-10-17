@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, tick, untrack } from "svelte";
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
@@ -881,17 +882,19 @@
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
 {:else if sessions.activeSessionNotFound && messages.messages.length === 0}
-  <EmptyState
-    title={m.message_list_session_not_found()}
-    description={m.message_list_session_not_found_hint()}
-  >
-    {#snippet icon()}
-      <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
-    {/snippet}
-    <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
-      {m.message_list_session_not_found_retry()}
-    </Button>
-  </EmptyState>
+  <div class="missing-session" {@attach errorTelemetry("session")}>
+    <EmptyState
+      title={m.message_list_session_not_found()}
+      description={m.message_list_session_not_found_hint()}
+    >
+      {#snippet icon()}
+        <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
+      {/snippet}
+      <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
+        {m.message_list_session_not_found_retry()}
+      </Button>
+    </EmptyState>
+  </div>
 {:else}
   <SessionFindView
     items={displayItemsAsc}
@@ -967,6 +970,10 @@
 {/if}
 
 <style>
+  .missing-session {
+    display: contents;
+  }
+
   .message-list-scroll {
     flex: 1;
     overflow-y: auto;

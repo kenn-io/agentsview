@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { Virtualizer, type VirtualizerOptions } from "@tanstack/virtual-core";
 import { controlFrames } from "../../test/frames.js";
 import { realVirtualizer } from "../../test/virtualizer.js";
-import type { DbMessage as Message } from "../../api/generated/index.js";
+import { SessionsService, type DbMessage as Message } from "../../api/generated/index.js";
+import { ApiError } from "../../api/runtime.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -163,6 +166,7 @@ describe("MessageList follow cancellation", () => {
     inSessionSearch.close();
     inSessionSearch.clearQuery();
     messages.clear();
+    sessions.activeSessionNotFound = false;
     sessions.activeSessionId = "s1";
     messages.sessionId = "s1";
     messages.messages = [makeMessage(10)];
@@ -400,6 +404,39 @@ describe("MessageList follow cancellation", () => {
       expect(ui.selectedOrdinal).toBe(ordinal);
     },
   );
+
+  it("counts a missing session once through a failed Retry, then again after recovery", async () => {
+    const previousSessions = sessions.sessions;
+    onTestFinished(() => {
+      sessions.sessions = previousSessions;
+    });
+    const session = { id: "s1" } as NonNullable<typeof sessions.activeSession>;
+    sessions.sessions = [session];
+    const request = vi
+      .spyOn(SessionsService, "getApiV1SessionsById")
+      .mockRejectedValue(new ApiError(404, "Missing"));
+    await sessions.refreshActiveSession();
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    messages.messages = [];
+    messages.loading = true;
+    await tick();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    messages.loading = false;
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
+    document.querySelector<HTMLButtonElement>("button")!.click();
+    await tick();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    request.mockResolvedValueOnce(session);
+    document.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.querySelector("button")).toBeNull());
+    await sessions.refreshActiveSession();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(2);
+  });
 
   it("renders empty and loading states in Simplified Chinese", async () => {
     setLocale("zh-CN");

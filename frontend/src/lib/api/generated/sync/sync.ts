@@ -17,6 +17,7 @@ export const getPostApiV1ResyncUrl = () => {
 };
 
 /**
+ * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
  * @summary Trigger full resync
  */
 export const postApiV1Resync = async (
@@ -81,6 +82,7 @@ export const getPostApiV1SyncUrl = (params?: PostApiV1SyncParams) => {
 };
 
 /**
+ * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
  * @summary Trigger sync
  */
 export const postApiV1Sync = async (

@@ -6,6 +6,8 @@ import { ApiError } from "../../api/runtime.js";
 import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 
 const { getToolSequences, getSession, getTiming } = vi.hoisted(() => ({
   getToolSequences: vi.fn(),
@@ -150,6 +152,7 @@ async function settle() {
 }
 
 beforeEach(() => {
+  vi.mocked(reportErrorShown).mockClear();
   getToolSequences.mockReset().mockResolvedValue(makeFacts(3));
   getTiming.mockReset().mockResolvedValue(null);
   getSession.mockReset().mockResolvedValue(makeSession());
@@ -417,6 +420,7 @@ describe("ToolEffectivenessReport", () => {
 
     const alert = document.querySelector(".tool-sequences-panel [role=alert]")!;
     expect(alert.textContent).toContain("Couldn't load tool sequences.");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("insight");
     alert.querySelector("button")!.click();
     await settle();
     expect(getToolSequences).toHaveBeenCalledTimes(2);

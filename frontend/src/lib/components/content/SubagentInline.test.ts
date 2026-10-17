@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -86,6 +88,19 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("reports the session kind when expanded messages fail", async () => {
+    getMessages.mockRejectedValueOnce(new Error("Messages failed"));
+    getSession.mockResolvedValueOnce(makeSession());
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session"));
+    unmount(component);
+  });
+
   it("aborts the nested read when collapsed", async () => {
     getMessages.mockImplementationOnce(() => new Promise(() => {}));
     getSession.mockImplementationOnce(() => new Promise(() => {}));

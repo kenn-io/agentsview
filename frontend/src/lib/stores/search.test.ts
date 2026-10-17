@@ -4,9 +4,9 @@ import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
-import { reportTelemetry } from "../utils/telemetry.js";
+import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
-vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
+vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/generated/index.js")>();
@@ -338,8 +338,13 @@ describe("SearchStore", () => {
     await runDebounce();
 
     expect(store.error).toEqual({ detail, kind });
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
+    store.retry();
+    await flushMicrotasks();
+    expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
   });
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
@@ -464,7 +469,7 @@ describe("SearchStore", () => {
     expect(store.isSearching).toBe(false);
   });
 
-  it("stale requests cannot overwrite newer results, loading, or error", async () => {
+  it.each(["empty", "error"])("ignores stale %s responses", async (outcome) => {
     const store = createSearchStore(memoryStorage());
     const stale = deferred<SearchResponse>();
     searchService.getApiV1Search.mockReturnValueOnce(stale.promise as never);
@@ -477,9 +482,12 @@ describe("SearchStore", () => {
     store.setMode("semantic");
     await flushMicrotasks();
 
-    stale.reject(new Error("late stale failure"));
+    if (outcome === "empty") stale.resolve(fullTextResponse("stale", 0));
+    else stale.reject(new Error("late stale failure"));
     await flushMicrotasks();
 
+    expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
+    expect(reportErrorShown).not.toHaveBeenCalled();
     expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
     expect(store.error).toBeNull();
     expect(store.isSearching).toBe(false);
@@ -506,8 +514,8 @@ describe("SearchStore", () => {
 
     store.search("cancel me");
     await runDebounce();
-    store.clear();
     completeRequest(fullTextResponse("cancel me", 2));
+    store.clear();
     await flushMicrotasks();
 
     expect(wasCancelled).toBe(true);
@@ -521,8 +529,30 @@ describe("SearchStore telemetry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(reportTelemetry).mockClear();
+    vi.mocked(reportErrorShown).mockClear();
     searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
-    searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
+    searchService.getApiV1SearchContent.mockResolvedValue(
+      contentResult([contentMatch("match", 1, 1)]),
+    );
+  });
+
+  it("counts accepted empty results across queries", async () => {
+    const store = createSearchStore(null);
+    for (const [query, count] of [
+      ["missing", 1],
+      ["found", 1],
+      ["missing again", 2],
+      [" ", 2],
+    ] as const) {
+      searchService.getApiV1Search.mockResolvedValue(
+        fullTextResponse(query, query === "found" ? 1 : 0),
+      );
+      store.search(query);
+      await runDebounce();
+      expect(
+        vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "search_empty"),
+      ).toHaveLength(count);
+    }
   });
 
   afterEach(() => {

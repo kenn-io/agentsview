@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -12,6 +14,9 @@ describe("QualityPage", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
+    vi.mocked(reportErrorShown).mockClear();
+    analytics.signals = null;
+    analytics.errors.signals = null;
     router.route = "quality";
     router.params = {};
     vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
@@ -34,6 +39,13 @@ describe("QualityPage", () => {
     expect(document.body.textContent).toContain("Deterministic Recommendations");
     expect(document.body.textContent).toContain("Quality Patterns");
     expect(insights.load).not.toHaveBeenCalled();
+  });
+
+  it("reports the analytics kind for a visible signals failure", async () => {
+    analytics.errors.signals = "Signals failed";
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
   });
 
   it("shows refresh activity while a filtered quality query is running", async () => {

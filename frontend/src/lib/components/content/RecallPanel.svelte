@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Button, Card } from "@kenn-io/kit-ui";
   import { RecallService } from "../../api/generated/index.js";
   import type {
@@ -69,7 +70,7 @@
   {#if loading}
     <p class="recall-state">{m.session_recall_loading()}</p>
   {:else if failed}
-    <p class="recall-state recall-error">{m.session_recall_error()}</p>
+    <p class="recall-state recall-error" {@attach errorTelemetry("session")}>{m.session_recall_error()}</p>
   {:else if entries.length === 0}
     <p class="recall-state">{m.session_recall_empty()}</p>
   {:else}

@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({
+  reportErrorShown: vi.fn(),
+  reportTelemetry: vi.fn(),
+}));
 import { mount, tick, unmount } from "svelte";
 import type { DbTopSessionEntry, UsageSummaryResponse } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
@@ -441,6 +446,25 @@ describe("AttributionPanel job groups", () => {
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+  });
+
+  it("reports the analytics kind for a displayed project error", async () => {
+    usage.selectedProjectKey = "pl1:sha256:first";
+    usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(new Error("Project failed"));
+    const component = mountPanel();
+    try {
+      await tick();
+      document
+        .querySelector<HTMLElement>(".list-row")!
+        .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await tick();
+      await vi.waitFor(() => expect(usage.errors.zoom).toBe("Project failed"));
+      await tick();
+      expect(document.querySelector(".empty")?.textContent).toBe("Project failed");
+      expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+    } finally {
+      await unmount(component);
+    }
   });
 
   it.each(["with a summary", "after the summary fails on a date change"])(

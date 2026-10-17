@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
@@ -295,7 +296,7 @@
         spellcheck="false"
       ></textarea>
       {#if trends.errors.terms}
-        <div class="error">{trends.errors.terms}</div>
+        <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
       {/if}
     </div>
 

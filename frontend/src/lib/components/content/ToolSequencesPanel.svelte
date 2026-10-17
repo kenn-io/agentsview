@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import type { ErrorKind } from "../../utils/telemetry.js";
   import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
@@ -21,6 +23,7 @@
     loading: boolean;
     failed: boolean;
     unavailable?: boolean;
+    errorTelemetryKind: ErrorKind;
     onretry?: (() => void) | undefined;
     /** Drops the panel's own background and scroll so a page section can host it. */
     embedded?: boolean;
@@ -34,6 +37,7 @@
     loading,
     failed,
     unavailable = false,
+    errorTelemetryKind,
     onretry = undefined,
     embedded = false,
     timing = null,
@@ -211,7 +215,7 @@
   {:else if unavailable && !data}
     <p class="state">{m.tool_sequences_unavailable()}</p>
   {:else if failed && !data}
-    <div class="state state-error" data-kit-tone="danger" role="alert">
+    <div class="state state-error" data-kit-tone="danger" role="alert" {@attach errorTelemetry(errorTelemetryKind)}>
       <span>{m.tool_sequences_error()}</span>
       {#if onretry}
         <Button size="sm" tone="neutral" surface="outline" label={m.tool_sequences_retry()} onclick={onretry} />

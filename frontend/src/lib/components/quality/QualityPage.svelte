@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
@@ -694,7 +695,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         </div>
       {:else if error && !signals}
         <Card level="default" padding="none" class="state-panel error">
-          <div class="state-panel-alert" role="alert">
+          <div class="state-panel-alert" role="alert" {@attach errorTelemetry("analytics")}>
             <strong>{m.insights_page_could_not_load()}</strong>
             <span>{error}</span>
             <button onclick={fetchQualitySignals}>
@@ -884,7 +885,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
               {#if signalExamplesLoading}
                 <p class="evidence-state">{m.insights_page_loading_examples()}</p>
               {:else if signalExamplesError}
-                <p class="evidence-state error">{signalExamplesError}</p>
+                <p class="evidence-state error" {@attach errorTelemetry("analytics")}>{signalExamplesError}</p>
               {:else if signalExamples.length === 0}
                 <p class="evidence-state">
                   {m.insights_page_no_triggering_sessions()}

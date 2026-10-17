@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({
+  reportErrorShown: vi.fn(),
+  reportTelemetry: vi.fn(),
+}));
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
@@ -91,6 +96,7 @@ function cardSub(label: string): string | undefined {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (component) {
     unmount(component);
     component = undefined;
@@ -109,6 +115,20 @@ afterEach(() => {
 });
 
 describe("UsageSummaryCards", () => {
+  it("reports the analytics kind for a displayed summary failure", async () => {
+    const { UsageService } = await import("../../api/generated/index.js");
+    vi.mocked(reportErrorShown).mockClear();
+    usage.summary = null;
+    vi.spyOn(UsageService, "getApiV1UsageSummary").mockRejectedValueOnce(
+      new Error("Summary failed"),
+    );
+    component = mount(UsageSummaryCards, { target: document.body });
+    await usage.fetchSummary({ loadComparison: false });
+    await tick();
+    expect(document.querySelector(".error-bar")?.textContent).toContain("Summary failed");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+  });
+
   it("uses the selected token types for aggregate token cards", async () => {
     usage.summary = summary();
     usage.mode = "token";

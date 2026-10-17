@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -88,6 +90,17 @@ function settle() {
 }
 
 describe("ActivityInsight", () => {
+  it("reports the insight kind when generation fails", async () => {
+    mocks.generateInsight.mockImplementation(() => ({
+      abort: vi.fn(),
+      done: Promise.reject(new Error("Generation failed")),
+    }));
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("insight"));
+  });
+
   it("fetches insights with both date bounds (full identity)", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();

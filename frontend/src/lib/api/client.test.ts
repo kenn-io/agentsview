@@ -456,13 +456,23 @@ describe("triggerSync SSE parsing", () => {
     expect(stats.total_sessions).toBe(3);
   });
 
-  it("should reject when the stream reports an error event", async () => {
-    const { handle } = startSync([
-      'event: error\ndata: {"error":"sync worker pass reported failed"}\n\n',
-    ]);
+  it.each([
+    { code: "sync_running", status: 409 },
+    { code: undefined, status: 500 },
+  ])(
+    "should reject when the stream reports an error event with status $status",
+    async ({ code, status }) => {
+      const { handle } = startSync([
+        `event: error\ndata: ${JSON.stringify({ error: "sync worker pass reported failed", code })}\n\n`,
+      ]);
 
-    await expect(handle.done).rejects.toThrow("sync worker pass reported failed");
-  });
+      await expect(handle.done).rejects.toMatchObject({
+        message: "sync worker pass reported failed",
+        code,
+        status,
+      });
+    },
+  );
 
   it("should reject for non-ok responses", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));

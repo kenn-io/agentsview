@@ -468,6 +468,7 @@
     </section>
 
     <ToolSequencesPanel
+      errorTelemetryKind="insight"
       data={facts}
       {sessionId}
       loading={factsLoading}

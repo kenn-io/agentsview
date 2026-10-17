@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
@@ -73,6 +75,7 @@ describe("SessionVitals", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
+    vi.mocked(reportErrorShown).mockClear();
     mocks.fetchSessionTiming.mockReset().mockResolvedValue(mocks.timing);
     vi.stubGlobal(
       "fetch",
@@ -415,6 +418,7 @@ describe("SessionVitals", () => {
     expect(document.body.textContent).toContain(traceSession.project);
     expect(document.body.textContent).toContain(traceSession.cwd);
     expect(document.body.textContent).toContain("timing unavailable");
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
   });
 
   it("copies repository and worktree values from hover controls", async () => {
@@ -569,6 +573,15 @@ describe("SessionVitals", () => {
       (button) => button.textContent?.includes("21–23"),
     );
     expect(evidenceButton).toBeUndefined();
+  });
+
+  it("reports the session kind when distilled recall fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Recall failed")));
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: traceSession.id, session: traceSession },
+    });
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session"));
   });
 
   it("shows an empty Recall state for a session without distilled entries", async () => {

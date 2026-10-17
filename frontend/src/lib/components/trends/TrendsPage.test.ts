@@ -1,3 +1,5 @@
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -356,6 +358,7 @@ describe("TrendsPage", () => {
     mocks.getApiV1TrendsTerms.mockRejectedValueOnce(
       new Error("at least one trend term is required"),
     );
+
     const textarea = document.querySelector<HTMLTextAreaElement>("#trend-terms");
     expect(textarea).not.toBeNull();
     textarea!.value = "";
@@ -367,8 +370,24 @@ describe("TrendsPage", () => {
     expect(refreshButton).not.toBeNull();
     refreshButton!.click();
     await flushPromises();
-
     expect(document.body.textContent).toContain("at least one trend term is required");
+    warn.mockRestore();
+  });
+
+  it("reports analytics when a pending refresh fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+    const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Refresh",
+    );
+    const request = Promise.withResolvers<never>();
+    mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);
+    refreshButton!.click();
+    await tick();
+    expect(document.querySelector(".error")).toBeNull();
+    request.reject(new Error("at least one trend term is required"));
+    await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics"));
     warn.mockRestore();
   });
 

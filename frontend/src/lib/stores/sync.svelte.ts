@@ -1,7 +1,8 @@
 import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
-import { ApiError, isRemoteConnection } from "../api/runtime.js";
+import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
+import { reportSyncFailed } from "../utils/telemetry.js";
 import { events } from "./events.svelte.js";
 import type {
   SyncProgress,
@@ -298,7 +299,7 @@ class SyncStore {
         onComplete?.();
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") {
+        if (isAbortError(err)) {
           return;
         }
         finalizeSync();
@@ -308,6 +309,10 @@ class SyncStore {
           onError?.(new Error("Sync failed"));
         }
       });
+
+    handle.done.catch((err: unknown) => {
+      if (!isAbortError(err)) reportSyncFailed(err);
+    });
 
     return true;
   }

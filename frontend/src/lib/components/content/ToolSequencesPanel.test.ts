@@ -103,7 +103,14 @@ function mountPanel(
 ) {
   return mount(ToolSequencesPanel, {
     target: document.body,
-    props: { data, sessionId: "session-a", loading: false, failed: false, ...extra },
+    props: {
+      data,
+      sessionId: "session-a",
+      loading: false,
+      failed: false,
+      errorTelemetryKind: "session",
+      ...extra,
+    },
   });
 }
 
@@ -465,6 +472,7 @@ describe("ToolSequencesPanel", () => {
         loading: false,
         failed: false,
         embedded: true,
+        errorTelemetryKind: "insight",
       },
     });
     await tick();
@@ -575,6 +583,7 @@ describe("ToolSequencesPanel", () => {
       target: document.body,
       props: {
         data: makeData({ sequences: [later] }),
+        errorTelemetryKind: "session",
         sessionId: "session-a",
         loading: false,
         failed: false,

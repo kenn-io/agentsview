@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
@@ -48,7 +49,7 @@
   </h3>
 
   {#if usage.errors.topSessions}
-    <div class="error">
+    <div class="error" {@attach errorTelemetry("analytics")}>
       {usage.errors.topSessions}
       <button
         class="retry-btn"

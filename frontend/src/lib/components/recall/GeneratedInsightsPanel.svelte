@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, onMount } from "svelte";
   import {
     Button,
@@ -420,7 +421,7 @@
                   : m.insights_page_generating()}
               </span>
               {#if insights.selectedTask.status === "error"}
-                <div class="generated-actions">
+                <div class="generated-actions" {@attach errorTelemetry("insight", insights.selectedTaskId)}>
                   <Button
                     size="sm"
                     label={m.insights_page_retry()}

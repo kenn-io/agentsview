@@ -2029,6 +2029,21 @@ fail. Markdown links count after the link is copied successfully.
 | `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                              |
 | `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings` |
 
+Feature outcomes use fixed categories; unknown strings become `other`.
+
+| Event          | Property | Allowed values                                                                            | Count unit                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | -------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search_empty` | none     | none                                                                                      | Each accepted completed empty result, including one followed by more typing. Blank, cancelled, superseded, and failed searches send nothing.                                                                                                                                                                                                            |
+| `error_shown`  | `kind`   | `search`, `session`, `insight`, `analytics`, `export`, `other`                            | Each appearance of a core-action error in search, session views, generated insights including their supporting tool sequences, or exports. Analytics counts each independently requested panel on Usage, Activity, Trends, and Quality. Continuous display counts once; hiding and showing the error counts again.                                                                                |
+| `sync_failed`  | `reason` | `request`, `sign_in_required`, `browser_extension`, `already_running`, `other` | Each failed foreground attempt after its terminal result, without `error_shown`. `request` covers uncoded request or processing failures; unsupported explicit codes use `other`. Completed Claude.ai imports with item errors send nothing. Cancellation, polling, and read-only refreshes send nothing. |
+
+Each accepted failed search counts once, including a semantic search that
+shows setup guidance. Internal setup probes and build retries add no events.
+
+Hidden failures, cached warnings, the Sessions dashboard, settings, data
+management, pins, stars, and in-session find send no outcomes. Query and error
+text, paths, and identifiers stay out of outcome properties.
+
 Every event contains only:
 
 - app version and git commit
@@ -2036,6 +2051,7 @@ Every event contains only:
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`
 - for the five UI actions, the one listed value above
+- for feature outcomes, the listed kind or reason
 - for screen views, the listed screen name and `surface: web`
 - for visits, the duration bucket and `surface: web`, without exact times
 

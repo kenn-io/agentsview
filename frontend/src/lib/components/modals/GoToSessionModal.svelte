@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Button, Modal, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";
@@ -157,7 +158,7 @@
       />
     </div>
     {#if errorKind}
-      <p id="go-to-session-error" class="go-to-session-error" role="alert">
+      <p id="go-to-session-error" class="go-to-session-error" role="alert" {@attach errorTelemetry(errorKind === "failed" ? "session" : undefined)}>
         {messageFor(errorKind)}
       </p>
     {/if}

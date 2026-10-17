@@ -46,6 +46,12 @@ can distinguish grouped routes from root paths. Archive and raw-sync clients use
 generated operations with an unread-response transport to preserve streaming and
 caller-owned response limits.
 
+## Sync errors
+
+Sync and resync SSE errors add `code: sync_running` for an active pass. Other
+errors omit `code`, including failed or deferred processing.
+The `error` text stays unchanged; older clients can ignore `code`.
+
 ## Collection nullability
 
 AgentsView uses `encoding/json/v2`, which encodes a nil Go slice as an empty

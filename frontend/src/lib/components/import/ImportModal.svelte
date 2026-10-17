@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reportSyncFailed } from "../../utils/telemetry.js";
   import { ImportService, type ClaudeAIChromeOutputBody, type ImporterImportStats as ImportStats } from "../../api/generated/index.js";
   import { Button, Card, Chip, CodeBlock, Modal, Notice, Spinner } from "@kenn-io/kit-ui";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -135,6 +136,7 @@
       if (!controller.signal.aborted) result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
+      reportSyncFailed(e);
       if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
         return;
       } else if (e instanceof ApiError && ["claude_ai_auth_required", "claude_ai_chrome_host_update_required"].includes(e.code ?? "")) {

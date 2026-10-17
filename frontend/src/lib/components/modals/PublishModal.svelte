@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy } from "svelte";
   import { Button, Modal, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
@@ -247,7 +248,7 @@
     </div>
 
   {:else if view === "error"}
-    <p class="modal-error-text">{errorMessage}</p>
+    <p class="modal-error-text" {@attach errorTelemetry("export")}>{errorMessage}</p>
   {/if}
 </Modal>
 

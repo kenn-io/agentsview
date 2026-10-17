@@ -3,7 +3,7 @@ import { SearchService } from "../api/generated/index.js";
 import { ApiError, isAbortError } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
-import { reportTelemetry } from "../utils/telemetry.js";
+import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
 export type SearchSort = "relevance" | "recency";
@@ -285,6 +285,7 @@ export class SearchStore {
 
       if (requestVersion !== this.requestVersion || signal.aborted) return;
       this.results = results;
+      if (results.length === 0) reportTelemetry("search_empty");
       this.error = null;
     } catch (error: unknown) {
       if (requestVersion !== this.requestVersion || signal.aborted || isAbortError(error)) {
@@ -293,6 +294,7 @@ export class SearchStore {
       this.results = [];
       const detail = errorDetail(error);
       this.error = { detail, kind: failureKind(mode, error, detail) };
+      reportErrorShown("search");
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;

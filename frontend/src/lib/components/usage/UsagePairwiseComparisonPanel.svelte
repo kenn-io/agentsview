@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -338,7 +339,7 @@
 
   {#if usage.errors.pairwise}
     <Card level="default" padding="none" class="error-bar">
-      <span>{usage.errors.pairwise}</span>
+      <span {@attach errorTelemetry("analytics")}>{usage.errors.pairwise}</span>
       <button
         class="retry-btn"
         onclick={() => usage.fetchAll({ preserveTimeRange: true })}

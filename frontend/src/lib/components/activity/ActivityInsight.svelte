@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { EmptyState, Spinner, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { InsightsService, type DbInsight } from "../../api/generated/index";
@@ -219,7 +220,7 @@
       <span>{m.activity_insight_generating_phase({ phase })}</span>
     </div>
   {:else if error}
-    <div class="state error">
+    <div class="state error" {@attach errorTelemetry("insight")}>
       <span>{error}</span>
       <div class="gen-row">
         {@render agentPicker()}

@@ -1636,24 +1636,37 @@ func TestHumaTriggerSyncWorkerBackedRejectsStaleArchive(t *testing.T) {
 	assert.True(t, f.db.NeedsResync(), "a rejected sync must not resync")
 }
 
-// TestHumaTriggerSyncWorkerRunnerErrorRejectsStream pins the failure UX: a
-// worker-backed runner that ran and reported failure must surface an SSE
-// "error" event (or an error status without SSE) instead of a "done" event
-// that makes the failed pass look successful.
-func TestHumaTriggerSyncWorkerRunnerErrorRejectsStream(t *testing.T) {
-	f := newSyncRouteFixture(t, withLocalSyncRunner(
-		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
-			return syncpkg.SyncStats{}, errors.New("sync worker pass reported failed")
-		},
-	))
-
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync", nil)
-
-	body := w.Body.String()
-	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "sync worker pass reported failed")
-	assert.NotContains(t, body, "event: done",
-		"a failed worker pass must not be reported as a completed sync")
+func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
+	for _, path := range []string{"/api/v1/sync", "/api/v1/resync"} {
+		for _, tc := range []struct {
+			name  string
+			stats syncpkg.SyncStats
+			err   error
+			code  string
+		}{
+			{"complete stats", syncpkg.SyncStats{}, errors.New("worker failed"), ""},
+			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil, ""},
+			{"busy", syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress, "sync_running"},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				runner := func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) { return tc.stats, tc.err }
+				f := newSyncRouteFixture(t, withLocalSyncRunner(runner), withLocalResyncRunner(runner))
+				body := serveJSON(t, f.handler, http.MethodPost, path, nil).Body.String()
+				assert.Contains(t, body, "event: error")
+				assert.NotContains(t, body, "event: done")
+				if tc.err == nil {
+					assert.Contains(t, body, "local sync processing incomplete")
+				} else {
+					assert.Contains(t, body, tc.err.Error())
+				}
+				if tc.code == "" {
+					assert.NotContains(t, body, `"code"`)
+				} else {
+					assert.Contains(t, body, `"code":"`+tc.code+`"`)
+				}
+			})
+		}
+	}
 }
 
 func TestHumaTriggerSyncRetryDecision(t *testing.T) {
@@ -1692,52 +1705,6 @@ func TestHumaTriggerSyncRetryDecision(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestHumaTriggerResyncWorkerRunnerErrorRejectsStream(t *testing.T) {
-	f := newSyncRouteFixture(t, withLocalResyncRunner(
-		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
-			return syncpkg.SyncStats{}, errors.New("resync build reported failed")
-		},
-	))
-
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil)
-
-	body := w.Body.String()
-	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "resync build reported failed")
-	assert.NotContains(t, body, "event: done",
-		"a failed worker resync must not be reported as a completed resync")
-}
-
-func TestForegroundSyncWorkerDeferredProcessingRejectsStream(t *testing.T) {
-	f := newSyncRouteFixture(t, withLocalSyncRunner(func(
-		context.Context, func(syncpkg.Progress),
-	) (syncpkg.SyncStats, error) {
-		return syncpkg.SyncStats{Deferred: 1}, nil
-	}))
-
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync", nil)
-
-	body := w.Body.String()
-	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "local sync processing incomplete")
-	assert.NotContains(t, body, "event: done")
-}
-
-func TestForegroundResyncWorkerDeferredProcessingRejectsStream(t *testing.T) {
-	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
-		context.Context, func(syncpkg.Progress),
-	) (syncpkg.SyncStats, error) {
-		return syncpkg.SyncStats{Deferred: 1}, nil
-	}))
-
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil)
-
-	body := w.Body.String()
-	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "local sync processing incomplete")
-	assert.NotContains(t, body, "event: done")
 }
 
 func TestForegroundSyncReleasesDeferredStartupMaintenance(t *testing.T) {

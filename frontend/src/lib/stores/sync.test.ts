@@ -1,9 +1,12 @@
+import { reportSyncFailed } from "../utils/telemetry.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
   UpdateCheckResponse as UpdateCheck,
 } from "../api/generated/index.js";
+
+vi.mock("../utils/telemetry.js", () => ({ reportSyncFailed: vi.fn() }));
 
 const api = vi.hoisted(() => ({
   triggerSync: vi.fn(),
@@ -32,7 +35,8 @@ vi.mock("../api/client.js", () => ({
   watchSession: api.watchSession,
 }));
 
-vi.mock("../api/runtime.js", () => ({
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   ApiError: api.ApiError,
 
   isRemoteConnection: api.isRemoteConnection,
@@ -393,8 +397,21 @@ describe("SyncStore.triggerResync", () => {
 
     await vi.waitFor(() => {
       expect(onError).toHaveBeenCalledWith(error);
+      expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(error);
     });
     expect(sync.syncing).toBe(false);
+  });
+
+  it.each([
+    new DOMException("Cancelled", "AbortError"),
+    Object.assign(new Error("Cancelled"), { name: "AbortError" }),
+  ])("ignores a cancelled resync: %s", async (error) => {
+    mockResyncFailure(error);
+    sync.triggerResync();
+    await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 
   it("resets syncing on non-Error rejection", async () => {
@@ -444,6 +461,30 @@ describe("SyncStore.triggerResync", () => {
     });
     expect(sync.syncing).toBe(false);
     expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+  });
+
+  it("does not report a sync failure when onComplete throws after success", async () => {
+    mockResyncSuccess();
+    api.getVersion.mockResolvedValue({
+      build_date: "",
+      commit: "abc123",
+      read_only: false,
+      version: "dev",
+    });
+    const error = new Error("completion callback failed");
+    const onComplete = vi.fn(() => {
+      throw error;
+    });
+    const onError = vi.fn();
+    sync.triggerResync(onComplete, onError);
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(sync.syncing).toBe(false);
+    expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+    expect(reportSyncFailed).not.toHaveBeenCalled();
   });
 
   it("rejects full resync for read-only backends", () => {

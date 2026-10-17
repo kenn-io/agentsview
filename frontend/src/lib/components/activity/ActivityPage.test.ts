@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { reportErrorShown } from "../../utils/telemetry.js";
+vi.mock("../../utils/telemetry.js", () => ({
+  reportErrorShown: vi.fn(),
+  reportTelemetry: vi.fn(),
+}));
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
@@ -110,6 +115,33 @@ async function selectFirstActivityRange() {
   await fireEvent.pointerDown(target, { button: 0 });
   await fireEvent.pointerUp(window);
 }
+
+it("reports the analytics kind for a displayed report failure", async () => {
+  const { ActivityService } = await import("../../api/generated/index.js");
+  vi.mocked(reportErrorShown).mockClear();
+  vi.spyOn(activity, "attach").mockReturnValue(() => {});
+  vi.spyOn(activity, "loadFilterOptions").mockResolvedValue(true);
+  vi.spyOn(ActivityService, "getApiV1ActivityReport").mockRejectedValueOnce(
+    new Error("Report failed"),
+  );
+  const previousPreset = activity.preset;
+  activity.report = null;
+  activity.preset = "day";
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await vi.waitFor(() =>
+      expect(document.querySelector(".status.error")?.textContent).toContain("Report failed"),
+    );
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
+  } finally {
+    await unmount(component);
+    activity.report = null;
+    activity.error = null;
+    activity.preset = previousPreset;
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  }
+});
 
 it("shows machine labels without full IDs crowding the menu and filters by ID", async () => {
   stubActivityPageCollaborators();

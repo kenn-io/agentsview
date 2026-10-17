@@ -24,13 +24,17 @@ func (s *Server) registerSyncRoutes() {
 	configureRouteGroup(group, "Sync")
 	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[remoteSyncResponse](), true, "")
 
-	s.stream(group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync)
-	s.stream(group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync)
+	s.stream(group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync, syncEventDescription)
+	s.stream(group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync, syncEventDescription)
 	s.get(group, "/sync/status", "Get sync status", s.humaSyncStatus)
 	s.stream(group, http.MethodPost, "/sync/remotes",
 		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponseSchema("RemoteSyncResponse"),
 	)
 	s.postLong(group, "/sessions/sync", "Sync a session", s.humaSyncSession)
+}
+
+func syncEventDescription(op *huma.Operation) {
+	op.Description = "Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code."
 }
 
 type syncStatusResponse struct {
@@ -58,6 +62,14 @@ type remoteSyncRequest struct {
 	Full         bool                `json:"full"`
 	IncludeLocal bool                `json:"include_local"`
 	Hosts        []config.RemoteHost `json:"hosts"`
+}
+
+func syncErrorPayload(err error) map[string]string {
+	payload := map[string]string{"error": err.Error()}
+	if errors.Is(err, syncpkg.ErrSyncInProgress) {
+		payload["code"] = "sync_running"
+	}
+	return payload
 }
 
 func requireProcessingComplete(stats syncpkg.SyncStats) error {
@@ -291,7 +303,7 @@ func (s *Server) humaTriggerSync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			stream.SendJSON("error", syncErrorPayload(err))
 			return
 		}
 		stream.SendJSON("done", stats)
@@ -419,7 +431,7 @@ func (s *Server) humaTriggerResync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			stream.SendJSON("error", syncErrorPayload(err))
 			return
 		}
 		stream.SendJSON("done", stats)

@@ -21,6 +21,9 @@ const (
 	EventVisitEnded       = "visit_ended"
 	EventScreenViewed     = "screen_viewed"
 	EventSearchRun        = "search_run"
+	EventSearchEmpty      = "search_empty"
+	EventErrorShown       = "error_shown"
+	EventSyncFailed       = "sync_failed"
 	EventSessionViewed    = "session_viewed"
 	EventExportRun        = "export_run"
 	EventInsightGenerated = "insight_generated"
@@ -155,6 +158,9 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 	return []kittelemetry.Option{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
+		kittelemetry.WithAllowedEvent(EventSearchEmpty),
+		kittelemetry.WithAllowedEvent(EventErrorShown, kittelemetry.RequireProperty("kind", outcomeValues("search", "session", "insight", "analytics", "export", "other"))),
+		kittelemetry.WithAllowedEvent(EventSyncFailed, kittelemetry.RequireProperty("reason", outcomeValues("request", "sign_in_required", "browser_extension", "already_running", "other"))),
 		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),
 			kittelemetry.AllowProperty("duration_bucket", kittelemetry.AllowStringValues("under_1m", "1_to_5m", "5_to_30m", "over_30m"))),
@@ -173,4 +179,14 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 func oneOf(event, property string, values ...string) kittelemetry.Option {
 	return kittelemetry.WithAllowedEvent(event,
 		kittelemetry.AllowProperty(property, kittelemetry.AllowStringValues(values...)))
+}
+
+func outcomeValues(values ...string) kittelemetry.PropertyFilter {
+	allowed := kittelemetry.AllowStringValues(values...)
+	return func(value any) (any, bool) {
+		if filtered, ok := allowed(value); ok {
+			return filtered, true
+		}
+		return "other", true
+	}
 }
