@@ -1388,7 +1388,7 @@ func errorThenRecoverableTryLock(t *testing.T, dir string) func(daemon.RuntimeSt
 	t.Helper()
 	calls := 0
 	return func(store daemon.RuntimeStore, ctx context.Context) (func(), bool, error) {
-		require.Equal(t, dir, store.Dir)
+		require.Equal(t, runtimeDir(dir), store.Dir)
 		calls++
 		if calls == 1 {
 			return nil, false, errors.New("simulated lock probe failure")
