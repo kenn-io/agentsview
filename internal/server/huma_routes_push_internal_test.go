@@ -681,7 +681,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 		func(bool) error { return pushFailure })
 	require.ErrorIs(t, err, pushFailure)
-	_, notStarted := errors.AsType[pushNotStartedError](err)
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
 	assert.False(t, notStarted, "an error from the push work may follow a started copy")
 }
 
@@ -796,7 +796,7 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local sync processing incomplete")
-	_, notStarted := errors.AsType[pushNotStartedError](err)
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
 	assert.True(t, notStarted, "a failed pre-push sync never started the push")
 }
 
@@ -1221,7 +1221,7 @@ func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
 			err     error
 			started bool
 		}{
-			{pushNotStartedError{errors.New("resync failed")}, false},
+			{storage.PushNotStartedError{Err: errors.New("resync failed")}, false},
 			{errors.New("copy failed"), true},
 		} {
 			t.Run(fmt.Sprintf("%s started=%t", accept, tt.started), func(t *testing.T) {
@@ -1241,5 +1241,88 @@ func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
 				assert.Equal(t, tt.started, body.PushStarted)
 			})
 		}
+	}
+}
+
+// stubReplica is a PostgreSQL replica whose pusher the test supplies.
+type stubReplica struct {
+	postgres.Backend
+	newPusher func() (storage.Pusher, error)
+}
+
+func (r stubReplica) NewPusher(
+	context.Context, storage.ReplicaTarget, *db.DB, storage.PusherOptions,
+) (storage.Pusher, error) {
+	return r.newPusher()
+}
+
+type failingPusher struct{ err error }
+
+func (failingPusher) EnsureSchema(context.Context) error { return nil }
+func (p failingPusher) PushWithOptions(
+	context.Context, storage.PushOptions, func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return storage.PushResult{}, p.err
+}
+func (failingPusher) Close() error { return nil }
+
+// The replica route reports whether the copy started: a failed connect
+// started nothing, and a failed copy may have recorded a full push the mirror
+// resumes.
+func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	for _, tt := range []struct {
+		name      string
+		newPusher func() (storage.Pusher, error)
+		started   bool
+	}{
+		{"connect failed", func() (storage.Pusher, error) {
+			return nil, errors.New("connection refused")
+		}, false},
+		{"copy failed", func() (storage.Pusher, error) {
+			return failingPusher{errors.New("conn reset")}, nil
+		}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stream, err := f.srv.humaReplicaPush(t.Context(),
+				stubReplica{newPusher: tt.newPusher},
+				&daemonPushInput{Body: daemonPushRequest{Replica: &daemonReplicaTarget{
+					URL: "postgres://127.0.0.1:5432/agentsview?sslmode=disable", MachineName: "test",
+				}}})
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
+			request.Header.Set("Accept", "text/event-stream")
+			stream.Body(humago.NewContext(&huma.Operation{}, request, recorder))
+
+			_, payload, found := strings.Cut(recorder.Body.String(), "event: error\ndata: ")
+			require.True(t, found, recorder.Body.String())
+			var body pushErrorResponse
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &body))
+			assert.Equal(t, tt.started, body.PushStarted)
+		})
+	}
+}
+
+// A push that rebuilt the archive and then failed to connect reports the push
+// as started. Every mirror pushes in full after a rebuild, and a client that
+// kept --full would make the daemon rebuild the archive on every retry.
+func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
+	var f *syncRouteFixture
+	f = newSyncRouteFixture(t, withLocalResyncRunner(func(
+		ctx context.Context, _ func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{}, f.db.SetDatabaseIDForTest(ctx, "rebuilt")
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	connectErr := storage.PushNotStartedError{Err: errors.New("connection refused")}
+
+	for _, full := range []bool{false, true} {
+		err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, full, nil, nil, nil,
+			func(bool) error { return connectErr })
+		require.ErrorIs(t, err, connectErr.Err)
+		assert.Equal(t, full, pushErrorBody(err.Error(), err).PushStarted,
+			"full=%t: only a push that rebuilt the archive counts as started", full)
 	}
 }

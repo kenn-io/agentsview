@@ -160,3 +160,11 @@ func (r *VectorPushResult) DeferSession(sessionID string) {
 // PushPhaseWaiting is the progress phase a daemon push reports while it
 // waits for another push to finish. The daemon runs one push at a time.
 const PushPhaseWaiting = "waiting"
+
+// PushNotStartedError marks a push error from before the push recorded a
+// full push it could resume. A watch keeps its --full request after one; any
+// other failed push resumes its recorded full push instead.
+type PushNotStartedError struct{ Err error }
+
+func (e PushNotStartedError) Error() string { return e.Err.Error() }
+func (e PushNotStartedError) Unwrap() error { return e.Err }

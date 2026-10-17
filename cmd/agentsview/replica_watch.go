@@ -60,7 +60,7 @@ func (p *replicaPusher) push(
 			}
 			// The replica records a full push only once the copy starts.
 			if stage != archivepush.StagePush {
-				err = pushNotStartedError{err}
+				err = storage.PushNotStartedError{Err: err}
 			}
 			return res, err
 		},

@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -123,6 +124,16 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		loop.enqueueUnscoped(reasonStartup, nil, false)
 		loop.runNextTask(ctx, false)
 		if ctx.Err() != nil {
+			// Stopping during the first push skips the final push, which would
+			// repeat the push just interrupted. A local owner still archives
+			// the changes the watcher had not handed over.
+			if w.engine != nil {
+				flushCtx, cancel := loop.flushContext()
+				defer cancel()
+				if err := lane.syncBeforeExit(flushCtx, ""); err != nil {
+					log.Printf("%s: %v", w.label, err)
+				}
+			}
 			return nil
 		}
 	}
@@ -173,13 +184,6 @@ type archiveSyncLane struct {
 	fullPending atomic.Bool
 }
 
-// pushNotStartedError marks a push that failed before it reached the
-// destination.
-type pushNotStartedError struct{ err error }
-
-func (e pushNotStartedError) Error() string { return e.err.Error() }
-func (e pushNotStartedError) Unwrap() error { return e.err }
-
 // markReady opens watcher dispatch the first time the archive catches up and
 // reports whether this call did so.
 func (l *archiveSyncLane) markReady() bool {
@@ -210,11 +214,8 @@ func (l *archiveSyncLane) push(
 		return nil
 	}
 	if l.engine != nil && reason == reasonShutdown {
-		// The watcher has stopped, so changes it had not dispatched yet
-		// reach the archive only through this sync.
-		l.engine.SyncAll(ctx, nil)
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("syncing before the final push: %w", err)
+		if err := l.syncBeforeExit(ctx, " before the final push"); err != nil {
+			return err
 		}
 	}
 	if l.engine != nil {
@@ -228,7 +229,7 @@ func (l *archiveSyncLane) push(
 	}
 	full := l.fullPending.Swap(false)
 	if err := push(ctx, reason, full, batch); err != nil {
-		if _, notStarted := errors.AsType[pushNotStartedError](err); full && notStarted {
+		if _, notStarted := errors.AsType[storage.PushNotStartedError](err); full && notStarted {
 			l.fullPending.Store(true)
 		}
 		return err
@@ -336,7 +337,7 @@ func (l *archiveSyncLane) syncStartup(ctx context.Context) bool {
 		}
 		l.startupFailures++
 		log.Printf("%s: startup sync failed: %v. Remote pushes stay paused. "+
-			"Retrying in %s.", l.label, err, l.retry)
+			"Next retry in %s.", l.label, err, l.retry)
 		return false
 	}
 	// Only a full push removes remote rows that a rebuild dropped locally.
@@ -374,4 +375,17 @@ func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	if stats.ChangedArchive() {
 		l.loop.NotifyDirty()
 	}
+}
+
+// syncBeforeExit runs the last local sync of a stopping watch. The watcher
+// has stopped, so changes it had not handed over reach the archive only
+// through this sync. what ends the progress line.
+func (l *archiveSyncLane) syncBeforeExit(ctx context.Context, what string) error {
+	log.Printf("%s: stopping. Syncing remaining changes%s.", l.label, what)
+	l.engine.SyncAll(ctx, nil)
+	if ctx.Err() != nil {
+		return errors.New("the final sync did not finish in time. The next " +
+			"run picks up changes made since the last sync")
+	}
+	return nil
 }

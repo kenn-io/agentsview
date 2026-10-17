@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // daemonPushOperation invokes one generated streaming daemon operation and
@@ -112,7 +113,7 @@ func postDaemonPush[T, P any](
 		}
 		resp, payload, stream, err := operation(ctx, api, &body)
 		if resp == nil {
-			return zero, pushNotStartedError{err}
+			return zero, storage.PushNotStartedError{Err: err}
 		}
 		if resp.StatusCode != http.StatusOK {
 			msg := payload
@@ -231,5 +232,5 @@ func daemonPushError(err error, body []byte, startedByDefault bool) error {
 	if started {
 		return err
 	}
-	return pushNotStartedError{err}
+	return storage.PushNotStartedError{Err: err}
 }

@@ -147,25 +147,20 @@ func runPushStream[T any](
 	writeHumaJSON(hctx, http.StatusOK, result)
 }
 
-// pushNotStartedError marks a push error from before the copy to the
-// destination started.
-type pushNotStartedError struct{ err error }
-
-func (e pushNotStartedError) Error() string { return e.err.Error() }
-func (e pushNotStartedError) Unwrap() error { return e.err }
-
 // pushErrorResponse is the error body of a push route.
 type pushErrorResponse struct {
 	Error string `json:"error"`
-	// PushStarted reports whether the copy to the destination started. A
-	// push that started records a full push the mirror resumes; one that
-	// did not leaves nothing to resume.
+	// PushStarted is false when the client should ask for --full again: the
+	// push failed before it recorded a full push the mirror could resume, and
+	// the request did not rebuild the archive, which makes every mirror push
+	// in full on its own.
 	PushStarted bool `json:"push_started"`
 }
 
 func pushErrorBody(message string, err error) pushErrorResponse {
-	_, notStarted := errors.AsType[pushNotStartedError](err)
-	return pushErrorResponse{Error: message, PushStarted: !notStarted}
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
+	_, rebuilt := errors.AsType[archiveRebuiltError](err)
+	return pushErrorResponse{Error: message, PushStarted: !notStarted || rebuilt}
 }
 
 // composePushProgress fans one progress report out to each non-nil callback.
@@ -526,7 +521,7 @@ func (p *pushTurn) take(ctx context.Context, onWait func()) (func(), error) {
 // while another push reads it. onWait, when set, is called if the push must
 // wait for its turn. Before the work it waits for any running sync and
 // flushes deferred signal recomputes, so the push copies settled sessions.
-// An error from before work runs is a pushNotStartedError.
+// An error from before work runs is a storage.PushNotStartedError.
 //
 // Full and stale-archive pushes are archive-scale: with the worker-backed
 // resync runner wired they route the rebuild through the worker (matching
@@ -547,19 +542,23 @@ func (s *Server) syncThenRunForPush(
 ) error {
 	endTurn, err := s.pushTurn.take(ctx, onWait)
 	if err != nil {
-		return pushNotStartedError{err}
+		return storage.PushNotStartedError{Err: err}
 	}
 	defer endTurn()
+	startDatabaseID, err := local.GetDatabaseID(ctx)
+	if err != nil {
+		return storage.PushNotStartedError{Err: err}
+	}
 	forceFull, incomplete, err := s.syncForPush(
 		ctx, engine, local, full, watchBatch, watchRecovery,
 	)
 	if err != nil {
-		return pushNotStartedError{err}
+		return markArchiveRebuilt(ctx, local, startDatabaseID, storage.PushNotStartedError{Err: err})
 	}
 	if err := engine.SettleForPush(ctx); err != nil {
-		return pushNotStartedError{err}
+		return markArchiveRebuilt(ctx, local, startDatabaseID, storage.PushNotStartedError{Err: err})
 	}
-	pushErr := work(forceFull)
+	pushErr := markArchiveRebuilt(ctx, local, startDatabaseID, work(forceFull))
 	if incomplete == nil {
 		return pushErr
 	}
@@ -568,6 +567,32 @@ func (s *Server) syncThenRunForPush(
 	}
 	log.Printf("local ingestion warning during archive push: %v", incomplete)
 	return nil
+}
+
+// archiveRebuiltError marks a push error from a request that rebuilt the
+// archive. Every mirror pushes in full after a rebuild, so the client need
+// not ask for --full again; asking would rebuild the archive on every retry.
+type archiveRebuiltError struct{ err error }
+
+func (e archiveRebuiltError) Error() string { return e.err.Error() }
+func (e archiveRebuiltError) Unwrap() error { return e.err }
+
+// markArchiveRebuilt marks err when the archive's database ID changed since
+// startDatabaseID, which a rebuild does.
+func markArchiveRebuilt(
+	ctx context.Context, local *db.DB, startDatabaseID string, err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	id, idErr := local.GetDatabaseID(context.WithoutCancel(ctx))
+	if idErr != nil {
+		return errors.Join(err, fmt.Errorf("reading archive database id: %w", idErr))
+	}
+	if id != startDatabaseID {
+		return archiveRebuiltError{err}
+	}
+	return err
 }
 
 // syncForPush runs the sync a push needs and reports whether the push must
@@ -720,7 +745,7 @@ func (s *Server) humaReplicaPush(
 					}, onProgress)
 					// The replica records a full push only once the copy starts.
 					if err != nil && stage != archivepush.StagePush {
-						return pushNotStartedError{err}
+						return storage.PushNotStartedError{Err: err}
 					}
 					return err
 				},

@@ -40,6 +40,10 @@ type Sync struct {
 	// snapshot syncUsagePrices loaded.
 	pricer *usagePricer
 
+	// fullRunRecorded reports that the current push recorded its full push
+	// run, so a later failure can resume it.
+	fullRunRecorded bool
+
 	// unownedPruned records that this Sync already removed this machine's
 	// mirror sessions without an archive id that the archive no longer
 	// holds. Pushes always record their archive, so no new ones appear.

@@ -6779,6 +6779,9 @@ func (db *DB) CountSessionsForMirrorScope(
 // ctx.Err() if ctx ends first.
 func (db *DB) MirrorPushCutoff(ctx context.Context) (string, error) {
 	for {
+		if err := db.WaitForWriter(ctx); err != nil {
+			return "", err
+		}
 		db.mu.Lock()
 		if !db.writerClosed.Load() {
 			cutoff := time.Now().UTC().Format(mirrorWindowBoundLayout)
@@ -6786,16 +6789,25 @@ func (db *DB) MirrorPushCutoff(ctx context.Context) (string, error) {
 			return cutoff, nil
 		}
 		db.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(writerHandoffPollInterval):
-		}
 	}
 }
 
-// writerHandoffPollInterval spaces MirrorPushCutoff's checks for the end of a
-// worker handoff. Handoffs last seconds to minutes.
+// WaitForWriter blocks while the writer is closed for a worker handoff. It
+// returns ctx.Err() if ctx ends first. A write can still fail if a new
+// handoff starts after it returns.
+func (db *DB) WaitForWriter(ctx context.Context) error {
+	for db.writerClosed.Load() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(writerHandoffPollInterval):
+		}
+	}
+	return nil
+}
+
+// writerHandoffPollInterval spaces checks for the end of a worker handoff.
+// Handoffs last seconds to minutes.
 const writerHandoffPollInterval = 50 * time.Millisecond
 
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it

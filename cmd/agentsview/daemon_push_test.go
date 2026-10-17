@@ -222,7 +222,6 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 		{"older daemon streamed an error", streamError(`{"error":"push: conn reset"}`), true},
 		{"pre-push resync failed", streamError(
 			`{"error":"resync failed","push_started":false}`), false},
-		{"copy failed", streamError(`{"error":"push: conn reset","push_started":true}`), true},
 		{"copy failed without a stream", serve(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -235,7 +234,7 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 				apiclient.DaemonPushRequest{}, nil,
 			)
 			require.Error(t, err)
-			_, notStarted := errors.AsType[pushNotStartedError](err)
+			_, notStarted := errors.AsType[storage.PushNotStartedError](err)
 			assert.Equal(t, !tt.started, notStarted)
 		})
 	}

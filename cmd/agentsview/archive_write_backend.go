@@ -558,7 +558,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		} else {
 			writer, cleanup, werr := pushWriter(pctx)
 			if werr != nil {
-				return pushNotStartedError{werr}
+				return storage.PushNotStartedError{Err: werr}
 			}
 			defer cleanup()
 			res, err = writer.DuckDBPush(
@@ -667,7 +667,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 				}
 				writer, cleanup, err := pushWriter(pctx)
 				if err != nil {
-					return storage.PushResult{}, pushNotStartedError{err}
+					return storage.PushResult{}, storage.PushNotStartedError{Err: err}
 				}
 				defer cleanup()
 				return writer.ReplicaPush(

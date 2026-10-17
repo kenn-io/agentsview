@@ -44,6 +44,19 @@ func newPushVersion() uint64 {
 func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions, onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
+	s.fullRunRecorded = false
+	result, err := s.pushWithOptions(ctx, opts, onProgress)
+	if err != nil && opts.Full && !s.fullRunRecorded {
+		// The push failed before it recorded the requested full push, so
+		// nothing can resume it.
+		err = storage.PushNotStartedError{Err: err}
+	}
+	return result, err
+}
+
+func (s *Sync) pushWithOptions(
+	ctx context.Context, opts storage.PushOptions, onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
 	start := time.Now()
 	var result storage.PushResult
 	if err := s.EnsureSchema(ctx); err != nil {
@@ -194,6 +207,7 @@ func (s *Sync) PushWithOptions(
 		if err := writeMetadata(ctx, conn, map[string]string{s.archiveKey(fullPushRunKeyBase): encoded}); err != nil {
 			return result, err
 		}
+		s.fullRunRecorded = true
 	}
 	if !full {
 		if err := s.applyDeletionDelta(ctx, storedDeletion, localDeletion, &result); err != nil {

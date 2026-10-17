@@ -519,7 +519,7 @@ func TestPgPusherErrorsNameTheFailedStep(t *testing.T) {
 	err := p.push(t.Context(), reasonChange, false)
 	require.ErrorIs(t, err, connectErr)
 	assert.Equal(t, "connect: connection refused", err.Error())
-	_, notStarted := errors.AsType[pushNotStartedError](err)
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
 	assert.True(t, notStarted, "a connect failure never reached the replica")
 
 	pushErr := errors.New("conn reset")
@@ -527,7 +527,7 @@ func TestPgPusherErrorsNameTheFailedStep(t *testing.T) {
 	err = p.push(t.Context(), reasonChange, false)
 	require.ErrorIs(t, err, pushErr)
 	assert.Equal(t, "push: conn reset", err.Error())
-	_, notStarted = errors.AsType[pushNotStartedError](err)
+	_, notStarted = errors.AsType[storage.PushNotStartedError](err)
 	assert.False(t, notStarted, "a copy failure may have started a full push")
 }
 

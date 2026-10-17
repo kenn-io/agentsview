@@ -451,6 +451,53 @@ func TestArchiveSyncLaneSyncsBeforeFinalPush(t *testing.T) {
 	assert.Equal(t, 1, archived, "the final push must see the pending session")
 }
 
+// Stopping a local watch during its first push skips the final push but
+// still archives changes the watcher had not handed over.
+func TestLocalPushWatchSyncsWhenStoppedDuringStartupPush(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	codexRoot := t.TempDir()
+	backend.appCfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {codexRoot}}
+	h := newPushWatchOwnerHarness()
+	hooks := h.hooks()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var pushes atomic.Int32
+	hooks.newDuckDBPusher = func(*syncpkg.Engine) *duckDBPusher {
+		return &duckDBPusher{mirrorPush: func(
+			pctx context.Context, _ bool,
+		) (storage.MirrorPushResult, error) {
+			if pushes.Add(1) > 1 {
+				assert.Fail(t, "stopping during the first push must not push again")
+				return storage.MirrorPushResult{}, nil
+			}
+			// A session changes while the first push runs, and the
+			// watcher has not handed it over when the watch stops.
+			uuid := "d4e5f6a7-4444-4555-8666-777788889999"
+			day := filepath.Join(codexRoot, "2026", "10", "17")
+			require.NoError(t, os.MkdirAll(day, 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(day, "rollout-2026-10-17T09-00-00-"+uuid+".jsonl"),
+				[]byte(testjsonl.NewSessionBuilder().
+					AddCodexMeta("2026-10-17T09:00:00Z", uuid, "/home/user/code/api", "codex_cli_rs").
+					AddCodexMessage("2026-10-17T09:00:01Z", "user", "hello").
+					String()),
+				0o644,
+			))
+			cancel()
+			<-pctx.Done()
+			return storage.MirrorPushResult{}, pctx.Err()
+		}}
+	}
+	backend.watchHooks = hooks
+
+	require.NoError(t, backend.DuckDBPushWatch(
+		ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour,
+	))
+	archived, err := backend.database.CountSessionsForMirrorScope(t.Context(), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, archived, "the stopped watch must archive the pending session")
+}
+
 // A push waits for an in-progress local sync, so it never copies a session
 // that the sync has only half written.
 func TestArchiveSyncLaneSettlesBeforePush(t *testing.T) {
@@ -518,7 +565,7 @@ func TestArchiveSyncLaneKeepsFullUntilAPushReachesTheDestination(t *testing.T) {
 	}
 	unreachable := errors.New("daemon unreachable")
 	copyFailed := errors.New("copy failed")
-	push(pushNotStartedError{unreachable}, copyFailed, copyFailed)
+	push(storage.PushNotStartedError{Err: unreachable}, copyFailed, copyFailed)
 	assert.Equal(t, []bool{true, true, false}, fullArgs)
 }
 
