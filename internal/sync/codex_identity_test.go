@@ -80,14 +80,14 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 
 func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 	for _, tc := range []struct {
-		name                                                             string
-		originalPresent, correctedMissing, trash, twoRows, sharedPinText bool
-		version                                                          int
+		name                                                                             string
+		originalPresent, correctedMissing, trash, twoRows, sharedPinText, compressedPath bool
+		version                                                                          int
 	}{
 		{name: "original_present", originalPresent: true, version: 135},
+		{name: "original_present_compressed_archive_path", originalPresent: true, compressedPath: true, version: 135},
 		{name: "original_absent", version: 135},
 		{name: "corrected_source_missing", originalPresent: true, correctedMissing: true, version: 135},
-		{name: "version_136", originalPresent: true, correctedMissing: true, version: 136},
 		{name: "both_missing", correctedMissing: true, version: 135},
 		{name: "two_rows_one_target", originalPresent: true, correctedMissing: true, twoRows: true, version: 135},
 		{name: "trash", originalPresent: true, trash: true, version: 135},
@@ -111,8 +111,12 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			if tc.sharedPinText {
 				archived = append(archived, "first question")
 			}
+			storedPath := pathB
+			if tc.compressedPath {
+				storedPath += ".zst"
+			}
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: legacyID, Agent: "codex", Project: "project-a", Machine: "local", FilePath: &pathB,
+				ID: legacyID, Agent: "codex", Project: "project-a", Machine: "local", FilePath: &storedPath,
 				DataVersion: tc.version, MessageCount: len(archived), UserMessageCount: 1,
 			}))
 			var messages []db.Message
@@ -123,7 +127,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 			stored, err := database.GetAllMessages(t.Context(), legacyID)
 			require.NoError(t, err)
 			require.Len(t, stored, len(archived))
-			if tc.correctedMissing {
+			if tc.correctedMissing || tc.originalPresent && !tc.trash {
 				_, err = database.PinMessage(t.Context(), legacyID, stored[len(stored)-1].ID, new("saved note"))
 				require.NoError(t, err)
 			}
@@ -180,7 +184,7 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 				assert.Nil(t, corrected.ParentSessionID)
 				assert.Nil(t, corrected.ParserParentSessionID)
 				assert.Empty(t, corrected.RelationshipType)
-				if tc.correctedMissing {
+				if tc.correctedMissing || tc.originalPresent {
 					pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
 					require.NoError(t, err)
 					require.Len(t, pins, 1)

@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 	for _, tc := range []struct{ name, prefix, agent string }{
 		{"full_push", "codex:", "codex"},
+		{"misfiled_thread", "codex:", "codex"},
 		{"head_first", "host~traex:", "traex"},
 		{"page_first", "augure-code:", "augure-code"},
 		{"page_only", "codex:", "codex"},
@@ -35,6 +37,11 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			const threadUUID = "11111111-1111-4111-8111-111111111111"
 			thread := tc.prefix + threadUUID
 			page := thread + "_22222222-2222-4222-8222-222222222222"
+			version := 130
+			if tc.name == "misfiled_thread" {
+				page = tc.prefix + "22222222-2222-4222-8222-222222222222"
+				version = 135
+			}
 			const schema = "agentsview_codex_page_pin_test"
 			ctx := t.Context()
 			pgURL := testPGURL(t)
@@ -43,6 +50,9 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+threadUUID+"_22222222-2222-4222-8222-222222222222.jsonl")
+			if tc.name == "misfiled_thread" {
+				pagePath = filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
+			}
 			headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
 			require.NoError(t, source.UpsertSession(ctx, db.Session{
 				ID: thread, Agent: tc.agent, Project: "sample", Machine: "machine",
@@ -51,7 +61,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NoError(t, source.InsertMessages(ctx, []db.Message{{
 				SessionID: thread, Role: "assistant", Content: "answer saved only on page", SourceUUID: "page-answer",
 			}}))
-			require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
+			require.NoError(t, source.SetSessionDataVersion(ctx, thread, version))
 			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -75,7 +85,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NoError(t, source.Close())
 			raw, err := sql.Open("sqlite3", sourcePath)
 			require.NoError(t, err)
-			_, err = raw.ExecContext(ctx, "PRAGMA user_version = 130")
+			_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version))
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 

@@ -1473,22 +1473,20 @@ func (d *DB) CopySessionMetadataFrom(
 	// match means the pinned message is gone: the pin is dropped rather
 	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
-		// Pins already copied with a rescued transcript must stay with that copy,
-		// even when the fresh thread contains an identical message.
+		// Reuse the rescue's filename mapping for both retained and reparsed
+		// transcripts. Verify the destination still holds the old source file.
 		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE _codex_pin_metadata AS
 			SELECT source_id, target_id FROM _codex_page_metadata
 			UNION ALL
-			SELECT source_id, target_id FROM (
-				SELECT mapped.source_id, mapped.target_id,
-					ROW_NUMBER() OVER (PARTITION BY mapped.target_id
-						ORDER BY old_s.message_count DESC, mapped.source_id) AS rank
-				FROM _codex_session_ids mapped
-				JOIN old_db.sessions old_s ON old_s.id = mapped.source_id
-				JOIN main.sessions rescued ON rescued.id = mapped.target_id AND rescued.file_path = old_s.file_path
-				JOIN main.sessions live ON live.id = mapped.source_id AND live.file_path != old_s.file_path
-				WHERE mapped.is_page = 0 AND rescued.data_version < ? AND ? < ?
-			) WHERE rank = 1`, codexThreadIdentityDataVersion, sourceVersion, codexThreadIdentityDataVersion); err != nil {
-			return fmt.Errorf("mapping rescued Codex pins: %w", err)
+			SELECT mapped.source_id, mapped.target_id
+			FROM _codex_session_ids mapped
+			JOIN old_db.sessions old_s ON old_s.id = mapped.source_id
+			JOIN main.sessions target ON target.id = mapped.target_id
+				AND (target.file_path = old_s.file_path
+					OR target.file_path = old_s.file_path || '.zst'
+					OR target.file_path || '.zst' = old_s.file_path)
+			WHERE mapped.is_page = 0 AND ? < ?`, sourceVersion, codexThreadIdentityDataVersion); err != nil {
+			return fmt.Errorf("mapping corrected Codex pins: %w", err)
 		}
 		defer func() { _, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS _codex_pin_metadata") }()
 		hasSourceUUID := oldDBHasColumn(
