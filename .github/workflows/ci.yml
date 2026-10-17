@@ -20,8 +20,13 @@ concurrency:
 permissions:
   contents: read
 
+# Every job needs a Namespace runner profile, which exists only in the
+# upstream repository, so the fork skips them instead of leaving them queued.
+# Fork Checks (fork-checks.yml) runs the main checks on GitHub-hosted runners
+# there. See docs/fork/upstream-merge.md for when to remove the guards.
 jobs:
   lint:
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-4cpu
     timeout-minutes: 10
     strategy:
@@ -79,6 +84,7 @@ jobs:
         run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
 
   frontend:
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -134,6 +140,7 @@ jobs:
         working-directory: frontend
 
   frontend-node-26:
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -160,6 +167,7 @@ jobs:
 
   docs:
     name: Docs and scripts
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -194,6 +202,7 @@ jobs:
 
   test:
     name: Go Test (${{ matrix.os }})
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -331,6 +340,7 @@ jobs:
   # Share setup for the shorter SQLite suites; keep Sync on its own runner.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-windows-4cpu
     strategy:
       fail-fast: false
@@ -514,6 +524,7 @@ jobs:
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
     name: Go Test (windows-latest, DuckDB)
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-windows-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -560,6 +571,7 @@ jobs:
 
   test-race:
     name: Go Test (race detector)
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -597,6 +609,7 @@ jobs:
 
   desktop-windows-unit:
     name: Desktop Unit Tests (Windows)
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-windows-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -637,6 +650,7 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-4cpu
     services:
       postgres:
@@ -700,6 +714,7 @@ jobs:
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

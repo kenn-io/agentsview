@@ -30,9 +30,14 @@ concurrency:
 permissions:
   contents: read
 
+# Every job needs a Namespace runner profile, which exists only in the
+# upstream repository, so the fork skips them instead of leaving them queued.
+# Fork Checks (fork-checks.yml) runs the main checks on GitHub-hosted runners
+# there. See docs/fork/upstream-merge.md for when to remove the guards.
 jobs:
   test-cjk-fts:
     name: Go Test (CJK FTS sidecar)
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: namespace-profile-linux-8cpu
     timeout-minutes: 25
     steps:
