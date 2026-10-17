@@ -243,11 +243,22 @@ describe("UsagePage refresh behavior", () => {
     summary.resolve({
       ...usageSummaryWithUnsupported(),
       model_aliases: { "claude-opus-4-20250514": "claude-4", "claude-sonnet-4": "claude-4" },
-      modelTotals: [{ model: "claude-4", inputTokens: 10, outputTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(1) }],
+      modelTotals: [
+        {
+          model: "claude-4",
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: testMoney(1),
+        },
+      ],
     });
     await vi.waitFor(() => expect(usage.summary?.model_aliases).toBeDefined());
     await flushEffects();
-    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Model: 1 hidden"]');
+    const trigger = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Model: 1 hidden"]',
+    );
     expect(trigger).not.toBeNull();
     trigger!.click();
     await flushEffects();

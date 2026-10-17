@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { excludedModelGroups, groupedModelCsv, modelPickerItems, toggleGroupedModel } from "./model-groups.js";
+import { describe, expect, it } from "vite-plus/test";
+import {
+  excludedModelGroups,
+  groupedModelCsv,
+  modelPickerItems,
+  toggleGroupedModel,
+} from "./model-groups.js";
 
 const aliases = { a: "group", b: "group" };
 
@@ -30,7 +35,9 @@ describe("grouped model filters", () => {
   it.each([
     ["a", "", 1],
     [" a, , other ", "other", 1],
-    ["a,b,other", "group,other", 0],
+    ["a,b,other", "other", 2],
+    // A raw model named "group" remains visible when every alias is excluded.
+    ["a,b", "", 2],
     ["a,group", "group", 0],
     ["unknown", "unknown", 0],
     ["", "", 0],

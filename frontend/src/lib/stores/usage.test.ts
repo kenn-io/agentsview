@@ -572,7 +572,8 @@ describe("UsageStore session filter params", () => {
     });
     await usage.fetchSummary();
     expect(usage.excludedModels).toBe("claude-opus-4-20250514");
-    expect(usage.displayedModels).toBe("claude-4");
+    expect(usage.displayedModels).toBe("");
+    expect(usage.partlyExcludedModelCount).toBe(1);
     usage.toggleModel("claude-4");
     expect(usage.excludedModels).toBe("");
   });
