@@ -32,6 +32,8 @@ The latest release is
   details. Existing installs with sessions send it once on their first start
   after upgrading.
 
+- Open session lists now refresh after imports, uploads, and restores.
+
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
   evidence. Versions 3 and 4 retain their existing behavior.

@@ -58,7 +58,7 @@ func runSetupTelemetry(ctx context.Context, interval time.Duration, cfg config.C
 			case <-ctx.Done():
 				return
 			case event := <-events:
-				if event.Scope == "sessions" {
+				if event.Scope == "sessions" || event.Scope == "sync" {
 					break wait
 				}
 			case <-ticker.C:

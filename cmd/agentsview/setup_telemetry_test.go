@@ -60,15 +60,14 @@ func TestSetupTelemetryImportAndRetry(t *testing.T) {
 		broadcaster.Emit("all")
 		synctest.Wait()
 		assert.Zero(t, sends.Load())
-		// Seed a readable session as an upload does before publishing its event.
+		// A foreground sync commits visible sessions before its completion event.
 		dbtest.SeedSessionWithMessages(t, database, "imported", "project-a", []db.Message{
 			{SessionID: "imported", Ordinal: 0, Role: "user", Content: "hello"},
 		})
 		importedAt := time.Now()
 		broadcaster.Emit("sync")
 		synctest.Wait()
-		assert.Zero(t, sends.Load(), "unrelated broadcasts leave the observer waiting")
-		broadcaster.Emit("sessions")
+		assert.EqualValues(t, 1, sends.Load(), "foreground sync captures setup promptly")
 		first := <-attempts
 		second := <-attempts
 		<-done
