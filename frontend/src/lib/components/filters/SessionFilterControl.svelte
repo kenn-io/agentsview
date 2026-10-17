@@ -366,8 +366,8 @@
       <div class="filter-section">
         <div class="filter-section-label">{m.sidebar_filters_machine()}</div>
         {#if sessions.machineFilterUpdateFailed}
-          <p role="alert">{m.sidebar_filters_machine_update_failed()}</p>
-          <button onclick={() => sessions.retryMachineFilter()}>{m.shared_retry()}</button>
+          <p class="agent-select-empty" role="alert">{m.sidebar_filters_machine_update_failed()}</p>
+          <button class="filter-toggle" onclick={() => sessions.retryMachineFilter()}>{m.shared_retry()}</button>
         {/if}
         {#if sessions.machineFilterError}<p role="alert">{sessions.machineFilterError}</p>{/if}
         {#if sessions.machineFilterPending}<p role="status">{m.subagent_inline_loading()}</p>{/if}

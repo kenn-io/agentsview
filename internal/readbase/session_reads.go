@@ -129,5 +129,9 @@ func (s Sessions) SecretFindingSource(
 }
 
 func (s Sessions) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
-	return db.MatchingMachineIDs(ctx, s.backend, s.backend.Dialect(), candidates)
+	ids, err := db.MatchingMachineIDs(ctx, s.backend, s.backend.Dialect(), candidates)
+	if err != nil {
+		return nil, s.backend.ReadError(ReadMachineMetadata, err)
+	}
+	return ids, nil
 }

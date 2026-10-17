@@ -2233,6 +2233,23 @@ describe("SessionsStore", () => {
       expect(sessions.selectedMachines).toEqual([]);
       expectSidebarIndexCalledWith({ machine: undefined });
     });
+
+    it("allows cached machine choices after an unfiltered catalog load fails", async () => {
+      await sessions.loadMachines();
+      api.getProjects.mockResolvedValue({ projects: [] });
+      api.getAgents.mockResolvedValue({ agents: [] });
+      api.getMachines.mockRejectedValue(new ApiError(500, "internal error"));
+      sessions.invalidateFilterCaches();
+      await sessions.loadMachines();
+
+      expect(sessions.machineFilterUpdateFailed).toBe(true);
+      expect(sessions.machines).toEqual(["host-a", "host-b"]);
+      sessions.toggleMachineFilter("host-b");
+
+      expect(sessions.selectedMachines).toEqual(["host-b"]);
+      expect(sessions.isMachineSelected("host-b")).toBe(true);
+      expectSidebarIndexCalledWith({ machine: "host-b" });
+    });
   });
 
   describe("label and pull request filters", () => {

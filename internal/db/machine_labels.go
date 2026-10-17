@@ -150,13 +150,9 @@ func knownMachineIDs(labels, aliases map[string]string) map[string]bool {
 	return known
 }
 
-// keepMachineList reports whether parts resolve as IDs. A list with an exact
-// installation ID keeps unknown legacy members, as the old filter did.
+// keepMachineList reports whether every part resolves as an ID.
 func keepMachineList(parts []string, known map[string]bool) bool {
 	isID := func(id string) bool { return config.ValidateInstallationID(id) == nil }
-	if len(parts) > 1 && slices.ContainsFunc(parts, isID) {
-		return true
-	}
 	return len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && !isID(id) })
 }
 

@@ -52,6 +52,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		MachineAliasKeyPrefix + "old-owner":       "id-a",
 		MachineAliasKeyPrefix + "empty-alias":     "empty-target",
 		MachineLabelKeyPrefix + "id-alias-list":   "old-owner,id-b",
+		MachineLabelKeyPrefix + "hex-comma-owner": id + ", Workstation",
 		MachineLabelKeyPrefix + "id-shadow":       "id-a",
 		MachineLabelKeyPrefix + "id-alias":        "old-owner",
 		MachineLabelKeyPrefix + "old-owner":       "A",
@@ -71,7 +72,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		// An installation ID without stored sessions stays an exact selector.
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", d},
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", d},
-		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", d},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,legacy-host", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,legacy-host", d},
 		{" Padded workstation ", "padded-owner", d},
 		{"", "", d},
 		{" \t ", "", d},
@@ -83,6 +84,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		{"legacy-host", "legacy-host", d},
 		{" id-a, id-b ,old-owner ", "id-a,id-b,id-a", d},
 		{"A,B", "id-comma", d},
+		{id + ", Workstation", "hex-comma-owner", d},
 		{"old-owner,id-b", "id-a,id-b", d},
 		{"local", "local", localArchive},
 	} {
@@ -114,10 +116,12 @@ func TestResolveMachineFilter(t *testing.T) {
 		}
 	})
 	t.Run("unknown list members", func(t *testing.T) {
-		for _, input := range []string{"id-a,id-gone", "old-owner,id-gone", "id-gone,missing", ", ,"} {
+		for _, input := range []string{"id-a,id-gone", "old-owner,id-gone", "id-gone,missing", id + ",missing", ", ,"} {
 			_, err := ResolveMachineFilter(ctx, d, input)
 			var filterError *MachineFilterError
 			require.ErrorAs(t, err, &filterError)
+			assert.Empty(t, filterError.Candidates)
+			assert.Contains(t, err.Error(), "unknown machine")
 			assert.Contains(t, err.Error(), "comma-separated filters take machine IDs or aliases")
 			assert.Contains(t, filterError.Known, "id-a")
 		}

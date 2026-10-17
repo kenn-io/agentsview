@@ -243,7 +243,7 @@ class AnalyticsStore {
     this.selectedDow = null;
     this.selectedHour = null;
     sessions.filters.project = "";
-    sessions.filters.machine = "";
+    sessions.setSelectedMachines([]);
     sessions.filters.agent = "";
     sessions.filters.termination = "";
     sessions.filters.minUserMessages = 0;
@@ -365,16 +365,16 @@ class AnalyticsStore {
 
   clearMachine() {
     this.machine = "";
-    sessions.filters.machine = "";
+    sessions.setSelectedMachines([]);
     sessions.activeSessionId = null;
     void sessions.load();
     void this.fetchAll();
   }
 
   removeMachine(machine: string) {
-    const current = sessions.selectedMachines;
-    this.machine = current.filter((m) => m !== machine).join(",");
-    sessions.filters.machine = this.machine;
+    const remaining = sessions.selectedMachines.filter((m) => m !== machine);
+    sessions.setSelectedMachines(remaining);
+    this.machine = sessions.filters.machine;
     sessions.activeSessionId = null;
     void sessions.load();
     void this.fetchAll();

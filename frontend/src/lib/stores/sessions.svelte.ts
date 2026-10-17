@@ -959,9 +959,10 @@ class SessionsStore {
   }
   get machineRowsDisabled(): boolean {
     return (
-      this.machineFilterPending ||
-      this.machineFilterUpdateFailed ||
-      (!!this.filters.machine && this.machineResolution?.selector !== this.filters.machine)
+      !!this.filters.machine &&
+      (this.machineFilterPending ||
+        this.machineFilterUpdateFailed ||
+        this.machineResolution?.selector !== this.filters.machine)
     );
   }
 
@@ -1244,6 +1245,12 @@ class SessionsStore {
     void this.load();
   }
 
+  setSelectedMachines(machines: string[]) {
+    this.resetMachineResolution();
+    this.filters.machine = machines.join(",");
+    this.machineResolution = { selector: this.filters.machine, status: "resolved" };
+  }
+
   toggleMachineFilter(machine: string) {
     if (this.machineRowsDisabled) return;
     const current =
@@ -1253,9 +1260,7 @@ class SessionsStore {
     const idx = current.indexOf(machine);
     if (idx >= 0) current.splice(idx, 1);
     else current.push(machine);
-    this.resetMachineResolution();
-    this.filters.machine = current.join(",");
-    this.machineResolution = { selector: this.filters.machine, status: "resolved" };
+    this.setSelectedMachines(current);
     this.setActiveSession(null);
     void this.load();
   }

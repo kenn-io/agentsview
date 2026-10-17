@@ -69,16 +69,21 @@ type activityReportBuildInputs struct {
 func (s *Server) humaActivityReport(
 	ctx context.Context, in *activityReportInput,
 ) (*huma.StreamResponse, error) {
-	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	input := activitySelectionInput{
+		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
+		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
+		GitBranch: in.GitBranch, Agent: in.Agent, Machine: in.Machine,
+		Automation: in.Automation,
+	}
+	if err := validateActivitySelectionSize(input); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	machine, err := db.ResolveMachineFilter(ctx, s.db, input.Machine)
 	if err != nil {
 		return nil, serverError(err)
 	}
-	selection, err := resolveActivitySelection(activitySelectionInput{
-		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
-		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
-		GitBranch: in.GitBranch, Agent: in.Agent, Machine: machine,
-		Automation: in.Automation,
-	}, time.Now())
+	input.Machine = machine
+	selection, err := resolveActivitySelection(input, time.Now())
 	if err != nil {
 		return nil, err
 	}
