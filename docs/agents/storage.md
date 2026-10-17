@@ -181,15 +181,12 @@ pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
 name kept with each deletion when the file is gone. Session and recall imports
 use the same exclusion check.
 
-Data version 137 restores misfiled Codex conversations to separate threads when
-their source files are available or their archived transcripts can be placed.
-Pins and notes follow matching messages, including PostgreSQL-only pins on the
-next push. Permanent deletions also hide the thread named by the deleted file
-unless the old archive already holds that thread.
-
-A returning source can replace a retained transcript. Names and stars stay on
-their existing IDs. A permanent deletion or trash on a misfiled row hides both
-threads.
+Data version 137 separates misfiled Codex threads and retains transcripts whose
+files are gone. Pins, Recall entries, and export message IDs follow the corrected
+transcript, including moved source files. For live sessions, names and stars
+stay on a surviving original thread; when it is absent, they follow the
+corrected transcript. Trash and permanent deletions continue to hide the
+affected threads. PostgreSQL pins move on the next push.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of

@@ -148,3 +148,152 @@ func TestCodexPageUpgradeRetainsReparsedConversationIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
+	const original = "codex:11111111-1111-7111-8111-111111111111"
+	const corrected = "codex:22222222-2222-7222-8222-222222222222"
+	for _, tc := range []struct {
+		name                                                                     string
+		moved, missing, originalAbsent, trash, deleted, headerOwnsID, compressed bool
+	}{
+		{name: "both_present"},
+		{name: "relocated", moved: true},
+		{name: "missing", missing: true},
+		{name: "original_absent", originalAbsent: true},
+		{name: "both_missing", originalAbsent: true, missing: true},
+		{name: "trash", trash: true},
+		{name: "permanent_deletion", deleted: true},
+		{name: "header_owns_id", headerOwnsID: true},
+		{name: "header_owns_id_compressed", headerOwnsID: true, compressed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			src := testDB(t)
+			seedRecallEvidenceWindow(t, src, original, 0, "saved", "")
+			path := filepath.Join(t.TempDir(), "rollout-2025-10-20T12-09-52-"+corrected[len("codex:"):]+".jsonl")
+			_, err := src.getWriter().Exec(ctx, `UPDATE sessions SET agent='codex', file_path=?, data_version=135 WHERE id=?`, path, original)
+			require.NoError(t, err)
+			selection := insertVerifiedRecallSelection(t, src, "saved-fact", original, 0, 1, []string{"tool-a"})
+			messages, err := src.GetAllMessages(ctx, original)
+			require.NoError(t, err)
+			pinID, err := src.PinMessage(ctx, original, messages[0].ID, new("saved note"))
+			require.NoError(t, err)
+			require.Positive(t, pinID)
+			require.NoError(t, src.RenameSession(ctx, original, new("saved name")))
+			_, err = src.StarSession(ctx, original)
+			require.NoError(t, err)
+			before, err := src.ExportConversationChanges(ctx, ConversationExportOptions{})
+			require.NoError(t, err)
+			require.NotEmpty(t, before.Changes)
+			if tc.trash {
+				require.NoError(t, src.SoftDeleteSession(ctx, original))
+			}
+			if tc.deleted {
+				require.NoError(t, src.DeleteSession(ctx, original))
+			}
+			_, err = src.getWriter().Exec(ctx, "PRAGMA user_version=135")
+			require.NoError(t, err)
+
+			dst := testDB(t)
+			require.NoError(t, dst.CopyArchiveIdentityFrom(src.Path()))
+			require.NoError(t, dst.CopyExcludedSessionsFrom(src.Path()))
+			_, err = dst.CopyTrashedDataFrom(src.Path())
+			require.NoError(t, err)
+			// Model the fresh parse after exclusions and trash have been copied.
+			if !tc.deleted && !tc.headerOwnsID && !tc.originalAbsent {
+				seedRecallEvidenceWindow(t, dst, original, 0, "head", "changed")
+				_, err = dst.getWriter().Exec(ctx, `UPDATE sessions SET agent='codex', file_path=? WHERE id=?`, filepath.Join(filepath.Dir(path), "rollout-2025-10-20T12-00-00-"+original[len("codex:"):]+".jsonl"), original)
+				require.NoError(t, err)
+			}
+			if !tc.missing && !tc.trash && !tc.deleted {
+				target := corrected
+				if tc.headerOwnsID {
+					target = original
+				}
+				parsedPath := path
+				if tc.moved {
+					parsedPath = filepath.Join(t.TempDir(), filepath.Base(path))
+				}
+				if tc.compressed {
+					parsedPath += ".zst"
+				}
+				insertSession(t, dst, target, "agentsview", func(s *Session) {
+					s.Agent = "codex"
+					s.FilePath = &parsedPath
+				})
+				for i := range messages {
+					messages[i].SessionID = target
+				}
+				insertMessages(t, dst, messages...)
+			}
+			_, err = dst.CopyOrphanedDataFrom(src.Path())
+			require.NoError(t, err)
+			require.NoError(t, dst.CopyRecallEntriesFrom(src.Path()))
+			require.NoError(t, dst.CopySessionMetadataFrom(src.Path()))
+			if tc.deleted {
+				assert.True(t, dst.IsSessionExcluded(ctx, corrected))
+				got, err := dst.GetSession(ctx, corrected)
+				require.NoError(t, err)
+				assert.Nil(t, got)
+				return
+			}
+			wantID := corrected
+			if tc.headerOwnsID {
+				wantID = original
+				duplicate, err := dst.GetSession(ctx, corrected)
+				require.NoError(t, err)
+				assert.Nil(t, duplicate)
+			}
+			got, err := dst.GetSessionFull(ctx, wantID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Nil(t, got.ParentSessionID)
+			assert.Nil(t, got.ParserParentSessionID)
+			assert.Empty(t, got.RelationshipType)
+			assert.Equal(t, tc.trash, dst.IsSessionTrashed(ctx, wantID))
+			pins, err := dst.ListPinnedMessages(ctx, wantID, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, wantID, pins[0].SessionID)
+			assert.Equal(t, new("saved note"), pins[0].Note)
+			recall, err := dst.GetRecallEntry(ctx, "saved-fact")
+			require.NoError(t, err)
+			require.NotNil(t, recall)
+			assert.Equal(t, wantID, recall.SourceSessionID)
+			require.Len(t, recall.Evidence, 1)
+			assert.Equal(t, wantID, recall.Evidence[0].SessionID)
+			assert.Equal(t, selection.ContentDigest, recall.Evidence[0].ContentDigest)
+			assert.True(t, recall.ProvenanceOK)
+			after, err := dst.ExportConversationChanges(ctx, ConversationExportOptions{})
+			require.NoError(t, err)
+			byID := make(map[string]ConversationChange)
+			for _, change := range after.Changes {
+				byID[change.MessageID] = change
+			}
+			for _, old := range before.Changes {
+				if old.MessageID == "" {
+					continue
+				}
+				change, found := byID[old.MessageID]
+				assert.True(t, found, "export message ID must survive")
+				assert.Equal(t, wantID, change.SessionID)
+			}
+			if tc.trash {
+				return
+			}
+
+			nameOwner := wantID
+			if !tc.originalAbsent && !tc.headerOwnsID {
+				nameOwner = original
+				assert.Nil(t, got.DisplayName)
+			}
+			owner, err := dst.GetSessionFull(ctx, nameOwner)
+			require.NoError(t, err)
+			require.NotNil(t, owner)
+			assert.Equal(t, new("saved name"), owner.DisplayName)
+			stars, err := dst.ListStarredSessionIDs(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{nameOwner}, stars)
+		})
+	}
+}

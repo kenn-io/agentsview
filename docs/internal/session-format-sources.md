@@ -591,10 +591,9 @@ fixtures retain this field; missing identities remain source-local.
   metadata can still update the working directory and branch; existing fork
   replay filtering and revert-page identities remain in effect. Data version
   137 uses the preservation rebuild because session identities change.
-  A missing transcript moves to its filename thread ID only when a different
-  file now owns its old ID and the target is free; competing copies retain the
-  longest transcript. Permanent deletions also exclude the filename thread ID
-  unless the old archive already holds that thread.
+  Saved transcript metadata follows the corrected thread, including when its
+  source moved or is absent. For live sessions, names and stars stay on a
+  surviving original thread; otherwise they follow the corrected transcript.
   Synthetic parser and SQLite sync regressions cover conflicting headers,
   either sync order, appended metadata, and repair of a misfiled session while
   retaining sessions whose sources are absent. This establishes a producer

@@ -189,7 +189,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
-	if sourceVersion < codexLegacyPageHeaderDataVersion {
+	if sourceVersion < codexThreadIdentityDataVersion {
 		// A parsed head can occupy the old page's ID. Keep the mapping even
 		// when the page was reparsed; export reconciliation needs it too.
 		// Index the remaining orphan IDs before checking them once per page.
@@ -206,29 +206,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			  AND NOT EXISTS (SELECT 1 FROM main.excluded_sessions WHERE id IN (mapped.target_id, mapped.source_id))
 			  AND NOT EXISTS (SELECT 1 FROM _extra_excluded_orphan_ids WHERE id IN (mapped.target_id, mapped.source_id))`); err != nil {
 			return nil, fmt.Errorf("preserving archived Codex pages: %w", err)
-		}
-	}
-
-	if sourceVersion < codexThreadIdentityDataVersion {
-		// Rescue a missing transcript only when another file now owns its old ID.
-		// Moved copies can name the same target; retain the longest transcript.
-		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO _orphaned_ids (id, source_id)
-			SELECT target_id, source_id FROM (
-				SELECT mapped.target_id, mapped.source_id,
-					ROW_NUMBER() OVER (PARTITION BY mapped.target_id
-						ORDER BY old_s.message_count DESC, mapped.source_id) AS rank
-				FROM _codex_session_ids mapped
-				JOIN old_db.sessions old_s ON old_s.id = mapped.source_id
-				JOIN main.sessions live ON live.id = mapped.source_id
-				WHERE mapped.is_page = 0 AND live.deleted_at IS NULL
-				  AND live.file_path != old_s.file_path
-				  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.target_id)
-				  AND NOT EXISTS (SELECT 1 FROM _orphaned_ids WHERE id = mapped.target_id)
-				  AND NOT EXISTS (SELECT 1 FROM main.excluded_sessions WHERE id IN (mapped.target_id, mapped.source_id))
-				  AND NOT EXISTS (SELECT 1 FROM _extra_excluded_orphan_ids WHERE id IN (mapped.target_id, mapped.source_id))
-			) WHERE rank = 1`); err != nil {
-			return nil, fmt.Errorf("preserving misfiled Codex threads: %w", err)
 		}
 	}
 
@@ -1269,7 +1246,7 @@ func (d *DB) CopySessionMetadataFrom(
 	}()
 
 	// All copied state must resolve old thread rows to the same page.
-	sourceVersion, err := prepareCodexSessionIDMap(ctx, conn, true)
+	sourceVersion, err := prepareCodexSessionIDMap(ctx, conn, false)
 	if err != nil {
 		return err
 	}
@@ -1473,22 +1450,6 @@ func (d *DB) CopySessionMetadataFrom(
 	// match means the pinned message is gone: the pin is dropped rather
 	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
-		// Reuse the rescue's filename mapping for both retained and reparsed
-		// transcripts. Verify the destination still holds the old source file.
-		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE _codex_pin_metadata AS
-			SELECT source_id, target_id FROM _codex_page_metadata
-			UNION ALL
-			SELECT mapped.source_id, mapped.target_id
-			FROM _codex_session_ids mapped
-			JOIN old_db.sessions old_s ON old_s.id = mapped.source_id
-			JOIN main.sessions target ON target.id = mapped.target_id
-				AND (target.file_path = old_s.file_path
-					OR target.file_path = old_s.file_path || '.zst'
-					OR target.file_path || '.zst' = old_s.file_path)
-			WHERE mapped.is_page = 0 AND ? < ?`, sourceVersion, codexThreadIdentityDataVersion); err != nil {
-			return fmt.Errorf("mapping corrected Codex pins: %w", err)
-		}
-		defer func() { _, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS _codex_pin_metadata") }()
 		hasSourceUUID := oldDBHasColumn(
 			ctx, tx, "messages", "source_uuid",
 		)
@@ -1505,7 +1466,7 @@ func (d *DB) CopySessionMetadataFrom(
 				FROM old_db.pinned_messages op
 				CROSS JOIN old_db.messages old_m
 					ON old_m.id = op.message_id
-				LEFT JOIN _codex_pin_metadata mapped
+				LEFT JOIN _codex_page_metadata mapped
 					ON mapped.source_id = old_m.session_id
 				JOIN main.messages new_m
 					ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
@@ -1546,7 +1507,7 @@ func (d *DB) CopySessionMetadataFrom(
 				FROM old_db.pinned_messages op
 				JOIN old_db.messages old_m
 					ON old_m.id = op.message_id
-				LEFT JOIN _codex_pin_metadata mapped
+				LEFT JOIN _codex_page_metadata mapped
 					ON mapped.source_id = old_m.session_id
 				JOIN main.messages new_m
 					ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
@@ -1623,7 +1584,7 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM old_db.pinned_messages op
 			JOIN old_db.messages old_m
 				ON old_m.id = op.message_id
-			LEFT JOIN _codex_pin_metadata mapped
+			LEFT JOIN _codex_page_metadata mapped
 				ON mapped.source_id = old_m.session_id
 			JOIN main.messages new_m
 				ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
@@ -2294,9 +2255,9 @@ func copySessionDataForIDs(
 	// A page that retired its source ID has no head under that ID; it is
 	// linked below.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
-		SET parent_session_id = copied.source_id,
-			parser_parent_session_id = copied.source_id,
-			relationship_type = 'continuation',
+		SET parent_session_id = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN copied.source_id ELSE parent_session_id END,
+			parser_parent_session_id = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN copied.source_id ELSE parser_parent_session_id END,
+			relationship_type = CASE WHEN substr(copied.id, 1, length(copied.source_id)+1) = copied.source_id || '_' THEN 'continuation' ELSE relationship_type END,
 			display_name = CASE WHEN EXISTS (
 				SELECT 1 FROM main.sessions head WHERE head.id = copied.source_id
 			) THEN NULL ELSE display_name END
@@ -2960,7 +2921,8 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 // The complete map also handles pre-version-40 fork identities. Pre-131
 // thread-to-page mappings and pre-134 rollout-to-page mappings move curation,
 // Recall, and conversation identities. Only the pre-134 mappings retire the
-// source ID, so only they also remap relationships, labels, and launcher
+// source ID. Pre-137 misfiled threads also move transcript metadata.
+// Only retired mappings also remap relationships, labels, and launcher
 // parents (retired = 1). A pre-134 candidate whose source ID the fresh parse
 // already produced is no page: the parser rejected it and kept its own ID.
 // Populate in batches, then check destination IDs with joins instead of one
@@ -2986,7 +2948,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("reading Codex source version: %w", err)
 	}
 	version, _ = DecodeUserVersion(version)
-	if version >= codexLegacyPageHeaderDataVersion && !includeLegacyForks {
+	if version >= codexThreadIdentityDataVersion && !includeLegacyForks {
 		return version, nil
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
@@ -3018,7 +2980,8 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
-		args = append(args, sourceID, targetID, headPage || retired, retired)
+		misfiledThread := version < codexThreadIdentityDataVersion && thread == targetKey && targetKey != sourceKey
+		args = append(args, sourceID, targetID, headPage || retired || misfiledThread, retired)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
 				return 0, fmt.Errorf("mapping Codex session IDs: %w", err)
@@ -3033,7 +2996,15 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	// the file name is not a page), so migrating would duplicate it.
 	if _, err := conn.ExecContext(ctx, `
 		UPDATE _codex_session_ids SET is_page = 0, retired = 0
-		WHERE retired = 1 AND source_id IN (SELECT id FROM main.sessions)`); err != nil {
+		WHERE (retired = 1 AND source_id IN (SELECT id FROM main.sessions))
+		   OR EXISTS (
+			SELECT 1 FROM main.sessions live
+			JOIN old_db.sessions old_s ON old_s.id = live.id
+			WHERE live.id = _codex_session_ids.source_id
+			  AND (live.file_path = old_s.file_path
+				OR live.file_path = old_s.file_path || '.zst'
+				OR live.file_path || '.zst' = old_s.file_path)
+		   )`); err != nil {
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
