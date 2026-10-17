@@ -1115,3 +1115,7 @@ func (s *Store) GetBranches(
 	}
 	return branches, rows.Err()
 }
+
+func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
+	return db.MatchingMachineIDs(ctx, s.pg, db.PostgresQueryDialect(), candidates)
+}

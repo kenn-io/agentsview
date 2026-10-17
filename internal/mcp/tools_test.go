@@ -2001,3 +2001,11 @@ func TestListSessionsOneShotHTTPPresence(t *testing.T) {
 		}
 	}
 }
+
+func TestListSessionsRejectsUnknownMachine(t *testing.T) {
+	ts, d := newTestToolset(t)
+	require.NoError(t, d.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "host-a.example"))
+	_, _, err := ts.listSessions(t.Context(), nil, listSessionsIn{Machine: "missing.example"})
+	var filterError *db.MachineFilterError
+	require.ErrorAs(t, err, &filterError)
+}

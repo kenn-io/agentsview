@@ -27,7 +27,7 @@ func TestDirectMachineAliases(t *testing.T) {
 	}
 	require.NoError(t, d.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
 	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_installation_id", "installation-a"))
-	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "host-a.example"))
 	backend := service.NewDirectBackend(d, nil)
 	for _, tt := range []struct {
 		machine string
@@ -37,7 +37,7 @@ func TestDirectMachineAliases(t *testing.T) {
 		{"old-owner", 1, 100},
 		{"old-owner,installation-a", 1, 100},
 		{"local", 1, 100},
-		{"Laptop", 0, 0},
+		{"host-a.example", 1, 100},
 	} {
 		t.Run(tt.machine, func(t *testing.T) {
 			list, err := backend.List(t.Context(), service.ListFilter{Machine: tt.machine})

@@ -442,6 +442,8 @@
   "sidebar_filters_no_match": "No match",
   "sidebar_filters_no_agents": "No agents",
   "sidebar_filters_machine": "Machine",
+  "sidebar_filters_machine_loading": "Loading machines...",
+  "sidebar_filters_machine_update_failed": "Couldn't update the machine filter. Try again.",
   "sidebar_filters_search_machines": "Search machines...",
   "sidebar_filters_no_machines": "No machines",
   "sidebar_filters_min_prompts": "Min Prompts",

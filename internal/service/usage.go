@@ -433,6 +433,32 @@ func defaultUsagePairwiseSelection(summary *UsageSummaryResult) (leftDimension, 
 	}
 }
 
+// QueryUsageSummary runs usage queries with a resolved filter and folds their
+// results. Callers can validate selectors before starting a streaming response.
+func QueryUsageSummary(ctx context.Context, store db.Store, f db.UsageFilter) (*UsageSummaryResult, error) {
+	result, err := store.GetDailyUsage(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := buildUsageSummary(f, result)
+	if err != nil {
+		return nil, err
+	}
+	if parser.AgentFilterLacksPerMessageTokenData(f.Agent) &&
+		db.NoTokenData(result.Totals) {
+		matchingSessions, err := store.GetUsageMatchingSessionCount(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		if matchingSessions > 0 {
+			summary.UnsupportedUsage = &UnsupportedUsage{
+				Kind: UnsupportedUsageKindForAgentFilter(f.Agent),
+			}
+		}
+	}
+	return summary, nil
+}
+
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage
 // query result over the [from, to] range.
 func buildUsageSummary(

@@ -31,9 +31,7 @@
       : [],
   );
   const selectedMachines = $derived(
-    sessions.filters.machine
-      ? sessions.filters.machine.split(",")
-      : [],
+    sessions.selectedMachines,
   );
 
   // Label and pull request filters narrow only the session list, so this
@@ -72,7 +70,11 @@
   }
 
   function removeMachine(machine: string) {
-    sessions.toggleMachineFilter(machine);
+    if (machine === sessions.filters.machine) {
+      sessions.setMachineFilter(machine);
+    } else {
+      sessions.toggleMachineFilter(machine);
+    }
   }
 
   function removeAgent(agent: string) {
