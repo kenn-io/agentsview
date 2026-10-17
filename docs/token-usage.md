@@ -513,8 +513,9 @@ names must be non-empty, have no surrounding whitespace or commas, and cannot
 form alias chains.
 
 Filters accept a group name anywhere a model filter is accepted. A raw member
-name still selects just that variant. API callers can request grouped report
-rows with `group_models=true` on usage endpoints, or a grouped model list on the
+name selects just that variant unless it is also a group name, in which case
+it selects the whole group. API callers can request grouped report rows with
+`group_models=true` on usage endpoints, or a grouped model list on the
 analytics summary. Grouped usage summaries omit `schema_version` and `pricing`.
 Without the flag, responses, `usage daily`, exports, and MCP keep raw model
 names and raw `pricing.models` entries.
