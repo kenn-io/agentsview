@@ -1983,6 +1983,25 @@ not send another ping that day. The web UI also reports an anonymous
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
 
+The server sends `setup_finished` once per installation when the archive first
+has a session in the default session list. Sessions need messages to count;
+automated sessions and trash are excluded. Child sessions count when their
+parent is missing and the list shows them as roots. It checks at startup, after
+session changes, and hourly for retries.
+The `telemetry-setup-finished` file beside the installation identity records the
+claim across restarts and servers sharing the data directory. Captures, seeds,
+backups, and restores preserve the claim with the installation identity when
+the snapshot contains it. Restoring a snapshot from before the claim can queue
+`setup_finished` again for the same installation ID.
+Ordinary imports keep the receiving installation's claim. The event carries
+no session details and follows the same telemetry opt-out. Existing installs
+with such a session send it on their first start after upgrading.
+
+The claim records that the event entered the telemetry queue, not that PostHog
+received it. Delivery is best effort: if the server stops or the network fails
+before the queue flushes, the event is lost and is not sent again. Only the
+server sends `setup_finished`; the web UI's telemetry route rejects that event.
+
 The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
 of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
 1 to below 5 minutes, 5 to below 30 minutes, and 30 minutes or more. Visible

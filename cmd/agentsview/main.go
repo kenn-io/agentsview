@@ -319,6 +319,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}()
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
+	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
 
 	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
 	if err != nil {
