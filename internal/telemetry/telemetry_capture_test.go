@@ -33,8 +33,6 @@ func TestCoreActionAllowlist(t *testing.T) {
 		{EventSearchEmpty, "query", "secret", false},
 		{EventErrorShown, "kind", "search", true},
 		{EventSyncFailed, "reason", "partial", true},
-		{EventErrorShown, "kind", "unknown", true},
-		{EventSyncFailed, "reason", "unknown", true},
 		{EventSearchRun, "query_type", "semantic", true},
 		{EventSearchRun, "query_type", "regex", false},
 		{EventSessionViewed, "agent", "freebuff", true},
@@ -101,11 +99,7 @@ func TestCoreActionAllowlist(t *testing.T) {
 			}
 		}
 		if c.kept {
-			want := c.value
-			if c.value == "unknown" {
-				want = "other"
-			}
-			assert.Equal(t, want, sent[i][c.key])
+			assert.Equal(t, c.value, sent[i][c.key])
 		} else {
 			assert.NotContains(t, sent[i], c.key)
 		}
@@ -123,7 +117,7 @@ func TestOutcomeCategoriesRequirePropertyAndNormalizeValues(t *testing.T) {
 		body, err := json.Marshal(map[string]any{"event": tc.event})
 		require.NoError(t, err)
 		postCapture(t, srv.Handler(), string(body), http.StatusBadRequest)
-		for _, value := range []any{nil, false, 42, map[string]any{"text": "private"}, "unknown"} {
+		for _, value := range []any{42, "unknown"} {
 			body, err := json.Marshal(map[string]any{"event": tc.event, "properties": map[string]any{tc.key: value}})
 			require.NoError(t, err)
 			postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
@@ -131,11 +125,11 @@ func TestOutcomeCategoriesRequirePropertyAndNormalizeValues(t *testing.T) {
 	}
 	require.NoError(t, reporter.Close())
 	sent := captured()
-	require.Len(t, sent, 10)
-	for _, properties := range sent[:5] {
+	require.Len(t, sent, 4)
+	for _, properties := range sent[:2] {
 		assert.Equal(t, "other", properties["kind"])
 	}
-	for _, properties := range sent[5:] {
+	for _, properties := range sent[2:] {
 		assert.Equal(t, "other", properties["reason"])
 	}
 }

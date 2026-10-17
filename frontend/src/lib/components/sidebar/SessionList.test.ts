@@ -112,27 +112,12 @@ describe("SessionList filter dropdown", () => {
     vi.restoreAllMocks();
   });
 
-  it("counts a sidebar rejection once until a successful refresh clears it", async () => {
+  it("counts sidebar errors only while the sidebar is open", async () => {
     const { SessionsService } = await import("../../api/generated/index.js");
     const { ApiError } = await import("../../api/runtime.js");
     const request = vi
       .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
       .mockRejectedValue(new ApiError(400, "Sidebar failed"));
-    component = mount(SessionList, { target: document.body });
-    for (const [attempt, count] of [1, 1, 1, 2].entries()) {
-      if (attempt === 2) request.mockResolvedValueOnce({ sessions: [], total: 0 });
-      await sessions.load();
-      await tick();
-      expect(reportErrorShown).toHaveBeenCalledTimes(count);
-    }
-  });
-
-  it("counts sidebar errors only while the sidebar is open", async () => {
-    const { SessionsService } = await import("../../api/generated/index.js");
-    const { ApiError } = await import("../../api/runtime.js");
-    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockRejectedValue(
-      new ApiError(400, "Sidebar failed"),
-    );
     ui.sidebarOpen = false;
     component = mount(SessionList, { target: document.body });
     await sessions.load();
@@ -149,6 +134,13 @@ describe("SessionList filter dropdown", () => {
     ui.sidebarOpen = true;
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(2);
+    request.mockResolvedValueOnce({ sessions: [], total: 0 });
+    await sessions.load();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(2);
+    await sessions.load();
+    await tick();
+    expect(reportErrorShown).toHaveBeenCalledTimes(3);
   });
 
   it("bounds the filter menu to the viewport and lets it scroll", async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
+  isAbortError,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -103,6 +104,10 @@ describe("orvalFetch", () => {
 });
 
 describe("API errors", () => {
+  it("recognizes an ordinary Error named AbortError as cancellation", () => {
+    expect(isAbortError(Object.assign(new Error("Cancelled"), { name: "AbortError" }))).toBe(true);
+  });
+
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();

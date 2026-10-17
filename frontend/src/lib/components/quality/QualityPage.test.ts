@@ -32,14 +32,19 @@ describe("QualityPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("counts a visible signals failure without loading generated reports", async () => {
-    analytics.errors.signals = "Signals failed";
+  it("renders deterministic quality analysis without loading generated reports", async () => {
     component = mount(QualityPage, { target: document.body });
     await tick();
 
     expect(document.body.textContent).toContain("Deterministic Recommendations");
     expect(document.body.textContent).toContain("Quality Patterns");
     expect(insights.load).not.toHaveBeenCalled();
+  });
+
+  it("reports the analytics kind for a visible signals failure", async () => {
+    analytics.errors.signals = "Signals failed";
+    component = mount(QualityPage, { target: document.body });
+    await tick();
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
   });
 

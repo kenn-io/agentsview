@@ -355,6 +355,10 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
+    mocks.getApiV1TrendsTerms.mockRejectedValueOnce(
+      new Error("at least one trend term is required"),
+    );
+
     const textarea = document.querySelector<HTMLTextAreaElement>("#trend-terms");
     expect(textarea).not.toBeNull();
     textarea!.value = "";
@@ -364,6 +368,19 @@ describe("TrendsPage", () => {
       (button) => button.textContent?.trim() === "Refresh",
     );
     expect(refreshButton).not.toBeNull();
+    refreshButton!.click();
+    await flushPromises();
+    expect(document.body.textContent).toContain("at least one trend term is required");
+    warn.mockRestore();
+  });
+
+  it("counts each displayed refresh failure again after loading", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+    const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Refresh",
+    );
     for (const count of [1, 2]) {
       const request = Promise.withResolvers<never>();
       mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);

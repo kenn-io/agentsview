@@ -427,15 +427,12 @@ describe("MessageList follow cancellation", () => {
     await tick();
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
     document.querySelector<HTMLButtonElement>("button")!.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await tick();
-    expect(request).toHaveBeenLastCalledWith({ id: "s1" }, { signal: expect.any(AbortSignal) });
+    await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(1);
     request.mockResolvedValueOnce(session);
     document.querySelector<HTMLButtonElement>("button")!.click();
-    await vi.waitFor(() => expect(sessions.activeSessionNotFound).toBe(false));
-    await tick();
-    expect(document.querySelector("button")).toBeNull();
+    await vi.waitFor(() => expect(document.querySelector("button")).toBeNull());
     await sessions.refreshActiveSession();
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(2);

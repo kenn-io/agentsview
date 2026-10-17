@@ -341,10 +341,6 @@ describe("SearchStore", () => {
     expect(reportErrorShown).toHaveBeenCalledWith("search");
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
-    store.retry();
-    await flushMicrotasks();
-    expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
   });
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
@@ -467,7 +463,6 @@ describe("SearchStore", () => {
 
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(store.error).toEqual({ detail: null, kind: "generic" });
-    expect(reportErrorShown).toHaveBeenCalledWith("search");
     expect(store.isSearching).toBe(false);
   });
 
@@ -600,6 +595,14 @@ describe("SearchStore telemetry", () => {
     store.setMode("semantic");
     await flushMicrotasks();
     expect(store.error?.kind).toBe("semantic-unavailable");
+
+    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      generatedApiError(501, "Semantic search is unavailable"),
+    );
+    store.retry();
+    await flushMicrotasks();
+    expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
 
     store.retry();
     await flushMicrotasks();

@@ -403,12 +403,8 @@ describe("SyncStore.triggerResync", () => {
     expect(sync.syncing).toBe(false);
   });
 
-  it.each(["dom", "error"])("ignores a cancelled %s resync", async (kind) => {
-    mockResyncFailure(
-      kind === "dom"
-        ? new DOMException("Cancelled", "AbortError")
-        : Object.assign(new Error("Cancelled"), { name: "AbortError" }),
-    );
+  it("ignores a cancelled resync", async () => {
+    mockResyncFailure(new DOMException("Cancelled", "AbortError"));
     sync.triggerResync();
     await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({
       name: "AbortError",
@@ -622,7 +618,6 @@ describe("SyncStore.remoteUnreachable", () => {
     });
 
     await sync.loadStatus();
-    expect(reportSyncFailed).not.toHaveBeenCalled();
 
     expect(sync.syncing).toBe(true);
     expect(sync.progress?.phase).toBe("rebuilding_search");

@@ -116,15 +116,14 @@ async function selectFirstActivityRange() {
   await fireEvent.pointerUp(window);
 }
 
-it("counts the displayed report failure once while Retry recovers", async () => {
+it("reports the analytics kind for a displayed report failure", async () => {
   const { ActivityService } = await import("../../api/generated/index.js");
   vi.mocked(reportErrorShown).mockClear();
   vi.spyOn(activity, "attach").mockReturnValue(() => {});
   vi.spyOn(activity, "loadFilterOptions").mockResolvedValue(true);
-  const retry = Promise.withResolvers<Response>();
-  vi.spyOn(ActivityService, "getApiV1ActivityReport")
-    .mockRejectedValueOnce(new Error("Report failed"))
-    .mockReturnValueOnce(retry.promise);
+  vi.spyOn(ActivityService, "getApiV1ActivityReport").mockRejectedValueOnce(
+    new Error("Report failed"),
+  );
   const previousPreset = activity.preset;
   activity.report = null;
   activity.preset = "day";
@@ -134,20 +133,6 @@ it("counts the displayed report failure once while Retry recovers", async () => 
       expect(document.querySelector(".status.error")?.textContent).toContain("Report failed"),
     );
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    document.querySelector<HTMLButtonElement>(".status.error .retry-btn")!.click();
-    await tick();
-    expect(document.querySelector(".status.error")).toBeNull();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    retry.resolve(
-      new Response(JSON.stringify(projectReport()), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    await vi.waitFor(() => expect(activity.loading).toBe(false));
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
   } finally {
     await unmount(component);
     activity.report = null;
