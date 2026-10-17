@@ -55,9 +55,6 @@ func (g ModelGroups) Expand(csv string) string {
 
 // GroupDaily merges each day's model breakdowns and sorts by cost, then name.
 func (g ModelGroups) GroupDaily(daily []db.DailyUsageEntry) error {
-	if len(g.names) == 0 {
-		return nil
-	}
 	for i := range daily {
 		day := &daily[i]
 		rows := slices.Clone(day.ModelBreakdowns)

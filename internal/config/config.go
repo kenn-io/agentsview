@@ -753,24 +753,6 @@ type CustomModelRate struct {
 	CacheReadMicrodollarsPerMTok       int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
 }
 
-func decodeModelAliases(data string) (map[string]string, error) {
-	var decoded struct {
-		ModelAliases map[string]string `toml:"model_aliases"`
-	}
-	if _, err := toml.Decode(data, &decoded); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	for key, name := range decoded.ModelAliases {
-		if key == "" || name == "" || strings.ContainsAny(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
-			return nil, fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, and contain no commas", key)
-		}
-		if target, ok := decoded.ModelAliases[name]; ok && target != name {
-			return nil, fmt.Errorf("model_aliases.%q: alias chains are unsupported", key)
-		}
-	}
-	return decoded.ModelAliases, nil
-}
-
 func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 	var decoded struct {
 		CustomModelPricing map[string]CustomModelRate `toml:"custom_model_pricing"`
@@ -1758,6 +1740,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
+		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
@@ -1774,9 +1757,13 @@ func (c *Config) applyConfigTOML(data string) error {
 			return err
 		}
 	}
-	modelAliases, err := decodeModelAliases(data)
-	if err != nil {
-		return err
+	for key, name := range file.ModelAliases {
+		if key == "" || name == "" || strings.ContainsAny(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
+			return fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, and contain no commas", key)
+		}
+		if target, ok := file.ModelAliases[name]; ok && target != name {
+			return fmt.Errorf("model_aliases.%q: alias chains are unsupported", key)
+		}
 	}
 	customModelPricing, err := decodeCustomModelPricing(data)
 	if err != nil {
@@ -2072,8 +2059,8 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.Agent[name] = cfg
 		}
 	}
-	if modelAliases != nil {
-		c.ModelAliases = modelAliases
+	if file.ModelAliases != nil {
+		c.ModelAliases = file.ModelAliases
 	}
 	if len(customModelPricing) > 0 {
 		c.CustomModelPricing = customModelPricing
