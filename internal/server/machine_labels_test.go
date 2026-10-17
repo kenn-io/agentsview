@@ -92,7 +92,6 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 			assert.Equal(t, 1, store.aliasReads)
 		})
 	}
-
 }
 
 func TestMachineAliasesOnDuckDB(t *testing.T) {

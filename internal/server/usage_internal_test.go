@@ -77,6 +77,21 @@ func TestUsageSummaryStreamResolvesMachineOnce(t *testing.T) {
 	assert.Equal(t, "id-a", spy.filters[0].Machine)
 }
 
+type usageMachineCatalogFailureStore struct{ db.Store }
+
+func (s usageMachineCatalogFailureStore) GetMachineLabels(context.Context) (map[string]string, error) {
+	return nil, errors.New("machine catalog database detail")
+}
+
+func TestUsageStreamMapsMachineCatalogFailure(t *testing.T) {
+	s := testServer(t, 30)
+	s.db = usageMachineCatalogFailureStore{Store: s.db}
+	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
+	assertRecorderStatus(t, w, http.StatusInternalServerError)
+	assert.Contains(t, w.Body.String(), `"error":"internal error"`)
+	assert.NotContains(t, w.Body.String(), "machine catalog database detail")
+}
+
 type usageProjectCatalogFailureStore struct {
 	db.Store
 	err error

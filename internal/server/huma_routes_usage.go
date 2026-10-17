@@ -152,7 +152,7 @@ func (s *Server) usageFilterFromInput(
 ) (db.UsageFilter, error) {
 	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
 	if err != nil {
-		return db.UsageFilter{}, serverError(err)
+		return db.UsageFilter{}, usageSummaryAPIError(err)
 	}
 	in.Machine = machine
 	req := usageRequestFromInput(in)

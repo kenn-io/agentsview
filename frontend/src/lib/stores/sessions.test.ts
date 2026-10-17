@@ -2604,6 +2604,58 @@ describe("SessionsStore", () => {
       expectSidebarIndexCalledWith({ machine: "id-b" });
     });
 
+    it.each([new Error("offline"), new ApiError(500, "internal error")])(
+      "preserves the selector when a picker edit hits a temporary metadata failure: %s",
+      async (error) => {
+        api.getMachines.mockImplementation((params) =>
+          params.machine ? Promise.reject(error) : Promise.resolve(catalog),
+        );
+        sessions.initFromParams({ machine: "Workstation" });
+        await sessions.toggleMachineFilter("id-b");
+        expect(sessions.filters.machine).toBe("Workstation");
+        expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+      },
+    );
+
+    it("applies overlapping picker clicks to the latest canonical selection", async () => {
+      let finish!: (value: { machines: string[] }) => void;
+      api.getMachines.mockImplementation((params) =>
+        params.machine
+          ? new Promise((resolve) => {
+              finish = resolve;
+            })
+          : Promise.resolve(catalog),
+      );
+      sessions.initFromParams({ machine: "Workstation" });
+      const first = sessions.toggleMachineFilter("id-b");
+      const second = sessions.toggleMachineFilter("id-c");
+      finish({ machines: ["id-a"] });
+      await Promise.all([first, second]);
+      expect(sessions.filters.machine).toBe("id-a,id-b,id-c");
+    });
+
+    it.each(["URL", "saved"])(
+      "resolves a name after %s visibility flags refresh metadata",
+      async (source) => {
+        api.getMachines.mockImplementation((params) =>
+          Promise.resolve(params.machine ? { machines: ["id-a"] } : catalog),
+        );
+        api.getProjects.mockResolvedValue({ projects: [] });
+        api.getAgents.mockResolvedValue({ agents: [] });
+        if (source === "URL") {
+          sessions.initFromParams({ machine: "Workstation", include_one_shot: "false" });
+        } else {
+          localStorage.setItem(
+            "session-filters",
+            JSON.stringify({ version: 2, machine: "Workstation", includeOneShot: false }),
+          );
+          sessions.restoreSavedFilters();
+        }
+        await sessions.loadMachines();
+        await vi.waitFor(() => expect(sessions.filters.machine).toBe("id-a"));
+      },
+    );
+
     it("preserves a stale saved selector until the user clears it", async () => {
       localStorage.setItem(
         "session-filters",
@@ -2637,7 +2689,7 @@ describe("SessionsStore", () => {
       sessions.initFromParams({ machine: "Workstation" });
       const editing = sessions.toggleMachineFilter("id-b");
       await vi.waitFor(() => expect(finish).toBeDefined());
-      sessions.filters.machine = "id-b";
+      sessions.setMachineFilter("id-b");
       finish({ machines: ["id-a"] });
       await editing;
       expect(sessions.filters.machine).toBe("id-b");
