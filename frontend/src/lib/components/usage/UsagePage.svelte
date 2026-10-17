@@ -514,6 +514,7 @@
         selectedLabel={usage.selectedModel}
         items={modelItems}
         excludedCsv={usage.displayedModels}
+        unlistedExcludedCount={usage.partlyExcludedModelCount}
         onToggle={(name) => usage.toggleModel(name)}
         onSelectAll={() => usage.selectAllModels()}
         onDeselectAll={() =>

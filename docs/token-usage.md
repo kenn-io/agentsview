@@ -516,6 +516,9 @@ A saved filter naming one model variant keeps its one-variant meaning after you
 configure an alias. The picker shows that selection on the group row. The
 selected variant names appear on hover and are available to screen readers.
 Clicking the row clears those variants; clicking again applies the whole group.
+On Usage, a group with only some variants excluded stays ticked because its
+other variants still show, and the trigger counts the hidden variants. The row
+shows unticked only when the group name or every variant is excluded.
 Grouped summary responses include the `model_aliases` map used to display these
 selections.
 

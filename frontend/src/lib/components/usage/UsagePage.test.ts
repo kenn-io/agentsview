@@ -213,7 +213,7 @@ describe("UsagePage refresh behavior", () => {
     usage.cancelInFlightReads();
   });
 
-  it("keeps a saved member exclusion and shows one unticked group row", async () => {
+  it("keeps a partly excluded group ticked and counts the hidden member", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -242,16 +242,19 @@ describe("UsagePage refresh behavior", () => {
     document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
     summary.resolve({
       ...usageSummaryWithUnsupported(),
-      model_aliases: { "claude-opus-4-20250514": "claude-4" },
+      model_aliases: { "claude-opus-4-20250514": "claude-4", "claude-sonnet-4": "claude-4" },
+      modelTotals: [{ model: "claude-4", inputTokens: 10, outputTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(1) }],
     });
-    await vi.waitFor(() => expect(usage.displayedModels).toBe("claude-4"));
+    await vi.waitFor(() => expect(usage.summary?.model_aliases).toBeDefined());
     expect(usage.excludedModels).toBe("claude-opus-4-20250514");
     await flushEffects();
     expect(router.params.exclude_model).toBe("claude-opus-4-20250514");
     expect(new URL(window.location.href).searchParams.get("exclude_model")).toBe(
       "claude-opus-4-20250514",
     );
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: None"]')!.click();
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Model: 1 hidden"]');
+    expect(trigger).not.toBeNull();
+    trigger!.click();
     await flushEffects();
     const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
     const groups = rows.filter(
@@ -259,7 +262,7 @@ describe("UsagePage refresh behavior", () => {
     );
     expect(rows).toHaveLength(1);
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).toBeNull();
+    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
     expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
     groups[0]!.click();
     await flushEffects();

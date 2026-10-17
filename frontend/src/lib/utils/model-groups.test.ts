@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupedModelCsv, modelPickerItems, toggleGroupedModel } from "./model-groups.js";
+import { excludedModelGroups, groupedModelCsv, modelPickerItems, toggleGroupedModel } from "./model-groups.js";
 
 const aliases = { a: "group", b: "group" };
 
@@ -25,6 +25,17 @@ describe("grouped model filters", () => {
     ["", "group", "group"],
   ])("toggles %s by %s to %s", (saved, name, result) => {
     expect(toggleGroupedModel(saved, name, aliases)).toBe(result);
+  });
+
+  it.each([
+    ["a", "", 1],
+    [" a, , other ", "other", 1],
+    ["a,b,other", "group,other", 0],
+    ["a,group", "group", 0],
+    ["unknown", "unknown", 0],
+    ["", "", 0],
+  ])("shows %s in exclude mode as %s with %i partly hidden", (saved, csv, partial) => {
+    expect(excludedModelGroups(saved, aliases)).toEqual({ csv, partial });
   });
 
   it.each(["constructor", "toString", "__proto__"])("selects and clears the %s group", (name) => {

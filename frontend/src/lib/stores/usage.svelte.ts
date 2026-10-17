@@ -1,4 +1,4 @@
-import { groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
+import { excludedModelGroups, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
 import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
@@ -777,7 +777,11 @@ class UsageStore {
   }
 
   get displayedModels(): string {
-    return groupedModelCsv(this.excludedModels, this.modelAliases);
+    return excludedModelGroups(this.excludedModels, this.modelAliases).csv;
+  }
+
+  get partlyExcludedModelCount(): number {
+    return excludedModelGroups(this.excludedModels, this.modelAliases).partial;
   }
 
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {

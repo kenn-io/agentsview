@@ -37,3 +37,15 @@ export function modelPickerItems(
             .join(", ") || undefined,
     }));
 }
+
+// Exclude mode shows a group unticked only when the whole group is hidden;
+// other hidden members count as partial so the group stays ticked.
+export function excludedModelGroups(csv: string, aliases: Record<string, string>) {
+  const tokens = csv.split(",").map((token) => token.trim()).filter(Boolean);
+  const group = (name: string) => (Object.hasOwn(aliases, name) ? aliases[name]! : name);
+  const members = (name: string) => Object.keys(aliases).filter((key) => aliases[key] === name);
+  const full = groupedModelCsv(csv, aliases).split(",").filter(
+    (name) => name && (tokens.includes(name) || members(name).every((key) => tokens.includes(key))),
+  );
+  return { csv: full.join(","), partial: tokens.filter((token) => !full.includes(group(token))).length };
+}
