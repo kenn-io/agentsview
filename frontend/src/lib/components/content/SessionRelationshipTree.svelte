@@ -320,7 +320,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--space-4);
     color: var(--text-muted);
     font-size: 9px;
     font-weight: 600;
@@ -343,7 +343,7 @@
   .tree-open-graph {
     flex-shrink: 0;
     display: inline-flex;
-    margin-left: -4px;
+    margin-left: -2px;
     letter-spacing: 0;
     text-transform: none;
   }
@@ -375,7 +375,7 @@
     padding: 6px 8px 6px calc(14px + var(--depth-offset));
     display: grid;
     grid-template-columns: 14px minmax(0, 1fr);
-    gap: 7px;
+    gap: var(--space-3);
     align-items: start;
     border-radius: var(--radius-sm);
     color: inherit;
@@ -488,7 +488,7 @@
   .tree-meta {
     display: flex;
     min-width: 0;
-    gap: 7px;
+    gap: var(--space-3);
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 9px;
