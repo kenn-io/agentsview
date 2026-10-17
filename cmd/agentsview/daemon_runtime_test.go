@@ -1074,8 +1074,8 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 		name     string
 		wrongPID bool
 	}{
-		{name: "live"},
-		{name: "filename PID mismatch", wrongPID: true},
+		{name: "live record is listed and readable by PID"},
+		{name: "record whose PID differs from its filename is ignored", wrongPID: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1096,14 +1096,15 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 			require.NoError(t, err)
 			if tt.wrongPID {
 				assert.Empty(t, records)
-			} else {
-				require.Len(t, records, 1)
-				assert.Equal(t, rec.PID, records[0].PID)
-				assert.Equal(t, path, records[0].SourcePath)
-				read, err := store.ReadPID(rec.PID)
-				require.NoError(t, err)
-				assert.Equal(t, path, read.SourcePath)
+				assert.FileExists(t, path)
+				return
 			}
+			require.Len(t, records, 1)
+			assert.Equal(t, rec.PID, records[0].PID)
+			assert.Equal(t, path, records[0].SourcePath)
+			read, err := store.ReadPID(rec.PID)
+			require.NoError(t, err)
+			assert.Equal(t, path, read.SourcePath)
 			assert.FileExists(t, path)
 		})
 	}

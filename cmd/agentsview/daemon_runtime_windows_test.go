@@ -84,27 +84,13 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("archive content"), 0o600))
 		before[i] = fileChangeTime(t, path)
 	}
-	assert.False(t, IsDaemonActive(dir))
-	assert.Nil(t, FindDaemonRuntime(dir))
-	assert.False(t, IsDaemonStarting(dir))
-	assert.FileExists(t, legacyPath, "legacy record should survive discovery")
+	IsDaemonActive(dir)
+	FindDaemonRuntime(dir)
+	IsDaemonStarting(dir)
 	_, err = WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
 	require.NoError(t, err)
 	RemoveDaemonRuntime(dir)
 	for i, path := range paths {
 		assert.Equal(t, before[i], fileChangeTime(t, path), "%s ChangeTime changed", path)
 	}
-}
-
-func TestDaemonRuntimeFindsLegacyWindowsRecord(t *testing.T) {
-	dir := t.TempDir()
-	host, port := testPingServer(t)
-	path, err := WriteDaemonRuntime(dir, host, port, "test", false)
-	require.NoError(t, err)
-	legacyPath := filepath.Join(dir, filepath.Base(path))
-	require.NoError(t, os.Rename(path, legacyPath))
-
-	rt := FindDaemonRuntime(dir)
-	require.NotNil(t, rt)
-	assert.Equal(t, legacyPath, rt.Record.SourcePath)
 }

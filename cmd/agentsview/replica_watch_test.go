@@ -4,27 +4,19 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/gofrs/flock"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplicaWatchLockLeavesDataDirPermissions(t *testing.T) {
+func TestReplicaWatchLockLeavesDataDirUntouched(t *testing.T) {
 	dir, lockPath := replicaWatchLockFixture(t)
-	if runtime.GOOS != "windows" {
-		require.NoError(t, os.Chmod(dir, 0o755))
-	}
+	check := replicaWatchDataDirCheck(t, dir)
 
 	err := runReplicaPushWatch(pgReplica{}, ReplicaPushConfig{}, "")
 	require.EqualError(t, err, "already locked ("+lockPath+")")
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(dir)
-		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
-	}
+	check()
 }
 
 func replicaWatchLockFixture(t *testing.T) (string, string) {
