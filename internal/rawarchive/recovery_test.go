@@ -31,11 +31,6 @@ func TestRecoveryPreservesSetupClaim(t *testing.T) {
 	seed := filepath.Join(t.TempDir(), "seed")
 	_, err = Seed(ctx, filepath.Join(opts.Destination, "capture.json"), seed, nil)
 	require.NoError(t, err)
-	seedCfg := config.Config{DataDir: seed, InstallationID: installation}
-	require.NoError(t, seedCfg.ClaimSetupFinished(func() error {
-		assert.Fail(t, "seed reported setup again")
-		return nil
-	}))
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })

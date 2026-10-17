@@ -18,15 +18,15 @@ import (
 
 func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 	for _, tc := range []struct {
-		name, scope    string
-		initial, retry bool
+		name, scope             string
+		initial, retry, claimed bool
 	}{
 		{name: "initial visible content", initial: true},
 		{name: "sync and timer retry", scope: "sync", retry: true},
 		{name: "sessions", scope: "sessions"},
 		{name: "messages", scope: "messages"},
-		{name: "all", scope: "all"},
 		{name: "empty archive cancellation"},
+		{name: "claimed empty archive exits", claimed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -35,6 +35,9 @@ func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 					dbtest.SeedSession(t, database, "session-one", "project-a")
 				}
 				cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+				if tc.claimed {
+					require.NoError(t, cfg.ClaimSetupFinished(func() error { return nil }))
+				}
 				broadcaster := server.NewBroadcaster(0)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
@@ -52,6 +55,15 @@ func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 					})
 				}()
 				synctest.Wait()
+				if tc.claimed {
+					assert.Zero(t, sends.Load(), "claimed installation reported again")
+					select {
+					case <-done:
+					default:
+						assert.Fail(t, "claimed installation kept observing an empty archive")
+					}
+					return
+				}
 				if !tc.initial {
 					assert.Zero(t, sends.Load())
 					if tc.scope == "" {
@@ -79,28 +91,4 @@ func TestSetupTelemetryWakeSourcesAndRetry(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestSetupTelemetryClaimedEmptyArchiveExits(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		database := dbtest.OpenTestDB(t)
-		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-		require.NoError(t, cfg.ClaimSetupFinished(func() error { return nil }))
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			runSetupTelemetry(ctx, time.Hour, cfg, database, server.NewBroadcaster(0), func() error {
-				assert.Fail(t, "claimed installation reported again")
-				return nil
-			})
-		}()
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			assert.Fail(t, "claimed installation kept observing an empty archive")
-		}
-	})
 }

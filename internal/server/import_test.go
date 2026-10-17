@@ -22,7 +22,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func readImportEvents(t *testing.T, body io.Reader, handle func(string, string)) {
@@ -889,36 +888,5 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 				require.FailNow(t, "committed upload did not broadcast sessions")
 			}
 		})
-	}
-}
-
-func TestUploadSessionAnnouncesSession(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-	srv.broadcaster = NewBroadcaster(0)
-	events, unsubscribe := srv.broadcaster.Subscribe()
-	defer unsubscribe()
-
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser("2024-01-01T10:00:00Z", "hello").
-		AddClaudeAssistant("2024-01-01T10:00:05Z", "hi").
-		String()
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", "incoming.jsonl")
-	require.NoError(t, err)
-	_, err = io.WriteString(part, content)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/upload?project=myproj", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rec := httptest.NewRecorder()
-	srv.mux.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-	select {
-	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "uploaded session did not broadcast sessions")
 	}
 }

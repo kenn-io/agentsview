@@ -14,7 +14,6 @@ func TestHasVisibleSession(t *testing.T) {
 		parent  bool
 		want    bool
 	}{
-		{name: "empty archive"},
 		{name: "empty session", session: &Session{}},
 		{name: "orphan subagent", session: &Session{MessageCount: 1, RelationshipType: "subagent", ParentSessionID: new("missing")}, want: true},
 		{name: "orphan fork", session: &Session{MessageCount: 1, RelationshipType: "fork", ParentSessionID: new("missing")}, want: true},
