@@ -137,24 +137,27 @@ func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/machines",
 		"/api/v1/sessions",
+		"/api/v1/usage/summary",
 		"/api/v1/usage/summary/stream",
 		"/api/v1/analytics/summary",
 		"/api/v1/activity/report",
 	} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine=Shared", nil)
-			if path == "/api/v1/usage/summary/stream" {
-				req.Header.Set("Accept", "text/event-stream")
-			}
-			w := httptest.NewRecorder()
-			te.handler.ServeHTTP(w, req)
-			assertStatus(t, w, http.StatusBadRequest)
-			assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
-			if path == "/api/v1/usage/summary/stream" {
-				assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
-				assert.NotContains(t, w.Body.String(), "event:")
-			}
-		})
+		for _, selector := range []string{"Shared", "missing"} {
+			t.Run(path+"/"+selector, func(t *testing.T) {
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine="+selector, nil)
+				if path == "/api/v1/usage/summary/stream" {
+					req.Header.Set("Accept", "text/event-stream")
+				}
+				w := httptest.NewRecorder()
+				te.handler.ServeHTTP(w, req)
+				assertStatus(t, w, http.StatusBadRequest)
+				assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
+				if path == "/api/v1/usage/summary/stream" {
+					assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
+					assert.NotContains(t, w.Body.String(), "event:")
+				}
+			})
+		}
 	}
 }
 

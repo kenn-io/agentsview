@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -78,8 +78,7 @@
 
   $effect(() => {
     if (open) {
-      sessions.loadAgents();
-      sessions.loadMachines();
+      untrack(() => { sessions.loadAgents(); sessions.loadMachines(); });
       agentSearch = "";
       machineSearch = "";
       labelDraft = "";
@@ -363,12 +362,15 @@
         {/each}
       </div>
     </div>
-    {#if sessions.machines.length > 0}
+    {#if sessions.machines.length > 0 || sessions.machineFilterPending || sessions.machineFilterUpdateFailed || sessions.machineFilterError}
       <div class="filter-section">
         <div class="filter-section-label">{m.sidebar_filters_machine()}</div>
         {#if sessions.machineFilterUpdateFailed}
           <p role="alert">{m.sidebar_filters_machine_update_failed()}</p>
+          <button onclick={() => sessions.retryMachineFilter()}>{m.shared_retry()}</button>
         {/if}
+        {#if sessions.machineFilterError}<p role="alert">{sessions.machineFilterError}</p>{/if}
+        {#if sessions.machineFilterPending}<p role="status">{m.subagent_inline_loading()}</p>{/if}
         {#if sessions.machines.length > 5}
           <input
             class="agent-search"
@@ -387,6 +389,7 @@
               style:--agent-color={"var(--accent-blue)"}
               style:--agent-foreground={"var(--accent-blue-foreground)"}
               title={machine}
+              disabled={sessions.machineRowsDisabled}
               onclick={() =>
                 sessions.toggleMachineFilter(machine)}
             >
@@ -403,9 +406,11 @@
               </span>
             </button>
           {:else}
-            <span class="agent-select-empty">
-              {machineSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_machines()}
-            </span>
+            {#if !sessions.machineFilterPending && !sessions.machineFilterUpdateFailed}
+              <span class="agent-select-empty">
+                {machineSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_machines()}
+              </span>
+            {/if}
           {/each}
         </div>
       </div>

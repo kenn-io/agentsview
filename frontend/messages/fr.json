@@ -442,6 +442,7 @@
   "sidebar_filters_no_match": "Aucun résultat",
   "sidebar_filters_no_agents": "Aucun agent",
   "sidebar_filters_machine": "Machine",
+  "sidebar_filters_machine_update_failed": "Impossible de mettre à jour le filtre des machines. Réessayez.",
   "sidebar_filters_search_machines": "Rechercher des machines...",
   "sidebar_filters_no_machines": "Aucune machine",
   "sidebar_filters_min_prompts": "Prompts min.",

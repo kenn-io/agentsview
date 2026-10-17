@@ -56,30 +56,67 @@ it("shows and searches machine labels while selecting the stored machine key", a
   expect(sessions.filters.machine).toBe("");
 });
 
-it("shows a failed machine edit and clears the error after retry", async () => {
-  sessions.machines = ["retry-machine", "another-machine"];
-  sessions.filters.machine = "Retry label";
+it("shows a temporary machine failure, disables rows, and retries", async () => {
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-  vi.spyOn(sessions, "loadMachines").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
+  sessions.setMachineFilter("Retry label");
   vi.spyOn(MetadataService, "getApiV1Machines")
     .mockRejectedValueOnce(new ApiError(500, "internal error"))
     .mockResolvedValue({
-      machines: ["retry-machine"],
+      machines: ["retry-machine", "another-machine"],
       resolved_machines: ["retry-machine"],
       machine_labels: {},
       machine_aliases: {},
     });
+  sessions.machines = ["retry-machine", "another-machine"];
   component = mount(SessionFilterControl, { target: document.body });
   await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-  await fireEvent.click(screen.getByRole("button", { name: "another-machine" }));
-  expect((await screen.findByRole("alert")).textContent).toBe(
+  expect((await screen.findByRole("alert")).textContent).toContain(
     "Couldn’t update the machine filter. Try again.",
   );
   expect(sessions.filters.machine).toBe("Retry label");
+  expect(
+    (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  sessions.machines = [];
+  flushSync();
+  expect(screen.queryByText("No machines")).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await vi.waitFor(() => expect(sessions.filters.machine).toBe("retry-machine"));
   await fireEvent.click(screen.getByRole("button", { name: "another-machine" }));
-  await vi.waitFor(() => expect(sessions.filters.machine).toBe("retry-machine,another-machine"));
+  expect(sessions.filters.machine).toBe("retry-machine,another-machine");
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("disables machine rows until a pending selector resolves", async () => {
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  sessions.setMachineFilter("Pending label");
+  sessions.machines = ["pending-machine"];
+  let finish!: (value: {
+    machines: string[];
+    resolved_machines: string[];
+    machine_labels: {};
+    machine_aliases: {};
+  }) => void;
+  vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  component = mount(SessionFilterControl, { target: document.body });
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  const row = screen.getByRole("button", { name: "pending-machine" }) as HTMLButtonElement;
+  const disabledWhilePending = row.disabled;
+  finish({
+    machines: ["pending-machine"],
+    resolved_machines: ["pending-machine"],
+    machine_labels: {},
+    machine_aliases: {},
+  });
+  await sessions.loadMachines();
+  expect(disabledWhilePending).toBe(true);
+  await vi.waitFor(() => expect(row.disabled).toBe(false));
 });
 
 describe("SessionFilterControl agent options", () => {

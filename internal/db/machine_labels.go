@@ -138,13 +138,9 @@ func ResolveMachineFilter(ctx context.Context, store Store, machine string) (str
 	return ResolveMachineFilterWithMetadata(ctx, store, machine, labels, aliases)
 }
 
-// knownMachineIDs lists identities named by metadata. The archive also accepts
-// its legacy local selector even before it has persisted an identity.
-func knownMachineIDs(store Store, labels, aliases map[string]string) map[string]bool {
+// knownMachineIDs lists identities named by metadata.
+func knownMachineIDs(labels, aliases map[string]string) map[string]bool {
 	known := make(map[string]bool, len(labels)+len(aliases))
-	if _, local := store.(*DB); local {
-		known["local"] = true
-	}
 	for id := range labels {
 		known[id] = true
 	}
@@ -158,17 +154,11 @@ func knownMachineIDs(store Store, labels, aliases map[string]string) map[string]
 func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine string, labels, aliases map[string]string) (string, error) {
 	machine = strings.TrimSpace(machine)
 	parts := splitCSV(CanonicalMachineFilter(machine, aliases))
-	known := knownMachineIDs(store, labels, aliases)
-	var candidates []string
-	for id, label := range labels {
-		if label == machine {
-			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
-		}
-	}
+	known := knownMachineIDs(labels, aliases)
 	// Confirm identities absent from metadata against retained session rows.
 	var unconfirmed []string
 	for _, id := range parts {
-		if !known[id] && (config.ValidateInstallationID(id) != nil || len(parts) == 1 && len(candidates) > 0) {
+		if !known[id] && config.ValidateInstallationID(id) != nil {
 			unconfirmed = append(unconfirmed, id)
 		}
 	}
@@ -181,17 +171,19 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 			known[id] = true
 		}
 	}
-	validIDs := len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil })
-	if len(parts) > 0 && (!slices.ContainsFunc(parts, func(id string) bool { return !known[id] }) || len(parts) > 1 && validIDs) {
+	if len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil }) {
 		return strings.Join(parts, ","), nil
+	}
+	var candidates []string
+	for id, label := range labels {
+		if label == machine {
+			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
+		}
 	}
 	slices.Sort(candidates)
 	candidates = slices.Compact(candidates)
 	if len(candidates) == 1 {
 		return candidates[0], nil
-	}
-	if len(candidates) == 0 && validIDs {
-		return strings.Join(parts, ","), nil
 	}
 	names, err := store.GetMachines(ctx, false, false)
 	if err != nil {

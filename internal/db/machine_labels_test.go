@@ -39,7 +39,11 @@ func TestResolveMachineFilter(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	d := testDB(t)
 	ctx := t.Context()
-	t.Run("legacy local sentinel in empty archive", func(t *testing.T) {
+	t.Run("stored local ID without an installation alias", func(t *testing.T) {
+		d := testDB(t)
+		_, err := ResolveMachineFilter(ctx, d, "local")
+		require.Error(t, err)
+		require.NoError(t, d.UpsertSession(ctx, Session{ID: "local-session", Machine: "local", Project: "project", Agent: "claude"}))
 		got, err := ResolveMachineFilter(ctx, d, "local")
 		require.NoError(t, err)
 		assert.Equal(t, "local", got)
@@ -65,7 +69,7 @@ func TestResolveMachineFilter(t *testing.T) {
 	}
 	for _, tt := range []struct{ input, want string }{
 		{id, id},
-		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hex-label-owner"},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		// An installation ID without stored sessions stays an exact selector.
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a"},

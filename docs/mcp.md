@@ -16,6 +16,10 @@ MCP tool results warn when the archive is stale during a full parser rebuild.
 
 ## When To Use It
 
+Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
+unique whole display label. A valid 32-hex installation ID takes precedence even
+without stored sessions. Unknown or ambiguous names return an error with choices.
+
 Use the MCP server when you want a coding assistant to answer questions such as:
 
 - "Have I solved this error before?"

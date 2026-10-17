@@ -35,7 +35,11 @@ type LoadOptions = {
   force?: boolean;
 };
 
-type MachineResolution = { machine: string } | { error: "invalid" | "unavailable" };
+type MachineResolution = {
+  selector: string;
+  status: "pending" | "resolved" | "invalid" | "unavailable";
+  error?: string;
+};
 
 const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
@@ -304,7 +308,6 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   machineLabels: Record<string, string> = $state({});
-  machineFilterUpdateFailed = $state(false);
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
@@ -348,10 +351,8 @@ class SessionsStore {
   private childSessionsVersion: number = 0;
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
-  private machinesVersion: number = 0;
-  private canonicalMachineSelectors = $state<Record<string, boolean>>(Object.create(null));
-  private machineSelectorRevision = 0;
-  private machineResolutionInflight = new Map<string, Promise<MachineResolution>>();
+  private machineRead = new LatestRead();
+  private machineResolution = $state<MachineResolution | null>(null);
   private sidebarHydrationInflightByVersion = new Map<number, Map<string, Promise<void>>>();
   private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
@@ -448,8 +449,7 @@ class SessionsStore {
 
   resetFiltersForRoot(): void {
     const previous = this.filters;
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters = defaultFilters();
     this.dateFiltersWindowDays = null;
     starred.filterOnly = false;
@@ -467,8 +467,7 @@ class SessionsStore {
   restoreSavedFilters(): void {
     const previous = this.filters;
     this.#savedFilters = loadSavedFilters();
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters = this.#savedFilters.filters;
     this.dateFiltersWindowDays = this.#savedFilters.windowDays;
     this.filterPersistenceHeld = false;
@@ -479,7 +478,7 @@ class SessionsStore {
     ) {
       this.invalidateFilterCaches();
     }
-    void this.normalizeMachineFilter();
+    void this.loadMachines();
     this.setActiveSession(null);
   }
 
@@ -502,8 +501,7 @@ class SessionsStore {
     const prevAutomated = this.filters.includeAutomated;
     const prevAutomatedSet = this.filters.automatedFilterSet;
     const next = parseFiltersFromParams(params);
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters = next;
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
@@ -515,7 +513,7 @@ class SessionsStore {
     ) {
       this.invalidateFilterCaches();
     }
-    void this.normalizeMachineFilter();
+    void this.loadMachines();
     this.setActiveSession(null);
   }
 
@@ -880,85 +878,95 @@ class SessionsStore {
   }
 
   async loadMachines() {
-    const normalization = this.normalizeMachineFilter();
-    if (this.machinesPromise) {
-      await this.machinesPromise;
-      await normalization;
-      return;
+    if (this.filters.machine && !this.filters.machine.trim()) {
+      this.filters.machine = "";
+      this.persistFiltersIfAllowed();
     }
-    if (this.machinesLoaded) {
-      await normalization;
+    const selector = this.filters.machine;
+    if (this.machineResolution?.selector !== selector) this.resetMachineResolution();
+    if (this.machinesPromise) return this.machinesPromise;
+    if (
+      this.machineResolution?.status === "invalid" ||
+      (this.machineResolution?.status === "resolved" && this.machinesLoaded)
+    )
       return;
-    }
-    const ver = this.machinesVersion;
-    this.machinesPromise = (async () => {
-      try {
-        const res = await MetadataService.getApiV1Machines(this.metadataParams);
-        if (ver === this.machinesVersion) {
-          this.machines = res.machines;
-          this.machineLabels = res.machine_labels ?? {};
-          this.machinesLoaded = true;
-        }
-      } catch {
-        // Non-fatal; machines list stays stale.
-      } finally {
-        if (ver === this.machinesVersion) {
-          this.machinesPromise = null;
-        }
+    const signal = this.machineRead.begin();
+    this.machineResolution = { selector, status: "pending" };
+    this.machinesPromise = this.readMachines(selector, signal);
+    return this.machinesPromise;
+  }
+
+  private async readMachines(selector: string, signal: AbortSignal) {
+    const params = this.metadataParams;
+    try {
+      const res = await MetadataService.getApiV1Machines({
+        ...params,
+        machine: selector || undefined,
+      });
+      if (!this.machineRead.isCurrent(signal) || this.filters.machine !== selector) return;
+      this.applyMachineCatalog(res);
+      if (selector && !res.resolved_machines?.length) {
+        this.machineResolution = { selector, status: "unavailable" };
+        return;
       }
-    })();
-    await this.machinesPromise;
-    await normalization;
+      this.filters.machine = selector ? [...new Set(res.resolved_machines)].join(",") : "";
+      this.machineResolution = { selector: this.filters.machine, status: "resolved" };
+      this.persistFiltersIfAllowed();
+    } catch (error) {
+      if (!this.machineRead.isCurrent(signal) || this.filters.machine !== selector) return;
+      const invalid = error instanceof ApiError && error.code === "invalid_machine_filter";
+      this.machineResolution = {
+        selector,
+        status: invalid ? "invalid" : "unavailable",
+        error: error instanceof Error ? error.message : undefined,
+      };
+      if (invalid) {
+        const catalog = await MetadataService.getApiV1Machines(params).catch(() => null);
+        if (catalog && this.machineRead.isCurrent(signal)) this.applyMachineCatalog(catalog);
+      }
+    } finally {
+      if (this.machineRead.finish(signal)) this.machinesPromise = null;
+    }
+  }
+
+  private applyMachineCatalog(res: Awaited<ReturnType<typeof MetadataService.getApiV1Machines>>) {
+    this.machines = res.machines;
+    this.machineLabels = res.machine_labels ?? {};
+    this.machinesLoaded = true;
+  }
+
+  private resetMachineResolution() {
+    this.machineRead.cancel();
+    this.machinesPromise = null;
+    this.machineResolution = null;
+  }
+
+  retryMachineFilter() {
+    this.resetMachineResolution();
+    return this.loadMachines();
+  }
+
+  get machineFilterPending(): boolean {
+    return this.machineResolution?.status === "pending";
+  }
+  get machineFilterUpdateFailed(): boolean {
+    return this.machineResolution?.status === "unavailable";
+  }
+  get machineFilterError(): string | null {
+    return this.machineResolution?.status === "invalid"
+      ? (this.machineResolution.error ?? null)
+      : null;
+  }
+  get machineRowsDisabled(): boolean {
+    return (
+      this.machineFilterPending ||
+      this.machineFilterUpdateFailed ||
+      (!!this.filters.machine && this.machineResolution?.selector !== this.filters.machine)
+    );
   }
 
   machineLabel(machine: string): string {
     return this.machineLabels[machine] ?? machine;
-  }
-
-  // Resolve whole selectors on the server, including identities omitted from
-  // the picker catalog, before splitting the selection for picker edits.
-  private async normalizeMachineFilter(): Promise<"resolved" | "invalid" | "unavailable"> {
-    const selector = this.filters.machine;
-    if (selector && !selector.trim()) {
-      this.filters.machine = "";
-      this.persistFiltersIfAllowed();
-      return "resolved";
-    }
-    if (!selector || this.canonicalMachineSelectors[selector]) return "resolved";
-    const revision = this.machineSelectorRevision;
-    const key = `${revision}:${selector}`;
-    let pending = this.machineResolutionInflight.get(key);
-    if (!pending) {
-      pending = (async (): Promise<MachineResolution> => {
-        try {
-          const res = await MetadataService.getApiV1Machines({ machine: selector });
-          if (revision !== this.machineSelectorRevision) return { error: "unavailable" };
-          if (!res.resolved_machines?.length) return { error: "unavailable" };
-          const machine = [...new Set(res.resolved_machines)].join(",");
-          this.canonicalMachineSelectors[machine] = true;
-          return { machine };
-        } catch (error) {
-          return {
-            error:
-              error instanceof ApiError && error.code === "invalid_machine_filter"
-                ? "invalid"
-                : "unavailable",
-          };
-        } finally {
-          this.machineResolutionInflight.delete(key);
-        }
-      })();
-      this.machineResolutionInflight.set(key, pending);
-    }
-    const result = await pending;
-    if (revision !== this.machineSelectorRevision) return "unavailable";
-    if ("error" in result) return result.error;
-    if (this.filters.machine !== selector) {
-      return this.canonicalMachineSelectors[this.filters.machine] ? "resolved" : "unavailable";
-    }
-    this.filters.machine = result.machine;
-    this.persistFiltersIfAllowed();
-    return "resolved";
   }
 
   private setActiveSession(id: string | null) {
@@ -1215,8 +1223,7 @@ class SessionsStore {
 
   setProjectFilter(project: string) {
     const prev = this.filters;
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters = { ...defaultFilters(), project, agent: prev.agent };
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
@@ -1231,42 +1238,40 @@ class SessionsStore {
   }
 
   setMachineFilter(machine: string) {
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters.machine = this.filters.machine === machine ? "" : machine;
     this.activeSessionId = null;
     void this.load();
   }
 
-  async toggleMachineFilter(machine: string) {
-    const revision = this.machineSelectorRevision;
-    const outcome = await this.normalizeMachineFilter();
-    if (revision !== this.machineSelectorRevision) return;
-    this.machineFilterUpdateFailed = outcome === "unavailable";
-    if (this.machineFilterUpdateFailed) return;
-    const current = this.canonicalMachineSelectors[this.filters.machine]
-      ? this.filters.machine.split(",")
-      : [];
+  toggleMachineFilter(machine: string) {
+    if (this.machineRowsDisabled) return;
+    const current =
+      this.machineResolution?.status === "resolved" && this.filters.machine
+        ? this.filters.machine.split(",")
+        : [];
     const idx = current.indexOf(machine);
-    if (idx >= 0) {
-      current.splice(idx, 1);
-    } else {
-      current.push(machine);
-    }
+    if (idx >= 0) current.splice(idx, 1);
+    else current.push(machine);
+    this.resetMachineResolution();
     this.filters.machine = current.join(",");
-    this.canonicalMachineSelectors[this.filters.machine] = true;
+    this.machineResolution = { selector: this.filters.machine, status: "resolved" };
     this.setActiveSession(null);
     void this.load();
   }
 
   isMachineSelected(machine: string): boolean {
-    if (!this.filters.machine) return false;
-    return this.filters.machine.split(",").includes(machine);
+    return (
+      this.machineResolution?.status === "resolved" &&
+      this.machineResolution.selector === this.filters.machine &&
+      this.filters.machine.split(",").includes(machine)
+    );
   }
 
   get selectedMachines(): string[] {
     if (!this.filters.machine) return [];
-    return this.canonicalMachineSelectors[this.filters.machine]
+    return this.machineResolution?.status === "resolved" &&
+      this.machineResolution.selector === this.filters.machine
       ? this.filters.machine.split(",")
       : [this.filters.machine];
   }
@@ -1429,8 +1434,7 @@ class SessionsStore {
       filters.labels = this.filters.labels;
       filters.pr = this.filters.pr;
     }
-    this.machineSelectorRevision++;
-    this.machineFilterUpdateFailed = false;
+    this.resetMachineResolution();
     this.filters = filters;
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
@@ -1558,7 +1562,7 @@ class SessionsStore {
 
   // Newer metadata can make a previously resolved display name ambiguous.
   private resetMachineCatalog() {
-    this.machinesVersion++;
+    this.resetMachineResolution();
     this.machinesLoaded = false;
     this.machinesPromise = null;
   }

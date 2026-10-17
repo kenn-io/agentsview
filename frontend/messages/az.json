@@ -444,6 +444,7 @@
   "sidebar_filters_no_match": "Uyğunluq yoxdur",
   "sidebar_filters_no_agents": "Agent yoxdur",
   "sidebar_filters_machine": "Kompüter",
+  "sidebar_filters_machine_update_failed": "Kompüter filtrini yeniləmək mümkün olmadı. Yenidən cəhd edin.",
   "sidebar_filters_search_machines": "Kompüterləri axtar...",
   "sidebar_filters_no_machines": "Kompüter yoxdur",
   "sidebar_filters_min_prompts": "Minimum sorğu sayı",

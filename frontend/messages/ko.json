@@ -429,6 +429,7 @@
   "sidebar_filters_no_match": "일치 항목 없음",
   "sidebar_filters_no_agents": "에이전트 없음",
   "sidebar_filters_machine": "머신",
+  "sidebar_filters_machine_update_failed": "머신 필터를 업데이트하지 못했습니다. 다시 시도해 주세요.",
   "sidebar_filters_search_machines": "머신 검색...",
   "sidebar_filters_no_machines": "머신 없음",
   "sidebar_filters_min_prompts": "최소 프롬프트 수",

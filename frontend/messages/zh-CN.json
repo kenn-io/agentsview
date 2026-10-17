@@ -429,6 +429,7 @@
   "sidebar_filters_no_match": "无匹配",
   "sidebar_filters_no_agents": "无 agents",
   "sidebar_filters_machine": "Machine",
+  "sidebar_filters_machine_update_failed": "无法更新机器筛选条件。请重试。",
   "sidebar_filters_search_machines": "搜索 machines...",
   "sidebar_filters_no_machines": "无 machines",
   "sidebar_filters_min_prompts": "最少提示数",

@@ -266,7 +266,7 @@ Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. Exact ID/alias lists take precedence over a
 same-spelled label. Otherwise, the complete input is matched against labels,
 including labels containing commas. A valid 32-character hexadecimal installation
-ID keeps its precedence even without stored sessions. Unknown or ambiguous selectors
+ID takes precedence over a same-text label even without stored sessions. Unknown or ambiguous selectors
 return HTTP 400 with code `invalid_machine_filter`.
 
 In JSON output, `sessions[].machine` keeps the machine key. Look it up in the

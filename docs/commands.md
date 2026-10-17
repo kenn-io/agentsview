@@ -1710,6 +1710,10 @@ ______________________________________________________________________
 
 ### `agentsview session`
 
+Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
+unique whole display label. A valid 32-hex installation ID takes precedence even
+without stored sessions. Unknown or ambiguous names return an error with choices.
+
 Programmatic access to session data for scripts, automation agents, and CI jobs.
 See [Session API](/docs/session-api/) for full documentation, including
 stability guarantees, transport auto-detection, and every subcommand.
