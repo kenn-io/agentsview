@@ -219,6 +219,16 @@ func TestCompareChatGPTPrefixReconcilesImages(t *testing.T) {
 	_, ok = compareChatGPTPrefix([]db.Message{reference}, []db.Message{otherReference})
 	assert.False(t, ok, "different image references must diverge")
 
+	// An image upgrade and a text completion can arrive in the same update.
+	partial := msg("[image unavailable]\nPartial")
+	extended := msg("![image](assets/chart-1.png)\nPartial completed")
+	completed, ok = compareChatGPTPrefix([]db.Message{partial}, []db.Message{extended})
+	assert.True(t, ok, "image replacement plus text completion must reconcile")
+	assert.Equal(t, []int{0}, completed)
+	otherExtended := msg("![image](assets/chart-2.png)\nPartial completed")
+	_, ok = compareChatGPTPrefix([]db.Message{msg("![image](assets/chart-1.png)\nPartial")}, []db.Message{otherExtended})
+	assert.False(t, ok, "different images must still diverge when the text also extends")
+
 	// Text outside the image still has to match exactly.
 	changed := msg("Here is the graph [image unavailable] and notes.")
 	_, ok = compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{changed})
@@ -243,10 +253,26 @@ func TestSyncChatGPTStopsWhenBrowserDisconnects(t *testing.T) {
 			return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
 		}
 		details++
-		return ClaudeAIResponse{}, errors.New("chrome host not connected")
+		return ClaudeAIResponse{}, fmt.Errorf("%w (not connected)", ErrBrowserDisconnected)
 	}, nil)
-	require.ErrorContains(t, err, "chrome host not connected")
+	require.ErrorIs(t, err, ErrBrowserDisconnected)
 	assert.Equal(t, 1, details, "a disconnected browser must stop the run at the first request")
+}
+
+func TestSyncChatGPTCountsPageTimeoutsWhileBrowserStaysConnected(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		if path == chatGPTRequest(chatGPTListRequest, "", 0) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
+		}
+		details++
+		return ClaudeAIResponse{}, errors.New("browser fetch timed out")
+	}, nil)
+	require.ErrorContains(t, err, "failed 3 times in a row")
+	require.NotErrorIs(t, err, ErrBrowserDisconnected)
+	assert.Equal(t, chatGPTMaxConsecutiveDetailFailures, details,
+		"a timeout with the host still connected counts toward the failure limit instead of aborting at once")
 }
 
 func TestSyncChatGPTStopsAfterRepeatedDetailFailures(t *testing.T) {

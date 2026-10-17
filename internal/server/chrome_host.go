@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
@@ -138,7 +139,7 @@ func (h *chromeHost) Connected() bool {
 }
 
 func (h *chromeHost) read(conn *chromeConnection) {
-	disconnectErr := errors.New("chrome host disconnected")
+	disconnectErr := importer.ErrBrowserDisconnected
 	defer func() {
 		_ = conn.Close()
 		h.mu.Lock()
@@ -195,7 +196,7 @@ func (h *chromeHost) fetch(ctx context.Context, platform chromehost.Platform, pa
 	conn := h.connection
 	h.mu.Unlock()
 	if conn == nil {
-		return importer.ClaudeAIResponse{}, errors.New("chrome host not connected")
+		return importer.ClaudeAIResponse{}, fmt.Errorf("%w (not connected)", importer.ErrBrowserDisconnected)
 	}
 	id := rand.Text()
 	answer := make(chan claudeAISyncResult, 1)
@@ -211,7 +212,7 @@ func (h *chromeHost) fetch(ctx context.Context, platform chromehost.Platform, pa
 	defer func() { conn.mu.Lock(); delete(conn.pending, id); conn.mu.Unlock() }()
 	if err != nil {
 		_ = conn.Close()
-		return importer.ClaudeAIResponse{}, err
+		return importer.ClaudeAIResponse{}, fmt.Errorf("%w: %v", importer.ErrBrowserDisconnected, err)
 	}
 	return awaitBrowserResponse(ctx, answer)
 }
