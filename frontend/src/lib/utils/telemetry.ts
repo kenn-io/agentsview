@@ -41,9 +41,11 @@ export function reportErrorShown(kind: ErrorKind): void {
 
 export function reportSyncFailed(error: unknown): void {
   let reason: SyncFailureReason = "other";
-  const isError = error instanceof Error || error instanceof DOMException;
-  const code =
-    isError && "code" in error && typeof error.code === "string" ? error.code : undefined;
+  let code: string | undefined;
+  if (error instanceof Error || error instanceof DOMException) {
+    const errorCode: unknown = "code" in error ? error.code : undefined;
+    if (typeof errorCode === "string") code = errorCode;
+  }
   switch (code) {
     case "sync_running":
     case "claude_ai_sync_running":
@@ -57,7 +59,9 @@ export function reportSyncFailed(error: unknown): void {
       reason = "browser_extension";
       break;
     default:
-      if (isError && code === undefined) reason = "request";
+      if ((error instanceof Error || error instanceof DOMException) && code === undefined) {
+        reason = "request";
+      }
   }
 
   reportTelemetry("sync_failed", { reason });
