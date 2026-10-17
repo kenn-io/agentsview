@@ -161,7 +161,7 @@ func (db *DB) loadReportingExportSource(
 	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
-	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
+	if len(labels) > 0 || export.IsJointReportingSchemaVersion(schemaVersion) {
 		archiveID, archiveSalt, scopeErr := reportingArchiveScope(ctx, tx)
 		if scopeErr != nil {
 			return source, scopeErr
@@ -180,7 +180,7 @@ func (db *DB) loadReportingExportSource(
 		}
 	}
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		references, err = db.reportingSessionReferences(ctx, tx, allSessions)
 		if err != nil {
 			return source, err

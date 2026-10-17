@@ -584,7 +584,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // state to the new id.)
 // (135: reparse Vibe sessions in place so existing search_replace tool calls
 // gain the corrected Edit category without changing session identities.)
-const dataVersion = 135
+// (137: rebuild Codex rollouts under their first session_meta identity.
+// Version 136 was used by unreleased builds of this fix and is skipped.)
+const dataVersion = 137
 
 const archiveOnlyVersionBase = 1 << 20
 

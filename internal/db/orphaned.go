@@ -1093,6 +1093,9 @@ const codexRevertPageDataVersion = 131
 // stored as codex:<rollout> instead of codex:<thread>_<rollout>.
 const codexLegacyPageHeaderDataVersion = 134
 
+// codexThreadIdentityDataVersion preserves the first session_meta identity.
+const codexThreadIdentityDataVersion = 137
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -2920,7 +2923,8 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 // The complete map also handles pre-version-40 fork identities. Pre-131
 // thread-to-page mappings and pre-134 rollout-to-page mappings move curation,
 // Recall, and conversation identities. Only the pre-134 mappings retire the
-// source ID, so only they also remap relationships, labels, and launcher
+// source ID. Proven pre-137 thread corrections also move transcript metadata.
+// Only retired mappings remap relationships, labels, and launcher
 // parents (retired = 1). A pre-134 candidate whose source ID the fresh parse
 // already produced is no page: the parser rejected it and kept its own ID.
 // Populate in batches, then check destination IDs with joins instead of one
@@ -2946,7 +2950,7 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("reading Codex source version: %w", err)
 	}
 	version, _ = DecodeUserVersion(version)
-	if version >= codexLegacyPageHeaderDataVersion && !includeLegacyForks {
+	if version >= codexThreadIdentityDataVersion && !includeLegacyForks {
 		return version, nil
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
@@ -2957,9 +2961,30 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	if !hasSessionFiles {
 		return version, nil
 	}
-	candidates, err := codexRowsReparsedElsewhere(ctx, conn)
-	if err != nil {
-		return 0, err
+	candidates := make(map[string]string)
+	if version < codexLegacyPageHeaderDataVersion || includeLegacyForks {
+		candidates, err = codexRowsReparsedElsewhere(ctx, conn)
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Thread corrections require the fresh parse at the exact stored path.
+	// Filename mappings remain available only for the older page/fork repair.
+	threads := make(map[string]string)
+	if version < codexThreadIdentityDataVersion {
+		threads, err = codexThreadCorrections(ctx, conn)
+		if err != nil {
+			return 0, err
+		}
+	}
+	targets := make(map[string]bool, len(threads))
+	for _, target := range threads {
+		targets[target] = true
+	}
+	for source, target := range threads {
+		if isCodexThreadCorrection(threads, targets, source, target) {
+			candidates[source] = target
+		}
 	}
 	var args []any
 	flush := func() error {
@@ -2973,12 +2998,14 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	}
 	for sourceID, targetID := range candidates {
 		prefixEnd := strings.LastIndex(sourceID, ":") + 1
-		sourceKey, targetKey := sourceID[prefixEnd:], targetID[prefixEnd:]
+		sourceKey := sourceID[prefixEnd:]
+		targetKey := targetID[strings.LastIndex(targetID, ":")+1:]
 		thread := parser.CodexThreadIDFromSessionKey(targetKey)
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
-		args = append(args, sourceID, targetID, headPage || retired, retired)
+		misfiledThread := isCodexThreadCorrection(threads, targets, sourceID, targetID)
+		args = append(args, sourceID, targetID, headPage || retired || misfiledThread, retired)
 		if len(args) >= 900 {
 			if err := flush(); err != nil {
 				return 0, fmt.Errorf("mapping Codex session IDs: %w", err)
@@ -2997,6 +3024,35 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
+}
+
+func codexThreadCorrections(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
+		FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
+		WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
+		  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
+		  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
+	if err != nil {
+		return nil, fmt.Errorf("finding reparsed Codex threads: %w", err)
+	}
+	defer rows.Close()
+	threads := make(map[string]string)
+	for rows.Next() {
+		var source, target string
+		if err := rows.Scan(&source, &target); err != nil {
+			return nil, fmt.Errorf("scanning reparsed Codex threads: %w", err)
+		}
+		threads[source] = target
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading reparsed Codex threads: %w", err)
+	}
+	return threads, nil
+}
+
+// isCodexThreadCorrection excludes both ends of a correction chain.
+func isCodexThreadCorrection(threads map[string]string, targets map[string]bool, source, target string) bool {
+	return threads[source] == target && threads[target] == "" && !targets[source]
 }
 
 // codexRowsReparsedElsewhere maps each old Codex-format row to the id its

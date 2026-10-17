@@ -293,6 +293,7 @@ func perHourPairingReportingHoursFromSource(
 		createdAt,
 		events,
 		activityUsage,
+		nil,
 	)
 	for i := range hours {
 		if err := ctx.Err(); err != nil {

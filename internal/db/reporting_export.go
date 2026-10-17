@@ -122,7 +122,7 @@ func (db *DB) ExportReportingDay(
 		Complete:      complete,
 		Hours:         hours,
 	}
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		day.BucketSeconds = int(bucket / time.Second)
 	}
 	day, _, err = export.FinalizeReportingDay(day)
@@ -243,7 +243,7 @@ func (db *DB) ExportReportingDigest(
 			Complete:      resolved.complete,
 			Hours:         hours,
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			day.BucketSeconds = int(bucket / time.Second)
 		}
 		day, _, err = export.FinalizeReportingDay(day)
@@ -336,8 +336,16 @@ func reportingHoursFromSource(
 	}
 	projects := source.projects
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	var groupLabels map[string]string
+	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		references = source.references
+		if schemaVersion == export.ReportingIdentitySchemaVersion {
+			projects, references, groupLabels = partitionReportingProjects(sessionByID, projects, references)
+			sessions = slices.Clone(sessions)
+			for i := range sessions {
+				sessions[i] = sessionByID[sessions[i].SessionID]
+			}
+		}
 		sessions, ids, events, usage = scopeJointReporting(sessions, events, usage, sessionByID, projects, projectKeys)
 		for i := range sessions {
 			sessions[i].ProjectKey = export.ProjectKeyForEntry(projects[sessions[i].Project])
@@ -355,6 +363,7 @@ func reportingHoursFromSource(
 		createdAt,
 		events,
 		activityUsage,
+		groupLabels,
 	)
 	// Pair once for the whole range. Prior-model inheritance does not depend on
 	// the pruning window, and each hour's window [hourStart-gapCap, hourEnd)
@@ -377,7 +386,7 @@ func reportingHoursFromSource(
 			candidates = dayCandidates[first:last:last]
 		}
 		aggregate := activity.AggregateCandidates
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			aggregate = activity.AggregateCandidatesWithJointActivity
 		}
 		report, aggregateErr := aggregate(ctx, activity.Params{
@@ -421,11 +430,14 @@ func reportingHoursFromSource(
 		if !hour.HasData {
 			hour = quietReportingHour(hourStart, schemaVersion, bucket)
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			hour.BucketSeconds = int(bucket / time.Second)
 			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, report.BySession, usage, sessionByID, projects, references, projectKeys)
 			if err != nil {
 				return nil, err
+			}
+			if schemaVersion == export.ReportingIdentitySchemaVersion {
+				restoreReportingProjectLabels(&hour, projects, groupLabels)
 			}
 		}
 		hours[i] = hour
@@ -848,6 +860,7 @@ func buildReportingFirstSeen(
 	createdAt map[string]time.Time,
 	events []activity.ActivityEvent,
 	usage []activity.UsageRow,
+	groupLabels map[string]string,
 ) map[int]reportingFirstSeenCounts {
 	sessionFirst := make(map[string]time.Time, len(sessions))
 	timed := make(map[string]bool, len(sessions))
@@ -923,8 +936,13 @@ func buildReportingFirstSeen(
 	sessionByID := make(map[string]activity.SessionMeta, len(sessions))
 	for _, session := range sessions {
 		sessionByID[session.SessionID] = session
-		if at, ok := sessionFirst[session.SessionID]; ok && session.Project != "" {
-			setEarlierReportingTime(projectFirst, session.Project, at)
+		// Identity groups split a project; count the project, as version 4 does.
+		project := session.Project
+		if label, grouped := groupLabels[project]; grouped {
+			project = label
+		}
+		if at, ok := sessionFirst[session.SessionID]; ok && project != "" {
+			setEarlierReportingTime(projectFirst, project, at)
 		}
 	}
 	for _, event := range events {
