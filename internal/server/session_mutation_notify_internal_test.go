@@ -69,7 +69,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 		`{"session_ids":["sess-1"]}`)
 	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(1), notified.Load(), "trashing must notify")
-	readable, err := database.HasReadableSessions(t.Context())
+	readable, err := database.HasVisibleSession(t.Context())
 	require.NoError(t, err)
 	assert.False(t, readable)
 
@@ -82,7 +82,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "restored session did not broadcast sessions")
 	}
-	readable, err = database.HasReadableSessions(t.Context())
+	readable, err = database.HasVisibleSession(t.Context())
 	require.NoError(t, err)
 	assert.True(t, readable)
 

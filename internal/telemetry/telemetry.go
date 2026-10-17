@@ -109,7 +109,7 @@ func (r *Reporter) EventAllowed(event string) bool {
 	return r != nil && r.client != nil && r.client.EventAllowed(event)
 }
 
-// CaptureSetupFinished queues the daemon's first readable archive milestone.
+// CaptureSetupFinished queues the daemon's first visible session milestone.
 func (r *Reporter) CaptureSetupFinished(ctx context.Context) error {
 	status, err := r.client.Report(ctx, EventSetupFinished, nil)
 	if err != nil {

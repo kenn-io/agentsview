@@ -31,6 +31,19 @@ func (c *Config) ClaimSetupFinished(send func() error) error {
 	return c.claimTelemetry(telemetrySetupFinishedFilename, c.InstallationID, send)
 }
 
+// SetupFinishedClaimed reports whether this installation already queued setup.
+func (c *Config) SetupFinishedClaimed() (claimed bool, err error) {
+	err = c.withConfigLock(func() error {
+		record, err := os.ReadFile(filepath.Join(c.DataDir, telemetrySetupFinishedFilename))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		claimed = err == nil && strings.TrimSpace(string(record)) == c.InstallationID
+		return err
+	})
+	return claimed, err
+}
+
 func (c *Config) claimTelemetry(filename, record string, send func() error) error {
 	return c.withConfigLock(func() error {
 		path := filepath.Join(c.DataDir, filename)

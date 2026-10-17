@@ -18,6 +18,62 @@ import (
 	"go.kenn.io/docbank"
 )
 
+func TestRecoveryPreservesSetupClaim(t *testing.T) {
+	ctx := t.Context()
+	opts := captureFixture(t)
+	opts.Roots[0].Provider = "files"
+	const installation = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dbtest.WriteTestFile(t, filepath.Join(opts.DataDir, "telemetry-install-id"), []byte(installation))
+	cfg := config.Config{DataDir: opts.DataDir, InstallationID: installation}
+	require.NoError(t, cfg.ClaimSetupFinished(func() error { return nil }))
+	_, err := Capture(ctx, opts)
+	require.NoError(t, err)
+	seed := filepath.Join(t.TempDir(), "seed")
+	_, err = Seed(ctx, filepath.Join(opts.Destination, "capture.json"), seed, nil)
+	require.NoError(t, err)
+	seedCfg := config.Config{DataDir: seed, InstallationID: installation}
+	require.NoError(t, seedCfg.ClaimSetupFinished(func() error {
+		assert.Fail(t, "seed reported setup again")
+		return nil
+	}))
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	archive, err := Open(ctx, database, seed, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
+	backup := filepath.Join(t.TempDir(), "backup")
+	report, err := archive.Backup(ctx, backup, opts.Settings, "test")
+	require.NoError(t, err)
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = Restore(ctx, backup, report.SnapshotID, restored, nil)
+	require.NoError(t, err)
+	restoredCfg := config.Config{DataDir: restored, InstallationID: installation}
+	require.NoError(t, restoredCfg.ClaimSetupFinished(func() error {
+		assert.Fail(t, "restore reported setup again")
+		return nil
+	}))
+	// An ordinary import adds content to the receiver's identity and claim.
+	spec, err := LoadImportSpec(ctx, filepath.Join(opts.Destination, "capture.json"))
+	require.NoError(t, err)
+	for _, claimed := range []bool{false, true} {
+		receiverDB := dbtest.OpenTestDB(t)
+		require.NoError(t, receiverDB.EnableArchiveOnly(ctx))
+		receiver := config.Config{DataDir: t.TempDir(), InstallationID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+		if claimed {
+			require.NoError(t, receiver.ClaimSetupFinished(func() error { return nil }))
+		}
+		receiverArchive, err := Open(ctx, receiverDB, receiver.DataDir, nil)
+		require.NoError(t, err)
+		_, err = receiverArchive.Import(ctx, spec)
+		require.NoError(t, err)
+		require.NoError(t, receiverArchive.Close())
+		got, err := receiver.SetupFinishedClaimed()
+		require.NoError(t, err)
+		assert.Equal(t, claimed, got)
+	}
+}
+
 func TestRecoveryPreservesBlockedResultCategories(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

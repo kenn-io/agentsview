@@ -23,14 +23,6 @@ const rootSessionFilter = `message_count > 0
 	AND relationship_type NOT IN ('subagent', 'fork')
 	AND deleted_at IS NULL`
 
-// HasReadableSessions reports whether the archive has a visible root session.
-func (db *DB) HasReadableSessions(ctx context.Context) (bool, error) {
-	var exists bool
-	err := db.getReader().QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM sessions WHERE `+rootSessionFilter+`)`).Scan(&exists)
-	return exists, err
-}
-
 func nonSourceBackedAgentPlaceholders() string {
 	agents := nonSourceBackedAgents()
 	placeholders := make([]string, len(agents))

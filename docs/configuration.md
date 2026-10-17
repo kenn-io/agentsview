@@ -1984,10 +1984,14 @@ UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
 
 The server sends `setup_finished` once per installation when the archive first
-contains a session with messages. Subagents, forks, and trashed sessions do not
-count. It checks at startup, after syncs and imports, and hourly for retries.
+has a session in the default session list. Sessions need messages to count;
+automated sessions and trash are excluded. Child sessions count when their
+parent is missing and the list shows them as roots. It checks at startup, after
+session changes, and hourly for retries.
 The `telemetry-setup-finished` file beside the installation identity records the
-claim across restarts and servers sharing the data directory. The event carries
+claim across restarts and servers sharing the data directory. Captures, seeds,
+backups, and restores preserve the claim with the installation identity.
+Ordinary imports keep the receiving installation's claim. The event carries
 no session details and follows the same telemetry opt-out. Existing installs
 with such a session send it on their first start after upgrading.
 

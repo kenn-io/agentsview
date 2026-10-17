@@ -35,8 +35,15 @@ func runSetupTelemetry(ctx context.Context, interval time.Duration, cfg config.C
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
-		readable, err := database.HasReadableSessions(ctx)
-		if err == nil && readable {
+		claimed, err := cfg.SetupFinishedClaimed()
+		if claimed {
+			return
+		}
+		var visible bool
+		if err == nil {
+			visible, err = database.HasVisibleSession(ctx)
+		}
+		if err == nil && visible {
 			err = cfg.ClaimSetupFinished(send)
 			if err == nil {
 				return
@@ -45,11 +52,18 @@ func runSetupTelemetry(ctx context.Context, interval time.Duration, cfg config.C
 		if err != nil && ctx.Err() == nil {
 			log.Printf("capture setup telemetry: %v", err)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-events:
-		case <-ticker.C:
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-events:
+				if event.Scope == "sessions" {
+					break wait
+				}
+			case <-ticker.C:
+				break wait
+			}
 		}
 	}
 }

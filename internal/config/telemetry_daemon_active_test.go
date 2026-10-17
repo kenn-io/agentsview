@@ -92,27 +92,33 @@ func TestClaimDaemonActiveDoesNotSendWhenRecordIsUnwritable(t *testing.T) {
 	assert.Zero(t, sends)
 }
 
-func TestClaimDaemonActiveConcurrent(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
-	var wg sync.WaitGroup
-	var sends atomic.Int32
-	errs := make(chan error, 8)
-	for range 8 {
-		wg.Go(func() {
-			c := Config{DataDir: dir, InstallationID: "install-one"}
-			errs <- c.ClaimDaemonActive(now, func() error {
-				sends.Add(1)
-				return nil
-			})
+func TestTelemetryClaimsConcurrent(t *testing.T) {
+	for _, event := range []string{"daemon_active", "setup_finished"} {
+		t.Run(event, func(t *testing.T) {
+			dir := t.TempDir()
+			now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+			var wg sync.WaitGroup
+			var sends atomic.Int32
+			errs := make(chan error, 8)
+			for range 8 {
+				wg.Go(func() {
+					c := Config{DataDir: dir, InstallationID: "install-one"}
+					send := func() error { sends.Add(1); return nil }
+					if event == "setup_finished" {
+						errs <- c.ClaimSetupFinished(send)
+					} else {
+						errs <- c.ClaimDaemonActive(now, send)
+					}
+				})
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				require.NoError(t, err)
+			}
+			assert.EqualValues(t, 1, sends.Load())
 		})
 	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	assert.EqualValues(t, 1, sends.Load())
 }
 
 func TestClaimSetupFinished(t *testing.T) {
