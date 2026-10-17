@@ -140,6 +140,10 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
+  and ingest fixtures. Text blocks retain literal thinking and tool markers;
+  separate thinking blocks remain available as reasoning. Cowork, iCodeMate CLI,
+  and Qoder share this parser. Amp and OpenClaude use the same block extraction.
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
@@ -2135,6 +2139,9 @@ schemas keep their existing ordering behavior.
 
 ## OpenHands (`openhands`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** A CLI conversation directory containing `base_state.json` and one
   JSON file per event under `events/`; Agentsview also fingerprints optional
   legacy `TASKS.json` files.
@@ -2172,6 +2179,9 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
+  shared block fixtures. Assistant text and thinking blocks remain separate.
+  Cursor IDE uses a different parser.
 - **Format:** Legacy text and newer JSONL transcripts under per-project
   `agent-transcripts` directories in three layouts: flat (`<id>.ext`), nested
   (`<id>/<id>.ext`), and subagent (`<parent>/subagents/<id>.ext`), where a
@@ -2554,6 +2564,10 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
+  ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
+  `thinking_text`, and tool calls retain their separate inputs and results. OMP,
+  OMO, Prime Agent, and StepCode share this parser.
 - **Format:** A tree-structured JSONL log with a session header and entries
   connected by `id` and `parentId`.
 - **Evidence:** `source`.
@@ -2967,6 +2981,9 @@ schemas keep their existing ordering behavior.
 
 ## OpenClaw (`openclaw`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** Per-agent session JSONL managed by the OpenClaw session store.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openclaw/openclaw.git` at
@@ -3033,6 +3050,9 @@ schemas keep their existing ordering behavior.
 
 ## QClaw (`qclaw`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** OpenClaw-compatible agent session JSONL with QClaw-specific root
   discovery.
 - **Evidence:** `no-public-source`.
@@ -3428,6 +3448,9 @@ schemas keep their existing ordering behavior.
 
 ## Devin CLI (`devin`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** `cli/sessions.db` for session metadata plus transcript JSON
   artifacts. The `sessions.created_at`, `sessions.last_activity_at`, and
   `message_nodes.created_at` columns are Unix epoch seconds (not
@@ -3842,6 +3865,9 @@ schemas keep their existing ordering behavior.
 
 ## iFlow CLI (`iflow`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the observed-format
+  ingest fixture. Assistant thinking blocks populate `thinking_text`; text
+  blocks supply dialogue. This adds no upstream format claim.
 - **Format:** Claude-like JSONL with UUID/parent UUID links and streaming
   message records.
 - **Evidence:** `no-public-source`.

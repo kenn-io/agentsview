@@ -525,6 +525,7 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, ParsedToolCall{ToolUseID: "call-1", ToolName: "read_file", Category: "Read", InputJSON: `{"file_path":"main.go"}`, Rendering: "[Read: main.go]"}, msgs[1].ToolCalls[0])
 	assert.Equal(t, RoleTool, msgs[2].Role)
+	assert.Equal(t, new(""), msgs[2].DialogueText)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, ParsedToolResult{ToolUseID: "call-1", ContentLength: len("package main\n"), ContentRaw: `"package main\n"`}, msgs[2].ToolResults[0])
 }

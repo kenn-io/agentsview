@@ -23,7 +23,7 @@ func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
 		{"claude", func(t *testing.T, ctx context.Context, path string) string {
 			t.Helper()
 
-			_, _, _, _, calls, _ := ExtractTextContent(ctx, gjson.Parse(
+			_, _, _, _, _, calls, _ := ExtractTextContent(ctx, gjson.Parse(
 				`[{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}]`,
 			))
 			require.Len(t, calls, 1)
@@ -552,7 +552,7 @@ func TestExtractTextContentInfersCursorJSONLSkillName(t *testing.T) {
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
+	_, _, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "Read", toolCalls[0].ToolName)
@@ -566,7 +566,7 @@ func TestExtractTextContentInfersCursorJSONLSkillNameFromFrontmatter(t *testing.
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
+	_, _, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "ReadFile", toolCalls[0].ToolName)
@@ -582,7 +582,7 @@ func TestExtractTextContentInfersSkillNameFromPathWithSpaces(t *testing.T) {
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
+	_, _, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "data-analytics:index", toolCalls[0].SkillName)
@@ -595,7 +595,7 @@ func TestExtractTextContentInfersCursorJSONLSkillNameFromShellRead(t *testing.T)
 			quoteJSON(t, "cd /tmp && sed -n '1,120p' "+path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
+	_, _, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "Shell", toolCalls[0].ToolName)
@@ -651,7 +651,7 @@ func TestExtractTextContentDoesNotInferCursorJSONLNonUsage(t *testing.T) {
 					quoteJSON(t, tt.toolName) + `,"input":` + tt.input + `}]`,
 			)
 
-			_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
+			_, _, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 			require.Len(t, toolCalls, 1)
 			assert.Empty(t, toolCalls[0].SkillName)

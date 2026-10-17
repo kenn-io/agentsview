@@ -182,6 +182,7 @@ func transcriptMessages(messages []Message) []Message {
 	for i := range stored {
 		if isToolOutputRow(stored[i]) {
 			stored[i].Content = ""
+			stored[i].DialogueText = nil
 			stored[i].ContentLength = 0
 		}
 		stored[i].ToolResults = nil
@@ -322,6 +323,7 @@ func usageOnlyMessages(messages []Message) []Message {
 		}
 		message.Content = ""
 		message.ThinkingText = ""
+		message.DialogueText = nil
 		message.ToolCalls = usageOnlyToolCalls(message.ToolCalls)
 		message.ToolResults = nil
 		message.HasThinking = false
@@ -553,28 +555,28 @@ func dropCopiedToolContentTx(
 			UPDATE tool_result_events SET content = ''
 			WHERE session_id` + inCopied},
 		{"tool-role message text", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE (role = 'tool' OR source_subtype = '` +
 			parser.SourceSubtypeToolResult + `')
 			  AND session_id` + inCopied},
 		// RooCode and Kilo Legacy stored unpaired tool output as system-flagged
 		// user or system rows.
 		{"unmarked RooCode and Kilo Legacy tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE is_system = 1 AND session_id` +
 			inUnmarked(`'`+string(parser.AgentRooCode)+`', '`+
 				string(parser.AgentKiloLegacy)+`'`)},
 		// Zencoder stored system blocks embedded in tool results as
 		// system-flagged user rows, just like ordinary system notices.
 		{"unmarked Zencoder tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE is_system = 1 AND session_id` +
 			inUnmarked(`'`+string(parser.AgentZencoder)+`'`)},
 		// Codex, TraeX, and Augure Code stored unpaired agent notifications
 		// as ordinary user rows, with no field that distinguishes them from
 		// prompts.
 		{"unmarked Codex, TraeX, and Augure Code tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE role = 'user' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentCodex)+`', '`+
 				string(parser.AgentTraeX)+`', '`+
@@ -582,20 +584,20 @@ func dropCopiedToolContentTx(
 		// gptme stored tool output as assistant rows without a model, while
 		// model replies carry the model name.
 		{"unmarked gptme tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE role = 'assistant' AND model = '' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentGptme)+`'`)},
 		// OpenHands stored unpaired observations as user rows that are
 		// indistinguishable from prompts, so every user row loses its text.
 		{"unmarked OpenHands tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE role = 'user' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentOpenHands)+`'`)},
 		// Aider surfaced its tool channel as assistant rows that are
 		// indistinguishable from replies, so every assistant row loses its
 		// text.
 		{"unmarked Aider tool output", `
-			UPDATE messages SET content = '', content_length = 0
+			UPDATE messages SET content = '', dialogue_text = NULL, content_length = 0
 			WHERE role = 'assistant' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentAider)+`'`)},
 	}
@@ -675,7 +677,7 @@ func compactCopiedSessionsForUsageTx(
 			               WHERE tc.message_id = messages.id))`},
 		{"message payloads", `
 			UPDATE messages
-			SET content = '', thinking_text = '', has_thinking = 0,
+			SET content = '', dialogue_text = NULL, thinking_text = '', has_thinking = 0,
 			    has_tool_use = EXISTS (SELECT 1 FROM tool_calls tc
 			                           WHERE tc.message_id = messages.id),
 			    content_length = 0, is_system = 0,

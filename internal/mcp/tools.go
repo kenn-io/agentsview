@@ -770,7 +770,7 @@ type contentMatch struct {
 	SessionID       string   `json:"session_id"`
 	Project         string   `json:"project,omitempty"`
 	Agent           string   `json:"agent"`
-	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
+	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, thinking, tool_input, or tool_result."`
 	Role            string   `json:"role,omitempty"`
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`

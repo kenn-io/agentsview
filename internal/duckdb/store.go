@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -857,6 +858,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	}
 	if f.Pattern == "" {
 		return db.ContentSearchPage{}, nil
+	}
+
+	if slices.Contains(f.Sources, "thinking") {
+		return db.ContentSearchPage{}, &db.SearchInputError{Msg: "search: thinking requires SQLite substring or regex mode"}
 	}
 
 	// Semantic and hybrid validate Sources themselves (messages only) ahead

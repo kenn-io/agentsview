@@ -194,7 +194,9 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// Projection bookkeeping and inherited trash scope add no content.
 			// Omit empty GroupKey values so existing revisions stay stable. Derived tool
 			// observation fields preserve the historical normalized-content-v1 representation.
+			// DialogueText is a local search projection, not captured source content.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
+				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) {
 				continue

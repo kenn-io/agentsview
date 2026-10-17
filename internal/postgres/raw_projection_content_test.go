@@ -209,4 +209,11 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	derivedKey, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	assert.Equal(t, key, derivedKey)
+	p.Messages[0].DialogueText = new("<>&\u2028\u2029")
+	projected, err := rawContentRevision(p)
+	require.NoError(t, err)
+	assert.Equal(t, got, projected, "local search projections preserve capture identity")
+	projectedKey, err := rawMessageKey(p.Messages[0])
+	require.NoError(t, err)
+	assert.Equal(t, key, projectedKey)
 }

@@ -455,22 +455,26 @@ func parsePiAssistantMessage(
 	sourceParentUUID, sessionCwd string,
 ) *ParsedMessage {
 	var (
-		parts       []string
-		toolCalls   []ParsedToolCall
-		hasThinking bool
-		hasToolUse  bool
+		parts         []string
+		dialogue      []string
+		thinkingParts []string
+		toolCalls     []ParsedToolCall
+		hasThinking   bool
+		hasToolUse    bool
 	)
 
 	msgContent := gjson.Get(line, "message.content")
 	if msgContent.Type == gjson.String {
 		// Plain string content (back-compat format variation).
 		parts = append(parts, msgContent.Str)
+		dialogue = append(dialogue, msgContent.Str)
 	} else {
 		msgContent.ForEach(func(_, block gjson.Result) bool {
 			switch block.Get("type").Str {
 			case "text":
 				if t := block.Get("text").Str; t != "" {
 					parts = append(parts, t)
+					dialogue = append(dialogue, t)
 				}
 			case "thinking":
 				// Set hasThinking regardless of whether the thinking
@@ -479,8 +483,8 @@ func parsePiAssistantMessage(
 				// to mark the message.
 				hasThinking = true
 				if thinking := block.Get("thinking").Str; thinking != "" {
-					parts = append(parts,
-						"[Thinking]\n"+thinking+"\n[/Thinking]")
+					thinkingParts = append(thinkingParts, thinking)
+					parts = append(parts, "[Thinking]\n"+thinking+"\n[/Thinking]")
 				}
 			case "toolCall":
 				hasToolUse = true
@@ -518,6 +522,8 @@ func parsePiAssistantMessage(
 		SourceUUID:       sourceUUID,
 		SourceParentUUID: sourceParentUUID,
 		Content:          content,
+		DialogueText:     new(strings.Join(dialogue, "\n")),
+		ThinkingText:     strings.Join(thinkingParts, "\n\n"),
 		Timestamp:        ts,
 		HasThinking:      hasThinking,
 		HasToolUse:       hasToolUse,

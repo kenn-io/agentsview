@@ -121,12 +121,11 @@ func devinSourceFingerprint(t *testing.T, root string) parser.SourceFingerprint 
 // than the discarded session metadata.
 const staleStartedAt = "1970-01-20T16:13:20Z"
 
-// staleUserVersion picks the archive user_version to stamp: one below the
-// Devin parser version to demand a resync, or the archive-wide version to model an
-// archive that a bump never reached.
+// staleUserVersion models an archive before the Devin epoch-seconds fix,
+// or a current archive that a version bump never reached.
 func staleUserVersion(demandResync bool) int {
 	if demandResync {
-		return db.AgentDataVersion(parser.AgentDevin) - 1
+		return 77 // The Devin timestamp reparse shipped in data version 78.
 	}
 	return db.CurrentDataVersion()
 }

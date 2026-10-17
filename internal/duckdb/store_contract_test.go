@@ -1062,3 +1062,10 @@ func requireReadOnlyDuck(t *testing.T, err error) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
+
+func TestSearchContentThinkingRequiresSQLite(t *testing.T) {
+	_, err := (&Store{}).SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"thinking"}})
+	var input *db.SearchInputError
+	require.ErrorAs(t, err, &input)
+	assert.Equal(t, "search: thinking requires SQLite substring or regex mode", input.Msg)
+}

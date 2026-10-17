@@ -586,7 +586,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // gain the corrected Edit category without changing session identities.)
 // (137: rebuild Codex rollouts under their first session_meta identity.
 // Version 136 was used by unreleased builds of this fix and is skipped.)
-const dataVersion = 137
+// (138: reparse classified dialogue in place.)
+const dataVersion = 138
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -654,7 +655,7 @@ var schemaSQL string
 const messagesADTriggerDDL = `
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
+        VALUES('delete', old.id, COALESCE(old.dialogue_text, old.content));
 END;
 `
 
@@ -669,33 +670,35 @@ CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ad
 AFTER DELETE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
+        VALUES('delete', old.id, COALESCE(old.dialogue_text, old.content));
 END;
 `
 
 const schemaFTS = `
+CREATE VIEW IF NOT EXISTS message_search_content AS
+SELECT id, session_id, COALESCE(dialogue_text, content) AS content FROM messages;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
-    content='messages',
+    content='message_search_content',
     content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.id, COALESCE(new.dialogue_text, new.content));
 END;
 ` + messagesADTriggerDDL + `
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+        VALUES('delete', old.id, COALESCE(old.dialogue_text, old.content));
+    INSERT INTO messages_fts(rowid, content) VALUES (new.id, COALESCE(new.dialogue_text, new.content));
 END;
 `
 
 const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
     content,
-    content='messages',
+    content='message_search_content',
     content_rowid='id',
     tokenize='simple 0'
 );
@@ -705,15 +708,15 @@ const schemaCJKFTSTriggers = `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, COALESCE(new.dialogue_text, new.content));
 END;
 ` + messagesCJKADTriggerDDL + `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_au
 AFTER UPDATE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
+        VALUES('delete', old.id, COALESCE(old.dialogue_text, old.content));
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, COALESCE(new.dialogue_text, new.content));
 END;
 
 -- The persistent BEFORE triggers mark a session pending without consulting
@@ -5011,7 +5014,20 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		}
 	}
 
+	// This additive search column requires no schema-repair rebuild.
+	if err := applyColumnMigrations(
+		[]schemaColumnMigration{{"messages", "dialogue_text", "ALTER TABLE messages ADD COLUMN dialogue_text TEXT"}},
+		func(query string, args ...any) rowScanner { return w.QueryRowContext(ctx, query, args...) },
+		func(query string, args ...any) (sql.Result, error) { return w.ExecContext(ctx, query, args...) },
+		progress,
+	); err != nil {
+		return err
+	}
+
 	progress.report("Initializing full-text search")
+	if err := refreshDialogueFTS(ctx, w); err != nil {
+		return err
+	}
 	var fts5Available bool
 	if err := w.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pragma_module_list WHERE name = 'fts5')`,

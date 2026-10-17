@@ -453,7 +453,7 @@ func (db *DB) Search(
 				snippet(messages_fts, 0, '<mark>', '</mark>',
 					'...', %d) AS snippet,
 				best.best_rank AS rank,
-				instr(LOWER(m.content), LOWER(best.best_query))
+				instr(LOWER(COALESCE(m.dialogue_text, m.content)), LOWER(best.best_query))
 					AS match_pos
 			FROM (
 				SELECT session_id, best_rowid, best_ordinal, best_rank, best_query

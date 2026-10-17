@@ -17,7 +17,7 @@ const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
 
 const (
 	cjkFTSFingerprintStatsKey = "messages_cjk_fts_fingerprint_v1"
-	cjkFTSSchemaVersion       = "messages-cjk-fts-v3"
+	cjkFTSSchemaVersion       = "messages-cjk-fts-v4"
 )
 
 var simpleFTSRuntimeConfig, simpleFTSRuntimeErr = discoverSimpleFTSRuntime()

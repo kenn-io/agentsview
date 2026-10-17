@@ -859,9 +859,9 @@ func extendTruncatedTextTx(
 			continue
 		}
 		if _, err := tx.Exec(
-			`UPDATE messages SET content = ?, content_length = ?
+			`UPDATE messages SET content = ?, content_length = ?, dialogue_text = ?, thinking_text = ?, has_thinking = ?
 			 WHERE id = ?`,
-			m.Content, m.ContentLength, id,
+			m.Content, m.ContentLength, m.DialogueText, m.ThinkingText, m.HasThinking, id,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"extending text for %s ordinal %d: %w",

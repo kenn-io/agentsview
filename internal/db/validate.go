@@ -184,6 +184,7 @@ func SanitizeMessage(m *Message) ValidationStats {
 	sanitizeLengthTrackedString(
 		&m.Content, &m.ContentLength, &stats,
 	)
+	sanitizeStringPtrField(m.DialogueText, &stats)
 	origThinkingLen := len(m.ThinkingText)
 	sanitizeStringField(&m.ThinkingText, &stats)
 	if removed := origThinkingLen - len(m.ThinkingText); removed > 0 {

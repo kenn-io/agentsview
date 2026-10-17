@@ -169,7 +169,8 @@ func stagedSessionContentDigestTx(ctx context.Context,
 ) ([sha256.Size]byte, error) {
 	h := sha256.New()
 	rows, err := tx.QueryContext(ctx, `
-		SELECT ordinal, role, content, thinking_text, COALESCE(timestamp, ''),
+		SELECT ordinal, role, content, thinking_text,
+		       dialogue_text IS NOT NULL, COALESCE(dialogue_text, ''), COALESCE(timestamp, ''),
 		       has_thinking, has_tool_use, content_length, is_system, model,
 		       reasoning_effort, token_usage, context_tokens, output_tokens,
 		       has_context_tokens, has_output_tokens,
@@ -184,12 +185,12 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	for rows.Next() {
 		var ordinal, hasThinking, hasToolUse, contentLength, isSystem int64
 		var contextTokens, outputTokens, hasContext, hasOutput int64
-		var isSidechain, isCompact int64
-		var role, content, thinking, timestamp, model, reasoningEffort, tokenUsage string
+		var isSidechain, isCompact, hasDialogue int64
+		var role, content, thinking, dialogue, timestamp, model, reasoningEffort, tokenUsage string
 		var claudeMessageID, claudeRequestID, sourceType, sourceSubtype string
 		var promptSource, sourceUUID, sourceParentUUID string
 		if err := rows.Scan(
-			&ordinal, &role, &content, &thinking, &timestamp,
+			&ordinal, &role, &content, &thinking, &hasDialogue, &dialogue, &timestamp,
 			&hasThinking, &hasToolUse, &contentLength, &isSystem, &model,
 			&reasoningEffort, &tokenUsage, &contextTokens, &outputTokens,
 			&hasContext, &hasOutput,
@@ -203,12 +204,12 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		for _, value := range []int64{
 			ordinal, hasThinking, hasToolUse, contentLength, isSystem,
 			contextTokens, outputTokens, hasContext, hasOutput,
-			isSidechain, isCompact,
+			isSidechain, isCompact, hasDialogue,
 		} {
 			writeStagedDigestInt(h, value)
 		}
 		for _, value := range []string{
-			role, content, thinking, timestamp, model, reasoningEffort, tokenUsage,
+			role, content, thinking, dialogue, timestamp, model, reasoningEffort, tokenUsage,
 			claudeMessageID, claudeRequestID, sourceType, sourceSubtype,
 			promptSource, sourceUUID, sourceParentUUID,
 		} {
