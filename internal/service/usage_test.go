@@ -1018,3 +1018,20 @@ func TestUsageModelGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestUsagePairwiseFallbackWithoutModelGroups(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	result, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", IncludeOneShot: true,
+		LeftDimension: "model", LeftValue: "gpt-4o,claude-sonnet-4-20250514",
+		RightDimension: "model", RightValue: "gpt-4o",
+		FallbackToDefault: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "claude-sonnet-4-20250514", result.Left.Value)
+	assert.Equal(t, 170, result.Left.InputTokens)
+	assert.Equal(t, "gpt-4o", result.Right.Value)
+	assert.Equal(t, 30, result.Right.InputTokens)
+}

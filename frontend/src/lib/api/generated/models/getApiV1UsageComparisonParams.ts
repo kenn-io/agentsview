@@ -4,10 +4,6 @@
 
 export type GetApiV1UsageComparisonParams = {
   /**
-   * Group model aliases in report rows
-   */
-  group_models?: boolean;
-  /**
    * Range start date
    */
   from?: string;

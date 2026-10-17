@@ -65,7 +65,7 @@ type UnsupportedUsage struct {
 // GET /api/v1/usage/summary while the handler delegates assembly to
 // the transport-neutral service layer.
 type UsageSummaryResponse struct {
-	SchemaVersion    int                               `json:"schema_version,omitempty"`
+	SchemaVersion    int                               `json:"schema_version,omitempty,omitzero"`
 	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects         map[string]export.ProjectMapEntry `json:"projects"`
 	From             string                            `json:"from"`

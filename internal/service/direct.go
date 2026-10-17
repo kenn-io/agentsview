@@ -1019,18 +1019,19 @@ func (b *directBackend) UsagePairwiseComparison(
 			return nil, err
 		}
 		left, right := req.LeftValue, req.RightValue
+		hasModelGroups := len(b.modelGroups.names) > 0
 		if req.LeftDimension == "model" {
 			left = b.modelGroups.Expand(left)
 		}
 		if req.RightDimension == "model" {
 			right = b.modelGroups.Expand(right)
 		}
-		if useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, left) || !usagePairwiseSideInRanking(summary, req.RightDimension, right) {
-			if req.GroupModels {
+		if useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, left, hasModelGroups) || !usagePairwiseSideInRanking(summary, req.RightDimension, right, hasModelGroups) {
+			if req.GroupModels && hasModelGroups {
 				if err := b.modelGroups.GroupDaily(rankingResult.Daily); err != nil {
 					return nil, err
 				}
-				summary, err = buildUsageSummary(rankingFilter, rankingResult)
+				summary.ModelTotals, err = foldModelTotals(rankingResult.Daily)
 				if err != nil {
 					return nil, err
 				}

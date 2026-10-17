@@ -6,10 +6,6 @@ import type { GetApiV1UsageTopSessionsSort } from "./getApiV1UsageTopSessionsSor
 
 export type GetApiV1UsageTopSessionsParams = {
   /**
-   * Group model aliases in report rows
-   */
-  group_models?: boolean;
-  /**
    * Range start date
    */
   from?: string;

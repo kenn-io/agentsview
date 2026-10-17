@@ -323,7 +323,7 @@ type UnsupportedUsage struct {
 // JSON shape served by GET /api/v1/usage/summary. The prior-period
 // comparison is a separate endpoint, so it is intentionally absent here.
 type UsageSummaryResult struct {
-	SchemaVersion    int                               `json:"schema_version,omitempty"`
+	SchemaVersion    int                               `json:"schema_version,omitempty,omitzero"`
 	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects         map[string]export.ProjectMapEntry `json:"projects"`
 	From             string                            `json:"from"`
@@ -400,10 +400,13 @@ type UsagePairwiseComparisonRequest struct {
 	RightProjectLabels []string `json:"-"`
 }
 
-func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
+func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string, expandModels bool) bool {
 	switch dimension {
 	case "model":
-		values := splitCSVTokens(value)
+		values := []string{value}
+		if expandModels {
+			values = splitCSVTokens(value)
+		}
 		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return slices.Contains(values, total.Model) })
 	case "project":
 		return slices.ContainsFunc(summary.ProjectTotals, func(total ProjectTotal) bool { return total.ProjectKey == value })
