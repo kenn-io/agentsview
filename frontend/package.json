@@ -22,8 +22,8 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#ceff715d835017daa9ec099446fa6ce71233829f",
-    "@lucide/svelte": "1.53.0",
-    "@tanstack/virtual-core": "3.17.11",
+    "@lucide/svelte": "1.55.0",
+    "@tanstack/virtual-core": "3.18.0",
     "d3-hierarchy": "3.1.2",
     "d3-scale": "4.0.2",
     "d3-shape": "3.2.0",
@@ -31,7 +31,7 @@
     "dompurify": "3.4.16",
     "eventsource": "^5.0.0",
     "eventsource-parser": "^4.0.0",
-    "layerchart": "2.5.2",
+    "layerchart": "2.6.1",
     "marked": "18.1.0",
     "mermaid": "12.1.0",
     "shiki": "4.5.0"
@@ -48,7 +48,7 @@
     "@types/d3-scale": "4.0.9",
     "@types/node": "24.19.2",
     "jsdom": "30.1.2",
-    "orval": "8.40.0",
+    "orval": "8.41.0",
     "svelte": "5.57.2",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
