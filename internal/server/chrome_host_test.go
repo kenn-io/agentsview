@@ -332,8 +332,14 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 			second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 			require.NoError(t, err)
 			defer second.Close()
-			require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
-			_, err = chromehost.ReadFrame(second)
+			// Windows AF_UNIX can miss an early close until the pending read is cancelled.
+			for deadline := time.Now().Add(5 * time.Second); ; {
+				require.NoError(t, second.SetReadDeadline(time.Now().Add(time.Second)))
+				_, err = chromehost.ReadFrame(second)
+				if !errors.Is(err, os.ErrDeadlineExceeded) || time.Now().After(deadline) {
+					break
+				}
+			}
 			require.ErrorIs(t, err, io.EOF)
 		}
 		writeChromeReply(t, conn, id, 200, "[]")
