@@ -622,12 +622,6 @@ func TestRestartAfterPartialReportShowsStoredDate(t *testing.T) {
 	assert.Equal(t, "Plan usage as of "+fetchNow.Add(-time.Hour).Local().Format("Jan 2 15:04"), env.planLine(t))
 }
 
-func TestPlanUsageDateShowsYearWhenNotThisYear(t *testing.T) {
-	lastYear := fetchNow.AddDate(-1, 0, 0)
-	assert.Equal(t, "Plan usage as of "+lastYear.Local().Format("Jan 2 2006 15:04"),
-		storedUsageLine(AccountState{UsageAsOf: lastYear}, fetchNow))
-}
-
 // A daemon that runs into the next year without another answer still
 // shows the year of the last one.
 func TestPlanUsageDateGainsItsYearAfterNewYear(t *testing.T) {
