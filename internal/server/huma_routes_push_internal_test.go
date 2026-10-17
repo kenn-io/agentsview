@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -582,7 +584,7 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 			t.Cleanup(engine.Close)
 
 			err := f.srv.syncThenRunForPush(
-				t.Context(), engine, f.db, tt.full, nil, nil,
+				t.Context(), engine, f.db, tt.full, nil, nil, nil,
 				func(forceFull bool) error {
 					workCalls++
 					assert.Equal(t, tt.wantForceFull, forceFull)
@@ -611,7 +613,7 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after a failed worker pass")
 			return nil
@@ -646,7 +648,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
 			runPushStream(hctx, func(_ func(storage.PushProgress)) (any, error) {
 				var result storage.PushResult
-				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 					func(forceFull bool) error {
 						assert.False(t, forceFull)
 						session, err := f.db.GetSession(t.Context(), "healthy")
@@ -676,9 +678,103 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 		})
 	}
 	pushFailure := errors.New("mirror write failed")
-	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 		func(bool) error { return pushFailure })
 	require.ErrorIs(t, err, pushFailure)
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
+	assert.False(t, notStarted, "an error from the push work may follow a started copy")
+}
+
+// A daemon push must not block local ingestion: a sync can take the engine
+// lock while the push copies the archive.
+func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
+		func(bool) error {
+			return engine.TryRunExclusive(func() error { return nil })
+		})
+
+	require.NoError(t, err, "a sync must be able to run while the push runs")
+}
+
+// Daemon pushes take turns, so an older push can never overwrite what a newer
+// push to the same destination wrote. A push takes its turn before its own
+// sync, so its archive rebuild never replaces the archive another push reads.
+func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		record("second rebuild")
+		return syncpkg.SyncStats{}, nil
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
+			func(bool) error {
+				close(firstStarted)
+				<-releaseFirst
+				record("first done")
+				return nil
+			})
+	}()
+	<-firstStarted
+	waiting := make(chan struct{})
+	second := make(chan error, 1)
+	go func() {
+		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, true, nil, nil,
+			func() { close(waiting) },
+			func(bool) error {
+				record("second start")
+				return nil
+			})
+	}()
+
+	<-waiting
+	close(releaseFirst)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+	assert.Equal(t, []string{"first done", "second rebuild", "second start"}, events)
+}
+
+// A push waiting for its turn stops when its request ends.
+func TestSyncThenRunForPushStopsWaitingForTurnWhenContextEnds(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	endTurn, err := f.srv.pushTurn.take(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(endTurn)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	waiting := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- f.srv.syncThenRunForPush(ctx, engine, f.db, false, nil, nil,
+			func() { close(waiting) },
+			func(bool) error {
+				assert.Fail(t, "a push must not run while another push holds the turn")
+				return nil
+			})
+	}()
+	<-waiting
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
@@ -691,7 +787,7 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after deferred worker processing")
 			return nil
@@ -700,6 +796,8 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local sync processing incomplete")
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
+	assert.True(t, notStarted, "a failed pre-push sync never started the push")
 }
 
 func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
@@ -711,7 +809,7 @@ func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
 	batch := syncpkg.WatchBatch{Paths: []string{changed}}
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil,
+		t.Context(), engine, f.db, false, &batch, nil, nil,
 		func(forceFull bool) error {
 			assert.False(t, forceFull)
 			changedSession, getErr := f.db.GetSession(t.Context(), "changed")
@@ -746,7 +844,7 @@ func TestSyncThenRunForPushStaleArchiveIgnoresBatchAndUsesWorker(t *testing.T) {
 	workCalls := 0
 
 	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil,
+		t.Context(), engine, f.db, false, &batch, nil, nil,
 		func(forceFull bool) error {
 			workCalls++
 			assert.True(t, forceFull)
@@ -1042,4 +1140,189 @@ func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 	assert.Contains(t, err.Error(), "allow_insecure")
+}
+
+// A daemon push that waits for another push tells its client, so the CLI can
+// say why nothing is happening.
+func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	f.srv.cfg.DuckDB = config.DuckDBConfig{
+		Path:        filepath.Join(t.TempDir(), "mirror.duckdb"),
+		MachineName: "daemon",
+	}
+	endTurn, err := f.srv.pushTurn.take(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(endTurn)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := f.srv.humaMirrorPush(ctx, &daemonPushInput{})
+	require.NoError(t, err)
+	writer := newSignalingRecorder(`"Phase":"waiting"`)
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/push/duckdb", nil)
+	request.Header.Set("Accept", "text/event-stream")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stream.Body(humago.NewContext(&huma.Operation{}, request, writer))
+	}()
+
+	<-writer.matched
+	cancel()
+	<-done
+	assert.Contains(t, writer.String(), "event: progress\n")
+}
+
+// signalingRecorder is a goroutine-safe flushing ResponseWriter that closes
+// matched once its body contains want.
+type signalingRecorder struct {
+	*httptest.ResponseRecorder
+	mu      sync.Mutex
+	want    string
+	matched chan struct{}
+	once    sync.Once
+}
+
+func newSignalingRecorder(want string) *signalingRecorder {
+	return &signalingRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		want:             want,
+		matched:          make(chan struct{}),
+	}
+}
+
+func (r *signalingRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n, err := r.ResponseRecorder.Write(p)
+	if strings.Contains(r.Body.String(), r.want) {
+		r.once.Do(func() { close(r.matched) })
+	}
+	return n, err
+}
+
+func (r *signalingRecorder) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ResponseRecorder.Flush()
+}
+
+func (r *signalingRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Body.String()
+}
+
+// A push error tells the client whether the copy started, in both response
+// shapes, so a watch can keep a --full request that no push started.
+func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
+	for _, accept := range []string{"application/json", "text/event-stream"} {
+		for _, tt := range []struct {
+			err     error
+			started bool
+		}{
+			{storage.PushNotStartedError{Err: errors.New("resync failed")}, false},
+			{errors.New("copy failed"), true},
+		} {
+			t.Run(fmt.Sprintf("%s started=%t", accept, tt.started), func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
+				request.Header.Set("Accept", accept)
+				runPushStream(humago.NewContext(&huma.Operation{}, request, recorder),
+					func(func(storage.PushProgress)) (any, error) { return nil, tt.err })
+				payload := recorder.Body.String()
+				if accept == "text/event-stream" {
+					require.Contains(t, payload, "event: error\n")
+					_, payload, _ = strings.Cut(payload, "data: ")
+				}
+				var body pushErrorResponse
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &body))
+				assert.Equal(t, tt.err.Error(), body.Error)
+				assert.Equal(t, tt.started, body.PushStarted)
+			})
+		}
+	}
+}
+
+// stubReplica is a PostgreSQL replica whose pusher the test supplies.
+type stubReplica struct {
+	postgres.Backend
+	newPusher func() (storage.Pusher, error)
+}
+
+func (r stubReplica) NewPusher(
+	context.Context, storage.ReplicaTarget, *db.DB, storage.PusherOptions,
+) (storage.Pusher, error) {
+	return r.newPusher()
+}
+
+type failingPusher struct{ err error }
+
+func (failingPusher) EnsureSchema(context.Context) error { return nil }
+func (p failingPusher) PushWithOptions(
+	context.Context, storage.PushOptions, func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return storage.PushResult{}, p.err
+}
+func (failingPusher) Close() error { return nil }
+
+// The replica route reports whether the copy started: a failed connect
+// started nothing, and a failed copy may have recorded a full push the mirror
+// resumes.
+func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	for _, tt := range []struct {
+		name      string
+		newPusher func() (storage.Pusher, error)
+		started   bool
+	}{
+		{"connect failed", func() (storage.Pusher, error) {
+			return nil, errors.New("connection refused")
+		}, false},
+		{"copy failed", func() (storage.Pusher, error) {
+			return failingPusher{errors.New("conn reset")}, nil
+		}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stream, err := f.srv.humaReplicaPush(t.Context(),
+				stubReplica{newPusher: tt.newPusher},
+				&daemonPushInput{Body: daemonPushRequest{Replica: &daemonReplicaTarget{
+					URL: "postgres://127.0.0.1:5432/agentsview?sslmode=disable", MachineName: "test",
+				}}})
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
+			request.Header.Set("Accept", "text/event-stream")
+			stream.Body(humago.NewContext(&huma.Operation{}, request, recorder))
+
+			_, payload, found := strings.Cut(recorder.Body.String(), "event: error\ndata: ")
+			require.True(t, found, recorder.Body.String())
+			var body pushErrorResponse
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &body))
+			assert.Equal(t, tt.started, body.PushStarted)
+		})
+	}
+}
+
+// A push that rebuilt the archive and then failed to connect reports the push
+// as started. Every mirror pushes in full after a rebuild, and a client that
+// kept --full would make the daemon rebuild the archive on every retry.
+func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
+	var f *syncRouteFixture
+	f = newSyncRouteFixture(t, withLocalResyncRunner(func(
+		ctx context.Context, _ func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{}, f.db.SetDatabaseIDForTest(ctx, "rebuilt")
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	connectErr := storage.PushNotStartedError{Err: errors.New("connection refused")}
+
+	for _, full := range []bool{false, true} {
+		err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, full, nil, nil, nil,
+			func(bool) error { return connectErr })
+		require.ErrorIs(t, err, connectErr.Err)
+		assert.Equal(t, full, pushErrorBody(err.Error(), err).PushStarted,
+			"full=%t: only a push that rebuilt the archive counts as started", full)
+	}
 }

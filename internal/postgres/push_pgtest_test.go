@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
@@ -3700,4 +3702,89 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 	result := f.pushMetadataChange(t, "Renamed session", "second-source")
 	assert.Equal(t, 1, result.Errors,
 		"a malformed usage timestamp must fail the push and remain retryable")
+}
+
+// A filtered push that starts while a local sync is moving a session out of
+// scope must reconcile the move. The push lists move candidates and takes its
+// cutoff; if it listed before the move committed and took the cutoff after,
+// the session would stay remote under its old project with the watermark
+// already past the move.
+func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
+	const (
+		sessionID     = "pg-concurrent-move"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		schema        = "agentsview_concurrent_move"
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := t.Context()
+	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	startedAt := "2026-07-16T12:00:00.000Z"
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: sessionID, Project: sourceProject, Machine: "local",
+		Agent: "claude", StartedAt: &startedAt, LocalModifiedAt: &startedAt,
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	syncer, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{
+		Projects: []string{sourceProject},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	// A local sync moves the session to an excluded project and holds its
+	// transaction open. Its stamp is after the first push's cutoff.
+	stamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	moved := make(chan struct{})
+	release := make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- local.Update(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE sessions SET project = ?, local_modified_at = ?
+				WHERE id = ?`, targetProject, stamp, sessionID,
+			); err != nil {
+				return err
+			}
+			close(moved)
+			<-release
+			return nil
+		})
+	}()
+	<-moved
+
+	pushed := make(chan error, 1)
+	go func() {
+		_, err := syncer.Push(ctx, false, nil)
+		pushed <- err
+	}()
+	// Commit the move once the push waits for its cutoff, or once it has
+	// finished without waiting.
+	var pushErr error
+	finished := false
+	for !finished && !testutil.GoroutineBlockedOnMutexIn("(*DB).MirrorPushCutoff") {
+		select {
+		case pushErr = <-pushed:
+			finished = true
+		default:
+			runtime.Gosched()
+		}
+	}
+	close(release)
+	require.NoError(t, <-committed)
+	if !finished {
+		pushErr = <-pushed
+	}
+	require.NoError(t, pushErr)
+
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&count))
+	assert.Zero(t, count, "a session moved out of scope during the push must leave the remote")
 }

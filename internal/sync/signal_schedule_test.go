@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 type harnessTimer struct {
@@ -618,6 +620,59 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, seen,
 		"work must observe flushed signal fields before pushing")
+}
+
+func TestSettleForPushFlushesSignals(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "sig-flush-settle.jsonl", "hello")
+	fx.engine.SyncAll(t.Context(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.engine.SyncPaths([]string{path})
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"second write within interval should defer the recompute")
+
+	require.NoError(t, fx.engine.SettleForPush(t.Context()))
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
+		"a push after settling must see flushed signal fields")
+}
+
+// A shutdown flush must not wait out a sync that holds the engine lock.
+func TestSettleForPushStopsWaitingWhenContextEnds(t *testing.T) {
+	fx := newEngineFixture(t)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	releaseLock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseLock)
+	exclusive := make(chan error, 1)
+	go func() {
+		exclusive <- fx.engine.RunExclusive(func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	settled := make(chan error, 1)
+	go func() { settled <- fx.engine.SettleForPush(ctx) }()
+	// Cancel only once SettleForPush waits for the lock, so the test covers
+	// abandoning a wait and not the context check before it.
+	require.Eventually(t, func() bool {
+		return testutil.GoroutineBlockedOnMutexIn("(*Engine).SettleForPush")
+	}, 10*time.Second, 5*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-settled, context.Canceled)
+
+	releaseLock()
+	require.NoError(t, <-exclusive)
+	require.NoError(t, fx.engine.SettleForPush(t.Context()),
+		"the abandoned wait must release the lock")
 }
 
 func TestSignalSchedulerRealTimerFlushes(t *testing.T) {

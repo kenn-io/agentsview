@@ -23,7 +23,6 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type DuckDBPushConfig struct {
@@ -43,60 +42,16 @@ type DuckDBPushConfig struct {
 	Automatic bool
 }
 
-// duckDBPusher runs a local engine sync then pushes to the DuckDB mirror.
-// It mirrors pgPusher's watch-loop shape: interval pushes use SyncAll, which
-// never tombstones missed deletions, so deferred scopes rely on the separate
-// unwatched-root poller wired by DuckDBPushWatch.
+// duckDBPusher pushes the archive to the DuckDB mirror from a watch process
+// that owns the archive. Local sync runs separately, so each push sends
+// whatever the archive holds when it starts.
 type duckDBPusher struct {
-	localSync  func(context.Context) error
-	scopedSync func(
-		context.Context, syncpkg.WatchBatch, *syncpkg.WatchRecoveryScope,
-		func() error,
-	) error
-	ensurePricing func(context.Context) error
-	mirrorPush    func(context.Context, bool) (storage.MirrorPushResult, error)
+	mirrorPush func(context.Context, bool) (storage.MirrorPushResult, error)
 }
 
 func (p *duckDBPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
-	return p.pushBatch(ctx, reason, full, nil, nil)
-}
-
-func (p *duckDBPusher) pushBatch(
-	ctx context.Context,
-	reason pushReason,
-	full bool,
-	batch *syncpkg.WatchBatch,
-	recovery *syncpkg.WatchRecoveryScope,
-) error {
-	push := func() error { return p.pushAfterSync(ctx, reason, full) }
-	if batch != nil {
-		if p.scopedSync == nil {
-			return errors.New("scoped local sync is unavailable")
-		}
-		return p.scopedSync(ctx, *batch, recovery, push)
-	}
-	if err := p.localSync(ctx); err != nil {
-		return fmt.Errorf("local sync: %w", err)
-	}
-	return push()
-}
-
-func (p *duckDBPusher) pushAfterSync(
-	ctx context.Context, reason pushReason, full bool,
-) error {
-	if p.ensurePricing != nil {
-		if err := p.ensurePricing(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			log.Printf("warning: pricing refresh failed: %v", err)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	res, err := p.mirrorPush(ctx, full)
 	if err != nil {
 		return err

@@ -21,6 +21,46 @@ import (
 
 type syncStateStore = storage.SyncStateStore
 
+// handoffSyncState writes push state to the local archive and rides out a
+// worker handoff. The daemon closes its archive writer while a sync worker
+// runs, and a daemon push runs outside the sync lock, so a handoff can start
+// during a push. A write that hits a closed writer waits for it to reopen and
+// tries again.
+type handoffSyncState struct{ local *db.DB }
+
+func (h handoffSyncState) GetSyncState(ctx context.Context, key string) (string, error) {
+	return h.local.GetSyncState(ctx, key)
+}
+
+func (h handoffSyncState) SetSyncState(ctx context.Context, key, value string) error {
+	_, err := retryAcrossHandoff(ctx, h.local, func() (struct{}, error) {
+		return struct{}{}, h.local.SetSyncState(ctx, key, value)
+	})
+	return err
+}
+
+func (h handoffSyncState) GetOrCreateSyncState(
+	ctx context.Context, key, defaultValue string,
+) (string, error) {
+	return retryAcrossHandoff(ctx, h.local, func() (string, error) {
+		return h.local.GetOrCreateSyncState(ctx, key, defaultValue)
+	})
+}
+
+func retryAcrossHandoff[T any](
+	ctx context.Context, local *db.DB, write func() (T, error),
+) (T, error) {
+	for {
+		value, err := write()
+		if !errors.Is(err, db.ErrWriterClosed) {
+			return value, err
+		}
+		if err := local.WaitForWriter(ctx); err != nil {
+			return value, err
+		}
+	}
+}
+
 type scopedSyncStateStore struct {
 	base          syncStateStore
 	scope         string
@@ -216,7 +256,7 @@ func (s *Sync) effectiveSyncState() syncStateStore {
 	if s.syncState != nil {
 		return s.syncState
 	}
-	return s.local
+	return handoffSyncState{s.local}
 }
 
 func (s *Sync) aliasBackfillSyncStateOrDefault() syncStateStore {
@@ -287,12 +327,12 @@ func New(
 		pg:    pg,
 		local: local,
 		syncState: newScopedSyncStateStore(
-			local,
+			handoffSyncState{local},
 			syncStateScope,
 			migrateLegacySyncState,
 		),
 		aliasBackfillState: newScopedSyncStateStore(
-			local,
+			handoffSyncState{local},
 			aliasBackfillStateScope,
 			false,
 		),

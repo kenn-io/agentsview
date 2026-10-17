@@ -235,3 +235,29 @@ func TestDuckCheckpointDecisionRequiresFreeBlockThreshold(t *testing.T) {
 		})
 	}
 }
+
+// The daemon can replace the archive while an incremental push runs. The
+// push must record the archive it started from, so the next push sees the
+// replacement and rebuilds the mirror.
+func TestIncrementalPushRecordsTheArchiveItStartedFrom(t *testing.T) {
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	started := probe.SourceDatabaseID
+
+	require.NoError(t, local.SetDatabaseIDForTest(ctx, "replaced-during-push"))
+	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
+	_, err = syncer.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
+	require.NoError(t, err)
+	require.NoError(t, syncer.Close())
+
+	after, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, started, after.SourceDatabaseID)
+	next, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Contains(t, next.Diagnostics.RebuildReason, "source database id changed")
+}

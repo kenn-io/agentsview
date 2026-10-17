@@ -44,6 +44,9 @@ type pushLoop struct {
 	// flushTimeout bounds the final shutdown-flush push. Zero means
 	// no bound (used in tests that inject a fake pusher).
 	flushTimeout time.Duration
+	// onIdle, when set, is called each time Run starts waiting for work.
+	// Tests use it to act only once no push is running.
+	onIdle func()
 }
 
 // queuedPushTask is one unit of work owned by the push loop. Producers enqueue
@@ -195,16 +198,15 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 	var armed bool
 	var fire <-chan time.Time
 	for {
+		if l.onIdle != nil {
+			l.onIdle()
+		}
 		select {
 		case <-ctx.Done():
 			// Final best-effort flush with a fresh context so the
 			// push is not immediately cancelled.
-			flushCtx := context.Background()
-			if l.flushTimeout > 0 {
-				var cancel context.CancelFunc
-				flushCtx, cancel = context.WithTimeout(flushCtx, l.flushTimeout)
-				defer cancel()
-			}
+			flushCtx, cancel := l.flushContext()
+			defer cancel()
 			l.enqueueShutdownTask()
 			l.runNextTask(flushCtx, true)
 			return
@@ -353,4 +355,13 @@ func completePushWaiters(waiters []chan error, err error) {
 		waiter <- err
 		close(waiter)
 	}
+}
+
+// flushContext returns the context for work after shutdown starts: fresh, so
+// it is not already cancelled, and bounded by flushTimeout when set.
+func (l *pushLoop) flushContext() (context.Context, context.CancelFunc) {
+	if l.flushTimeout > 0 {
+		return context.WithTimeout(context.Background(), l.flushTimeout)
+	}
+	return context.WithCancel(context.Background())
 }

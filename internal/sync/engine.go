@@ -5035,6 +5035,39 @@ func (e *Engine) RunExclusiveFlushed(work func() error) error {
 	return work()
 }
 
+// SettleForPush waits for an in-progress sync to finish and then flushes
+// deferred signal recomputes, so a push that starts next copies settled
+// sessions. It does not hold the sync lock afterward: later syncs may write
+// while the push runs. If ctx ends first, SettleForPush returns ctx.Err() and
+// abandons the wait; the lock is released without flushing once acquired.
+func (e *Engine) SettleForPush(ctx context.Context) error {
+	if e.refuseWriteInForceParse("SettleForPush") {
+		return errors.New(
+			"SettleForPush refused on report-only parse-diff engine",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var abandoned atomic.Bool
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		if !abandoned.Load() {
+			e.signalSched.flushAllInline()
+		}
+	}()
+	select {
+	case <-settled:
+		return nil
+	case <-ctx.Done():
+		abandoned.Store(true)
+		return ctx.Err()
+	}
+}
+
 // ApplyWorktreeReclassification serializes the mapping rule, historical
 // session rewrites, and identity publication with watcher and sync writes.
 func (e *Engine) ApplyWorktreeReclassification(

@@ -6765,6 +6765,51 @@ func (db *DB) CountSessionsForMirrorScope(
 	return count, nil
 }
 
+// MirrorPushCutoff returns the cutoff a mirror push records as its next
+// window's lower bound. It reads the clock while holding the write lock, so
+// no write transaction is open: every write stamped before the cutoff has
+// committed and is visible to the push's later listing, and every later write
+// is stamped at or after the cutoff. A cutoff read without the lock can fall
+// after the stamp of a write that commits only after the push lists sessions;
+// no later window would list that write.
+//
+// It also waits while the writer is closed for a worker handoff. A sync-worker
+// child writes the archive then, outside this process's write lock, so a
+// cutoff taken during the handoff has the same gap. MirrorPushCutoff returns
+// ctx.Err() if ctx ends first.
+func (db *DB) MirrorPushCutoff(ctx context.Context) (string, error) {
+	for {
+		if err := db.WaitForWriter(ctx); err != nil {
+			return "", err
+		}
+		db.mu.Lock()
+		if !db.writerClosed.Load() {
+			cutoff := time.Now().UTC().Format(mirrorWindowBoundLayout)
+			db.mu.Unlock()
+			return cutoff, nil
+		}
+		db.mu.Unlock()
+	}
+}
+
+// WaitForWriter blocks while the writer is closed for a worker handoff. It
+// returns ctx.Err() if ctx ends first. A write can still fail if a new
+// handoff starts after it returns.
+func (db *DB) WaitForWriter(ctx context.Context) error {
+	for db.writerClosed.Load() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(writerHandoffPollInterval):
+		}
+	}
+	return nil
+}
+
+// writerHandoffPollInterval spaces checks for the end of a worker handoff.
+// Handoffs last seconds to minutes.
+const writerHandoffPollInterval = 50 * time.Millisecond
+
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the
 // bound compares correctly against trigger-maintained markers.
@@ -6773,8 +6818,11 @@ func normalizeMirrorWindowBound(bound string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parsing mirror window bound %q: %w", bound, err)
 	}
-	return parsed.UTC().Format("2006-01-02T15:04:05.000Z"), nil
+	return parsed.UTC().Format(mirrorWindowBoundLayout), nil
 }
+
+// mirrorWindowBoundLayout matches the trigger-maintained sync_marker text.
+const mirrorWindowBoundLayout = "2006-01-02T15:04:05.000Z"
 
 // SessionProjectsByIDs returns each session's current project keyed by session
 // ID. IDs with no sessions row are absent from the result, so a caller can tell

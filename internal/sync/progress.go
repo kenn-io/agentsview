@@ -145,6 +145,12 @@ func (s *SyncStats) shouldEmitSync() bool {
 		(!s.Aborted && (s.hasSessionChanges() || s.ArchiveRebuilt))
 }
 
+// ChangedArchive reports whether the pass wrote session state to the archive,
+// including a pass that stopped early after some writes.
+func (s *SyncStats) ChangedArchive() bool {
+	return s.hasSessionChanges() || s.ArchiveRebuilt
+}
+
 func (s *SyncStats) hasSessionChanges() bool {
 	return s.Synced > 0 || s.CwdUpdated > 0 || s.TitlesUpdated > 0 || s.Tombstoned > 0 || s.LinksUpdated > 0
 }

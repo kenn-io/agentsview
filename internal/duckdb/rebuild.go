@@ -446,9 +446,9 @@ type rebuildSnapshot struct {
 	cutoff           string
 	deletionRevision int64
 	// sourceDatabaseID identifies the archive generation this rebuild reads
-	// from (see mirrorMetadata.SourceDatabaseID). It cannot change while the
-	// rebuild's *db.DB handle is open, so capturing it here is a convenience
-	// rather than a race guard.
+	// from (see mirrorMetadata.SourceDatabaseID). The daemon can replace the
+	// archive while the rebuild runs; recording the id read before the
+	// listing makes the next push rebuild again then.
 	sourceDatabaseID string
 	// sourceArchiveID is the stable provenance identity stamped onto every
 	// mirrored row. A repair can change it without changing database_id.
@@ -459,6 +459,10 @@ type rebuildSnapshot struct {
 // post-rebuild mirror metadata. It must be called before the rebuild lists
 // sessions to push; see rebuildSnapshot for why.
 func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot, error) {
+	cutoff, err := local.MirrorPushCutoff(ctx)
+	if err != nil {
+		return rebuildSnapshot{}, err
+	}
 	deletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
 		return rebuildSnapshot{}, err
@@ -476,7 +480,7 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 		)
 	}
 	return rebuildSnapshot{
-		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
+		cutoff:           cutoff,
 		deletionRevision: deletionRevision,
 		sourceDatabaseID: sourceDatabaseID,
 		sourceArchiveID:  sourceArchiveID,

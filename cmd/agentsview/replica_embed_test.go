@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -321,13 +322,12 @@ func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
 	embedder, err := newReplicaEmbedder(cfg, replica, embedTarget(), archive)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
-	pusher := &replicaPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func(ctx context.Context) (storage.Pusher, error) {
+	pusher := testReplicaPusher(archivepush.ReplicaSession{
+		Connect: func(ctx context.Context) (storage.Pusher, error) {
 			return replica.NewPusher(ctx, storage.ReplicaTarget{}, archive, storage.PusherOptions{VectorSource: embedder})
 		},
-	}
-	t.Cleanup(pusher.reset)
+	})
+	t.Cleanup(pusher.session.Close)
 	require.NoError(t, pusher.push(t.Context(), reasonStartup, false))
 	require.Error(t, embedder.startScheduler(t.Context()))
 	assert.Equal(t, []bool{true}, replica.skipped)
@@ -466,7 +466,19 @@ func TestReplicaWatchEmbedKeepsFullVectorRepairAfterStartupFailure(t *testing.T)
 				watchHooks: &archivePushWatchHooks{
 					newLoop: func(label string, debounce, interval time.Duration, work func(context.Context, pushReason, *syncpkg.WatchBatch) error) (*pushLoop, func()) {
 						loopPush = work
-						loop, ticker := newPushLoopWithLabel(label, debounce, interval, work)
+						push := work
+						if notReady {
+							// Watcher dispatch opens before the startup push,
+							// so recovery starts when that push returns.
+							push = func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+								err := work(c, r, batch)
+								if r == reasonStartup {
+									recoverPush()
+								}
+								return err
+							}
+						}
+						loop, ticker := newPushLoopWithLabel(label, debounce, interval, push)
 						if !notReady {
 							loop.after = func(time.Duration) <-chan time.Time {
 								recoverPush()
@@ -475,9 +487,10 @@ func TestReplicaWatchEmbedKeepsFullVectorRepairAfterStartupFailure(t *testing.T)
 						}
 						return loop, ticker.Stop
 					},
-					replicaStartupSync: func(_ context.Context, _ *syncpkg.Engine, full bool) (bool, error) {
+					startupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
 						require.True(t, full)
-						return true, nil
+						_, err := runPGWatchStartupSync(ctx, engine, full)
+						return true, err
 					},
 					startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
 						recoverPush = func() {
@@ -515,9 +528,6 @@ func TestReplicaWatchEmbedKeepsFullVectorRepairAfterStartupFailure(t *testing.T)
 							assert.False(t, replica.options[2].Full)
 							assert.False(t, replica.options[2].FullVectors, "a completed vector phase clears repair")
 						}
-						if notReady {
-							return func() {}, recoverPush, nil
-						}
 						return func() {}, func() {}, nil
 					},
 				},
@@ -547,19 +557,34 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var push func(context.Context, pushReason, *syncpkg.WatchBatch) error
+	var engine *syncpkg.Engine
 	var shutdownStart time.Time
+	var afterStartup func()
 	backend := &localArchiveWriteBackend{
 		appCfg: cfg, database: archive,
 		ensurePricing: func(context.Context, *db.DB) error { return nil },
 		watchHooks: &archivePushWatchHooks{
 			newLoop: func(label string, debounce, interval time.Duration, work func(context.Context, pushReason, *syncpkg.WatchBatch) error) (*pushLoop, func()) {
 				push = work
-				loop, ticker := newPushLoopWithLabel(label, debounce, interval, work)
+				loop, ticker := newPushLoopWithLabel(label, debounce, interval,
+					func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+						err := work(c, r, batch)
+						if r == reasonStartup {
+							afterStartup()
+						}
+						return err
+					})
 				return loop, ticker.Stop
 			},
-			replicaStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) { return false, nil },
-			startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
-				return func() {}, func() {
+			startupSync: func(ctx context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
+				_, err := runPGWatchStartupSync(ctx, engine, full)
+				return false, err
+			},
+			startWatcher: func(_ config.Config, e *syncpkg.Engine, _ syncpkg.WatchCallback, _ syncpkg.WatcherOptions) (func(), func(), []string) {
+				engine = e
+				// Watcher dispatch opens before the startup push, so the
+				// scenario starts when that push returns.
+				afterStartup = func() {
 					select {
 					case <-started:
 					case <-time.After(10 * time.Second):
@@ -569,6 +594,8 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 						AddClaudeUser("2026-01-01T00:00:00Z", "missed watcher event").
 						String()
 					require.NoError(t, os.WriteFile(filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "interval-session.jsonl"), []byte(content), 0o600))
+					// Local sync runs apart from the push, as the sync lane does.
+					engine.SyncAll(ctx, nil)
 					require.NoError(t, push(ctx, reasonInterval, nil))
 					session, err := archive.GetSession(ctx, "interval-session")
 					require.NoError(t, err)
@@ -582,7 +609,8 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 					assert.Equal(t, []string{"connect", "push", "push", "push"}, replica.events)
 					shutdownStart = time.Now()
 					cancel()
-				}, nil
+				}
+				return func() {}, func() {}, nil
 			},
 		},
 	}
