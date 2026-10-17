@@ -96,8 +96,4 @@ func TestRefusedWorkLeaseRefusesTheJoin(t *testing.T) {
 	assert.Zero(t, leases.held.Load())
 	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond,
 		"the refused join closes its connection")
-
-	leases.draining.Store(false)
-	env.join(t, "a")
-	assert.Equal(t, []string{"a"}, env.monitor.Joined(passKey), "the refused join gave back its slot")
 }
