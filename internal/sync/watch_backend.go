@@ -25,6 +25,11 @@ type WatchRoot struct {
 	ExtraDirectories []string
 	Exists           bool
 	Scopes           []WatchScope
+	// SourceFileGlobs opts this root into shared metadata scans. Patterns match
+	// filenames; Recursive determines whether nested directories participate.
+	SourceFileGlobs              []string
+	FollowChildDirectorySymlinks bool
+	SourceScanScopes             []WatchScope
 }
 
 // MergeExtraDirectories unions the extra-directory lists of two plans for the
@@ -73,6 +78,7 @@ func (w *Watcher) RegisterRoots(
 	roots []WatchRoot,
 	recursiveBudget int,
 ) []RecursiveWatchResult {
+	w.scanner = newSourceScanner(roots, w.excludes)
 	for _, root := range roots {
 		for _, scope := range root.Scopes {
 			if scope.SyncDir != "" {
