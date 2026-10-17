@@ -88,14 +88,6 @@ afterEach(() => {
 
 describe("AnalyticsPage grouped model filter", () => {
   it("shows only the display group with its tick selected", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(outcomeTotals, "load").mockResolvedValue();
     const summary =

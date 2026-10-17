@@ -10504,12 +10504,12 @@ paths:
           schema:
             description: Filter by termination reason
             type: string
-        - description: Group model aliases in the model list
+        - description: Include model aliases for display grouping
           explode: false
           in: query
           name: group_models
           schema:
-            description: Group model aliases in the model list
+            description: Include model aliases for display grouping
             type: boolean
       responses:
         "200":

@@ -510,7 +510,7 @@ model keys to `~/.agentsview/config.toml`, then restart AgentsView:
 Both variants appear as `qwen3.6`, with their tokens and costs added together.
 Each variant keeps its own pricing before the totals are combined. Keys and
 names must be non-empty, have no surrounding whitespace or commas, and cannot
-form alias chains or use the reserved name `__all__`.
+form alias chains or use the reserved names `__all__` and `__other__`.
 
 A saved filter naming one model variant keeps its one-variant meaning after you
 configure an alias. The picker shows that selection on the group row. The
@@ -529,8 +529,9 @@ Model filters expand group names on `/api/v1/usage/summary`,
 `/api/v1/analytics/*` endpoints. A raw member name selects just that variant
 unless it is also a group name, in which case it selects the whole group.
 API callers can request grouped report rows with
-`group_models=true` on usage endpoints, or a grouped model list on the
-analytics summary. When aliases are configured, grouped usage summaries omit
+`group_models=true` on usage endpoints. On the analytics summary, this flag
+adds `model_aliases` for the picker and keeps the model list raw.
+When aliases are configured, grouped usage summaries omit
 `schema_version` and `pricing`.
 Without the flag, responses, `usage daily`, exports, and MCP keep raw model
 names and raw `pricing.models` entries.

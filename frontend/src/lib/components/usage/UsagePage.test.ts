@@ -214,14 +214,6 @@ describe("UsagePage refresh behavior", () => {
   });
 
   it("keeps a partly excluded group ticked and counts the hidden member", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     const summary = Promise.withResolvers<UsageSummaryResponse>();
     vi.spyOn(UsageService, "getApiV1UsageSummary").mockReturnValue(summary.promise);

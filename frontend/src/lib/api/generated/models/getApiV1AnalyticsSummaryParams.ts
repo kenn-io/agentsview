@@ -74,7 +74,7 @@ export type GetApiV1AnalyticsSummaryParams = {
    */
   termination?: string;
   /**
-   * Group model aliases in the model list
+   * Include model aliases for display grouping
    */
   group_models?: boolean;
 };

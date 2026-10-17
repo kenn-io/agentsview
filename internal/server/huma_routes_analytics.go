@@ -57,7 +57,7 @@ type AnalyticsFilterInput struct {
 
 type analyticsSummaryInput struct {
 	AnalyticsFilterInput
-	GroupModels bool `query:"group_models" doc:"Group model aliases in the model list"`
+	GroupModels bool `query:"group_models" doc:"Include model aliases for display grouping"`
 }
 
 type analyticsSummaryResponse struct {
@@ -151,7 +151,6 @@ func (s *Server) humaAnalyticsSummary(
 	response := analyticsSummaryResponse{AnalyticsSummary: result}
 	if in.GroupModels {
 		response.ModelAliases = s.modelGroups.Aliases()
-		response.Models = s.modelGroups.GroupNames(result.Models)
 	}
 	return &jsonOutput[analyticsSummaryResponse]{Body: response}, nil
 }

@@ -117,7 +117,7 @@
 
     // Sum the selected value per key across the whole range to find top N.
     const totals = new Map<string, number>();
-    const labels: Record<string, string> = {};
+    const labels: Record<string, string> = Object.create(null);
     let hasBreakdownData = false;
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
@@ -193,7 +193,7 @@
 
     const points: Point[] = [];
     for (const day of daily) {
-      const values: Record<string, number> = {};
+      const values: Record<string, number> = Object.create(null);
       let items: Array<{ key: string; value: number }> = [];
 
       if (groupBy === "project" && day.projectBreakdowns) {

@@ -3193,6 +3193,8 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 		{name: "self alias", data: "[model_aliases]\n\"a\" = \"a\"", want: map[string]string{"a": "a"}},
 		{name: "reserved key", data: "[model_aliases]\n__all__ = \"group\"", badKey: `"__all__"`},
 		{name: "reserved name", data: "[model_aliases]\na = \"__all__\"", badKey: `"a"`},
+		{name: "reserved other key", data: "[model_aliases]\n__other__ = \"group\"", badKey: `"__other__"`},
+		{name: "reserved other name", data: "[model_aliases]\na = \"__other__\"", badKey: `"a"`},
 		{name: "empty key", data: "[model_aliases]\n\"\" = \"group\"", badKey: `""`},
 		{name: "empty name", data: "[model_aliases]\na = \"\"", badKey: `"a"`},
 		{name: "comma key", data: "[model_aliases]\n\"a,b\" = \"group\"", badKey: `"a,b"`},
