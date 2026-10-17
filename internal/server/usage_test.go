@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -551,19 +552,32 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 	})
 	seedUsagePairwiseEnv(t, te)
 	for _, tt := range []struct {
-		name, grouped string
+		name, grouped, suffix string
 	}{
-		{"raw", ""},
-		{"grouped", "true"},
+		{"raw", "", ""},
+		{"grouped", "true", ""},
+		{"grouped stream", "true", "/stream"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			w := te.get(t, buildPathURL("/api/v1/usage/summary", map[string]string{
+			w := te.get(t, buildPathURL("/api/v1/usage/summary"+tt.suffix, map[string]string{
 				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC",
 				"group_models": tt.grouped,
 			}))
 			assertStatus(t, w, http.StatusOK)
+			payload := w.Body.String()
+			if tt.suffix == "/stream" {
+				_, done, ok := strings.Cut(payload, "event: done\ndata: ")
+				require.True(t, ok, "no done event in %s", payload)
+				payload, _, _ = strings.Cut(done, "\n")
+				var summary service.UsageSummaryResult
+				require.NoError(t, json.Unmarshal([]byte(payload), &summary))
+				require.Len(t, summary.ModelTotals, 1)
+				assert.Equal(t, "group", summary.ModelTotals[0].Model)
+				assert.Equal(t, 130, summary.ModelTotals[0].InputTokens)
+				assert.Equal(t, 65, summary.ModelTotals[0].OutputTokens)
+			}
 			var body map[string]jsontext.Value
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.NoError(t, json.Unmarshal([]byte(payload), &body))
 			if tt.grouped == "true" {
 				assert.NotContains(t, body, "pricing")
 				assert.NotContains(t, body, "schema_version")
@@ -580,14 +594,24 @@ func TestUsageTopSessionsModelGroup(t *testing.T) {
 		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
 	})
 	seedUsagePairwiseEnv(t, te)
-	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{
-		"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", "model": "group",
-	}))
-	assertStatus(t, w, http.StatusOK)
-	entries := decode[[]db.TopSessionEntry](t, w)
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		ids = append(ids, entry.SessionID)
+	for _, tt := range []struct {
+		filter string
+		want   []string
+	}{
+		{"model", []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}},
+		{"exclude_model", []string{}},
+	} {
+		t.Run(tt.filter, func(t *testing.T) {
+			w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{
+				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", tt.filter: "group",
+			}))
+			assertStatus(t, w, http.StatusOK)
+			entries := decode[[]db.TopSessionEntry](t, w)
+			ids := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				ids = append(ids, entry.SessionID)
+			}
+			assert.ElementsMatch(t, tt.want, ids)
+		})
 	}
-	assert.ElementsMatch(t, []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}, ids)
 }
