@@ -33,6 +33,8 @@ it("keeps separate machine chips and picker choices after removing one of three 
   vi.spyOn(analytics, "fetchAll").mockResolvedValue();
   vi.spyOn(MetadataService, "getApiV1Machines").mockResolvedValue({
     machines: ["a", "b", "c"],
+    machine_labels: {},
+    machine_aliases: {},
     resolved_machines: ["a", "b", "c"],
   });
   analytics.machine = "a,b,c";

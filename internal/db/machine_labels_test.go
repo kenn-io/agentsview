@@ -107,7 +107,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		var filterError *MachineFilterError
 		require.ErrorAs(t, err, &filterError)
 		assert.Equal(t, []string{"id-comma", "id-duplicate"}, filterError.Candidates)
-		assert.Contains(t, err.Error(), "ambiguous machine")
+		assert.EqualError(t, err, `ambiguous machine "A,B"; matching IDs: id-comma, id-duplicate; known machines: A,B`)
 	})
 	t.Run("unknown selectors", func(t *testing.T) {
 		for _, input := range []string{"missing", "a", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"} {
@@ -116,7 +116,22 @@ func TestResolveMachineFilter(t *testing.T) {
 				var filterError *MachineFilterError
 				require.ErrorAs(t, err, &filterError)
 				assert.Equal(t, input, filterError.Value)
-				assert.Contains(t, filterError.Known, "id-a")
+				assert.Equal(t, []string{
+					"  Padded workstation \t",
+					id,
+					id + ", Workstation",
+					"A",
+					"A,B",
+					"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+					"B",
+					"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+					"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"empty-target",
+					"id-a",
+					"legacy-host",
+					"old-owner",
+					"old-owner,id-b",
+				}, filterError.Known)
 			})
 		}
 	})
@@ -127,8 +142,7 @@ func TestResolveMachineFilter(t *testing.T) {
 			require.ErrorAs(t, err, &filterError)
 			assert.Empty(t, filterError.Candidates)
 			assert.Contains(t, err.Error(), "unknown machine")
-			assert.Contains(t, err.Error(), "comma-separated filters take machine IDs or aliases")
-			assert.Contains(t, filterError.Known, "id-a")
+			assert.Contains(t, filterError.Known, "A")
 		}
 	})
 }

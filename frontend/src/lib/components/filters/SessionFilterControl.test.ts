@@ -56,7 +56,7 @@ it("shows and searches machine labels while selecting the stored machine key", a
   expect(sessions.filters.machine).toBe("");
 });
 
-it("shows a temporary machine failure, disables rows, and retries", async () => {
+it("shows a temporary machine failure, disables rows, and retries when reopened", async () => {
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
   sessions.setMachineFilter("Retry label");
@@ -91,7 +91,8 @@ it("shows a temporary machine failure, disables rows, and retries", async () => 
   sessions.machines = [];
   flushSync();
   expect(screen.queryByText("No machines")).toBeNull();
-  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
   await vi.waitFor(() => expect(sessions.filters.machine).toBe("retry-machine"));
   expect(
     (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,

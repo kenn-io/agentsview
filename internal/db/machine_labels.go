@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // MachineLabelKeyPrefix identifies display labels in archive and mirror metadata.
@@ -99,26 +98,11 @@ type MachineFilterError struct {
 }
 
 func (e *MachineFilterError) Error() string {
-	display := func(values []string) string {
-		bounded := make([]string, min(len(values), 20))
-		for i := range bounded {
-			bounded[i] = stringutil.SafeTruncate(values[i], 128)
-		}
-		text := strings.Join(bounded, ", ")
-		if len(values) > len(bounded) {
-			text += fmt.Sprintf(" (+%d more)", len(values)-len(bounded))
-		}
-		return text
-	}
-	known := display(e.Known)
+	known := strings.Join(e.Known, ", ")
 	if len(e.Candidates) > 1 {
-		return fmt.Sprintf("ambiguous machine %.256q; matching IDs: %s; known machines: %s", e.Value, display(e.Candidates), known)
+		return fmt.Sprintf("ambiguous machine %q; matching IDs: %s; known machines: %s", e.Value, strings.Join(e.Candidates, ", "), known)
 	}
-	hint := ""
-	if strings.Contains(e.Value, ",") {
-		hint = "; comma-separated filters take machine IDs or aliases"
-	}
-	return fmt.Sprintf("unknown machine %.256q%s; known machines: %s", e.Value, hint, known)
+	return fmt.Sprintf("unknown machine %q; known machines: %s", e.Value, known)
 }
 
 // ResolveMachineFilter accepts aliases, exact IDs, and unique display labels.
@@ -202,10 +186,12 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 	for _, id := range aliases {
 		names = append(names, id)
 	}
-	for id, label := range labels {
+	for id := range labels {
 		names = append(names, id)
-		if label != "" {
-			names = append(names, label)
+	}
+	for i, id := range names {
+		if label := labels[id]; label != "" {
+			names[i] = label
 		}
 	}
 	slices.Sort(names)

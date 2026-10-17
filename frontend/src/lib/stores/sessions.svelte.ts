@@ -941,11 +941,6 @@ class SessionsStore {
     this.machineResolution = null;
   }
 
-  retryMachineFilter() {
-    this.resetMachineResolution();
-    return this.loadMachines();
-  }
-
   get machineFilterPending(): boolean {
     return this.machineResolution?.status === "pending";
   }
