@@ -213,49 +213,6 @@ describe("UsagePage refresh behavior", () => {
     usage.cancelInFlightReads();
   });
 
-  it("keeps a partly excluded group ticked and counts the hidden member", async () => {
-    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    const summary = Promise.withResolvers<UsageSummaryResponse>();
-    vi.spyOn(UsageService, "getApiV1UsageSummary").mockReturnValue(summary.promise);
-    vi.spyOn(usage, "fetchAll").mockImplementation(async () => {
-      await usage.fetchSummary({ loadComparison: false });
-    });
-    router.route = "usage";
-    router.params = { exclude_model: "claude-opus-4-20250514" };
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    summary.resolve({
-      ...usageSummaryWithUnsupported(),
-      model_aliases: { "claude-opus-4-20250514": "claude-4", "claude-sonnet-4": "claude-4" },
-      modelTotals: [
-        {
-          model: "claude-4",
-          inputTokens: 10,
-          outputTokens: 5,
-          cacheCreationTokens: 0,
-          cacheReadTokens: 0,
-          cost: testMoney(1),
-        },
-      ],
-    });
-    await vi.waitFor(() => expect(usage.summary?.model_aliases).toBeDefined());
-    await flushEffects();
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Model: 1 hidden"]',
-    );
-    expect(trigger).not.toBeNull();
-    trigger!.click();
-    await flushEffects();
-    const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
-    const groups = rows.filter(
-      (row) => row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
-    );
-    expect(rows).toHaveLength(1);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
-    expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
-  });
-
   it("keeps a saved variant's group available after re-including an empty period", async () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -267,7 +224,11 @@ describe("UsagePage refresh behavior", () => {
     };
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
-    document.querySelector<HTMLButtonElement>('button[aria-label="Model: 1 hidden"]')!.click();
+    const trigger = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Model: 1 hidden"]',
+    );
+    expect(trigger).not.toBeNull();
+    trigger!.click();
     await flushEffects();
     const groupRow = () =>
       [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")].find(
@@ -275,6 +236,9 @@ describe("UsagePage refresh behavior", () => {
           row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
       );
     expect(groupRow()).toBeDefined();
+    expect(document.querySelectorAll(".kit-filter-dropdown__item")).toHaveLength(1);
+    expect(groupRow()!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    expect(groupRow()!.getAttribute("title")).toBe("claude-opus-4-20250514");
     [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Select all")!
       .click();

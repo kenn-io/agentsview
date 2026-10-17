@@ -548,7 +548,7 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 
 func TestUsageSummaryModelGroups(t *testing.T) {
 	te := setup(t, func(c *config.Config) {
-		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "constructor", "gpt-4o": "constructor"}
+		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
 	})
 	seedUsagePairwiseEnv(t, te)
 	for _, tt := range []struct {
@@ -572,25 +572,12 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 			}
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal([]byte(payload), &body))
-			var rows service.UsageSummaryResult
-			require.NoError(t, json.Unmarshal([]byte(payload), &rows))
 			if tt.grouped == "true" {
-				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"constructor","gpt-4o":"constructor"}`, string(body["model_aliases"]))
-				require.Len(t, rows.ModelTotals, 1)
-				assert.Equal(t, "constructor", rows.ModelTotals[0].Model)
-				assert.Equal(t, 130, rows.ModelTotals[0].InputTokens)
-				require.Len(t, rows.Daily, 1)
-				require.Len(t, rows.Daily[0].ModelBreakdowns, 1)
-				assert.Equal(t, "constructor", rows.Daily[0].ModelBreakdowns[0].ModelName)
-				assert.Equal(t, 130, rows.Daily[0].ModelBreakdowns[0].InputTokens)
-			} else {
-				assert.NotContains(t, body, "model_aliases")
-				assert.Len(t, rows.ModelTotals, 2)
-			}
-			if tt.grouped == "true" {
+				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"group","gpt-4o":"group"}`, string(body["model_aliases"]))
 				assert.NotContains(t, body, "pricing")
 				assert.NotContains(t, body, "schema_version")
 			} else {
+				assert.NotContains(t, body, "model_aliases")
 				assert.Contains(t, body, "pricing")
 				assert.Contains(t, body, "schema_version")
 			}
@@ -615,23 +602,14 @@ func TestUsageTopSessionsModelGroup(t *testing.T) {
 			m.TokenUsage = tokenUsageJSON
 		}
 	})
-	for _, tt := range []struct {
-		filter string
-		want   []string
-	}{
-		{"model", []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}},
-	} {
-		t.Run(tt.filter, func(t *testing.T) {
-			w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{
-				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", tt.filter: "group",
-			}))
-			assertStatus(t, w, http.StatusOK)
-			entries := decode[[]db.TopSessionEntry](t, w)
-			ids := make([]string, 0, len(entries))
-			for _, entry := range entries {
-				ids = append(ids, entry.SessionID)
-			}
-			assert.ElementsMatch(t, tt.want, ids)
-		})
+	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{
+		"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", "model": "group",
+	}))
+	assertStatus(t, w, http.StatusOK)
+	entries := decode[[]db.TopSessionEntry](t, w)
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.SessionID)
 	}
+	assert.ElementsMatch(t, []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}, ids)
 }

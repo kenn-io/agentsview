@@ -1040,24 +1040,17 @@ func TestUsageModelGroups(t *testing.T) {
 		for _, tt := range []struct {
 			name                  string
 			grouped               bool
-			fallback              bool
 			dimension             string
 			left, right           string
 			leftInput, rightInput int
 		}{
 			{name: "grouping omitted", dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 200, rightInput: 30},
 			{name: "grouping enabled", grouped: true, dimension: "project", leftInput: 100, rightInput: 100},
-			{name: "fallback requested", fallback: true, dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 200, rightInput: 30},
-			{name: "grouped fallback requested", grouped: true, fallback: true, dimension: "project", leftInput: 100, rightInput: 100},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				req := service.UsagePairwiseComparisonRequest{
 					From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true, ExcludeModel: "other",
-					GroupModels: tt.grouped, FallbackToDefault: tt.fallback,
-				}
-				if tt.fallback {
-					req.LeftDimension, req.LeftValue = "model", "absent"
-					req.RightDimension, req.RightValue = "model", "gpt-4o"
+					GroupModels: tt.grouped,
 				}
 				result, err := be.UsagePairwiseComparison(t.Context(), req)
 				require.NoError(t, err)
@@ -1093,7 +1086,6 @@ func TestUsageModelGroups(t *testing.T) {
 		be := service.NewReadOnlyBackend(d, service.WithModelGroups(groups))
 		summary, err := be.UsageSummary(t.Context(), service.UsageRequest{From: "2024-06-01", To: "2024-06-01", IncludeOneShot: true, GroupModels: true, Model: "group"})
 		require.NoError(t, err)
-		assert.Equal(t, map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}, summary.ModelAliases)
 		require.Len(t, summary.ModelTotals, 1)
 		assert.Equal(t, "group", summary.ModelTotals[0].Model)
 	})

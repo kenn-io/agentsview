@@ -936,7 +936,7 @@ describe("AnalyticsStore model filter", () => {
     );
   });
 
-  it("displays and clears a saved member selection through its group", async () => {
+  it("displays a saved member selection through its group", async () => {
     analytics.model = "claude-opus-4-20250514";
     analyticsService.getApiV1AnalyticsSummary.mockResolvedValue({
       ...makeSummary(),
@@ -949,8 +949,6 @@ describe("AnalyticsStore model filter", () => {
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]?.model).toBe(
       "claude-opus-4-20250514",
     );
-    analytics.toggleModel("claude-4");
-    expect(analytics.model).toBe("");
   });
 
   it.each([

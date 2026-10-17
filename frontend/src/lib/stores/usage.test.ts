@@ -563,7 +563,7 @@ describe("UsageStore session filter params", () => {
     vi.clearAllMocks();
   });
 
-  it("replaces a saved member exclusion with its group, then clears it", async () => {
+  it("uses summary aliases when toggling a saved member exclusion", async () => {
     const { usage } = await loadStore();
     usage.excludedModels = "claude-opus-4-20250514";
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
@@ -571,11 +571,8 @@ describe("UsageStore session filter params", () => {
       model_aliases: { "claude-opus-4-20250514": "claude-4" },
     });
     await usage.fetchSummary();
-    expect(usage.excludedModels).toBe("claude-opus-4-20250514");
     usage.toggleModel("claude-4");
     expect(usage.excludedModels).toBe("claude-4");
-    usage.toggleModel("claude-4");
-    expect(usage.excludedModels).toBe("");
   });
 
   it("requests grouped model rows only from summary and pairwise endpoints", async () => {

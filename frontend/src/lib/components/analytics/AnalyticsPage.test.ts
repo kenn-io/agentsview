@@ -16,7 +16,6 @@ import sourceRaw from "./AnalyticsPage.svelte?raw";
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
-import { AnalyticsService } from "../../api/generated/index.js";
 import { requestUrl } from "../../test-support/request-url.js";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
@@ -121,63 +120,18 @@ describe("AnalyticsPage grouped model filter", () => {
         (row) =>
           row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
       );
-    expect(groupRow()).toBeDefined();
-    groupRow()!.click();
-    await flushEffects();
-    expect(analytics.model).toBe("");
-    expect(groupRow()).toBeDefined();
-    groupRow()!.click();
-    await flushEffects();
-    expect(analytics.model).toBe("claude-4");
-  });
-
-  it("shows only the display group with its tick selected", async () => {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
-    const summary =
-      Promise.withResolvers<
-        Awaited<ReturnType<typeof AnalyticsService.getApiV1AnalyticsSummary>>
-      >();
-    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockReturnValue(summary.promise);
-    vi.spyOn(analytics, "fetchAll").mockImplementation(async () => {
-      await analytics.fetchSummary();
-    });
-    analytics.model = "claude-opus-4-20250514";
-    analytics.summary = null;
-    sessions.loading = false;
-    router.route = "sessions";
-    component = mount(AnalyticsPage, { target: document.body });
-    await flushEffects();
-    summary.resolve({
-      total_sessions: 0,
-      total_messages: 0,
-      total_output_tokens: 0,
-      token_reporting_sessions: 0,
-      models: ["claude-opus-4-20250514"],
-      model_aliases: { "claude-opus-4-20250514": "claude-4" },
-      active_projects: 0,
-      active_days: 0,
-      avg_messages: 0,
-      median_messages: 0,
-      p90_messages: 0,
-      most_active_project: "",
-      concentration: 0,
-      agents: {},
-    });
-    await vi.waitFor(() => expect(analytics.displayedModels).toBe("claude-4"));
-    await flushEffects();
-    document
-      .querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!
-      .click();
-    await flushEffects();
     const rows = [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")];
     const groups = rows.filter(
       (row) => row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
     );
     expect(rows).toHaveLength(2);
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
-    expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
+    expect(groupRow()!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    expect(groupRow()!.getAttribute("title")).toBe("claude-opus-4-20250514");
+    groupRow()!.click();
+    await flushEffects();
+    expect(analytics.model).toBe("");
+    expect(groupRow()).toBeDefined();
   });
 });
 

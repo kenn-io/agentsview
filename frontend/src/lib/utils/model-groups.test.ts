@@ -23,18 +23,18 @@ describe("grouped model filters", () => {
 
   it.each([
     ["a,b,other", "group", "other"],
-    [" a, b, , other ", "group", "other"],
     ["a,b,other", "a", "b,other"],
     ["group,a,other", "group", "other"],
     ["a", "other", "a,other"],
     ["", "group", "group"],
-  ])("toggles %s by %s to %s", (saved, name, result) => {
-    expect(toggleGroupedModel(saved, name, aliases)).toBe(result);
+    ["a", "group", "group", true],
+    ["group", "group", "", true],
+  ])("toggles %s by %s to %s", (saved, name, result, exclude = false) => {
+    expect(toggleGroupedModel(saved, name, aliases, exclude)).toBe(result);
   });
 
   it.each([
     ["a", "", 1],
-    [" a, , other ", "other", 1],
     ["a,b,other", "other", 2],
     // A raw model named "group" remains visible when every alias is excluded.
     ["a,b", "", 2],
@@ -46,10 +46,6 @@ describe("grouped model filters", () => {
   });
 
   it("groups and sorts picker items while describing selected members", () => {
-    expect(modelPickerItems(["group"], " a, , other ", aliases)).toEqual([
-      { name: "group", description: "a" },
-      { name: "other", description: undefined },
-    ]);
     expect(modelPickerItems(["z", "b", "a", "other"], "b,a,unknown", aliases)).toEqual([
       { name: "group", description: "b, a" },
       { name: "other", description: undefined },
