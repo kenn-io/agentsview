@@ -2593,19 +2593,6 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("id-a");
     });
 
-    it("replaces a rejected selector with the clicked machine", async () => {
-      api.getMachines.mockImplementation((params) =>
-        params.machine
-          ? Promise.reject(new ApiError(400, "invalid machine", "invalid_machine_filter"))
-          : Promise.resolve(catalog),
-      );
-      sessions.initFromParams({ machine: "missing" });
-      await sessions.loadMachines();
-      sessions.toggleMachineFilter("id-b");
-      expect(sessions.filters.machine).toBe("id-b");
-      expectSidebarIndexCalledWith({ machine: "id-b" });
-    });
-
     it.each([new Error("offline"), new ApiError(500, "internal error"), null])(
       "preserves the selector when machine resolution is unavailable: %s",
       async (error) => {
@@ -2709,6 +2696,9 @@ describe("SessionsStore", () => {
       sessions.invalidateFilterCaches();
       await sessions.loadMachines();
       expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toHaveLength(2);
+      sessions.toggleMachineFilter("id-b");
+      expect(sessions.filters.machine).toBe("id-b");
+      expectSidebarIndexCalledWith({ machine: "id-b" });
     });
 
     it("preserves a stale saved selector until the user clears it", async () => {

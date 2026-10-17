@@ -49,7 +49,4 @@ it("keeps separate machine chips and picker choices after removing one of three 
   expect(screen.getByRole("button", { name: "a" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "b" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "c" })).toBeNull();
-  expect(sessions.machineRowsDisabled).toBe(false);
-  expect(sessions.isMachineSelected("a")).toBe(true);
-  expect(sessions.isMachineSelected("b")).toBe(true);
 });

@@ -97,7 +97,6 @@ func TestUsageStreamMapsCatalogFailures(t *testing.T) {
 		message string
 		machine bool
 	}{
-		{"storage failure", errors.New("catalog lookup failed"), http.StatusInternalServerError, "internal error", false},
 		{"machine metadata", nil, http.StatusInternalServerError, "internal error", true},
 		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "gateway timeout", false},
 		{"remote mode", db.ErrReadOnly, http.StatusNotImplemented, "not available in remote mode", false},

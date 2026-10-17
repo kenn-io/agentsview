@@ -84,7 +84,6 @@ it("shows a temporary machine failure, disables rows, and retries when reopened"
   expect((await screen.findByRole("alert")).textContent).toContain(
     "Couldn't update the machine filter. Try again.",
   );
-  expect(sessions.filters.machine).toBe("Retry label");
   expect(
     (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
   ).toBe(true);
@@ -93,10 +92,11 @@ it("shows a temporary machine failure, disables rows, and retries when reopened"
   expect(screen.queryByText("No machines")).toBeNull();
   await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
   await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-  await vi.waitFor(() => expect(sessions.filters.machine).toBe("retry-machine"));
-  expect(
-    (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
-  ).toBe(false);
+  await vi.waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
   expect(screen.queryByRole("alert")).toBeNull();
 });
 

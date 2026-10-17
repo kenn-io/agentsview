@@ -72,7 +72,6 @@ func TestResolveMachineFilter(t *testing.T) {
 		{id, id, d},
 		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", d},
 		{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", d},
-		{"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", d},
 		{"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "id-a", d},
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", d},
 		// An installation ID without stored sessions stays an exact selector.

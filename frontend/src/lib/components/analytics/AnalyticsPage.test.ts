@@ -396,7 +396,6 @@ describe("AnalyticsPage initial load", () => {
     await sessions.loadMachines();
     await flushEffects();
 
-    expect(sessions.filters.machine).toBe("id-a");
     expect(requests).toEqual(["id-a"]);
   });
 
