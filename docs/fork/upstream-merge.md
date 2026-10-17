@@ -126,11 +126,19 @@ Namespace runner 只有 upstream 有，fork 里用它的 job 会一直排队，�
 - `.github/actionlint.yaml` 保留，因为 `ci.yml` 和 `cjk-fts.yml` 仍引用 Namespace
   标签。
 
+fork 只通过命令行安装 AgentsView，不发布桌面安装包，所以 `desktop-artifacts.yml`
+和 `desktop-macos-main.yml` 的 `build` job 也加了同样的 `if` 条件，在 fork 里跳过。
+PR 上的桌面构建通过 `desktop-artifacts-pr.yml` 调用 `desktop-artifacts.yml`，所以
+一并跳过。这个跳过和 Namespace 无关；需要桌面安装包时，去掉这两处 `if` 即可，它们
+已经使用托管 runner。
+
 upstream 从 #2236（`65006001`）起把所有 job 改到了 GitHub 托管 runner。合并到包含
 #2236 的 upstream 时：
 
-1. 上面列出的 workflow 和 action 都取 upstream 的版本，不再保留 `if` 条件；
-   `.github/actionlint.yaml` 随 upstream 删除。
+1. 上面列出的 workflow 和 action 都取 upstream 的版本，`ci.yml` 和 `cjk-fts.yml`
+   不再保留 `if` 条件；`.github/actionlint.yaml` 随 upstream 删除。
+1. 只要 fork 仍不需要桌面安装包，就在 upstream 版本的 `desktop-artifacts.yml` 和
+   `desktop-macos-main.yml` 上重新加回 `build` job 的 `if` 条件。
 1. 删掉 `fork-checks.yml` 里和 upstream CI 重复的 job。整个 workflow 都重复时，
    删掉这个文件，并更新上文"基本做法"里提到它的那句话。
 

@@ -24,9 +24,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# This fork installs AgentsView from the command line and does not ship
+# desktop installers, so it skips these builds. See
+# docs/fork/upstream-merge.md before removing the guard.
 jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
+    if: github.repository == 'kenn-io/agentsview'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
