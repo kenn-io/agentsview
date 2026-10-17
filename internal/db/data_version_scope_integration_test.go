@@ -328,7 +328,7 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
 }
 
-func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
+func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
 		db.ScopedDataVersionProviders(137, 138))
@@ -338,10 +338,21 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
 		resolution         export.ProjectResolution
 		remote, remoteName string
 		wantNormalized     string
+		fullRebuild        bool
+		otherAmbiguous     bool
 	}{
 		{name: "unknown root only", resolution: export.ProjectResolutionUnknown, wantNormalized: recorded},
 		{name: "resolved root only", resolution: export.ProjectResolutionResolved, wantNormalized: recorded},
 		{name: "ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded},
+		{name: "full rebuild root only", resolution: export.ProjectResolutionResolved, wantNormalized: recorded, fullRebuild: true},
+		{name: "full rebuild ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true},
+		{name: "another session remains ambiguous", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, otherAmbiguous: true},
+		{name: "full rebuild retains another ambiguous session", resolution: export.ProjectResolutionAmbiguous, wantNormalized: recorded, fullRebuild: true, otherAmbiguous: true},
+		{
+			name: "full rebuild retains checkout remote", resolution: export.ProjectResolutionResolved,
+			remote: "https://example.com/team/other.git", remoteName: "origin",
+			wantNormalized: "example.com/team/other", fullRebuild: true,
+		},
 		{
 			name: "resolved checkout remote", resolution: export.ProjectResolutionResolved,
 			remote: "https://example.com/team/other.git", remoteName: "origin",
@@ -367,8 +378,11 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
 			before, err := database.GetSessionFull(ctx, "codex:"+id)
 			require.NoError(t, err)
 			require.NotNil(t, before)
-			// Simulate version 137, which discarded the URL in these unchanged
-			// bytes and kept whatever identity checkout discovery produced.
+			// Older parsers discarded the URL and kept checkout-derived evidence.
+			version := 137
+			if tc.fullRebuild {
+				version = 135
+			}
 			oldIdentity := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
 				RootPath: before.Cwd, GitRemote: tc.remote, GitRemoteName: tc.remoteName,
 			})
@@ -376,19 +390,32 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
 				oldIdentity = export.StoredProjectIdentity{}
 			}
 			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `
-					UPDATE session_project_identity_snapshots SET git_remote=?, git_remote_name=?,
+				for _, table := range []string{"session_project_identity_snapshots", "project_identity_observations"} {
+					_, err := tx.ExecContext(ctx, `
+					UPDATE `+table+` SET git_remote=?, git_remote_name=?,
 					    normalized_remote=?, key=?, key_source=?, remote_resolution=?,
 					    remote_candidate_count=0`,
-					tc.remote, tc.remoteName, oldIdentity.NormalizedRemote,
-					oldIdentity.Key, oldIdentity.KeySource, tc.resolution)
-				if err != nil {
-					return err
+						tc.remote, tc.remoteName, oldIdentity.NormalizedRemote,
+						oldIdentity.Key, oldIdentity.KeySource, tc.resolution)
+					if err != nil {
+						return err
+					}
 				}
-				_, err = tx.ExecContext(ctx, `
-					DELETE FROM project_identity_observations;
-					UPDATE sessions SET data_version=137;
-					PRAGMA user_version=137`)
+				_, err := tx.ExecContext(ctx, fmt.Sprintf(
+					"UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version, version))
+				return err
+			}))
+			if tc.otherAmbiguous {
+				require.NoError(t, database.UpsertSessionWithProjectIdentity(ctx, db.Session{
+					ID: "unavailable-session", Project: before.Project, Machine: "local", Agent: "codex",
+				}, export.ProjectIdentityObservation{
+					SessionID: "unavailable-session", Project: before.Project, Machine: "local",
+					RootPath: before.Cwd, RemoteResolution: export.ProjectResolutionAmbiguous,
+					RemoteCandidateCount: 2, ObservedAt: time.Now(),
+				}, before.Project))
+			}
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "ALTER TABLE session_project_identity_snapshots DROP COLUMN recorded_git_remote")
 				return err
 			}))
 			path := database.Path()
@@ -399,10 +426,14 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
 			needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
 			require.NoError(t, err)
 			assert.True(t, needsSync)
-			assert.False(t, fullRebuild)
+			assert.Equal(t, tc.fullRebuild, fullRebuild)
 			engine = sync.NewEngine(ctx, database, cfg)
 			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+			stats, err := engine.SyncThenRun(ctx, false, nil, func(bool) error { return nil })
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Synced)
+			require.Zero(t, stats.Failed)
+			require.False(t, stats.Aborted)
 			after, err := database.GetSessionFull(ctx, "codex:"+id)
 			require.NoError(t, err)
 			require.NotNil(t, after)
@@ -413,13 +444,30 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentityInPlace(t *testing.T) {
 			assert.Equal(t, db.CurrentDataVersion(), after.DataVersion)
 			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
 			require.NoError(t, err)
-			require.Len(t, snapshots, 1)
-			assert.Equal(t, after.ID, snapshots[0].SessionID)
-			assert.Equal(t, tc.wantNormalized, snapshots[0].NormalizedRemote)
-			assert.Equal(t, export.ProjectResolutionResolved, snapshots[0].RemoteResolution)
+			found := false
+			for _, snapshot := range snapshots {
+				if snapshot.SessionID == after.ID {
+					found = true
+					assert.Equal(t, tc.wantNormalized, snapshot.NormalizedRemote)
+					assert.Equal(t, export.ProjectResolutionResolved, snapshot.RemoteResolution)
+				}
+			}
+			require.True(t, found, "the reparsed session must retain its snapshot")
+			projects, err := database.BuildProjectIdentityMap(ctx, []string{after.Project})
+			require.NoError(t, err)
+			wantResolution := export.ProjectResolutionResolved
+			if tc.otherAmbiguous || tc.remote != "" {
+				wantResolution = export.ProjectResolutionAmbiguous
+			}
+			assert.Equal(t, wantResolution, projects[after.Project].Resolution)
 			var sessions int
 			require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
-			assert.Equal(t, 1, sessions)
+			wantSessions := 1
+			if tc.otherAmbiguous {
+				wantSessions++
+			}
+			assert.Len(t, snapshots, wantSessions)
+			assert.Equal(t, wantSessions, sessions)
 			assert.Zero(t, engine.SyncAll(ctx, nil).Synced, "unchanged sources must stop reparsing after the upgrade")
 		})
 	}

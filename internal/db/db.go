@@ -2812,6 +2812,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "sync_marker",
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
 		},
+		{
+			"session_project_identity_snapshots", "recorded_git_remote",
+			"ALTER TABLE session_project_identity_snapshots ADD COLUMN recorded_git_remote TEXT NOT NULL DEFAULT ''",
+		},
 	}
 }
 
@@ -3302,6 +3306,7 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 			root_path          TEXT NOT NULL DEFAULT '',
 			git_remote         TEXT NOT NULL DEFAULT '',
 			git_remote_name    TEXT NOT NULL DEFAULT '',
+			recorded_git_remote TEXT NOT NULL DEFAULT '',
 			repository_path    TEXT NOT NULL DEFAULT '',
 			worktree_name      TEXT NOT NULL DEFAULT '',
 			worktree_root_path TEXT NOT NULL DEFAULT '',
