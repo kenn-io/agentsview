@@ -23,10 +23,11 @@ Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
 Version 3 is the default. Hour, day, and digest commands also accept
-`--schema-version 4` for joint cells; versions 1 and 2 are no longer available.
-Any other value is rejected before the archive is opened or output is written.
-Integrations pinned to an older version must update to version 3 and refresh
-their saved digests.
+`--schema-version 4` for joint cells and `--schema-version 5` to keep
+contributions with different repository evidence separate. Versions 1 and 2 are
+no longer available. Any other value is rejected before the archive is opened or
+output is written. Integrations pinned to an older version must update to
+version 3 and refresh their saved digests.
 
 Each successful command writes exactly one canonical JSON document followed by
 one newline. Diagnostics go to stderr. A malformed or future period, an open
@@ -248,6 +249,38 @@ batches once per day export, then builds each hour's catalog from its actual
 contributors; it does not query the archive once per hour or inspect live
 checkouts.
 
+### Project contributions (version 5)
+
+Request `--schema-version 5` when a report needs to distinguish repositories
+that share a project name, or to select only activity with verified identity.
+Version 5 uses the same fields and accounting rules as version 4. It partitions
+activity and usage by each contributing session's saved identity before building
+project breakdowns and joint cells.
+
+For example, two sessions named `api` can produce separate entries: ten minutes
+with a verified repository, and five minutes with missing evidence. Selecting
+the verified entry returns only its ten minutes and its usage. The unknown entry
+neither hides those minutes nor inherits their repository.
+
+A project key combines the archive-scoped label key, resolution, and, when
+resolved, the identity key. Treat the complete key as an opaque selector.
+Different resolved repositories and unknown or ambiguous contributions have
+separate keys even when their display labels match. A missing snapshot or one
+whose label no longer matches the session stays unknown. Sessions with the same
+label and identity share a group; differently named checkouts retain separate
+labels. Consumers can group those entries by their verified repository identity.
+
+`activity.by_project`, `usage.by_project`, and `joint` use the same keys.
+`--project-key` selects a group across all three, including totals and
+concurrency. Usage deduplication and cost allocation still happen before
+selection. Display labels remain labels and never establish identity. Standalone
+usage stays unattributed. Exports contain no session IDs or raw checkout paths
+and never inspect live checkouts or modify the archive.
+
+Versions 3 and 4 remain available with their existing semantics. When moving to
+version 5, obtain new project keys and refresh saved digests; old label keys do
+not select the new groups.
+
 ### Cell measurements
 
 The `automation` field uses the same disjoint categories as activity totals.
@@ -426,8 +459,9 @@ independent concurrency peaks for each category. It retains the complete Claude
 snapshot selection and web-search charging introduced in version 2. Versions 1
 and 2 are no longer emitted.
 
-Version 4 adds scoped joint cells and selectable bucket duration while version 3
-remains the default.
+Version 4 adds scoped joint cells and selectable bucket duration. Version 5
+separates contributions by saved repository evidence. Version 3 remains the
+default.
 
 Integrations should request and require their intended `schema_version`, reject
 unknown fields, and verify the canonical content digest before accepting an

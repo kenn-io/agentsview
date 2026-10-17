@@ -206,7 +206,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				To:            toValue,
 				Days:          days,
 			}
-			if *schemaVersion == export.ReportingJointSchemaVersion {
+			if export.IsJointReportingSchemaVersion(*schemaVersion) {
 				digest.BucketSeconds = int(duration / time.Second)
 			}
 			return writeCanonicalReportingDocument(cmd, digest)
@@ -231,7 +231,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		fmt.Sprintf("Reporting export schema version (%d or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion),
+		fmt.Sprintf("Reporting export schema version (%d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingIdentitySchemaVersion),
 	)
 	return version
 }
@@ -239,14 +239,14 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 func bindReportingProjectKeys(command *cobra.Command) *[]string {
 	keys := new([]string)
 	command.Flags().StringArrayVar(keys, "project-key", nil,
-		"Limit the complete export to an archive project key (repeatable; schema 4)")
+		"Limit the complete export to an archive project key (repeatable; schema 4 or 5)")
 	return keys
 }
 
 func bindReportingBucket(command *cobra.Command) *string {
 	bucket := new(string)
 	command.Flags().StringVar(bucket, "bucket", "",
-		"Bucket duration: whole-minute divisor of one hour (schema 4; default 5m)")
+		"Bucket duration: whole-minute divisor of one hour (schema 4 or 5; default 5m)")
 	return bucket
 }
 

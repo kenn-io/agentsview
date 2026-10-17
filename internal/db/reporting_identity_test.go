@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json/jsontext"
+	"strconv"
 	"testing"
 	"time"
 
@@ -51,54 +52,58 @@ func TestReportingProjectEvidenceRootConsensus(t *testing.T) {
 }
 
 func TestReportingWorktreeIdentityExportsRemainStable(t *testing.T) {
-	d := testDB(t)
-	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	for i, root := range []string{"/synthetic/main", "/synthetic/linked"} {
-		id := []string{"session-a", "session-b"}[i]
-		insertSession(t, d, id, "api", func(s *Session) {
-			s.Agent = "agent-a"
-			s.StartedAt, s.EndedAt = new("2026-07-28T12:00:00Z"), new("2026-07-28T12:01:00Z")
+	for _, version := range []int{4, 5} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			d := testDB(t)
+			date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+			for i, root := range []string{"/synthetic/main", "/synthetic/linked"} {
+				id := []string{"session-a", "session-b"}[i]
+				insertSession(t, d, id, "api", func(s *Session) {
+					s.Agent = "agent-a"
+					s.StartedAt, s.EndedAt = new("2026-07-28T12:00:00Z"), new("2026-07-28T12:01:00Z")
+				})
+				insertMessages(t, d,
+					Message{SessionID: id, Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
+					Message{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
+				)
+				require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
+					SessionID: id, Project: "api", Machine: "synthetic", RootPath: root,
+					RepositoryPath: "/synthetic/main", WorktreeRootPath: root,
+					WorktreeRelationship: []export.WorktreeRelationship{export.WorktreeMain, export.WorktreeLinked}[i], ObservedAt: date,
+				}))
+			}
+			opts := ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: version, Bucket: "5m"}
+			first, err := d.ExportReportingDay(t.Context(), opts)
+			require.NoError(t, err)
+			firstBytes, err := export.MarshalCanonical(first)
+			require.NoError(t, err)
+			require.Len(t, first.Hours[12].Joint.Projects, 1)
+			for _, project := range first.Hours[12].Joint.Projects {
+				require.Equal(t, export.ProjectResolutionResolved, project.Resolution)
+				require.NotNil(t, project.Identity)
+				assert.Equal(t, export.ProjectKindMachineRoot, project.Identity.Kind)
+				assert.NotEmpty(t, project.Identity.Key)
+				assert.NotEmpty(t, project.Identity.RepositoryKey)
+				require.Empty(t, project.Identity.RootKey, "no individual worktree represents the shared repository")
+			}
+			for range 8 {
+				day, err := d.ExportReportingDay(t.Context(), opts)
+				require.NoError(t, err)
+				dayBytes, err := export.MarshalCanonical(day)
+				require.NoError(t, err)
+				assert.Equal(t, firstBytes, dayBytes)
+				digests, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{
+					From: date, To: date, Now: opts.Now, SchemaVersion: version, Bucket: "5m",
+				})
+				require.NoError(t, err)
+				require.Len(t, digests, 1)
+				assert.Equal(t, first.Digest, digests[0].DayDigest)
+				require.Len(t, digests[0].HourDigests, 24)
+				for i, hour := range first.Hours {
+					assert.Equal(t, hour.Digest, digests[0].HourDigests[i])
+				}
+			}
 		})
-		insertMessages(t, d,
-			Message{SessionID: id, Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
-			Message{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
-		)
-		require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
-			SessionID: id, Project: "api", Machine: "synthetic", RootPath: root,
-			RepositoryPath: "/synthetic/main", WorktreeRootPath: root,
-			WorktreeRelationship: []export.WorktreeRelationship{export.WorktreeMain, export.WorktreeLinked}[i], ObservedAt: date,
-		}))
-	}
-	opts := ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: 4, Bucket: "5m"}
-	first, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	firstBytes, err := export.MarshalCanonical(first)
-	require.NoError(t, err)
-	require.Len(t, first.Hours[12].Joint.Projects, 1)
-	for _, project := range first.Hours[12].Joint.Projects {
-		require.Equal(t, export.ProjectResolutionResolved, project.Resolution)
-		require.NotNil(t, project.Identity)
-		assert.Equal(t, export.ProjectKindMachineRoot, project.Identity.Kind)
-		assert.NotEmpty(t, project.Identity.Key)
-		assert.NotEmpty(t, project.Identity.RepositoryKey)
-		require.Empty(t, project.Identity.RootKey, "no individual worktree represents the shared repository")
-	}
-	for range 8 {
-		day, err := d.ExportReportingDay(t.Context(), opts)
-		require.NoError(t, err)
-		dayBytes, err := export.MarshalCanonical(day)
-		require.NoError(t, err)
-		assert.Equal(t, firstBytes, dayBytes)
-		digests, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{
-			From: date, To: date, Now: opts.Now, SchemaVersion: 4, Bucket: "5m",
-		})
-		require.NoError(t, err)
-		require.Len(t, digests, 1)
-		assert.Equal(t, first.Digest, digests[0].DayDigest)
-		require.Len(t, digests[0].HourDigests, 24)
-		for i, hour := range first.Hours {
-			assert.Equal(t, hour.Digest, digests[0].HourDigests[i])
-		}
 	}
 }
 

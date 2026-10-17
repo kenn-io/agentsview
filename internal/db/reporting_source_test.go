@@ -43,6 +43,8 @@ func TestReportingDigestMatchesPerDateExport(t *testing.T) {
 		{name: "v3", schema: export.ReportingSchemaVersion},
 		{name: "v4-5m", schema: export.ReportingJointSchemaVersion, bucket: "5m"},
 		{name: "v4-1m", schema: export.ReportingJointSchemaVersion, bucket: "1m"},
+		{name: "v5-5m", schema: export.ReportingIdentitySchemaVersion, bucket: "5m"},
+		{name: "v5-1m", schema: export.ReportingIdentitySchemaVersion, bucket: "1m"},
 		{name: "v4-scoped", schema: export.ReportingJointSchemaVersion, bucket: "5m", projectKeys: []string{projectKey}},
 	}
 

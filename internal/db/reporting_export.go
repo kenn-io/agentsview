@@ -122,7 +122,7 @@ func (db *DB) ExportReportingDay(
 		Complete:      complete,
 		Hours:         hours,
 	}
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		day.BucketSeconds = int(bucket / time.Second)
 	}
 	day, _, err = export.FinalizeReportingDay(day)
@@ -243,7 +243,7 @@ func (db *DB) ExportReportingDigest(
 			Complete:      resolved.complete,
 			Hours:         hours,
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			day.BucketSeconds = int(bucket / time.Second)
 		}
 		day, _, err = export.FinalizeReportingDay(day)
@@ -336,8 +336,15 @@ func reportingHoursFromSource(
 	}
 	projects := source.projects
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchemaVersion(schemaVersion) {
 		references = source.references
+		if schemaVersion == export.ReportingIdentitySchemaVersion {
+			projects, references = partitionReportingProjects(sessionByID, projects, references)
+			sessions = slices.Clone(sessions)
+			for i := range sessions {
+				sessions[i] = sessionByID[sessions[i].SessionID]
+			}
+		}
 		sessions, ids, events, usage = scopeJointReporting(sessions, events, usage, sessionByID, projects, projectKeys)
 		for i := range sessions {
 			sessions[i].ProjectKey = export.ProjectKeyForEntry(projects[sessions[i].Project])
@@ -377,7 +384,7 @@ func reportingHoursFromSource(
 			candidates = dayCandidates[first:last:last]
 		}
 		aggregate := activity.AggregateCandidates
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			aggregate = activity.AggregateCandidatesWithJointActivity
 		}
 		report, aggregateErr := aggregate(ctx, activity.Params{
@@ -421,11 +428,14 @@ func reportingHoursFromSource(
 		if !hour.HasData {
 			hour = quietReportingHour(hourStart, schemaVersion, bucket)
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchemaVersion(schemaVersion) {
 			hour.BucketSeconds = int(bucket / time.Second)
 			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, report.BySession, usage, sessionByID, projects, references, projectKeys)
 			if err != nil {
 				return nil, err
+			}
+			if schemaVersion == export.ReportingIdentitySchemaVersion {
+				restoreReportingProjectLabels(&hour, projects)
 			}
 		}
 		hours[i] = hour
