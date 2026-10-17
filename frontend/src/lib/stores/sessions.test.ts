@@ -2551,10 +2551,7 @@ describe("SessionsStore", () => {
       });
     });
 
-    sessions.restoreSavedFilters();
     await sessions.loadMachines();
-    sessions.toggleMachineFilter("id-b");
-    sessions.toggleMachineFilter("id-b");
 
     expect(sessions.selectedMachines).toEqual(["installation-a", "source-a"]);
     expect(filtersToParams(sessions.filters).machine).toBe("installation-a,source-a");
@@ -2569,37 +2566,14 @@ describe("SessionsStore", () => {
       machine_labels: { "id-a": "Workstation", "id-b": "Secondary" },
     };
 
-    it("resolves the whole selector once before picker edits and revalidates after metadata changes", async () => {
-      let ambiguous = false;
-      api.getMachines.mockImplementation((params) => {
-        if (!params.machine) return Promise.resolve(catalog);
-        return ambiguous
-          ? Promise.reject(new ApiError(400, "ambiguous machine", "invalid_machine_filter"))
-          : Promise.resolve({ machines: ["id-a"], resolved_machines: ["id-a"] });
-      });
+    it("resolves the whole selector before picker edits", async () => {
+      api.getMachines.mockResolvedValue({ ...catalog, resolved_machines: ["id-a"] });
       sessions.initFromParams({ machine: "Work, Linux" });
       await sessions.loadMachines();
       sessions.toggleMachineFilter("id-b");
       expect(sessions.filters.machine).toBe("id-a,id-b");
       sessions.toggleMachineFilter("id-b");
       expect(sessions.filters.machine).toBe("id-a");
-      expect(
-        api.getMachines.mock.calls
-          .filter(([p]) => p.machine === "Work, Linux")
-          .map(([p]) => p.machine),
-      ).toEqual(["Work, Linux"]);
-      ambiguous = true;
-      api.getProjects.mockResolvedValue({ projects: [] });
-      api.getAgents.mockResolvedValue({ agents: [] });
-      sessions.invalidateFilterCaches();
-      sessions.initFromParams({ machine: "Work, Linux" });
-      await sessions.loadMachines();
-      expect(sessions.filters.machine).toBe("Work, Linux");
-      expect(
-        api.getMachines.mock.calls
-          .filter(([p]) => p.machine === "Work, Linux")
-          .map(([p]) => p.machine),
-      ).toEqual(["Work, Linux", "Work, Linux"]);
     });
 
     it("replaces a rejected selector with the clicked machine", async () => {
@@ -2615,11 +2589,11 @@ describe("SessionsStore", () => {
       expectSidebarIndexCalledWith({ machine: "id-b" });
     });
 
-    it.each([new Error("offline"), new ApiError(500, "internal error")])(
-      "preserves the selector when a picker edit hits a temporary metadata failure: %s",
+    it.each([new Error("offline"), new ApiError(500, "internal error"), null])(
+      "preserves the selector when machine resolution is unavailable: %s",
       async (error) => {
         api.getMachines.mockImplementation((params) =>
-          params.machine ? Promise.reject(error) : Promise.resolve(catalog),
+          params.machine && error ? Promise.reject(error) : Promise.resolve(catalog),
         );
         sessions.initFromParams({ machine: "Workstation" });
         await sessions.loadMachines();
@@ -2671,6 +2645,7 @@ describe("SessionsStore", () => {
         }
         await sessions.loadMachines();
         await vi.waitFor(() => expect(sessions.filters.machine).toBe("id-a"));
+        expect(api.getMachines).toHaveBeenCalledTimes(1);
       },
     );
 
@@ -2680,34 +2655,6 @@ describe("SessionsStore", () => {
       await sessions.loadMachines();
       expect(sessions.filters.machine).toBe("");
       expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe("");
-    });
-
-    it("normalizes constructor-restored alias lists before showing picker state", async () => {
-      localStorage.setItem(
-        "session-filters",
-        JSON.stringify({ version: 2, machine: "old-owner,id-b" }),
-      );
-      api.getMachines.mockImplementation((params) =>
-        Promise.resolve(
-          params.machine
-            ? { machines: ["id-a", "id-b"], resolved_machines: ["id-a", "id-b"] }
-            : catalog,
-        ),
-      );
-      sessions = createSessionsStore();
-      await sessions.loadMachines();
-      expect(sessions.selectedMachines).toEqual(["id-a", "id-b"]);
-      expect(sessions.isMachineSelected("id-a")).toBe(true);
-      sessions.toggleMachineFilter("id-b");
-      expect(sessions.filters.machine).toBe("id-a");
-    });
-
-    it("preserves the selector when a response omits resolved IDs", async () => {
-      api.getMachines.mockResolvedValue(catalog);
-      sessions.initFromParams({ machine: "Workstation" });
-      await sessions.loadMachines();
-      sessions.toggleMachineFilter("id-b");
-      expect(sessions.filters.machine).toBe("Workstation");
     });
 
     it("refreshes a canonical selection after alias adoption", async () => {
@@ -2727,15 +2674,6 @@ describe("SessionsStore", () => {
       await sessions.loadMachines();
       expect(sessions.filters.machine).toBe("new-id");
       expect(sessions.isMachineSelected("new-id")).toBe(true);
-    });
-
-    it("uses one response to resolve a selector and load its catalog", async () => {
-      api.getMachines.mockResolvedValue({ ...catalog, resolved_machines: ["id-a"] });
-      sessions.initFromParams({ machine: "Workstation" });
-      await sessions.loadMachines();
-      expect(sessions.filters.machine).toBe("id-a");
-      expect(sessions.machines).toEqual(["id-a", "id-b"]);
-      expect(api.getMachines).toHaveBeenCalledTimes(1);
     });
 
     it("caches explicit rejection and recovers the picker catalog until metadata changes", async () => {

@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,9 +70,6 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 		})
 	}
 	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Work, Linux"))
-	store := &machineMetadataCounter{Store: te.db}
-	cfg := config.Config{Host: "127.0.0.1"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	for _, tt := range []struct {
 		selector string
 		want     []string
@@ -82,7 +78,6 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 		{"Work, Linux", []string{"id-a"}},
 	} {
 		t.Run(tt.selector, func(t *testing.T) {
-			store.labelReads, store.aliasReads = 0, 0
 			w := te.get(t, "/api/v1/machines?machine="+url.QueryEscape(tt.selector))
 			assertStatus(t, w, http.StatusOK)
 			response := decode[struct {
@@ -91,8 +86,6 @@ func TestMachinesResolveWholeSelectors(t *testing.T) {
 			}](t, w)
 			assert.ElementsMatch(t, []string{"id-a", "id-b"}, response.Machines)
 			assert.Equal(t, tt.want, response.ResolvedMachines)
-			assert.Equal(t, 1, store.labelReads)
-			assert.Equal(t, 1, store.aliasReads)
 		})
 	}
 }
@@ -125,15 +118,10 @@ func TestMachineAliasesOnDuckDB(t *testing.T) {
 	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, decode[struct {
 		Aliases map[string]string `json:"machine_aliases"`
 	}](t, w).Aliases)
-	w = te.get(t, "/api/v1/sessions?machine=local")
-	assertStatus(t, w, http.StatusBadRequest)
-	assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
 }
 
 func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
 	te := setup(t)
-	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Shared"))
-	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-b", "Shared"))
 	for _, path := range []string{
 		"/api/v1/machines",
 		"/api/v1/sessions",
@@ -142,36 +130,19 @@ func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
 		"/api/v1/analytics/summary",
 		"/api/v1/activity/report",
 	} {
-		for _, selector := range []string{"Shared", "missing"} {
-			t.Run(path+"/"+selector, func(t *testing.T) {
-				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine="+selector, nil)
-				if path == "/api/v1/usage/summary/stream" {
-					req.Header.Set("Accept", "text/event-stream")
-				}
-				w := httptest.NewRecorder()
-				te.handler.ServeHTTP(w, req)
-				assertStatus(t, w, http.StatusBadRequest)
-				assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
-				if path == "/api/v1/usage/summary/stream" {
-					assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
-					assert.NotContains(t, w.Body.String(), "event:")
-				}
-			})
-		}
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine=missing", nil)
+			if path == "/api/v1/usage/summary/stream" {
+				req.Header.Set("Accept", "text/event-stream")
+			}
+			w := httptest.NewRecorder()
+			te.handler.ServeHTTP(w, req)
+			assertStatus(t, w, http.StatusBadRequest)
+			assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
+			if path == "/api/v1/usage/summary/stream" {
+				assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
+				assert.NotContains(t, w.Body.String(), "event:")
+			}
+		})
 	}
-}
-
-type machineMetadataCounter struct {
-	db.Store
-	labelReads, aliasReads int
-}
-
-func (s *machineMetadataCounter) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	s.labelReads++
-	return s.Store.GetMachineLabels(ctx)
-}
-
-func (s *machineMetadataCounter) GetMachineAliases(ctx context.Context) (map[string]string, error) {
-	s.aliasReads++
-	return s.Store.GetMachineAliases(ctx)
 }

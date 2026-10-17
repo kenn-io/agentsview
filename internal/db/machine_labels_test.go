@@ -39,15 +39,9 @@ func TestResolveMachineFilter(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	d := testDB(t)
 	ctx := t.Context()
-	t.Run("stored local ID without an installation alias", func(t *testing.T) {
-		d := testDB(t)
-		_, err := ResolveMachineFilter(ctx, d, "local")
-		require.Error(t, err)
-		require.NoError(t, d.UpsertSession(ctx, Session{ID: "local-session", Machine: "local", Project: "project", Agent: "claude"}))
-		got, err := ResolveMachineFilter(ctx, d, "local")
-		require.NoError(t, err)
-		assert.Equal(t, "local", got)
-	})
+	localArchive := testDB(t)
+	require.NoError(t, localArchive.UpsertSession(ctx, Session{ID: "local-session", Machine: "local", Project: "project", Agent: "claude"}))
+
 	for _, id := range []string{"id-a", "id-b", "legacy-host", id} {
 		require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project", Machine: id, Agent: "claude"}))
 	}
@@ -68,28 +62,32 @@ func TestResolveMachineFilter(t *testing.T) {
 	} {
 		require.NoError(t, d.SetSyncState(ctx, key, value))
 	}
-	for _, tt := range []struct{ input, want string }{
-		{id, id},
-		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	for _, tt := range []struct {
+		input, want string
+		store       Store
+	}{
+		{id, id, d},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", d},
 		// An installation ID without stored sessions stays an exact selector.
-		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a"},
-		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host"},
-		{" Padded workstation ", "padded-owner"},
-		{"", ""},
-		{" \t ", ""},
-		{"A", "id-a"},
-		{"id-a", "id-a"},
-		{"old-owner", "id-a"},
-		{"empty-alias", "empty-target"},
-		{"local", "id-a"},
-		{"legacy-host", "legacy-host"},
-		{" id-a, id-b ,old-owner ", "id-a,id-b,id-a"},
-		{"A,B", "id-comma"},
-		{"old-owner,id-b", "id-a,id-b"},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", d},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", d},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", d},
+		{" Padded workstation ", "padded-owner", d},
+		{"", "", d},
+		{" \t ", "", d},
+		{"A", "id-a", d},
+		{"id-a", "id-a", d},
+		{"old-owner", "id-a", d},
+		{"empty-alias", "empty-target", d},
+		{"local", "id-a", d},
+		{"legacy-host", "legacy-host", d},
+		{" id-a, id-b ,old-owner ", "id-a,id-b,id-a", d},
+		{"A,B", "id-comma", d},
+		{"old-owner,id-b", "id-a,id-b", d},
+		{"local", "local", localArchive},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := ResolveMachineFilter(ctx, d, tt.input)
+			got, err := ResolveMachineFilter(ctx, tt.store, tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})

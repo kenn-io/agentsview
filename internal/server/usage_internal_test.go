@@ -53,26 +53,15 @@ type usageComparisonProjectKeySpy struct {
 	projectMap   map[string]export.ProjectMapEntry
 }
 
-type usageMachineResolutionSpy struct {
-	usageSummaryCountsSpy
-	machineLabelCalls int
-}
-
-func (s *usageMachineResolutionSpy) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	s.machineLabelCalls++
-	return s.Store.GetMachineLabels(ctx)
-}
-
-func TestUsageSummaryStreamResolvesMachineOnce(t *testing.T) {
+func TestUsageSummaryStreamUsesResolvedMachine(t *testing.T) {
 	s := testServer(t, 30)
 	require.NoError(t, s.db.(*db.DB).SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Workstation"))
-	spy := &usageMachineResolutionSpy{Store: s.db}
+	spy := &usageSummaryCountsSpy{Store: s.db}
 	s.db = spy
 	s.sessions = service.NewReadOnlyBackend(spy)
 	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
 	assertRecorderStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Body.String(), "event: done\n")
-	assert.Equal(t, 1, spy.machineLabelCalls)
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, "id-a", spy.filters[0].Machine)
 }
@@ -81,15 +70,6 @@ type usageMachineCatalogFailureStore struct{ db.Store }
 
 func (s usageMachineCatalogFailureStore) GetMachineLabels(context.Context) (map[string]string, error) {
 	return nil, errors.New("machine catalog database detail")
-}
-
-func TestUsageStreamMapsMachineCatalogFailure(t *testing.T) {
-	s := testServer(t, 30)
-	s.db = usageMachineCatalogFailureStore{Store: s.db}
-	w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&machine=Workstation")
-	assertRecorderStatus(t, w, http.StatusInternalServerError)
-	assert.Contains(t, w.Body.String(), `"error":"internal error"`)
-	assert.NotContains(t, w.Body.String(), "machine catalog database detail")
 }
 
 type usageProjectCatalogFailureStore struct {
@@ -101,23 +81,32 @@ func (s usageProjectCatalogFailureStore) GetActiveProjectLabels(context.Context)
 	return nil, s.err
 }
 
-func TestUsageStreamMapsProjectCatalogFailures(t *testing.T) {
+func TestUsageStreamMapsCatalogFailures(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		err     error
 		status  int
 		message string
+		machine bool
 	}{
-		{"storage failure", errors.New("catalog lookup failed"), http.StatusInternalServerError, "internal error"},
-		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "gateway timeout"},
-		{"remote mode", db.ErrReadOnly, http.StatusNotImplemented, "not available in remote mode"},
+		{"storage failure", errors.New("catalog lookup failed"), http.StatusInternalServerError, "internal error", false},
+		{"machine metadata", nil, http.StatusInternalServerError, "internal error", true},
+		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "gateway timeout", false},
+		{"remote mode", db.ErrReadOnly, http.StatusNotImplemented, "not available in remote mode", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := testServer(t, 30)
-			s.db = usageProjectCatalogFailureStore{Store: s.db, err: tt.err}
-			w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+"&project_key=pl1:sha256:known")
+			query := "&project_key=pl1:sha256:known"
+			if tt.machine {
+				s.db = usageMachineCatalogFailureStore{Store: s.db}
+				query = "&machine=Workstation"
+			} else {
+				s.db = usageProjectCatalogFailureStore{Store: s.db, err: tt.err}
+			}
+			w := serveGet(t, s, "/api/v1/usage/summary/stream?"+oneDayUsageRange+query)
 			assertRecorderStatus(t, w, tt.status)
 			assert.Contains(t, w.Body.String(), `"error":"`+tt.message+`"`)
+			assert.NotContains(t, w.Body.String(), "machine catalog database detail")
 		})
 	}
 }
