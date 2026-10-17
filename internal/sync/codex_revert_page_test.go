@@ -142,6 +142,44 @@ func writeCodexUsagePageAs(t *testing.T, root string, page int, crossDay, previo
 		))
 }
 
+func TestCodexReturningLegacyPageRemovesStaleRolloutRow(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	path := writeCodexLegacyUsagePage(t, root, 1, false, false)
+	database := openTestDB(t)
+	const oldID = "codex:22222222-2222-4222-8222-222222222222"
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
+		ID: oldID, Agent: "codex", Project: "sample", Machine: "local",
+		FilePath: &path, MessageCount: 2,
+	}))
+	require.NoError(t, database.InsertMessages(ctx, []db.Message{
+		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "Request 1"},
+		{SessionID: oldID, Ordinal: 1, Role: "assistant", Content: "Response 1"},
+	}))
+	// A retained row can predate the archive's current parser version.
+	dbPath := database.Path()
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, "UPDATE sessions SET data_version=133 WHERE id=?", oldID)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	reopened, err := db.OpenIsolated(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.False(t, reopened.NeedsResync())
+	require.Equal(t, 133, reopened.GetSessionDataVersion(ctx, oldID))
+	engine := NewEngine(ctx, reopened, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(ctx, []string{path}))
+	assert.Equal(t, []string{"Request 1", "Response 1"}, messageContents(t, reopened, paginationSessionID(1)))
+	stale, err := reopened.GetSessionFull(ctx, oldID)
+	require.NoError(t, err)
+	assert.Nil(t, stale, "the returning page must replace its pre-134 rollout row")
+}
+
 func dailyOutputTokens(t *testing.T, database *db.DB) (map[string]int, int) {
 	t.Helper()
 	usage, err := database.GetDailyUsage(t.Context(), db.UsageFilter{

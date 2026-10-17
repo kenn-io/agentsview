@@ -14281,9 +14281,8 @@ func (e *Engine) applyProviderFilePathPolicies(
 			if id == currentID || id == currentPrefixedID {
 				continue
 			}
-			// A pre-137 Codex transcript retained while its source was missing
-			// still owns its saved metadata. Keep both identities on return.
-			if isCodexFormatAgent(agent) && e.db.GetSessionDataVersion(ctx, id) < 137 {
+			// A retained misfiled transcript keeps its ID until a rebuild proves its owner.
+			if isCodexFormatAgent(agent) && e.db.IsRetainedMisfiledCodexRow(ctx, id) {
 				continue
 			}
 			addExclusion(id)

@@ -186,7 +186,9 @@ which rollout owns each ID. A moved file matches by rollout file name, including
 changes between `.jsonl` and `.jsonl.zst`. If the file is gone, its transcript
 moves only when another rollout now owns the old ID; otherwise the archived row
 keeps its ID. If that file returns later, normal sync keeps the saved row and
-its metadata under that ID alongside the freshly parsed thread.
+its metadata under that ID alongside the freshly parsed thread. The next
+rebuild then moves that row's metadata to the thread, judging each retained
+row by the parser version that stored it.
 Pins, Recall entries, and export message IDs follow the corrected
 transcript. For live sessions, names and stars stay on a surviving original
 thread; when it is absent, they follow the corrected transcript. Trash and

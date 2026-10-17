@@ -1379,6 +1379,16 @@ func (db *DB) HasExcludedCodexRollout(ctx context.Context, sessionID, path strin
 	return false, rows.Err()
 }
 
+// IsRetainedMisfiledCodexRow reports whether id is a Codex-format row that
+// an older parser filed under a thread its rollout file name contradicts.
+func (db *DB) IsRetainedMisfiledCodexRow(ctx context.Context, id string) bool {
+	var path string
+	var version int
+	err := db.getReader().QueryRowContext(ctx, `SELECT file_path, data_version FROM sessions
+		WHERE id = ? AND agent IN ('codex', 'traex', 'augure-code') AND file_path IS NOT NULL`, id).Scan(&path, &version)
+	return err == nil && isMisfiledCodexThread(id, parser.CodexSessionUUIDFromPath(path), version)
+}
+
 const sessionTrashedQuery = `SELECT EXISTS (
 	SELECT 1 FROM sessions
 	WHERE deleted_at IS NOT NULL AND (

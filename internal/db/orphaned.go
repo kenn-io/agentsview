@@ -189,24 +189,22 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
-	if sourceVersion < codexThreadIdentityDataVersion {
-		// A parsed head can occupy the old page's ID. Keep the mapping even
-		// when the page was reparsed; export reconciliation needs it too.
-		// Index the remaining orphan IDs before checking them once per page.
-		if _, err := conn.ExecContext(ctx, `
-			DELETE FROM _orphaned_ids WHERE id = source_id AND source_id IN
-				(SELECT source_id FROM _codex_session_ids WHERE is_page = 1);
-			CREATE INDEX _orphaned_target_ids ON _orphaned_ids(id);
-			INSERT INTO _orphaned_ids (id, source_id)
-			SELECT mapped.target_id, mapped.source_id FROM _codex_session_ids mapped
-			WHERE mapped.is_page = 1
-			  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.target_id)
-			  AND NOT EXISTS (SELECT 1 FROM _orphaned_ids WHERE id = mapped.target_id)
-			  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.source_id AND deleted_at IS NOT NULL)
-			  AND NOT EXISTS (SELECT 1 FROM main.excluded_sessions WHERE id IN (mapped.target_id, mapped.source_id))
-			  AND NOT EXISTS (SELECT 1 FROM _extra_excluded_orphan_ids WHERE id IN (mapped.target_id, mapped.source_id))`); err != nil {
-			return nil, fmt.Errorf("preserving archived Codex pages: %w", err)
-		}
+	// A parsed head can occupy the old page's ID. Keep the mapping even
+	// when the page was reparsed; export reconciliation needs it too.
+	// Index the remaining orphan IDs before checking them once per page.
+	if _, err := conn.ExecContext(ctx, `
+		DELETE FROM _orphaned_ids WHERE id = source_id AND source_id IN
+			(SELECT source_id FROM _codex_session_ids WHERE is_page = 1);
+		CREATE INDEX _orphaned_target_ids ON _orphaned_ids(id);
+		INSERT INTO _orphaned_ids (id, source_id)
+		SELECT mapped.target_id, mapped.source_id FROM _codex_session_ids mapped
+		WHERE mapped.is_page = 1
+		  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.target_id)
+		  AND NOT EXISTS (SELECT 1 FROM _orphaned_ids WHERE id = mapped.target_id)
+		  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.source_id AND deleted_at IS NOT NULL)
+		  AND NOT EXISTS (SELECT 1 FROM main.excluded_sessions WHERE id IN (mapped.target_id, mapped.source_id))
+		  AND NOT EXISTS (SELECT 1 FROM _extra_excluded_orphan_ids WHERE id IN (mapped.target_id, mapped.source_id))`); err != nil {
+		return nil, fmt.Errorf("preserving archived Codex pages: %w", err)
 	}
 
 	if _, err := conn.ExecContext(ctx, `CREATE UNIQUE INDEX _orphaned_source_ids ON _orphaned_ids(source_id)`); err != nil {
@@ -2949,9 +2947,6 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("reading Codex source version: %w", err)
 	}
 	version, _ = DecodeUserVersion(version)
-	if version >= codexThreadIdentityDataVersion && !includeLegacyForks {
-		return version, nil
-	}
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM pragma_table_info('sessions', 'old_db') WHERE name = 'file_path'
 	)`).Scan(&hasSessionFiles); err != nil {
@@ -2960,26 +2955,12 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	if !hasSessionFiles {
 		return version, nil
 	}
-	candidates, err := codexRowsReparsedElsewhere(ctx, conn)
+	candidates, err := codexMapCandidates(ctx, conn, version, includeLegacyForks)
+	if err != nil || len(candidates) == 0 {
+		return version, err
+	}
+	liveKeys, err := parsedCodexRolloutKeys(ctx, conn)
 	if err != nil {
-		return 0, err
-	}
-	// Only freshly parsed rows can prove that a misfiled transcript moved.
-	liveKeys := make(map[string]string)
-	rows, err := conn.QueryContext(ctx, `SELECT id, file_path FROM main.sessions
-		WHERE agent IN ('codex', 'traex', 'augure-code') AND file_path IS NOT NULL AND deleted_at IS NULL`)
-	if err != nil {
-		return 0, fmt.Errorf("reading parsed Codex sources: %w", err)
-	}
-	for rows.Next() {
-		var id, path string
-		if err := rows.Scan(&id, &path); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		liveKeys[id] = parser.CodexSessionUUIDFromPath(path)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return 0, err
 	}
 	var args []any
@@ -2992,14 +2973,15 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		args = args[:0]
 		return err
 	}
-	for sourceID, targetID := range candidates {
+	for sourceID, candidate := range candidates {
+		targetID := candidate.target
 		prefixEnd := strings.LastIndex(sourceID, ":") + 1
 		sourceKey, targetKey := sourceID[prefixEnd:], targetID[prefixEnd:]
 		thread := parser.CodexThreadIDFromSessionKey(targetKey)
 		headPage := version < codexRevertPageDataVersion && thread == sourceKey
 		retired := !headPage && version < codexLegacyPageHeaderDataVersion &&
 			thread != targetKey && targetKey == thread+"_"+sourceKey
-		misfiledThread := version < codexThreadIdentityDataVersion && thread == targetKey && targetKey != sourceKey
+		misfiledThread := isMisfiledCodexThread(sourceID, targetKey, candidate.version)
 		if misfiledThread && liveKeys[targetID] != targetKey &&
 			(liveKeys[sourceID] == "" || liveKeys[sourceID] == targetKey) {
 			continue
@@ -3023,6 +3005,87 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
+}
+
+// isMisfiledCodexThread reports whether a Codex-format row parsed before
+// version 137 sits under an ID that its rollout file's plain thread key
+// contradicts. Such a row moves only when the fresh parse proves the owner.
+func isMisfiledCodexThread(id, rolloutKey string, version int) bool {
+	return version < codexThreadIdentityDataVersion && rolloutKey != "" &&
+		parser.CodexThreadIDFromSessionKey(rolloutKey) == rolloutKey &&
+		rolloutKey != id[strings.LastIndex(id, ":")+1:]
+}
+
+type codexMapCandidate struct {
+	target  string
+	version int
+}
+
+// codexMapCandidates pairs each reparsed-elsewhere row with the parser
+// version that stored it. A current archive can still hold older retained
+// rows; without legacy forks only those need a mapping.
+func codexMapCandidates(ctx context.Context, conn *sql.Conn, version int, includeLegacyForks bool) (map[string]codexMapCandidate, error) {
+	retained := make(map[string]int)
+	if version >= codexThreadIdentityDataVersion {
+		var err error
+		if retained, err = retainedCodexRowVersions(ctx, conn); err != nil || (len(retained) == 0 && !includeLegacyForks) {
+			return nil, err
+		}
+	}
+	targets, err := codexRowsReparsedElsewhere(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make(map[string]codexMapCandidate, len(targets))
+	for id, target := range targets {
+		if rowVersion, ok := retained[id]; ok {
+			candidates[id] = codexMapCandidate{target, rowVersion}
+		} else if version < codexThreadIdentityDataVersion || includeLegacyForks {
+			candidates[id] = codexMapCandidate{target, version}
+		}
+	}
+	return candidates, nil
+}
+
+// retainedCodexRowVersions reads the old archive's Codex-format rows that a
+// parser before version 137 stored.
+func retainedCodexRowVersions(ctx context.Context, conn *sql.Conn) (map[string]int, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT id, data_version FROM old_db.sessions
+		WHERE agent IN ('codex', 'traex', 'augure-code') AND data_version < ?`, codexThreadIdentityDataVersion)
+	if err != nil {
+		return nil, fmt.Errorf("reading retained Codex rows: %w", err)
+	}
+	defer rows.Close()
+	versions := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var version int
+		if err := rows.Scan(&id, &version); err != nil {
+			return nil, fmt.Errorf("scanning retained Codex row: %w", err)
+		}
+		versions[id] = version
+	}
+	return versions, rows.Err()
+}
+
+// parsedCodexRolloutKeys maps each freshly parsed live Codex-format row to
+// its rollout key. Only these rows can prove that a misfiled transcript moved.
+func parsedCodexRolloutKeys(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT id, file_path FROM main.sessions
+		WHERE agent IN ('codex', 'traex', 'augure-code') AND file_path IS NOT NULL AND deleted_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("reading parsed Codex sources: %w", err)
+	}
+	defer rows.Close()
+	keys := make(map[string]string)
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		keys[id] = parser.CodexSessionUUIDFromPath(path)
+	}
+	return keys, rows.Err()
 }
 
 // codexRowsReparsedElsewhere maps each old Codex-format row to the id its

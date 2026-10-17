@@ -296,6 +296,21 @@ func TestCodexThreadIdentityUpgradePreservesTranscriptMetadata(t *testing.T) {
 					assert.Equal(t, new("saved note"), pins[0].Note)
 					assert.False(t, reopened.IsSessionExcluded(ctx, a))
 				}
+				stats, err := engine.SyncThenRun(ctx, true, nil, func(bool) error { return nil })
+				require.NoError(t, err)
+				require.Zero(t, stats.Failed)
+				require.False(t, stats.Aborted)
+				assert.Equal(t, bMessages, messageContents(t, reopened, b))
+				pins, err := reopened.ListPinnedMessages(ctx, "", "")
+				require.NoError(t, err)
+				assert.Len(t, pins, 1, "a later rebuild must preserve the retained transcript's pin")
+				recall, err := reopened.GetRecallEntry(ctx, "saved-fact")
+				require.NoError(t, err)
+				if assert.NotNil(t, recall, "a later rebuild must preserve accepted Recall") {
+					assert.Equal(t, b, recall.SourceSessionID)
+					require.Len(t, recall.Evidence, 1)
+					assert.Equal(t, b, recall.Evidence[0].SessionID)
+				}
 			}
 		})
 	}
