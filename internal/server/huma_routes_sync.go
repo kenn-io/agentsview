@@ -34,7 +34,7 @@ func (s *Server) registerSyncRoutes() {
 }
 
 func syncEventDescription(op *huma.Operation) {
-	op.Description = "Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or incomplete when failed or deferred processing leaves the run incomplete. Other errors omit code."
+	op.Description = "Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code."
 }
 
 type syncStatusResponse struct {
@@ -64,12 +64,10 @@ type remoteSyncRequest struct {
 	Hosts        []config.RemoteHost `json:"hosts"`
 }
 
-func syncErrorPayload(err error, stats syncpkg.SyncStats) map[string]string {
+func syncErrorPayload(err error) map[string]string {
 	payload := map[string]string{"error": err.Error()}
 	if errors.Is(err, syncpkg.ErrSyncInProgress) {
 		payload["code"] = "sync_running"
-	} else if !stats.ProcessingComplete() {
-		payload["code"] = "incomplete"
 	}
 	return payload
 }
@@ -305,7 +303,7 @@ func (s *Server) humaTriggerSync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", syncErrorPayload(err, stats))
+			stream.SendJSON("error", syncErrorPayload(err))
 			return
 		}
 		stream.SendJSON("done", stats)
@@ -433,7 +431,7 @@ func (s *Server) humaTriggerResync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", syncErrorPayload(err, stats))
+			stream.SendJSON("error", syncErrorPayload(err))
 			return
 		}
 		stream.SendJSON("done", stats)

@@ -27,10 +27,9 @@ export function reportTelemetry(
   }).catch(() => {});
 }
 
-export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export" | "other";
+export type ErrorKind = "search" | "session" | "insight" | "analytics" | "export";
 export type SyncFailureReason =
   | "request"
-  | "partial"
   | "sign_in_required"
   | "browser_extension"
   | "already_running"
@@ -48,9 +47,6 @@ export function reportSyncFailed(error: unknown): void {
     case "claude_ai_sync_running":
       reason = "already_running";
       break;
-    case "incomplete":
-      reason = "partial";
-      break;
     case "claude_ai_auth_required":
       reason = "sign_in_required";
       break;
@@ -61,9 +57,6 @@ export function reportSyncFailed(error: unknown): void {
     default:
       if (error instanceof Error && code === undefined) reason = "request";
   }
-  reportSyncFailedReason(reason);
-}
 
-export function reportSyncFailedReason(reason: SyncFailureReason): void {
   reportTelemetry("sync_failed", { reason });
 }

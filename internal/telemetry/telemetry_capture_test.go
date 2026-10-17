@@ -32,7 +32,7 @@ func TestCoreActionAllowlist(t *testing.T) {
 	}{
 		{EventSearchEmpty, "query", "secret", false},
 		{EventErrorShown, "kind", "search", true},
-		{EventSyncFailed, "reason", "partial", true},
+		{EventSyncFailed, "reason", "request", true},
 		{EventSearchRun, "query_type", "semantic", true},
 		{EventSearchRun, "query_type", "regex", false},
 		{EventSessionViewed, "agent", "freebuff", true},

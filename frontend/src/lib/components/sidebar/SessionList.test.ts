@@ -1,8 +1,3 @@
-import { reportErrorShown } from "../../utils/telemetry.js";
-vi.mock("../../utils/telemetry.js", () => ({
-  reportTelemetry: vi.fn(),
-  reportErrorShown: vi.fn(),
-}));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
@@ -78,8 +73,6 @@ describe("SessionList filter dropdown", () => {
     sessions.activeSessionId = null;
     sessions.nextCursor = null;
     sessions.loading = false;
-    sessions.sidebarLoadError = null;
-    vi.mocked(reportErrorShown).mockClear();
     sessions.selectedIds = new Set();
     sessions.selectMode = false;
     sessions.sidebarIndexVersion++;
@@ -110,37 +103,6 @@ describe("SessionList filter dropdown", () => {
     ui.sidebarOpen = true;
     ui.isMobileViewport = false;
     vi.restoreAllMocks();
-  });
-
-  it("counts sidebar errors only while the sidebar is open", async () => {
-    const { SessionsService } = await import("../../api/generated/index.js");
-    const { ApiError } = await import("../../api/runtime.js");
-    const request = vi
-      .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
-      .mockRejectedValue(new ApiError(400, "Sidebar failed"));
-    ui.sidebarOpen = false;
-    component = mount(SessionList, { target: document.body });
-    await sessions.load();
-    await tick();
-    expect(reportErrorShown).not.toHaveBeenCalled();
-    ui.sidebarOpen = true;
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session");
-    await sessions.load();
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    ui.sidebarOpen = false;
-    await tick();
-    ui.sidebarOpen = true;
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(2);
-    request.mockResolvedValueOnce({ sessions: [], total: 0 });
-    await sessions.load();
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(2);
-    await sessions.load();
-    await tick();
-    expect(reportErrorShown).toHaveBeenCalledTimes(3);
   });
 
   it("bounds the filter menu to the viewport and lets it scroll", async () => {

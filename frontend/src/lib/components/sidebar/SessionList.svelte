@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.svelte.js";
   import { onDestroy, onMount } from "svelte";
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -551,7 +550,7 @@
 </div>
 
 {#if sessions.sidebarLoadError}
-  <div class="sidebar-load-error" role="alert" {@attach errorTelemetry(ui.sidebarOpen ? "session" : undefined)}>{sessions.sidebarLoadError}</div>
+  <div class="sidebar-load-error" role="alert">{sessions.sidebarLoadError}</div>
 {/if}
 
 {#if sessions.selectMode}

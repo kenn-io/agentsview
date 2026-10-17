@@ -1642,13 +1642,11 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 			name  string
 			stats syncpkg.SyncStats
 			err   error
-			code  string
 		}{
-			{"complete stats", syncpkg.SyncStats{}, errors.New("worker failed"), ""},
-			{"failed processing", syncpkg.SyncStats{Failed: 1}, errors.New("worker failed"), "incomplete"},
-			{"deferred processing", syncpkg.SyncStats{Deferred: 1}, errors.New("worker failed"), "incomplete"},
-			{"busy takes precedence", syncpkg.SyncStats{Failed: 1}, syncpkg.ErrSyncInProgress, "sync_running"},
-			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil, "incomplete"},
+			{"complete stats", syncpkg.SyncStats{}, errors.New("worker failed")},
+			{"failed processing", syncpkg.SyncStats{Failed: 1}, errors.New("worker failed")},
+			{"deferred processing", syncpkg.SyncStats{Deferred: 1}, errors.New("worker failed")},
+			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil},
 		} {
 			t.Run(path+"/"+tc.name, func(t *testing.T) {
 				runner := func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) { return tc.stats, tc.err }
@@ -1661,14 +1659,22 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 				} else {
 					assert.Contains(t, body, tc.err.Error())
 				}
-				if tc.code == "" {
-					assert.NotContains(t, body, `"code"`)
-				} else {
-					assert.Contains(t, body, `"code":"`+tc.code+`"`)
-				}
+				assert.NotContains(t, body, `"code"`)
 			})
 		}
 	}
+}
+
+func TestHumaTriggerSyncBusyCode(t *testing.T) {
+	runner := func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress
+	}
+	f := newSyncRouteFixture(t, withLocalSyncRunner(runner))
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync", nil).Body.String()
+	assert.Contains(t, body, "event: error")
+	assert.NotContains(t, body, "event: done")
+	assert.Contains(t, body, syncpkg.ErrSyncInProgress.Error())
+	assert.Contains(t, body, `"code":"sync_running"`)
 }
 
 func TestHumaTriggerSyncRetryDecision(t *testing.T) {

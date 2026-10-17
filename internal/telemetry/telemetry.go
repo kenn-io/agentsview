@@ -160,7 +160,7 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		kittelemetry.WithAllowedEvent(EventSearchEmpty),
 		kittelemetry.WithAllowedEvent(EventErrorShown, kittelemetry.RequireProperty("kind", outcomeValues("search", "session", "insight", "analytics", "export", "other"))),
-		kittelemetry.WithAllowedEvent(EventSyncFailed, kittelemetry.RequireProperty("reason", outcomeValues("request", "partial", "sign_in_required", "browser_extension", "already_running", "other"))),
+		kittelemetry.WithAllowedEvent(EventSyncFailed, kittelemetry.RequireProperty("reason", outcomeValues("request", "sign_in_required", "browser_extension", "already_running", "other"))),
 		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),
 			kittelemetry.AllowProperty("duration_bucket", kittelemetry.AllowStringValues("under_1m", "1_to_5m", "5_to_30m", "over_30m"))),

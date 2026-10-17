@@ -16824,7 +16824,7 @@ paths:
         - RemoteSync
   /api/v1/resync:
     post:
-      description: Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or incomplete when failed or deferred processing leaves the run incomplete. Other errors omit code.
+      description: Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
       operationId: post-api-v1-resync
       responses:
         "200":
@@ -22545,7 +22545,7 @@ paths:
         - Metadata
   /api/v1/sync:
     post:
-      description: Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or incomplete when failed or deferred processing leaves the run incomplete. Other errors omit code.
+      description: Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
       operationId: post-api-v1-sync
       parameters:
         - description: Wait for an active sync or maintenance pass before starting this sync

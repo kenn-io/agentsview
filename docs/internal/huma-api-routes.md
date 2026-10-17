@@ -48,8 +48,8 @@ caller-owned response limits.
 
 ## Sync errors
 
-Sync/resync SSE errors add `code: sync_running` for an active pass or
-`code: incomplete` for failed or deferred processing. Other errors omit `code`.
+Sync SSE errors add `code: sync_running` for an active pass. Other sync and
+resync errors omit `code`, including failed or deferred processing.
 The `error` text stays unchanged; older clients can ignore `code`.
 
 ## Collection nullability
