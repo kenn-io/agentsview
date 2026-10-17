@@ -646,6 +646,8 @@ docs recommend enabling the source on one machine.
   pending approval requests to a new subscriber.
 - **Missed turns.** A turn that ends before a join, or while all 10 slots are
   full, gets no live tokens. The 5-minute window depends on the local clock.
+  Live capture never joins a sub-agent chat, so a captured chat's combined
+  usage counts each sub-agent's user messages as missed turns, one per turn.
 - **Counter restarts.** A reset is detected only as a decrease. A restart that
   grows past the old total before the next join undercounts. No probe has seen
   a reset.
