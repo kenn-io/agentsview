@@ -290,7 +290,7 @@
   }
 
   .outline-item:hover {
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--bg-surface-hover);
     color: var(--text-primary);
   }
 

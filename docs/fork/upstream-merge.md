@@ -108,6 +108,21 @@ fork 给共享接口加的方法（例如 `db.Store.GetInputOutline`）要在 up
   upstream 的 Pull Requests 一节有"除非用户要求，不要监控 GitHub Actions"的两条
   规则，与它相反，合并时不要把这两条加回来。
 
+### CI workflow 在 fork 里的跳过条件
+
+fork 在 `ci.yml` 和 `cjk-fts.yml` 的每个 job 上加了
+`if: github.repository == 'kenn-io/agentsview'`。这两个 workflow 用的 Namespace
+runner 只有 upstream 有，不加的话，fork 里的 job 会一直排队，直到 GitHub 取消。
+`fork-checks.yml` 在 GitHub 托管 runner 上跑其中的 lint、Go、脚本、前端和 CJK FTS
+检查。
+
+upstream 从 #2236（`65006001`）起把这些 job 全部改到了 GitHub 托管 runner。合并
+到包含 #2236 的 upstream 时：
+
+1. `ci.yml` 和 `cjk-fts.yml` 取 upstream 的版本，不再保留这些 `if` 条件。
+1. 删掉 `fork-checks.yml` 里和 upstream CI 重复的 job。整个 workflow 都重复时，
+   删掉这个文件，并更新上文"基本做法"里提到它的那句话。
+
 ### 多语言文件
 
 `frontend/messages/*.json` 的 key 集合必须和 `en.json` 完全一致，包括 upstream
