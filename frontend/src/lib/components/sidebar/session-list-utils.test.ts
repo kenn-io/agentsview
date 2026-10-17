@@ -11,6 +11,7 @@ import {
   computeTotalSize,
   findStart,
   isSubagentDescendant,
+  selectLiveId,
   selectPrimaryId,
 } from "./session-list-utils.js";
 import type { DisplayItem } from "./session-list-utils.js";
@@ -67,6 +68,7 @@ function makeGroup(agent: string, sessionCount = 1, idPrefix?: string): SessionG
     project: "test-project",
     sessions,
     primarySessionId: sessions[0]!.id,
+    liveSessionId: sessions[0]!.id,
     totalMessages: sessions.reduce((s, x) => s + x.message_count, 0),
     firstMessage: sessions[0]!.first_message,
     startedAt: sessions[0]!.started_at,
@@ -125,6 +127,7 @@ describe("buildGroupSections", () => {
       project: "test",
       sessions: [session],
       primarySessionId: "primary-1",
+      liveSessionId: "primary-1",
       totalMessages: 10,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
@@ -142,6 +145,7 @@ describe("buildGroupSections", () => {
       project: "test",
       sessions: [],
       primarySessionId: "nonexistent",
+      liveSessionId: "nonexistent",
       totalMessages: 0,
       firstMessage: null,
       startedAt: null,
@@ -364,6 +368,7 @@ describe("adjacentVisibleSessionId", () => {
       project: root.project,
       sessions: [root, child],
       primarySessionId: root.id,
+      liveSessionId: root.id,
       totalMessages: root.message_count + child.message_count,
       firstMessage: root.first_message,
       startedAt: root.started_at,
@@ -404,6 +409,7 @@ describe("adjacentVisibleSessionId", () => {
       project: root.project,
       sessions: [root, continuation, hidden],
       primarySessionId: root.id,
+      liveSessionId: root.id,
       totalMessages: 30,
       firstMessage: root.first_message,
       startedAt: root.started_at,
@@ -600,12 +606,14 @@ describe("starred-only session count", () => {
       .map((g) => {
         const filtered = g.sessions.filter((s) => starredIds.has(s.id));
         const primaryStillPresent = filtered.some((s) => s.id === g.primarySessionId);
+        const liveStillPresent = filtered.some((s) => s.id === g.liveSessionId);
         return {
           ...g,
           sessions: filtered,
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
             : selectPrimaryId(filtered, g.key),
+          liveSessionId: liveStillPresent ? g.liveSessionId : selectLiveId(filtered, g.key),
         };
       })
       .filter((g) => g.sessions.length > 0);
@@ -673,6 +681,7 @@ describe("starred-only session count", () => {
       sessions: filtered,
       allSessions: fullSessions, // full list for ancestry
       primarySessionId: "root",
+      liveSessionId: "root",
       totalMessages: 30,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
@@ -695,9 +704,10 @@ describe("starred-only session count", () => {
     expect(contItem!.depth).toBe(2);
   });
 
-  it("recomputes primarySessionId using recency when original primary is unstarred", () => {
-    // Root session s0 is the primary, children s1 and s2 are starred.
-    // s2 is more recent so it should become the new primary.
+  it("recomputes the head and the live session when the root is unstarred", () => {
+    // Root session s0 heads the group, children s1 and s2 are starred.
+    // Both sit one step below the root, so the earlier s1 heads the
+    // filtered group, while the more recent s2 is its live session.
     const root = makeSession({ id: "s0", agent: "claude" });
     const child1 = makeSession({
       id: "s1",
@@ -716,6 +726,7 @@ describe("starred-only session count", () => {
       project: "test",
       sessions: [root, child1, child2],
       primarySessionId: "s0",
+      liveSessionId: "s0",
       totalMessages: 30,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
@@ -727,9 +738,8 @@ describe("starred-only session count", () => {
     const filtered = filterGroupsForStarred([group], starred);
 
     expect(filtered).toHaveLength(1);
-    // primarySessionId must be the most recent surviving session.
-    expect(filtered[0]!.primarySessionId).toBe("s2");
-    expect(filtered[0]!.sessions.some((s) => s.id === filtered[0]!.primarySessionId)).toBe(true);
+    expect(filtered[0]!.primarySessionId).toBe("s1");
+    expect(filtered[0]!.liveSessionId).toBe("s2");
   });
 });
 
@@ -791,6 +801,7 @@ describe("child classification precedence", () => {
       project: "test",
       sessions: [root, teammate, subagent],
       primarySessionId: "root",
+      liveSessionId: "root",
       totalMessages: 30,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
@@ -850,6 +861,7 @@ describe("child classification precedence", () => {
       // Insert in ascending order (as buildSessionGroups does).
       sessions: [root, sub1, sub2, sub3],
       primarySessionId: "root",
+      liveSessionId: "root",
       totalMessages: 40,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
@@ -889,6 +901,86 @@ describe("selectPrimaryId", () => {
     expect(selectPrimaryId([], "key")).toBe("key");
   });
 
+  it("keeps the root on top of newer continuations and forks", () => {
+    const root = makeSession({ id: "root", ended_at: "2025-01-01T00:00:00Z" });
+    const cont = makeSession({
+      id: "cont",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+      ended_at: "2025-01-02T00:00:00Z",
+    });
+    const fork = makeSession({
+      id: "fork",
+      parent_session_id: "root",
+      relationship_type: "fork",
+      ended_at: "2025-01-03T00:00:00Z",
+    });
+    expect(selectPrimaryId([root, cont, fork], "root")).toBe("root");
+  });
+
+  it("picks the session closest to a filtered-out root", () => {
+    // root -> first -> second; a filter kept only second and a
+    // continuation of the root that started later.
+    const root = makeSession({ id: "root" });
+    const first = makeSession({
+      id: "first",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+    });
+    const second = makeSession({
+      id: "second",
+      parent_session_id: "first",
+      relationship_type: "continuation",
+    });
+    const later = makeSession({
+      id: "later",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+    });
+    expect(selectPrimaryId([second, later], "root", [root, first, second, later])).toBe("later");
+  });
+
+  it("counts filtered-out ancestors toward the distance from the root", () => {
+    // second reaches the root only through the filtered-out first; the
+    // adopted session has no link to the root at all.
+    const root = makeSession({ id: "root" });
+    const first = makeSession({
+      id: "first",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+    });
+    const second = makeSession({
+      id: "second",
+      parent_session_id: "first",
+      relationship_type: "continuation",
+    });
+    const adopted = makeSession({ id: "adopted" });
+    expect(selectPrimaryId([adopted, second], "root", [root, first, second, adopted])).toBe(
+      "second",
+    );
+  });
+
+  it("picks the earlier of two sessions at the same distance from the root", () => {
+    const root = makeSession({ id: "root" });
+    const a = makeSession({ id: "a", parent_session_id: "root", relationship_type: "fork" });
+    const b = makeSession({
+      id: "b",
+      parent_session_id: "root",
+      relationship_type: "continuation",
+    });
+    expect(selectPrimaryId([a, b], "root", [root, a, b])).toBe("a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectLiveId
+// ---------------------------------------------------------------------------
+
+describe("selectLiveId", () => {
+  it("returns groupKey for empty sessions", () => {
+    expect(selectLiveId([], "key")).toBe("key");
+  });
+
   it("selects the most recent session by ended_at", () => {
     const old = makeSession({
       id: "old",
@@ -902,7 +994,7 @@ describe("selectPrimaryId", () => {
       id: "mid",
       ended_at: "2025-01-02T00:00:00Z",
     });
-    expect(selectPrimaryId([old, mid, recent], "key")).toBe("recent");
+    expect(selectLiveId([old, mid, recent], "key")).toBe("recent");
   });
 
   it("prefers root session when group has subagents", () => {
@@ -917,7 +1009,7 @@ describe("selectPrimaryId", () => {
     });
     // Despite sub being more recent, root should be chosen
     // because it matches the groupKey.
-    expect(selectPrimaryId([root, sub], "root")).toBe("root");
+    expect(selectLiveId([root, sub], "root")).toBe("root");
   });
 
   it("falls back to first session when root is missing from subagent group", () => {
@@ -926,7 +1018,7 @@ describe("selectPrimaryId", () => {
       relationship_type: "subagent",
     });
     const other = makeSession({ id: "other" });
-    expect(selectPrimaryId([sub, other], "missing")).toBe("sub");
+    expect(selectLiveId([sub, other], "missing")).toBe("sub");
   });
 
   it("walks filtered-out ancestors to keep a fork's descendant off the main line", () => {
@@ -950,7 +1042,7 @@ describe("selectPrimaryId", () => {
       ended_at: "2025-01-04T00:00:00Z",
     });
     // A starred-only filter kept cont and fork-cont but dropped the fork.
-    expect(selectPrimaryId([cont, forkCont], "root", [root, cont, fork, forkCont])).toBe("cont");
+    expect(selectLiveId([cont, forkCont], "root", [root, cont, fork, forkCont])).toBe("cont");
   });
 
   it("uses started_at when ended_at is missing", () => {
@@ -964,6 +1056,6 @@ describe("selectPrimaryId", () => {
       started_at: "2025-01-05T00:00:00Z",
       ended_at: undefined,
     });
-    expect(selectPrimaryId([a, b], "key")).toBe("b");
+    expect(selectLiveId([a, b], "key")).toBe("b");
   });
 });

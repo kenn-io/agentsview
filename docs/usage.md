@@ -407,7 +407,9 @@ When a parent session has subagents or a continuation chain, the dot reflects
 the freshest activity across the group: a parent in `tool_call_pending` whose
 subagent is currently writing rolls up to Working green. The parent's parser
 status still wins for the Waiting state — a fork running in parallel doesn't
-change that the parent has said *"your turn"*.
+change that the parent has said *"your turn"*. A continuation chain's row shows
+the original session, but its Waiting state comes from the newest continuation,
+where the conversation is now.
 
 ### Group by Agent
 
@@ -431,6 +433,10 @@ AgentsView automatically detects conversation forks in Claude Code sessions —
 for example, when you use "retry from here" to branch a conversation. Large
 forks (more than 3 user turns) appear as separate session entries grouped with
 their parent. Small retries fold into the main session.
+
+In the sidebar, a group of related sessions always starts with the original
+session, as in the session tree. Expand the group to see its continuations,
+forks, and subagents below it.
 
 Open **Analysis** on a session with forks to see its session tree. Switch the
 tree to **Inputs** to see the prompts of the session's fork family as one tree.

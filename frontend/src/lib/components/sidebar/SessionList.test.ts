@@ -803,7 +803,7 @@ describe("SessionList visible hydration", () => {
         ended_at: "2024-01-01T07:00:00Z",
         is_index_only: true,
       }),
-      // The group's primary; it is not starred, so the filter picks again.
+      // Like the root, it is not starred, so the filter picks again.
       makeSession({
         id: "latest",
         parent_session_id: "cont",
@@ -823,6 +823,79 @@ describe("SessionList visible hydration", () => {
 
     expect(document.body.textContent).toContain("Main continuation");
     expect(document.body.textContent).not.toContain("Branch continuation");
+  });
+
+  it("heads a continuation chain with its root and shows the newest continuation's state", async () => {
+    const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+    sessions.sessions = [
+      // The root was waiting on the user when it handed off.
+      makeSession({
+        id: "root",
+        display_name: "Original session",
+        started_at: isoAgo(60 * 60 * 1000),
+        ended_at: isoAgo(5 * 60 * 1000),
+        termination_status: "awaiting_user",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "cont",
+        parent_session_id: "root",
+        relationship_type: "continuation",
+        display_name: "Continued session",
+        started_at: isoAgo(5 * 60 * 1000),
+        ended_at: isoAgo(20 * 1000),
+        is_index_only: true,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const head = document.querySelector<HTMLElement>('[data-session-id="root"]');
+    expect(head?.querySelector(".session-name")?.textContent).toContain("Original session");
+    expect(head?.querySelector(".kit-status-dot--working")).not.toBeNull();
+    expect(document.querySelector('[data-session-id="cont"]')).toBeNull();
+  });
+
+  it("shows the newest starred continuation's state when starred-only drops the live one", async () => {
+    const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+    sessions.sessions = [
+      makeSession({
+        id: "root",
+        display_name: "Original session",
+        started_at: isoAgo(60 * 60 * 1000),
+        ended_at: isoAgo(5 * 60 * 1000),
+        termination_status: "awaiting_user",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "cont",
+        parent_session_id: "root",
+        relationship_type: "continuation",
+        started_at: isoAgo(5 * 60 * 1000),
+        ended_at: isoAgo(20 * 1000),
+        is_index_only: true,
+      }),
+      // The group's live session; it is not starred.
+      makeSession({
+        id: "latest",
+        parent_session_id: "cont",
+        relationship_type: "continuation",
+        started_at: isoAgo(60 * 1000),
+        ended_at: isoAgo(10 * 1000),
+        is_index_only: true,
+      }),
+    ];
+    starred.filterOnly = true;
+    starred.ids = new Set(["root", "cont"]);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const head = document.querySelector<HTMLElement>('[data-session-id="root"]');
+    expect(head?.querySelector(".kit-status-dot--working")).not.toBeNull();
   });
 
   it("reloads the sidebar when starred-only is toggled", async () => {
@@ -1102,10 +1175,11 @@ describe("SessionList visible hydration", () => {
         ended_at: "2024-01-01T00:01:00Z",
         is_index_only: false,
       }),
+      // The continuation stays inside the collapsed group.
       makeSession({
         id: "child",
         parent_session_id: "parent",
-        display_name: "Visible continuation",
+        display_name: "Hidden continuation",
         started_at: "2024-01-01T00:02:00Z",
         ended_at: "2024-01-01T00:03:00Z",
         is_index_only: false,
@@ -1116,8 +1190,8 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    expect(document.querySelector<HTMLElement>('[data-session-id="child"]')).not.toBeNull();
-    expect(document.querySelector<HTMLElement>('[data-session-id="parent"]')).toBeNull();
+    expect(document.querySelector<HTMLElement>('[data-session-id="parent"]')).not.toBeNull();
+    expect(document.querySelector<HTMLElement>('[data-session-id="child"]')).toBeNull();
 
     const selectModeButton = document.querySelector<HTMLButtonElement>(".select-toggle-btn");
     expect(selectModeButton).not.toBeNull();
@@ -1129,7 +1203,7 @@ describe("SessionList visible hydration", () => {
     selectAllButton!.click();
     await tick();
 
-    expect([...sessions.selectedIds]).toEqual(["child"]);
+    expect([...sessions.selectedIds]).toEqual(["parent"]);
   });
 
   it("deletes only selected rows that are still rendered", async () => {

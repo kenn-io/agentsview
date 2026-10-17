@@ -246,11 +246,12 @@ The latest published release is
 
 **Bug fixes**
 
-- The sidebar lists forked sessions under the session they branched from,
-  matching the session tree in the analysis panel. Before, the newest fork
-  took the original's place as the group's top row and the original appeared
-  as one of its children. Continuations still bring their newest session to
-  the top.
+- The sidebar lists forked and continued sessions under the session they
+  started from, matching the session tree in the analysis panel. Before, the
+  newest fork or continuation took the original's place as the group's top row
+  and the original appeared as one of its children. A continuation chain's
+  status dot and its place in the list still follow its newest continuation,
+  so a chain that is still running stays marked as working.
 - Opening a forked session's link directly, or reloading the page while viewing
   a fork, no longer hangs on "Loading messages...". Once the sidebar's first
   rows load, it expands the fork's group and highlights the fork.
