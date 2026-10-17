@@ -511,8 +511,8 @@ describe("SearchStore", () => {
 
     store.search("cancel me");
     await runDebounce();
-    store.clear();
     completeRequest(fullTextResponse("cancel me", 2));
+    store.clear();
     await flushMicrotasks();
 
     expect(reportErrorShown).not.toHaveBeenCalled();
