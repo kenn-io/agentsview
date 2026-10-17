@@ -561,6 +561,112 @@ func TestWriteSessionBatchAtomicExtendedTextReconcilesConversationExport(t *test
 	})
 }
 
+func TestCompleteStoredRowsMergesImagePlaceholderUpgradesAndDowngrades(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "image-merge"
+	session := Session{ID: id, Project: "project", Machine: defaultMachine, Agent: "chatgpt", MessageCount: 1}
+	archived := "Start [image unavailable] middle ![image](assets/old.png) end"
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: archived, ContentLength: len(archived),
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	// The first image is upgraded from a placeholder; the second is an archived
+	// reference that the export shows as a placeholder and must be kept.
+	incoming := "Start ![image](assets/new.png) middle [image unavailable] end"
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: incoming, ContentLength: len(incoming),
+		}},
+		CompleteStoredRows: true,
+	}})
+	require.NoError(t, err)
+
+	want := "Start ![image](assets/new.png) middle ![image](assets/old.png) end"
+	messages, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, want, messages[0].Content)
+	assert.Equal(t, len(want), messages[0].ContentLength)
+}
+
+func TestCompleteStoredRowsMergesImageUpgradeWithTextExtension(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "image-extend"
+	session := Session{ID: id, Project: "project", Machine: defaultMachine, Agent: "chatgpt", MessageCount: 1}
+	archived := "[image unavailable]\nPartial"
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: archived, ContentLength: len(archived),
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	incoming := "![image](assets/new.png)\nPartial completed ![image](assets/extra.png)"
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: incoming, ContentLength: len(incoming),
+		}},
+		CompleteStoredRows: true,
+	}})
+	require.NoError(t, err)
+
+	messages, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, incoming, messages[0].Content)
+	assert.Equal(t, len(incoming), messages[0].ContentLength)
+
+	// A later sync that shows the first image as a placeholder keeps the reference.
+	downgraded := "[image unavailable]\nPartial completed ![image](assets/extra.png) done"
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: downgraded, ContentLength: len(downgraded),
+		}},
+		CompleteStoredRows: true,
+	}})
+	require.NoError(t, err)
+	messages, err = d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	want := "![image](assets/new.png)\nPartial completed ![image](assets/extra.png) done"
+	assert.Equal(t, want, messages[0].Content)
+}
+
+func TestExtendImageContent(t *testing.T) {
+	merged, ok := ExtendImageContent("[image unavailable]\nPartial", "![image](a.png)\nPartial completed")
+	assert.True(t, ok)
+	assert.Equal(t, "![image](a.png)\nPartial completed", merged)
+
+	_, ok = ExtendImageContent("![image](a.png)\nPartial", "![image](b.png)\nPartial completed")
+	assert.False(t, ok, "different concrete references must diverge")
+
+	_, ok = ExtendImageContent("[image unavailable]\nPartial text", "![image](a.png)\nPartial")
+	assert.False(t, ok, "shorter incoming text is not an extension")
+
+	_, ok = ExtendImageContent("[image unavailable]\nPartial", "![image](a.png)\nDifferent completed")
+	assert.False(t, ok, "text that differs from the archived text must diverge")
+
+	_, ok = ExtendImageContent("", "anything")
+	assert.False(t, ok)
+}
+
 func TestUsageOnlyBatchWritesClearExistingFriction(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

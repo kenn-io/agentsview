@@ -2603,6 +2603,8 @@
   "import_claude_open_chrome": "Open Chrome to connect.",
   "import_claude_tab_note": "Sync opens a background claude.ai tab if none is open. The tab stays open after Sync.",
   "import_claude_signed_out": "Sign in to claude.ai in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects.",
+  "import_chatgpt_tab_note": "Sync opens a background chatgpt.com tab if none is open. The tab stays open after Sync.",
+  "import_chatgpt_signed_out": "Sign in to ChatGPT in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects.",
   "import_claude_reload_extension": "Then reload the extension in {url}.",
   "import_claude_update_app": "Restart AgentsView if you upgraded it.",
   "import_claude_syncing": "Syncing...",

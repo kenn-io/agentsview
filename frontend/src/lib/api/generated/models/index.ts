@@ -340,6 +340,8 @@ export * from "./postApiV1EmbeddingsGenerationsByIdRetireParams.ts";
 export * from "./postApiV1EmbeddingsGenerationsByIdRetirePathParameters.ts";
 export * from "./postApiV1ImportChatgptBody.ts";
 export * from "./postApiV1ImportChatgptParams.ts";
+export * from "./postApiV1ImportChatgptSyncBrowser.ts";
+export * from "./postApiV1ImportChatgptSyncParams.ts";
 export * from "./postApiV1ImportClaudeAiBody.ts";
 export * from "./postApiV1ImportClaudeAiParams.ts";
 export * from "./postApiV1ImportClaudeAiSyncBrowser.ts";

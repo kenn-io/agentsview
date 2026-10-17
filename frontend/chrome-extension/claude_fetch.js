@@ -9,7 +9,7 @@ globalThis.claudeFetch = async function claudeFetch(url) {
       redirect: "error",
       signal: controller.signal,
     });
-    const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit.
+    const limit = 32 * 1024 * 1024; // Browser sync caps each response at 32 MiB.
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let size = 0;

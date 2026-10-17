@@ -54,6 +54,7 @@ filter:
       - post-api-v1-sync
       - get-api-v1-sync-status
       - post-api-v1-import-claude-ai-sync
+      - post-api-v1-import-chatgpt-sync
       - post-api-v1-resync
       - post-api-v1-sync-remotes
       - post-api-v1-push-pg

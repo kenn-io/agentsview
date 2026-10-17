@@ -2616,6 +2616,8 @@
   "import_claude_open_chrome": "Ouvrez Chrome pour vous connecter.",
   "import_claude_tab_note": "La synchronisation ouvre un onglet claude.ai en arrière-plan si aucun n'est ouvert. L'onglet reste ouvert après la synchronisation.",
   "import_claude_signed_out": "Connectez-vous à claude.ai dans le profil Chrome avec l'extension AgentsView. Activez l'extension dans un seul profil Chrome. La synchronisation utilise le premier profil qui se connecte.",
+  "import_chatgpt_tab_note": "La synchronisation ouvre un onglet chatgpt.com en arrière-plan si aucun n'est ouvert. L'onglet reste ouvert après la synchronisation.",
+  "import_chatgpt_signed_out": "Connectez-vous à ChatGPT dans le profil Chrome avec l'extension AgentsView. Activez l'extension dans un seul profil Chrome. La synchronisation utilise le premier profil qui se connecte.",
   "import_claude_reload_extension": "Rechargez ensuite l’extension dans {url}.",
   "import_claude_update_app": "Redémarrez AgentsView si vous l'avez mis à jour.",
   "import_claude_syncing": "Synchronisation...",

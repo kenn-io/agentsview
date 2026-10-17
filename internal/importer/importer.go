@@ -708,8 +708,24 @@ func compareChatGPTPrefix(
 			return nil, false
 		}
 		extended := db.IsTextExtension(a.Content, b.Content)
-		if !extended && (a.Content != b.Content || a.ContentLength != b.ContentLength) {
-			return nil, false
+		imageFill := false
+		if !extended {
+			same, fill := db.ReconcileImageContent(a.Content, b.Content)
+			switch {
+			case same:
+				if a.Content == b.Content && a.ContentLength != b.ContentLength {
+					return nil, false
+				}
+				imageFill = fill
+			default:
+				// An image replaced by a concrete reference can arrive together
+				// with more text; reconcile the images inside the archived text.
+				merged, ok := db.ExtendImageContent(a.Content, b.Content)
+				if !ok || merged == a.Content {
+					return nil, false
+				}
+				imageFill = true
+			}
 		}
 		if len(incoming[i].ToolCalls) < len(existing[i].ToolCalls) {
 			return nil, false
@@ -724,7 +740,7 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended {
+		if fill || extended || imageFill {
 			completed = append(completed, i)
 		}
 	}

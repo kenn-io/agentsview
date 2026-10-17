@@ -13,6 +13,7 @@ const getBrowserHost = vi.hoisted(() => vi.fn());
 const isRemoteConnection = vi.hoisted(() => vi.fn());
 const chromeStatus = vi.hoisted(() => vi.fn());
 const syncClaudeAI = vi.hoisted(() => vi.fn());
+const syncChatGPTChrome = vi.hoisted(() => vi.fn());
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
@@ -25,6 +26,7 @@ vi.mock("../../api/generated/index.js", async (original) => ({
 vi.mock("../../api/client.js", () => ({
   connectClaudeAI: (browser: typeof host) => browser.connect(),
   syncClaudeAI,
+  syncChatGPTChrome,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
@@ -43,6 +45,7 @@ beforeEach(() => {
   getBrowserHost.mockReturnValue(undefined);
   chromeStatus.mockResolvedValue(ready);
   syncClaudeAI.mockResolvedValue(stats);
+  syncChatGPTChrome.mockResolvedValue(stats);
   void setLocale("en", { reload: false });
 });
 afterEach(() => {
@@ -83,6 +86,31 @@ it("shows setup instructions when disconnected", async () => {
   expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
+});
+
+it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure", async () => {
+  syncChatGPTChrome.mockRejectedValueOnce(
+    new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"),
+  );
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  render(ImportModal, props());
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
+  expect(screen.getByText(m.import_chatgpt_signed_out())).toBeTruthy();
+  expect(screen.queryByText(m.import_chatgpt_tab_note())).toBeNull();
+  expect(syncChatGPTChrome).toHaveBeenCalledWith(
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
+  expect(open).toHaveBeenCalledExactlyOnceWith(
+    "https://chatgpt.com/",
+    "_blank",
+    "noopener,noreferrer",
+  );
+  expect(syncClaudeAI).not.toHaveBeenCalled();
+  expect(chromeStatus).toHaveBeenCalled();
 });
 
 it.each(["stop", "cancel"])(
@@ -393,9 +421,11 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   expect(chromeStatus).toHaveBeenCalledTimes(4);
   await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(4);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Claude.ai" }));
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  await tick();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   let reject!: (error: Error) => void;
   syncClaudeAI.mockImplementation(
     () =>
@@ -405,15 +435,15 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   );
   await fireEvent.click(syncButton());
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   reject(new Error("Stopped"));
   await tick();
   await vi.advanceTimersByTimeAsync(0);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
   await rerender({ ...p, open: false });
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
 });
 
 it("cancels stale reads and clears auth on close and reopen", async () => {

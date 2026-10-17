@@ -157,6 +157,32 @@ UI.
 Claude.ai's private endpoints can change without notice. Sign in again if Sync
 reports that your sign-in expired.
 
+## Sync ChatGPT chats
+
+Chrome Sync also supports ChatGPT. Set up the AgentsView Chrome extension using
+the steps above, then sign in to ChatGPT in the Chrome profile that has the
+extension enabled. In **Import conversations**, select **ChatGPT** and click
+**Sync**. If no ChatGPT tab is open, Sync opens one in the background and leaves
+it open.
+
+The extension gets the short-lived access token inside the ChatGPT page and
+uses it for the approved conversation-list and conversation-detail requests.
+The token is not sent to AgentsView or through native messaging; only the
+conversation responses return to the local server. Sync is available only from
+a local writable archive with Chrome connected.
+
+The CLI can sync without an AgentsView tab open:
+
+```bash
+agentsview import --type chatgpt --sync
+```
+
+Sync checks each conversation's `update_time`, imports changed details through
+the existing ChatGPT parser, and appends compatible history to the existing
+`chatgpt:<conversation id>` session. Divergent or shorter history follows the
+same refusal rules as a ChatGPT zip import. ChatGPT's private API can change
+without notice; sign in again if Sync reports that authentication expired.
+
 ## Importing via the CLI
 
 Use `agentsview import` to import from the command line:
@@ -170,6 +196,7 @@ agentsview import --type gemini-apps ~/Downloads/takeout.zip
 | Flag | Description |
 |------|-------------|
 | `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
+| `--sync` | Sync Claude.ai or ChatGPT from Chrome instead of importing a file (`claude-ai` and `chatgpt` only) |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file

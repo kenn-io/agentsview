@@ -291,7 +291,7 @@ func TestChromeSyncResults(t *testing.T) {
 			defer ts.Close()
 			api, err := apiclient.NewHTTPClient(ts.URL+"/base/", "test-token", ts.Client())
 			require.NoError(t, err)
-			browser := apiclient.Chrome
+			browser := apiclient.PostAPIV1ImportClaudeAiSyncQueryBrowserChrome
 			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
 			if tt.status == http.StatusOK {
 				require.NoError(t, err)
@@ -365,6 +365,31 @@ func TestChromeSyncCommand(t *testing.T) {
 	}
 }
 
+func TestChatGPTChromeSyncCommand(t *testing.T) {
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/import/chatgpt/sync": func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+			if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, err := io.WriteString(w, "event: done\ndata: {\"imported\":1,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n")
+			assert.NoError(t, err)
+		},
+	})
+	registerTestRuntime(t, dataDir, ts.URL, false)
+	output := captureStderr(t, func() {
+		cmd := newImportCommand()
+		cmd.SetArgs([]string{"--type", "chatgpt", "--sync"})
+		require.NoError(t, cmd.Execute())
+	})
+	assert.Contains(t, output, "Done: 1 processed (1 new)")
+}
+
 func TestChromeImportArguments(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -374,7 +399,7 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync", []string{"--type", "claude-ai", "--sync"}, nil, true},
 		{"file", []string{"--type", "claude-ai"}, []string{"conversations.json"}, true},
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
-		{"sync provider", []string{"--type", "chatgpt", "--sync"}, nil, false},
+		{"sync provider", []string{"--type", "gemini-apps", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},
 	} {

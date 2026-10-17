@@ -1,0 +1,2 @@
+/backend-api/conversations?offset={offset}&limit=50&order=updated
+/backend-api/conversation/{conversation}

@@ -13201,6 +13201,95 @@ paths:
       summary: Import ChatGPT archive
       tags:
         - Import
+  /api/v1/import/chatgpt/sync:
+    post:
+      operationId: post-api-v1-import-chatgpt-sync
+      parameters:
+        - explode: false
+          in: query
+          name: browser
+          required: true
+          schema:
+            enum:
+              - chrome
+            type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                description: "Server-sent events: progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: chatgpt_auth_required, chrome_host_update_required."
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Before streaming, code chrome_host_required reports a disconnected Chrome host; chrome_sync_running reports that a browser sync is already running.
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Sync ChatGPT conversations
+      tags:
+        - Import
   /api/v1/import/claude-ai:
     post:
       operationId: post-api-v1-import-claude-ai

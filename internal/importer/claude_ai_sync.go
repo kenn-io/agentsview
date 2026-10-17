@@ -160,44 +160,45 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				existing, err := store.GetSessionFull(ctx, id)
+				detail, unchanged, fetchErr, err := fetchConversationDetailIfChanged(
+					ctx, store, parser.AgentClaudeAI, id,
+					func(session *db.Session) uint64 { return claudeAIFreshness(marker.UpdatedAt, leaf, session) },
+					func(ctx context.Context) ([]byte, error) {
+						return fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationRequest, org.UUID, marker.UUID, 0))
+					},
+				)
 				if err != nil {
 					return stats, err
 				}
-				storedHash, fresh, err := store.GetProviderStatHash(ctx, parser.AgentClaudeAI, id)
-				if err != nil {
-					return stats, err
-				}
-				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing) {
-					failedLast = false
-					stats.Skipped++
-					cb.progress(stats)
-					continue
-				}
-				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationRequest, org.UUID, marker.UUID, 0))
-				if err != nil {
+				if fetchErr != nil {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
 					}
-					if errors.Is(err, ErrClaudeAIAuthRequired) {
-						return stats, err
+					if errors.Is(fetchErr, ErrClaudeAIAuthRequired) {
+						return stats, fetchErr
 					}
-					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
+					detailError, _ := errors.AsType[*claudeAIHTTPError](fetchErr)
 					if detailError != nil && detailError.status == 404 {
 						failedLast = false
 						stats.record(id, importSkipped, nil)
 					} else {
-						stats.record(id, importSkipped, err)
-						if !errors.Is(err, ErrClaudeAIResponseTooLarge) {
+						stats.record(id, importSkipped, fetchErr)
+						if !errors.Is(fetchErr, ErrClaudeAIResponseTooLarge) {
 							if failedLast {
 								cb.progress(stats)
-								return stats, err
+								return stats, fetchErr
 							}
 							failedLast = true
 						} else {
 							failedLast = false
 						}
 					}
+					cb.progress(stats)
+					continue
+				}
+				if unchanged {
+					failedLast = false
+					stats.Skipped++
 					cb.progress(stats)
 					continue
 				}
@@ -261,6 +262,29 @@ func SyncClaudeAI(ctx context.Context, store interface {
 		}
 	}
 	return stats, nil
+}
+
+// fetchConversationDetailIfChanged shares the detail-fetch decision between
+// browser platforms. Platform adapters supply the provider-specific freshness
+// key and request function; persistence and parsing stay in their import paths.
+func fetchConversationDetailIfChanged(ctx context.Context, store interface {
+	db.Store
+	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
+}, agent parser.AgentType, id string, freshness func(*db.Session) uint64, fetch func(context.Context) ([]byte, error),
+) ([]byte, bool, error, error) {
+	existing, err := store.GetSessionFull(ctx, id)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	storedHash, fresh, err := store.GetProviderStatHash(ctx, agent, id)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if existing != nil && fresh && storedHash == freshness(existing) {
+		return nil, true, nil, nil
+	}
+	detail, fetchErr := fetch(ctx)
+	return detail, false, fetchErr, nil
 }
 
 func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
