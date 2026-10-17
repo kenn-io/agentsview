@@ -24,6 +24,9 @@ The latest release is
 
 **New features**
 
+- Combine model variants into one row in Usage and Analytics with
+  `[model_aliases]` in `config.toml`. Scripts, exports, `usage daily`, and MCP
+  keep raw model names.
 - Browse and search fx sessions, including tool results and child runs. Schema
   4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Assistants connected over MCP can see which tools a session ran, find which
