@@ -1071,13 +1071,11 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 
 func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		wrongPID  bool
-		newRecord bool
+		name     string
+		wrongPID bool
 	}{
-		{name: "live record is listed"},
 		{name: "record whose PID differs from its filename is ignored", wrongPID: true},
-		{name: "older legacy record precedes new runtime record", newRecord: true},
+		{name: "older legacy record precedes new runtime record"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1094,7 +1092,7 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(path, body, 0o600))
 			var newPath string
-			if tt.newRecord {
+			if !tt.wrongPID {
 				newRec := rec
 				newRec.PID++
 				newRec.StartedAt = rec.StartedAt.Add(time.Hour)
@@ -1109,12 +1107,8 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 				assert.FileExists(t, path)
 				return
 			}
-			if tt.newRecord {
-				require.Len(t, records, 2)
-				assert.Equal(t, newPath, records[1].SourcePath)
-			} else {
-				require.Len(t, records, 1)
-			}
+			require.Len(t, records, 2)
+			assert.Equal(t, newPath, records[1].SourcePath)
 			assert.Equal(t, rec.PID, records[0].PID)
 			assert.Equal(t, path, records[0].SourcePath)
 			assert.FileExists(t, path)
