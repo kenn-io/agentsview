@@ -1380,65 +1380,10 @@ const hasTrashedSessionByFilePathQuery = "SELECT 1 FROM sessions" +
 // HasTrashedSessionByFilePath returns true when a source path already belongs
 // to a trashed row for this agent. Use the path index so each parsed source
 // checks only its own rows, rather than scanning every session for the agent.
-// Codex callers use CodexSourceSessionIDs to avoid suppressing shared histories.
 func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent string) bool {
 	var n int
 	_ = db.getReader().QueryRow(ctx, hasTrashedSessionByFilePathQuery, path, agent).Scan(&n)
 	return n == 1
-}
-
-// codexSourcePathsSQL lists both storage representations of one rollout.
-// path is an internal SQL expression, never a source path supplied by a caller.
-func codexSourcePathsSQL(path string) string {
-	return `(` + path + `, CASE
-        WHEN substr(` + path + `, -10) = '.jsonl.zst' THEN substr(` + path + `, 1, length(` + path + `) - 4)
-        WHEN substr(` + path + `, -6) = '.jsonl' THEN ` + path + ` || '.zst'
-        ELSE ` + path + ` END)`
-}
-
-var excludedCodexSourceQuery = `SELECT EXISTS (
-    SELECT 1 FROM excluded_sessions WHERE file_path IN ` + codexSourcePathsSQL("?1") + ` AND file_path != ''
-    AND (id GLOB ?2 OR id GLOB ?3)
-)`
-
-// CorrectedCodexSessionID identifies a unique retained source after an identity
-// repair. Shared-path archives provide no evidence to move another row's pins.
-func (db *DB) CorrectedCodexSessionID(ctx context.Context, oldID, path, agent string) (string, error) {
-	if path == "" || !parser.IsCodexFormatAgent(parser.AgentType(agent)) {
-		return "", nil
-	}
-	rows, err := db.getReader().Query(ctx, `SELECT id FROM sessions
-		WHERE file_path IN `+codexSourcePathsSQL("?1")+` AND agent = ?2 LIMIT 2`, path, agent)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return "", err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	if len(ids) == 1 && ids[0] != oldID {
-		return ids[0], nil
-	}
-	return "", nil
-}
-
-// HasExcludedCodexSource retains a permanent deletion when a Codex rollout's
-// parsed identity changes, including files absent during an archive rebuild.
-func (db *DB) HasExcludedCodexSource(ctx context.Context, path, agent string) (bool, error) {
-	if path == "" || !parser.IsCodexFormatAgent(parser.AgentType(agent)) {
-		return false, nil
-	}
-	var excluded bool
-	err := db.getReader().QueryRow(ctx, excludedCodexSourceQuery, path, agent+":*", "*~"+agent+":*").Scan(&excluded)
-	return excluded, err
 }
 
 // PurgeExcludedSessions removes any session rows whose IDs
@@ -1785,14 +1730,6 @@ func upsertSessionExec(
 	if excluded == 1 {
 		return sessionUpsertResult{}, ErrSessionExcluded
 	}
-	if s.FilePath != nil && *s.FilePath != "" && (s.Agent == "codex" || s.Agent == "traex" || s.Agent == "augure-code") {
-		if err := queryRow(ctx, excludedCodexSourceQuery, *s.FilePath, s.Agent+":*", "*~"+s.Agent+":*").Scan(&excluded); err != nil {
-			return sessionUpsertResult{}, fmt.Errorf("checking excluded Codex source: %w", err)
-		}
-		if excluded == 1 {
-			return sessionUpsertResult{}, ErrSessionExcluded
-		}
-	}
 	var previousProject string
 	var previousSessionName sql.NullString
 	var previousAutomated bool
@@ -1902,14 +1839,6 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 	).Scan(&excluded)
 	if excluded == 1 {
 		return ErrSessionExcluded
-	}
-	if s.FilePath != nil && *s.FilePath != "" && (s.Agent == "codex" || s.Agent == "traex" || s.Agent == "augure-code") {
-		if err := db.getWriter().QueryRowContext(ctx, excludedCodexSourceQuery, *s.FilePath, s.Agent+":*", "*~"+s.Agent+":*").Scan(&excluded); err != nil {
-			return fmt.Errorf("checking excluded Codex source: %w", err)
-		}
-		if excluded == 1 {
-			return ErrSessionExcluded
-		}
 	}
 	// A soft-deleted (trashed) session would satisfy ON CONFLICT DO NOTHING and
 	// silently leave the import attached to a hidden session. Reject it like
@@ -4264,14 +4193,11 @@ func (db *DB) GetFileHashByAgentPath(ctx context.Context,
 // and agent. Used by parsers whose canonical session ID can change while the
 // underlying source file remains the same.
 func (db *DB) ListSessionIDsByFilePath(ctx context.Context, path, agent string) ([]string, error) {
-	source := "file_path = ?1 AND source_missing_at IS NULL"
-	if parser.IsCodexFormatAgent(parser.AgentType(agent)) {
-		// A returning rollout must recover retained alternatives even when
-		// reconciliation marked the source missing or compression changed.
-		source = "file_path IN " + codexSourcePathsSQL("?1")
-	}
 	rows, err := db.getReader().Query(ctx,
-		"SELECT id FROM sessions WHERE "+source+" AND agent = ?2 AND deleted_at IS NULL ORDER BY id",
+		"SELECT id FROM sessions"+
+			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
+			" AND source_missing_at IS NULL"+
+			" ORDER BY id",
 		path, agent,
 	)
 	if err != nil {
@@ -4316,23 +4242,6 @@ func (db *DB) ListSessionPathRecords(ctx context.Context, baseID string) ([]Sess
 			" UNION ALL SELECT id, COALESCE(file_path, ''), 0, 1, 0, 0 FROM excluded_sessions WHERE "+match,
 		baseID, low, high, baseID, low, high,
 	)
-}
-
-// CodexSourceSessionIDs returns the parsed identity and source-bound alternatives,
-// including trash. Other native identities sharing a path own distinct history.
-func (db *DB) CodexSourceSessionIDs(ctx context.Context, path, agent, id string) ([]string, error) {
-	records, err := db.querySessionPathRecords(ctx, sessionPathRecordQuery+
-		"file_path IN "+codexSourcePathsSQL("?1")+" AND agent = ?2", path, agent)
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, r := range records {
-		if r.ID == id || r.ID == parser.AltSessionID(parser.BaseSessionID(r.ID), r.FilePath) {
-			ids = append(ids, r.ID)
-		}
-	}
-	return ids, nil
 }
 
 // ListSessionPathRecordsForAgents returns the stored rows of the given agents.

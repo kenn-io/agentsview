@@ -599,9 +599,8 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"friction_findings":                               true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup":    true,
-		"idx_tool_result_events_terminal":  true,
-		"idx_sessions_codex_repair_source": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
@@ -641,9 +640,8 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"friction_findings":                               true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup":    true,
-		"idx_tool_result_events_terminal":  true,
-		"idx_sessions_codex_repair_source": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,

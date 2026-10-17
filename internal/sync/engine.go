@@ -6810,7 +6810,7 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // parser.AgentCodex alone: those forks write no index file and have no S3
 // path convention.
 func isCodexFormatAgent(agent parser.AgentType) bool {
-	return parser.IsCodexFormatAgent(agent)
+	return ingest.IsCodexFormatAgent(agent)
 }
 
 func reconciliationWatchRoot(
@@ -14171,17 +14171,11 @@ func (e *Engine) applyProviderFilePathPolicies(
 		}
 		currentPrefixedID := applyIDPrefixToID(idPrefix, currentID)
 
-		listSourceIDs := e.db.ListSessionIDsByFilePath
-		if isCodexFormatAgent(agent) {
-			listSourceIDs = func(ctx context.Context, path, agent string) ([]string, error) {
-				return e.db.CodexSourceSessionIDs(ctx, path, agent, currentPrefixedID)
-			}
-		}
 		agentsToQuery := []string{string(agent)}
 		var existingIDs []string
 		primaryErr := make(map[string]error, len(agentsToQuery))
 		for _, agentStr := range agentsToQuery {
-			ids, err := listSourceIDs(ctx, lookupPath, agentStr)
+			ids, err := e.db.ListSessionIDsByFilePath(ctx, lookupPath, agentStr)
 			if err != nil {
 				primaryErr[agentStr] = err
 				continue
@@ -14194,7 +14188,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// primary-agent failure does not propagate as a full-failure.
 		if len(primaryErr) > 0 {
 			for agentStr := range primaryErr {
-				ids, retryErr := listSourceIDs(ctx, lookupPath, agentStr)
+				ids, retryErr := e.db.ListSessionIDsByFilePath(ctx, lookupPath, agentStr)
 				if retryErr != nil {
 					continue
 				}
@@ -14234,37 +14228,11 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
 		suppress := false
-		sourceExcluded := false
 		for _, agentStr := range agentsToQuery {
-			excludedSource, err := e.db.HasExcludedCodexSource(ctx, lookupPath, agentStr)
-			if err != nil {
-				res.err = fmt.Errorf("checking excluded source %q: %w", lookupPath, err)
-				res.noCacheSkip = true
-				res.results = nil
-				return
-			}
-			if excludedSource {
-				sourceExcluded = true
-				break
-			}
-			if !isCodexFormatAgent(agent) && e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
+			if e.db.HasTrashedSessionByFilePath(ctx, lookupPath, agentStr) {
 				suppress = true
 				break
 			}
-		}
-		if sourceExcluded {
-			if err := e.db.CorrectCodexSourceExclusions(ctx, currentPrefixedID, lookupPath, string(agent)); err != nil {
-				res.err = err
-				res.noCacheSkip = true
-				res.results = nil
-				return
-			}
-			// The exclusion owns a source, not every row with its parsed ID.
-			// Only clean up rows whose stored path proves that ownership.
-			for _, id := range existingIDs {
-				addExclusion(id)
-			}
-			continue
 		}
 		if !suppress {
 			for id := range excluded {
@@ -14279,6 +14247,9 @@ func (e *Engine) applyProviderFilePathPolicies(
 		}
 		if !suppress {
 			for _, id := range existingIDs {
+				if id == currentID || id == currentPrefixedID {
+					continue
+				}
 				if e.db.IsSessionExcluded(ctx, id) || e.db.IsSessionTrashed(ctx, id) {
 					suppress = true
 					break
@@ -14384,36 +14355,6 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 				return nil, err
 			}
 		}
-		// Recover only alternatives belonging to each returning source. A
-		// destination with different history stays separate and must not make
-		// an otherwise valid source fail every subsequent sync.
-		preserved := make(map[string]bool)
-		for _, result := range res.results {
-			agent := result.Session.Agent
-			if !isCodexFormatAgent(agent) {
-				continue
-			}
-			path := result.Session.File.Path
-			if e.pathRewriter != nil {
-				path = e.pathRewriter(path)
-			}
-			id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
-			candidates, err := e.db.CodexSourceSessionIDs(ctx, path, string(agent), id)
-			if err != nil {
-				return nil, err
-			}
-			for _, oldID := range candidates {
-				if oldID == id || !slices.Contains(excluded, oldID) {
-					continue
-				}
-				recovered, err := e.db.RecoverCodexSessionIdentity(ctx, oldID, id, path, string(agent), result.Session.Cwd)
-				if err != nil {
-					return nil, err
-				}
-				preserved[oldID] = !recovered
-			}
-		}
-		excluded = slices.DeleteFunc(excluded, func(id string) bool { return preserved[id] })
 		if _, err := e.db.DeleteParserExcludedSessions(ctx, excluded); err != nil {
 			return nil, err
 		}

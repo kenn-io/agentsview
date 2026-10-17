@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -81,510 +78,119 @@ func TestCodexForeignMetadataKeepsSessionsSeparate(t *testing.T) {
 	}
 }
 
-func TestCodexUpgradePreservesDistinctHistoriesAtSharedPath(t *testing.T) {
-	for _, tc := range []struct {
-		suffix string
-		trash  bool
-	}{{"", false}, {".zst", false}, {"", true}, {".zst", true}} {
-		t.Run(fmt.Sprintf("representation=%s/trash=%t", tc.suffix, tc.trash), func(t *testing.T) {
-			root, pathA, pathB := writeCodexIdentityRollouts(t)
-			require.NoError(t, os.Remove(pathA))
-			database := openTestDB(t)
-			const retainedID = "codex:" + identityThreadA
-			const parsedID = "codex:" + identityThreadB
-			for _, row := range []struct{ id, path, content string }{
-				{retainedID, pathB + tc.suffix, "distinct archived history"},
-				{parsedID, pathB, "other question"},
-			} {
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-					ID: row.id, Agent: "codex", Project: "sample", Machine: "local",
-					FilePath: &row.path, DataVersion: 135, MessageCount: 1,
-				}))
-				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "user", Content: row.content}}))
-			}
-			messages, err := database.GetAllMessages(t.Context(), retainedID)
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			_, err = database.PinMessage(t.Context(), retainedID, messages[0].ID, new("archived note"))
-			require.NoError(t, err)
-			if tc.trash {
-				require.NoError(t, database.SoftDeleteSession(t.Context(), retainedID))
-			}
-			reopened, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, parsedID))
-			stats := engine.SyncAllForceParse(t.Context(), nil)
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, parsedID))
-			if !tc.trash {
-				assert.Equal(t, []string{"distinct archived history"}, messageContents(t, reopened, retainedID), "full parse keeps the native sibling")
-			}
-			stats, err = engine.SyncThenRun(t.Context(), true, nil, func(bool) error { return nil })
-			require.NoError(t, err)
-			require.True(t, stats.ArchiveRebuilt)
-			if tc.trash {
-				require.True(t, reopened.IsSessionTrashed(t.Context(), retainedID))
-				_, err = reopened.RestoreSession(t.Context(), retainedID)
-				require.NoError(t, err)
-			}
-			assert.Equal(t, []string{"distinct archived history"}, messageContents(t, reopened, retainedID))
-			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, parsedID))
-			pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
-			require.NoError(t, err)
-			require.Len(t, pins, 1)
-			assert.Equal(t, retainedID, pins[0].SessionID)
-			assert.Equal(t, new("archived note"), pins[0].Note)
-		})
-	}
-}
-
-func TestCodexUpgradeRecognizesMovedRollout(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	const ts = "2025-10-20T19:00:00Z"
-	path := writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-00-00-"+identityThreadA+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(identityThreadA, "/work/sample", "codex_cli_rs", ts),
-		testjsonl.CodexMsgJSON("user", "saved question", ts)))
-	database := openTestDB(t)
-	const id = "codex:" + identityThreadA
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135, MessageCount: 1}))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: id, Role: "user", Content: "saved question"}}))
-	archived := filepath.Join(filepath.Dir(root), "archived_sessions", filepath.Base(path))
-	require.NoError(t, os.MkdirAll(filepath.Dir(archived), 0o700))
-	require.NoError(t, os.Rename(path, archived))
-	reopened, _ := rebuildCodexIdentityArchive(t, database, filepath.Dir(archived), 135)
-	assert.Equal(t, archived, reopened.GetSessionFilePath(t.Context(), id))
-	assert.Equal(t, []string{"saved question"}, messageContents(t, reopened, id))
-	ids, err := reopened.ListSessionIDsByFilePath(t.Context(), path, "codex")
-	require.NoError(t, err)
-	assert.Empty(t, ids, "a moved source must not leave an archived duplicate at its old path")
-}
-
-func TestCodexReturningSourcePreservesProjectEvidenceWithoutCheckout(t *testing.T) {
-	for _, subdir := range []string{".", "nested"} {
-		t.Run(subdir, func(t *testing.T) {
-			root := t.TempDir()
-			checkout := t.TempDir()
-			cwd := filepath.Join(checkout, subdir)
-			require.NoError(t, os.MkdirAll(cwd, 0o700))
-			const ts = "2025-10-20T19:00:00Z"
-			path := writeCodexRollout(t, root, "01", "rollout-restored.jsonl", testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(identityThreadB, cwd, "codex_cli_rs", ts),
-				testjsonl.CodexMsgJSON("user", "saved question", ts),
-			))
-			database := openTestDB(t)
-			oldID := parser.AltSessionID("codex:"+identityThreadA, path)
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: oldID, Agent: "codex", Project: "sample", Machine: "local", Cwd: cwd,
-				FilePath: &path, DataVersion: 135, MessageCount: 1,
-			}))
-			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: oldID, Role: "user", Content: "saved question"}}))
-			require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(t.Context(), export.ProjectIdentityObservation{
-				SessionID: oldID, Project: "sample", Machine: "local", RootPath: checkout,
-				GitRemote: "https://example.com/team/sample.git", RemoteResolution: export.ProjectResolutionResolved,
-				ObservedAt: time.Date(2025, 10, 20, 19, 0, 0, 0, time.UTC),
-			}, "sample"))
-			before, err := database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{oldID})
-			require.NoError(t, err)
-			require.NotEmpty(t, before[oldID].Key)
-			require.NoError(t, os.RemoveAll(checkout))
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local",
-			})
-			t.Cleanup(engine.Close)
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
-			const id = "codex:" + identityThreadB
-			assert.Equal(t, []string{"saved question"}, messageContents(t, database, id))
-			snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{oldID, id})
-			require.NoError(t, err)
-			assert.NotContains(t, snapshots, oldID)
-			require.Contains(t, snapshots, id)
-			assert.Equal(t, "https://example.com/team/sample.git", snapshots[id].GitRemote)
-			assert.Equal(t, export.ProjectResolutionResolved, snapshots[id].RemoteResolution)
-			assert.Equal(t, before[oldID].Key, snapshots[id].Key)
-			assert.Equal(t, checkout, snapshots[id].RootPath)
-		})
-	}
-}
-
-func TestCodexMissingCorrectedPageKeepsParent(t *testing.T) {
-	const thread = "codex:" + identityThreadB
-	const base = thread + "_44444444-4444-7444-8444-444444444444"
-	for _, tc := range []struct {
-		name, parent, parserParent, want string
-		occupied                         bool
-	}{
-		{"no_parent", "", "", thread, false},
-		{"foreign_parent", "codex:" + identityThreadA, "codex:" + identityThreadA, thread, false},
-		{"retained_base", base, base, base, false},
-		{"launcher", "launcher", "", "launcher", false},
-		{"occupied_no_parent", "", "", thread, true},
-		{"occupied_foreign_parent", "codex:" + identityThreadA, "codex:" + identityThreadA, thread, true},
-		{"occupied_base", base, base, base, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root, _, pathB := writeCodexIdentityRollouts(t)
-			require.NoError(t, os.Remove(pathB))
-			const suffix = "_33333333-3333-7333-8333-333333333333"
-			pathB = strings.TrimSuffix(pathB, ".jsonl") + suffix + ".jsonl"
-			database := openTestDB(t)
-			const oldID = "codex:" + identityThreadA
-			session := db.Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB, DataVersion: 135, MessageCount: 1}
-			if tc.parserParent != "" {
-				session.ParentSessionID = &tc.parent
-				session.ParserParentSessionID = &tc.parserParent
-				session.RelationshipType = "continuation"
-			}
-			require.NoError(t, database.UpsertSession(t.Context(), session))
-			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: oldID, Role: "user", Content: "archived page"}}))
-			pageID := thread + suffix
-			if tc.occupied {
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: pageID, Agent: "codex", Project: "other", Machine: "local"}))
-				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: pageID, Role: "user", Content: "independent page"}}))
-				pageID = parser.AltSessionID(oldID, pathB)
-			}
-			if tc.name == "launcher" {
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "launcher", Agent: "gemini", Project: "sample", Machine: "local"}))
-				_, err := database.SetSessionExternalParent(t.Context(), oldID, "launcher")
-				require.NoError(t, err)
-			}
-			reopened, _ := rebuildCodexIdentityArchive(t, database, root, 135)
-			page, err := reopened.GetSession(t.Context(), pageID)
-			require.NoError(t, err)
-			require.NotNil(t, page)
-			assert.Equal(t, &tc.want, page.ParentSessionID)
-			if tc.name != "launcher" {
-				assert.Equal(t, "continuation", page.RelationshipType)
-			}
-			assert.Equal(t, []string{"archived page"}, messageContents(t, reopened, pageID))
-			if tc.occupied {
-				assert.Equal(t, []string{"independent page"}, messageContents(t, reopened, thread+suffix))
-			}
-		})
-	}
-}
-
 func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		originalPresent bool
-		renamedFile     bool
-		version         int
-		missing         bool
-		trash           bool
-		snapshot        bool
-		matchingRoot    bool
-		page            bool
-		occupied        bool
-		compression     string
-		returning       string
+		name                                                             string
+		originalPresent, correctedMissing, trash, twoRows, sharedPinText bool
+		version                                                          int
 	}{
-		{name: "plain_to_compressed", originalPresent: true, compression: "compress", version: 135},
-		{name: "compressed_to_plain", originalPresent: true, compression: "decompress", version: 135},
-		{name: "trash_noncanonical_compressed", originalPresent: true, renamedFile: true, trash: true, compression: "compress", version: 135},
-		{name: "trash_noncanonical_decompressed", originalPresent: true, renamedFile: true, trash: true, compression: "decompress", version: 135},
-		{name: "trash_occupied_destination", originalPresent: true, trash: true, missing: true, occupied: true, version: 135},
-		{name: "original_present", originalPresent: true, version: 134},
-		{name: "original_absent", version: 134},
-		{name: "noncanonical_filename", originalPresent: true, renamedFile: true, version: 134},
-		{name: "version_135", version: 135},
-		{name: "corrected_source_missing", originalPresent: true, missing: true, version: 135},
-		{name: "returning_plain", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "plain"},
-		{name: "returning_compressed", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "compressed"},
-		{name: "returning_source_missing", originalPresent: true, renamedFile: true, missing: true, version: 135, returning: "source_missing"},
-		{name: "missing_noncanonical_source", originalPresent: true, renamedFile: true, missing: true, version: 135},
-		{name: "missing_misfiled_page", originalPresent: true, page: true, missing: true, version: 135},
-		{name: "missing_page_destination_owned", originalPresent: true, page: true, missing: true, occupied: true, version: 135},
-		{name: "both_sources_missing", missing: true, version: 135},
-		{name: "both_noncanonical_sources_missing", missing: true, renamedFile: true, version: 135},
+		{name: "original_present", originalPresent: true, version: 135},
+		{name: "original_absent", version: 135},
+		{name: "corrected_source_missing", originalPresent: true, correctedMissing: true, version: 135},
+		{name: "version_136", originalPresent: true, correctedMissing: true, version: 136},
+		{name: "both_missing", correctedMissing: true, version: 135},
+		{name: "two_rows_one_target", originalPresent: true, correctedMissing: true, twoRows: true, version: 135},
 		{name: "trash", originalPresent: true, trash: true, version: 135},
-		{name: "trash_noncanonical", originalPresent: true, renamedFile: true, trash: true, version: 135},
-		{name: "trash_missing_source", originalPresent: true, missing: true, trash: true, version: 135},
-		{name: "foreign_project_snapshot", originalPresent: true, snapshot: true, version: 135},
-		{name: "matching_project_snapshot", originalPresent: true, snapshot: true, matchingRoot: true, version: 135},
+		{name: "pin_matches_live", originalPresent: true, correctedMissing: true, sharedPinText: true, version: 135},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, pathA, pathB := writeCodexIdentityRollouts(t)
-			contentA, err := os.ReadFile(pathA)
-			require.NoError(t, err)
-			correctedID := "codex:" + identityThreadB
-			if tc.page {
-				const suffix = "_33333333-3333-7333-8333-333333333333"
-				pagePath := strings.TrimSuffix(pathB, ".jsonl") + suffix + ".jsonl"
-				require.NoError(t, os.Rename(pathB, pagePath))
-				pathB = pagePath
-				correctedID += suffix
-			}
-			if tc.renamedFile {
-				restored := filepath.Join(filepath.Dir(pathB), "rollout-restored.jsonl")
-				require.NoError(t, os.Rename(pathB, restored))
-				pathB = restored
-			}
 			if !tc.originalPresent {
 				require.NoError(t, os.Remove(pathA))
 			}
-			var correctedRoot string
-			if tc.snapshot {
-				correctedRoot = t.TempDir()
-				require.NoError(t, os.Mkdir(filepath.Join(correctedRoot, ".git"), 0o700))
-				require.NoError(t, os.WriteFile(filepath.Join(correctedRoot, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/project-b.git\n"), 0o600))
-				require.NoError(t, os.WriteFile(filepath.Join(correctedRoot, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600))
-				content, err := os.ReadFile(pathB)
-				require.NoError(t, err)
-				// JSON-escape the fixture cwd on Windows too.
-				cwdJSON := fmt.Sprintf("%q", filepath.ToSlash(correctedRoot))
-				require.NoError(t, os.WriteFile(pathB, []byte(strings.ReplaceAll(string(content), `"/work/project-b"`, cwdJSON)), 0o600))
-			}
-			contentB, err := os.ReadFile(pathB)
-			require.NoError(t, err)
-			if tc.missing {
+			if tc.correctedMissing {
 				require.NoError(t, os.Remove(pathB))
 			}
-			if tc.missing && !tc.originalPresent {
-				writeCodexRollout(t, root, "02", "rollout-unrelated.jsonl", testjsonl.JoinJSONL(
-					testjsonl.CodexSessionMetaJSON("unrelated", "/work/other", "codex_cli_rs", "2025-10-20T19:00:00Z"),
-					testjsonl.CodexMsgJSON("user", "unrelated", "2025-10-20T19:00:01Z")))
-			}
-			if tc.compression == "decompress" || tc.returning == "plain" {
-				pathB += ".zst"
-			}
 			database := openTestDB(t)
-			// Earlier versions could store B's transcript as A and lose A's full history.
 			const legacyID = "codex:" + identityThreadA
+			const correctedID = "codex:" + identityThreadB
+			archived := []string{"other question"}
+			if tc.twoRows {
+				archived = append(archived, "archived answer")
+			}
+			if tc.sharedPinText {
+				archived = append(archived, "first question")
+			}
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: legacyID, Agent: "codex", Project: "project-a", Machine: "local", FilePath: &pathB,
-				DataVersion: tc.version, MessageCount: 1, UserMessageCount: 1,
+				DataVersion: tc.version, MessageCount: len(archived), UserMessageCount: 1,
 			}))
-			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: legacyID, Role: "user", Content: "other question"}}))
-			name, note := "Saved conversation", "Keep this question"
-			require.NoError(t, database.RenameSession(t.Context(), legacyID, &name))
-			_, err = database.StarSession(t.Context(), legacyID)
+			var messages []db.Message
+			for ordinal, content := range archived {
+				messages = append(messages, db.Message{SessionID: legacyID, Ordinal: ordinal, Role: "user", Content: content})
+			}
+			require.NoError(t, database.InsertMessages(t.Context(), messages))
+			stored, err := database.GetAllMessages(t.Context(), legacyID)
 			require.NoError(t, err)
-			_, err = database.SetSessionLabels(t.Context(), legacyID, []string{"saved", "topic"})
-			require.NoError(t, err)
-			_, err = database.AssignSessionProject(t.Context(), legacyID, "chosen")
-			require.NoError(t, err)
-			messages, err := database.GetAllMessages(t.Context(), legacyID)
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			_, err = database.PinMessage(t.Context(), legacyID, messages[0].ID, &note)
-			require.NoError(t, err)
+			require.Len(t, stored, len(archived))
+			if tc.correctedMissing {
+				_, err = database.PinMessage(t.Context(), legacyID, stored[len(stored)-1].ID, new("saved note"))
+				require.NoError(t, err)
+			}
 			if tc.trash {
 				require.NoError(t, database.SoftDeleteSession(t.Context(), legacyID))
 			}
-			if tc.snapshot {
-				historicalRoot := "/work/project-a"
-				if tc.matchingRoot {
-					historicalRoot = correctedRoot
-				}
-				require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(t.Context(), export.ProjectIdentityObservation{
-					SessionID: legacyID, Project: "project-a", Machine: "local", RootPath: historicalRoot,
-					GitRemote: "https://example.com/team/project-a.git", RemoteResolution: export.ProjectResolutionResolved,
-					ObservedAt: time.Date(2025, 10, 20, 19, 0, 0, 0, time.UTC),
-				}, "project-a"))
+			const threadC = "33333333-3333-7333-8333-333333333333"
+			if tc.twoRows {
+				writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-10-00-"+threadC+".jsonl", testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaJSON(threadC, "/work/project-c", "codex_cli_rs", "2025-10-20T19:10:00Z"),
+					testjsonl.CodexMsgJSON("user", "third question", "2025-10-20T19:10:00Z"),
+				))
+				movedB := filepath.Join(root, "archived_sessions", filepath.Base(pathB))
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+					ID: "codex:" + threadC, Agent: "codex", Project: "project-c", Machine: "local", FilePath: &movedB,
+					DataVersion: tc.version, MessageCount: 1,
+				}))
+				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:" + threadC, Role: "user", Content: "shorter copy"}}))
 			}
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "retained", Agent: "gemini", Project: "sample", Machine: "local", MessageCount: 1,
 			}))
 			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "retained", Role: "user", Content: "Only stored in the archive"}}))
-			_, err = database.SetSessionExternalParent(t.Context(), legacyID, "retained")
-			require.NoError(t, err)
-			if tc.occupied {
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: correctedID, Agent: "codex", Project: "sample", Machine: "local", MessageCount: 1}))
-				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: correctedID, Role: "user", Content: "independent archive"}}))
-			}
-			if tc.missing && tc.renamedFile && !tc.originalPresent {
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "child", Agent: "gemini", Project: "sample", Machine: "local"}))
-				_, err = database.SetSessionExternalParent(t.Context(), "child", legacyID)
-				require.NoError(t, err)
-			}
-			if tc.compression == "compress" {
-				require.NoError(t, os.Remove(pathB))
-				require.NoError(t, os.WriteFile(pathB+".zst", zstdCompressString(t, string(contentB)), 0o600))
-			}
-			reopened, engine := rebuildCodexIdentityArchive(t, database, root, tc.version)
-			if tc.compression != "" {
-				if !tc.trash {
-					oldIDs, err := reopened.ListSessionIDsByFilePath(t.Context(), pathB, "codex")
-					require.NoError(t, err)
-					assert.Equal(t, []string{correctedID}, oldIDs, "both representations must resolve to one corrected source")
-				}
-				if tc.compression == "compress" {
-					pathB += ".zst"
-				} else {
-					pathB = strings.TrimSuffix(pathB, ".zst")
-				}
-			}
-			if tc.occupied {
-				assert.Equal(t, []string{"independent archive"}, messageContents(t, reopened, correctedID))
-			}
-			if tc.missing && tc.occupied && tc.trash {
-				correctedID = parser.AltSessionID(legacyID, pathB)
-			} else if tc.missing && (tc.renamedFile || tc.occupied) {
-				ids, err := reopened.ListSessionIDsByFilePath(t.Context(), pathB, "codex")
-				require.NoError(t, err)
-				require.Len(t, ids, 1, "retain the archived transcript even without its canonical identity")
-				correctedID = ids[0]
-				assert.NotEqual(t, legacyID, correctedID)
-			}
+			reopened, _ := rebuildCodexIdentityArchive(t, database, root, tc.version)
+			assert.Equal(t, []string{"Only stored in the archive"}, messageContents(t, reopened, "retained"))
 			if tc.trash {
-				require.True(t, reopened.IsSessionTrashed(t.Context(), correctedID))
-			}
-			if tc.trash && !tc.occupied {
-				_, err = reopened.RestoreSession(t.Context(), correctedID)
+				assert.True(t, reopened.IsSessionTrashed(t.Context(), legacyID))
+				assert.Equal(t, archived, messageContents(t, reopened, legacyID))
+				absent, err := reopened.GetSession(t.Context(), correctedID)
 				require.NoError(t, err)
-				if tc.missing {
-					require.NoError(t, os.WriteFile(pathB, contentB, 0o600))
-				}
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
+				assert.Nil(t, absent)
+				return
 			}
 			if tc.originalPresent {
-				assert.False(t, reopened.IsSessionTrashed(t.Context(), legacyID))
 				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
 				assert.Equal(t, pathA, reopened.GetSessionFilePath(t.Context(), legacyID))
-				original, err := reopened.GetSession(t.Context(), legacyID)
-				require.NoError(t, err)
-				require.NotNil(t, original)
-				assert.Empty(t, original.Labels)
-				assert.False(t, original.ProjectAssigned)
-				assert.Nil(t, original.ParentSessionID)
-				if tc.trash {
-					original, err := reopened.GetSession(t.Context(), legacyID)
-					require.NoError(t, err)
-					require.NotNil(t, original)
-					assert.Nil(t, original.DisplayName)
-				}
-			} else {
+			} else if !tc.correctedMissing {
 				stale, err := reopened.GetSession(t.Context(), legacyID)
 				require.NoError(t, err)
-				assert.Nil(t, stale, "B's misfiled transcript must not also survive under A")
+				assert.Nil(t, stale)
 			}
-			assert.Equal(t, []string{"other question"}, messageContents(t, reopened, correctedID))
-			assert.Equal(t, []string{"Only stored in the archive"}, messageContents(t, reopened, "retained"))
-			assert.Equal(t, pathB, reopened.GetSessionFilePath(t.Context(), correctedID))
-			if tc.trash && tc.occupied {
-				_, err := reopened.RestoreSession(t.Context(), correctedID)
+			if !tc.originalPresent && tc.correctedMissing {
+				assert.Equal(t, archived, messageContents(t, reopened, legacyID))
+				assert.Equal(t, pathB, reopened.GetSessionFilePath(t.Context(), legacyID))
+				absent, err := reopened.GetSession(t.Context(), correctedID)
 				require.NoError(t, err)
-			}
-			pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
-			require.NoError(t, err)
-			require.Len(t, pins, 1)
-			assert.Equal(t, correctedID, pins[0].SessionID)
-			assert.Equal(t, &note, pins[0].Note)
-			corrected, err := reopened.GetAllMessages(t.Context(), correctedID)
-			require.NoError(t, err)
-			require.Len(t, corrected, 1)
-			assert.Equal(t, corrected[0].ID, pins[0].MessageID)
-			curatedID := correctedID
-			curated, err := reopened.GetSession(t.Context(), curatedID)
-			require.NoError(t, err)
-			require.NotNil(t, curated)
-			assert.Equal(t, &name, curated.DisplayName)
-			assert.Equal(t, []string{"saved", "topic"}, curated.Labels)
-			assert.Equal(t, "chosen", curated.Project)
-			assert.True(t, curated.ProjectAssigned)
-			parent, err := reopened.GetSessionExternalParent(t.Context(), curatedID)
-			require.NoError(t, err)
-			assert.Equal(t, "retained", parent.ParentSessionID)
-			if !tc.page {
-				assert.True(t, parent.Applied)
-			}
-			stars, err := reopened.ListStarredSessionIDs(t.Context())
-			require.NoError(t, err)
-			assert.Equal(t, []string{curatedID}, stars)
-
-			if tc.missing && tc.renamedFile {
-				if !tc.originalPresent {
-					child, err := reopened.GetSessionExternalParent(t.Context(), "child")
+				assert.Nil(t, absent)
+			} else {
+				assert.Equal(t, archived, messageContents(t, reopened, correctedID))
+				corrected, err := reopened.GetSession(t.Context(), correctedID)
+				require.NoError(t, err)
+				require.NotNil(t, corrected)
+				assert.Equal(t, pathB, reopened.GetSessionFilePath(t.Context(), correctedID))
+				assert.Nil(t, corrected.ParentSessionID)
+				assert.Nil(t, corrected.ParserParentSessionID)
+				assert.Empty(t, corrected.RelationshipType)
+				if tc.correctedMissing {
+					pins, err := reopened.ListPinnedMessages(t.Context(), "", "")
 					require.NoError(t, err)
-					assert.Equal(t, correctedID, child.ParentSessionID)
-					assert.True(t, child.Applied)
-					returnedA := filepath.Join(filepath.Dir(pathA), "rollout-original-returned.jsonl")
-					require.NoError(t, os.WriteFile(returnedA, contentA, 0o600))
-					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{returnedA}))
-					assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
-					assert.Equal(t, []string{"other question"}, messageContents(t, reopened, correctedID))
-					child, err = reopened.GetSessionExternalParent(t.Context(), "child")
-					require.NoError(t, err)
-					assert.Equal(t, correctedID, child.ParentSessionID)
-					assert.True(t, child.Applied)
-				}
-				engine.Close()
-				again, againEngine := rebuildCodexIdentityArchive(t, reopened, root, tc.version)
-				assert.Equal(t, []string{"other question"}, messageContents(t, again, correctedID))
-				retainedPins, err := again.ListPinnedMessages(t.Context(), "", "")
-				require.NoError(t, err)
-				require.Len(t, retainedPins, 1)
-				assert.Equal(t, correctedID, retainedPins[0].SessionID)
-				// Curation made on the retained alternative belongs to this
-				// source even after its canonical identity becomes readable.
-				recoveredName := "Recovered conversation"
-				require.NoError(t, again.RenameSession(t.Context(), correctedID, &recoveredName))
-				_, err = again.StarSession(t.Context(), correctedID)
-				require.NoError(t, err)
-				window, err := again.BuildRecallEvidenceWindow(t.Context(), correctedID, 0, 0)
-				require.NoError(t, err)
-				bound, err := window.BindSelection(db.RecallEvidenceSelection{MessageStartOrdinal: 0, MessageEndOrdinal: 0})
-				require.NoError(t, err)
-				_, err = again.InsertRecallEntry(t.Context(), db.RecallEntry{
-					ID: "saved-recall", Type: "fact", Scope: "project", Title: "Saved fact", Body: "A reviewed fact.",
-					SourceSessionID: correctedID, ProvenanceOK: true, ReviewState: "human_reviewed",
-					Evidence: []db.RecallEvidence{{SessionID: correctedID, ContentDigest: bound.ContentDigest}},
-				})
-				require.NoError(t, err)
-				if tc.returning == "source_missing" {
-					require.NoError(t, again.BaselineActiveSessionSourcePaths(t.Context(), "local", []db.SessionSourcePath{{Agent: "codex", FilePath: pathB}}))
-					changed, err := again.MarkSessionSourceMissing(t.Context(), "local", "codex", correctedID, pathB)
-					require.NoError(t, err)
-					require.True(t, changed)
-				}
-				if tc.returning == "plain" {
-					pathB = strings.TrimSuffix(pathB, ".zst")
-				}
-				if tc.returning == "compressed" {
-					pathB += ".zst"
-					contentB = zstdCompressString(t, string(contentB))
-				}
-				require.NoError(t, os.WriteFile(pathB, contentB, 0o600))
-				require.NoError(t, againEngine.SyncPathsContext(t.Context(), []string{pathB}))
-				retainedPins, err = again.ListPinnedMessages(t.Context(), "", "")
-				require.NoError(t, err)
-				require.Len(t, retainedPins, 1)
-				assert.Equal(t, "codex:"+identityThreadB, retainedPins[0].SessionID)
-				assert.Equal(t, &note, retainedPins[0].Note)
-				recovered, err := again.GetSession(t.Context(), "codex:"+identityThreadB)
-				require.NoError(t, err)
-				require.NotNil(t, recovered)
-				assert.Equal(t, &recoveredName, recovered.DisplayName)
-				stars, err := again.ListStarredSessionIDs(t.Context())
-				require.NoError(t, err)
-				assert.Contains(t, stars, "codex:"+identityThreadB)
-				alternative, err := again.GetSession(t.Context(), correctedID)
-				require.NoError(t, err)
-				assert.Nil(t, alternative)
-				entry, err := again.GetRecallEntry(t.Context(), "saved-recall")
-				require.NoError(t, err)
-				require.NotNil(t, entry)
-				assert.Equal(t, "codex:"+identityThreadB, entry.SourceSessionID)
-				assert.Equal(t, "human_reviewed", entry.ReviewState)
-				assert.True(t, entry.ProvenanceOK)
-				require.Len(t, entry.Evidence, 1)
-				assert.Equal(t, "codex:"+identityThreadB, entry.Evidence[0].SessionID)
-				if !tc.originalPresent {
-					child, err := again.GetSessionExternalParent(t.Context(), "child")
-					require.NoError(t, err)
-					assert.Equal(t, "codex:"+identityThreadB, child.ParentSessionID)
-					assert.True(t, child.Applied)
+					require.Len(t, pins, 1)
+					assert.Equal(t, correctedID, pins[0].SessionID)
+					assert.Equal(t, new("saved note"), pins[0].Note)
+					assert.Equal(t, new(archived[len(archived)-1]), pins[0].Content)
 				}
 			}
-			if tc.snapshot {
-				snapshots, err := reopened.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{correctedID})
-				require.NoError(t, err)
-				require.Contains(t, snapshots, correctedID)
-				assert.Equal(t, correctedRoot, snapshots[correctedID].RootPath)
-				expectedRemote := "https://example.com/team/project-b.git"
-				if tc.matchingRoot {
-					expectedRemote = "https://example.com/team/project-a.git"
-				}
-				assert.Equal(t, expectedRemote, snapshots[correctedID].GitRemote)
+			if tc.twoRows {
+				assert.Equal(t, []string{"third question"}, messageContents(t, reopened, "codex:"+threadC))
 			}
 		})
 	}
@@ -592,24 +198,15 @@ func TestCodexForeignMetadataUpgradeRepairsMisfiledSession(t *testing.T) {
 
 func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 	for _, tc := range []struct {
-		missing bool
-		version int
-		renamed bool
+		name                    string
+		missing, archivedTarget bool
 	}{
-		{false, 134, false},
-		{true, 134, false},
-		{false, 135, false},
-		{true, 135, false},
-		{false, 135, true},
-		{true, 135, true},
+		{name: "present"},
+		{name: "missing", missing: true},
+		{name: "archived_target", missing: true, archivedTarget: true},
 	} {
-		t.Run(fmt.Sprintf("version=%d/missing=%t/renamed=%t", tc.version, tc.missing, tc.renamed), func(t *testing.T) {
-			root, pathA, pathB := writeCodexIdentityRollouts(t)
-			if tc.renamed {
-				renamed := filepath.Join(filepath.Dir(pathB), "rollout-restored.jsonl")
-				require.NoError(t, os.Rename(pathB, renamed))
-				pathB = renamed
-			}
+		t.Run(tc.name, func(t *testing.T) {
+			root, _, pathB := writeCodexIdentityRollouts(t)
 			content, err := os.ReadFile(pathB)
 			require.NoError(t, err)
 			if tc.missing {
@@ -619,38 +216,52 @@ func TestCodexForeignMetadataUpgradePreservesPermanentDeletion(t *testing.T) {
 			const legacyID = "codex:" + identityThreadA
 			const correctedID = "codex:" + identityThreadB
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: legacyID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB,
-				DataVersion: tc.version, MessageCount: 1,
+				ID: legacyID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB, DataVersion: 135, MessageCount: 1,
 			}))
-			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
-				{SessionID: legacyID, Role: "user", Content: "other question"},
-			}))
+			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: legacyID, Role: "user", Content: "other question"}}))
 			require.NoError(t, database.DeleteSession(t.Context(), legacyID))
-			reopened, engine := rebuildCodexIdentityArchive(t, database, root, tc.version)
+			if tc.archivedTarget {
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+					ID: correctedID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB, DataVersion: 135, MessageCount: 1,
+				}))
+				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: correctedID, Role: "user", Content: "independent archived thread"}}))
+			}
+			reopened, engine := rebuildCodexIdentityArchive(t, database, root, 135)
+			assert.True(t, reopened.IsSessionExcluded(t.Context(), legacyID))
+			absent, err := reopened.GetSession(t.Context(), legacyID)
+			require.NoError(t, err)
+			assert.Nil(t, absent)
+			if tc.archivedTarget {
+				assert.False(t, reopened.IsSessionExcluded(t.Context(), correctedID))
+				assert.Equal(t, []string{"independent archived thread"}, messageContents(t, reopened, correctedID))
+				return
+			}
+			assert.True(t, reopened.IsSessionExcluded(t.Context(), correctedID))
+			absent, err = reopened.GetSession(t.Context(), correctedID)
+			require.NoError(t, err)
+			assert.Nil(t, absent)
+			movedB := filepath.Join(root, "archived_sessions", filepath.Base(pathB))
+			require.NoError(t, os.MkdirAll(filepath.Dir(movedB), 0o700))
+			require.NoError(t, os.WriteFile(movedB, content, 0o600))
 			if !tc.missing {
-				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
+				require.NoError(t, os.Remove(pathB))
 			}
-			excludedPath, err := reopened.HasExcludedCodexSource(t.Context(), pathB, "codex")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{movedB}))
+			absent, err = reopened.GetSession(t.Context(), correctedID)
 			require.NoError(t, err)
-			assert.True(t, excludedPath, "the deleted source stays excluded")
-			deleted, err := reopened.GetSession(t.Context(), correctedID)
-			require.NoError(t, err)
-			assert.Nil(t, deleted)
-			if tc.missing {
-				require.NoError(t, os.WriteFile(pathB, content, 0o600))
-			}
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
-			deleted, err = reopened.GetSession(t.Context(), correctedID)
-			require.NoError(t, err)
-			assert.Nil(t, deleted, "a later sync must not resurrect the deleted transcript")
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathA}))
-			assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, reopened, legacyID))
+			assert.Nil(t, absent, "moving a deleted rollout must keep it excluded")
 		})
 	}
 }
 
 func rebuildCodexIdentityArchive(t *testing.T, database *db.DB, root string, version int) (*db.DB, *Engine) {
 	t.Helper()
+	// A fresh unrelated source allows a rebuild when both affected files are gone.
+	const controlID = "44444444-4444-7444-8444-444444444444"
+	writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-20-00-"+controlID+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(controlID, "/work/control", "codex_cli_rs", "2025-10-20T19:20:00Z"),
+		testjsonl.CodexMsgJSON("user", "control question", "2025-10-20T19:20:00Z"),
+	))
 	path := database.Path()
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
@@ -674,271 +285,4 @@ func rebuildCodexIdentityArchive(t *testing.T, database *db.DB, root string, ver
 	require.True(t, stats.ArchiveRebuilt)
 	assert.False(t, reopened.NeedsResync())
 	return reopened, engine
-}
-
-func TestCodexIdentityDeletionDoesNotTrustFilename(t *testing.T) {
-	for _, tc := range []struct{ missing, corrected bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
-		missing := tc.missing
-		t.Run(fmt.Sprintf("deleted_source_missing=%t/corrected=%t", missing, tc.corrected), func(t *testing.T) {
-			root, pathA, pathB := writeCodexIdentityRollouts(t)
-			// A renamed export can name B while its first metadata still owns A.
-			contentPath := pathA
-			if tc.corrected {
-				contentPath = pathB
-			}
-			content, err := os.ReadFile(contentPath)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(pathB, content, 0o600))
-			if missing {
-				require.NoError(t, os.Remove(pathB))
-			}
-			database := openTestDB(t)
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: "codex:" + identityThreadA, Agent: "codex", Project: "sample", Machine: "local", FilePath: &pathB,
-			}))
-			require.NoError(t, database.DeleteSession(t.Context(), "codex:"+identityThreadA))
-			writeCodexRollout(t, root, "02", "rollout-unrelated.jsonl", testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON("unrelated", "/work/other", "codex_cli_rs", "2025-10-20T19:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "unrelated", "2025-10-20T19:00:01Z")))
-			// B's independent transcript exists only in the archive.
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: "codex:" + identityThreadB, Agent: "codex", Project: "sample", Machine: "local", MessageCount: 1,
-			}))
-			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:" + identityThreadB, Role: "user", Content: "Unrelated archived history"}}))
-			reopened, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-			assert.False(t, reopened.IsSessionExcluded(t.Context(), "codex:"+identityThreadB))
-			assert.Equal(t, []string{"Unrelated archived history"}, messageContents(t, reopened, "codex:"+identityThreadB))
-			if missing {
-				require.NoError(t, os.WriteFile(pathB, content, 0o600))
-			}
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{pathB}))
-			assert.Equal(t, []string{"Unrelated archived history"}, messageContents(t, reopened, "codex:"+identityThreadB))
-		})
-	}
-}
-
-func TestCodexDeletedSourceChangesCompressionDuringUpgrade(t *testing.T) {
-	for _, compressedFirst := range []bool{false, true} {
-		for _, returnsLater := range []bool{false, true} {
-			t.Run(fmt.Sprintf("compressed_first=%t/returns_later=%t", compressedFirst, returnsLater), func(t *testing.T) {
-				root, original, plain := writeCodexIdentityRollouts(t)
-				raw, err := os.ReadFile(plain)
-				require.NoError(t, err)
-				compressed := plain + ".zst"
-				oldPath, newPath := plain, compressed
-				newContent := zstdCompressString(t, string(raw))
-				if compressedFirst {
-					oldPath, newPath, newContent = compressed, plain, raw
-				}
-				database := openTestDB(t)
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:" + identityThreadA, Agent: "codex", Project: "sample", Machine: "local", FilePath: &oldPath}))
-				require.NoError(t, database.DeleteSession(t.Context(), "codex:"+identityThreadA))
-				require.NoError(t, os.Remove(plain))
-				if !returnsLater {
-					require.NoError(t, os.WriteFile(newPath, newContent, 0o600))
-				}
-				rebuilt, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-				if returnsLater {
-					require.NoError(t, os.WriteFile(newPath, newContent, 0o600))
-				}
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{newPath}))
-				restored, err := rebuilt.GetSessionFull(t.Context(), "codex:"+identityThreadB)
-				require.NoError(t, err)
-				assert.Nil(t, restored)
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{original}))
-				assert.Equal(t, []string{"first question", "first answer", "second question", "second answer"}, messageContents(t, rebuilt, "codex:"+identityThreadA))
-				excluded, err := rebuilt.HasExcludedCodexSource(t.Context(), newPath, "codex")
-				require.NoError(t, err)
-				assert.True(t, excluded)
-			})
-		}
-	}
-}
-
-func TestCodexCanonicalTrashedLegacyPageSurvivesUpgrade(t *testing.T) {
-	root := t.TempDir()
-	const rollout = "33333333-3333-7333-8333-333333333333"
-	const pageID = "codex:" + identityThreadB + "_" + rollout
-	path := writeCodexRollout(t, root, "01", "rollout-2025-10-20T12-00-00-"+identityThreadB+"_"+rollout+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(rollout, "/work/sample", "codex_cli_rs", "2025-10-20T19:00:00Z", map[string]any{"session_id": identityThreadB}),
-		testjsonl.CodexMsgJSON("user", "archived page", "2025-10-20T19:00:00Z")))
-	database := openTestDB(t)
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: pageID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135, MessageCount: 1}))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: pageID, Role: "user", Content: "archived page"}}))
-	messages, err := database.GetAllMessages(t.Context(), pageID)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	_, err = database.PinMessage(t.Context(), pageID, messages[0].ID, new("saved note"))
-	require.NoError(t, err)
-	require.NoError(t, database.SoftDeleteSession(t.Context(), pageID))
-	// Keep discovery nonempty while the page is suppressed as trash.
-	writeCodexRollout(t, root, "02", "rollout-other.jsonl", testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON("other", "/work/sample", "codex_cli_rs", "2025-10-20T19:00:00Z"), testjsonl.CodexMsgJSON("user", "other", "2025-10-20T19:00:00Z")))
-	rebuilt, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-	assert.True(t, rebuilt.IsSessionTrashed(t.Context(), pageID), "already-canonical trash must keep its page identity")
-	_, err = rebuilt.RestoreSession(t.Context(), pageID)
-	require.NoError(t, err)
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
-	pins, err := rebuilt.ListPinnedMessages(t.Context(), "", "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, pageID, pins[0].SessionID)
-	assert.Equal(t, new("saved note"), pins[0].Note)
-	assert.Equal(t, []string{"archived page"}, messageContents(t, rebuilt, pageID))
-}
-
-func TestCodexConnectedIdentityCorrections(t *testing.T) {
-	for _, tc := range []struct{ cycle, trash bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
-		t.Run(fmt.Sprintf("cycle=%t/trash=%t", tc.cycle, tc.trash), func(t *testing.T) {
-			ctx := t.Context()
-			root, pathA, pathB := writeCodexIdentityRollouts(t)
-			const threadC = "33333333-3333-7333-8333-333333333333"
-			pathC := writeCodexRollout(t, root, "02", "rollout-2025-10-20T13-00-00-"+threadC+".jsonl", testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(threadC, "/work/project-c", "codex_cli_rs", "2025-10-20T19:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "third question", "2025-10-20T19:00:00Z")))
-			database := openTestDB(t)
-			secondPath, secondContent, secondID := pathC, "third question", "codex:"+threadC
-			if tc.cycle {
-				secondPath, secondContent, secondID = pathA, "first question", "codex:"+identityThreadA
-			}
-			for _, old := range []struct{ id, path, content, note string }{
-				{"codex:" + identityThreadA, pathB, "other question", "note B"},
-				{"codex:" + identityThreadB, secondPath, secondContent, "note next"},
-			} {
-				require.NoError(t, database.UpsertSession(ctx, db.Session{ID: old.id, Agent: "codex", Project: "sample", Machine: "local", FilePath: &old.path, DataVersion: 135, MessageCount: 1}))
-				require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: old.id, Role: "user", Content: old.content}}))
-				messages, err := database.GetAllMessages(ctx, old.id)
-				require.NoError(t, err)
-				require.Len(t, messages, 1)
-				_, err = database.PinMessage(ctx, old.id, messages[0].ID, &old.note)
-				require.NoError(t, err)
-			}
-			const oldID = "codex:" + identityThreadA
-			if tc.trash {
-				require.NoError(t, database.RenameSession(ctx, oldID, new("Saved B")))
-				_, err := database.SetSessionLabels(ctx, oldID, []string{"saved-b"})
-				require.NoError(t, err)
-				require.NoError(t, database.SoftDeleteSession(ctx, oldID))
-			}
-			rebuilt, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-			if tc.trash {
-				retainedID := parser.AltSessionID(oldID, pathB)
-				require.True(t, rebuilt.IsSessionTrashed(ctx, retainedID))
-				_, err := rebuilt.RestoreSession(ctx, retainedID)
-				require.NoError(t, err)
-				saved, err := rebuilt.GetSession(ctx, retainedID)
-				require.NoError(t, err)
-				require.NotNil(t, saved)
-				assert.Equal(t, new("Saved B"), saved.DisplayName)
-				assert.Equal(t, []string{"saved-b"}, saved.Labels)
-				require.Zero(t, engine.SyncAllForceParse(ctx, nil).Failed)
-			}
-			for _, source := range []struct{ path, id string }{{pathA, "codex:" + identityThreadA}, {pathB, "codex:" + identityThreadB}, {pathC, "codex:" + threadC}} {
-				ids, err := rebuilt.ListSessionIDsByFilePath(ctx, source.path, "codex")
-				require.NoError(t, err)
-				assert.Equal(t, []string{source.id}, ids, "a freshly parsed source must have only its canonical identity")
-				corrected, err := rebuilt.CorrectedCodexSessionID(ctx, "codex:old", source.path, "codex")
-				require.NoError(t, err)
-				assert.Equal(t, source.id, corrected, "remote curation must have an unambiguous target")
-			}
-			pins, err := rebuilt.ListPinnedMessages(ctx, "", "")
-			require.NoError(t, err)
-			notes := map[string]string{}
-			for _, pin := range pins {
-				if pin.Note != nil {
-					notes[pin.SessionID] = *pin.Note
-				}
-			}
-			assert.Equal(t, map[string]string{"codex:" + identityThreadB: "note B", secondID: "note next"}, notes)
-		})
-	}
-}
-
-func TestCodexTrashedAlternativeSurvivesCompressionChange(t *testing.T) {
-	for _, compressedFirst := range []bool{false, true} {
-		t.Run(fmt.Sprintf("compressed_first=%t", compressedFirst), func(t *testing.T) {
-			ctx := t.Context()
-			root, _, source := writeCodexIdentityRollouts(t)
-			content, err := os.ReadFile(source)
-			require.NoError(t, err)
-			require.NoError(t, os.Remove(source))
-			path := filepath.Join(filepath.Dir(source), "rollout-restored.jsonl")
-			returnPath := path + ".zst"
-			returnContent := zstdCompressString(t, string(content))
-			if compressedFirst {
-				path, returnPath = returnPath, path
-				returnContent = content
-			}
-			database := openTestDB(t)
-			const oldID = "codex:" + identityThreadA
-			require.NoError(t, database.UpsertSession(ctx, db.Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135, MessageCount: 1}))
-			require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: oldID, Role: "user", Content: "other question"}}))
-			rebuilt, engine := rebuildCodexIdentityArchive(t, database, root, 135)
-			ids, err := rebuilt.ListSessionIDsByFilePath(ctx, path, "codex")
-			require.NoError(t, err)
-			require.Len(t, ids, 1)
-			alternative := ids[0]
-			require.NotEqual(t, oldID, alternative)
-			require.NoError(t, rebuilt.SoftDeleteSession(ctx, alternative))
-			require.NoError(t, os.WriteFile(returnPath, returnContent, 0o600))
-			require.NoError(t, engine.SyncPathsContext(ctx, []string{returnPath}))
-			canonical, err := rebuilt.GetSession(ctx, "codex:"+identityThreadB)
-			require.NoError(t, err)
-			assert.Nil(t, canonical, "returning the same trashed source must not publish an active conversation")
-			assert.True(t, rebuilt.IsSessionTrashed(ctx, alternative))
-			_, err = rebuilt.RestoreSession(ctx, alternative)
-			require.NoError(t, err)
-			require.NoError(t, engine.SyncPathsContext(ctx, []string{returnPath}))
-			assert.Equal(t, []string{"other question"}, messageContents(t, rebuilt, "codex:"+identityThreadB))
-		})
-	}
-}
-
-func TestCodexRecoveryDoesNotBlockGrowingOrDistinctSource(t *testing.T) {
-	for _, distinct := range []bool{false, true} {
-		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
-			root := t.TempDir()
-			const ts = "2025-10-20T19:00:00Z"
-			first := "saved question"
-			if distinct {
-				first = "different question"
-			}
-			path := writeCodexRollout(t, root, "01", "rollout-restored.jsonl", testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(identityThreadB, "/work/sample", "codex_cli_rs", ts),
-				testjsonl.CodexMsgJSON("user", first, ts),
-				testjsonl.CodexMsgJSON("user", "later question", ts)))
-			database := openTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			oldID := parser.AltSessionID("codex:"+identityThreadA, path)
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, MessageCount: 1}))
-			// Retained data has the same message metadata as the original parse.
-			messages, err := database.GetAllMessages(t.Context(), "codex:"+identityThreadB)
-			require.NoError(t, err)
-			require.Len(t, messages, 2)
-			messages[0].ID, messages[0].SessionID, messages[0].Content = 0, oldID, "saved question"
-			require.NoError(t, database.InsertMessages(t.Context(), messages[:1]))
-			stored, err := database.GetAllMessages(t.Context(), oldID)
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
-			_, err = database.PinMessage(t.Context(), oldID, stored[0].ID, new("saved note"))
-			require.NoError(t, err)
-			for range 2 {
-				require.Zero(t, engine.SyncAllForceParse(t.Context(), nil).Failed)
-			}
-			assert.Equal(t, []string{first, "later question"}, messageContents(t, database, "codex:"+identityThreadB))
-			pins, err := database.ListPinnedMessages(t.Context(), "", "")
-			require.NoError(t, err)
-			require.Len(t, pins, 1)
-			wantID := "codex:" + identityThreadB
-			if distinct {
-				wantID = oldID
-				assert.Equal(t, []string{"saved question"}, messageContents(t, database, oldID))
-			} else {
-				assert.Empty(t, messageContents(t, database, oldID))
-			}
-			assert.Equal(t, wantID, pins[0].SessionID)
-			assert.Equal(t, new("saved note"), pins[0].Note)
-		})
-	}
 }

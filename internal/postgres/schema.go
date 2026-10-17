@@ -1127,10 +1127,8 @@ func EnsureSchema(
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
-func createPartialIndexesPG(ctx context.Context, conn pgSessionExecer) error {
+func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	indexes := []string{
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_sessions_codex_repair_source ON sessions(file_path)
-		 WHERE data_version < %d AND provenance_kind = 'legacy'`, db.CodexThreadIdentityDataVersion),
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
@@ -1175,11 +1173,11 @@ func createPartialIndexesPG(ctx context.Context, conn pgSessionExecer) error {
 		 ON messages(session_id, role)`,
 	}
 	for _, ddl := range indexes {
-		if _, err := conn.ExecContext(ctx, ddl); err != nil {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating PG index: %w", err)
 		}
 	}
-	if _, err := conn.ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy PG usage index: %w", err)
@@ -2439,8 +2437,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// A push may provision the schema for a read-only serve role. Include
 	// the Activity index so that upgrading through push installs it too.
 	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
-		pgHasIndex(ctx, db, "idx_tool_result_events_terminal") &&
-		pgHasIndex(ctx, db, "idx_sessions_codex_repair_source")
+		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a

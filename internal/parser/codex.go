@@ -20,11 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 )
 
-// IsCodexFormatAgent reports agents using Codex rollout result identity rules.
-func IsCodexFormatAgent(agent AgentType) bool {
-	return agent == AgentCodex || agent == AgentTraeX || agent == AgentAugureCode
-}
-
 // Codex JSONL entry types.
 const (
 	codexTypeSessionMeta      = "session_meta"
@@ -1802,42 +1797,6 @@ func (p *codexProvider) parentTurnResolver(
 // replay parent and remain current without resolving their parent transcript.
 func CodexReplayParentID(childPath string) (string, bool) {
 	return codexReplayParentIDContext(context.Background(), childPath)
-}
-
-// ReadCodexRolloutSessionID reads the owning thread or page key without replaying
-// the transcript. Archive repairs use the same header and filename rules as
-// the parser before copying trash, which must not be reparsed into live sessions.
-func ReadCodexRolloutSessionID(ctx context.Context, path string) (string, error) {
-	f, err := openCodexRolloutLines(path)
-	if errors.Is(err, os.ErrNotExist) {
-		switch {
-		case strings.HasSuffix(path, ".jsonl.zst"):
-			path = strings.TrimSuffix(path, ".zst")
-		case strings.HasSuffix(path, ".jsonl"):
-			path += ".zst"
-		}
-		f, err = openCodexRolloutLines(path)
-	}
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if gjson.Valid(line) && gjson.Get(line, "type").Str == codexTypeSessionMeta {
-			if id := gjson.Get(line, "payload.id").Str; id != "" {
-				key := CodexSessionUUIDFromPath(path)
-				thread := codexRevertPageThreadID(key, id, gjson.Get(line, "payload.session_id").Str)
-				if page, _, ok := codexRevertPage(path, thread, "", "", false); ok {
-					return page, nil
-				}
-				return id, nil
-			}
-		}
-	}
-	return "", scanner.Err()
 }
 
 func codexReplayParentIDContext(

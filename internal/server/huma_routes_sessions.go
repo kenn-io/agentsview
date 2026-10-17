@@ -1611,20 +1611,6 @@ func (s *Server) humaResumeSession(
 		model = primaryResumeModel(counts)
 	}
 	resumeTarget := rawID
-	if parser.IsCodexFormatAgent(parser.AgentType(session.Agent)) && parser.BaseSessionID(rawID) != rawID {
-		// The alternative's base may name the foreign thread that caused the
-		// repair. Only its source header can identify a thread to resume.
-		resumeTarget = ""
-		if host == "" && !s.db.ReadOnly() && session.FilePath != nil {
-			resumeTarget, err = parser.ReadCodexRolloutSessionID(ctx, *session.FilePath)
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-		}
-		if err != nil || resumeTarget == "" {
-			return nil, apiError(http.StatusConflict, "Cannot resume this archived session until its source file is available.")
-		}
-	}
 	if session.Agent == string(parser.AgentPi) && session.FilePath != nil &&
 		*session.FilePath != "" {
 		resumeTarget = *session.FilePath

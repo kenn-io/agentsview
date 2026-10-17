@@ -584,12 +584,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // state to the new id.)
 // (135: reparse Vibe sessions in place so existing search_replace tool calls
 // gain the corrected Edit category without changing session identities.)
-// (136: Codex-format rollouts keep their first nonempty session_meta id when
-// copied history includes another thread's metadata. Rebuild to recover
-// sessions previously filed under that other thread, preserving archived
-// sessions whose sources are gone. Curation follows reparsed transcripts and
-// permanent exclusions also cover their corrected identities.)
-const dataVersion = 136
+// (137: keep Codex rollouts under their first session_meta identity and rebuild
+// misfiled transcripts. Version 136 was used only by unreleased builds of this
+// fix; 137 also rebuilds those archives.)
+const dataVersion = 137
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -3765,8 +3763,6 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
 	}
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_excluded_sessions_file_path
-		 ON excluded_sessions(file_path) WHERE file_path IS NOT NULL`,
 		// Activity checks terminal events even for sessions whose ended_at
 		// predates the report. Avoid reading historical result payloads for
 		// every session just to find a recent tool completion.

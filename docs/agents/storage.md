@@ -133,39 +133,42 @@ the archive; S3 materializations do not record temporary paths.
 ### Claude persisted tool results
 
 Claude Code (and iCodeMate CLI, which shares its transcript layout and parser)
-moves a large tool output to a side file in the session's `tool-results` folder
-and leaves a placeholder in the transcript. The parser inlines the side file
-while it exists, so the first sync archives the full output. Once Claude Code
-deletes the side file after its cleanup period, a later full parse sees only the
-placeholder. The parser marks exactly the tool_result block that genuinely tried
-and failed to resolve a `persistedOutputPath`
+moves a large tool output to a side file in the session's `tool-results`
+folder and leaves a placeholder in the transcript. The parser inlines the side
+file while it exists, so the first sync archives the full output. Once Claude
+Code deletes the side file after its cleanup period, a later full parse sees
+only the placeholder. The parser marks exactly the tool_result block that
+genuinely tried and failed to resolve a `persistedOutputPath`
 (`parser.ParsedToolResult.PersistedOutputUnresolved`; never derived from the
 placeholder text's own shape). `ingest.ReconcileProviderHistory`
-(`internal/ingest/history.go`) restores each flagged current event from the one
-archived event whose `tool_use_id`, source, and timestamp all match — never by
-array position, so a dedup collapse or a retry/branch reorder can never pair the
-wrong occurrence; no unique match leaves the event untouched, and a later,
-unflagged occurrence of the same `tool_use_id` is never overwritten. Restoration
-only happens when the archive held real text; that text, its length, and its raw
-digest are restored. When the archive held only a length without text (the
-`transcripts`/`usage` archive-content policies, or a blocked category), the
-event is left alone: "blank content, kept length" already means something else
-to every reader of `tool_result_events` (a deduped summary, re-derived from its
-one content-bearing event), and restoring a bare length would reproduce that
+(`internal/ingest/history.go`) restores each flagged current event from the
+one archived event whose `tool_use_id`, source, and timestamp all match —
+never by array position, so a dedup collapse or a retry/branch reorder can
+never pair the wrong occurrence; no unique match leaves the event untouched,
+and a later, unflagged occurrence of the same `tool_use_id` is never
+overwritten. Restoration only happens when the archive held real text; that
+text, its length, and its raw digest are restored. When the archive held
+only a length without text (the `transcripts`/`usage` archive-content
+policies, or a blocked category), the event is left alone: "blank content,
+kept length" already means something else to every reader of
+`tool_result_events` (a deduped summary, re-derived from its one
+content-bearing event), and restoring a bare length would reproduce that
 same shape for an unrelated reason with no way to tell the two apart later.
-Accepted limit: once such an event's side file ages out, its archived length
-cannot be recovered on a later reparse; the event keeps whatever length its
-current placeholder text itself resolves to, not the archived length.
+Accepted limit: once such an event's side file ages out, its archived
+length cannot be recovered on a later reparse; the event keeps whatever
+length its current placeholder text itself resolves to, not the archived
+length.
 
 This is the same provider-history dispatcher every other agent's archive
 preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`
 (the agent and a `.jsonl` path, covering both Claude Code and iCodeMate CLI;
 `ingest.IsClaudeFormatAgent` alone would also match iCodeMate's unrelated
 VSCode-extension storage path), so hosted Postgres mirrors reach it with no
-separate wiring. `internal/sync/engine.go`'s `reconcileProviderHistoryContext`
-checks cheaply, over the parsed messages and before any store read, whether
-anything is flagged before loading the archived session. Rebuilds read the old
-archive, and S3 Claude sessions follow the same rule.
+separate wiring. `internal/sync/engine.go`'s
+`reconcileProviderHistoryContext` checks cheaply, over the parsed messages and
+before any store read, whether anything is flagged before loading the
+archived session. Rebuilds read the old archive, and S3 Claude sessions follow
+the same rule.
 
 ### Codex deletion scope
 
@@ -178,40 +181,15 @@ pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
 name kept with each deletion when the file is gone. Session and recall imports
 use the same exclusion check.
 
-Data version 136 corrects threads filed under foreign metadata. Permanent
-Codex-format deletions retain their source paths and reject that file even if it
-returns with a corrected identity, a noncanonical filename, or the other
-`.jsonl`/`.jsonl.zst` representation. Dropping an excluded source cannot delete
-an unrelated archive row with the same parsed ID. A filename UUID alone does not
-exclude another thread. When the retained header or a later parse proves that an
-exclusion used the wrong ID, the deletion stays attached to its source and the
-original thread can return. Without that evidence, the ID remains excluded.
-Trash is corrected before parsing, so restoring it keeps its transcript, pins,
-notes, rename, and star. Missing sources can use a recoverable filename identity
-to preserve their archived transcript without replacing another source. Revert
-pages retain their full page identity. When the canonical identity is
-unavailable or already belongs to another source, a stable alternative ID
-preserves the archived transcript and pins. When that source returns, its
-archived content and curation move to the recovered identity in one transaction
-before the alternative is removed, including labels, explicit project
-assignments, reviewed Recall entries and evidence, and launcher parent links.
-When the old parent ID disappears, incoming launcher links follow it as well.
-Matching project identity snapshots survive recovery when the checkout is gone;
-resolved destination evidence takes precedence. Existing destination choices
-take precedence. Recovery also finds sources marked missing and sources whose
-compression changed. Renames and stars follow verified thread corrections even
-when the original thread returns, as do labels and assigned projects. An
-unresolved missing source keeps an alternative identity even when the original
-rollout is also missing, so that rollout can return without overwriting the
-archive. Trash checks treat plain and compressed sources as the same file.
-Freshly parsed destinations take precedence over displaced historical occupants
-in correction chains and cycles. A destination owned by another source is left
-intact. Plain and compressed paths identify the same rollout during correction
-and ownership checks. Multiple archived identities sharing a path remain
-separate, including when one is reparsed during a rebuild. Missing corrected
-pages continue their own thread while retaining valid base links and launcher
-overrides. Archive-only rebuilds do not consult files on the receiving host.
-Empty trash anchors are limited to verified historical page mappings.
+Data version 137 rescues a misfiled Codex transcript under its filename thread ID
+when a different source now occupies its old ID and the target is free, retaining
+the longest copy and its pins without a continuation link. Permanent deletions
+also exclude the filename thread ID unless the old archive already holds that
+thread; the original exclusion stays.
+
+A returning source can replace a retained transcript. Names and stars stay on
+their existing IDs, and PostgreSQL-only pins stay on the remote row. A permanent
+deletion or trash on a misfiled row hides both threads.
 
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
@@ -247,28 +225,18 @@ legacy writes. Retries stop after five attempts or when the request is canceled.
 When an old PostgreSQL thread row held a revert page, the next push moves its
 remote pins and notes to that page before replacing the original thread. Both
 writes share a transaction, including when the page belongs to a later batch.
-For connected corrections, all migrating pins are snapshotted and cleared before
-any transferred pin is restored. Equal message text cannot let an intermediate
-pin block another transfer, and unrelated destination pins remain intact. When
-the original rollout is absent locally, the push also moves remote names, stars,
-and trash state to a newly published page, then removes the duplicate thread
-transcript and usage. Existing page curation takes precedence. An empty thread
-row retains any inherited trash scope for restore and purge. If the retained
-page cannot be published, the push stops and keeps the original row. A filtered
-push must include the page's project for this migration. A surviving original
-rollout without remote pins can still be pushed when its old page has been
-removed or filtered out.
+When the original rollout is absent locally, the push also moves remote names,
+stars, and trash state to a newly published page, then removes the duplicate
+thread transcript and usage. Existing page curation takes precedence. An empty
+thread row retains any inherited trash scope for restore and purge. If the
+retained page cannot be published, the push stops and keeps the original row. A
+filtered push must include the page's project for this migration. A surviving
+original rollout without remote pins can still be pushed when its old page has
+been removed or filtered out.
 
 If the original rollout moves outside a filtered push's project scope, the
 curation transfer and removal of the old thread row share a transaction. A
 failed transfer leaves the thread and its pins intact.
-
-The same PostgreSQL transaction handles pre-136 thread corrections when a unique
-local source path identifies the corrected session. Remote-only pins and notes
-move before the old transcript is replaced or removed, including when the
-corrected session belongs to a later push batch. Plain and compressed paths
-identify the same source. A partial index on pre-136 source paths keeps this
-lookup limited to the current batch; the next push installs it when missing.
 
 ### Codex incremental import state
 
@@ -529,9 +497,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
 - All four backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
-  message counts and project maps; SQL, pricing, caches and read lifetimes
-  stay in each backend. Daily usage query strategies and aggregation loops
-  remain per backend.
+  message counts and project maps; SQL, pricing, caches and read lifetimes stay
+  in each backend. Daily usage query strategies and aggregation loops remain
+  per backend.
 
 ### Usage cache divergence
 
@@ -586,8 +554,8 @@ rollup installs of every other session holding a changed identity; rollup
 installation re-verifies inside its transaction that no finalized identity
 gained an outside member and, when one did, reclassifies against the newly
 committed facts rather than failing the caller. A finalized daily row must never
-survive gaining a sibling. The daemon requeues invalidated sessions after commit
-and rebuilds their rollups; CLI writes leave rebuilding to the request.
+survive gaining a sibling. The daemon requeues invalidated sessions after
+commit and rebuilds their rollups; CLI writes leave rebuilding to the request.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching
@@ -641,15 +609,15 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
-`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
-session creation time match. Reader swaps clear the entries and reject stores
-from earlier generations. Reports exceeding the entry limit reuse retained hits
-and store up to the cap. Reports exceeding the candidate budget skip storing new
-entries. Warm reads still load session revisions and merge the per-session
-candidates in SQLite's microsecond order.
+with 36-byte session IDs, 24-byte models, and append-grown slices. Empty sessions
+use only the entry budget. A week report then a month report keep separate
+entries for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and
+remain valid while the transcript revision and session creation time match.
+Reader swaps clear the entries and reject stores from earlier generations.
+Reports exceeding the entry limit reuse retained hits and store up to the cap.
+Reports exceeding the candidate budget skip storing new entries. Warm reads
+still load session revisions and merge the per-session candidates in SQLite's
+microsecond order.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial

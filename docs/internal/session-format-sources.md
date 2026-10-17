@@ -590,45 +590,16 @@ fixtures retain this field; missing identities remain source-local.
   and ignores later metadata with a different or empty ID. Same-thread
   metadata can still update the working directory and branch; existing fork
   replay filtering and revert-page identities remain in effect. Data version
-  136 uses the preservation rebuild because session identities change.
+  137 uses the preservation rebuild because session identities change.
+  A missing transcript moves to its filename thread ID only when a different
+  file now owns its old ID and the target is free; competing copies retain the
+  longest transcript. Permanent deletions also exclude the filename thread ID
+  unless the old archive already holds that thread.
   Synthetic parser and SQLite sync regressions cover conflicting headers,
   either sync order, appended metadata, and repair of a misfiled session while
-  retaining sessions whose sources are absent. Upgrade regressions also check
-  that pins and notes follow the corrected transcript, including archived
-  sources that are missing or in trash, and that renames and stars follow the
-  corrected transcript. Missing noncanonical sources retain a stable
-  alternative identity; missing revert pages keep their full page identity.
-  PostgreSQL transfers remote-only pins and notes using verified source paths
-  before replacing old transcripts. Connected corrections snapshot their
-  original remote pins before publishing any destination, including cycles and
-  corrections outside the current push batch. Clearing the whole migrating pin
-  set before restoration preserves distinct notes on equal message text
-  without removing unrelated destination pins. Active plain/compressed source
-  changes retain one identity; returning noncanonical sources transfer
-  curation, labels, project assignments, reviewed Recall evidence, and
-  launcher parents from their alternative identity, including sources marked
-  missing. Incoming launcher links follow a relocated parent whose old ID is
-  gone. Missing noncanonical sources remain separate when the original rollout
-  returns later. Trash retains its identity and deletion state across either
-  compression direction. Shared-path archive restores preserve separate
-  historical transcripts across rebuilds and later parses, including trashed
-  siblings. Moving a canonical rollout into `archived_sessions` does not
-  create an alternative. Recovery merges labels and preserves distinct
-  transcripts without blocking later syncs. Returning-source regressions
-  retain matching historical project evidence after the checkout disappears,
-  including sessions launched in subdirectories, and preserve resolved
-  destination evidence. Missing corrected pages retain their continuation
-  links, valid bases, and launcher overrides even when a collision requires an
-  alternative storage ID. Resume resolves alternatives through the source
-  header; unavailable sources return an error instead of an invalid or
-  unrelated thread command. Permanent deletions follow retained source paths
-  when files return, including noncanonical filenames and either plain or
-  compressed form; filename UUIDs alone cannot exclude an unrelated thread.
-  Verified source metadata releases a wrongly excluded original ID while
-  retaining the deleted source exclusion. Corrected sessions keep freshly
-  resolved project evidence when the historical snapshot describes a different
-  root. This establishes a producer path for the shape reported in #2248, not
-  the history of that particular file.
+  retaining sessions whose sources are absent. This establishes a producer
+  path for the shape reported in [issue #2248](https://github.com/kenn-io/agentsview/issues/2248);
+  the particular file's history remains unverified.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
@@ -693,7 +664,7 @@ fixtures retain this field; missing identities remain source-local.
   ([rollout_lineage.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs#L65-L188)),
   so several pages can share one base. Each page lands in the dated folder
   for the day of the undo, and archiving moves every file of the thread into
-  `archived_sessions/` without changing its filename (rechecked 2026-10-16)
+  `archived_sessions/`
   ([archive_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/archive_thread.rs#L42-L113)).
   Resume and thread lookup take the thread id and open its newest file
   ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).
@@ -817,18 +788,15 @@ fixtures retain this field; missing identities remain source-local.
   header the other way round: the page's own rollout id in `session_meta.id`
   and the thread id in `session_meta.session_id`. The writer at
   [recorder.rs](https://github.com/openai/codex/blob/rust-v0.148.0-alpha.15/codex-rs/rollout/src/recorder.rs#L818-L820)
-  (rust-v0.148.0-alpha.15, rechecked 2026-10-16) only writes the thread id
-  as `conversation_id`. It does not produce this reversed header, so the
-  reversed shape and its version range come from local files and are
+  (rust-v0.148.0-alpha.15, checked 2026-10-04) only writes the thread id as
+  `conversation_id`. It does not produce this reversed header, so the reversed
+  shape and its version range come from local files and are
   `no-public-source`. The `id` rule in the entry above describes rust-v0.154.0
   and later. AgentsView accepts the older header only when the file name is
   `<session_id>_<id>`, and stores the page under the file-name key like any
   other revert page. Data version 134 rebuilds archives that stored such pages
   as `codex:<rollout>`, moving curation, trash, and deletions to the canonical
-  page whether its file is present or gone. The version-136 repair uses these
-  same header rules for already-canonical trash; upgrade and restore preserve
-  its page identity and pin in
-  `TestCodexCanonicalTrashedLegacyPageSurvivesUpgrade`. Tests:
+  page whether its file is present or gone. Tests:
   `TestCodexOlderHeaderRevertPageUpgradeMovesCuration`,
   `TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing`,
   `TestCodexOlderHeaderRevertPageTitleAndSubagent`,
