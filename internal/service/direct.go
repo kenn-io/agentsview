@@ -953,7 +953,7 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	if req.GroupModels {
+	if req.GroupModels && len(b.modelGroups.names) > 0 {
 		if err := b.modelGroups.GroupDaily(result.Daily); err != nil {
 			return nil, err
 		}
@@ -1027,7 +1027,7 @@ func (b *directBackend) UsagePairwiseComparison(
 			right = b.modelGroups.Expand(right)
 		}
 		if useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, left, hasModelGroups) || !usagePairwiseSideInRanking(summary, req.RightDimension, right, hasModelGroups) {
-			if req.GroupModels && hasModelGroups {
+			if hasModelGroups {
 				if err := b.modelGroups.GroupDaily(rankingResult.Daily); err != nil {
 					return nil, err
 				}

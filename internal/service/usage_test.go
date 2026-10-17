@@ -1035,3 +1035,69 @@ func TestUsagePairwiseFallbackWithoutModelGroups(t *testing.T) {
 	assert.Equal(t, "gpt-4o", result.Right.Value)
 	assert.Equal(t, 30, result.Right.InputTokens)
 }
+
+func TestUsagePairwiseModelGroupNameCollision(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	groups := service.NewModelGroups(map[string]string{"gpt-4o": "claude-sonnet-4-20250514"})
+	for _, be := range []service.SessionService{
+		service.NewDirectBackend(d, nil, service.WithModelGroups(groups)),
+		service.NewReadOnlyBackend(d, service.WithModelGroups(groups)),
+	} {
+		for _, tt := range []struct {
+			name     string
+			grouped  bool
+			fallback bool
+		}{
+			{name: "grouping omitted"},
+			{name: "grouping enabled", grouped: true},
+			{name: "fallback requested", fallback: true},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				req := service.UsagePairwiseComparisonRequest{
+					From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+					GroupModels: tt.grouped, FallbackToDefault: tt.fallback,
+				}
+				if tt.fallback {
+					req.LeftDimension, req.LeftValue = "model", "absent"
+					req.RightDimension, req.RightValue = "model", "gpt-4o"
+				}
+				result, err := be.UsagePairwiseComparison(t.Context(), req)
+				require.NoError(t, err)
+				// One model group remains, so the default compares projects.
+				assert.Equal(t, "project", result.Left.Dimension)
+				assert.Equal(t, "project", result.Right.Dimension)
+				assert.NotEqual(t, result.Left.Value, result.Right.Value)
+				assert.Equal(t, 100, result.Left.InputTokens)
+				assert.Equal(t, 100, result.Right.InputTokens)
+			})
+		}
+		result, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+			LeftDimension: "model", LeftValue: "gpt-4o", RightDimension: "model", RightValue: "claude-sonnet-4-20250514", FallbackToDefault: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "gpt-4o", result.Left.Value)
+		assert.Equal(t, 30, result.Left.InputTokens)
+		assert.Equal(t, 200, result.Right.InputTokens)
+	}
+}
+
+func TestUsageGroupingWithoutAliasesPreservesSummary(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	for _, be := range []service.SessionService{
+		service.NewDirectBackend(d, nil),
+		service.NewReadOnlyBackend(d),
+	} {
+		req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true}
+		raw, err := be.UsageSummary(t.Context(), req)
+		require.NoError(t, err)
+		require.NotNil(t, raw.Pricing)
+		require.NotZero(t, raw.SchemaVersion)
+		req.GroupModels = true
+		grouped, err := be.UsageSummary(t.Context(), req)
+		require.NoError(t, err)
+		assert.Equal(t, raw, grouped)
+	}
+}
