@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modelPickerItems } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -302,14 +303,12 @@
   });
 
   $effect(() => {
-    const selected = analytics.model
-      .split(",")
-      .filter((model) => model.length > 0);
+    const selected = analytics.model.split(",").filter(Boolean);
     untrack(() => mergeIntoKnownModels(selected));
   });
 
   const modelItems = $derived(
-    knownModels.map((name) => ({ name })),
+    modelPickerItems(knownModels, analytics.model, analytics.modelAliases),
   );
   function handleExportCSV() {
     exportAnalyticsCSV({
@@ -675,8 +674,9 @@
     />
     <FilterDropdown
       label={m.analytics_model()}
+      selectedLabel={analytics.model !== analytics.displayedModels ? analytics.model : ""}
       items={modelItems}
-      excludedCsv={analytics.model}
+      excludedCsv={analytics.displayedModels}
       mode="include"
       onToggle={(name) => analytics.toggleModel(name)}
       onSelectAll={() => analytics.clearModel()}

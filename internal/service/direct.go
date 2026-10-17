@@ -36,6 +36,7 @@ import (
 // interface (GetSessionFilePath, Reader). Structural nil checks
 // on local+engine replace runtime type assertions.
 type directBackend struct {
+	modelGroups    ModelGroups
 	db             db.Store
 	local          *db.DB
 	engine         *sync.Engine
@@ -50,15 +51,31 @@ type directBackend struct {
 // engine is nil, Sync returns db.ErrReadOnly but reads still
 // work. Use NewReadOnlyBackend for stores that are not *db.DB
 // (e.g. a PostgreSQL reader).
-func NewDirectBackend(d *db.DB, engine *sync.Engine) SessionService {
-	return &directBackend{db: d, local: d, engine: engine, evidenceSource: newEvidenceSource()}
+func NewDirectBackend(d *db.DB, engine *sync.Engine, opts ...DirectBackendOption) SessionService {
+	b := &directBackend{db: d, local: d, engine: engine, evidenceSource: newEvidenceSource()}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // NewReadOnlyBackend returns a read-only SessionService over any
 // db.Store (e.g. a PostgreSQL reader used by `pg serve`). Sync
 // returns db.ErrReadOnly unconditionally.
-func NewReadOnlyBackend(d db.Store) SessionService {
-	return &directBackend{db: d, evidenceSource: newEvidenceSource()}
+func NewReadOnlyBackend(d db.Store, opts ...DirectBackendOption) SessionService {
+	b := &directBackend{db: d, evidenceSource: newEvidenceSource()}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
+}
+
+// DirectBackendOption configures a direct or read-only backend.
+type DirectBackendOption func(*directBackend)
+
+// WithModelGroups configures model filters and optional display grouping.
+func WithModelGroups(groups ModelGroups) DirectBackendOption {
+	return func(b *directBackend) { b.modelGroups = groups }
 }
 
 // newEvidenceSource returns a random ID for this backend instance, so a
@@ -926,7 +943,7 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	f, err := BuildUsageFilter(req)
+	f, err := BuildUsageFilter(req, b.modelGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -934,9 +951,19 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
+	if req.GroupModels && b.modelGroups.Configured() {
+		if err := b.modelGroups.GroupDaily(result.Daily); err != nil {
+			return nil, err
+		}
+		result.SchemaVersion = 0
+		result.Pricing = nil
+	}
 	summary, err := buildUsageSummary(f, result)
 	if err != nil {
 		return nil, err
+	}
+	if req.GroupModels {
+		summary.ModelAliases = b.modelGroups.Aliases()
 	}
 	if parser.AgentFilterLacksPerMessageTokenData(f.Agent) &&
 		db.NoTokenData(result.Totals) {
@@ -965,7 +992,7 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	base, err := BuildUsageFilter(req.UsageRequest)
+	base, err := BuildUsageFilter(req.UsageRequest, b.modelGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -979,6 +1006,13 @@ func (b *directBackend) UsagePairwiseComparison(
 		}
 	}
 	if useDefault || req.FallbackToDefault {
+		left, right := req.LeftValue, req.RightValue
+		if req.LeftDimension == "model" {
+			left = b.modelGroups.Expand(left)
+		}
+		if req.RightDimension == "model" {
+			right = b.modelGroups.Expand(right)
+		}
 		rankingFilter := base
 		rankingFilter.Breakdowns = true
 		rankingFilter.SkipSessionCounts = true
@@ -990,7 +1024,17 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		if useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, req.LeftValue) || !usagePairwiseSideInRanking(summary, req.RightDimension, req.RightValue) {
+		useDefault = useDefault || !usagePairwiseSideInRanking(summary, req.LeftDimension, left, b.modelGroups.Configured()) || !usagePairwiseSideInRanking(summary, req.RightDimension, right, b.modelGroups.Configured())
+		if useDefault {
+			if req.GroupModels && b.modelGroups.Configured() {
+				if err := b.modelGroups.GroupDaily(rankingResult.Daily); err != nil {
+					return nil, err
+				}
+				summary.ModelTotals, err = foldModelTotals(rankingResult.Daily)
+				if err != nil {
+					return nil, err
+				}
+			}
 			req.LeftDimension, req.LeftValue, req.RightDimension, req.RightValue = defaultUsagePairwiseSelection(summary)
 		}
 		if req.LeftDimension == "" {
@@ -1006,7 +1050,14 @@ func (b *directBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	leftFilter, leftEmpty, rightFilter, rightEmpty, err := buildUsagePairwiseFilters(req, base)
+	query := req
+	if query.LeftDimension == "model" {
+		query.LeftValue = b.modelGroups.Expand(query.LeftValue)
+	}
+	if query.RightDimension == "model" {
+		query.RightValue = b.modelGroups.Expand(query.RightValue)
+	}
+	leftFilter, leftEmpty, rightFilter, rightEmpty, err := buildUsagePairwiseFilters(query, base)
 	if err != nil {
 		return nil, err
 	}

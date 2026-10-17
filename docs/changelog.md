@@ -24,6 +24,10 @@ The latest release is
 
 **New features**
 
+- Combine model variants into one row in Usage and Analytics with
+  `[model_aliases]` in `config.toml`. Scripts, exports, `usage daily`, and MCP
+  keep raw model names.
+
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
   evidence. Versions 3 and 4 retain their existing behavior.

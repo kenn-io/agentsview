@@ -73,4 +73,8 @@ export type GetApiV1AnalyticsSummaryParams = {
    * Filter by termination reason
    */
   termination?: string;
+  /**
+   * Include model aliases for display grouping
+   */
+  group_models?: boolean;
 };

@@ -1,5 +1,5 @@
 import type {
-  DbAnalyticsSummary as AnalyticsSummary,
+  AnalyticsSummaryResponse as AnalyticsSummary,
   DbActivityResponse as ActivityResponse,
   DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
   DbToolsAnalyticsResponse as ToolsAnalyticsResponse,

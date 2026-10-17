@@ -4911,6 +4911,7 @@ func (c *Client) GetAPIV1UsageSummaryStreamStreamWithResponse(ctx context.Contex
 		"exclude_project_key": {Style: "form", Explode: &[]bool{false}[0]},
 		"from":                {Style: "form", Explode: &[]bool{false}[0]},
 		"git_branch":          {Style: "form", Explode: &[]bool{false}[0]},
+		"group_models":        {Style: "form", Explode: &[]bool{false}[0]},
 		"include_automated":   {Style: "form", Explode: &[]bool{false}[0]},
 		"include_one_shot":    {Style: "form", Explode: &[]bool{false}[0]},
 		"machine":             {Style: "form", Explode: &[]bool{false}[0]},
@@ -19656,6 +19657,9 @@ type PostAPIV1SyncQuery struct {
 }
 
 type GetAPIV1UsagePairwiseComparisonQuery struct {
+	// GroupModels Group model aliases in report rows
+	GroupModels *bool `json:"group_models,omitempty"`
+
 	// From Range start date
 	From *runtime.Date `json:"from,omitempty"`
 
@@ -19763,6 +19767,9 @@ func (g GetAPIV1UsagePairwiseComparisonQuery) Validate() error {
 }
 
 type GetAPIV1UsageSummaryQuery struct {
+	// GroupModels Group model aliases in report rows
+	GroupModels *bool `json:"group_models,omitempty"`
+
 	// From Range start date
 	From *runtime.Date `json:"from,omitempty"`
 
@@ -19855,6 +19862,9 @@ func (g GetAPIV1UsageSummaryQuery) Validate() error {
 }
 
 type GetAPIV1UsageSummaryStreamQuery struct {
+	// GroupModels Group model aliases in report rows
+	GroupModels *bool `json:"group_models,omitempty"`
+
 	// From Range start date
 	From *runtime.Date `json:"from,omitempty"`
 
@@ -25315,6 +25325,7 @@ type UsageSummaryResponse struct {
 	Daily            []DBDailyUsageEntry              `json:"daily" validate:"required"`
 	From             string                           `json:"from" validate:"required"`
 	ModelTotals      []ModelTotal                     `json:"modelTotals" validate:"required"`
+	ModelAliases     map[string]string                `json:"model_aliases,omitempty"`
 	Pricing          *ExportPricingBlock              `json:"pricing,omitempty"`
 	ProjectTotals    []ProjectTotal                   `json:"projectTotals" validate:"required"`
 	Projects         map[string]ExportProjectMapEntry `json:"projects"`
