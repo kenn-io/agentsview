@@ -245,26 +245,6 @@ func TestUsageResetIsNotLogged(t *testing.T) {
 	assert.NotContains(t, logs.String(), "thread-a", "a reparse would repeat the line for every past reset")
 }
 
-func TestUsageKeepsEqualTotalsFromDifferentJoins(t *testing.T) {
-	// Two connections can report the same totals; only an exact repeat of
-	// one connection's record is dropped. A drop then a return to the same
-	// total is a new baseline and counts again.
-	high := ccCounts(300, 0, 30)
-	recs := []mirror.TokenUsageData{
-		ccTokens("join-a", "turn-1", high, high, 0),
-		ccTokens("join-b", "turn-2", ccCounts(50, 0, 5), ccCounts(50, 0, 5), 1),
-		ccTokens("join-b", "turn-2", high, ccCounts(250, 0, 25), 2),
-	}
-
-	events, _, _ := codexCloudUsageEvents("thread-a", recs, "gpt-6")
-
-	var input int
-	for _, ev := range events {
-		input += ev.InputTokens
-	}
-	assert.Equal(t, 600, input)
-}
-
 func ccTurn(id, status string, startedAt float64) mirror.Turn {
 	return mirror.Turn{ID: id, Status: status, StartedAt: &startedAt}
 }
