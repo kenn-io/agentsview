@@ -1086,6 +1086,9 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	if s.broadcaster != nil {
+		s.broadcaster.Emit("sessions")
+	}
 	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
@@ -1431,6 +1434,14 @@ func (s *Server) humaUploadSession(
 			"failed to save session to database")
 	}
 	cleanupCommittedUpload(uploadCommit)
+	if s.broadcaster != nil {
+		for _, pr := range results {
+			if len(pr.Messages) > 0 {
+				s.broadcaster.Emit("sessions")
+				break
+			}
+		}
+	}
 	main := results[0]
 	return &jsonOutput[uploadSessionResponse]{
 		Body: uploadSessionResponse{

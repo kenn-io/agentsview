@@ -31,8 +31,6 @@ const (
 	EventAnalyticsViewed  = "analytics_viewed"
 	application           = "agentsview"
 	envPrefix             = "AGENTSVIEW"
-	// captureMaxBodyBytes matches kit's capture request limit.
-	captureMaxBodyBytes = 64 << 10
 )
 
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedEvent
@@ -127,7 +125,7 @@ func (r *Reporter) CaptureSetupFinished(ctx context.Context) error {
 }
 
 // CaptureHandler lets the web UI report allowlisted events through this reporter.
-// It rejects daemon events, whose conditions and claims only the daemon checks.
+// It rejects setup_finished, whose archive check and claim belong to the daemon.
 func (r *Reporter) CaptureHandler() http.Handler {
 	var client *kittelemetry.Reporter
 	if r != nil {
@@ -135,27 +133,18 @@ func (r *Reporter) CaptureHandler() http.Handler {
 	}
 	capture := kittelemetry.NewCaptureHandler(client)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		body, err := io.ReadAll(io.LimitReader(req.Body, captureMaxBodyBytes))
-		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-			http.Error(w, "telemetry request too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		if err != nil {
-			http.Error(w, "invalid telemetry request", http.StatusBadRequest)
-			return
-		}
+		body, err := io.ReadAll(req.Body)
 		// Decode as kit does, so both read the same event name.
 		var event struct {
 			Event string `json:"event"`
 		}
-		if json.NewDecoder(bytes.NewReader(body)).Decode(&event) == nil {
-			switch strings.TrimSpace(event.Event) {
-			case EventDaemonActive, EventSetupFinished:
+		if err == nil && json.NewDecoder(bytes.NewReader(body)).Decode(&event) == nil {
+			if strings.TrimSpace(event.Event) == EventSetupFinished {
 				http.Error(w, ErrUnsupportedEvent.Error(), http.StatusBadRequest)
 				return
 			}
 		}
-		// Hand kit the bytes already read plus the rest, so its size and decode answers stay its own.
+		// Replay the body and any reader error so kit handles size and decode failures.
 		req.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(body), req.Body), Closer: req.Body}
 		capture.ServeHTTP(w, req)
 	})

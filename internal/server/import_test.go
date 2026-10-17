@@ -22,6 +22,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func readImportEvents(t *testing.T, body io.Reader, handle func(string, string)) {
@@ -439,10 +440,7 @@ func TestHandleImportChatGPT_RequiresZip(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
 }
 
-func TestHandleImportClaudeAI_SSE(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-
-	conversations := `[{
+const claudeAIUploadConv = `{
       "uuid": "sse-test-001",
       "name": "SSE Test",
       "created_at": "2026-03-01T10:00:00.000000Z",
@@ -452,7 +450,12 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
         "content": [{"type":"text","text":"hello"}],
         "created_at": "2026-03-01T10:00:00.000000Z"
       }]
-    }]`
+    }`
+
+func TestHandleImportClaudeAI_SSE(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+
+	conversations := "[" + claudeAIUploadConv + "]"
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -851,16 +854,13 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 }
 
 func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
-	const claudeAIConv = `{"uuid":"announce-001","name":"Announce","created_at":"2026-03-01T10:00:00.000000Z",` +
-		`"updated_at":"2026-03-01T10:05:00.000000Z","chat_messages":[{"uuid":"m1","text":"hello","sender":"human",` +
-		`"content":[{"type":"text","text":"hello"}],"created_at":"2026-03-01T10:00:00.000000Z"}]}`
 	for _, tt := range []struct {
 		name, path, file string
 		data             []byte
 		wantCode         int
 	}{
-		{"claude-ai", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIConv + "]"), http.StatusOK},
-		{"claude-ai partial", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIConv + ",{"), http.StatusInternalServerError},
+		{"claude-ai", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIUploadConv + "]"), http.StatusOK},
+		{"claude-ai partial", "/api/v1/import/claude-ai", "conversations.json", []byte("[" + claudeAIUploadConv + ",{"), http.StatusInternalServerError},
 		{"chatgpt", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv), http.StatusOK},
 		{"chatgpt partial", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv, "["), http.StatusInternalServerError},
 	} {
@@ -899,4 +899,42 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 			assert.Empty(t, mutations)
 		})
 	}
+}
+
+func TestUploadSessionAnnouncesReadableSession(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	srv.broadcaster = NewBroadcaster(0)
+	events, unsubscribe := srv.broadcaster.Subscribe()
+	defer unsubscribe()
+	database := srv.db.(*db.DB)
+	readable, err := database.HasReadableSessions(t.Context())
+	require.NoError(t, err)
+	require.False(t, readable)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T10:00:00Z", "hello").
+		AddClaudeAssistant("2024-01-01T10:00:05Z", "hi").
+		String()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "incoming.jsonl")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, content)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/upload?project=myproj", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "uploaded session did not broadcast sessions")
+	}
+	readable, err = database.HasReadableSessions(t.Context())
+	require.NoError(t, err)
+	assert.True(t, readable)
 }

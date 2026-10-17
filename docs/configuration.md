@@ -1994,8 +1994,7 @@ with such a session send it on their first start after upgrading.
 The claim records that the event entered the telemetry queue, not that PostHog
 received it. Delivery is best effort: if the server stops or the network fails
 before the queue flushes, the event is lost and is not sent again. Only the
-server sends `setup_finished` and `daemon_active`; the web UI's telemetry route
-rejects both.
+server sends `setup_finished`; the web UI's telemetry route rejects that event.
 
 The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
 of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,

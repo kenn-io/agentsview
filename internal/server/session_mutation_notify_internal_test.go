@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,8 +43,12 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 		notified.Add(1)
 	}))
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
+		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude", MessageCount: 1,
 	}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "hello"}}))
+	s.broadcaster = NewBroadcaster(0)
+	events, unsubscribe := s.broadcaster.Subscribe()
+	defer unsubscribe()
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -64,15 +69,28 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 		`{"session_ids":["sess-1"]}`)
 	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(1), notified.Load(), "trashing must notify")
+	readable, err := database.HasReadableSessions(t.Context())
+	require.NoError(t, err)
+	assert.False(t, readable)
 
 	w = do(http.MethodPost, "/api/v1/sessions/sess-1/restore", "")
 	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(2), notified.Load(), "restoring must notify")
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "restored session did not broadcast sessions")
+	}
+	readable, err = database.HasReadableSessions(t.Context())
+	require.NoError(t, err)
+	assert.True(t, readable)
 
 	w = do(http.MethodPost, "/api/v1/sessions/missing/restore", "")
 	require.Equal(t, http.StatusNotFound, w.Code)
 	require.Equal(t, int32(2), notified.Load(),
 		"a failed restore must not notify")
+	assert.Empty(t, events)
 
 	w = do(http.MethodPost, "/api/v1/sessions/batch-delete",
 		`{"session_ids":["sess-1"]}`)
