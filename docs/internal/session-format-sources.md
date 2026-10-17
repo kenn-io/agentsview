@@ -607,11 +607,16 @@ fixtures retain this field; missing identities remain source-local.
   changes retain one identity; returning noncanonical sources transfer
   curation, labels, project assignments, reviewed Recall evidence, and
   launcher parents from their alternative identity, including sources marked
-  missing. Missing noncanonical sources remain separate when the original
-  rollout returns later. Trash retains its identity and deletion state across
-  either compression direction. Shared-path archive restores preserve separate
-  historical transcripts. Permanent deletions follow retained source paths
-  when files return, including noncanonical filenames and either plain or
+  missing. Incoming launcher links follow a relocated parent whose old ID is
+  gone. Missing noncanonical sources remain separate when the original rollout
+  returns later. Trash retains its identity and deletion state across either
+  compression direction. Shared-path archive restores preserve separate
+  historical transcripts, including when a rebuild reparses one active
+  identity. Returning-source regressions retain matching historical project
+  evidence after the checkout disappears and preserve resolved destination
+  evidence. Missing corrected pages retain their continuation links, valid
+  bases, and launcher overrides. Permanent deletions follow retained source
+  paths when files return, including noncanonical filenames and either plain or
   compressed form; filename UUIDs alone cannot exclude an unrelated thread.
   Verified source metadata releases a wrongly excluded original ID while
   retaining the deleted source exclusion. Corrected sessions keep freshly

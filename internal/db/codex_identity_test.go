@@ -3,9 +3,11 @@ package db
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -42,7 +44,7 @@ func TestCodexPermanentDeletionFollowsSourcePath(t *testing.T) {
 }
 
 func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
-	for _, mode := range []string{"new_destination", "same_transcript", "other_source", "delete_failure"} {
+	for _, mode := range []string{"new_destination", "same_transcript", "other_source", "delete_failure", "foreign_root"} {
 		t.Run(mode, func(t *testing.T) {
 			database := testDB(t)
 			ctx := t.Context()
@@ -50,6 +52,16 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 			oldID := parser.AltSessionID("codex:old", path)
 			const id = "codex:corrected"
 			require.NoError(t, database.UpsertSession(ctx, Session{ID: oldID, Agent: "codex", Project: "sample", Machine: "local", FilePath: &path, DataVersion: 135}))
+			root := "/work/sample"
+			if mode == "foreign_root" {
+				root = "/work/other"
+			}
+			observation := export.ProjectIdentityObservation{
+				SessionID: oldID, Project: "sample", Machine: "local", RootPath: root,
+				GitRemote: "https://example.com/team/saved.git", RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt: time.Date(2025, 10, 20, 19, 0, 0, 0, time.UTC),
+			}
+			require.NoError(t, database.UpsertProjectIdentityObservation(ctx, observation))
 			require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: oldID, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
 			require.NoError(t, database.RenameSession(ctx, oldID, new("Saved name")))
 			_, err := database.SetSessionLabels(ctx, oldID, []string{"saved", "topic"})
@@ -81,6 +93,9 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "saved question", SourceUUID: "saved-message"}}))
 			}
 			if mode == "same_transcript" {
+				observation.SessionID = id
+				observation.GitRemote = "https://example.com/team/destination.git"
+				require.NoError(t, database.UpsertProjectIdentityObservation(ctx, observation))
 				_, err = database.AssignSessionProject(ctx, id, "destination")
 				require.NoError(t, err)
 				_, err = database.SetSessionLabels(ctx, id, []string{"destination"})
@@ -93,7 +108,7 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				_, err = database.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_identity_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'forced delete failure'); END`)
 				require.NoError(t, err)
 			}
-			err = database.RecoverCodexSessionIdentity(ctx, oldID, id, path, "codex")
+			err = database.RecoverCodexSessionIdentity(ctx, oldID, id, path, "codex", "/work/sample")
 			retainedID := id
 			if mode == "other_source" || mode == "delete_failure" {
 				require.Error(t, err)
@@ -102,6 +117,17 @@ func TestRecoverCodexSessionIdentityIsAtomic(t *testing.T) {
 				require.NoError(t, err)
 				requireSessionGone(t, database, oldID)
 			}
+			snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(ctx, []string{retainedID})
+			require.NoError(t, err)
+			require.Contains(t, snapshots, retainedID)
+			wantRemote := "https://example.com/team/saved.git"
+			switch mode {
+			case "same_transcript":
+				wantRemote = "https://example.com/team/destination.git"
+			case "foreign_root":
+				wantRemote = ""
+			}
+			assert.Equal(t, wantRemote, snapshots[retainedID].GitRemote)
 			pins, err := database.ListPinnedMessages(ctx, "", "")
 			require.NoError(t, err)
 			require.Len(t, pins, 1)

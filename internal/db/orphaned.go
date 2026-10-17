@@ -151,7 +151,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 
 	// Noncanonical rollout names have no filename mapping. Keep the original
 	// Codex-only path match so a reparsed fork is not restored as an orphan.
-	// Copied trash is not evidence that the file was reparsed.
+	// Copied trash and paths shared by distinct histories do not prove ownership.
 	if _, err := conn.ExecContext(ctx, `
 		INSERT OR IGNORE INTO _extra_excluded_orphan_ids (id)
 		SELECT mapped.source_id FROM _codex_session_ids mapped
@@ -164,6 +164,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		  AND new_s.deleted_at IS NULL
 		  AND NOT EXISTS (
 			SELECT 1 FROM _codex_session_ids WHERE source_id = old_s.id
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM old_db.sessions peer
+			WHERE peer.agent = old_s.agent AND peer.id != old_s.id
+			  AND peer.file_path IN `+codexSourcePathsSQL("old_s.file_path")+`
 		  )`); err != nil {
 		return nil, fmt.Errorf("excluding stale Codex rows: %w", err)
 	}
@@ -1515,6 +1520,17 @@ func (d *DB) CopySessionMetadataFrom(
             JOIN _codex_session_ids mapped ON mapped.source_id = ep.session_id AND mapped.is_thread_correction = 1`); err != nil {
 			return fmt.Errorf("copying corrected Codex parents: %w", err)
 		}
+		// A disappeared parent follows its archived transcript. A surviving
+		// native ID can still own launcher links, so leave those ambiguous links.
+		if _, err := tx.ExecContext(ctx, `UPDATE main.session_external_parents
+			SET parent_session_id = mapped.target_id
+			FROM _codex_session_ids mapped
+			WHERE mapped.is_thread_correction = 1
+			  AND session_external_parents.parent_session_id = mapped.source_id
+			  AND EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.target_id)
+			  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.source_id)`); err != nil {
+			return fmt.Errorf("remapping retained Codex launcher parents: %w", err)
+		}
 		if _, err := applySessionExternalParents(ctx, tx); err != nil {
 			return err
 		}
@@ -2388,22 +2404,29 @@ func copySessionDataForIDs(
 		    OR `+retiredCodexTargetSQL("sessions.parser_parent_session_id")+` IS NOT NULL)`); err != nil {
 		return fmt.Errorf("remapping retired Codex parents: %w", err)
 	}
-	// A retired page continues its thread, whatever parent the old parser
+	// A corrected page continues its thread, whatever parent the old parser
 	// derived from its header (a reverted subagent thread named its launcher).
 	// A parent with no parser parent behind it is a launcher override and
 	// stays. The thread ID is the page ID without its trailing _<rollout>. The link does
 	// not wait for the thread row: trashed pages copy before the parse, and a
-	// page whose source file is gone is never parsed again to set it.
+	// page whose source file is gone is never parsed again to set it. Keep a
+	// retained continuation within that thread, which may name an earlier page.
 	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
 		SET parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
 			parser_parent_session_id = substr(sessions.id, 1, length(sessions.id) - 37),
 			relationship_type = 'continuation'
 		FROM `+tempIDsTable+` copied
-		JOIN _codex_session_ids r ON r.retired = 1 AND r.source_id = copied.source_id
+		JOIN _codex_session_ids r ON (r.retired = 1 OR (r.is_thread_correction = 1 AND r.is_page = 1))
+		  AND r.source_id = copied.source_id
 		WHERE sessions.id = copied.id AND copied.id != copied.source_id
 		  AND (COALESCE(sessions.parser_parent_session_id, '') != ''
-		    OR COALESCE(sessions.parent_session_id, '') = '')`); err != nil {
-		return fmt.Errorf("linking retired Codex pages: %w", err)
+		    OR COALESCE(sessions.parent_session_id, '') = '')
+		  AND NOT (sessions.relationship_type = 'continuation' AND (
+			COALESCE(sessions.parser_parent_session_id, '') = substr(sessions.id, 1, length(sessions.id) - 37)
+			OR (length(COALESCE(sessions.parser_parent_session_id, '')) = length(sessions.id)
+			  AND substr(sessions.parser_parent_session_id, 1, length(sessions.id) - 36) = substr(sessions.id, 1, length(sessions.id) - 36))
+		  ))`); err != nil {
+		return fmt.Errorf("linking corrected Codex pages: %w", err)
 	}
 	// Friction titles name the session and depend on its parent, so every
 	// session restored under a new ID starts stale. Backfill reviews it under
@@ -3030,8 +3053,8 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 // The complete map also handles pre-version-40 fork identities. Pre-131
 // thread-to-page mappings and pre-134 rollout-to-page mappings move curation,
 // Recall, and conversation identities. Only the pre-134 mappings retire the
-// source ID, so only they also remap relationships, labels, and launcher
-// parents (retired = 1). A pre-134 candidate whose source ID the fresh parse
+// source ID (retired = 1), so their incoming relationships can always move.
+// A pre-134 candidate whose source ID the fresh parse
 // already produced is no page: the parser rejected it and kept its own ID.
 // Pre-136 thread corrections use retained paths, headers, and filenames. They
 // do not retire the source ID: its original rollout may still exist or return.
@@ -3262,9 +3285,11 @@ func mapRetainedCodexThreads(ctx context.Context, conn *sql.Conn) error {
 				return fmt.Errorf("cannot preserve Codex source: alternative identity %s belongs to another source", target)
 			}
 		}
+		targetKey := target[strings.LastIndex(target, ":")+1:]
+		isPage := parser.CodexThreadIDFromSessionKey(targetKey) != targetKey
 		if _, err := conn.ExecContext(ctx, `
 			INSERT INTO _codex_session_ids (source_id, target_id, is_page, is_thread_correction)
-			VALUES (?, ?, 0, 1)`, s.id, target); err != nil {
+			VALUES (?, ?, ?, 1)`, s.id, target, isPage); err != nil {
 			return fmt.Errorf("mapping retained Codex transcript: %w", err)
 		}
 	}

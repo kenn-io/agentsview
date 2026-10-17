@@ -12,7 +12,7 @@ import (
 // recovered from its returning source. Copy the archived transcript and its
 // curation before deleting the alternative, so a later parse failure loses
 // nothing. An occupied destination must belong to the same source and content.
-func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, agent string) error {
+func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, agent, cwd string) error {
 	if oldID == id || (agent != "codex" && agent != "traex" && agent != "augure-code") {
 		return nil
 	}
@@ -109,6 +109,18 @@ func (db *DB) RecoverCodexSessionIdentity(ctx context.Context, oldID, id, path, 
 		}
 		if !sameSource || !transcriptMessagesEqual(rekeyed, destination) {
 			return fmt.Errorf("recovered Codex identity %s already holds another transcript", id)
+		}
+	}
+	snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, []string{oldID})
+	if err != nil {
+		return err
+	}
+	if snapshot, ok := snapshots[oldID]; ok && cwd != "" && snapshot.RootPath == cwd {
+		// Reuse snapshot precedence: resolved destination evidence wins over
+		// history, and foreign metadata must not supply the corrected project.
+		snapshot.SessionID = id
+		if err := upsertProjectIdentityObservationTxContext(ctx, tx, snapshot); err != nil {
+			return err
 		}
 	}
 	if err := restorePinsTx(ctxTx, id, pins); err != nil {

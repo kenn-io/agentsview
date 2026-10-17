@@ -14396,7 +14396,7 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 			}
 			id := e.applyIDPrefixToSessionIDs([]string{result.Session.ID})[0]
 			for _, oldID := range excluded {
-				if err := e.db.RecoverCodexSessionIdentity(ctx, oldID, id, path, agent); err != nil {
+				if err := e.db.RecoverCodexSessionIdentity(ctx, oldID, id, path, agent, result.Session.Cwd); err != nil {
 					return nil, err
 				}
 			}
