@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -330,7 +331,7 @@ func TestListEmptySessionSelectionReturnsEmptyWithoutRequest(t *testing.T) {
 
 func TestUsageModelGroupsQuery(t *testing.T) {
 	for _, grouped := range []bool{false, true} {
-		t.Run(fmt.Sprint(grouped), func(t *testing.T) {
+		t.Run(strconv.FormatBool(grouped), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, grouped, r.URL.Query().Has("group_models"))
 				if grouped {
