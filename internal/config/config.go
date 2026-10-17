@@ -1037,6 +1037,9 @@ type Config struct {
 
 	// vectorSectionDefined records a [vector] section in config.toml.
 	vectorSectionDefined bool
+	validationScope      ValidationScope
+	pgConfigErr          error
+	clickHouseConfigErr  error
 
 	pgEnvOverrides         pgEnvOverrides
 	clickHouseEnvOverrides clickHouseEnvOverrides
@@ -1389,7 +1392,7 @@ func AgentHomeDirs(def parser.AgentDef, home string) []string {
 // The provided FlagSet must already be parsed by the caller.
 // Only flags that were explicitly set override the lower layers.
 func Load(fs *flag.FlagSet) (Config, error) {
-	cfg, err := loadConfigLayers()
+	cfg, err := loadConfigLayers(0)
 	if err != nil {
 		return cfg, err
 	}
@@ -1402,7 +1405,12 @@ func Load(fs *flag.FlagSet) (Config, error) {
 
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
-	cfg, err := loadConfigLayers()
+	return LoadPFlagsFor(fs, 0)
+}
+
+// LoadPFlagsFor loads a command's config, warning about invalid unused sections.
+func LoadPFlagsFor(fs *pflag.FlagSet, scope ValidationScope) (Config, error) {
+	cfg, err := loadConfigLayers(scope)
 	if err != nil {
 		return cfg, err
 	}
@@ -1462,7 +1470,12 @@ func loadPGServeBase() (Config, error) {
 // without parsing CLI flags. Use this for subcommands that manage
 // their own flag sets.
 func LoadMinimal() (Config, error) {
-	cfg, err := loadConfigLayers()
+	return LoadMinimalFor(0)
+}
+
+// LoadMinimalFor loads a command's config without flags. Zero scope is strict.
+func LoadMinimalFor(scope ValidationScope) (Config, error) {
+	cfg, err := loadConfigLayers(scope)
 	if err != nil {
 		return cfg, err
 	}
@@ -1473,11 +1486,12 @@ func LoadMinimal() (Config, error) {
 }
 
 // loadConfigLayers leaves runtime roots unresolved until flags are applied.
-func loadConfigLayers() (Config, error) {
+func loadConfigLayers(scope ValidationScope) (Config, error) {
 	cfg, err := Default()
 	if err != nil {
 		return cfg, err
 	}
+	cfg.validationScope = scope
 	cfg.loadEnv()
 	if err := expandDataDir(&cfg); err != nil {
 		return cfg, err
@@ -1486,7 +1500,10 @@ func loadConfigLayers() (Config, error) {
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
-	return cfg, cfg.applyDeploymentEnv()
+	if scope.uses(ScopeDeployment) {
+		return cfg, cfg.applyDeploymentEnv()
+	}
+	return cfg, nil
 }
 
 func finishLoadedConfig(cfg *Config) error {
@@ -1508,11 +1525,30 @@ func finishLoadedConfig(cfg *Config) error {
 // writing config migrations or generated secrets. Use it for diagnostic
 // commands that must not mutate user state.
 func LoadReadOnly() (Config, error) {
+	return LoadReadOnlyFor(0)
+}
+
+// LoadReadOnlyFor loads scoped config without migrations or generated secrets.
+func LoadReadOnlyFor(scope ValidationScope) (Config, error) {
+	return loadReadOnlyFor(scope, "")
+}
+
+// LoadReadOnlyAt validates the complete config in dataDir, including deployment
+// environment, without migrations or generated secrets.
+func LoadReadOnlyAt(dataDir string) (Config, error) {
+	return loadReadOnlyFor(0, dataDir)
+}
+
+func loadReadOnlyFor(scope ValidationScope, dataDir string) (Config, error) {
 	cfg, err := Default()
 	if err != nil {
 		return cfg, err
 	}
+	cfg.validationScope = scope
 	cfg.loadEnv()
+	if dataDir != "" {
+		cfg.DataDir = dataDir
+	}
 	if err := expandDataDir(&cfg); err != nil {
 		return cfg, err
 	}
@@ -1520,8 +1556,10 @@ func LoadReadOnly() (Config, error) {
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
-	if err := cfg.applyDeploymentEnv(); err != nil {
-		return cfg, err
+	if scope.uses(ScopeDeployment) {
+		if err := cfg.applyDeploymentEnv(); err != nil {
+			return cfg, err
+		}
 	}
 	if err := cfg.readInstallationID(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cfg, fmt.Errorf("reading installation identity: %w", err)
@@ -1751,7 +1789,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.vectorSectionDefined = true
 	}
 	if file.ZoomLevel != nil {
-		if err := file.ZoomLevel.Validate(); err != nil {
+		if err := c.validateSection(ScopeServer, "zoom_level", file.ZoomLevel.Validate); err != nil {
 			return err
 		}
 	}
@@ -1792,11 +1830,13 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Port = file.Port
 	}
 	if meta.IsDefined("chart_palette") {
-		palette, err := ParseChartPalette(string(file.ChartPalette))
-		if err != nil {
+		if err := c.validateSection(ScopeServer, "chart_palette", func() error {
+			_, err := ParseChartPalette(string(file.ChartPalette))
+			return err
+		}); err != nil {
 			return err
 		}
-		c.ChartPalette = palette
+		c.ChartPalette = file.ChartPalette
 	}
 	if file.ZoomLevel != nil {
 		c.ZoomLevel = file.ZoomLevel
@@ -1862,7 +1902,10 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	legacyPG, namedPG, err := parsePGConfigSection(raw["pg"])
 	if err != nil {
-		return fmt.Errorf("pg: %w", err)
+		c.pgConfigErr = fmt.Errorf("pg: %w", err)
+		if _, semantic := errors.AsType[*targetValidationError](err); !semantic || c.validationScope.uses(ScopePG) {
+			return c.pgConfigErr
+		}
 	}
 	if len(namedPG) > 0 {
 		c.PG = PGConfig{}
@@ -1893,7 +1936,10 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	legacyCH, namedCH, err := parseClickHouseConfigSection(raw["clickhouse"])
 	if err != nil {
-		return fmt.Errorf("clickhouse: %w", err)
+		c.clickHouseConfigErr = fmt.Errorf("clickhouse: %w", err)
+		if _, semantic := errors.AsType[*targetValidationError](err); !semantic || c.validationScope.uses(ScopeClickHouse) {
+			return c.clickHouseConfigErr
+		}
 	}
 	if len(namedCH) > 0 {
 		c.ClickHouse = ClickHouseConfig{}
@@ -2562,7 +2608,6 @@ func splitFlagList(value string) []string {
 }
 
 func finalize(cfg *Config) error {
-	var err error
 	if err := expandLocalPaths(cfg); err != nil {
 		return err
 	}
@@ -2572,38 +2617,7 @@ func finalize(cfg *Config) error {
 	if err := cfg.resolveSessionSources(); err != nil {
 		return err
 	}
-	if err := normalizeProxyConfig(&cfg.Proxy); err != nil {
-		return err
-	}
-	cfg.PublicURL, err = resolvePublicURL(cfg.PublicURL, cfg.Proxy)
-	if err != nil {
-		return fmt.Errorf("invalid public url: %w", err)
-	}
-	cfg.PublicOrigins, err = normalizePublicOrigins(cfg.PublicOrigins)
-	if err != nil {
-		return fmt.Errorf("invalid public origins: %w", err)
-	}
-	if cfg.PublicURL != "" {
-		cfg.PublicOrigins, err = normalizePublicOrigins(
-			append(cfg.PublicOrigins, cfg.PublicURL),
-		)
-		if err != nil {
-			return fmt.Errorf("invalid public url: %w", err)
-		}
-	}
-	if cfg.DaemonIdleTimeout < 0 {
-		return fmt.Errorf("invalid daemon_idle_timeout: %s", cfg.DaemonIdleTimeout)
-	}
-	if err := cfg.Vector.Validate(); err != nil {
-		return err
-	}
-	if err := cfg.Recall.Extract.Validate(); err != nil {
-		return err
-	}
-	if err := cfg.Insights.Validate(); err != nil {
-		return err
-	}
-	return nil
+	return cfg.validateSections()
 }
 
 func (c *Config) resolveSessionSources() error {
@@ -3184,6 +3198,9 @@ func defaultAgentsviewDBDir(dbPath string) bool {
 
 // DefaultPGTargetName returns the effective named PG target for this config.
 func (c *Config) DefaultPGTargetName() (string, error) {
+	if c.pgConfigErr != nil {
+		return "", c.pgConfigErr
+	}
 	return defaultNamedTargetName("pg", "default_pg", c.DefaultPG, c.PGTargets)
 }
 
@@ -3193,6 +3210,9 @@ func (c *Config) validatePGTargets() error {
 }
 
 func (c *Config) PGTargetNames() ([]string, string, error) {
+	if c.pgConfigErr != nil {
+		return nil, "", c.pgConfigErr
+	}
 	return namedTargetNames("pg", "default_pg", c.DefaultPG, c.PGTargets)
 }
 
@@ -3244,6 +3264,13 @@ func (c *Config) resolvePGConfig(
 		}
 		if c.pgEnvOverrides.AllowInsecure != nil {
 			pg.AllowInsecure = *c.pgEnvOverrides.AllowInsecure
+		}
+		if strings.TrimSpace(os.Getenv("AGENTSVIEW_MODE")) != "" {
+			if v, set, err := lookupEnvBool("AGENTSVIEW_PG_ALLOW_INSECURE"); err != nil {
+				return pg, err
+			} else if set {
+				pg.AllowInsecure = v
+			}
 		}
 	}
 	if pg.URL != "" {
@@ -3340,6 +3367,9 @@ func (c *Config) ResolvePGTargets() ([]ResolvedPGTarget, error) {
 }
 
 func (c *Config) DefaultClickHouseTargetName() (string, error) {
+	if c.clickHouseConfigErr != nil {
+		return "", c.clickHouseConfigErr
+	}
 	return defaultNamedTargetName(
 		"clickhouse", "default_clickhouse", c.DefaultClickHouse, c.ClickHouseTargets,
 	)
@@ -3351,6 +3381,9 @@ func (c *Config) validateClickHouseTargets() error {
 }
 
 func (c *Config) ClickHouseTargetNames() ([]string, string, error) {
+	if c.clickHouseConfigErr != nil {
+		return nil, "", c.clickHouseConfigErr
+	}
 	return namedTargetNames(
 		"clickhouse", "default_clickhouse", c.DefaultClickHouse, c.ClickHouseTargets,
 	)

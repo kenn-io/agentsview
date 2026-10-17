@@ -17,7 +17,7 @@ func newMCPStatusCommand() *cobra.Command {
 		Args:              cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error { return nil },
 		RunE: func(command *cobra.Command, _ []string) error {
-			cfg, err := config.LoadReadOnly()
+			cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 			if err != nil {
 				return err
 			}

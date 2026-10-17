@@ -52,12 +52,12 @@ func newClassifierRebuildCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.LoadPFlags(cmd.Flags())
+			cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
 			applyClassifierConfig(cfg)
-			tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+			tr, err := detectClientTransportContext(cmd.Context(), &cfg, 0)
 			if err != nil {
 				return err
 			}

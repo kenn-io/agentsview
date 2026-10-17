@@ -117,10 +117,30 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 }
 
 func newDaemonCommand() *cobra.Command {
-	return newDaemonCommandWithDeps(defaultDaemonCommandDeps())
+	deps := defaultDaemonCommandDeps()
+	clientDeps := deps
+	clientDeps.loadConfig = func() (config.Config, error) {
+		cfg, err := config.LoadMinimalFor(config.ScopeLocal)
+		if err == nil {
+			err = cfg.ApplyDeploymentAuth()
+		}
+		return cfg, err
+	}
+	clientDeps.loadReadOnlyConfig = func() (config.Config, error) {
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
+		if err == nil {
+			err = cfg.ApplyDeploymentAuth()
+		}
+		return cfg, err
+	}
+	return newDaemonCommandWithClientDeps(deps, clientDeps)
 }
 
 func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
+	return newDaemonCommandWithClientDeps(deps, deps)
+}
+
+func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Manage the background server",
@@ -151,14 +171,14 @@ func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
 			Use: "status", Short: "Show background server status",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return runDaemonStatus(cmd.OutOrStdout(), deps)
+				return runDaemonStatus(cmd.OutOrStdout(), clientDeps)
 			},
 		},
 		&cobra.Command{
 			Use: "stop", Short: "Stop the background server",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return runDaemonStop(cmd.OutOrStdout(), deps)
+				return runDaemonStop(cmd.OutOrStdout(), clientDeps)
 			},
 		},
 		&cobra.Command{

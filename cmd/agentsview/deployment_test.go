@@ -167,6 +167,9 @@ func TestMCPDeploymentTokenDoesNotOpenNetworkBind(t *testing.T) {
 	token := filepath.Join(dir, "token")
 	require.NoError(t, os.WriteFile(token, []byte("listener-secret\n"), 0o600))
 	t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", token)
+	// The listener consumes deployment auth, but not the serve-mode model layer.
+	t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://127.0.0.1:30000/v1")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled=false\n"), 0o600))
 
 	cmd := newMCPCommand()
 	cmd.SetContext(t.Context())

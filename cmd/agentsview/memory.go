@@ -330,7 +330,7 @@ func checkHostedReaderAvailability(
 func resolveMemoryPGTarget(
 	targetName string,
 ) (config.Config, storage.ConfiguredReplica, error) {
-	cfg, err := config.LoadMinimal()
+	cfg, err := config.LoadMinimalFor(config.ScopePG)
 	if err != nil {
 		return config.Config{}, storage.ConfiguredReplica{},
 			fmt.Errorf("memory session-start: loading config: %w", err)
@@ -372,7 +372,7 @@ func probeHostedReaderPostgreSQL(
 }
 
 func requestLocalMemoryRefresh(ctx context.Context) error {
-	cfg, err := config.LoadMinimal()
+	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("memory session-start: loading config: %w", err)
 	}

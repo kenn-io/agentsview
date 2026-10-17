@@ -277,7 +277,7 @@ func runPrune(ctx context.Context, cfg PruneConfig) {
 		fatal("at least one filter is required\nuse --project, --max-messages, --before, or --first-message")
 	}
 
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}

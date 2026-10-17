@@ -112,7 +112,7 @@ type DuckDBQuackServeConfig struct {
 }
 
 func runDuckDBPush(cfg DuckDBPushConfig) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
@@ -309,7 +309,7 @@ func duckDBLongRunningSignals() []os.Signal {
 }
 
 func runDuckDBStatus() {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
@@ -576,7 +576,7 @@ func duckDBMirrorProbeFailureReason(probe duckdbsync.MirrorProbe) string {
 }
 
 func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}

@@ -93,7 +93,7 @@ var openPGReadStore = func(
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
 	applyClassifierConfig(cfg)
-	if err := pgCfg.ValidateRawDerivation(cfg.RequireAuth); err != nil {
+	if err := cfg.ValidatePGRawDerivation(pgCfg); err != nil {
 		return nil, nil, err
 	}
 	if pgCfg.RawTenant != "" {
@@ -132,6 +132,31 @@ func detectTransport(
 	return detectTransportContext(
 		context.Background(), dataDir, authToken, waitTimeout,
 	)
+}
+
+// detectClientTransportContext probes an existing daemon using deployment
+// credentials, without applying unrelated deployment settings or auto-starting.
+// Keep the resolved token in cfg for the API client selected by this probe.
+func detectClientTransportContext(
+	ctx context.Context, cfg *config.Config, waitTimeout time.Duration,
+) (transport, error) {
+	if err := ctx.Err(); err != nil {
+		return transport{}, err
+	}
+	if err := cfg.ApplyDeploymentAuth(); err != nil {
+		return transport{}, fmt.Errorf("loading daemon auth: %w", err)
+	}
+	return detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, waitTimeout)
+}
+
+// loadDaemonClientConfig is the scoped minimal loader for clients which probe
+// daemon ownership directly rather than using transport discovery.
+func loadDaemonClientConfig(scope config.ValidationScope) (config.Config, error) {
+	cfg, err := config.LoadMinimalFor(scope)
+	if err == nil {
+		err = cfg.ApplyDeploymentAuth()
+	}
+	return cfg, err
 }
 
 func detectTransportContext(
@@ -226,6 +251,9 @@ func ensureTransportContext(
 	}
 	if err := ctx.Err(); err != nil {
 		return transport{}, err
+	}
+	if err := cfg.ApplyDeploymentAuth(); err != nil {
+		return transport{}, fmt.Errorf("loading daemon auth: %w", err)
 	}
 	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
 	// invocation only, without touching the process environment.
@@ -478,9 +506,13 @@ func daemonRuntimeAhead(rt *DaemonRuntime) bool {
 }
 
 func guardDaemonAutoStartConfig(cfg config.Config) error {
-	host := strings.TrimSpace(cfg.Host)
-	if host == "" || cfg.RequireAuth || isLoopbackHost(host) {
-		return nil
+	effective, err := config.LoadReadOnlyAt(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("loading daemon configuration: %w", err)
+	}
+	host := strings.TrimSpace(effective.Host)
+	if host == "" || effective.RequireAuth || isLoopbackHost(host) {
+		return validateServeConfig(effective)
 	}
 	return fmt.Errorf(
 		"refusing to auto-start an unauthenticated daemon on non-loopback "+

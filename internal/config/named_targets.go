@@ -51,6 +51,7 @@ func parseNamedTargetSection[T any](
 	}
 	hasLegacyFields := false
 	hasNamedTargets := false
+	var layoutErr error
 	legacyRaw := make(map[string]any)
 	namedTargets := make(map[string]T)
 	seenNames := make(map[string]string)
@@ -76,19 +77,19 @@ func parseNamedTargetSection[T any](
 		}
 		hasNamedTargets = true
 		if name == "" {
-			return zero, nil, fmt.Errorf(
+			layoutErr = invalidTargetLayout(
 				"named %s targets must not be blank",
 				noun,
 			)
 		}
 		if reserved(name) {
-			return zero, nil, fmt.Errorf(
+			layoutErr = invalidTargetLayout(
 				"named %s target %q is reserved",
 				noun, name,
 			)
 		}
 		if prev, exists := seenNames[name]; exists {
-			return zero, nil, fmt.Errorf(
+			layoutErr = invalidTargetLayout(
 				"named %s targets %q and %q normalize to the same name %q",
 				noun, prev, rawName, name,
 			)
@@ -103,7 +104,7 @@ func parseNamedTargetSection[T any](
 		namedTargets[name] = targetCfg
 	}
 	if hasLegacyFields && hasNamedTargets {
-		return zero, nil, fmt.Errorf(
+		layoutErr = invalidTargetLayout(
 			"cannot mix legacy [%s] fields with named [%s.NAME] targets",
 			section, section,
 		)
@@ -113,7 +114,13 @@ func parseNamedTargetSection[T any](
 		if err != nil {
 			return zero, nil, err
 		}
+		if layoutErr != nil {
+			return zero, nil, layoutErr
+		}
 		return legacyCfg, nil, nil
+	}
+	if layoutErr != nil {
+		return zero, nil, layoutErr
 	}
 	if hasNamedTargets {
 		return zero, namedTargets, nil

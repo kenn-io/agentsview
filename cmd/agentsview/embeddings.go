@@ -396,7 +396,7 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 func runEmbeddingsBuild(
 	ctx context.Context, out io.Writer, in io.Reader, opts EmbeddingsBuildOptions,
 ) error {
-	cfg, err := config.LoadMinimal()
+	cfg, err := loadDaemonClientConfig(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -784,7 +784,7 @@ func printBuildSummary(w io.Writer, result vector.BuildResult) {
 // display, including entries fetched from the daemon (which does not send
 // one because the selected store is already explicit in the request).
 func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, store string) error {
-	cfg, err := config.LoadMinimal()
+	cfg, err := loadDaemonClientConfig(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -880,7 +880,7 @@ func truncateFingerprint(fp string) string {
 func runEmbeddingsGenerationAction(
 	ctx context.Context, out io.Writer, id int64, force, retire bool, store string,
 ) error {
-	cfg, err := config.LoadMinimal()
+	cfg, err := loadDaemonClientConfig(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -950,6 +950,9 @@ func directGenerationAction(
 // HTTP client for its embeddings API. Callers only reach it after
 // IsLocalDaemonActive reported true.
 func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, error) {
+	if err := cfg.ApplyDeploymentAuth(); err != nil {
+		return embeddingsDaemonClient{}, fmt.Errorf("loading daemon auth: %w", err)
+	}
 	rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
 	if rt == nil {
 		if _, err := findIncompatibleWritableDaemonRuntime(

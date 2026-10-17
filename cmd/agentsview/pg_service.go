@@ -120,7 +120,7 @@ func newServiceLogsCommand(kind serviceKind) *cobra.Command {
 
 // loadServiceConfig loads minimal config and ensures the data dir.
 func loadServiceConfig(kind serviceKind) config.Config {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		fatal("%s service: loading config: %v", kind.Name, err)
 	}

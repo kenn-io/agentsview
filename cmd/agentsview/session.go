@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -77,7 +78,18 @@ func resolveService(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	scope := config.ScopeLocal
+	for _, name := range []string{"semantic", "hybrid"} {
+		if enabled, _ := cmd.Flags().GetBool(name); enabled {
+			scope |= config.ScopeVector
+		}
+	}
+	mode, _ := cmd.Flags().GetString("mode")
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == db.RecallQueryModeVector || mode == db.RecallQueryModeHybrid {
+		scope |= config.ScopeVector
+	}
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), scope)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"loading config: %w", err,
@@ -88,6 +100,11 @@ func resolveService(
 		return nil, nil, err
 	}
 	if usePG {
+		if scope&config.ScopeVector != 0 {
+			if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
+				return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
+			}
+		}
 		return newPGReadService(cfg, pgCfg)
 	}
 	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
@@ -156,7 +173,7 @@ func resolveWritableServiceWithIntent(
 			"--pg is read-only and cannot be used with write commands",
 		)
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -164,7 +181,7 @@ func resolveWritableServiceWithIntent(
 	if fresh {
 		tr, err = ensureTransport(&cfg, transportIntentArchiveWrite, 0)
 	} else {
-		tr, err = detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+		tr, err = detectClientTransportContext(cmd.Context(), &cfg, 0)
 	}
 	if err != nil {
 		return nil, nil, err
