@@ -67,7 +67,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 				}
 				require.Equal(b, int64(60_000), day.Hours[12].Usage.Totals.OutputTokens)
 				b.ReportMetric(float64(len(payload)), "payload-bytes/op")
-				if variant.version == 4 {
+				if variant.version == export.ReportingJointSchemaVersion {
 					require.NotEmpty(b, day.Hours[12].Joint.Cells)
 					require.Len(b, day.Hours[12].Joint.Projects, projects)
 					b.ReportMetric(float64(len(day.Hours[12].Joint.Cells)), "cells/op")
