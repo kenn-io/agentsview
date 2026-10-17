@@ -1129,6 +1129,8 @@ func EnsureSchema(
 // Idempotent via IF NOT EXISTS.
 func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_sessions_legacy_codex_file
+		 ON sessions(file_path) WHERE provenance_kind = 'legacy' AND data_version < 137`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
@@ -2437,7 +2439,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// A push may provision the schema for a read-only serve role. Include
 	// the Activity index so that upgrading through push installs it too.
 	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
-		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
+		pgHasIndex(ctx, db, "idx_tool_result_events_terminal") &&
+		pgHasIndex(ctx, db, "idx_sessions_legacy_codex_file")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a

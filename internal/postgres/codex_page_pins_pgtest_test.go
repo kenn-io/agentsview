@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,9 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 	for _, tc := range []struct{ name, prefix, agent string }{
 		{"full_push", "codex:", "codex"},
 		{"misfiled_thread", "codex:", "codex"},
+		{"misfiled_thread_only", "codex:", "codex"},
+		{"misfiled_thread_only_compressed", "codex:", "codex"},
+		{"misfiled_thread_only_uncompressed", "codex:", "codex"},
 		{"head_first", "host~traex:", "traex"},
 		{"page_first", "augure-code:", "augure-code"},
 		{"page_only", "codex:", "codex"},
@@ -38,7 +42,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			thread := tc.prefix + threadUUID
 			page := thread + "_22222222-2222-4222-8222-222222222222"
 			version := 130
-			if tc.name == "misfiled_thread" {
+			if strings.HasPrefix(tc.name, "misfiled_thread") {
 				page = tc.prefix + "22222222-2222-4222-8222-222222222222"
 				version = 135
 			}
@@ -50,8 +54,11 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+threadUUID+"_22222222-2222-4222-8222-222222222222.jsonl")
-			if tc.name == "misfiled_thread" {
+			if strings.HasPrefix(tc.name, "misfiled_thread") {
 				pagePath = filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
+			}
+			if tc.name == "misfiled_thread_only_uncompressed" {
+				pagePath += ".zst"
 			}
 			headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
 			require.NoError(t, source.UpsertSession(ctx, db.Session{
@@ -96,8 +103,16 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				{thread, headPath, "original answer", "head-answer"},
 				{page, pagePath, "answer saved only on page", "page-answer"},
 			} {
-				if tc.name == "page_only" && row.id == thread {
+				if (tc.name == "page_only" || strings.HasPrefix(tc.name, "misfiled_thread_only")) && row.id == thread {
 					continue
+				}
+				if row.id == page {
+					if tc.name == "misfiled_thread_only_compressed" {
+						row.path += ".zst"
+					}
+					if tc.name == "misfiled_thread_only_uncompressed" {
+						row.path = strings.TrimSuffix(row.path, ".zst")
+					}
 				}
 				if tc.name == "changed_page" && row.id == page {
 					row.content, row.uuid = "unrelated replacement", "replacement-answer"
@@ -175,6 +190,12 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					require.True(t, result.ok)
 				}
 			}
+			if tc.name == "misfiled_thread_only" {
+				require.True(t, pushSchemaCurrent(ctx, upgraded.pg))
+				_, err = upgraded.pg.ExecContext(ctx, `DROP INDEX idx_sessions_legacy_codex_file`)
+				require.NoError(t, err)
+				assert.False(t, pushSchemaCurrent(ctx, upgraded.pg))
+			}
 			result, err = upgraded.Push(ctx, true, nil)
 			if blocked {
 				require.Error(t, err)
@@ -190,6 +211,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Zero(t, result.Errors)
+			assert.True(t, pushSchemaCurrent(ctx, upgraded.pg))
 			if tc.name == "filtered_head" || tc.name == "excluded_head" {
 				head, err := store.GetSessionFull(ctx, thread)
 				require.NoError(t, err)
@@ -213,6 +235,11 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			if tc.name == "changed_page" {
 				assert.Empty(t, after, "a removed message must not pin an unrelated replacement")
 				return
+			}
+			if strings.HasPrefix(tc.name, "misfiled_thread_only") {
+				old, err := store.GetSessionFull(ctx, thread)
+				require.NoError(t, err)
+				assert.Nil(t, old, "the duplicate remote transcript must be retired")
 			}
 			require.Len(t, after, 1, "the remote-only pin must survive the page split and a later full push")
 			wantSession := page

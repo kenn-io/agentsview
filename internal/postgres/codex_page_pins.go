@@ -24,6 +24,8 @@ func (s *Sync) migrateCodexPages(
 	markerID string, legacyMarkerMachines []string,
 ) error {
 	threads := make(map[string]db.Session)
+	byFile := make(map[string]db.Session)
+	var files []string
 	for _, sess := range batch {
 		switch sess.Agent {
 		case "codex", "traex", "augure-code":
@@ -37,6 +39,11 @@ func (s *Sync) migrateCodexPages(
 					continue
 				}
 				threads[id] = sess
+				if sess.FilePath != nil {
+					path := strings.TrimSuffix(*sess.FilePath, ".zst")
+					byFile[path] = sess
+					files = append(files, path, path+".zst")
+				}
 				// Also key by the id a legacy page held before data version 134
 				// (the filename without its thread). The old data version is
 				// only known after the query below, so this stays unrestricted;
@@ -55,8 +62,9 @@ func (s *Sync) migrateCodexPages(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
 		FROM sessions
-		WHERE id = ANY($1) AND provenance_kind = 'legacy'
-		ORDER BY id FOR UPDATE`, mapKeys(threads))
+		WHERE provenance_kind = 'legacy'
+		  AND (id = ANY($1) OR (data_version < 137 AND file_path = ANY($2)))
+		ORDER BY id FOR UPDATE`, mapKeys(threads), files)
 	if err != nil {
 		return fmt.Errorf("finding legacy Codex pages: %w", err)
 	}
@@ -70,6 +78,9 @@ func (s *Sync) migrateCodexPages(
 		var page legacyPage
 		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion); err != nil {
 			return fmt.Errorf("reading legacy Codex pages: %w", err)
+		}
+		if _, selected := threads[page.id]; !selected {
+			threads[page.id] = byFile[strings.TrimSuffix(page.path, ".zst")]
 		}
 		pages = append(pages, page)
 	}
