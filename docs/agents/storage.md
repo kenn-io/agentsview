@@ -181,6 +181,16 @@ pages stored under their bare rollout ID to `<thread>_<rollout>`, using the file
 name kept with each deletion when the file is gone. Session and recall imports
 use the same exclusion check.
 
+Data version 137 rebuilds the archive so each Codex rollout keeps its first
+session metadata ID. During this upgrade, pins, Recall entries and export
+message IDs follow a misfiled transcript only when a fresh parse at its exact
+stored path proves the corrected thread. Names and stars stay on a surviving
+original thread. Missing, moved or compressed files, trashed or deleted misfiled
+rows, and chains of misfiled rows follow the existing rebuild behavior. If
+another file reparses under the saved ID, its messages replace the old
+transcript. PostgreSQL-only pins on a misfiled row's messages are dropped on the
+next push.
+
 Legacy trash keeps the same thread-wide scope in
 `sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
 absent pages even when they return at a different path. Restoring the thread or

@@ -577,6 +577,25 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Repeated session metadata (checked 2026-10-17 at rust-v0.47.0,
+  `c71297b9a9b3f7995445eff8d768837814ac06f8`):** The
+  [reader](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/rollout/recorder.rs#L223-L229)
+  uses the first `session_meta` as the canonical conversation identity.
+  [Fork initialization](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/codex.rs#L571-L585)
+  persists copied rollout items, including metadata allowed by the
+  [persistence policy](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/rollout/policy.rs#L6-L15).
+  Its
+  [metadata schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/protocol.rs#L971-L980)
+  has no `forked_from_id`. AgentsView keeps the first nonempty metadata ID and
+  ignores later metadata with a different or empty ID. Same-thread metadata can
+  still update the working directory and branch; existing fork replay filtering
+  and revert-page identities remain in effect. This establishes a producer path
+  for the shape reported in
+  [issue #2248](https://github.com/kenn-io/agentsview/issues/2248); the
+  particular file's history remains unverified.
+  `TestCodexMisfiledPageUpgradeRetainsTranscriptMetadata` verifies that a proven
+  page correction preserves transcript metadata during upgrade.
+
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
   by the Codex app compresses rollouts whose modification time is at least
