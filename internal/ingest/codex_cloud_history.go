@@ -3,7 +3,6 @@ package ingest
 import (
 	"fmt"
 	"slices"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -50,12 +49,11 @@ func CodexCloudKeepReason(messages int, prior CodexCloudPrior) string {
 //     newest records.
 //   - With no plan records, prepared takes the saved plan figures. With
 //     only an outcome other than "counted under", it keeps the saved
-//     report figures, under the new outcome when that outcome is newer
-//     than the saved report, as the parser does for a whole mirror. A
-//     parse with a report keeps its own plan figures: a file cut after a
-//     newer report shows the older one until the next usage answer.
-//     Report times come from OpenAI and can repeat across answers, so
-//     they cannot tell a cut file from a whole one.
+//     report figures under the new outcome, as the parser does for a
+//     whole mirror. A parse with a report keeps its own plan figures: a
+//     file cut after a newer report shows the older one until the next
+//     usage answer. Report times come from OpenAI and can repeat across
+//     answers, so they cannot tell a cut file from a whole one.
 //
 // It reports whether prepared took anything from the saved copy.
 func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool {
@@ -85,11 +83,7 @@ func CarryCodexCloudUsage(prepared *PreparedSession, prior CodexCloudPrior) bool
 	case hasPlanRecords(prepared.PlanUsage):
 		if hasPlanReport(prior.PlanUsage) {
 			merged := *prior.PlanUsage
-			// An outcome from before the saved report is one the parser
-			// drops in a whole file, so it does not replace the saved one.
-			if planTime(row.OutcomeAt).After(planTime(merged.DataAsOf)) {
-				merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
-			}
+			merged.OutcomeKind, merged.OutcomeAt = row.OutcomeKind, row.OutcomeAt
 			row = withCoverage(merged, row)
 			carried = true
 		}
@@ -128,16 +122,6 @@ func dropsEvents(parsed, saved []db.UsageEvent) bool {
 		keys[ev.DedupKey] = true
 	}
 	return !slices.ContainsFunc(parsed, func(ev db.UsageEvent) bool { return !keys[ev.DedupKey] })
-}
-
-// planTime parses a stored plan usage time. An empty or malformed time is
-// the zero time, which is older than any real one.
-func planTime(s string) time.Time {
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
 }
 
 // hasPlanReport reports whether a plan usage row holds OpenAI's report
