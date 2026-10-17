@@ -372,7 +372,7 @@ class AnalyticsStore {
   }
 
   removeMachine(machine: string) {
-    const current = this.machine ? this.machine.split(",") : [];
+    const current = sessions.selectedMachines;
     this.machine = current.filter((m) => m !== machine).join(",");
     sessions.filters.machine = this.machine;
     sessions.activeSessionId = null;

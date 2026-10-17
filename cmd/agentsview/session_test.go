@@ -422,6 +422,29 @@ func recordFixtureInstallation(t *testing.T, database *db.DB) {
 	require.NoError(t, database.AdoptMachineIdentity(t.Context(), cfg.InstallationID, nil))
 }
 
+func TestSessionGetCodebuffMachineSelectors(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	t.Setenv("CODEBUFF_DIR", t.TempDir())
+	id := "host-a~codebuff:proj:2026-07-17T06-58-00.000Z"
+	seedSessionsWithOpts(t, dataDir, sessionSeed{id: id, project: "proj", mut: func(s *db.Session) {
+		s.Agent = "codebuff"
+		s.Machine = "id-a"
+	}})
+	database, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	require.NoError(t, database.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Work, Linux"))
+	require.NoError(t, database.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-b", "Secondary"))
+	require.NoError(t, database.Close())
+	for _, selector := range []string{"id-a,id-b", "Work, Linux"} {
+		t.Run(selector, func(t *testing.T) {
+			out, err := executeCommand(newRootCommand(), "session", "get", "2026-07-17T06-58-00.000Z", "--machine", selector, "--json")
+			require.NoError(t, err)
+			got := decodeCLIJSON[map[string]any](t, out)
+			assert.Equal(t, id, got["id"])
+		})
+	}
+}
+
 func TestSessionGetVariants(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	bareID := "019da6a6-8c67-7c23-b102-ef48502852d0"

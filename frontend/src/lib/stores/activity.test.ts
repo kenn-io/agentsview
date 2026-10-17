@@ -271,6 +271,17 @@ describe("load", () => {
     expect(activity.loading).toBe(false);
   });
 
+  it("clears the previous report when a background refresh rejects the machine selector", async () => {
+    api.getActivityReport.mockResolvedValueOnce(makeReport());
+    await activity.load();
+    api.getActivityReport.mockRejectedValueOnce(
+      new ApiError(400, "unknown machine", "invalid_machine_filter"),
+    );
+    await activity.load({ background: true });
+    expect(activity.report).toBeNull();
+    expect(activity.error).toBe("unknown machine");
+  });
+
   it("keeps the existing report when a background refresh fails", async () => {
     api.getActivityReport.mockResolvedValueOnce(makeReport());
     await activity.load();

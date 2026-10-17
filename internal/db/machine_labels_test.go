@@ -63,6 +63,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		MachineLabelKeyPrefix + "old-owner":       "A",
 		MachineLabelKeyPrefix + "label-owner":     id,
 		MachineLabelKeyPrefix + "hex-label-owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		MachineLabelKeyPrefix + "padded-owner":    "  Padded workstation \t",
 		artifactLocalInstallationStateKey:         "id-a",
 	} {
 		require.NoError(t, d.SetSyncState(ctx, key, value))
@@ -73,6 +74,8 @@ func TestResolveMachineFilter(t *testing.T) {
 		// An installation ID without stored sessions stays an exact selector.
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,id-a"},
+		{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,old-host"},
+		{" Padded workstation ", "padded-owner"},
 		{"", ""},
 		{" \t ", ""},
 		{"A", "id-a"},

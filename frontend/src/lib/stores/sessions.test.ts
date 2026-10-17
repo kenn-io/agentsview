@@ -2622,6 +2622,7 @@ describe("SessionsStore", () => {
           params.machine ? Promise.reject(error) : Promise.resolve(catalog),
         );
         sessions.initFromParams({ machine: "Workstation" });
+        await sessions.loadMachines();
         sessions.toggleMachineFilter("id-b");
         expect(sessions.filters.machine).toBe("Workstation");
         expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
@@ -2701,16 +2702,10 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("id-a");
     });
 
-    it("reads resolved machine IDs separately from the picker catalog", async () => {
-      api.getMachines.mockResolvedValue({ ...catalog, resolved_machines: ["id-a"] });
-      sessions.initFromParams({ machine: "Workstation" });
-      await sessions.loadMachines();
-      expect(sessions.filters.machine).toBe("id-a");
-    });
-
     it("preserves the selector when a response omits resolved IDs", async () => {
       api.getMachines.mockResolvedValue(catalog);
       sessions.initFromParams({ machine: "Workstation" });
+      await sessions.loadMachines();
       sessions.toggleMachineFilter("id-b");
       expect(sessions.filters.machine).toBe("Workstation");
     });

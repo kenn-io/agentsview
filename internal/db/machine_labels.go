@@ -150,6 +150,16 @@ func knownMachineIDs(labels, aliases map[string]string) map[string]bool {
 	return known
 }
 
+// keepMachineList reports whether parts resolve as IDs. A list with an exact
+// installation ID keeps unknown legacy members, as the old filter did.
+func keepMachineList(parts []string, known map[string]bool) bool {
+	isID := func(id string) bool { return config.ValidateInstallationID(id) == nil }
+	if len(parts) > 1 && slices.ContainsFunc(parts, isID) {
+		return true
+	}
+	return len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && !isID(id) })
+}
+
 // ResolveMachineFilterWithMetadata reuses labels and aliases already read for a catalog response.
 func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine string, labels, aliases map[string]string) (string, error) {
 	machine = strings.TrimSpace(machine)
@@ -171,12 +181,12 @@ func ResolveMachineFilterWithMetadata(ctx context.Context, store Store, machine 
 			known[id] = true
 		}
 	}
-	if len(parts) > 0 && !slices.ContainsFunc(parts, func(id string) bool { return !known[id] && config.ValidateInstallationID(id) != nil }) {
+	if keepMachineList(parts, known) {
 		return strings.Join(parts, ","), nil
 	}
 	var candidates []string
 	for id, label := range labels {
-		if label == machine {
+		if strings.TrimSpace(label) == machine {
 			candidates = append(candidates, CanonicalMachineFilter(id, aliases))
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -295,7 +296,7 @@ func resolveBareCodebuffID(
 // codebuffMachineMatches reports whether a row's machine column
 // passes the user's --machine filter. "" or "local" defers to
 // localMachine (cfg.InstallationID); "*" matches anything; any
-// other non-empty value is matched exactly. This keeps the resolver
+// other non-empty value is a comma-separated ID list. This keeps the resolver
 // decoupled from cobra while still honouring the rule that
 // unspecified / "local" mean "this archive's own sessions".
 func codebuffMachineMatches(
@@ -307,7 +308,7 @@ func codebuffMachineMatches(
 	case "", "local":
 		return rowMachine == localMachine
 	default:
-		return rowMachine == filter
+		return slices.Contains(strings.Split(filter, ","), rowMachine)
 	}
 }
 
