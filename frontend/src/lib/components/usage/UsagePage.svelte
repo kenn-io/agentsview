@@ -148,6 +148,11 @@
     untrack(() => mergeIntoKnownModels(fromSummary));
   });
 
+  $effect(() => {
+    const filtered = usage.excludedModels.split(",").filter(Boolean);
+    untrack(() => mergeIntoKnownModels(filtered));
+  });
+
   const modelItems = $derived(
     modelPickerItems(knownModels, usage.excludedModels, usage.modelAliases),
   );

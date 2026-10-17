@@ -507,10 +507,11 @@ model keys to `~/.agentsview/config.toml`, then restart AgentsView:
 "qwen3.6-mlx" = "qwen3.6"
 ```
 
-Both variants appear as `qwen3.6`, with their tokens and costs added together.
+Usage combines both variants as `qwen3.6`, with their tokens and costs added
+together. Analytics gets the grouped Model filter; it has no per-model rows.
 Each variant keeps its own pricing before the totals are combined. Keys and
 names must be non-empty, have no surrounding whitespace or commas, and cannot
-form alias chains or use the reserved names `__all__` and `__other__`.
+form alias chains or use the reserved name `__other__`.
 
 A saved filter naming one model variant keeps its one-variant meaning after you
 configure an alias. The picker shows that selection on the group row. The

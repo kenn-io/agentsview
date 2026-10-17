@@ -548,7 +548,7 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 
 func TestUsageSummaryModelGroups(t *testing.T) {
 	te := setup(t, func(c *config.Config) {
-		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
+		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "constructor", "gpt-4o": "constructor"}
 	})
 	seedUsagePairwiseEnv(t, te)
 	for _, tt := range []struct {
@@ -572,10 +572,20 @@ func TestUsageSummaryModelGroups(t *testing.T) {
 			}
 			var body map[string]jsontext.Value
 			require.NoError(t, json.Unmarshal([]byte(payload), &body))
+			var rows service.UsageSummaryResult
+			require.NoError(t, json.Unmarshal([]byte(payload), &rows))
 			if tt.grouped == "true" {
-				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"group","gpt-4o":"group"}`, string(body["model_aliases"]))
+				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"constructor","gpt-4o":"constructor"}`, string(body["model_aliases"]))
+				require.Len(t, rows.ModelTotals, 1)
+				assert.Equal(t, "constructor", rows.ModelTotals[0].Model)
+				assert.Equal(t, 130, rows.ModelTotals[0].InputTokens)
+				require.Len(t, rows.Daily, 1)
+				require.Len(t, rows.Daily[0].ModelBreakdowns, 1)
+				assert.Equal(t, "constructor", rows.Daily[0].ModelBreakdowns[0].ModelName)
+				assert.Equal(t, 130, rows.Daily[0].ModelBreakdowns[0].InputTokens)
 			} else {
 				assert.NotContains(t, body, "model_aliases")
+				assert.Len(t, rows.ModelTotals, 2)
 			}
 			if tt.grouped == "true" {
 				assert.NotContains(t, body, "pricing")
@@ -593,6 +603,18 @@ func TestUsageTopSessionsModelGroup(t *testing.T) {
 		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
 	})
 	seedUsagePairwiseEnv(t, te)
+	started := "2024-06-01T11:00:00Z"
+	te.seedSession(t, "unrelated-model", "gamma", 2, func(sess *db.Session) {
+		sess.StartedAt, sess.EndedAt = &started, &started
+		sess.UserMessageCount = 1
+	})
+	te.seedMessages(t, "unrelated-model", 2, func(_ int, m *db.Message) {
+		m.Timestamp = started
+		if m.Role == "assistant" {
+			m.Model = "unrelated"
+			m.TokenUsage = tokenUsageJSON
+		}
+	})
 	for _, tt := range []struct {
 		filter string
 		want   []string

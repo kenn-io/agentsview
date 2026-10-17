@@ -87,6 +87,50 @@ afterEach(() => {
 });
 
 describe("AnalyticsPage grouped model filter", () => {
+  it("keeps a saved variant's group available after clearing an empty period", async () => {
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    analytics.model = "claude-opus-4-20250514";
+    analytics.summary = {
+      total_sessions: 0,
+      total_messages: 0,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
+      models: [],
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
+      active_projects: 0,
+      active_days: 0,
+      avg_messages: 0,
+      median_messages: 0,
+      p90_messages: 0,
+      most_active_project: "",
+      concentration: 0,
+      agents: {},
+    };
+    sessions.loading = false;
+    router.route = "sessions";
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Model: claude-opus-4-20250514"]')!
+      .click();
+    await flushEffects();
+    const groupRow = () =>
+      [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")].find(
+        (row) =>
+          row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
+      );
+    expect(groupRow()).toBeDefined();
+    groupRow()!.click();
+    await flushEffects();
+    expect(analytics.model).toBe("");
+    expect(groupRow()).toBeDefined();
+    groupRow()!.click();
+    await flushEffects();
+    expect(analytics.model).toBe("claude-4");
+  });
+
   it("shows only the display group with its tick selected", async () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(outcomeTotals, "load").mockResolvedValue();

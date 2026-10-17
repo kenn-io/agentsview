@@ -256,6 +256,35 @@ describe("UsagePage refresh behavior", () => {
     expect(groups[0]!.getAttribute("title")).toBe("claude-opus-4-20250514");
   });
 
+  it("keeps a saved variant's group available after re-including an empty period", async () => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { exclude_model: "claude-opus-4-20250514" };
+    usage.summary = {
+      ...usageSummaryWithUnsupported(),
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
+    };
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Model: 1 hidden"]')!.click();
+    await flushEffects();
+    const groupRow = () =>
+      [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item")].find(
+        (row) =>
+          row.querySelector(".kit-filter-dropdown__label")?.textContent?.trim() === "claude-4",
+      );
+    expect(groupRow()).toBeDefined();
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Select all")!
+      .click();
+    await flushEffects();
+    expect(usage.excludedModels).toBe("");
+    expect(groupRow()).toBeDefined();
+    expect(groupRow()!.querySelector(".kit-filter-dropdown__check.on")).not.toBeNull();
+    usage.cancelInFlightReads();
+  });
+
   it("restores hidden models from a shared URL", async () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

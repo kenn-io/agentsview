@@ -302,6 +302,11 @@
     untrack(() => mergeIntoKnownModels(fromSummary));
   });
 
+  $effect(() => {
+    const selected = analytics.model.split(",").filter(Boolean);
+    untrack(() => mergeIntoKnownModels(selected));
+  });
+
   const modelItems = $derived(
     modelPickerItems(knownModels, analytics.model, analytics.modelAliases),
   );

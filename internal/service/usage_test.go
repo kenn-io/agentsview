@@ -450,6 +450,7 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 		{name: "default", defaultPair: true, wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
 		{name: "fallback kept", fallback: true, leftValue: "gpt-4o", rightValue: "claude-sonnet-4-20250514", wantLeft: "gpt-4o", wantRight: "claude-sonnet-4-20250514", leftSessions: 1, rightSessions: 2, leftTokens: 50, rightTokens: 285},
 		{name: "fallback replaced", fallback: true, leftValue: "missing-model", rightValue: "gpt-4o", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
+		{name: "CSV fallback without aliases", fallback: true, leftValue: "gpt-4o,missing-model", rightValue: "claude-sonnet-4-20250514", wantLeft: "claude-sonnet-4-20250514", wantRight: "gpt-4o", leftSessions: 2, rightSessions: 1, leftTokens: 285, rightTokens: 50},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
