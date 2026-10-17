@@ -392,7 +392,9 @@ func (s *Store) storedPlan(key AccountKey, id string, st ThreadState) (planState
 // A final row settles the root. Of the outcomes, "settled with no row",
 // "could not check", and "too many sub-agent chats" settle it, and "left
 // out" settles it only when it is the mark written in one commit with a
-// final row, as settleLeftOut does.
+// final row, as settleLeftOut does. A missing mirror file holds no plan
+// records: the root goes back in the queue, and its next plan usage write
+// rebuilds the file and fetches the history again.
 func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 	path, err := s.MirrorPath(key, id)
 	if err != nil {
@@ -400,6 +402,9 @@ func (s *Store) mirrorPlan(key AccountKey, id string) (planState, error) {
 	}
 	// A local read with no request behind it to cancel.
 	records, err := mirror.ReadAll(context.Background(), path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return planState{}, nil
+	}
 	if err != nil {
 		return planState{}, fmt.Errorf("read mirror: %w", err)
 	}

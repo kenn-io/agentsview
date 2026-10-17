@@ -255,7 +255,9 @@ reads only local files and fetches nothing. For each root:
 
 Each root keeps its group's stored change time, so a root that changed more than
 7 days ago settles on its first answer. A root whose files cannot be read is
-logged and left out until its chat changes again.
+logged and left out until its chat changes again. A root whose mirror file is
+missing has no plan records, so it is pending again, and its next plan usage
+write rebuilds the file and fetches the history.
 
 The same rebuild restores the chats that a pass fetches again although their
 listing has not changed. A chat with a running turn, or whose newest turn ended
