@@ -41,6 +41,7 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		label:    w.label,
 		engine:   w.engine,
 		retry:    w.debounce,
+		maxRetry: w.interval,
 		requests: make(chan struct{}, 1),
 	}
 	lane.fullPending.Store(w.full)
@@ -141,9 +142,12 @@ type archiveSyncLane struct {
 	loop   *pushLoop
 	// retry spaces syncs while no complete local sync has run, so a failed
 	// startup sync does not pause remote pushes for a whole floor interval.
-	retry        time.Duration
-	openDispatch func()
-	requests     chan struct{}
+	// It doubles after each further failure, up to maxRetry: a retry can
+	// rebuild the whole archive.
+	retry, maxRetry time.Duration
+	startupFailures int
+	openDispatch    func()
+	requests        chan struct{}
 	// startupSync runs the startup sync, including any archive rebuild it
 	// needs. The lane retries it until one completes. full is the watch's
 	// --full request. Local owners only.
@@ -204,6 +208,14 @@ func (l *archiveSyncLane) push(
 		log.Printf("%s: push (%s) skipped: waiting for a local sync that "+
 			"finishes without errors", l.label, reason)
 		return nil
+	}
+	if l.engine != nil && reason == reasonShutdown {
+		// The watcher has stopped, so changes it had not dispatched yet
+		// reach the archive only through this sync.
+		l.engine.SyncAll(ctx, nil)
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("syncing before the final push: %w", err)
+		}
 	}
 	if l.engine != nil {
 		// Wait for an in-progress sync and flush deferred signal recomputes,
@@ -319,6 +331,10 @@ func (l *archiveSyncLane) syncStartup(ctx context.Context) bool {
 		return false
 	}
 	if err != nil {
+		if l.startupFailures > 0 {
+			l.retry = min(2*l.retry, max(l.maxRetry, l.retry))
+		}
+		l.startupFailures++
 		log.Printf("%s: startup sync failed: %v. Remote pushes stay paused. "+
 			"Retrying in %s.", l.label, err, l.retry)
 		return false

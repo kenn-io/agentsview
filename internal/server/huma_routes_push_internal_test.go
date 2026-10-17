@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -680,6 +681,8 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 		func(bool) error { return pushFailure })
 	require.ErrorIs(t, err, pushFailure)
+	_, notStarted := errors.AsType[pushNotStartedError](err)
+	assert.False(t, notStarted, "an error from the push work may follow a started copy")
 }
 
 // A daemon push must not block local ingestion: a sync can take the engine
@@ -793,6 +796,8 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local sync processing incomplete")
+	_, notStarted := errors.AsType[pushNotStartedError](err)
+	assert.True(t, notStarted, "a failed pre-push sync never started the push")
 }
 
 func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
@@ -1206,4 +1211,35 @@ func (r *signalingRecorder) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.Body.String()
+}
+
+// A push error tells the client whether the copy started, in both response
+// shapes, so a watch can keep a --full request that no push started.
+func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
+	for _, accept := range []string{"application/json", "text/event-stream"} {
+		for _, tt := range []struct {
+			err     error
+			started bool
+		}{
+			{pushNotStartedError{errors.New("resync failed")}, false},
+			{errors.New("copy failed"), true},
+		} {
+			t.Run(fmt.Sprintf("%s started=%t", accept, tt.started), func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
+				request.Header.Set("Accept", accept)
+				runPushStream(humago.NewContext(&huma.Operation{}, request, recorder),
+					func(func(storage.PushProgress)) (any, error) { return nil, tt.err })
+				payload := recorder.Body.String()
+				if accept == "text/event-stream" {
+					require.Contains(t, payload, "event: error\n")
+					_, payload, _ = strings.Cut(payload, "data: ")
+				}
+				var body pushErrorResponse
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &body))
+				assert.Equal(t, tt.err.Error(), body.Error)
+				assert.Equal(t, tt.started, body.PushStarted)
+			})
+		}
+	}
 }

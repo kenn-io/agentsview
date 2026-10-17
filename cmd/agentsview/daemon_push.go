@@ -124,8 +124,9 @@ func postDaemonPush[T, P any](
 				fallbackAttempted = true
 				continue
 			}
-			// The daemon answers before it starts the push.
-			return zero, pushNotStartedError{errors.New(daemonErrorMessage(resp.StatusCode, msg))}
+			return zero, daemonPushError(
+				errors.New(daemonErrorMessage(resp.StatusCode, msg)), msg, false,
+			)
 		}
 		defer resp.Body.Close()
 		if strings.HasPrefix(
@@ -196,7 +197,7 @@ func consumeDaemonPushEvents[T, P any](stream *runtime.Stream[[]byte], onProgres
 		default:
 			var apiErr apiclient.APIErrorResponse
 			if err := json.Unmarshal(frame.Data, &apiErr); err == nil && apiErr.ErrorData != "" {
-				pushErr = errors.New(apiErr.ErrorData)
+				pushErr = daemonPushError(errors.New(apiErr.ErrorData), frame.Data, true)
 			} else {
 				pushErr = fmt.Errorf("daemon push error: %s", frame.Data)
 			}
@@ -212,4 +213,23 @@ func consumeDaemonPushEvents[T, P any](stream *runtime.Stream[[]byte], onProgres
 		return zero, errors.New("daemon push response missing done event")
 	}
 	return result, nil
+}
+
+// daemonPushError marks err as a push that never started when the daemon's
+// error body sets push_started to false. Older daemons omit the field; then
+// startedByDefault decides. A rejected request never started a push, and an
+// error streamed after the daemon accepted the push may come from one that
+// did.
+func daemonPushError(err error, body []byte, startedByDefault bool) error {
+	var status struct {
+		PushStarted *bool `json:"push_started"`
+	}
+	started := startedByDefault
+	if json.Unmarshal(body, &status) == nil && status.PushStarted != nil {
+		started = *status.PushStarted
+	}
+	if started {
+		return err
+	}
+	return pushNotStartedError{err}
 }

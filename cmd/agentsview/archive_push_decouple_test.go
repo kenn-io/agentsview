@@ -336,6 +336,38 @@ func TestLocalPushWatchPushesFullAfterStartupRebuildWithFailures(t *testing.T) {
 	}
 }
 
+// A retry of the startup sync can rebuild the whole archive, so repeated
+// failures space the retries out: the wait doubles each time, up to the floor
+// interval.
+func TestLocalPushWatchBacksOffFailedStartupSyncs(t *testing.T) {
+	for _, owner := range localPushWatchOwnerCases(t) {
+		t.Run(owner.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness()
+				hooks := h.hooks()
+				start := time.Now()
+				var attempts []time.Duration
+				hooks.startupSync = func(context.Context, *syncpkg.Engine, bool) (bool, error) {
+					attempts = append(attempts, time.Since(start))
+					return false, errors.New("startup sync discovery incomplete")
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, hooks) }()
+
+				time.Sleep(7*localPushWatchTestDebounce + time.Second)
+				synctest.Wait()
+				d := localPushWatchTestDebounce
+				assert.Equal(t, []time.Duration{0, d, 3 * d, 7 * d}, attempts)
+
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
+		})
+	}
+}
+
 // A periodic local sync queues a push only when it writes the archive.
 func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -381,6 +413,42 @@ func TestArchiveSyncLaneQueuesPushOnlyAfterArchiveChanges(t *testing.T) {
 	))
 	lane.syncAll(ctx)
 	assert.True(t, queued(), "a sync that wrote a session queues a push")
+}
+
+// Stopping a local watch archives changes the watcher had not dispatched yet,
+// so the final push includes them.
+func TestArchiveSyncLaneSyncsBeforeFinalPush(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	codexRoot := t.TempDir()
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexRoot}},
+	})
+	t.Cleanup(engine.Close)
+	lane := &archiveSyncLane{
+		label: "test watch", engine: engine, openDispatch: func() {},
+	}
+	lane.ready.Store(true)
+	uuid := "c3d4e5f6-3333-4444-8555-666677778888"
+	day := filepath.Join(codexRoot, "2026", "10", "16")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(day, "rollout-2026-10-16T09-00-00-"+uuid+".jsonl"),
+		[]byte(testjsonl.NewSessionBuilder().
+			AddCodexMeta("2026-10-16T09:00:00Z", uuid, "/home/user/code/api", "codex_cli_rs").
+			AddCodexMessage("2026-10-16T09:00:01Z", "user", "hello").
+			String()),
+		0o644,
+	))
+
+	var archived int
+	require.NoError(t, lane.push(t.Context(), reasonShutdown, nil, func(
+		ctx context.Context, _ pushReason, _ bool, _ *syncpkg.WatchBatch,
+	) error {
+		var err error
+		archived, err = database.CountSessionsForMirrorScope(ctx, nil, nil)
+		return err
+	}))
+	assert.Equal(t, 1, archived, "the final push must see the pending session")
 }
 
 // A push waits for an in-progress local sync, so it never copies a session

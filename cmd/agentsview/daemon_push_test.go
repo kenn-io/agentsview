@@ -191,19 +191,22 @@ func daemonEventStream(body io.Reader) *runtime.Stream[[]byte] {
 	return runtime.NewEventStream[[]byte](&http.Response{Body: io.NopCloser(body)})
 }
 
-// A push the daemon refused or never received did not start, so a push watch
-// keeps its --full request for the retry. An error the daemon streams after
-// it accepted the push may come from a push that already started.
+// A push the daemon refused, never received, or reports as not started
+// leaves nothing to resume, so a push watch keeps its --full request for the
+// retry. An error from an older daemon that accepted the push may come from a
+// push that already started.
 func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
-	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(refused.Close)
-	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: error\ndata: {\"error\":\"push: conn reset\"}\n\n"))
-	}))
-	t.Cleanup(failed.Close)
+	serve := func(handler http.HandlerFunc) string {
+		ts := httptest.NewServer(handler)
+		t.Cleanup(ts.Close)
+		return ts.URL
+	}
+	streamError := func(data string) string {
+		return serve(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: error\ndata: " + data + "\n\n"))
+		})
+	}
 	unreachable := httptest.NewServer(http.NotFoundHandler())
 	unreachable.Close()
 
@@ -212,9 +215,19 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 		url     string
 		started bool
 	}{
-		{"daemon refused", refused.URL, false},
+		{"daemon refused", serve(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}), false},
 		{"daemon unreachable", unreachable.URL, false},
-		{"push failed", failed.URL, true},
+		{"older daemon streamed an error", streamError(`{"error":"push: conn reset"}`), true},
+		{"pre-push resync failed", streamError(
+			`{"error":"resync failed","push_started":false}`), false},
+		{"copy failed", streamError(`{"error":"push: conn reset","push_started":true}`), true},
+		{"copy failed without a stream", serve(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"push: conn reset","push_started":true}`))
+		}), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := postDaemonPush[storage.PushResult, storage.PushProgress](

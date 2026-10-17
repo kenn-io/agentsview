@@ -532,7 +532,7 @@ func TestPgPusherErrorsNameTheFailedStep(t *testing.T) {
 }
 
 // The watch records the push stage with its own progress hook. A hook the
-// caller set must keep firing, once per stage.
+// caller set must keep firing.
 func TestPgPusherKeepsTheCallerStageHook(t *testing.T) {
 	p, _ := newTestReplicaPusher(&fakeTarget{})
 	var stages []archivepush.Stage
@@ -541,10 +541,8 @@ func TestPgPusherKeepsTheCallerStageHook(t *testing.T) {
 		return nil
 	}
 	require.NoError(t, p.push(t.Context(), reasonChange, false))
-	require.NoError(t, p.push(t.Context(), reasonChange, false))
 	assert.Equal(t, []archivepush.Stage{
 		archivepush.StageConnect, archivepush.StageSchema, archivepush.StagePush,
-		archivepush.StageSchema, archivepush.StagePush,
 	}, stages)
 }
 

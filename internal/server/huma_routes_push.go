@@ -111,7 +111,9 @@ func (s *Server) registerPushRoutes() {
 // (the CLI's daemon-delegated push renders these live), a single JSON body
 // otherwise. run receives the progress callback to thread into the push;
 // it is a throttled SSE sender in stream mode and nil in JSON mode — the
-// daemon-side debug.log progress logger is composed by the caller.
+// daemon-side debug.log progress logger is composed by the caller. An error
+// body carries push_started, so a watch client can keep a --full request
+// that no push started.
 func runPushStream[T any](
 	hctx huma.Context,
 	run func(onProgress func(T)) (any, error),
@@ -123,7 +125,7 @@ func runPushStream[T any](
 			})
 			result, err := run(send)
 			if err != nil {
-				sse.SendJSON("error", map[string]string{"error": err.Error()})
+				sse.SendJSON("error", pushErrorBody(err.Error(), err))
 				return
 			}
 			sse.SendJSON("done", result)
@@ -135,15 +137,35 @@ func runPushStream[T any](
 		if errors.Is(err, db.ErrWriterClosed) {
 			server, ok := hctx.Context().Value(ctxKeyHumaServer).(*Server)
 			response := writerClosedResponse(hctx.AppendHeader, ok && server.archiveStale())
-			writeHumaJSON(hctx, response.Status,
-				map[string]string{"error": response.Message})
+			writeHumaJSON(hctx, response.Status, pushErrorBody(response.Message, err))
 			return
 		}
 		writeHumaJSON(hctx, http.StatusInternalServerError,
-			map[string]string{"error": err.Error()})
+			pushErrorBody(err.Error(), err))
 		return
 	}
 	writeHumaJSON(hctx, http.StatusOK, result)
+}
+
+// pushNotStartedError marks a push error from before the copy to the
+// destination started.
+type pushNotStartedError struct{ err error }
+
+func (e pushNotStartedError) Error() string { return e.err.Error() }
+func (e pushNotStartedError) Unwrap() error { return e.err }
+
+// pushErrorResponse is the error body of a push route.
+type pushErrorResponse struct {
+	Error string `json:"error"`
+	// PushStarted reports whether the copy to the destination started. A
+	// push that started records a full push the mirror resumes; one that
+	// did not leaves nothing to resume.
+	PushStarted bool `json:"push_started"`
+}
+
+func pushErrorBody(message string, err error) pushErrorResponse {
+	_, notStarted := errors.AsType[pushNotStartedError](err)
+	return pushErrorResponse{Error: message, PushStarted: !notStarted}
 }
 
 // composePushProgress fans one progress report out to each non-nil callback.
@@ -504,6 +526,7 @@ func (p *pushTurn) take(ctx context.Context, onWait func()) (func(), error) {
 // while another push reads it. onWait, when set, is called if the push must
 // wait for its turn. Before the work it waits for any running sync and
 // flushes deferred signal recomputes, so the push copies settled sessions.
+// An error from before work runs is a pushNotStartedError.
 //
 // Full and stale-archive pushes are archive-scale: with the worker-backed
 // resync runner wired they route the rebuild through the worker (matching
@@ -524,17 +547,17 @@ func (s *Server) syncThenRunForPush(
 ) error {
 	endTurn, err := s.pushTurn.take(ctx, onWait)
 	if err != nil {
-		return err
+		return pushNotStartedError{err}
 	}
 	defer endTurn()
 	forceFull, incomplete, err := s.syncForPush(
 		ctx, engine, local, full, watchBatch, watchRecovery,
 	)
 	if err != nil {
-		return err
+		return pushNotStartedError{err}
 	}
 	if err := engine.SettleForPush(ctx); err != nil {
-		return err
+		return pushNotStartedError{err}
 	}
 	pushErr := work(forceFull)
 	if incomplete == nil {
@@ -671,6 +694,11 @@ func (s *Server) humaReplicaPush(
 			if storage.StoresFriction(replica) {
 				session.FrictionReview = engine
 			}
+			var stage archivepush.Stage
+			session.OnStage = func(s archivepush.Stage) func() {
+				stage = s
+				return nil
+			}
 			defer session.Close()
 			var result storage.PushResult
 			err := s.syncThenRunForPush(
@@ -690,6 +718,10 @@ func (s *Server) humaReplicaPush(
 						LastReconciledVectorGeneration: body.
 							LastReconciledVectorGeneration,
 					}, onProgress)
+					// The replica records a full push only once the copy starts.
+					if err != nil && stage != archivepush.StagePush {
+						return pushNotStartedError{err}
+					}
 					return err
 				},
 			)
