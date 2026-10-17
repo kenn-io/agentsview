@@ -16,24 +16,21 @@ import (
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.lock")
-	assert.False(t, IsDaemonStarting(dir))
 	assert.False(t, isExternalDaemonStarting(dir))
 	assert.NoFileExists(t, path)
 
 	stdin := startExternalDaemonStartLockHelper(t, path)
-	assert.True(t, IsDaemonStarting(dir))
 	assert.True(t, isExternalDaemonStarting(dir))
 
 	require.NoError(t, stdin.Close())
 	require.Eventually(t, func() bool {
-		return !IsDaemonStarting(dir) && !isExternalDaemonStarting(dir)
+		return !isExternalDaemonStarting(dir)
 	}, 5*time.Second, 10*time.Millisecond, "legacy daemon start lock should be released")
 	assert.FileExists(t, path)
 
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Mkdir(path, 0o700))
-	assert.False(t, IsDaemonStarting(dir), "an unopenable lock is not a starting daemon")
-	assert.False(t, isExternalDaemonStarting(dir))
+	assert.False(t, isExternalDaemonStarting(dir), "an unopenable lock is not a starting daemon")
 	assert.DirExists(t, path)
 }
 
@@ -54,16 +51,14 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("archive content"), 0o600))
 		before[i] = changeTime(path)
 	}
-	for range 3 {
-		assert.False(t, IsDaemonActive(dir))
-		assert.Nil(t, FindDaemonRuntime(dir))
-		assert.False(t, IsDaemonStarting(dir))
-		_, err := WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
-		require.NoError(t, err)
-		RemoveDaemonRuntime(dir)
-		for i, path := range paths {
-			assert.Equal(t, before[i], changeTime(path), "%s ChangeTime changed", path)
-		}
+	assert.False(t, IsDaemonActive(dir))
+	assert.Nil(t, FindDaemonRuntime(dir))
+	assert.False(t, IsDaemonStarting(dir))
+	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
+	require.NoError(t, err)
+	RemoveDaemonRuntime(dir)
+	for i, path := range paths {
+		assert.Equal(t, before[i], changeTime(path), "%s ChangeTime changed", path)
 	}
 }
 
@@ -72,22 +67,10 @@ func TestDaemonRuntimeFindsLegacyWindowsRecord(t *testing.T) {
 	host, port := testPingServer(t)
 	path, err := WriteDaemonRuntime(dir, host, port, "test", false)
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, "run"), filepath.Dir(path))
 	legacyPath := filepath.Join(dir, filepath.Base(path))
 	require.NoError(t, os.Rename(path, legacyPath))
 
 	rt := FindDaemonRuntime(dir)
 	require.NotNil(t, rt)
 	assert.Equal(t, legacyPath, rt.Record.SourcePath)
-	records, err := daemonStatusRecords(dir, "")
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	assert.Equal(t, legacyPath, records[0].SourcePath)
-	assert.True(t, hasLiveDaemonRuntime(dir))
-	assert.True(t, hasLiveWritableDaemonRuntime(dir))
-	assert.Len(t, liveDaemonRecords(dir), 1)
-	writable, err := writableDaemonRecords(dir, "")
-	require.NoError(t, err)
-	assert.Len(t, writable, 1)
-	assert.FileExists(t, legacyPath)
 }

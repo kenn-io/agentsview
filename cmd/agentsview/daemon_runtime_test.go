@@ -1069,17 +1069,22 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	assertPathRemoved(t, path, "runtime record not removed")
 }
 
-func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
+func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 	for _, tt := range []struct {
-		name     string
-		wrongPID bool
-		dead     bool
+		name        string
+		wrongPID    bool
+		dead        bool
+		unremovable bool
 	}{
 		{name: "live"},
 		{name: "dead", dead: true},
 		{name: "filename PID mismatch", wrongPID: true},
+		{name: "unremovable legacy file", dead: true, unremovable: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.unremovable && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
+				t.Skip("requires Unix directory permissions and a non-root user")
+			}
 			dir := t.TempDir()
 			store := daemonRuntimeStore{Dir: filepath.Join(dir, "run"), legacyDir: dir}
 			rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
@@ -1105,9 +1110,9 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 				require.Len(t, records, 1)
 				assert.Equal(t, rec.PID, records[0].PID)
 				assert.Equal(t, path, records[0].SourcePath)
-				cached, err := store.ReadPID(rec.PID)
+				read, err := store.ReadPID(rec.PID)
 				require.NoError(t, err)
-				assert.Equal(t, path, cached.SourcePath)
+				assert.Equal(t, path, read.SourcePath)
 			}
 			assert.FileExists(t, path)
 			// Count dead records in both directories, leaving live and mismatched records alone.
@@ -1115,10 +1120,14 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 			current.PID = deadPID(t)
 			currentPath, err := store.Write(current)
 			require.NoError(t, err)
+			if tt.unremovable {
+				t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
+				require.NoError(t, os.Chmod(dir, 0o500))
+			}
 			removed, err := store.CleanupDead()
 			require.NoError(t, err)
 			assert.NoFileExists(t, currentPath)
-			if tt.dead {
+			if tt.dead && !tt.unremovable {
 				assert.Equal(t, 2, removed)
 				assert.NoFileExists(t, path)
 			} else {
@@ -1127,30 +1136,6 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDaemonRuntimeStoreCleanupDeadIgnoresLegacyRemoveFailure(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("requires Unix directory permissions and a non-root user")
-	}
-	dir := t.TempDir()
-	store := daemonRuntimeStore{Dir: filepath.Join(dir, "run"), legacyDir: dir}
-	rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
-		Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
-	})
-	rec.PID = deadPID(t)
-	path := filepath.Join(dir, fmt.Sprintf("daemon.%d.json", rec.PID))
-	body, err := json.Marshal(rec)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, body, 0o600))
-	require.NoError(t, os.Mkdir(store.Dir, 0o700))
-	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
-	require.NoError(t, os.Chmod(dir, 0o500))
-
-	removed, err := store.CleanupDead()
-	require.NoError(t, err)
-	assert.Zero(t, removed)
-	assert.FileExists(t, path)
 }
 
 func TestFindDaemonRuntime_NoFiles(t *testing.T) {

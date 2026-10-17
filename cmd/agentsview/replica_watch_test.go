@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplicaWatchRefusesHeldLegacyLock(t *testing.T) {
+func TestReplicaWatchLockLeavesDataDirPermissions(t *testing.T) {
 	dir := t.TempDir()
 	isolateDeploymentEnv(t)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
