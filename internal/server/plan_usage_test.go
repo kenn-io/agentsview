@@ -46,9 +46,12 @@ func TestSessionUsagePlanOnlyFlagsFalse(t *testing.T) {
 		UncapturedTurns: 2,
 	}))
 
-	for _, path := range []string{
-		"/api/v1/sessions/" + id + "/usage",
-		"/api/v1/sessions/" + id + "/usage?subagents=true",
+	// The child has no coverage row of its own, as live capture never joins
+	// a sub-agent chat, so the combined result counts its two user messages
+	// as missed turns.
+	for path, uncaptured := range map[string]float64{
+		"/api/v1/sessions/" + id + "/usage":                2,
+		"/api/v1/sessions/" + id + "/usage?subagents=true": 4,
 	} {
 		w := te.get(t, path)
 		assertStatus(t, w, http.StatusOK)
@@ -67,7 +70,7 @@ func TestSessionUsagePlanOnlyFlagsFalse(t *testing.T) {
 			"final": true,
 		}, got["plan_usage"], path)
 		assert.Equal(t, map[string]any{
-			"last_capture_at": "2026-10-01T12:30:00Z", "uncaptured_turns": float64(2),
+			"last_capture_at": "2026-10-01T12:30:00Z", "uncaptured_turns": uncaptured,
 		}, got["capture_coverage"], path)
 	}
 }
