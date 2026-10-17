@@ -3,65 +3,31 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
-	if path := os.Getenv("AGENTSVIEW_LEGACY_START_LOCK_HELPER"); path != "" {
-		lock := flock.New(path)
-		require.NoError(t, lock.Lock())
-		fmt.Println("ready")
-		_, err := io.Copy(io.Discard, os.Stdin)
-		require.NoError(t, err)
-		require.NoError(t, lock.Close())
-		return
-	}
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.lock")
 	assert.False(t, IsDaemonStarting(dir))
 	assert.False(t, isExternalDaemonStarting(dir))
 	assert.NoFileExists(t, path)
 
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDaemonRuntimeFindsLegacyWindowsStartLock$")
-	cmd.Env = append(os.Environ(), "AGENTSVIEW_LEGACY_START_LOCK_HELPER="+path)
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-	stdout, err := cmd.StdoutPipe()
-	require.NoError(t, err)
-	cmd.Stderr = os.Stderr
-	require.NoError(t, cmd.Start())
-	waited := false
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		if !waited {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
-	})
-	ready, err := bufio.NewReader(stdout).ReadString('\n')
-	require.NoError(t, err)
-	require.Equal(t, "ready\n", ready)
+	stdin := startExternalDaemonStartLockHelper(t, path)
 	assert.True(t, IsDaemonStarting(dir))
 	assert.True(t, isExternalDaemonStarting(dir))
 
 	require.NoError(t, stdin.Close())
-	err = cmd.Wait()
-	waited = true
-	require.NoError(t, err)
-	assert.False(t, IsDaemonStarting(dir))
-	assert.False(t, isExternalDaemonStarting(dir))
+	require.Eventually(t, func() bool {
+		return !IsDaemonStarting(dir) && !isExternalDaemonStarting(dir)
+	}, 5*time.Second, 10*time.Millisecond, "legacy daemon start lock should be released")
 	assert.FileExists(t, path)
 
 	require.NoError(t, os.Remove(path))

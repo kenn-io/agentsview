@@ -89,11 +89,45 @@ func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
 	if err != nil || s.Dir == s.legacyDir {
 		return records, err
 	}
+	legacy, err := s.legacyRecords()
+	if err != nil {
+		return nil, err
+	}
+	return append(records, legacy...), nil
+}
+
+func (s daemonRuntimeStore) CleanupDead() (int, error) {
+	removed, err := s.RuntimeStore.CleanupDead()
+	if err != nil || s.Dir == s.legacyDir {
+		return removed, err
+	}
+	records, err := s.legacyRecords()
+	if err != nil {
+		return removed, err
+	}
+	var firstErr error
+	for _, rec := range records {
+		if daemon.ProcessAlive(rec.PID) {
+			continue
+		}
+		if err := os.Remove(rec.SourcePath); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			removed++
+		}
+	}
+	return removed, firstErr
+}
+
+func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
 	// Remove this bridge the release after the Windows runtime subdirectory ships.
 	entries, err := os.ReadDir(s.legacyDir)
 	if err != nil {
 		return nil, fmt.Errorf("read legacy runtime dir: %w", err)
 	}
+	var records []daemon.RuntimeRecord
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasPrefix(name, "daemon.") || !strings.HasSuffix(name, ".json") {

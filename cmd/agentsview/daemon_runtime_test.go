@@ -372,7 +372,9 @@ func TestSameProcessStartMarkerNeverReportsExternal(t *testing.T) {
 
 func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
 	t.Helper()
-	stdin := startExternalDaemonStartLockHelper(t, dataDir)
+	lockPath, err := runtimeStore(dataDir).LockPath()
+	require.NoError(t, err)
+	stdin := startExternalDaemonStartLockHelper(t, lockPath)
 
 	var once sync.Once
 	unlock := func() {
@@ -388,7 +390,7 @@ func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
 	return unlock
 }
 
-func startExternalDaemonStartLockHelper(t *testing.T, dataDir string) io.Closer {
+func startExternalDaemonStartLockHelper(t *testing.T, lockPath string) io.Closer {
 	t.Helper()
 
 	cmd := exec.CommandContext(t.Context(),
@@ -398,7 +400,7 @@ func startExternalDaemonStartLockHelper(t *testing.T, dataDir string) io.Closer 
 	cmd.Env = append(
 		os.Environ(),
 		"AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_HELPER=1",
-		"AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_DATA_DIR="+dataDir,
+		"AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_PATH="+lockPath,
 	)
 	stdin, err := cmd.StdinPipe()
 	require.NoError(t, err)
@@ -428,10 +430,6 @@ func startExternalDaemonStartLockHelper(t *testing.T, dataDir string) io.Closer 
 		_ = cmd.Process.Kill()
 		require.Equal(t, "ready", strings.TrimSpace(line))
 	}
-	require.Eventually(t, func() bool {
-		return isExternalDaemonStarting(dataDir)
-	}, 2*time.Second, 10*time.Millisecond,
-		"external daemon start lock should be visible to parent")
 	return stdin
 }
 
@@ -501,10 +499,8 @@ func TestHoldExternalDaemonStartLockHelperProcess(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_HELPER") != "1" {
 		return
 	}
-	dataDir := os.Getenv("AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_DATA_DIR")
-	require.NotEmpty(t, dataDir)
-	lockPath, err := runtimeStore(dataDir).LockPath()
-	require.NoError(t, err)
+	lockPath := os.Getenv("AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_PATH")
+	require.NotEmpty(t, lockPath)
 	lock := flock.New(lockPath)
 	locked, err := lock.TryLock()
 	require.NoError(t, err)
@@ -1077,8 +1073,10 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		wrongPID bool
+		dead     bool
 	}{
 		{name: "live"},
+		{name: "dead", dead: true},
 		{name: "filename PID mismatch", wrongPID: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1087,6 +1085,9 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 			rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
 				Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
 			})
+			if tt.dead {
+				rec.PID = deadPID(t)
+			}
 			filenamePID := rec.PID
 			if tt.wrongPID {
 				filenamePID = deadPID(t)
@@ -1109,6 +1110,21 @@ func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
 				assert.Equal(t, path, cached.SourcePath)
 			}
 			assert.FileExists(t, path)
+			// Count dead records in both directories, leaving live and mismatched records alone.
+			current := rec
+			current.PID = deadPID(t)
+			currentPath, err := store.Write(current)
+			require.NoError(t, err)
+			removed, err := store.CleanupDead()
+			require.NoError(t, err)
+			assert.NoFileExists(t, currentPath)
+			if tt.dead {
+				assert.Equal(t, 2, removed)
+				assert.NoFileExists(t, path)
+			} else {
+				assert.Equal(t, 1, removed)
+				assert.FileExists(t, path)
+			}
 		})
 	}
 }
