@@ -1045,13 +1045,17 @@ func TestUsagePairwiseModelGroupNameCollision(t *testing.T) {
 		service.NewReadOnlyBackend(d, service.WithModelGroups(groups)),
 	} {
 		for _, tt := range []struct {
-			name     string
-			grouped  bool
-			fallback bool
+			name                  string
+			grouped               bool
+			fallback              bool
+			dimension             string
+			left, right           string
+			leftInput, rightInput int
 		}{
-			{name: "grouping omitted"},
-			{name: "grouping enabled", grouped: true},
-			{name: "fallback requested", fallback: true},
+			{name: "grouping omitted", dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 170, rightInput: 30},
+			{name: "grouping enabled", grouped: true, dimension: "project", leftInput: 100, rightInput: 100},
+			{name: "fallback requested", fallback: true, dimension: "model", left: "claude-sonnet-4-20250514", right: "gpt-4o", leftInput: 170, rightInput: 30},
+			{name: "grouped fallback requested", grouped: true, fallback: true, dimension: "project", leftInput: 100, rightInput: 100},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				req := service.UsagePairwiseComparisonRequest{
@@ -1064,12 +1068,16 @@ func TestUsagePairwiseModelGroupNameCollision(t *testing.T) {
 				}
 				result, err := be.UsagePairwiseComparison(t.Context(), req)
 				require.NoError(t, err)
-				// One model group remains, so the default compares projects.
-				assert.Equal(t, "project", result.Left.Dimension)
-				assert.Equal(t, "project", result.Right.Dimension)
-				assert.NotEqual(t, result.Left.Value, result.Right.Value)
-				assert.Equal(t, 100, result.Left.InputTokens)
-				assert.Equal(t, 100, result.Right.InputTokens)
+				assert.Equal(t, tt.dimension, result.Left.Dimension)
+				assert.Equal(t, tt.dimension, result.Right.Dimension)
+				if tt.grouped {
+					assert.NotEqual(t, result.Left.Value, result.Right.Value)
+				} else {
+					assert.Equal(t, tt.left, result.Left.Value)
+					assert.Equal(t, tt.right, result.Right.Value)
+				}
+				assert.Equal(t, tt.leftInput, result.Left.InputTokens)
+				assert.Equal(t, tt.rightInput, result.Right.InputTokens)
 			})
 		}
 		result, err := be.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
