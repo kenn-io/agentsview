@@ -91,7 +91,10 @@ function settle() {
 
 describe("ActivityInsight", () => {
   it("reports the insight kind when generation fails", async () => {
-    mocks.generateInsight.mockImplementation(() => ({ abort: vi.fn(), done: Promise.reject(new Error("Generation failed")) }));
+    mocks.generateInsight.mockImplementation(() => ({
+      abort: vi.fn(),
+      done: Promise.reject(new Error("Generation failed")),
+    }));
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: /generate/i }));

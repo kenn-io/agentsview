@@ -402,7 +402,10 @@ describe("SyncStore.triggerResync", () => {
     expect(sync.syncing).toBe(false);
   });
 
-  it.each([new DOMException("Cancelled", "AbortError"), Object.assign(new Error("Cancelled"), { name: "AbortError" })])("ignores a cancelled resync: %s", async (error) => {
+  it.each([
+    new DOMException("Cancelled", "AbortError"),
+    Object.assign(new Error("Cancelled"), { name: "AbortError" }),
+  ])("ignores a cancelled resync: %s", async (error) => {
     mockResyncFailure(error);
     sync.triggerResync();
     await expect(api.triggerResync.mock.results[0]!.value.done).rejects.toMatchObject({

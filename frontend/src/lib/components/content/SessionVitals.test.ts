@@ -577,7 +577,10 @@ describe("SessionVitals", () => {
 
   it("reports the session kind when distilled recall fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Recall failed")));
-    component = mount(SessionVitals, { target: document.body, props: { sessionId: traceSession.id, session: traceSession } });
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: traceSession.id, session: traceSession },
+    });
     await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session"));
   });
 

@@ -524,7 +524,9 @@ describe("QualityPage evidence navigation", () => {
   });
 
   it("reports the analytics kind when signal evidence fails", async () => {
-    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockRejectedValueOnce(new Error("Evidence failed"));
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockRejectedValueOnce(
+      new Error("Evidence failed"),
+    );
     component = mount(QualityPage, { target: document.body });
     await flushEffects();
     document.querySelector<HTMLButtonElement>(".driver-row")!.click();

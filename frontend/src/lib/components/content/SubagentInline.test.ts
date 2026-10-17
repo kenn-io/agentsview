@@ -91,7 +91,10 @@ describe("SubagentInline", () => {
   it("reports the session kind when expanded messages fail", async () => {
     getMessages.mockRejectedValueOnce(new Error("Messages failed"));
     getSession.mockResolvedValueOnce(makeSession());
-    const component = mount(SubagentInline, { target: document.body, props: { sessionId: "subagent-session-id" } });
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
     await tick();
     document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
     await vi.waitFor(() => expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("session"));

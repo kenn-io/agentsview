@@ -103,7 +103,14 @@ function mountPanel(
 ) {
   return mount(ToolSequencesPanel, {
     target: document.body,
-    props: { data, sessionId: "session-a", loading: false, failed: false, errorTelemetryKind: "session", ...extra },
+    props: {
+      data,
+      sessionId: "session-a",
+      loading: false,
+      failed: false,
+      errorTelemetryKind: "session",
+      ...extra,
+    },
   });
 }
 
