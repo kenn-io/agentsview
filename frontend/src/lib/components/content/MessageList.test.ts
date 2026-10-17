@@ -1,6 +1,6 @@
+// @vitest-environment jsdom
 import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { Virtualizer, type VirtualizerOptions } from "@tanstack/virtual-core";
