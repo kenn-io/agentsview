@@ -173,36 +173,21 @@ function isFamilyLink(node: SessionTreeNode): boolean {
   return relationship === "fork" || relationship === "continuation";
 }
 
-// Reports whether the active session's fork family branches. The family is
-// the nearest ancestor not linked to its parent by a fork or continuation,
-// and every fork and continuation below it. Only a fork branches, so a
-// family linked by continuations alone is a single path.
-export function forkFamilyBranches(root: SessionTreeNode, activeId: string): boolean {
-  const parents = new Map<SessionTreeNode, SessionTreeNode>();
-  let active: SessionTreeNode | null = null;
+// Reports whether the active session's fork family holds other sessions:
+// a fork or continuation links the session to its parent or to one of its
+// children. A family linked by continuations alone does not branch, but its
+// inputs still span every session in it.
+export function inForkFamily(root: SessionTreeNode, activeId: string): boolean {
+  if (root.session.id === activeId) return root.children.some(isFamilyLink);
   const stack = [root];
   while (stack.length > 0) {
     const node = stack.pop()!;
-    if (node.session.id === activeId) active = node;
     for (const child of node.children) {
-      parents.set(child, node);
+      if (child.session.id === activeId) {
+        return isFamilyLink(child) || child.children.some(isFamilyLink);
+      }
       stack.push(child);
     }
-  }
-  if (!active) return false;
-
-  let familyRoot = active;
-  while (isFamilyLink(familyRoot)) {
-    const parent = parents.get(familyRoot);
-    if (!parent) break;
-    familyRoot = parent;
-  }
-
-  const pending = familyRoot.children.filter(isFamilyLink);
-  while (pending.length > 0) {
-    const node = pending.pop()!;
-    if (node.session.relationship_type === "fork") return true;
-    pending.push(...node.children.filter(isFamilyLink));
   }
   return false;
 }

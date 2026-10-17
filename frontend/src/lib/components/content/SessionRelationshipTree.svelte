@@ -19,7 +19,7 @@
   import { ui, type SessionTreeView } from "../../stores/ui.svelte.js";
   import { formatNumber } from "../../utils/format.js";
   import SessionInputTree from "./SessionInputTree.svelte";
-  import { forkFamilyBranches } from "./input-tree.js";
+  import { inForkFamily } from "./input-tree.js";
   import {
     SESSION_TREE_HEIGHT_MIN,
     SESSION_TREE_HEIGHT_STORAGE_MAX,
@@ -64,13 +64,13 @@
 
   let rows = $derived(tree ? flattenTree(tree.root) : []);
   let visible = $derived(rows.length > 1);
-  // The input view needs a fork in the family to branch; other sessions
-  // show only the session view.
-  let hasForks = $derived(
-    tree ? forkFamilyBranches(tree.root, tree.active_session_id) : false,
+  // The input view needs a fork or continuation that links the session's
+  // inputs to another session's; other sessions show only the session view.
+  let hasFamily = $derived(
+    tree ? inForkFamily(tree.root, tree.active_session_id) : false,
   );
   let view = $derived<SessionTreeView>(
-    hasForks ? ui.sessionTreeView : "sessions",
+    hasFamily ? ui.sessionTreeView : "sessions",
   );
   const viewOptions = $derived<SegmentedControlOption[]>([
     { value: "sessions", label: m.session_tree_view_sessions() },
@@ -233,7 +233,7 @@
       {#if tree?.truncated && view === "sessions"}
         <span class="tree-truncated">{m.session_tree_truncated()}</span>
       {/if}
-      {#if hasForks}
+      {#if hasFamily}
         <span class="tree-view-switch">
           <SegmentedControl
             options={viewOptions}
