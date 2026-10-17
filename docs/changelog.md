@@ -265,6 +265,8 @@ The latest published release is
   **Inputs** view. Its prompts now carry on below the session it continues, and
   its highlighted path includes the earlier prompts; click one of those to open
   the session that holds it.
+- A prompt where one session ends and another carries on no longer folds into
+  a run in the **Inputs** side panel, so that session's label stays visible.
 - Oversized telemetry requests return HTTP 413.
 - Tool calls whose input is a raw script or patch, such as Codex `exec` and
   `apply_patch` calls, now show that input when expanded. Copy input, Copy

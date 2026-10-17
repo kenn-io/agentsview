@@ -192,6 +192,26 @@ describe("layoutInputTree", () => {
       expect(rows.some((row) => row.kind === "gap")).toBe(false);
     });
 
+    it("keeps an input where a session ends visible while another path continues below it", () => {
+      // 0 - 1 - 2 - 3 - 4 ends one session - 5 - 6 - 7 - 8 ends the one
+      // that continued it.
+      const rows = layoutInputTree([
+        inputNode(-1),
+        inputNode(0),
+        inputNode(1),
+        inputNode(2),
+        inputNode(3, { end_session_ids: ["parent"] }),
+        inputNode(4),
+        inputNode(5),
+        inputNode(6),
+        inputNode(7, { end_session_ids: ["continued"] }),
+      ]);
+
+      expect(rows.map((row) => row.key)).toEqual(["n0", "g1", "n4", "g5", "n8"]);
+      expect(rows[1]).toMatchObject({ kind: "gap", runStart: 1, hidden: 3 });
+      expect(rows[3]).toMatchObject({ kind: "gap", runStart: 5, hidden: 3 });
+    });
+
     it("leaves short runs alone", () => {
       const rows = layoutInputTree([inputNode(-1), inputNode(0), inputNode(1), inputNode(2)]);
 

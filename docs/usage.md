@@ -446,7 +446,7 @@ Code session you moved to the background:
     open the session that holds it, including the prompts a continuation
     carries on from the session before it.
 - Runs of prompts without a split fold into one row. Click the row to show
-    them.
+    them. A prompt where a session ends always stays visible.
 
 For a closer look, click the expand button beside the **Sessions**/**Inputs**
 switch. It opens the same family as a full diagram:

@@ -119,8 +119,15 @@ function isOnActivePath(node: InputTreeNode): boolean {
 
 // An input is foldable when the inputs before and after it on its branch
 // are its only neighbours: it neither starts, ends, nor splits a branch.
+// An input where a session ends stays visible to show that session's label,
+// even when another session's path carries on below it.
 function isFoldable(row: InputTreeNodeRow): boolean {
-  return row.lineAbove && !row.isLeaf && !row.isBranchPoint;
+  return (
+    row.lineAbove &&
+    !row.isLeaf &&
+    !row.isBranchPoint &&
+    row.node.end_session_ids.length === 0
+  );
 }
 
 function foldRuns(
