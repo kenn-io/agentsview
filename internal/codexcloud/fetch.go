@@ -535,12 +535,7 @@ func commitBesideHistory(
 func markCheckAgain(store *Store, key AccountKey, acct *AccountState, threadID string) error {
 	mark := func(acct *AccountState) {
 		acct.CheckAgain[threadID] = true
-		// A stalled turn is not checked again, so the stall mark goes too,
-		// as in a pass's own write.
-		if unfinished, ok := acct.Unfinished[threadID]; ok && unfinished.Stalled {
-			unfinished.Stalled = false
-			acct.Unfinished[threadID] = unfinished
-		}
+		acct.clearStall(threadID)
 	}
 	if acct != nil {
 		mark(acct)
