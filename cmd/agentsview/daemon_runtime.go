@@ -105,20 +105,15 @@ func (s daemonRuntimeStore) CleanupDead() (int, error) {
 	if err != nil {
 		return removed, err
 	}
-	var firstErr error
 	for _, rec := range records {
 		if daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if err := os.Remove(rec.SourcePath); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-		} else {
+		if err := os.Remove(rec.SourcePath); err == nil {
 			removed++
 		}
 	}
-	return removed, firstErr
+	return removed, nil
 }
 
 func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
