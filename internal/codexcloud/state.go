@@ -223,6 +223,20 @@ func (s *Store) MirrorPath(key AccountKey, threadID string) (string, error) {
 	return s.path(key, threadID, mirrorSuffix)
 }
 
+// clearStall removes the stall mark from id's unfinished entry and reports
+// whether it was set. A stalled turn is not checked again, so whatever
+// marks a thread to check again clears the mark too; the next save of the
+// thread sets it again if the turn still shows no progress.
+func (a *AccountState) clearStall(id string) bool {
+	unfinished, ok := a.Unfinished[id]
+	if !ok || !unfinished.Stalled {
+		return false
+	}
+	unfinished.Stalled = false
+	a.Unfinished[id] = unfinished
+	return true
+}
+
 // LoadThread reads one thread's state. A missing file is a never-synced
 // thread: offset zero makes the next append recover every stored frame.
 func (s *Store) LoadThread(key AccountKey, threadID string) (ThreadState, error) {
