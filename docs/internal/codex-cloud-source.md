@@ -491,8 +491,10 @@ ancestor through its resolved parent. A request sends each root with its
 `created_at` and all known descendants in `descendant_thread_ids`. A child whose
 parent is not mirrored waits in the parent's waiting file and counts as its own
 root. When the parent arrives, the child and its descendants move under the
-parent's root, and each gets a "counted under" record. Building a group reads
-only the root's descendant file, so the work follows what changed.
+parent's root, and each gets a "counted under" record. A parent whose mirror
+file went missing stays known through its saved state, so its children keep
+counting under it until a fetch rebuilds the file. Building a group reads only
+the root's descendant file, so the work follows what changed.
 
 ### Scheduling
 

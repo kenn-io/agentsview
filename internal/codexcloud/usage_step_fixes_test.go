@@ -523,3 +523,40 @@ func TestLostAccountStateSkipsUnreadableRoots(t *testing.T) {
 	assert.Contains(t, logged.String(), "chat badrow")
 	assert.Contains(t, logged.String(), "chat badmirror")
 }
+
+// A child whose parent's mirror file went missing keeps counting under the
+// parent, so no request asks about the child alone and the child's file
+// gets no row of its own.
+func TestChildOfLostParentMirrorStaysCountedUnderParent(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("p", ago(3*time.Hour), message("m", "root")))
+	child := finishedThread("c", ago(2*time.Hour), message("n", "child"))
+	child.ParentThreadID = "p"
+	env.threads.Set(child)
+	env.usage.SetRow("p", codexcloudtest.Row("p", "available", pct(4), nil))
+	env.usage.SetRow("c", codexcloudtest.Row("c", "available", pct(1), nil))
+	env.run(t)
+	require.Equal(t, []string{"p"}, env.requestedSince(0))
+
+	require.NoError(t, os.Remove(env.mirrorPath(t, "p")))
+	env.clock.Advance(time.Hour)
+	env.threads.Update("c", func(th *codexcloudtest.Thread) {
+		th.UpdatedAt = env.clock.Now().Unix() - 600
+		th.Turns[0].Items = append(th.Turns[0].Items, message("n2", "more"))
+	})
+	from := len(env.usage.Requests())
+	env.run(t)
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+
+	requested := env.requestedSince(from)
+	assert.Contains(t, requested, "p", "the parent is asked about with the child")
+	assert.NotContains(t, requested, "c", "the child is never asked about alone")
+	plan := env.plan(t, "c")
+	assert.Empty(t, plan.rows, "the child's file has no row of its own")
+	require.NotEmpty(t, plan.outcomes)
+	assert.Equal(t, "p", plan.outcomes[len(plan.outcomes)-1].Root)
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "p"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m"}, recordedItemIDs(records), "the parent's history is fetched again")
+}
