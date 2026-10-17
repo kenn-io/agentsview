@@ -1,11 +1,8 @@
 package telemetry
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -131,28 +128,7 @@ func (r *Reporter) CaptureHandler() http.Handler {
 	if r != nil {
 		client = r.client
 	}
-	capture := kittelemetry.NewCaptureHandler(client)
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		body, err := io.ReadAll(req.Body)
-		// Decode as kit does, so both read the same event name.
-		var event struct {
-			Event string `json:"event"`
-		}
-		if err == nil && json.NewDecoder(bytes.NewReader(body)).Decode(&event) == nil {
-			if strings.TrimSpace(event.Event) == EventSetupFinished {
-				http.Error(w, ErrUnsupportedEvent.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		// Replay the body and any reader error so kit handles size and decode failures.
-		req.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(body), req.Body), Closer: req.Body}
-		capture.ServeHTTP(w, req)
-	})
-}
-
-type readCloser struct {
-	io.Reader
-	io.Closer
+	return kittelemetry.NewCaptureHandler(client, kittelemetry.RejectEvents(EventSetupFinished))
 }
 
 func (r *Reporter) SanitizeProperties(
