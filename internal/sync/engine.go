@@ -18785,7 +18785,7 @@ func (e *Engine) keepCodexCloudUsage(
 		Session: *stored, UsageEvents: events, PlanUsage: plan,
 		Current: stored.DataVersion >= db.AgentDataVersion(parser.AgentCodexCloud),
 	}) {
-		log.Printf("codex-cloud: kept the token counts of %s because the local copy of the chat has no token counts, or fewer than the saved copy", prepared.Session.ID)
+		log.Printf("codex-cloud: kept part of the saved usage of %s because the mirror file has fewer usage records than the saved copy", prepared.Session.ID)
 	}
 	return nil
 }

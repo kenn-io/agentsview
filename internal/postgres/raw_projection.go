@@ -183,6 +183,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 			if ingest.CodexCloudKeepReason(len(c.Messages), *codexCloud) != "" {
 				decision.Action = ingest.HistoryPreserve
+				decision.PriorContributed = true
 			}
 		}
 		var prepared ingest.PreparedSession
@@ -198,8 +199,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if err != nil {
 				return err
 			}
-			if codexCloud != nil {
-				ingest.CarryCodexCloudUsage(&prepared, *codexCloud)
+			if codexCloud != nil && ingest.CarryCodexCloudUsage(&prepared, *codexCloud) {
+				decision.PriorContributed = true
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())

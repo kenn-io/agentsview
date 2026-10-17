@@ -215,10 +215,16 @@ counts, usage events, and capture coverage until new live counts arrive, and the
 archived plan figures until a newer report arrives. A newer outcome alone, other
 than "counted under", keeps the archived figures under it, as a whole file
 would. Records only accumulate, so a parse whose output total is below the
-archived one comes from a file cut short; it keeps the archived counts too.
-Turns that ran while the mirror was missing do not count as uncaptured. When the
-first new live record arrives, its running total restores the token totals, and
-the larger of the archived and new peak context stays.
+archived one, or that holds only some of the archived usage events, comes from a
+file cut short; it keeps the archived counts too. A rebuilt file starts a new
+running total, so its events never match archived ones. A parse whose plan
+report is older than the archived one, as from a file cut short after an older
+report, keeps the archived figures. Its outcome applies only when it is newer
+than both the archived report and the archived outcome. Two copies share no
+file, so this compares times where the parser compares places in the file. Turns
+that ran while the mirror was missing do not count as uncaptured. When the first
+new live record arrives, its running total restores the token totals, and the
+larger of the archived and new peak context stays.
 
 Sync replaces an archived copy from an older parser version, so a parser change
 still takes effect, unless the file holds no messages: no parser change empties
