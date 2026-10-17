@@ -1073,6 +1073,71 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	assertPathRemoved(t, path, "runtime record not removed")
 }
 
+func TestDaemonRuntimeStoreListsLegacyRecordsInPlace(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		dead       bool
+		mismatched bool
+		wrongPID   bool
+		duplicate  bool
+	}{
+		{name: "live"},
+		{name: "dead", dead: true},
+		{name: "mismatched identity", mismatched: true},
+		{name: "filename PID mismatch", wrongPID: true},
+		{name: "duplicate", duplicate: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store := daemonRuntimeStore{
+				Dir:       filepath.Join(dir, "run"),
+				legacyDir: dir,
+			}
+			rec := daemon.NewRuntimeRecord(daemonService, "test", daemon.Endpoint{
+				Network: daemon.NetworkTCP, Address: "127.0.0.1:1",
+			})
+			if tt.dead {
+				rec.PID = deadPID(t)
+			}
+			if tt.mismatched {
+				rec.ProcessIdentity = ""
+				rec.ProcessIdentityV2 = ""
+				ct, ok := processCreateTimeMillis(rec.PID)
+				require.True(t, ok)
+				rec.Metadata = map[string]string{runtimeCreateTime: strconv.FormatInt(ct+1, 10)}
+			}
+			filenamePID := rec.PID
+			if tt.wrongPID {
+				filenamePID = deadPID(t)
+			}
+			path := filepath.Join(dir, fmt.Sprintf("daemon.%d.json", filenamePID))
+			body, err := json.Marshal(rec)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, body, 0o600))
+			wantPath := path
+			if tt.duplicate {
+				wantPath, err = store.Write(rec)
+				require.NoError(t, err)
+			}
+
+			records, err := store.List()
+			require.NoError(t, err)
+			if tt.dead || tt.mismatched || tt.wrongPID {
+				assert.Empty(t, records)
+			} else {
+				require.Len(t, records, 1)
+				assert.Equal(t, rec.PID, records[0].PID)
+				assert.Equal(t, wantPath, records[0].SourcePath)
+			}
+			if tt.dead || tt.mismatched {
+				assert.NoFileExists(t, path)
+			} else {
+				assert.FileExists(t, path)
+			}
+		})
+	}
+}
+
 func TestFindDaemonRuntime_NoFiles(t *testing.T) {
 	dir := runtimeTestDir(t)
 	assert.Nil(t, FindDaemonRuntime(dir))

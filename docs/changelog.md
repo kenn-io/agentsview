@@ -161,6 +161,8 @@ The latest release is
 
 **Bug fixes**
 
+- On Windows, daemon commands no longer make backup and sync tools treat the
+  whole data directory as changed.
 - `agentsview prune` no longer deletes the shared `state.db` of Hermes or
   Augure Desktop. Sessions synced by 0.45.0 or earlier record the bare
   `state.db` path, and pruning one deleted the whole app database. The prune

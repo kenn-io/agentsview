@@ -71,8 +71,56 @@ type DaemonRuntime struct {
 	RuntimeError     string
 }
 
-func runtimeStore(dataDir string) daemon.RuntimeStore {
-	return daemon.RuntimeStore{Dir: dataDir}
+type daemonRuntimeStore struct {
+	daemon.RuntimeStore
+	legacyDir string
+}
+
+func runtimeStore(dataDir string) daemonRuntimeStore {
+	return daemonRuntimeStore{
+		Dir:       runtimeDir(dataDir),
+		legacyDir: dataDir,
+	}
+}
+
+func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
+	records, err := listDaemonRuntimeRecords(s.RuntimeStore)
+	if err != nil || s.Dir == s.legacyDir {
+		return records, err
+	}
+	// Remove this bridge the release after the Windows runtime subdirectory ships.
+	entries, err := os.ReadDir(s.legacyDir)
+	if err != nil {
+		return nil, fmt.Errorf("read legacy runtime dir: %w", err)
+	}
+	seen := make(map[int]bool, len(records))
+	for _, rec := range records {
+		seen[rec.PID] = true
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "daemon.") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "daemon."), ".json"))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		path := filepath.Join(s.legacyDir, name)
+		rec, err := s.Read(path)
+		if err != nil || rec.PID != pid || rec.Address == "" {
+			continue
+		}
+		if !daemon.ProcessAlive(pid) || runtimeRecordIdentityState(rec) == processCreateTimeMismatch {
+			_ = os.Remove(path)
+			continue
+		}
+		if !seen[pid] {
+			records = append(records, rec)
+			seen[pid] = true
+		}
+	}
+	return records, nil
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running
@@ -230,7 +278,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	_, _ = store.CleanupDead()
 
 	token := firstAuthToken(authToken)
-	records, err := listDaemonRuntimeRecords(store)
+	records, err := store.List()
 	if err != nil {
 		rt := findStartupStateFallback(dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) == nil {
@@ -419,7 +467,7 @@ func findIncompatibleDaemonRuntime(
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
-	records, err := listDaemonRuntimeRecords(store)
+	records, err := store.List()
 	if err != nil {
 		rt := findStartupStateFallback(dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) != nil {
@@ -823,7 +871,7 @@ func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
 }
 
 func runtimeRecordHasMismatchedIdentity(
-	store daemon.RuntimeStore,
+	store daemonRuntimeStore,
 	rec daemon.RuntimeRecord,
 ) bool {
 	if runtimeRecordIdentityState(rec) != processCreateTimeMismatch {
@@ -913,7 +961,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if _, ok := startLocks.Load(path); ok {
 		return !external
 	}
-	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
 	if err == nil {
 		if locked {
 			release()
@@ -932,7 +980,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
 		return true
 	}
-	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
 	if recoveryErr != nil || !recoveryLocked {
 		return true
 	}

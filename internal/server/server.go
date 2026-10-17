@@ -1371,7 +1371,6 @@ func (s *Server) ListenAndServe() error {
 			Network: daemon.NetworkTCP,
 			Address: addr,
 		},
-		daemon.WithRuntimeStore(daemon.RuntimeStore{Dir: s.dataDir}),
 	)
 	if err != nil {
 		return err
