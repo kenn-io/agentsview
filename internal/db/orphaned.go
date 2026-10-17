@@ -2961,34 +2961,19 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	if !hasSessionFiles {
 		return version, nil
 	}
-	candidates, err := codexRowsReparsedElsewhere(ctx, conn)
-	if err != nil {
-		return 0, err
+	candidates := make(map[string]string)
+	if version < codexLegacyPageHeaderDataVersion || includeLegacyForks {
+		candidates, err = codexRowsReparsedElsewhere(ctx, conn)
+		if err != nil {
+			return 0, err
+		}
 	}
 	// Thread corrections require the fresh parse at the exact stored path.
 	// Filename mappings remain available only for the older page/fork repair.
 	threads := make(map[string]string)
 	if version < codexThreadIdentityDataVersion {
-		rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
-			FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
-			WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
-			  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
-			  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
+		threads, err = codexThreadCorrections(ctx, conn)
 		if err != nil {
-			return 0, fmt.Errorf("finding reparsed Codex threads: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var source, target string
-			if err := rows.Scan(&source, &target); err != nil {
-				return 0, fmt.Errorf("scanning reparsed Codex threads: %w", err)
-			}
-			threads[source] = target
-		}
-		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("reading reparsed Codex threads: %w", err)
-		}
-		if err := rows.Close(); err != nil {
 			return 0, err
 		}
 	}
@@ -3039,6 +3024,30 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 		return 0, fmt.Errorf("dropping Codex pages the parser kept: %w", err)
 	}
 	return version, nil
+}
+
+func codexThreadCorrections(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
+		FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
+		WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
+		  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
+		  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
+	if err != nil {
+		return nil, fmt.Errorf("finding reparsed Codex threads: %w", err)
+	}
+	defer rows.Close()
+	threads := make(map[string]string)
+	for rows.Next() {
+		var source, target string
+		if err := rows.Scan(&source, &target); err != nil {
+			return nil, fmt.Errorf("scanning reparsed Codex threads: %w", err)
+		}
+		threads[source] = target
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading reparsed Codex threads: %w", err)
+	}
+	return threads, nil
 }
 
 // isCodexThreadCorrection excludes both ends of a correction chain.
