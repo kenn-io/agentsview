@@ -14,7 +14,7 @@ import { yokedDates } from "./yokedDates.svelte.js";
 import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
-import { selectPrimaryId } from "../utils/session-primary.js";
+import { selectLiveId, selectPrimaryId } from "../utils/session-primary.js";
 
 type SidebarIndexParams = NonNullable<
   Parameters<typeof SessionsService.getApiV1SessionsSidebarIndex>[0]
@@ -65,7 +65,12 @@ export interface SessionGroup {
   /** Unfiltered session list for ancestry classification.
    *  Set when a filter (e.g. starred) removes sessions from the group. */
   allSessions?: SessionGroupInput[];
+  /** The session the group's row shows: its root, unless a filter
+   *  removed it. */
   primarySessionId: string;
+  /** The session whose status the group's row shows and sorts by: the
+   *  newest session on the root's main line. */
+  liveSessionId: string;
   totalMessages: number;
   firstMessage: string | null;
   startedAt: string | null;
@@ -1839,6 +1844,7 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
           project: s.project,
           sessions: [],
           primarySessionId: s.id,
+          liveSessionId: s.id,
           totalMessages: 0,
           firstMessage: null,
           startedAt: null,
@@ -1967,6 +1973,7 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
     }
     group.firstMessage = group.sessions[0]?.first_message ?? null;
     group.primarySessionId = selectPrimaryId(group.sessions, group.key);
+    group.liveSessionId = selectLiveId(group.sessions, group.key);
   }
 
   const ordered = insertionOrder.filter((k) => !keysToRemove.has(k)).map((k) => groupMap.get(k)!);
@@ -1995,8 +2002,8 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
 }
 
 function statusSortKey(group: SessionGroup): number {
-  const primary = group.sessions.find((s) => s.id === group.primarySessionId) ?? group.sessions[0]!;
-  const status = getSessionStatus(primary, group.sessions);
+  const live = group.sessions.find((s) => s.id === group.liveSessionId) ?? group.sessions[0]!;
+  const status = getSessionStatus(live, group.sessions);
   switch (status) {
     case "working":
       return 0;

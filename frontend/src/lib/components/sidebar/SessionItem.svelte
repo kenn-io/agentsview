@@ -42,6 +42,10 @@
      * still wins over freshness for awaiting_user (a fork running
      * in parallel doesn't change that the parent is waiting). */
     groupSessions?: SessionGroupInput[];
+    /** The session whose parser status the dot reads, when it is not
+     * the one the row shows. A continuation chain's row shows its root
+     * but the state of its newest continuation. */
+    statusSession?: SessionGroupInput;
     hideAgent?: boolean;
     hideProject?: boolean;
     /** Render in compact mode (smaller, used for child sessions). */
@@ -69,6 +73,7 @@
     continuationCount = 1,
     groupSessionIds,
     groupSessions,
+    statusSession,
     hideAgent = false,
     hideProject = false,
     compact = false,
@@ -82,7 +87,9 @@
     selected = false,
   }: Props = $props();
 
-  let sessionStatus = $derived(getSessionStatus(session, groupSessions));
+  let sessionStatus = $derived(
+    getSessionStatus(statusSession ?? session, groupSessions),
+  );
 
   let isActive = $derived.by(() => {
     const aid = sessions.activeSessionId;

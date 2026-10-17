@@ -31,6 +31,7 @@
     computeTotalSize,
     findStart,
     isSubagentDescendant,
+    selectLiveId,
     selectPrimaryId,
   } from "./session-list-utils.js";
 
@@ -81,11 +82,14 @@
         const filtered = g.sessions.filter((s) =>
           starred.isStarred(s.id),
         );
-        // Recompute primarySessionId so it points to a
-        // session that survived the filter, using the same
-        // rule as buildSessionGroups.
+        // Recompute primarySessionId and liveSessionId so they
+        // point to sessions that survived the filter, using the
+        // same rules as buildSessionGroups.
         const primaryStillPresent = filtered.some(
           (s) => s.id === g.primarySessionId,
+        );
+        const liveStillPresent = filtered.some(
+          (s) => s.id === g.liveSessionId,
         );
         return {
           ...g,
@@ -96,6 +100,9 @@
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
             : selectPrimaryId(filtered, g.key, g.sessions),
+          liveSessionId: liveStillPresent
+            ? g.liveSessionId
+            : selectLiveId(filtered, g.key, g.sessions),
         };
       })
       .filter((g) => g.sessions.length > 0);
@@ -687,12 +694,16 @@
           {@const primary = item.group.sessions.find(
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
+          {@const live = item.group.sessions.find(
+            (s) => s.id === item.group!.liveSessionId,
+          )}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
           {@const groupHasSubagents = children.some((s) => isSubagentDescendant(s, item.group!.sessions))}
           {@const groupHasTeammates = children.some((s) => s.is_teammate ?? s.first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem
               session={primary}
+              statusSession={live}
               continuationCount={item.group.sessions.length}
               groupSessionIds={item.group.sessions.length > 1
                 ? item.group.sessions.map((s) => s.id)

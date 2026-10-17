@@ -57,8 +57,8 @@ export function getInitialGroupMode(): GroupMode {
   return "none";
 }
 
-/** Same primary rule as buildSessionGroups. */
-export { selectPrimaryId } from "../../utils/session-primary.js";
+/** Same head and status rules as buildSessionGroups. */
+export { selectLiveId, selectPrimaryId } from "../../utils/session-primary.js";
 
 /**
  * Build grouped sections from flat session groups.

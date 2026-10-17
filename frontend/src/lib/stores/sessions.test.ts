@@ -2945,6 +2945,40 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 }
 
 describe("buildSessionGroups", () => {
+  it("sorts a continuation chain by the state of its newest continuation", () => {
+    const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const rows = [
+      // The root was waiting on the user when it handed off; its
+      // continuation is writing now.
+      makeSkinnyRow({
+        id: "chain-root",
+        started_at: isoAgo(2 * 60 * 60 * 1000),
+        ended_at: isoAgo(60 * 60 * 1000),
+        termination_status: "awaiting_user",
+      }),
+      makeSkinnyRow({
+        id: "chain-cont",
+        parent_session_id: "chain-root",
+        relationship_type: "continuation",
+        started_at: isoAgo(60 * 60 * 1000),
+        ended_at: isoAgo(30 * 1000),
+      }),
+      makeSkinnyRow({
+        id: "waiting",
+        started_at: isoAgo(60 * 1000),
+        ended_at: isoAgo(10 * 1000),
+        termination_status: "awaiting_user",
+      }),
+    ];
+
+    const groups = buildSessionGroups(rows as any);
+
+    expect(groups.map((g) => [g.key, g.primarySessionId, g.liveSessionId])).toEqual([
+      ["chain-root", "chain-root", "chain-cont"],
+      ["waiting", "waiting", "waiting"],
+    ]);
+  });
+
   it("sidebar index rows preserve status-tier order", () => {
     const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
     const rows = [
@@ -3170,10 +3204,11 @@ describe("buildSessionGroups", () => {
     expect(g.startedAt).toBe("2024-01-01T00:00:00Z");
     expect(g.endedAt).toBe("2024-01-01T04:00:00Z");
     expect(g.firstMessage).toBe("first session msg");
-    expect(g.primarySessionId).toBe("s2");
+    expect(g.primarySessionId).toBe("s1");
+    expect(g.liveSessionId).toBe("s2");
   });
 
-  it("selects primary by ended_at not started_at", () => {
+  it("selects the live session by ended_at not started_at", () => {
     const sessions = [
       makeSession({
         id: "s1",
@@ -3191,10 +3226,10 @@ describe("buildSessionGroups", () => {
     ];
 
     const groups = buildSessionGroups(sessions);
-    expect(groups[0]!.primarySessionId).toBe("s2");
+    expect(groups[0]!.liveSessionId).toBe("s2");
   });
 
-  it("selects primary by ended_at when started_at later", () => {
+  it("selects the live session by ended_at when started_at later", () => {
     const sessions = [
       makeSession({
         id: "s1",
@@ -3212,10 +3247,10 @@ describe("buildSessionGroups", () => {
     ];
 
     const groups = buildSessionGroups(sessions);
-    expect(groups[0]!.primarySessionId).toBe("s2");
+    expect(groups[0]!.liveSessionId).toBe("s2");
   });
 
-  it("null ended_at falls back to started_at for primary", () => {
+  it("null ended_at falls back to started_at for the live session", () => {
     const sessions = [
       makeSession({
         id: "s1",
@@ -3234,7 +3269,7 @@ describe("buildSessionGroups", () => {
 
     const groups = buildSessionGroups(sessions);
     // s2 recencyKey = started_at "2024-01-02" > s1 ended_at "2024-01-01T05"
-    expect(groups[0]!.primarySessionId).toBe("s2");
+    expect(groups[0]!.liveSessionId).toBe("s2");
   });
 
   it("completed session wins over in-progress when ended_at later", () => {
@@ -3256,10 +3291,10 @@ describe("buildSessionGroups", () => {
 
     const groups = buildSessionGroups(sessions);
     // s1 recencyKey = ended_at "2024-01-03" > s2 started_at "2024-01-02"
-    expect(groups[0]!.primarySessionId).toBe("s1");
+    expect(groups[0]!.liveSessionId).toBe("s1");
   });
 
-  it("selects primary by created_at when both null", () => {
+  it("selects the live session by created_at when both null", () => {
     const sessions = [
       makeSession({
         id: "s1",
@@ -3279,7 +3314,7 @@ describe("buildSessionGroups", () => {
     ];
 
     const groups = buildSessionGroups(sessions);
-    expect(groups[0]!.primarySessionId).toBe("s2");
+    expect(groups[0]!.liveSessionId).toBe("s2");
   });
 
   it("equal ended_at picks earliest started_at deterministically", () => {
@@ -3301,14 +3336,14 @@ describe("buildSessionGroups", () => {
 
     const groups = buildSessionGroups(sessions);
     // Both have same ended_at, so recencyKey ties;
-    // after started_at asc sort, s2 is first -> kept as primary
-    expect(groups[0]!.primarySessionId).toBe("s2");
+    // after started_at asc sort, s2 is first -> kept as the live session
+    expect(groups[0]!.liveSessionId).toBe("s2");
   });
 
   // Each row: [id, parent, relationship, ended_at]. Started times follow
   // list order so the group sorts in the same order.
   type ForkRow = [string, string | null, string | null, string];
-  it.each<{ name: string; rows: ForkRow[]; primary: string }>([
+  it.each<{ name: string; rows: ForkRow[]; primary: string; live: string }>([
     {
       name: "newer forks do not replace the session they branched from",
       rows: [
@@ -3318,15 +3353,17 @@ describe("buildSessionGroups", () => {
         ["fork-c", "root", "fork", "2024-01-04T00:00:00Z"],
       ],
       primary: "root",
+      live: "root",
     },
     {
-      name: "a continuation on the main line beats a newer fork",
+      name: "a continuation keeps the root on top but is the live session",
       rows: [
         ["root", null, null, "2024-01-01T00:00:00Z"],
         ["cont", "root", "continuation", "2024-01-02T00:00:00Z"],
         ["fork", "root", "fork", "2024-01-03T00:00:00Z"],
       ],
-      primary: "cont",
+      primary: "root",
+      live: "cont",
     },
     {
       name: "continuations of a fork stay off the main line",
@@ -3336,6 +3373,7 @@ describe("buildSessionGroups", () => {
         ["fork-cont", "fork", "continuation", "2024-01-04T00:00:00Z"],
       ],
       primary: "root",
+      live: "root",
     },
     {
       name: "a fork whose parent is not loaded heads its own main line",
@@ -3344,9 +3382,10 @@ describe("buildSessionGroups", () => {
         ["orphan-cont", "orphan-fork", "continuation", "2024-01-02T00:00:00Z"],
         ["nested-fork", "orphan-fork", "fork", "2024-01-05T00:00:00Z"],
       ],
-      primary: "orphan-cont",
+      primary: "orphan-fork",
+      live: "orphan-cont",
     },
-  ])("$name", ({ rows, primary }) => {
+  ])("$name", ({ rows, primary, live }) => {
     const sessions = rows.map(([id, parent, relationship, ended], i) =>
       makeSession({
         id,
@@ -3361,6 +3400,7 @@ describe("buildSessionGroups", () => {
     const groups = buildSessionGroups(sessions);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.primarySessionId).toBe(primary);
+    expect(groups[0]!.liveSessionId).toBe(live);
   });
 
   it("sorts sessions within group by startedAt asc", () => {
