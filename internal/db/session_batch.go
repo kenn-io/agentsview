@@ -825,12 +825,10 @@ func extendTruncatedTextTx(
 		}
 		content, contentLength := m.Content, m.ContentLength
 		if !IsTextExtension(stored, m.Content) {
-			if !IsImagePlaceholderUpgrade(stored, m.Content) {
-				continue
-			}
-			// Keep archived concrete references that the export replaced with placeholders.
-			merged, ok := MergeImageContent(stored, m.Content)
-			if !ok {
+			// Keep archived concrete references that the export replaced with
+			// placeholders, and take any text the incoming message adds.
+			merged, ok := ExtendImageContent(stored, m.Content)
+			if !ok || merged == stored {
 				continue
 			}
 			content, contentLength = merged, len(merged)
