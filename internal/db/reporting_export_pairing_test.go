@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -275,8 +276,13 @@ func perHourPairingReportingHoursFromSource(
 	}
 	projects := source.projects
 	var references map[string]export.ProjectReference
+	var groupLabels map[string]string
 	if schemaVersion == export.ReportingJointSchemaVersion {
-		references = source.references
+		projects, references, groupLabels = partitionReportingProjects(sessionByID, projects, source.references)
+		sessions = slices.Clone(sessions)
+		for i := range sessions {
+			sessions[i] = sessionByID[sessions[i].SessionID]
+		}
 		sessions, ids, events, usage = scopeJointReporting(sessions, events, usage, sessionByID, projects, projectKeys)
 		for i := range sessions {
 			sessions[i].ProjectKey = export.ProjectKeyForEntry(projects[sessions[i].Project])
@@ -293,7 +299,7 @@ func perHourPairingReportingHoursFromSource(
 		createdAt,
 		events,
 		activityUsage,
-		nil,
+		groupLabels,
 	)
 	for i := range hours {
 		if err := ctx.Err(); err != nil {
@@ -354,6 +360,7 @@ func perHourPairingReportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
+			restoreReportingProjectLabels(&hour, projects, groupLabels)
 		}
 		hours[i] = hour
 	}

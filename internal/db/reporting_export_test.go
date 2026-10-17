@@ -326,7 +326,7 @@ func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 
 	joint, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), SchemaVersion: 4,
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), SchemaVersion: export.ReportingJointSchemaVersion,
 	})
 	require.NoError(t, err)
 	require.Len(t, joint.Hours[10].Joint.Cells, 1)

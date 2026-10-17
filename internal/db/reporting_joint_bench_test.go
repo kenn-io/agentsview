@@ -19,7 +19,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 		for _, variant := range []struct {
 			version int
 			bucket  string
-		}{{3, ""}, {4, "5m"}, {4, "1m"}} {
+		}{{export.ReportingSchemaVersion, ""}, {export.ReportingJointSchemaVersion, "5m"}, {export.ReportingJointSchemaVersion, "1m"}} {
 			b.Run(fmt.Sprintf("projects-%d/v%d/%s", projects, variant.version, variant.bucket), func(b *testing.B) {
 				d := testDB(b)
 				const sessions = 200
@@ -67,7 +67,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 				}
 				require.Equal(b, int64(60_000), day.Hours[12].Usage.Totals.OutputTokens)
 				b.ReportMetric(float64(len(payload)), "payload-bytes/op")
-				if variant.version == 4 {
+				if variant.version == export.ReportingJointSchemaVersion {
 					require.NotEmpty(b, day.Hours[12].Joint.Cells)
 					require.Len(b, day.Hours[12].Joint.Projects, projects)
 					b.ReportMetric(float64(len(day.Hours[12].Joint.Cells)), "cells/op")
@@ -87,7 +87,7 @@ func BenchmarkReportingDigestRange(b *testing.B) {
 		bucket string
 	}{
 		{name: "v3", schema: export.ReportingSchemaVersion},
-		{name: "v4-5m", schema: export.ReportingJointSchemaVersion, bucket: "5m"},
+		{name: "v5-5m", schema: export.ReportingJointSchemaVersion, bucket: "5m"},
 	} {
 		b.Run(variant.name, func(b *testing.B) {
 			d := testDB(b)
