@@ -53,12 +53,12 @@ type codexExclusionPlanStmt struct {
 	args *[]any
 }
 
-func (s *codexExclusionPlanStmt) Query(values []driver.Value) (driver.Rows, error) {
+func (s *codexExclusionPlanStmt) QueryContext(ctx context.Context, values []driver.NamedValue) (driver.Rows, error) {
 	*s.args = nil
 	for _, value := range values {
-		*s.args = append(*s.args, value)
+		*s.args = append(*s.args, value.Value)
 	}
-	return s.Stmt.Query(values)
+	return s.Stmt.(driver.StmtQueryContext).QueryContext(ctx, values)
 }
 
 func TestHasDeletedCodexRolloutUsesIndexedLookup(t *testing.T) {
@@ -1037,6 +1037,32 @@ func TestRecentSessionSourcesUsesBoundedRangeAfterReopen(t *testing.T) {
 				fmt.Sprintf(recentSessionSourcesSQL, "(?,?)"),
 				"codex", "local", "peer", "2026-07-29T00:00:00Z", 1), "\n")
 			assert.Contains(t, plan, "SEARCH sessions USING INDEX idx_sessions_recent_source_activity")
+		})
+	}
+}
+
+func TestHasDeletedCodexRolloutUnicodeHost(t *testing.T) {
+	for _, trash := range []bool{false, true} {
+		t.Run(strconv.FormatBool(trash), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			const oldID = "münchen~codex:11111111-1111-4111-8111-111111111111"
+			const correctedID = "münchen~codex:22222222-2222-4222-8222-222222222222"
+			path := "/sessions/rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl"
+			insertSession(t, d, oldID, "project", func(s *Session) {
+				s.Agent, s.FilePath = "codex", &path
+			})
+			if trash {
+				require.NoError(t, d.SoftDeleteSession(ctx, oldID))
+			} else {
+				require.NoError(t, d.DeleteSession(ctx, oldID))
+			}
+			deleted, err := d.HasDeletedCodexRollout(ctx, correctedID, "/archive/"+filepath.Base(path)+".zst")
+			require.NoError(t, err)
+			assert.True(t, deleted, "a moved compressed rollout must remain hidden")
+			otherHost, err := d.HasDeletedCodexRollout(ctx, "other~codex:22222222-2222-4222-8222-222222222222", path)
+			require.NoError(t, err)
+			assert.False(t, otherHost)
 		})
 	}
 }

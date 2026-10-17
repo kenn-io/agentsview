@@ -1375,10 +1375,10 @@ func (db *DB) HasDeletedCodexRollout(ctx context.Context, sessionID, path string
 	}
 	tail, prefix := key[len(key)-36:], sessionID[:prefixEnd]
 	rows, err := db.getReader().QueryContext(ctx, `SELECT file_path FROM excluded_sessions
-		WHERE `+codexRolloutTailSQL+` = ? AND file_path IS NOT NULL AND substr(id, 1, ?) = ?
+		WHERE `+codexRolloutTailSQL+` = ? AND file_path IS NOT NULL AND substr(id, 1, length(?)) = ?
 		UNION ALL SELECT file_path FROM sessions
-		WHERE `+codexRolloutTailSQL+` = ? AND deleted_at IS NOT NULL AND substr(id, 1, ?) = ?`,
-		tail, prefixEnd, prefix, tail, prefixEnd, prefix)
+		WHERE `+codexRolloutTailSQL+` = ? AND deleted_at IS NOT NULL AND substr(id, 1, length(?)) = ?`,
+		tail, prefix, prefix, tail, prefix, prefix)
 	if err != nil {
 		return false, fmt.Errorf("reading deleted Codex rollouts: %w", err)
 	}

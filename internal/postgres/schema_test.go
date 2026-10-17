@@ -601,9 +601,9 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_legacy_codex_file":  true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
-
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
 
 	executed := strings.ToLower(state.executedSQL())
@@ -642,13 +642,13 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_legacy_codex_file":  true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,
 		tokenCoverageRepairMetadataKey:    true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
-
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
 
 	queried := strings.ToLower(state.queriedSQL())

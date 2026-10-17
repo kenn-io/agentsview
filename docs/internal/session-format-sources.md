@@ -593,6 +593,12 @@ fixtures retain this field; missing identities remain source-local.
   a producer path for the shape reported in
   [issue #2248](https://github.com/kenn-io/agentsview/issues/2248);
   the particular file's history remains unverified.
+  Archive corrections reverified on 2026-10-17 with a missing intermediate
+  rollout, identical pinned messages, and corrections spanning PostgreSQL push
+  batches. Retained transcripts keep their own project evidence. PostgreSQL
+  snapshots the full correction chain and clears outgoing pins before restoring
+  each note to its corrected session. Deletion checks also cover non-ASCII host
+  prefixes after a rollout moves or becomes compressed.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

@@ -153,10 +153,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	// Copied trash is not evidence that the file was reparsed.
 	if _, err := conn.ExecContext(ctx, `
 		INSERT OR IGNORE INTO _extra_excluded_orphan_ids (id)
-		SELECT mapped.source_id FROM _codex_session_ids mapped
-		JOIN main.sessions live ON live.id = mapped.target_id
-		WHERE NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = mapped.source_id)
-		UNION ALL
 		SELECT old_s.id FROM old_db.sessions old_s
 		JOIN main.sessions new_s ON new_s.file_path = old_s.file_path
 		WHERE old_s.agent = 'codex' AND new_s.agent = 'codex'
@@ -175,7 +171,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		SELECT id, id AS source_id FROM old_db.sessions
 		WHERE id NOT IN (SELECT id FROM main.sessions)
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)
-		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)`,
+		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)
+		  AND id NOT IN (
+			SELECT mapped.source_id FROM _codex_session_ids mapped
+			JOIN main.sessions live ON live.id = mapped.target_id
+		  )`,
 	); err != nil {
 		return nil, fmt.Errorf(
 			"identifying orphaned sessions: %w", err,
@@ -2529,11 +2529,11 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM main.session_project_identity_snapshots
 		WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-		  AND `+missingSourceSnapshot); err != nil {
+		  AND (`+missingSourceSnapshot+` OR session_id IN (SELECT id FROM `+tempIDsTable+` WHERE id != source_id))`); err != nil {
 		return fmt.Errorf("removing generated identity snapshots: %w", err)
 	}
-	// Mapped orphans have no same-ID snapshot in the source. Preserve their
-	// archived evidence after removing the insert trigger's placeholder.
+	// Mapped orphans need their source's evidence even if their destination
+	// held another transcript. Replace the insert trigger's placeholder.
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		if _, err := tx.ExecContext(ctx, `

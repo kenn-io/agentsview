@@ -256,10 +256,24 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 }
 
 func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
+	testCodexChainedPins(t, false, false)
+}
+
+func TestCodexChainedIdenticalMessagesPreservePostgresPins(t *testing.T) {
+	testCodexChainedPins(t, true, false)
+}
+
+func TestCodexChainedPostgresPinsAcrossBatches(t *testing.T) {
+	testCodexChainedPins(t, false, true)
+}
+
+func testCodexChainedPins(t *testing.T, identical, separateBatches bool) {
+	t.Helper()
 	ctx := t.Context()
 	const (
 		a      = "codex:11111111-1111-4111-8111-111111111111"
 		b      = "codex:22222222-2222-4222-8222-222222222222"
+		d      = "codex:44444444-4444-4444-8444-444444444444"
 		c      = "codex:33333333-3333-4333-8333-333333333333"
 		schema = "agentsview_codex_chained_pin_test"
 	)
@@ -269,14 +283,22 @@ func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
 	root := t.TempDir()
 	pathB := filepath.Join(root, "rollout-2026-09-25T12-00-00-22222222-2222-4222-8222-222222222222.jsonl")
 	pathC := filepath.Join(root, "rollout-2026-09-25T13-00-00-33333333-3333-4333-8333-333333333333.jsonl")
+	pathD := filepath.Join(root, "rollout-2026-09-25T14-00-00-44444444-4444-4444-8444-444444444444.jsonl")
 	source := testDB(t)
 	sourcePath := source.Path()
 	// Model the old parser's last-header result: rollout B has headers B, A;
 	// rollout C has headers C, B. Their corrected identities overlap at B.
-	for _, row := range []struct{ id, path, content, uuid string }{
+	legacy := []struct{ id, path, content, uuid string }{
 		{a, pathB, "answer for B", "answer-b"},
 		{b, pathC, "answer for C", "answer-c"},
-	} {
+	}
+	if separateBatches {
+		legacy = append(legacy, struct{ id, path, content, uuid string }{c, pathD, "answer for D", "answer-d"})
+	}
+	for _, row := range legacy {
+		if identical {
+			row.content, row.uuid = "identical answer", ""
+		}
 		require.NoError(t, source.UpsertSession(ctx, db.Session{
 			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
 			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
@@ -297,9 +319,13 @@ func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.PinMessage(ctx, b, 0, new("saved C remotely"))
 	require.NoError(t, err)
+	if separateBatches {
+		_, err = store.PinMessage(ctx, c, 0, new("saved D remotely"))
+		require.NoError(t, err)
+	}
 	before, err := store.ListPinnedMessages(ctx, "", "")
 	require.NoError(t, err)
-	require.Len(t, before, 2)
+	require.Len(t, before, len(legacy))
 	require.NoError(t, source.Close())
 	raw, err := sql.Open("sqlite3", sourcePath)
 	require.NoError(t, err)
@@ -310,10 +336,11 @@ func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
 	rebuilt := testDB(t)
 	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
 	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
-	for _, row := range []struct{ id, path, content, uuid string }{
-		{b, pathB, "answer for B", "answer-b"},
-		{c, pathC, "answer for C", "answer-c"},
-	} {
+	for i, row := range legacy {
+		row.id = []string{b, c, d}[i]
+		if identical {
+			row.content, row.uuid = "identical answer", ""
+		}
 		require.NoError(t, rebuilt.UpsertSession(ctx, db.Session{
 			ID: row.id, Agent: "codex", Project: "sample", Machine: "machine",
 			FilePath: new(row.path), MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
@@ -329,6 +356,25 @@ func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
 	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	if separateBatches {
+		upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+		require.NoError(t, err)
+		upgraded.databaseGeneration, err = rebuilt.GetDatabaseID(ctx)
+		require.NoError(t, err)
+		marker, err := upgraded.pushMarkerID(ctx)
+		require.NoError(t, err)
+		sess, err := rebuilt.GetSessionFull(ctx, b)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		var pushed []db.Session
+		batchResult, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, &pushed)
+		require.NoError(t, err)
+		require.True(t, batchResult.ok)
+		pins, err := store.ListPinnedMessages(ctx, d, "")
+		require.NoError(t, err)
+		require.Len(t, pins, 1, "the first batch must preserve the last legacy destination")
+		assert.Equal(t, new("saved D remotely"), pins[0].Note)
+	}
 	result, err = upgraded.Push(ctx, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
@@ -336,15 +382,22 @@ func TestCodexChainedIdentityUpgradePreservesPostgresPins(t *testing.T) {
 		messages, err := store.GetMessages(ctx, row.id, 0, 10, true)
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
-		require.Equal(t, row.content, messages[0].Content)
+		want := row.content
+		if identical {
+			want = "identical answer"
+		}
+		require.Equal(t, want, messages[0].Content)
 	}
 	after, err := store.ListPinnedMessages(ctx, "", "")
 	require.NoError(t, err)
-	assert.Len(t, after, 2, "both remote-only pins must survive overlapping identity corrections")
+	assert.Len(t, after, len(legacy), "both remote-only pins must survive overlapping identity corrections")
 	for _, old := range before {
 		wantSession := b
 		if old.SessionID == b {
 			wantSession = c
+		}
+		if old.SessionID == c {
+			wantSession = d
 		}
 		var found bool
 		for _, pin := range after {
