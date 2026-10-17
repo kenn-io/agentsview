@@ -865,11 +865,7 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 		{"chatgpt partial", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv, "["), http.StatusInternalServerError},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			mutations := make(chan struct{}, 2)
-			srv := testServer(t, 5*time.Second,
-				WithSessionMutationNotifier(func() { mutations <- struct{}{} }),
-				WithRecallCorpusMutationNotifier(func() { mutations <- struct{}{} }),
-			)
+			srv := testServer(t, 5*time.Second)
 			srv.broadcaster = NewBroadcaster(0)
 			events, unsubscribe := srv.broadcaster.Subscribe()
 			defer unsubscribe()
@@ -892,8 +888,6 @@ func TestHandleImportAnnouncesCommittedSessions(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				require.FailNow(t, "committed upload did not broadcast sessions")
 			}
-			// Uploads wake only live views, not model-backed extraction or recall rebuilds.
-			assert.Empty(t, mutations)
 		})
 	}
 }

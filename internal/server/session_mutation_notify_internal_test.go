@@ -23,12 +23,9 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-// TestSessionMutationRoutesNotify pins that the routes changing a session's
-// lifecycle — trash, restore, permanent delete — fire the mutation notifier
-// on success and stay silent on failure. Consumers (the extraction
-// scheduler's retraction pass) otherwise only learn about these changes
-// from sync activity that may never come.
-func TestSessionMutationRoutesNotify(t *testing.T) {
+// Session lifecycle changes notify background consumers. Restores also broadcast
+// sessions so open lists refresh; a failed restore emits neither notification.
+func TestSessionMutationRoutesNotifyAndRestoreBroadcasts(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
