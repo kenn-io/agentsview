@@ -184,6 +184,9 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 }
 
 func chatGPTToolsChanged(archived, incoming []db.Message) bool {
+	if archived == nil || incoming == nil {
+		return false
+	}
 	for i := range min(len(archived), len(incoming)) {
 		if !slices.EqualFunc(archived[i].ToolCalls, incoming[i].ToolCalls, func(a, b db.ToolCall) bool {
 			return a.ToolName == b.ToolName && a.Category == b.Category &&
