@@ -801,17 +801,19 @@ The content-search response includes `active_filter_applied`, which is true when
 `exclude_active_since` was applied before pagination. All current stores support
 this filter. Older servers may omit the field.
 
-SQLite's `messages` source searches dialogue from structured text blocks in
-Pi, OMP, OMO, Prime Agent, StepCode, iFlow, Claude Code, Cowork, iCodeMate CLI,
-Qoder, Cursor JSONL, Amp, OpenClaude, OpenClaw, QClaw, Devin, and OpenHands.
+On SQLite, DuckDB, and ClickHouse, the `messages` source searches dialogue from
+structured text blocks in Pi, OMP, OMO, Prime Agent, StepCode, iFlow, Claude Code,
+Cowork, iCodeMate CLI, Qoder, Cursor JSONL, Amp, OpenClaude, OpenClaw, QClaw, Devin,
+and OpenHands.
 Those projections exclude rendered tool calls and reasoning from snippets,
 while preserving literal marker text in dialogue. These parsers store reasoning
-blocks in `thinking_text`, including Cursor JSONL and OpenHands. SQLite substring
-and regex searches include `thinking` by default; use `--in messages` for dialogue
-alone or `--in thinking` for reasoning alone. FTS, terms, semantic, and hybrid
-reject `thinking` as a source. Semantic search continues to embed full message
-text; hybrid's keyword search uses dialogue. Ordinary session search and the
-command palette continue to search the full rendered transcript.
+blocks in `thinking_text`, including Cursor JSONL and OpenHands. Substring and
+regex searches on SQLite, DuckDB, and ClickHouse include `thinking` by default;
+use `--in messages` for dialogue alone or `--in thinking` for reasoning alone.
+FTS, terms, semantic, and hybrid reject `thinking` as a source. Semantic search
+continues to embed full message text; hybrid's keyword search uses dialogue.
+Ordinary session search and the command palette continue to search the full
+rendered transcript.
 
 Existing sessions from these providers are reparsed when their source files are
 available. Other providers and parser paths, sessions without source files,
@@ -823,9 +825,10 @@ rendered text in `rendered` and `COALESCE(dialogue_text, content)` in `content`.
 Ordinary session search matches `rendered` unless the query names an FTS column;
 FTS content search and hybrid's keyword search match `content`. Session-search
 ordering may shift.
-Artifact transport and PostgreSQL, DuckDB, and ClickHouse dialogue search are a
-separate follow-up. Transcript display, block order, and artifact format v4
-remain unchanged.
+DuckDB mirrors rebuild on their next push to fill dialogue. The first ClickHouse
+push after upgrading is a full push to fill dialogue.
+Artifact transport and PostgreSQL dialogue search are a separate follow-up.
+Transcript display, block order, and artifact format v4 remain unchanged.
 
 One-shot, automated, and subagent sessions are excluded by default; opt back in
 with `--include-one-shot`, `--include-automated`, or `--include-children`.
@@ -838,7 +841,7 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
 | `--scope`             | `scope`                | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
 | `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite substring/regex                                                                                                                  |
+| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, DuckDB, or ClickHouse substring/regex                                                                                                                  |
 | `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |
 | `--reveal`            | `reveal`               | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
 | `--project`           | `project`              | string                                                                                                                                                                            |

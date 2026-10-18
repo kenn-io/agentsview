@@ -18,6 +18,10 @@ up a PostgreSQL server.
     core extension. Expect rough edges, and treat the Quack remote
     path as suitable for trusted networks only.
 
+Content search uses dialogue for `--in messages` and searches reasoning with
+`--in thinking` in substring and regex modes. Both modes include reasoning by
+default. Existing mirrors rebuild on their next push to fill dialogue.
+
 ## Quick Start
 
 ```bash

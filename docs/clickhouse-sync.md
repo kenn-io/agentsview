@@ -18,6 +18,11 @@ the SQLite archive; the ClickHouse UI does not write them. Semantic search works
 when `[vector]` is enabled locally and the push includes vectors (see
 [Vector Push](#vector-push)). Hosted raw sync is not part of this path.
 
+Content search uses dialogue for `--in messages` and searches reasoning with
+`--in thinking` in substring and regex modes. Both modes include reasoning by
+default. Hybrid keyword search also uses dialogue; semantic search uses rendered
+messages. The first push after upgrading is a full push to fill dialogue.
+
 ## Quick Start
 
 ### 1. Configure ClickHouse
