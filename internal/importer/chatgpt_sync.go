@@ -196,7 +196,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	keepArchivedChatGPTModels(msgs, archived)
 	canonical := canonicalChatGPTMessages(store, chatGPTSession(result.Session), msgs, storeArchiveContent(store))
 	if chatGPTToolsChanged(archived, canonical) {
-		status, err := replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
+		status, err := replaceSyncedConversation(ctx, store, result, msgs, true)
 		if errors.Is(err, db.ErrReplaceUnchanged) {
 			// Length-only changes still need a write under the transcripts policy.
 			err = writeChatGPTSession(ctx, store, chatGPTSession(result.Session), msgs)
@@ -205,7 +205,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	}
 	status, err := upsertChatGPTConversation(ctx, store, result, nil, true)
 	if replaceable(err) {
-		return replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
+		return replaceSyncedConversation(ctx, store, result, msgs, true)
 	}
 	if err == nil && status == importSkipped {
 		// Sync also refreshes the source timestamp when the messages match.
@@ -275,23 +275,6 @@ func chatGPTToolsChanged(archived, incoming []db.Message) bool {
 }
 
 var chatGPTImageLink = regexp.MustCompile(`!\[image\]\(asset://[^)]*\)`)
-
-func chatGPTImagesLost(archived, incoming []db.Message) bool {
-	links := make(map[string]struct{})
-	for _, message := range incoming {
-		for _, link := range chatGPTImageLink.FindAllString(message.Content, -1) {
-			links[link] = struct{}{}
-		}
-	}
-	for _, message := range archived {
-		for _, link := range chatGPTImageLink.FindAllString(message.Content, -1) {
-			if _, ok := links[link]; !ok {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 	byOrdinal := make(map[int]db.Message, len(archived))

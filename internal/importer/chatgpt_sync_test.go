@@ -84,6 +84,7 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	messages, err = d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(messages))
+	assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), "appending makes no copy")
 
 	stats = syncWith(3, chatGPTSyncDetail(3, true, "Rewritten question"))
 	assert.Equal(t, 1, stats.Updated)
@@ -92,10 +93,16 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	messages, err = d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Rewritten question", "Answer", "Follow up", "Second answer"}, messageContents(messages))
+	copies := replacedCopies(t, d, "chatgpt:"+chatGPTSyncID)
+	require.Len(t, copies, 1)
+	saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(saved))
 	assert.Equal(t, 3, details)
 	stats = syncWith(3, chatGPTSyncDetail(3, true, "Rewritten question"))
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Equal(t, 3, details)
+	assert.Len(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), 1, "re-syncing the same edit makes no further copy")
 	stats = syncWith(4, chatGPTSyncDetail(4, false, "Rewritten question"))
 	assert.Equal(t, 1, stats.Updated)
 	assert.Zero(t, stats.Errors)
@@ -105,7 +112,18 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	messages, err = d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Rewritten question", "Answer"}, messageContents(messages))
-	assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), "replacements without pin or image loss make no copy")
+	copies = replacedCopies(t, d, "chatgpt:"+chatGPTSyncID)
+	require.Len(t, copies, 2, "each replacement keeps its previous version")
+	var savedContents [][]string
+	for _, copy := range copies {
+		saved, err := d.GetAllMessages(t.Context(), copy.ID)
+		require.NoError(t, err)
+		savedContents = append(savedContents, messageContents(saved))
+	}
+	assert.ElementsMatch(t, [][]string{
+		{"Question", "Answer", "Follow up", "Second answer"},
+		{"Rewritten question", "Answer", "Follow up", "Second answer"},
+	}, savedContents)
 }
 
 func TestSyncChatGPTMissingCreateTime(t *testing.T) {
@@ -1219,27 +1237,44 @@ func TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn(t *testing.
 }
 
 func TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins(t *testing.T) {
-	d := testDB(t)
-	details := 0
-	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, true, "Question"), &details), nil)
-	require.NoError(t, err)
-	id := "chatgpt:" + chatGPTSyncID
-	before, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	_, err = d.PinMessage(t.Context(), id, before[3].ID, nil)
-	require.NoError(t, err)
-	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Edited question"), &details), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	after, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"Edited question", "Answer"}, messageContents(after))
-	copies := replacedCopies(t, d, id)
-	require.Len(t, copies, 1)
-	pins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, 3, pins[0].Ordinal)
+	for _, pinned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pinned=%t", pinned), func(t *testing.T) {
+			d := testDB(t)
+			details := 0
+			_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, true, "Question"), &details), nil)
+			require.NoError(t, err)
+			id := "chatgpt:" + chatGPTSyncID
+			before, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			if pinned {
+				_, err = d.PinMessage(t.Context(), id, before[3].ID, nil)
+				require.NoError(t, err)
+			}
+			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Edited question"), &details), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			after, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Edited question", "Answer"}, messageContents(after))
+			copies := replacedCopies(t, d, id)
+			require.Len(t, copies, 1)
+			saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(saved))
+			pins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+			require.NoError(t, err)
+			if pinned {
+				require.Len(t, pins, 1)
+				assert.Equal(t, 3, pins[0].Ordinal)
+			} else {
+				assert.Empty(t, pins)
+			}
+			require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentChatGPT, id, 0))
+			_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Edited question"), &details), nil)
+			require.NoError(t, err)
+			assert.Len(t, replacedCopies(t, d, id), 1, "re-syncing the same shorter branch makes no further copy")
+		})
+	}
 }
 
 type chatGPTPostWriteReadStore struct{ *db.DB }
