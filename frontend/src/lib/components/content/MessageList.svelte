@@ -30,7 +30,7 @@
     type ScrollAlign,
   } from "./message-scroll.js";
   import { m } from "../../i18n/index.js";
-  import { settleVirtualScroll } from "./staged-scroll.js";
+  import { settleScrollAnchor, settleVirtualScroll } from "./staged-scroll.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -101,6 +101,10 @@
     return displayItemsAsc[index];
   }
 
+  // Sessions whose measured row heights survive a switch. Returning to one
+  // restores its reading position from real heights instead of estimates.
+  const RETAINED_SESSION_MEASUREMENTS = 20;
+
   const virtualizer = createVirtualizer(() => {
     const count = displayItemsAsc.length;
     const el = containerRef ?? null;
@@ -113,6 +117,7 @@
       overscan: 5,
       useAnimationFrameWithResizeObserver: true,
       measureCacheKey: sid,
+      retainedMeasureCaches: RETAINED_SESSION_MEASUREMENTS,
       getItemKey: (index: number) => {
         const item = itemAt(index, newestFirst);
         if (!item) return `${sid}-${index}`;
@@ -496,6 +501,9 @@
     const sid = messages.sessionId;
     const v = virtualizer.instance;
     if (!sid || !v || messages.loading) return;
+    // A restore scrolls through positions the reader never chose. Keep the
+    // remembered anchor until the restore ends or the reader scrolls.
+    if (restoreTarget?.sessionId === sid || isRestoring()) return;
     const scrollTop = v.scrollOffset ?? 0;
     const vi = findFirstVisibleVirtualItem(
       v.getVirtualItems(),
@@ -508,6 +516,23 @@
       ordinal: item.ordinals[0]!,
       offsetPx: Math.max(0, scrollTop - vi.start),
     });
+  }
+
+  function isRestoring() {
+    return (
+      activeRestoreRequest !== null &&
+      activeRestoreRequest === lastScrollRequest
+    );
+  }
+
+  /** Display index of the row holding an anchor ordinal, or of the row
+   *  after it when the anchor is gone; -1 when the list is empty. */
+  function anchorDisplayIndex(ordinal: number) {
+    const idxAsc = findAnchorIndexAsc(displayItemsAsc, ordinal);
+    if (idxAsc < 0) return -1;
+    return ui.sortNewestFirst
+      ? displayItemsAsc.length - 1 - idxAsc
+      : idxAsc;
   }
 
   function cancelRestoreWork() {
@@ -527,40 +552,39 @@
     const reqId = ++lastScrollRequest;
     activeFollowScrollRequest = null;
     activeRestoreRequest = reqId;
+    try {
+      const holdsAnchor = () =>
+        displayItemsAsc[findAnchorIndexAsc(displayItemsAsc, anchor.ordinal)]
+          ?.ordinals.includes(anchor.ordinal) ?? false;
+      if (!holdsAnchor() && messages.hasOlder) {
+        await messages.ensureOrdinalLoaded(anchor.ordinal);
+        if (reqId !== lastScrollRequest) return;
+        // Let Svelte re-derive displayItemsAsc and the virtualizer
+        // update its count after loading.
+        await raf();
+        await raf();
+        if (reqId !== lastScrollRequest) return;
+      }
+      const idx = anchorDisplayIndex(anchor.ordinal);
+      if (idx < 0) return;
 
-    let idxAsc = findAnchorIndexAsc(displayItemsAsc, anchor.ordinal);
-    const isExact =
-      displayItemsAsc[idxAsc]?.ordinals.includes(anchor.ordinal) ?? false;
-    if (!isExact && messages.hasOlder) {
-      await messages.ensureOrdinalLoaded(anchor.ordinal);
-      if (reqId !== lastScrollRequest) return;
-      // Let Svelte re-derive displayItemsAsc and the virtualizer
-      // update its count after loading.
-      await raf();
-      await raf();
-      if (reqId !== lastScrollRequest) return;
-      idxAsc = findAnchorIndexAsc(displayItemsAsc, anchor.ordinal);
-    }
-    if (idxAsc < 0) return;
-
-    const idx = ui.sortNewestFirst
-      ? displayItemsAsc.length - 1 - idxAsc
-      : idxAsc;
-    const settled = await scrollToDisplayIndex(idx, 0, 0, reqId, "start");
-    if (!settled || reqId !== lastScrollRequest) return;
-    // Re-apply the sub-row offset the anchor was taken at, so the
-    // restore lands on the same line rather than the row's top. The
-    // row's own offset is asked for explicitly rather than read back
-    // from scrollOffset, which can still be mid-animation here.
-    const v = virtualizer.instance;
-    if (v && anchor.offsetPx > 0) {
-      const resolved = v.getOffsetForIndex?.(idx, "start");
-      const rowOffset = Array.isArray(resolved)
-        ? resolved[0]
-        : (v.scrollOffset ?? 0);
-      v.scrollToOffset(Math.round(rowOffset + anchor.offsetPx), {
-        align: "start",
+      const settled = await scrollToDisplayIndex(idx, 0, 0, reqId, "start");
+      if (!settled || reqId !== lastScrollRequest) return;
+      // Re-apply the sub-row offset the anchor was taken at, so the
+      // restore lands on the same line rather than the row's top, and
+      // keep it there while the rows around it are measured. The offset
+      // belongs to the anchor row, so a stand-in row starts at its top.
+      await settleScrollAnchor({
+        resolveIndex: () => anchorDisplayIndex(anchor.ordinal),
+        offsetPx: holdsAnchor() ? anchor.offsetPx : 0,
+        getVirtualizer: () => virtualizer.instance,
+        getScrollTop: () =>
+          containerRef?.scrollTop ?? virtualizer.instance?.scrollOffset ?? 0,
+        isCurrent: () => !destroyed && reqId === lastScrollRequest,
+        nextFrame: raf,
       });
+    } finally {
+      if (activeRestoreRequest === reqId) activeRestoreRequest = null;
     }
   }
 

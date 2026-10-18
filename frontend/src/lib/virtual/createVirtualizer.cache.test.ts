@@ -11,9 +11,11 @@ interface MockInstance {
   _willUpdate(): void;
 }
 
+type CacheOptions = { measureCacheKey: string; count: number; retainedMeasureCaches?: number };
+
 type TestController = {
-  initialOptions: { measureCacheKey: string; count: number };
-  updateOptions: (opts: { measureCacheKey: string; count: number }) => void;
+  initialOptions: CacheOptions;
+  updateOptions: (opts: CacheOptions) => void;
 };
 
 const { createdInstances } = vi.hoisted(() => ({
@@ -67,9 +69,13 @@ describe("createVirtualizer cache invalidation", () => {
     }
   });
 
-  async function setupTest(type: "element" | "window", initialKey: string) {
+  async function setupTest(
+    type: "element" | "window",
+    initialKey: string,
+    retainedMeasureCaches?: number,
+  ) {
     const controller: TestController = {
-      initialOptions: { measureCacheKey: initialKey, count: 10 },
+      initialOptions: { measureCacheKey: initialKey, count: 10, retainedMeasureCaches },
       updateOptions: () => {
         throw new Error("Not yet bound by component");
       },
@@ -125,6 +131,75 @@ describe("createVirtualizer cache invalidation", () => {
         expect(createdInstances).toHaveLength(1);
         expect(instance.options.count).toBe(10);
         expect(instance.itemSizeCache).toBeDefined();
+        expect(instance.itemSizeCache?.size).toBe(0);
+      });
+
+      it("starts from estimates again when switching back without retention", async () => {
+        const { controller, instance } = await setupTest(type, "session-1");
+
+        controller.updateOptions({ measureCacheKey: "session-2", count: 10 });
+        await tick();
+        controller.updateOptions({ measureCacheKey: "session-1", count: 10 });
+        await tick();
+
+        expect(instance.itemSizeCache?.size).toBe(0);
+      });
+
+      it("brings back a retained key's sizes when switching back", async () => {
+        const { controller, instance } = await setupTest(type, "session-1", 2);
+
+        controller.updateOptions({
+          measureCacheKey: "session-2",
+          count: 10,
+          retainedMeasureCaches: 2,
+        });
+        await tick();
+        expect(instance.itemSizeCache?.size).toBe(0);
+        instance.itemSizeCache!.set("0", 70);
+
+        controller.updateOptions({
+          measureCacheKey: "session-1",
+          count: 10,
+          retainedMeasureCaches: 2,
+        });
+        await tick();
+        expect([...instance.itemSizeCache!]).toEqual([
+          ["0", 50],
+          ["1", 60],
+        ]);
+
+        controller.updateOptions({
+          measureCacheKey: "session-2",
+          count: 10,
+          retainedMeasureCaches: 2,
+        });
+        await tick();
+        expect([...instance.itemSizeCache!]).toEqual([["0", 70]]);
+      });
+
+      it("forgets the least recently left key beyond the retention limit", async () => {
+        const { controller, instance } = await setupTest(type, "session-1", 1);
+
+        controller.updateOptions({
+          measureCacheKey: "session-2",
+          count: 10,
+          retainedMeasureCaches: 1,
+        });
+        await tick();
+        instance.itemSizeCache!.set("0", 70);
+        controller.updateOptions({
+          measureCacheKey: "session-3",
+          count: 10,
+          retainedMeasureCaches: 1,
+        });
+        await tick();
+
+        controller.updateOptions({
+          measureCacheKey: "session-1",
+          count: 10,
+          retainedMeasureCaches: 1,
+        });
+        await tick();
         expect(instance.itemSizeCache?.size).toBe(0);
       });
     });

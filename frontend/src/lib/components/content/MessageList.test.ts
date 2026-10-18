@@ -26,6 +26,7 @@ const virtualizerMock = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
   scrollToOffset: vi.fn(),
   getOffsetForIndex: vi.fn(),
+  getOffsetForAlignment: vi.fn((offset: number) => offset),
 }));
 
 vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
@@ -691,6 +692,58 @@ describe("MessageList scroll position memory", () => {
       expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(130, {
         align: "start",
       });
+    });
+  });
+
+  it("keeps the remembered anchor while a restore passes through other rows", async () => {
+    scrollMemory.remember("s1", { ordinal: 1, offsetPx: 10 });
+    virtualizerMock.getVirtualItems.mockImplementation(() => virtualRows);
+    virtualizerMock.getOffsetForIndex.mockImplementation(() => [120, "start"]);
+
+    component = mount(MessageList, { target: document.body });
+    // jsdom never moves scrollTop, so the restore keeps correcting toward
+    // 130 until it gives up.
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(130, {
+        align: "start",
+      });
+    });
+
+    const container = document.querySelector(".message-list-scroll")!;
+    virtualizerMock.scrollOffset = 5;
+    container.dispatchEvent(new Event("scroll"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(scrollMemory.get("s1")).toEqual({ ordinal: 1, offsetPx: 10 });
+
+    // Once the restore stops, scrolling is remembered again.
+    await vi.waitFor(
+      () => {
+        container.dispatchEvent(new Event("scroll"));
+        expect(scrollMemory.get("s1")).toEqual({ ordinal: 0, offsetPx: 5 });
+      },
+      { timeout: 5_000 },
+    );
+  });
+
+  it("remembers a reader scroll that interrupts a restore", async () => {
+    scrollMemory.remember("s1", { ordinal: 1, offsetPx: 10 });
+    virtualizerMock.getVirtualItems.mockImplementation(() => virtualRows);
+    virtualizerMock.getOffsetForIndex.mockImplementation(() => [120, "start"]);
+
+    component = mount(MessageList, { target: document.body });
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(130, {
+        align: "start",
+      });
+    });
+
+    const container = document.querySelector(".message-list-scroll")!;
+    container.dispatchEvent(new Event("wheel"));
+    virtualizerMock.scrollOffset = 5;
+    container.dispatchEvent(new Event("scroll"));
+
+    await vi.waitFor(() => {
+      expect(scrollMemory.get("s1")).toEqual({ ordinal: 0, offsetPx: 5 });
     });
   });
 

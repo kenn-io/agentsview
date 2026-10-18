@@ -58,3 +58,53 @@ export async function settleVirtualScroll(options: StagedScrollOptions): Promise
     retries++;
   }
 }
+
+interface AnchorScrollTarget {
+  getOffsetForIndex(index: number, align: "start"): readonly [number, unknown] | undefined;
+  getOffsetForAlignment(toOffset: number, align: "start"): number;
+  scrollToOffset(offset: number, options: { align: "start" }): void;
+}
+
+export interface AnchorSettleOptions {
+  /** Display index of the anchor row now, or -1 once it is gone. */
+  resolveIndex(): number;
+  /** Pixels the viewport top sits below the anchor row's top. */
+  offsetPx: number;
+  getVirtualizer(): AnchorScrollTarget | undefined;
+  getScrollTop(): number;
+  isCurrent(): boolean;
+  nextFrame(): Promise<void>;
+  stableFrames?: number;
+  maxFrames?: number;
+}
+
+/** Hold the viewport top `offsetPx` below the anchor row's top while row
+ *  measurements land. Rows measured for the first time near the viewport move
+ *  scrollTop, because TanStack compensates them against estimated starts, so a
+ *  single scroll can end rows away from the anchor. A true result means the
+ *  position held for `stableFrames` frames in a row; false means cancellation,
+ *  a missing anchor, or no settled position within `maxFrames`. */
+export async function settleScrollAnchor(options: AnchorSettleOptions): Promise<boolean> {
+  const stableFrames = options.stableFrames ?? 5;
+  const maxFrames = options.maxFrames ?? 90;
+  let stable = 0;
+  for (let frame = 0; frame < maxFrames; frame++) {
+    if (!options.isCurrent()) return false;
+    const virtualizer = options.getVirtualizer();
+    const index = options.resolveIndex();
+    const row =
+      virtualizer && index >= 0 ? virtualizer.getOffsetForIndex(index, "start") : undefined;
+    if (!virtualizer || !row) return false;
+    const target = Math.round(
+      virtualizer.getOffsetForAlignment(row[0] + options.offsetPx, "start"),
+    );
+    if (Math.abs(options.getScrollTop() - target) > 1) {
+      virtualizer.scrollToOffset(target, { align: "start" });
+      stable = 0;
+    } else if (++stable >= stableFrames) {
+      return true;
+    }
+    await options.nextFrame();
+  }
+  return false;
+}

@@ -12,22 +12,31 @@ import {
 
 type PartialKeys<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
+type MeasureCacheOpts = {
+  /** Measured item sizes belong to this key. A new key lays items out from estimates. */
+  measureCacheKey?: unknown;
+  /** How many earlier keys keep their measured sizes, so switching back to one
+   *  lays items out from real heights instead of estimates. Defaults to 0. */
+  retainedMeasureCaches?: number;
+};
+
 type ElementOpts = PartialKeys<
   VirtualizerOptions<HTMLElement, HTMLElement>,
   "observeElementOffset" | "observeElementRect" | "scrollToFn"
-> & { measureCacheKey?: unknown };
+> &
+  MeasureCacheOpts;
 
 type WindowOpts = PartialKeys<
   VirtualizerOptions<Window, HTMLElement>,
   "observeElementOffset" | "observeElementRect" | "scrollToFn" | "getScrollElement"
-> & { measureCacheKey?: unknown };
+> &
+  MeasureCacheOpts;
 
 type BaseOpts<TScroll extends Element | Window, TItem extends Element> = VirtualizerOptions<
   TScroll,
   TItem
-> & {
-  measureCacheKey?: unknown;
-};
+> &
+  MeasureCacheOpts;
 
 function createBaseVirtualizer<TScroll extends Element | Window, TItem extends Element>(
   optsFn: () => BaseOpts<TScroll, TItem>,
@@ -41,6 +50,8 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
   let notifyPending = false;
   let lastMeasureCacheKey: unknown = undefined;
   let cacheKeyChanged = false;
+  // Sizes measured under earlier keys, least recently left first.
+  const retainedCaches = new Map<unknown, Virtualizer<TScroll, TItem>["itemSizeCache"]>();
   let _version = $state(0);
 
   function bumpVersion() {
@@ -81,11 +92,16 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
 
     cacheKeyChanged = false;
     if (opts.measureCacheKey !== lastMeasureCacheKey) {
-      (
-        instance as typeof instance & {
-          itemSizeCache: Map<unknown, unknown>;
+      const limit = opts.retainedMeasureCaches ?? 0;
+      if (limit > 0 && instance.itemSizeCache.size > 0) {
+        retainedCaches.delete(lastMeasureCacheKey);
+        retainedCaches.set(lastMeasureCacheKey, instance.itemSizeCache);
+        while (retainedCaches.size > limit) {
+          retainedCaches.delete(retainedCaches.keys().next().value);
         }
-      ).itemSizeCache = new Map();
+      }
+      instance.itemSizeCache = retainedCaches.get(opts.measureCacheKey) ?? new Map();
+      retainedCaches.delete(opts.measureCacheKey);
       cacheKeyChanged = true;
     }
     lastMeasureCacheKey = opts.measureCacheKey;
@@ -123,6 +139,12 @@ export function createVirtualizer(optsFn: () => ElementOpts) {
       };
     },
     (instance, opts, reset) => {
+      if (reset) {
+        // TanStack keeps its own copy of the offset and scrolls a newly
+        // attached scroll element back to it. Without this, a list that
+        // remounts its scroller for the new key opens at the old key's offset.
+        instance.scrollOffset = 0;
+      }
       const scrollEl = opts.getScrollElement?.() ?? null;
       if (!scrollEl) return;
       if (reset) {

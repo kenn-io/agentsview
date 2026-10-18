@@ -228,6 +228,44 @@ describe("initialOffset semantics", () => {
 
     unmount(component);
   });
+
+  it("element virtualizer forgets the old key's offset while its scroller is detached", async () => {
+    // TanStack scrolls a newly attached scroll element back to its stored
+    // scrollOffset. MessageList swaps its scroller for a loading state on
+    // session switch, so the new session would reopen at the old offset.
+    const onInstanceChange = vi.fn();
+    const container = document.createElement("div");
+    const scrollDiv = document.createElement("div");
+
+    const component = mount(VirtualizerTest, {
+      target: container,
+      props: {
+        type: "element",
+        options: {
+          count: 10,
+          getScrollElement: () => scrollDiv,
+          estimateSize: () => 50,
+          measureCacheKey: "session-1",
+        },
+        onInstanceChange,
+      },
+    });
+
+    await tick();
+    lastInstance.value!.scrollOffset = 900;
+
+    component.setOptions({
+      count: 0,
+      getScrollElement: () => null,
+      estimateSize: (): number => 50,
+      measureCacheKey: "session-2",
+    });
+    await tick();
+
+    expect(lastInstance.value!.scrollOffset).toBe(0);
+
+    unmount(component);
+  });
 });
 
 describe("createVirtualizer reactivity", () => {
