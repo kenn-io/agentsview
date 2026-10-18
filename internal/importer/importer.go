@@ -608,6 +608,17 @@ func appendChatGPTMessages(
 	})
 }
 
+// chatGPTModelRows selects model changes from matching stored-form rows.
+func chatGPTModelRows(archived, incoming []db.Message) []db.Message {
+	var changed []int
+	for i := range archived {
+		if archived[i].Model != incoming[i].Model {
+			changed = append(changed, i)
+		}
+	}
+	return chatGPTFillRows(archived, incoming, changed)
+}
+
 // chatGPTFillRows copies rows with filled results, extended text, or updated
 // models, keeping only the tool results being filled.
 func chatGPTFillRows(
