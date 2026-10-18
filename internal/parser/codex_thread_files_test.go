@@ -156,16 +156,12 @@ func TestCodexForkInventoryChangedDayDoesNotScanOtherDays(t *testing.T) {
 			require.Equal(t, "new answer", messages[len(messages)-1].Content)
 		}
 		parse(2)
-		root := factory.(*codexProviderFactory).threadFiles.directory(cfg.Roots[0])
-		directory := root.children["2026"].children["09"].children["02"]
 		pagePath := filepath.Join(changedDay, "rollout-2026-09-02T10-00-00-"+revertThread+"_"+revertRollout+".jsonl")
 		page := []byte("{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"page-turn\"}}\n")
 		allocations = append(allocations, testing.AllocsPerRun(5, func() {
 			require.NoError(t, os.WriteFile(pagePath, page, 0o600))
-			waitForCodexThreadDirectoryChange(t, directory)
 			parse(1)
 			require.NoError(t, os.Remove(pagePath))
-			waitForCodexThreadDirectoryChange(t, directory)
 			parse(2)
 		}))
 	}
