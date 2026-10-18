@@ -25,7 +25,6 @@ var chatGPTRequests string
 const (
 	chatGPTListRequest = iota
 	chatGPTDetailRequest
-	chatGPTPageSize = 50
 )
 
 // ErrChatGPTResponseTooLarge marks a conversation over the browser relay limit.
@@ -70,7 +69,7 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 		store: store, agent: parser.AgentChatGPT, stats: &stats, cb: cb, machine: machine,
 		tooLarge: ErrChatGPTResponseTooLarge, stop: func(err error) bool {
 			httpErr, _ := errors.AsType[*browserHTTPError](err)
-			return errors.Is(err, ErrChatGPTAuthRequired) || errors.Is(err, errChatGPTFormat) || httpErr != nil && httpErr.rateLimited
+			return errors.Is(err, ErrChatGPTAuthRequired) || httpErr != nil && httpErr.rateLimited
 		},
 	}
 	for _, archived := range []bool{false, true} {
@@ -177,7 +176,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 		}
 	}
 	status, err := upsertChatGPTConversation(ctx, store, result, nil)
-	if reason := refusalReason(err); reason == RefusalDiverged || reason == RefusalShorterExport {
+	if replaceable(err) {
 		return replaceSyncedConversation(ctx, store, result, chatGPTMessages(result.Session.ID, result.Messages))
 	}
 	return status, err
@@ -198,8 +197,8 @@ func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 		}
 		comparison := chatGPTImageLink.ReplaceAllString(stored.Content, "[image unavailable]")
 		if comparison == message.Content || db.IsTextExtension(comparison, message.Content) {
-			message.Content = stored.Content
-			message.ContentLength = len(stored.Content)
+			message.Content = stored.Content + message.Content[len(comparison):]
+			message.ContentLength = len(message.Content)
 		}
 	}
 }
