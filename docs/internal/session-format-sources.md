@@ -3931,7 +3931,8 @@ schemas keep their existing ordering behavior.
   the old conversation in Trash when a pin would be lost.
   Sync fills missing models and keeps nonempty stored models under full,
   transcripts, and usage storage, including when later replies cause the parser
-  to infer a different model for an older reply. Reverified 2026-10-18 with
+  to infer a different model for an older reply during appends or replacements.
+  Reverified 2026-10-18 with
   `TestSyncChatGPTArchiveUpdatesAppendedTurns` and
   `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`.
   Usage-only sync also fills missing models when turns and `update_time`

@@ -237,9 +237,29 @@ func TestSyncChatGPTArchiveUpdatesAppendedTurns(t *testing.T) {
 			}
 			assert.Equal(t, []string{"gpt-4o", "gpt-5"}, models)
 
+			// Regenerating the later reply preserves the earlier reply's stored model.
+			detail = strings.Replace(detail, `"parts":["Second answer"]`, `"parts":["Regenerated answer"]`, 1)
+			detail = strings.Replace(detail, `"update_time":1.706745712e+09`, `"update_time":1706745712.5`, 1)
+			stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712.5", detail, &details), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			assert.Zero(t, stats.Errors)
+			messages, err = d.GetAllMessages(t.Context(), session.ID)
+			require.NoError(t, err)
+			models = nil
+			for _, message := range messages {
+				if message.Role == "assistant" {
+					models = append(models, message.Model)
+				}
+			}
+			assert.Equal(t, []string{"gpt-4o", "gpt-5"}, models)
+			if !policy.UsageOnly() {
+				assert.Equal(t, []string{"Question", "Answer", "Follow up", "Regenerated answer"}, messageContents(messages))
+			}
+
 			// A metadata-only refresh with omitted models keeps both stored models.
 			detail = strings.ReplaceAll(detail, `"metadata":{"model_slug":"gpt-5"}`, `"metadata":{}`)
-			detail = strings.Replace(detail, `"update_time":1.706745712e+09`, `"update_time":1706745713`, 1)
+			detail = strings.Replace(detail, `"update_time":1706745712.5`, `"update_time":1706745713`, 1)
 			detail = strings.Replace(detail, `"title":"Tool"`, `"title":"Renamed"`, 1)
 			_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745713", detail, &details), nil)
 			require.NoError(t, err)
@@ -256,7 +276,7 @@ func TestSyncChatGPTArchiveUpdatesAppendedTurns(t *testing.T) {
 			stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745713", detail, &details), nil)
 			require.NoError(t, err)
 			assert.Equal(t, 1, stats.Skipped)
-			assert.Equal(t, 3, details)
+			assert.Equal(t, 4, details)
 		})
 	}
 }
