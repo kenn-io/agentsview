@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -159,30 +160,43 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 var errChatGPTFormat = errors.New("ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
 
 func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
-	for _, message := range result.Messages {
-		if strings.Contains(message.Content, "[image unavailable]") {
-			archived, err := store.GetAllMessages(ctx, result.Session.ID)
-			if err != nil {
-				return importSkipped, err
-			}
-			keepChatGPTImages(result.Messages, archived)
-			break
-		}
+	archived, err := store.GetAllMessages(ctx, result.Session.ID)
+	if err != nil {
+		return importSkipped, err
 	}
+	keepChatGPTImages(result.Messages, archived)
 	for _, message := range result.Messages {
 		if message.Role == parser.RoleUser && !message.IsSystem && message.Content != "" {
 			result.Session.FirstMessage = message.Content
 			break
 		}
 	}
+	msgs := chatGPTMessages(result.Session.ID, result.Messages)
+	canonical := canonicalChatGPTMessages(store, chatGPTSession(result.Session), msgs, storeArchiveContent(store))
+	if chatGPTToolsChanged(archived, canonical) {
+		return replaceSyncedConversation(ctx, store, result, msgs)
+	}
 	status, err := upsertChatGPTConversation(ctx, store, result, nil)
 	if replaceable(err) {
-		return replaceSyncedConversation(ctx, store, result, chatGPTMessages(result.Session.ID, result.Messages))
+		return replaceSyncedConversation(ctx, store, result, msgs)
 	}
 	return status, err
 }
 
-var chatGPTImageLink = regexp.MustCompile(`!\[image\]\([^)]*\)`)
+func chatGPTToolsChanged(archived, incoming []db.Message) bool {
+	for i := range min(len(archived), len(incoming)) {
+		if !slices.EqualFunc(archived[i].ToolCalls, incoming[i].ToolCalls, func(a, b db.ToolCall) bool {
+			return a.ToolName == b.ToolName && a.Category == b.Category &&
+				a.InputJSON == b.InputJSON && a.ResultContent == b.ResultContent &&
+				a.ResultContentLength == b.ResultContentLength
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+var chatGPTImageLink = regexp.MustCompile(`!\[image\]\(asset://[^)]*\)`)
 
 func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 	byOrdinal := make(map[int]db.Message, len(archived))
@@ -191,8 +205,17 @@ func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 	}
 	for i := range incoming {
 		message := &incoming[i]
+		clean := db.SanitizeUTF8(message.Content)
+		message.ContentLength -= len(message.Content) - len(clean)
+		message.Content = clean
 		stored, ok := byOrdinal[message.Ordinal]
-		if !ok || stored.Role != string(message.Role) || !strings.Contains(message.Content, "[image unavailable]") {
+		// Generated images can change without changing the assistant text.
+		// Only retain uploads on the same user turn.
+		if !ok || message.Role != parser.RoleUser || stored.Role != string(message.Role) ||
+			message.Timestamp.IsZero() || message.SourceUUID == "" || stored.SourceUUID != message.SourceUUID ||
+			stored.SourceParentUUID != message.SourceParentUUID ||
+			stored.Timestamp != message.Timestamp.UTC().Format(time.RFC3339Nano) ||
+			!strings.Contains(message.Content, "[image unavailable]") {
 			continue
 		}
 		comparison := chatGPTImageLink.ReplaceAllString(stored.Content, "[image unavailable]")
