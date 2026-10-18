@@ -3900,9 +3900,12 @@ schemas keep their existing ordering behavior.
   conversation list, and detail endpoints in
   [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226), checked
   2026-10-17. Sync uses the export conversation parser; list timestamps accept
-  ISO strings or Unix seconds, and detail timestamps use Unix seconds. Synthetic
-  importer tests cover these shapes; this rework did not capture a live account
-  response. The [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  ISO strings or Unix seconds, and detail timestamps use Unix seconds. A supplied
+  signed-in capture has a detail timestamp 0.68 s after the list
+  timestamp and a `mapping` object. Reverified 2026-10-18 with
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail`: Sync allows 5 s of
+  endpoint skew and re-fetches detail 60 s newer than the list.
+  The [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
   checked 2026-10-17, document separate active (`is_archived=false`) and archived
   (`is_archived=true`) conversation lists. Sync pages both lists each run.
   The [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),

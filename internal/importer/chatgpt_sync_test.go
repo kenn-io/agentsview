@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -328,15 +329,19 @@ func TestFetchBrowserChatGPTOversizedResponse(t *testing.T) {
 	}
 }
 
-func chatGPTSyncFetch(t *testing.T, listUpdate string, detail string, details *int) func(context.Context, string) (ClaudeAIResponse, error) {
+func chatGPTSyncFetch(t *testing.T, listUpdate string, detail string, details *int, conversationID ...string) func(context.Context, string) (ClaudeAIResponse, error) {
 	t.Helper()
+	id := chatGPTSyncID
+	if len(conversationID) > 0 {
+		id = conversationID[0]
+	}
 	return func(_ context.Context, path string) (ClaudeAIResponse, error) {
 		switch path {
 		case chatGPTRequest(chatGPTListRequest, "", 0, true):
 			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
 		case chatGPTRequest(chatGPTListRequest, "", 0, false):
-			return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":%s}],"total":1}`, chatGPTSyncID, listUpdate))}, nil
-		case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
+			return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":%s}],"total":1,"limit":50,"offset":0}`, id, listUpdate))}, nil
+		case chatGPTRequest(chatGPTDetailRequest, id, 0, false):
 			*details++
 			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
 		default:
@@ -346,21 +351,75 @@ func chatGPTSyncFetch(t *testing.T, listUpdate string, detail string, details *i
 	}
 }
 
+func chatGPTSyncCapturedDetail(t *testing.T, id string, updated float64) string {
+	t.Helper()
+	var detail struct {
+		Mapping     jsontext.Value `json:"mapping"`
+		CurrentNode string         `json:"current_node"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(chatGPTSyncDetail(updated, false, "Question")), &detail))
+	return fmt.Sprintf(`{
+		"title":null,
+		"create_time":null,
+		"update_time":%g,
+		"moderation_results":[],
+		"plugin_ids":[],
+		"conversation_id":%q,
+		"conversation_template_id":null,
+		"gizmo_id":null,
+		"gizmo_type":null,
+		"is_archived":false,
+		"is_starred":false,
+		"safe_urls":[],
+		"blocked_urls":[],
+		"default_model_slug":null,
+		"atlas_mode_enabled":false,
+		"conversation_origin":null,
+		"is_read_only":false,
+		"voice":null,
+		"async_status":null,
+		"disabled_tool_ids":[],
+		"is_temporary_chat":false,
+		"is_do_not_remember":false,
+		"memory_scope":null,
+		"context_scopes":[],
+		"sugar_item_id":null,
+		"sugar_item_visible":false,
+		"pinned_time":null,
+		"is_study_mode":false,
+		"owner":null,
+		"sectioned_conversation":null,
+		"mapping":%s,
+		"current_node":%q,
+		"context_truncation_continuation":null
+	}`, updated, id, detail.Mapping, detail.CurrentNode)
+}
+
 func TestSyncChatGPTEquivalentTimestampsSkipSecondDetail(t *testing.T) {
 	for _, tc := range []struct {
 		name, listTime           string
 		detailTime               float64
 		wantDetails, wantSkipped int
+		id, detail               string
 	}{
-		{"fractional", `"2025-01-02T03:04:05.678901+00:00"`, 1735787045.678901, 1, 1},
-		{"millisecond boundary", `"2025-01-02T03:04:05.679+00:00"`, 1735787045.679, 1, 1},
-		{"detail changed", `"2025-01-02T03:04:05.679+00:00"`, 1735787045.681, 2, 1},
+		{"fractional", `"2025-01-02T03:04:05.678901+00:00"`, 1735787045.678901, 1, 1, chatGPTSyncID, ""},
+		{"millisecond boundary", `"2025-01-02T03:04:05.679+00:00"`, 1735787045.679, 1, 1, chatGPTSyncID, ""},
+		{"detail changed", `"2025-01-02T03:04:05.679+00:00"`, 1735787105.679, 2, 1, chatGPTSyncID, ""},
+		{
+			name: "captured endpoint skew", listTime: `"2026-08-18T01:25:43.336713Z"`,
+			detailTime: 1787016344.016941, wantDetails: 1, wantSkipped: 1,
+			id:     "6a83b493-b890-83ea-915b-90410c25ef98",
+			detail: chatGPTSyncCapturedDetail(t, "6a83b493-b890-83ea-915b-90410c25ef98", 1787016344.016941),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			details := 0
-			detail := chatGPTSyncDetail(tc.detailTime, false, "Question")
-			fetch := chatGPTSyncFetch(t, tc.listTime, detail, &details)
+			detail := tc.detail
+			if detail == "" {
+				detail = chatGPTSyncDetail(tc.detailTime, false, "Question")
+			}
+			fetch := chatGPTSyncFetch(t, tc.listTime, detail, &details, tc.id)
 			_, err := SyncChatGPT(t.Context(), d, fetch, nil)
 			require.NoError(t, err)
 			stats, err := SyncChatGPT(t.Context(), d, fetch, nil)
