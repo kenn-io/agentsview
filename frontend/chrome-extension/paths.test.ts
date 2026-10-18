@@ -102,7 +102,7 @@ describe("ChatGPT request allowlist", () => {
     "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0",
   ])("refuses %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(false));
 
-  it("rejects unknown platforms without loading a request file", async () => {
+  it("rejects unknown platforms", async () => {
     expect(await allowedPath("gemini", listPath("0"))).toBe(false);
   });
 });

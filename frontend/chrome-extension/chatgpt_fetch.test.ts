@@ -22,7 +22,7 @@ function loadFetch(fetch: typeof globalThis.fetch) {
 }
 
 describe("ChatGPT page fetch", () => {
-  it("uses the page session token only for the approved API request", async () => {
+  it("fetches the page session token and sends it as Bearer without echoing it", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ accessToken: "synthetic-test-value" })))
@@ -62,56 +62,41 @@ describe("ChatGPT page fetch", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("reuses a JWT access token across requests until it nears expiry", async () => {
-    const claims = Buffer.from(
-      JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
-    ).toString("base64url");
-    const token = `eyJhbGciOiJub25lIn0.${claims}.synthetic`;
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockImplementation(async (input) =>
-        String(input).endsWith("/api/auth/session")
-          ? new Response(JSON.stringify({ accessToken: token }))
-          : new Response('{"items":[]}'),
+  it.each([
+    { name: "readable expiry", readableExpiry: true, wantSessionCalls: 1, wantFetchCalls: 3 },
+    { name: "unreadable expiry", readableExpiry: false, wantSessionCalls: 2, wantFetchCalls: 4 },
+  ])(
+    "caches tokens according to $name",
+    async ({ readableExpiry, wantSessionCalls, wantFetchCalls }) => {
+      const claims = Buffer.from(
+        JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+      ).toString("base64url");
+      const token = readableExpiry
+        ? `eyJhbGciOiJub25lIn0.${claims}.synthetic`
+        : "synthetic-test-value";
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (input) =>
+          String(input).endsWith("/api/auth/session")
+            ? new Response(JSON.stringify({ accessToken: token }))
+            : new Response('{"items":[]}'),
+        );
+      const chatgptFetch = loadFetch(fetch);
+
+      await chatgptFetch(
+        "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
       );
-    const chatgptFetch = loadFetch(fetch);
-
-    await chatgptFetch(
-      "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
-    );
-    await chatgptFetch(
-      "https://chatgpt.com/backend-api/conversation/22222222-2222-4222-8222-222222222222",
-    );
-
-    const sessionCalls = fetch.mock.calls.filter(([input]) =>
-      String(input).endsWith("/api/auth/session"),
-    );
-    expect(sessionCalls).toHaveLength(1);
-    expect(fetch).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not cache a token whose expiry cannot be read", async () => {
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockImplementation(async (input) =>
-        String(input).endsWith("/api/auth/session")
-          ? new Response(JSON.stringify({ accessToken: "synthetic-test-value" }))
-          : new Response('{"items":[]}'),
+      await chatgptFetch(
+        "https://chatgpt.com/backend-api/conversation/22222222-2222-4222-8222-222222222222",
       );
-    const chatgptFetch = loadFetch(fetch);
 
-    await chatgptFetch(
-      "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
-    );
-    await chatgptFetch(
-      "https://chatgpt.com/backend-api/conversations?offset=50&limit=50&order=updated",
-    );
-
-    const sessionCalls = fetch.mock.calls.filter(([input]) =>
-      String(input).endsWith("/api/auth/session"),
-    );
-    expect(sessionCalls).toHaveLength(2);
-  });
+      const sessionCalls = fetch.mock.calls.filter(([input]) =>
+        String(input).endsWith("/api/auth/session"),
+      );
+      expect(sessionCalls).toHaveLength(wantSessionCalls);
+      expect(fetch).toHaveBeenCalledTimes(wantFetchCalls);
+    },
+  );
   it("fetches a new session after the conversation API rejects the cached token", async () => {
     const claims = Buffer.from(
       JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
