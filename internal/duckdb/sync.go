@@ -991,9 +991,21 @@ func (s *Sync) sessionFingerprints(
 		if err != nil {
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}
+		// DialogueText is excluded from Message JSON. Omit all-NULL dialogue
+		// so sessions without projections retain their previous fingerprints.
+		var dialogue []*string
+		for i, m := range msgs {
+			if m.DialogueText != nil {
+				if dialogue == nil {
+					dialogue = make([]*string, len(msgs))
+				}
+				dialogue[i] = m.DialogueText
+			}
+		}
 		payload := struct {
 			SessionFields  []any
 			Messages       []db.Message
+			Dialogue       []*string `json:",omitzero"`
 			Usage          string
 			ToolCalls      string
 			SecretFindings []db.SecretFinding
@@ -1004,6 +1016,7 @@ func (s *Sync) sessionFingerprints(
 				sess, db.MirroredSessionMachine(sess, s.machine),
 			),
 			Messages:       msgs,
+			Dialogue:       dialogue,
 			Usage:          usage[sess.ID],
 			ToolCalls:      toolCalls,
 			SecretFindings: findings,

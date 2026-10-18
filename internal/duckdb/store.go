@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -882,9 +883,12 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		if f.Mode == "" || f.Mode == "substring" || f.Mode == "regex" {
+			f.Sources = append(f.Sources, "thinking")
+		}
 	}
 	for _, source := range f.Sources {
-		if source != "messages" && source != "tool_input" && source != "tool_result" {
+		if source != "messages" && source != "thinking" && source != "tool_input" && source != "tool_result" {
 			return db.ContentSearchPage{},
 				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -935,17 +939,26 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 		if err != nil {
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
 		}
+		sortContentCandidates(all)
+		// Deduplicate legacy thinking before applying the page cursor.
+		var lastMessageMatch db.MessageRef
 		filtered := all[:0]
 		for _, m := range all {
 			loc := re.FindStringIndex(m.body)
 			if loc != nil {
+				ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
+				if m.match.Location == "message" {
+					lastMessageMatch = ref
+				}
+				if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
+					continue
+				}
 				m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 				filtered = append(filtered, m)
 			}
 		}
 		all = filtered
 	}
-	sortContentCandidates(all)
 	if f.Cursor > 0 {
 		if f.Cursor >= len(all) {
 			return nil, nil
@@ -978,14 +991,37 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
-			contentPred := addSearchArgs("m.content")
+			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
 					m.timestamp AS ts,
-					m.content AS body,
+					COALESCE(m.dialogue_text, m.content) AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					0 AS src, COALESCE(m.id, 0) AS row_id,
+					0 AS call_index, 0 AS event_index
+				FROM messages m JOIN sessions s ON s.id = m.session_id
+				WHERE `+contentPred+`
+					AND `+sysPred+`
+					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+		case "thinking":
+			sysPred := "TRUE"
+			if f.ExcludeSystem {
+				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			}
+			contentPred := duckContentSearchPredicate("m.thinking_text", f, &args)
+			if slices.Contains(f.Sources, "messages") {
+				legacyPred := duckContentSearchPredicate("m.content", f, &args)
+				contentPred += " AND (m.dialogue_text IS NOT NULL OR NOT (" + legacyPred + "))"
+			}
+			args = append(args, scopeArgs...)
+			branches = append(branches, `
+				SELECT m.session_id, s.project, s.agent, 'thinking' AS location,
+					m.role, '' AS tool_name, m.ordinal,
+					m.timestamp AS ts,
+					m.thinking_text AS body,
+					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+					4 AS src, COALESCE(m.id, 0) AS row_id,
 					0 AS call_index, 0 AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
@@ -1090,15 +1126,16 @@ func duckContentSearchPredicate(
 }
 
 type duckContentCandidate struct {
-	match      db.ContentMatch
-	body       string
-	sortTS     string
-	sortTime   time.Time
-	hasSort    bool
-	sourceRank int
-	rowID      int64
-	callIndex  int
-	eventIndex int
+	match          db.ContentMatch
+	body           string
+	sortTS         string
+	sortTime       time.Time
+	hasSort        bool
+	sourceRank     int
+	rowID          int64
+	callIndex      int
+	eventIndex     int
+	legacyThinking bool
 }
 
 func sortContentCandidates(all []duckContentCandidate) {
@@ -1171,14 +1208,31 @@ func (s *Store) collectContentSource(
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
 			m.role, '', m.ordinal, m.timestamp,
-			m.content,
+			COALESCE(m.dialogue_text, m.content),
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 			0 AS src, COALESCE(m.id, 0) AS row_id,
-			0 AS call_index, 0 AS event_index
+			0 AS call_index, 0 AS event_index, false AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
 		if f.Mode != "regex" {
-			query += ` AND m.content ILIKE ? ESCAPE '\'`
+			query += ` AND COALESCE(m.dialogue_text, m.content) ILIKE ? ESCAPE '\'`
+			args = append(args, pattern)
+		}
+		if f.ExcludeSystem {
+			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+		}
+		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
+	case "thinking":
+		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
+			m.role, '', m.ordinal, m.timestamp,
+			m.thinking_text,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+			4 AS src, COALESCE(m.id, 0) AS row_id,
+			0 AS call_index, 0 AS event_index, m.dialogue_text IS NULL AS legacy_thinking
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		if f.Mode != "regex" {
+			query += ` AND m.thinking_text ILIKE ? ESCAPE '\'`
 			args = append(args, pattern)
 		}
 		if f.ExcludeSystem {
@@ -1191,7 +1245,7 @@ func (s *Store) collectContentSource(
 				COALESCE(tc.input_json, ''),
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 				1 AS src, COALESCE(tc.id, 0) AS row_id,
-				tc.call_index AS call_index, 0 AS event_index
+				tc.call_index AS call_index, 0 AS event_index, false AS legacy_thinking
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
@@ -1210,7 +1264,7 @@ func (s *Store) collectContentSource(
 			eventPred = `tre.content ILIKE ? ESCAPE '\'`
 		}
 		query = `SELECT session_id, project, agent, location, role,
-				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index
+				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 				FROM (
 					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, tc.tool_name, m.ordinal,
@@ -1219,7 +1273,7 @@ func (s *Store) collectContentSource(
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						2 AS src,
 						COALESCE(tc.id, 0) AS row_id,
-						tc.call_index AS call_index, 0 AS event_index
+						tc.call_index AS call_index, 0 AS event_index, false AS legacy_thinking
 					FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 					JOIN messages m ON m.session_id = tc.session_id
 						AND m.id = tc.message_id
@@ -1240,7 +1294,7 @@ func (s *Store) collectContentSource(
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						3 AS src,
 						COALESCE(tre.id, 0) AS row_id,
-						tre.call_index AS call_index, tre.event_index
+						tre.call_index AS call_index, tre.event_index, false AS legacy_thinking
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
 						AND ` + eventPred + `
@@ -1306,7 +1360,7 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 			&candidate.match.Role, &candidate.match.ToolName,
 			&candidate.match.Ordinal, &ts,
 			&candidate.body, &sortTS, &candidate.sourceRank,
-			&candidate.rowID, &candidate.callIndex, &candidate.eventIndex,
+			&candidate.rowID, &candidate.callIndex, &candidate.eventIndex, &candidate.legacyThinking,
 		); err != nil {
 			return nil, err
 		}
