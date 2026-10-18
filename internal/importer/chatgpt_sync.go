@@ -28,6 +28,9 @@ const (
 	chatGPTDetailRequest
 )
 
+// The list and detail endpoints stamp update_time independently; one real capture showed detail 0.68 s later.
+const chatGPTUpdateSkew = 5 * time.Second
+
 // ErrChatGPTResponseTooLarge marks a conversation over the browser relay limit.
 var ErrChatGPTResponseTooLarge = errors.New("ChatGPT response exceeds 32 MiB")
 
@@ -141,7 +144,7 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 					},
 					write: syncChatGPTConversation,
 					matches: func(_ []byte, result parser.ParseResult) bool {
-						return result.Session.EndedAt.Sub(updatedAt).Abs() <= time.Millisecond
+						return result.Session.EndedAt.Sub(updatedAt).Abs() <= chatGPTUpdateSkew
 					},
 				})
 				if err != nil {
