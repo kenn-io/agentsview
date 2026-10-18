@@ -232,17 +232,18 @@ agentsview import --type chatgpt --sync
 
 Sync checks each conversation's `update_time`, imports changed details through
 the existing ChatGPT parser, and appends compatible history to the existing
-`chatgpt:<conversation id>` session. Divergent or shorter history follows the
-same refusal rules as a ChatGPT zip import. Sync requires a `mapping` object in
-each conversation. ChatGPT's private API can change without notice; sign in
-again if Sync reports that authentication expired.
+`chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync
+replaces the archive with ChatGPT's visible branch, including shorter histories.
+If that would lose a pin or note, Sync keeps the previous version in Trash, as
+Claude.ai Sync does. Sync requires a `mapping` object in each conversation.
+ChatGPT's private API can change without notice; sign in again if Sync reports
+that authentication expired.
 
 Each conversation has a 32 MiB response limit. Larger conversations count as
-failed while Sync continues. Two detail fetch failures in a row end Sync;
-refused history and oversized conversations do not count toward that stop. A
-rate limit that lasts through retries, or a requested wait longer than 60
-seconds, ends Sync early. Completed conversations stay imported. Run Sync again
-later to continue.
+failed while Sync continues. Two chat failures in a row end Sync; oversized
+conversations do not count toward that stop. A rate limit that lasts through
+retries, or a requested wait longer than 60 seconds, ends Sync early. Completed
+conversations stay imported. Run Sync again later to continue.
 
 Images appear as `[image unavailable]`. If a ZIP import already stored an image,
 Sync keeps that reference when the surrounding text matches and can append new

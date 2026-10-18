@@ -407,23 +407,13 @@ func upsertChatGPTConversation(
 	result parser.ParseResult,
 	fts *lazyFTS,
 ) (importStatus, error) {
-	existing, err := store.GetSession(ctx, result.Session.ID)
+	s := result.Session
+	msgs := chatGPTMessages(s.ID, result.Messages)
+
+	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
 		return importNew, fmt.Errorf("checking session: %w", err)
 	}
-	var archived []db.Message
-	if existing != nil && existing.Agent == string(parser.AgentChatGPT) && !storeArchiveContent(store).UsageOnly() {
-		archived, err = store.GetAllMessages(ctx, result.Session.ID)
-		if err != nil {
-			return importNew, fmt.Errorf("loading existing messages: %w", err)
-		}
-	}
-	return upsertChatGPTConversationWithHistory(ctx, store, result, fts, existing, archived)
-}
-
-func upsertChatGPTConversationWithHistory(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS, existing *db.Session, archived []db.Message) (importStatus, error) {
-	s := result.Session
-	msgs := chatGPTMessages(s.ID, result.Messages)
 	if existing == nil {
 		fts.suspend(ctx)
 		err := writeChatGPTSession(ctx, store, chatGPTSession(s), msgs)
@@ -447,6 +437,10 @@ func upsertChatGPTConversationWithHistory(ctx context.Context, store db.Store, r
 		// token usage, so the archived history cannot be verified as a
 		// prefix of the export. Leave the stored session untouched.
 		return importSkipped, nil
+	}
+	archived, err := store.GetAllMessages(ctx, s.ID)
+	if err != nil {
+		return importNew, fmt.Errorf("loading existing messages: %w", err)
 	}
 	// Compare against the export as it would be stored, not as parsed:
 	// the write path sanitizes and projects rows, so raw parser output
