@@ -25,6 +25,7 @@ describe("feature outcomes", () => {
     [new DOMException("timed out", "TimeoutError"), "request"],
     [{ code: "sync_running" }, "other"],
     [new ApiError(500, "detail", "unknown"), "other"],
+    [new ApiError(500, "detail", "toString"), "other"],
   ])("reports only the fixed reason %s", (error, reason) => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
     vi.stubGlobal("fetch", fetch);

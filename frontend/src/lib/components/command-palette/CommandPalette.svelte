@@ -45,10 +45,10 @@
   // mechanism). This ensures stale results and in-flight requests are always
   // cancelled even when the caller bypasses close().
   onDestroy(() => {
+    searchStore.endSession();
     searchStore.clear();
     searchStore.resetSort();
     searchStore.resetRange();
-    searchStore.reportedModes.clear();
   });
 
   // Most Chinese, Japanese, and Korean words are one or two characters long,

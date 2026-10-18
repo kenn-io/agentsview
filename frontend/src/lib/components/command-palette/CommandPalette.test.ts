@@ -54,7 +54,7 @@ const {
     range: { mode: "relative" as const, days: 0 },
     setRange: vi.fn(),
     resetRange: vi.fn(),
-    reportedModes: new Set(),
+    endSession: vi.fn(),
   },
   mockRouter: {
     navigateToSession: vi.fn(),
@@ -249,7 +249,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("calls clear() and resetSort() on unmount via onDestroy", async () => {
+  it("ends the search session before clearing on unmount", async () => {
     const component = mount(CommandPalette, {
       target: document.body,
     });
@@ -258,6 +258,8 @@ describe("CommandPalette", () => {
 
     unmount(component);
 
+    expect(mockSearchStore.endSession).toHaveBeenCalledOnce();
+    expect(mockSearchStore.endSession).toHaveBeenCalledBefore(mockSearchStore.clear);
     expect(mockSearchStore.clear).toHaveBeenCalledOnce();
     expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
   });

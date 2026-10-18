@@ -39,30 +39,20 @@ export function reportErrorShown(kind: ErrorKind): void {
   reportTelemetry("error_shown", { kind });
 }
 
+const syncFailureReasons = new Map<string, SyncFailureReason>([
+  ["sync_running", "already_running"],
+  ["claude_ai_sync_running", "already_running"],
+  ["claude_ai_auth_required", "sign_in_required"],
+  ["claude_ai_chrome_host_required", "browser_extension"],
+  ["claude_ai_chrome_host_update_required", "browser_extension"],
+]);
+
 export function reportSyncFailed(error: unknown): void {
   let reason: SyncFailureReason = "other";
-  let code: string | undefined;
+  // DOMException does not extend Error in every runtime.
   if (error instanceof Error || error instanceof DOMException) {
-    const errorCode: unknown = "code" in error ? error.code : undefined;
-    if (typeof errorCode === "string") code = errorCode;
+    const code: unknown = "code" in error ? error.code : undefined;
+    reason = typeof code === "string" ? (syncFailureReasons.get(code) ?? "other") : "request";
   }
-  switch (code) {
-    case "sync_running":
-    case "claude_ai_sync_running":
-      reason = "already_running";
-      break;
-    case "claude_ai_auth_required":
-      reason = "sign_in_required";
-      break;
-    case "claude_ai_chrome_host_required":
-    case "claude_ai_chrome_host_update_required":
-      reason = "browser_extension";
-      break;
-    default:
-      if ((error instanceof Error || error instanceof DOMException) && code === undefined) {
-        reason = "request";
-      }
-  }
-
   reportTelemetry("sync_failed", { reason });
 }

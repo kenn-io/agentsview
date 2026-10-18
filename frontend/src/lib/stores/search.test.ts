@@ -486,6 +486,7 @@ describe("SearchStore", () => {
     else stale.reject(new Error("late stale failure"));
     await flushMicrotasks();
 
+    store.endSession();
     expect(reportTelemetry).not.toHaveBeenCalledWith("search_empty");
     expect(reportErrorShown).not.toHaveBeenCalled();
     expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
@@ -536,23 +537,36 @@ describe("SearchStore telemetry", () => {
     );
   });
 
-  it("counts accepted empty results across queries", async () => {
+  it("counts a palette open once when it ends on an accepted empty result", async () => {
     const store = createSearchStore(null);
-    for (const [query, count] of [
-      ["missing", 1],
-      ["found", 1],
-      ["missing again", 2],
-      [" ", 2],
-    ] as const) {
-      searchService.getApiV1Search.mockResolvedValue(
-        fullTextResponse(query, query === "found" ? 1 : 0),
-      );
+    const emptyCount = () =>
+      vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "search_empty").length;
+    const run = async (query: string, results: number) => {
+      searchService.getApiV1Search.mockResolvedValue(fullTextResponse(query, results));
       store.search(query);
       await runDebounce();
-      expect(
-        vi.mocked(reportTelemetry).mock.calls.filter(([event]) => event === "search_empty"),
-      ).toHaveLength(count);
-    }
+    };
+
+    await run("missing", 0);
+    await run("missing more", 0);
+    expect(emptyCount()).toBe(0);
+    store.endSession();
+    expect(emptyCount()).toBe(1);
+
+    await run("missing", 0);
+    await run("found", 1);
+    store.endSession();
+    await run("missing", 0);
+    store.search("still typing");
+    store.endSession();
+    await run("missing", 0);
+    store.clear();
+    store.endSession();
+    searchService.getApiV1Search.mockRejectedValueOnce(new Error("failed"));
+    store.search("failure");
+    await runDebounce();
+    store.endSession();
+    expect(emptyCount()).toBe(1);
   });
 
   afterEach(() => {
@@ -579,7 +593,7 @@ describe("SearchStore telemetry", () => {
       ["search_run", { query_type: "hybrid" }],
     ]);
 
-    store.reportedModes.clear();
+    store.endSession();
     store.search("needle");
     await runDebounce();
     expect(reportTelemetry).toHaveBeenLastCalledWith("search_run", { query_type: "semantic" });

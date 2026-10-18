@@ -134,8 +134,10 @@ export class SearchStore {
   results: PaletteSearchResult[] = $state([]);
   isSearching: boolean = $state(false);
   error: SearchFailure | null = $state(null);
-  // search_run counts each mode once per palette open; the palette clears this when it closes.
-  reportedModes = new Set<SearchMode>();
+  // Telemetry counts per palette open: search_run once per mode, and search_empty
+  // once when the open ends on an accepted empty result. endSession() closes it.
+  private reportedModes = new Set<SearchMode>();
+  private endedEmpty = false;
 
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
@@ -224,7 +226,15 @@ export class SearchStore {
     this.sort = "relevance";
   }
 
+  /** Ends a palette open. Call it before clear(), which discards the outcome. */
+  endSession() {
+    if (this.endedEmpty) reportTelemetry("search_empty");
+    this.endedEmpty = false;
+    this.reportedModes.clear();
+  }
+
   private cancelInFlight() {
+    this.endedEmpty = false;
     this.requestVersion += 1;
     this.abortController?.abort();
     this.abortController = null;
@@ -285,7 +295,7 @@ export class SearchStore {
 
       if (requestVersion !== this.requestVersion || signal.aborted) return;
       this.results = results;
-      if (results.length === 0) reportTelemetry("search_empty");
+      this.endedEmpty = results.length === 0;
       this.error = null;
     } catch (error: unknown) {
       if (requestVersion !== this.requestVersion || signal.aborted || isAbortError(error)) {
