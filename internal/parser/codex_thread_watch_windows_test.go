@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
@@ -117,12 +118,15 @@ func TestCodexThreadWatchRecoversAfterNotificationFailure(t *testing.T) {
 	require.NoError(t, err)
 	state := cache.roots[root].Value.(*codexThreadDirectory).watch.state
 	require.NoError(t, windows.CancelIoEx(state.handle, &state.overlapped))
-	paths, err := cache.find(t.Context(), root, revertThread)
-	require.ErrorIs(t, err, windows.ERROR_OPERATION_ABORTED)
-	assert.Empty(t, paths)
+	// CancelIoEx does not wait for the cancelled read to reach the port.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		paths, err := cache.find(t.Context(), root, revertThread)
+		assert.ErrorIs(c, err, windows.ERROR_OPERATION_ABORTED)
+		assert.Empty(c, paths)
+	}, 5*time.Second, 10*time.Millisecond)
 	file := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	paths, err = cache.find(t.Context(), root, revertThread)
+	paths, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	assert.Equal(t, []string{file}, paths)
 }
@@ -130,15 +134,21 @@ func TestCodexThreadWatchRecoversAfterNotificationFailure(t *testing.T) {
 func TestCodexThreadWatchReclaimsWatchesClosedByMissingParent(t *testing.T) {
 	factory, cfg, source := codexForkInventoryFixture(t, 0)
 	require.NoError(t, os.Remove(filepath.Join(cfg.Roots[0], "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")))
-	retained := func() int {
+	retained := func(c require.TestingT) int {
 		_, err := factory.NewProvider(cfg).Parse(t.Context(), ParseRequest{Source: source})
-		require.NoError(t, err)
+		require.NoError(c, err)
 		codexThreadWatches.mu.Lock()
 		defer codexThreadWatches.mu.Unlock()
 		return len(codexThreadWatches.states)
 	}
-	first := retained()
+	first := retained(t)
 	for range 50 {
-		require.LessOrEqual(t, retained(), first, "each parse with a missing parent closes its watches")
+		retained(t)
 	}
+	// Each parse closes its watches, and closing does not wait for the
+	// cancelled reads to reach the port, so the next parse can still see some.
+	// Without reclamation the count grows with every parse and never drops.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.LessOrEqual(c, retained(c), first)
+	}, 5*time.Second, 10*time.Millisecond)
 }
