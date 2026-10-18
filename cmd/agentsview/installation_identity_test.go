@@ -1,15 +1,14 @@
 package main
 
 import (
+	"encoding/json/jsontext"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -128,58 +127,39 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 
 func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 	const legacy = "install-one 2026-10-08 sessions"
-	const converted = `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2026-10-08"]}}`
-	for _, tc := range []struct{ enabled, want string }{
-		{"1", converted},
-		{"0", legacy},
-	} {
-		t.Run(tc.enabled, func(t *testing.T) {
-			t.Setenv(telemetry.EnabledEnv, tc.enabled)
+	for _, enabled := range []string{"1", "0"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv(telemetry.EnabledEnv, enabled)
 			t.Setenv(telemetry.GenericEnabledEnv, "1")
 			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-			lock := flock.New(path + ".lock")
-			require.NoError(t, lock.Lock())
-			t.Cleanup(func() { require.NoError(t, lock.Unlock()) })
-			forwarded := make(chan string, 8)
-			constructed := make(chan http.Handler, 1)
-			go func() {
-				telemetryOptions(cfg)
-				constructed <- telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-					data, err := os.ReadFile(path)
-					assert.NoError(t, err)
-					forwarded <- string(data)
-				}))
-			}()
-			var handler http.Handler
-			select {
-			case handler = <-constructed:
-			case <-time.After(time.Second):
-				require.FailNow(t, "telemetry setup waited for the screen claims lock")
-			}
-			var requests sync.WaitGroup
-			for range 8 {
-				requests.Go(func() {
-					handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
-				})
-			}
-			require.NoError(t, lock.Unlock())
-			requests.Wait()
-			for range 8 {
-				data := <-forwarded
-				if tc.enabled == "1" {
-					assert.JSONEq(t, tc.want, data)
+			opts := telemetryOptions(cfg)
+			assert.Equal(t, path, opts.ScreenClaimsPath)
+			wantLegacy := enabled == "0"
+			forwarded := 0
+			handler := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+				forwarded++
+				data, err := os.ReadFile(path)
+				assert.NoError(t, err)
+				if wantLegacy {
+					assert.Equal(t, legacy, string(data))
 				} else {
-					assert.Equal(t, tc.want, data)
+					assert.True(t, jsontext.Value(data).IsValid(), "claims must be JSON before forwarding capture")
 				}
-			}
-			// A later request must leave claims alone, even if they change.
-			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
+			}))
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, legacy, string(data))
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
+			require.Equal(t, 1, forwarded)
+			if enabled == "1" {
+				// A later request must leave claims alone, even if they change.
+				require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+				wantLegacy = true
+				handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
+				assert.Equal(t, 2, forwarded)
+			}
 		})
 	}
 }

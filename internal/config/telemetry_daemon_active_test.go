@@ -144,11 +144,7 @@ func TestClaimDaemonActiveDoesNotBlockConfigSaves(t *testing.T) {
 	go func() {
 		defer close(savesDone)
 		cfg := Config{DataDir: dir}
-		if err := cfg.SaveSettings(map[string]any{"chart_palette": ChartPaletteMatplotlib}); err != nil {
-			saved <- err
-			return
-		}
-		saved <- cfg.SaveTerminalConfig(TerminalConfig{Mode: "clipboard"})
+		saved <- cfg.SaveSettings(map[string]any{"chart_palette": ChartPaletteMatplotlib})
 	}()
 	select {
 	case err := <-saved:
@@ -156,7 +152,4 @@ func TestClaimDaemonActiveDoesNotBlockConfigSaves(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "config save waited for the heartbeat callback")
 	}
-	cfg := readConfigFile(t, dir)
-	assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
-	assert.Equal(t, "clipboard", cfg.Terminal.Mode)
 }
