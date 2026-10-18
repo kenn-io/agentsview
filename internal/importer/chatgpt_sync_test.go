@@ -574,7 +574,11 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 				details := 0
 				stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", string(unchangedDetail), &details), nil)
 				require.NoError(t, err)
-				assert.Equal(t, 1, stats.Skipped)
+				if tc.legacy {
+					assert.Equal(t, 1, stats.Updated)
+				} else {
+					assert.Equal(t, 1, stats.Skipped)
+				}
 				assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID))
 				if extend {
 					mapping := conversation["mapping"].(map[string]any)
@@ -889,6 +893,76 @@ func TestSyncChatGPTReplacesExtendedTurnWithChangedSourceID(t *testing.T) {
 	require.Len(t, pins, 1)
 	assert.Equal(t, original[2].ID, pins[0].MessageID)
 	assert.Equal(t, new("Keep the original"), pins[0].Note)
+}
+
+func TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(policy)
+			details := 0
+			detail := strings.Trim(chatGPTChainConvID(chatGPTSyncID,
+				chatGPTNodeSpec{"user", "text", "Question"},
+				chatGPTNodeSpec{"assistant", "text", "Answer"},
+				chatGPTNodeSpec{"user", "text", "Follow up"},
+			), "[]")
+			result, err := parser.ParseChatGPTConversation([]byte(detail))
+			require.NoError(t, err)
+			legacy := chatGPTMessages(result.Session.ID, result.Messages)
+			for i := range legacy {
+				legacy[i].SourceUUID, legacy[i].SourceParentUUID = "", ""
+			}
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+				Session: chatGPTSession(result.Session), Messages: legacy,
+				ReplaceMessages: true, SkipSignalUpdates: true,
+			}})
+			require.NoError(t, err)
+			id := "chatgpt:" + chatGPTSyncID
+			seeded, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, seeded, 3)
+			_, err = d.PinMessage(t.Context(), id, seeded[2].ID, new("Keep the original"))
+			require.NoError(t, err)
+			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745710", detail, &details), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			before, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, before, 3)
+			assert.Equal(t, "m-n3", before[2].SourceUUID)
+			assert.Equal(t, "n2", before[2].SourceParentUUID)
+			assert.Equal(t, seeded[2].ID, before[2].ID)
+
+			detail = strings.NewReplacer(`"id":"m-n3"`, `"id":"new-user-message"`,
+				`"Follow up"`, `"Follow up with more detail"`,
+				`"update_time":1706745710.0`, `"update_time":1706745711`).Replace(detail)
+			stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", detail, &details), nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Updated)
+			after, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, after, 3)
+			assert.Equal(t, "Follow up with more detail", after[2].Content)
+			assert.Equal(t, "new-user-message", after[2].SourceUUID)
+			pins, err := d.ListPinnedMessages(t.Context(), id, "")
+			require.NoError(t, err)
+			assert.Empty(t, pins, "the changed source turn no longer owns the original pin")
+			copies := replacedCopies(t, d, id)
+			require.Len(t, copies, 1)
+			assert.True(t, d.IsSessionTrashed(t.Context(), copies[0].ID))
+			original, err := d.GetAllMessages(t.Context(), copies[0].ID)
+			require.NoError(t, err)
+			require.Len(t, original, 3)
+			assert.Equal(t, "Follow up", original[2].Content)
+			assert.Equal(t, "m-n3", original[2].SourceUUID)
+			pins, err = d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, original[2].ID, pins[0].MessageID)
+			assert.Equal(t, new("Keep the original"), pins[0].Note)
+		})
+	}
 }
 
 func TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins(t *testing.T) {

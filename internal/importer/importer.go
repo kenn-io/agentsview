@@ -712,7 +712,7 @@ func sameMessages(existing, incoming []db.Message) bool {
 // compareChatGPTPrefix reports whether the export still starts with the
 // archived messages and which archived rows the export completes: a result
 // that was empty when archived and is filled now, archived text the export
-// extends (db.IsTextExtension), or a changed model. It compares turn fields,
+// extends (db.IsTextExtension), a changed model, or missing source identities. It compares turn fields,
 // conflicting source IDs, text and length, and each archived call's name,
 // category, and whether its result is empty.
 func compareChatGPTPrefix(
@@ -743,11 +743,16 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended || a.Model != b.Model {
+		if fill || extended || a.Model != b.Model || missingSourceIdentity(a, b) {
 			completed = append(completed, i)
 		}
 	}
 	return completed, true
+}
+
+func missingSourceIdentity(archived, incoming db.Message) bool {
+	return archived.SourceUUID == "" && incoming.SourceUUID != "" ||
+		archived.SourceParentUUID == "" && incoming.SourceParentUUID != ""
 }
 
 func emptyToolResult(tc db.ToolCall) bool {
