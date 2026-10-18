@@ -242,8 +242,8 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 // chatGPTPopulatedList returns a full first page of distinct conversation IDs.
 func chatGPTPopulatedList(t *testing.T) string {
 	t.Helper()
-	items := make([]string, 0, chatGPTPageSize)
-	for i := range chatGPTPageSize {
+	items := make([]string, 0, 50)
+	for i := range 50 {
 		items = append(items, fmt.Sprintf(`{"id":"%08x-0000-4000-8000-000000000000","update_time":1}`, i+1))
 	}
 	return fmt.Sprintf(`{"items":[%s],"total":%d}`, strings.Join(items, ","), len(items))
@@ -275,7 +275,7 @@ func TestSyncChatGPTStopsAfterTwoDetailFailures(t *testing.T) {
 	}
 }
 
-func TestSyncChatGPTUnsupportedFormatStopsAndKeepsEarlierWrites(t *testing.T) {
+func TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop(t *testing.T) {
 	for _, tc := range []struct {
 		name, mapping string
 	}{
@@ -283,36 +283,74 @@ func TestSyncChatGPTUnsupportedFormatStopsAndKeepsEarlierWrites(t *testing.T) {
 		{"null mapping", `,"mapping":null`},
 		{"array mapping", `,"mapping":[]`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			var details []string
-			stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
-				switch path {
-				case chatGPTRequest(chatGPTListRequest, "", 0, false):
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + chatGPTSyncID + `","update_time":1},{"id":"00000002-0000-4000-8000-000000000000","update_time":1},{"id":"00000003-0000-4000-8000-000000000000","update_time":1}],"total":3}`)}, nil
-				case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
-					details = append(details, chatGPTSyncID)
-					return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTSyncDetail(1, false, "Question"))}, nil
-				case chatGPTRequest(chatGPTDetailRequest, "00000002-0000-4000-8000-000000000000", 0, false):
-					details = append(details, "00000002-0000-4000-8000-000000000000")
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"00000002-0000-4000-8000-000000000000","messages":[{"id":"message-1","author":{"role":"user"},"content":{"content_type":"text","parts":["New format"]}}],"page_info":{"start_cursor":"message-1","end_cursor":"message-1","has_previous_page":true,"has_next_page":false}` + tc.mapping + `}`)}, nil
-				default:
-					require.Failf(t, "unexpected ChatGPT request path", "%s", path)
-					return ClaudeAIResponse{}, nil
+		for _, failures := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s/failures=%d", tc.name, failures), func(t *testing.T) {
+				d := testDB(t)
+				details := 0
+				stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+					if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
+						return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
+					}
+					if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
+						return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
+					}
+					details++
+					id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", details)
+					require.Equal(t, chatGPTRequest(chatGPTDetailRequest, id, 0, false), path)
+					if details > 1 && details <= failures+1 {
+						return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"` + id + `"` + tc.mapping + `}`)}, nil
+					}
+					return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, id))}, nil
+				}, nil)
+				if failures == 2 {
+					require.EqualError(t, err, "ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
+					assert.Equal(t, 3, details)
+					assert.Equal(t, 1, stats.Imported)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, 50, details)
+					assert.Equal(t, 49, stats.Imported)
+					messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000003-0000-4000-8000-000000000000")
+					require.NoError(t, err)
+					assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
 				}
-			}, nil)
-			require.EqualError(t, err, "ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
-			assert.Equal(t, []string{chatGPTSyncID, "00000002-0000-4000-8000-000000000000"}, details)
-			assert.Equal(t, 1, stats.Imported)
-			assert.Equal(t, 1, stats.Errors)
-			messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
-			require.NoError(t, err)
-			assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
-			stored, err := d.GetSessionFull(t.Context(), "chatgpt:00000002-0000-4000-8000-000000000000")
-			require.NoError(t, err)
-			assert.Nil(t, stored)
-		})
+				assert.Equal(t, failures, stats.Errors)
+				require.Len(t, stats.Refusals, failures)
+				messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000001-0000-4000-8000-000000000000")
+				require.NoError(t, err)
+				assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
+			})
+		}
 	}
+}
+
+func TestSyncChatGPTSkipsConversationsWithoutImportableMessages(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
+		}
+		if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"00000001-0000-4000-8000-000000000000","update_time":1},{"id":"00000002-0000-4000-8000-000000000000","update_time":1},{"id":"00000003-0000-4000-8000-000000000000","update_time":1}],"total":3}`)}, nil
+		}
+		details++
+		id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", details)
+		require.Equal(t, chatGPTRequest(chatGPTDetailRequest, id, 0, false), path)
+		if details <= 2 {
+			return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"` + id + `","mapping":{"root":{"id":"root","message":null}}}`)}, nil
+		}
+		return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, id))}, nil
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, details)
+	assert.Equal(t, 2, stats.Skipped)
+	assert.Zero(t, stats.Errors)
+	assert.Empty(t, stats.Refusals)
+	assert.Equal(t, 1, stats.Imported)
+	messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000003-0000-4000-8000-000000000000")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
 }
 
 func TestSyncChatGPTContinuesAfterOversizedDetails(t *testing.T) {
@@ -447,8 +485,16 @@ func TestSyncChatGPTKeepsZipImageAndAppends(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, after, len(before)+1)
 			for i := range before {
-				assert.Equal(t, before[i].Content, after[i].Content)
+				want := before[i].Content
+				if extend && i == 0 {
+					want += " text"
+				}
+				assert.Equal(t, want, after[i].Content)
 				assert.Equal(t, before[i].ID, after[i].ID)
+			}
+			assert.Contains(t, after[0].Content, "![image](")
+			if extend {
+				assert.Contains(t, after[0].Content, " incomplete text")
 			}
 			assert.Equal(t, "Follow up", after[len(before)].Content)
 			stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+id)
