@@ -594,7 +594,7 @@ func writeChatGPTSession(
 }
 
 // appendChatGPTMessages fills archived-empty tool results, extends truncated
-// text, updates models at stored ordinals, and inserts later rows, leaving
+// text, fills missing models at stored ordinals, and inserts later rows, leaving
 // other stored rows untouched. Message changes clear signals for backfill;
 // metadata-only writes preserve them.
 func appendChatGPTMessages(
@@ -608,21 +608,21 @@ func appendChatGPTMessages(
 	})
 }
 
-// chatGPTModelRows selects model changes from matching stored-form rows.
+// chatGPTModelRows selects missing models from matching stored-form rows.
 func chatGPTModelRows(archived, incoming []db.Message) []db.Message {
 	if incoming == nil {
 		return nil
 	}
 	var changed []int
 	for i, row := range incoming {
-		if i < len(archived) && row.Model != "" && archived[i].Model != row.Model {
+		if i < len(archived) && row.Model != "" && archived[i].Model == "" {
 			changed = append(changed, i)
 		}
 	}
 	return chatGPTFillRows(archived, incoming, changed)
 }
 
-// chatGPTFillRows copies rows with filled results, extended text, or updated
+// chatGPTFillRows copies rows with filled results, extended text, or missing
 // models, keeping only the tool results being filled.
 func chatGPTFillRows(
 	archived, incoming []db.Message, filled []int,
@@ -712,7 +712,7 @@ func sameMessages(existing, incoming []db.Message) bool {
 // compareChatGPTPrefix reports whether the export still starts with the
 // archived messages and which archived rows the export completes: a result
 // that was empty when archived and is filled now, archived text the export
-// extends (db.IsTextExtension), a changed model, or missing source identities. It compares turn fields,
+// extends (db.IsTextExtension), a missing model, or missing source identities. It compares turn fields,
 // conflicting source IDs, text and length, and each archived call's name,
 // category, and whether its result is empty.
 func compareChatGPTPrefix(
@@ -743,7 +743,7 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended || b.Model != "" && a.Model != b.Model || missingSourceIdentity(a, b) {
+		if fill || extended || b.Model != "" && a.Model == "" || missingSourceIdentity(a, b) {
 			completed = append(completed, i)
 		}
 	}
