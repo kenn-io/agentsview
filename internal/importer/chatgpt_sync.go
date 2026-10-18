@@ -193,6 +193,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 		}
 	}
 	msgs := chatGPTMessages(result.Session.ID, result.Messages)
+	keepArchivedChatGPTModels(msgs, archived)
 	canonical := canonicalChatGPTMessages(store, chatGPTSession(result.Session), msgs, storeArchiveContent(store))
 	if chatGPTToolsChanged(archived, canonical) {
 		status, err := replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
@@ -211,6 +212,14 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 		return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
 	}
 	return status, err
+}
+
+func keepArchivedChatGPTModels(msgs, archived []db.Message) {
+	for _, row := range archived {
+		if row.Model != "" && row.Ordinal >= 0 && row.Ordinal < len(msgs) && sameTurn(row, msgs[row.Ordinal]) {
+			msgs[row.Ordinal].Model = row.Model
+		}
+	}
 }
 
 func fillChatGPTSyncStart(ctx context.Context, store db.Store, result *parser.ParseResult) error {
