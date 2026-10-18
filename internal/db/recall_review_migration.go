@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,12 +56,6 @@ func migrateRecallReviewStateConstraintLocked(
 		)
 	}
 	defer func() {
-		if ctx.Err() != nil {
-			// Cancellation can start an asynchronous rollback before our
-			// deferred Rollback. Do not reuse connection-local PRAGMA state.
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			return
-		}
 		if err := conn.Close(); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
@@ -80,7 +73,7 @@ func migrateRecallReviewStateConstraintLocked(
 		return fmt.Errorf("disabling foreign keys: %w", err)
 	}
 	defer func() {
-		if foreignKeys == 0 || ctx.Err() != nil {
+		if foreignKeys == 0 {
 			return
 		}
 		if _, err := execWithoutCancel(
@@ -91,7 +84,9 @@ func migrateRecallReviewStateConstraintLocked(
 		}
 	}()
 
-	tx, err := conn.BeginTx(ctx, nil)
+	// Own rollback so cancellation cannot discard the connection during cleanup.
+	// Statements still use ctx, and cancellation is checked before commit.
+	tx, err := conn.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return fmt.Errorf("beginning recall review migration: %w", err)
 	}
@@ -137,6 +132,9 @@ func migrateRecallReviewStateConstraintLocked(
 		return errors.New("migrated recall entries failed foreign-key check")
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing recall review migration: %w", err)
 	}

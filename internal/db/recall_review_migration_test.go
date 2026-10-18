@@ -118,8 +118,16 @@ func TestOpenLegacyRecallFTS4WithoutReviewConstraint(t *testing.T) {
 }
 
 func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
-	for _, ftsModule := range []string{"fts5", "fts4"} {
-		t.Run(ftsModule, func(t *testing.T) {
+	for _, tc := range []struct {
+		ftsModule, cancelTable string
+		cancelOp               int
+	}{
+		{"fts5", "recall_entries_review_state_v2", sqlite3.SQLITE_INSERT},
+		{"fts4", "recall_entries_review_state_v2", sqlite3.SQLITE_INSERT},
+		{"fts5", "pragma_foreign_key_check", sqlite3.SQLITE_READ},
+		{"fts4", "pragma_foreign_key_check", sqlite3.SQLITE_READ},
+	} {
+		t.Run(tc.ftsModule+"/"+tc.cancelTable, func(t *testing.T) {
 			d := testDB(t)
 			path := d.Path()
 			insertSession(t, d, "review-migration-session", "agentsview")
@@ -207,7 +215,7 @@ func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
 		ALTER TABLE recall_entries_legacy_review_check RENAME TO recall_entries;
 	`)
 			require.NoError(t, err)
-			if ftsModule == "fts4" {
+			if tc.ftsModule == "fts4" {
 				_, err = tx.ExecContext(t.Context(), `
 			DROP TRIGGER recall_evidence_ai;
 			DROP TRIGGER recall_evidence_ad;
@@ -240,13 +248,13 @@ func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&beforeFK))
 			require.Equal(t, 1, beforeFK)
 
-			// Cancel after the migration begins copying the legacy entries. A later
+			// Cancel during the entry copy or final foreign-key check. A later
 			// open must still be able to migrate the intact original table.
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			require.NoError(t, conn.Raw(func(raw any) error {
 				raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
-					if op == sqlite3.SQLITE_INSERT && table == "recall_entries_review_state_v2" {
+					if op == tc.cancelOp && table == tc.cancelTable {
 						cancel()
 					}
 					return sqlite3.SQLITE_OK
