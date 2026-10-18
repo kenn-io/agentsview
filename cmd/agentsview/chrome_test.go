@@ -343,7 +343,7 @@ func TestChromeSyncResults(t *testing.T) {
 			defer ts.Close()
 			api, err := apiclient.NewHTTPClient(ts.URL+"/base/", "test-token", ts.Client())
 			require.NoError(t, err)
-			browser := apiclient.PostAPIV1ImportClaudeAiSyncQueryBrowserChrome
+			browser := apiclient.Chrome
 			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
 			if tt.status == http.StatusOK {
 				require.NoError(t, err)
@@ -423,7 +423,7 @@ func TestChatGPTChromeSyncCommand(t *testing.T) {
 	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 		"/api/v1/import/chatgpt/sync": func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, http.MethodPost, r.Method)
-			assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+			assert.Empty(t, r.URL.RawQuery)
 			if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return

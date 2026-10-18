@@ -399,6 +399,24 @@ it("uses the desktop account and email-code sign-in without polling Chrome", asy
   expect(chromeStatus).not.toHaveBeenCalled();
 });
 
+it("uses the Chrome card for ChatGPT in the desktop app", async () => {
+  getBrowserHost.mockReturnValue(host);
+  render(ImportModal, props());
+  expect(screen.getByText("Account")).toBeTruthy();
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await waitFor(() => expect(screen.getByText("Connected")).toBeTruthy());
+  expect(screen.getByText("Chrome")).toBeTruthy();
+  expect(screen.queryByText("Account")).toBeNull();
+  expect(chromeStatus).toHaveBeenCalled();
+  await clickSync();
+  expect(syncChatGPTChrome).toHaveBeenCalledWith(
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
+  expect(syncClaudeAI).not.toHaveBeenCalled();
+  expect(host.connect).not.toHaveBeenCalled();
+});
+
 it("shows desktop signed-out state", async () => {
   getBrowserHost.mockReturnValue(host);
   syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Auth required", "claude_ai_auth_required"));

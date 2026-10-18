@@ -43,44 +43,13 @@ async function chatgptFetch(url) {
       globalThis.__agentsviewChatGPTTokenUntil = jwtExpiryMs(accessToken) - 60000;
     }
 
-    const response = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      redirect: "error",
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: controller.signal,
-    });
+    const response = await globalThis.claudeFetch(url, { Authorization: `Bearer ${accessToken}` });
     if (response.status === 401) {
       // A rejected token must not be reused; the next request fetches a fresh session.
       globalThis.__agentsviewChatGPTToken = undefined;
       globalThis.__agentsviewChatGPTTokenUntil = 0;
     }
-    const limit = 32 * 1024 * 1024; // Browser sync caps each response at 32 MiB.
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-    let size = 0;
-    let body = "";
-    if (reader) {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > limit) {
-          controller.abort();
-          try {
-            await reader.cancel();
-          } catch {}
-          return { status: 413, body: "" };
-        }
-        body += decoder.decode(value, { stream: true });
-      }
-      body += decoder.decode();
-    }
-    return {
-      status: response.status,
-      body,
-      retryAfter: response.headers.get("retry-after") ?? undefined,
-    };
+    return response;
   } catch (error) {
     return { status: 0, body: "", error: String(error) };
   } finally {

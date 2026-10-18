@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/parser"
@@ -358,6 +359,15 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 }
 
 func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
+	return fetchBrowser(ctx, fetch, chromehost.ClaudeAI, path)
+}
+
+// fetchBrowser shares browser response limits and retries across platforms.
+func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), platform chromehost.Platform, path string) ([]byte, error) {
+	tooLarge, authRequired := ErrClaudeAIResponseTooLarge, ErrClaudeAIAuthRequired
+	if platform == chromehost.ChatGPT {
+		tooLarge, authRequired = ErrChatGPTResponseTooLarge, ErrChatGPTAuthRequired
+	}
 	attempt := 0
 	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
@@ -365,7 +375,7 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 			return nil, backoff.Permanent(err)
 		}
 		if len(response.Body) > ClaudeAIResponseLimit {
-			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
+			return nil, backoff.Permanent(tooLarge)
 		}
 		status := response.Status
 		if status >= 200 && status < 300 {
@@ -379,22 +389,26 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(response.Body, &apiError)
-		if status == 401 || apiError.Error.Details.Code == "account_session_invalid" {
-			return nil, backoff.Permanent(ErrClaudeAIAuthRequired)
+		if status == 401 || platform == chromehost.ClaudeAI && apiError.Error.Details.Code == "account_session_invalid" {
+			return nil, backoff.Permanent(authRequired)
 		}
 		if status == 413 {
-			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
+			return nil, backoff.Permanent(tooLarge)
 		}
-		if status == 403 {
-			return nil, backoff.Permanent(&claudeAIHTTPError{status: status})
+		var httpErr error = &claudeAIHTTPError{status: status}
+		if platform == chromehost.ChatGPT {
+			httpErr = &chatGPTHTTPError{status: status, rateLimited: status == 429}
 		}
-		httpErr := &claudeAIHTTPError{status: status}
 		if status != 429 && status < 500 {
 			return nil, backoff.Permanent(httpErr)
 		}
 		delay := time.Duration(1<<attempt) * time.Second
 		attempt++
 		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
+			if chatGPTErr, ok := errors.AsType[*chatGPTHTTPError](httpErr); ok && retryAfter > 60*time.Second {
+				chatGPTErr.rateLimited = true
+				return nil, backoff.Permanent(httpErr)
+			}
 			delay = min(retryAfter, 60*time.Second)
 		}
 		return nil, backoff.RetryAfter(delay, httpErr)
@@ -403,7 +417,10 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, retryErr.LastErr
+		err = retryErr.LastErr
+	}
+	if httpErr, ok := errors.AsType[*chatGPTHTTPError](err); ok && httpErr.rateLimited {
+		err = fmt.Errorf("ChatGPT rate limited; sync stopped early, run Sync again later: %w", err)
 	}
 	return body, err
 }

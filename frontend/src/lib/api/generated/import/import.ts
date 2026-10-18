@@ -6,7 +6,6 @@ import type {
   ClaudeAISyncResultInputBody,
   PostApiV1ImportChatgptBody,
   PostApiV1ImportChatgptParams,
-  PostApiV1ImportChatgptSyncParams,
   PostApiV1ImportClaudeAiBody,
   PostApiV1ImportClaudeAiParams,
   PostApiV1ImportClaudeAiSyncParams,
@@ -57,30 +56,17 @@ export const postApiV1ImportChatgpt = async (
   });
 };
 
-export const getPostApiV1ImportChatgptSyncUrl = (params: PostApiV1ImportChatgptSyncParams) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? "null" : String(value));
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0
-    ? `/api/v1/import/chatgpt/sync?${stringifiedParams}`
-    : `/api/v1/import/chatgpt/sync`;
+export const getPostApiV1ImportChatgptSyncUrl = () => {
+  return `/api/v1/import/chatgpt/sync`;
 };
 
 /**
  * @summary Sync ChatGPT conversations
  */
 export const postApiV1ImportChatgptSync = async (
-  params: PostApiV1ImportChatgptSyncParams,
   options?: Parameters<typeof orvalRequest>[1],
 ): Promise<Response> => {
-  return orvalRequest<Response>(getPostApiV1ImportChatgptSyncUrl(params), {
+  return orvalRequest<Response>(getPostApiV1ImportChatgptSyncUrl(), {
     ...options,
     method: "POST",
   });

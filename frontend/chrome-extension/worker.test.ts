@@ -214,7 +214,7 @@ describe("Chrome native host worker", () => {
     });
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, {
       target: { tabId: 7 },
-      files: ["chatgpt_fetch.js"],
+      files: ["claude_fetch.js", "chatgpt_fetch.js"],
       world: "ISOLATED",
     });
     expect(chatgptFetch).toHaveBeenCalledExactlyOnceWith(
