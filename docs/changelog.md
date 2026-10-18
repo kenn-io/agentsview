@@ -246,6 +246,11 @@ The latest published release is
 
 **Bug fixes**
 
+- New messages in the open session appear as soon as they sync, whether the
+  live update or the **Sync** button brings them in. Before, with **Follow
+  latest messages** off, the transcript kept its old length until you scrolled
+  or switched to another session and back, so a reader at the bottom saw
+  nothing new.
 - Switching between sessions in one tab returns you to the line you were
   reading in each one. Before, each return could land several messages further
   down, and the gap grew with every switch. A session you open for the first
