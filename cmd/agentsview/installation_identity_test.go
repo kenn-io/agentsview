@@ -170,7 +170,7 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 				}()
 				select {
 				case <-started:
-				case <-time.After(5 * time.Second):
+				case <-time.After(time.Second):
 					require.NoError(t, lock.Unlock())
 					require.FailNow(t, "starting migration waited for the screen claims lock")
 				}

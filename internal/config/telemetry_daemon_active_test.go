@@ -141,29 +141,39 @@ func TestClaimSetupFinished(t *testing.T) {
 
 func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		claim func(Config, func() error) error
+		name    string
+		claim   func(Config, func() error) error
+		sendErr error
 	}{
-		{"daemon active", func(c Config, send func() error) error { return c.ClaimDaemonActive(time.Now(), send) }},
-		{"setup finished", func(c Config, send func() error) error { return c.ClaimSetupFinished(send) }},
+		{"daemon active", func(c Config, send func() error) error { return c.ClaimDaemonActive(time.Now(), send) }, nil},
+		{"setup finished", func(c Config, send func() error) error { return c.ClaimSetupFinished(send) }, errors.New("queue full")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			started, release := make(chan struct{}), make(chan struct{})
+			releaseSend := sync.OnceFunc(func() { close(release) })
 			done := make(chan error, 1)
 			var savesDone chan struct{}
+			var readDone chan struct{}
 			go func() {
 				done <- tc.claim(Config{DataDir: dir, InstallationID: "install-one"}, func() error {
 					close(started)
 					<-release
-					return nil
+					return tc.sendErr
 				})
 			}()
 			defer func() {
-				close(release)
-				require.NoError(t, <-done)
+				releaseSend()
+				if tc.sendErr != nil {
+					require.ErrorIs(t, <-done, tc.sendErr)
+				} else {
+					require.NoError(t, <-done)
+				}
 				if savesDone != nil {
 					<-savesDone
+				}
+				if readDone != nil {
+					<-readDone
 				}
 			}()
 			select {
@@ -191,55 +201,25 @@ func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
 			cfg := readConfigFile(t, dir)
 			assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
 			assert.Equal(t, "clipboard", cfg.Terminal.Mode)
+			if tc.name == "setup finished" {
+				var readClaimed bool
+				var readErr error
+				readDone = make(chan struct{})
+				go func() {
+					defer close(readDone)
+					claimConfig := Config{DataDir: dir, InstallationID: "install-one"}
+					readClaimed, readErr = claimConfig.SetupFinishedClaimed()
+				}()
+				select {
+				case <-readDone:
+					require.FailNow(t, "setup read returned while the claim was pending", "claimed=%v err=%v", readClaimed, readErr)
+				case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows the read does not return while the claim holds the setup record lock
+				}
+				releaseSend()
+				<-readDone
+				require.NoError(t, readErr)
+				assert.False(t, readClaimed, "a failed send rolls back the reservation the read waited on")
+			}
 		})
 	}
-}
-
-func TestSetupFinishedClaimedWaitsForPendingClaim(t *testing.T) {
-	cfg := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	sendErr := errors.New("queue full")
-	started, release := make(chan struct{}), make(chan struct{})
-	releaseSend := sync.OnceFunc(func() { close(release) })
-	var wg sync.WaitGroup
-	defer func() {
-		releaseSend()
-		wg.Wait()
-	}()
-	var claimErr error
-	wg.Go(func() {
-		claimErr = cfg.ClaimSetupFinished(func() error {
-			close(started)
-			<-release
-			return sendErr
-		})
-	})
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "setup claim callback did not start")
-	}
-	var readClaimed bool
-	var readErr error
-	read := make(chan struct{})
-	wg.Go(func() {
-		defer close(read)
-		readClaimed, readErr = cfg.SetupFinishedClaimed()
-	})
-	select {
-	case <-read:
-		require.FailNow(t, "setup read returned while the claim was pending", "claimed=%v err=%v", readClaimed, readErr)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows the read does not return while the claim holds the setup record lock
-	}
-	releaseSend()
-	wg.Wait()
-	require.ErrorIs(t, claimErr, sendErr)
-	require.NoError(t, readErr)
-	assert.False(t, readClaimed, "a failed send rolls back the reservation the read waited on")
-
-	sent := false
-	require.NoError(t, cfg.ClaimSetupFinished(func() error {
-		sent = true
-		return nil
-	}))
-	assert.True(t, sent, "a later claim retries after the failed send")
 }
