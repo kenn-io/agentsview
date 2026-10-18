@@ -46,15 +46,16 @@ Before reviewing CI runner security, read the
    made.
 1. Keep commits focused and use clear conventional commit messages.
 1. Do not amend, squash, rebase, push, or pull unless the user asks.
-1. After every push, watch each GitHub Actions run it starts, such as CI
-   checks and the rolling release build, until all of them finish. Local
-   commits start no runs, so watching begins at the push; runs for a pull
-   request count too. Find the runs with
+1. Watch GitHub Actions runs without being asked. Start right after every
+   push, and again as soon as a pull request is opened, whether you or the
+   user opened it. Watch every run for the head commit: the runs its push
+   started, such as the rolling release build, and the pull request's checks,
+   such as CI and fork checks. Local commits start no runs. Find the runs with
    `gh run list --branch <branch> --commit "$(git rev-parse HEAD)"`; the
    filter needs the full SHA, and new runs can take a few seconds to appear.
-   Wait on each with
-   `gh run watch <run-id> --exit-status` in the background instead of polling
-   in a loop. Report every run's result. When a run fails, read
+   Wait on each with `gh run watch <run-id> --exit-status` in the background
+   instead of polling in a loop. When they all finish, report every run's
+   result without waiting to be asked. When a run fails, read
    `gh run view <run-id> --log-failed`, name the cause, and fix it when the
    change caused it.
 1. Do not add generated-with lines, attribution blocks, validation footers, or
