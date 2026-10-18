@@ -6,7 +6,6 @@ package parser
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -161,16 +160,15 @@ func parseChatGPTFile(
 }
 
 // ParseChatGPTConversation parses one conversation returned by the web API.
-// Unlike an export import, browser sync has no local asset resolver.
+// Unlike an export import, browser sync has no local asset resolver. A
+// conversation with no importable messages yields an empty result, which
+// browser sync skips the way an export import does.
 func ParseChatGPTConversation(data []byte) (ParseResult, error) {
 	var conv chatGPTConversation
 	if err := json.Unmarshal(data, &conv); err != nil {
 		return ParseResult{}, fmt.Errorf("decoding ChatGPT conversation: %w", err)
 	}
-	result, ok := convertChatGPTConversation(conv, nil)
-	if !ok {
-		return ParseResult{}, errors.New("ChatGPT conversation has no importable messages")
-	}
+	result, _ := convertChatGPTConversation(conv, nil)
 	return result, nil
 }
 
