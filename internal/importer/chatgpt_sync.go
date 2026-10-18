@@ -69,6 +69,7 @@ func waitChatGPTDetailGap(ctx context.Context) error {
 func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, machine ...string,
 ) (stats ImportStats, retErr error) {
 	seen := make(map[string]struct{})
+	var formatErr error
 	runner := browserSync{
 		store: store, agent: parser.AgentChatGPT, stats: &stats, cb: cb, machine: machine,
 		tooLarge: ErrChatGPTResponseTooLarge, stop: func(err error) bool {
@@ -130,15 +131,9 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 						return fetchBrowser(ctx, fetch, chromehost.ChatGPT, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0, false))
 					},
 					parse: func(detail []byte) (parser.ParseResult, error) {
-						var shape struct {
-							Mapping jsontext.Value `json:"mapping"`
-						}
-						if err := json.Unmarshal(detail, &shape); err == nil && shape.Mapping.Kind() != '{' {
-							return parser.ParseResult{}, errChatGPTFormat
-						}
-						result, err := parser.ParseChatGPTConversation(detail)
-						if err == nil && result.Session.ID != "" && result.Session.ID != id {
-							err = errors.New("conversation ID differs from requested UUID")
+						result, err := parseChatGPTSyncConversation(detail, id)
+						if errors.Is(err, errChatGPTFormat) {
+							formatErr = err
 						}
 						return result, err
 					},
@@ -157,10 +152,27 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 			offset += len(page.Items)
 		}
 	}
-	return stats, nil
+	return stats, formatErr
 }
 
 var errChatGPTFormat = errors.New("ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
+
+func parseChatGPTSyncConversation(detail []byte, id string) (parser.ParseResult, error) {
+	var shape struct {
+		Mapping        jsontext.Value `json:"mapping"`
+		ConversationID string         `json:"conversation_id"`
+		ID             string         `json:"id"`
+	}
+	if err := json.Unmarshal(detail, &shape); err == nil &&
+		(shape.Mapping.Kind() != '{' || shape.ConversationID == "" && shape.ID == "") {
+		return parser.ParseResult{}, errChatGPTFormat
+	}
+	result, err := parser.ParseChatGPTConversation(detail)
+	if err == nil && result.Session.ID != "" && result.Session.ID != id {
+		err = errors.New("conversation ID differs from requested UUID")
+	}
+	return result, err
+}
 
 func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
 	if storeArchiveContent(store).UsageOnly() {
@@ -180,7 +192,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	msgs := chatGPTMessages(result.Session.ID, result.Messages)
 	canonical := canonicalChatGPTMessages(store, chatGPTSession(result.Session), msgs, storeArchiveContent(store))
 	if chatGPTToolsChanged(archived, canonical) {
-		status, err := replaceSyncedConversation(ctx, store, result, msgs)
+		status, err := replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
 		if errors.Is(err, db.ErrReplaceUnchanged) {
 			// Length-only changes still need a write under the transcripts policy.
 			err = writeChatGPTSession(ctx, store, chatGPTSession(result.Session), msgs)
@@ -189,7 +201,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	}
 	status, err := upsertChatGPTConversation(ctx, store, result, nil)
 	if replaceable(err) {
-		return replaceSyncedConversation(ctx, store, result, msgs)
+		return replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
 	}
 	if err == nil && status == importSkipped {
 		// Sync also refreshes the source timestamp when the messages match.
@@ -215,6 +227,23 @@ func chatGPTToolsChanged(archived, incoming []db.Message) bool {
 }
 
 var chatGPTImageLink = regexp.MustCompile(`!\[image\]\(asset://[^)]*\)`)
+
+func chatGPTImagesLost(archived, incoming []db.Message) bool {
+	links := make(map[string]struct{})
+	for _, message := range incoming {
+		for _, link := range chatGPTImageLink.FindAllString(message.Content, -1) {
+			links[link] = struct{}{}
+		}
+	}
+	for _, message := range archived {
+		for _, link := range chatGPTImageLink.FindAllString(message.Content, -1) {
+			if _, ok := links[link]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 	byOrdinal := make(map[int]db.Message, len(archived))

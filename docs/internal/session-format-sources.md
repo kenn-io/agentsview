@@ -3913,9 +3913,11 @@ schemas keep their existing ordering behavior.
   (`is_archived=true`) conversation lists. Sync pages both lists each run.
   The [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
   checked 2026-10-17, describe a newer flat `messages` array with `page_info`
-  pagination. Each detail without a `mapping` object counts toward the
-  two-consecutive-failures stop and asks for an AgentsView update; Sync does not
-  parse the flat format.
+  pagination. Each detail without a `mapping` object or either `conversation_id`
+  or `id` counts toward the two-consecutive-failures stop. A single unsupported
+  detail reports the update error after the remaining chats finish, verified by
+  `TestSyncChatGPTSingleUnsupportedDetail` on 2026-10-18. Sync does not parse the
+  flat format or cache freshness for details without an identity.
   Reverified against the parser and synthetic importer regressions on 2026-10-18:
   tool nodes attach to assistant messages, and browser image placeholders carry
   no asset identity. The parser records user message and parent IDs in the
@@ -3925,7 +3927,9 @@ schemas keep their existing ordering behavior.
   older ZIP imports have neither ID. Matching turns fill empty source identities
   before Sync caches freshness under full and transcripts storage, verified by
   `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`.
-  Generated images use the browser snapshot.
+  Generated images use the browser snapshot. Replacements that drop archived
+  image links keep the previous version in Trash once per loss, verified by
+  `TestSyncChatGPTZipImageReconciliation` on 2026-10-18.
   Sync replaces turns with conflicting nonempty source message IDs, preserving
   the old conversation in Trash when a pin would be lost.
   Model-only changes update retained message rows under full and transcripts

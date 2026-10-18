@@ -1427,6 +1427,53 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	assert.Empty(t, stats.Refusals)
 }
 
+func TestImportChatGPTReimportLegacyRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "chatgpt:cg-tool"
+	// Seed the row shape written before source identities were archived.
+	_, err := d.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: db.Session{ID: id, Agent: "chatgpt", Project: "ChatGPT", Machine: "web"},
+		Messages: []db.Message{
+			{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z", Model: "old-model"},
+			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Answer", ContentLength: 6, Timestamp: "2024-02-01T00:00:10Z", Model: "old-model"},
+		},
+	}})
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
+	require.NoError(t, err)
+	body := chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Question"}, chatGPTNodeSpec{"assistant", "text", "Answer"})
+	body = strings.ReplaceAll(body, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+	dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": body}))
+	require.NoError(t, err)
+	defer cleanup()
+	stats, err := ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	assert.Empty(t, stats.Refusals)
+	after, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	for i := range after {
+		assert.Equal(t, before[i].ID, after[i].ID)
+	}
+	assert.Empty(t, after[0].Model)
+	assert.Equal(t, "gpt-4o", after[1].Model)
+	assert.Equal(t, "m-n1", after[0].SourceUUID)
+	assert.Equal(t, "r", after[0].SourceParentUUID)
+	assert.Empty(t, after[1].SourceUUID)
+	assert.Empty(t, after[1].SourceParentUUID)
+	pins, err := d.ListPinnedMessages(ctx, id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[1].ID, pins[0].MessageID)
+	assert.Equal(t, new("Saved answer"), pins[0].Note)
+}
+
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

@@ -233,17 +233,17 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		return importUpdated, err
 	}
-	return replaceSyncedConversation(ctx, store, result, msgs)
+	return replaceSyncedConversation(ctx, store, result, msgs, false)
 }
 
-func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message) (importStatus, error) {
+func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
 		return importUpdated, errors.New("store cannot preserve replaced chats")
 	}
 	_, err := replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
-		Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
-		KeepTrashedCopyOnlyOnPinLoss: true,
+		Session: chatGPTSession(result.Session), Messages: msgs,
+		KeepTrashedCopyOnlyOnPinLoss: !keepCopy,
 	})
 	return importUpdated, err
 }
