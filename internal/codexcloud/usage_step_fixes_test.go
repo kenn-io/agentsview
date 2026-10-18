@@ -608,3 +608,32 @@ func TestLostAccountStateFetchesIdleChatWithLostMirror(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"m"}, recordedItemIDs(records))
 }
+
+// A stalled chat whose account state and mirror file are both lost is
+// fetched again: the rebuild clears the stall that would skip it.
+func TestLostAccountStateFetchesStalledChatWithLostMirror(t *testing.T) {
+	env := newUsageEnv(t)
+	updated := ago(30 * time.Second)
+	env.threads.Set(codexcloudtest.Thread{
+		ID: "s", Name: "s", CreatedAt: updated - 60, UpdatedAt: updated,
+		Turns: []codexcloudtest.Turn{{
+			ID: "s-1", Status: "inProgress", StartedAt: updated - 60,
+			Items: []codexcloudtest.Item{message("m", "working")},
+		}},
+	})
+	env.run(t)
+	env.clock.Advance(25 * time.Hour)
+	env.run(t)
+	require.True(t, env.account(t).Unfinished["s"].Stalled)
+	require.NoError(t, os.Remove(env.mirrorPath(t, "s")))
+
+	env.loseAccount(t, false)
+	env.clock.Advance(5 * time.Minute)
+	from := len(env.host.Requests())
+	env.run(t)
+
+	assert.Contains(t, env.fetchedThreads(from), "s", "the unchanged stalled chat is fetched again")
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "s"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m"}, recordedItemIDs(records))
+}

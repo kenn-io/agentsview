@@ -258,8 +258,12 @@ Each root keeps its group's stored change time, so a root that changed more than
 logged and left out until its chat changes again. A root whose mirror file is
 missing has no plan records, so it is pending again, and its next plan usage
 write rebuilds the file and fetches the history. Any thread whose mirror file is
-missing is marked to check again, so the next pass fetches it even when its
-listing has not changed.
+missing is marked to check again, and its stall mark is cleared, so the next
+pass fetches it even when its listing has not changed. A mirror file that is
+still there but shorter than its stored offset waits for its chat's next change.
+The rebuild only checks whether each file exists. A fetch of a file that cannot
+be recovered stops the account's pass, so marking short files would repeat that
+stop on every pass.
 
 The same rebuild restores the chats that a pass fetches again although their
 listing has not changed. A chat with a running turn, or whose newest turn ended
