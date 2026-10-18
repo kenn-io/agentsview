@@ -3925,7 +3925,9 @@ schemas keep their existing ordering behavior.
   before Sync caches freshness under full and transcripts storage, verified by
   `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`.
   Generated images use the browser snapshot. Every replacement keeps the
-  previous version in Trash with its pins, notes, and archived images.
+  previous version in Trash under full, transcripts, and usage storage, with
+  its pins, notes, and any archived images. Usage-only preservation is verified by
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy` on 2026-10-18.
   Re-syncing the same chat makes no further copy, verified by
   `TestSyncChatGPTAppendFreshnessAndBranchChanges`,
   `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`, and

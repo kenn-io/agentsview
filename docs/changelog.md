@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- Claude.ai Chrome users must rerun `agentsview source chrome setup` and reload the
+  extension once because the native-host protocol moved to version 2.
+
 **New features**
 
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
@@ -52,6 +57,10 @@ The latest release is
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
   a PostgreSQL archive. Transcript text and tool arguments stay out of the
   report.
+
+- Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
+  `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version of each chat it replaces in Trash.
 
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
