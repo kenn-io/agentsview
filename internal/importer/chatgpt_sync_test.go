@@ -105,6 +105,7 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	messages, err = d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Rewritten question", "Answer"}, messageContents(messages))
+	assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), "replacements without pin or image loss make no copy")
 }
 
 func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
@@ -565,6 +566,56 @@ func TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTSingleUnsupportedDetail(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail string
+	}{
+		{"missing mapping", `{"id":"00000002-0000-4000-8000-000000000000"}`},
+		{"missing identity", `{"mapping":{},"update_time":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			details := 0
+			fetch := func(_ context.Context, path string) (ClaudeAIResponse, error) {
+				switch path {
+				case chatGPTRequest(chatGPTListRequest, "", 0, true):
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
+				case chatGPTRequest(chatGPTListRequest, "", 0, false):
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"00000001-0000-4000-8000-000000000000","update_time":1},{"id":"00000002-0000-4000-8000-000000000000","update_time":1},{"id":"00000003-0000-4000-8000-000000000000","update_time":1}],"total":3}`)}, nil
+				case chatGPTRequest(chatGPTDetailRequest, "00000002-0000-4000-8000-000000000000", 0, false):
+					details++
+					return ClaudeAIResponse{Status: 200, Body: []byte(tc.detail)}, nil
+				default:
+					for _, id := range []string{"00000001-0000-4000-8000-000000000000", "00000003-0000-4000-8000-000000000000"} {
+						if path == chatGPTRequest(chatGPTDetailRequest, id, 0, false) {
+							details++
+							return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, id))}, nil
+						}
+					}
+					require.Failf(t, "unexpected ChatGPT request path", "%s", path)
+					return ClaudeAIResponse{}, nil
+				}
+			}
+			for run := range 2 {
+				stats, err := SyncChatGPT(t.Context(), d, fetch, nil)
+				require.ErrorIs(t, err, errChatGPTFormat)
+				assert.Equal(t, 1, stats.Errors)
+				if run == 0 {
+					assert.Equal(t, 2, stats.Imported)
+				} else {
+					assert.Equal(t, 2, stats.Skipped)
+				}
+				assert.Equal(t, 3+run, details, "unsupported detail must be fetched again")
+			}
+			for _, id := range []string{"00000001-0000-4000-8000-000000000000", "00000003-0000-4000-8000-000000000000"} {
+				messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+id)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
+			}
+		})
+	}
+}
+
 func TestSyncChatGPTLongRetryAfterKeepsEarlierWrites(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -774,10 +825,21 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 			require.Len(t, after, 1)
 			if tc.regenerate || tc.changedTime || tc.changedParent {
 				assert.Equal(t, "See this:\n[image unavailable]", after[0].Content)
+				copies := replacedCopies(t, d, "chatgpt:"+chatGPTSyncID)
+				require.Len(t, copies, 1)
+				saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
+				require.NoError(t, err)
+				assert.Equal(t, messageContents(before), messageContents(saved))
+				// Force another fetch to check that the same loss creates only one copy.
+				require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentChatGPT, "chatgpt:"+chatGPTSyncID, 0))
+				_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745720", detail, &details), nil)
+				require.NoError(t, err)
+				assert.Len(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), 1)
 			} else {
 				assert.Equal(t, before[0].Content, after[0].Content)
 				assert.Equal(t, before[0].ContentLength, after[0].ContentLength)
 				assert.Equal(t, before[0].ID, after[0].ID)
+				assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID))
 			}
 		})
 	}

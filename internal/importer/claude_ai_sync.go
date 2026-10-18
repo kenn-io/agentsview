@@ -237,17 +237,17 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		// Browser snapshots are authoritative even when retained usage rows match.
 		return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
 	}
-	return replaceSyncedConversation(ctx, store, result, msgs)
+	return replaceSyncedConversation(ctx, store, result, msgs, false)
 }
 
-func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message) (importStatus, error) {
+func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
 		return importUpdated, errors.New("store cannot preserve replaced chats")
 	}
 	_, err := replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
 		Session: chatGPTSession(result.Session), Messages: msgs,
-		KeepTrashedCopyOnlyOnPinLoss: true,
+		KeepTrashedCopyOnlyOnPinLoss: !keepCopy,
 	})
 	return importUpdated, err
 }
