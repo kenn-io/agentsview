@@ -109,6 +109,7 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 			require.NoError(t, err)
 			opts := telemetryOptions(cfg)
 			assert.Equal(t, cfg.InstallationID, opts.InstallationID)
+			assert.Equal(t, filepath.Join(dir, "telemetry-screen-views"), opts.ScreenClaimsPath)
 			if tc.wantRecent {
 				assert.WithinDuration(t, time.Now(), opts.InstalledAt, time.Minute)
 			} else {
@@ -134,8 +135,7 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-			opts := telemetryOptions(cfg)
-			assert.Equal(t, path, opts.ScreenClaimsPath)
+			telemetryOptions(cfg)
 			wantLegacy := enabled == "0"
 			forwarded := 0
 			handler := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
