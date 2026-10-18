@@ -234,6 +234,22 @@ func TestSyncChatGPTEquivalentTimestampsSkipSecondDetail(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	fetch := chatGPTSyncFetch(t, "1", `{"id":"`+chatGPTSyncID+`","update_time":1,"mapping":{}}`, &details)
+	for range 2 {
+		stats, err := SyncChatGPT(t.Context(), d, fetch, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Errors)
+	}
+	assert.Equal(t, 1, details)
+	session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	assert.Nil(t, session, "empty chats stay out of the archive")
+}
+
 func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	d := testDB(t)
 	details := 0

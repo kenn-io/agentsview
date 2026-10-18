@@ -70,7 +70,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	if err != nil {
 		return err
 	}
-	if before != nil && fresh && storedHash == chat.freshness(before) {
+	if fresh && storedHash == chat.freshness(before) {
 		s.failedLast = false
 		s.stats.record(id, importSkipped, nil)
 		return nil
@@ -106,6 +106,9 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
+		if err == nil && result.Session.ID == "" {
+			err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(before))
+		}
 		if err != nil || result.Session.ID == "" {
 			s.stats.record(id, importSkipped, err)
 			detailErr = err
