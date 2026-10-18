@@ -9,8 +9,8 @@ import (
 
 // hybridDisplay carries what one fused unit needs for presentation: the
 // anchor (session, ordinal) the match reports and enriches by, the unit's
-// ordinal span and subordinate flag, plus the leg's raw approximate snippet
-// text used only to center the redacted window.
+// ordinal span and subordinate flag, plus the vector leg's approximate
+// snippet or the keyword leg's final redacted snippet.
 type hybridDisplay struct {
 	sessionID    string
 	ordinal      int
@@ -153,7 +153,7 @@ func (s *Store) fetchHybridKeywordBatch(
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
-		hit.snippet = content[lo:hi]
+		hit.snippet = f.SemanticSnippet(content, content[lo:hi])
 		hits = append(hits, hit)
 	}
 	return hits, rows.Err()
@@ -285,9 +285,9 @@ func (s *Store) enrichHybridMatches(
 		if !ok {
 			continue
 		}
-		content := info.content
-		if _, keyword := kwDisplay[m.Unit.Key]; keyword {
-			content = info.dialogueContent
+		snippet := d.snippet
+		if _, keyword := kwDisplay[m.Unit.Key]; !keyword {
+			snippet = f.SemanticSnippet(info.content, d.snippet)
 		}
 		score := m.Score
 		out = append(out, db.ContentMatch{
@@ -305,7 +305,7 @@ func (s *Store) enrichHybridMatches(
 			ParentSessionID: info.parentSessionID,
 			Sidechain:       info.isSidechain,
 			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(content, d.snippet),
+			Snippet:         snippet,
 			Score:           &score,
 		})
 	}

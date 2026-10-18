@@ -21,7 +21,11 @@ when `[vector]` is enabled locally and the push includes vectors (see
 Content search uses dialogue for `--in messages` and searches reasoning with
 `--in thinking` in substring and regex modes. Both modes include reasoning by
 default. Hybrid keyword search also uses dialogue; semantic search uses rendered
-messages. The first push after upgrading is a full push to fill dialogue.
+messages. The first push after upgrading re-sends every session in the
+configured mirror scope to fill dialogue, including sessions without dialogue.
+Reads from a pre-upgrade mirror fail with a schema compatibility error naming
+`messages.dialogue_text` until that push. Run it with a role that can update the
+ClickHouse schema.
 
 ## Quick Start
 

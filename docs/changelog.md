@@ -21,7 +21,10 @@ The latest release is
   observations keep searching their saved text as `message` hits. The first
   writable open refreshes full-text indexes once and waits for the scan.
   DuckDB mirrors rebuild on their next push. The first ClickHouse push after
-  upgrading is a full push to fill dialogue.
+  upgrading re-sends every session in the configured mirror scope, including
+  sessions without dialogue, and needs schema permissions. Reads from either
+  pre-upgrade mirror fail with a schema compatibility error naming
+  `messages.dialogue_text` until the first push.
   Artifact transport and PostgreSQL dialogue search are a separate follow-up;
   semantic search continues to use rendered messages.
 

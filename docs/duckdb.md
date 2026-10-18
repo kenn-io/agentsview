@@ -20,7 +20,10 @@ up a PostgreSQL server.
 
 Content search uses dialogue for `--in messages` and searches reasoning with
 `--in thinking` in substring and regex modes. Both modes include reasoning by
-default. Existing mirrors rebuild on their next push to fill dialogue.
+default. Existing mirrors rebuild on their next push to fill dialogue. Reads
+from a pre-upgrade mirror fail with a schema compatibility error naming
+`messages.dialogue_text` until that push. Run `agentsview duckdb push` before
+serving the mirror with the upgraded binary.
 
 ## Quick Start
 

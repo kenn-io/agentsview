@@ -439,22 +439,26 @@ func (s *Store) collectContentRegexMatches(
 		}
 		all = append(all, candidates...)
 	}
-	sortContentCandidates(all)
-	// Deduplicate legacy thinking before applying the page cursor.
-	var lastMessageMatch db.MessageRef
 	filtered := all[:0]
 	for _, m := range all {
 		if loc := re.FindStringIndex(m.body); loc != nil {
-			ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
-			if m.match.Location == "message" {
-				lastMessageMatch = ref
-			}
-			if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
-				continue
-			}
 			m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 			filtered = append(filtered, m)
 		}
+	}
+	all = filtered
+	sortContentCandidates(all)
+	// Deduplicate legacy thinking before applying the page cursor.
+	var lastMessageMatch db.MessageRef
+	filtered = all[:0]
+	for _, m := range all {
+		ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
+		if m.match.Location == "message" {
+			lastMessageMatch = ref
+		} else if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
+			continue
+		}
+		filtered = append(filtered, m)
 	}
 	all = filtered
 	if f.Cursor > 0 {

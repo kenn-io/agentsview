@@ -131,7 +131,6 @@ func (s *Store) semanticAllowedSessionIDs(
 // so secret redaction sees the same whole-body context the lexical paths do.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
-	dialogueContent                          string
 	machine                                  string
 	displayName                              *string
 	relationshipType, parentSessionID        string
@@ -176,7 +175,7 @@ func (s *Store) enrichSemanticHitChunk(
 	rows, err := s.queryContext(ctx, `
 		WITH refs AS (`+strings.Join(parts, " UNION ALL ")+`)
 		SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal,
-			m.timestamp, m.content, COALESCE(m.dialogue_text, m.content),
+			m.timestamp, m.content,
 			COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
 			m.is_sidechain
 		FROM refs r
@@ -192,7 +191,7 @@ func (s *Store) enrichSemanticHitChunk(
 		var ordinal int64
 		var ts any
 		if err := rows.Scan(&ref.SessionID, &info.project, &info.agent, &info.machine, &info.displayName,
-			&info.role, &ordinal, &ts, &info.content, &info.dialogueContent,
+			&info.role, &ordinal, &ts, &info.content,
 			&info.relationshipType, &info.parentSessionID,
 			&info.isSidechain); err != nil {
 			return fmt.Errorf("scanning clickhouse semantic hit: %w", err)

@@ -939,23 +939,27 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 		if err != nil {
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
 		}
-		sortContentCandidates(all)
-		// Deduplicate legacy thinking before applying the page cursor.
-		var lastMessageMatch db.MessageRef
 		filtered := all[:0]
 		for _, m := range all {
 			loc := re.FindStringIndex(m.body)
 			if loc != nil {
-				ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
-				if m.match.Location == "message" {
-					lastMessageMatch = ref
-				}
-				if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
-					continue
-				}
 				m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 				filtered = append(filtered, m)
 			}
+		}
+		all = filtered
+		sortContentCandidates(all)
+		// Deduplicate legacy thinking before applying the page cursor.
+		var lastMessageMatch db.MessageRef
+		filtered = all[:0]
+		for _, m := range all {
+			ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
+			if m.match.Location == "message" {
+				lastMessageMatch = ref
+			} else if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
+				continue
+			}
+			filtered = append(filtered, m)
 		}
 		all = filtered
 	}

@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,4 +129,35 @@ func TestDialogueReparseClickHouseRepushesSession(t *testing.T) {
 	var dialogue string
 	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT dialogue_text FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID).Scan(&dialogue))
 	assert.Equal(t, "answerneedle", dialogue)
+}
+
+func TestDialogueClickHouseHybridRedactsBeforeTruncating(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	dialogue := "answerneedle -----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 10) +
+		"-----END RSA PRIVATE KEY-----"
+	messages[0].Content = dialogue + "\n[Thinking] reasoningneedle"
+	messages[0].DialogueText = new(dialogue)
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, messages))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	store.SetVectorSearcher(&activityVectorSearcher{})
+	for _, reveal := range []bool{false, true} {
+		page, err := store.SearchContent(ctx, db.ContentSearchFilter{
+			Pattern: "answerneedle", Mode: "hybrid", IncludeOneShot: true, RevealSecrets: reveal,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		snippet := page.Matches[0].Snippet
+		assert.Contains(t, snippet, "answerneedle")
+		assert.NotContains(t, snippet, "[Thinking]")
+		if reveal {
+			assert.Contains(t, snippet, "SECRETKEYMATERIAL")
+		} else {
+			assert.NotContains(t, snippet, "SECRETKEYMATERIAL")
+		}
+	}
 }
