@@ -197,3 +197,7 @@ func (h *HostedStore) WriteSessionBatchAtomic(ctx context.Context,
 	return h.physical.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
 }
 func (h *HostedStore) ReadOnly() bool { return h.physical.ReadOnly() }
+
+func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
+	return h.physical.GetMatchingMachineIDs(ctx, candidates)
+}

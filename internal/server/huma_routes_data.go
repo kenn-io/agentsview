@@ -179,7 +179,7 @@ func (s *Server) humaDataProjectRules(
 	if machine == "" {
 		machine = localMachine
 	}
-	machine, err := db.ResolveMachineFilter(ctx, s.db, machine)
+	machine, err := db.ResolveMachineAliases(ctx, s.db, machine)
 	if err != nil {
 		return nil, serverError(err)
 	}

@@ -42,7 +42,7 @@ type activityReportInput struct {
 	Project   string `query:"project" doc:"Filter by project"`
 	GitBranch string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	Agent     string `query:"agent" doc:"Filter by agent"`
-	Machine   string `query:"machine" doc:"Filter by machine"`
+	Machine   string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	// Automation classes the report: "all" (default) keeps both, "interactive"
 	// drops automated sessions, "automated" drops interactive ones. Empty is
 	// treated as "all"; any other value is rejected.
@@ -69,16 +69,21 @@ type activityReportBuildInputs struct {
 func (s *Server) humaActivityReport(
 	ctx context.Context, in *activityReportInput,
 ) (*huma.StreamResponse, error) {
-	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	input := activitySelectionInput{
+		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
+		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
+		GitBranch: in.GitBranch, Agent: in.Agent, Machine: in.Machine,
+		Automation: in.Automation,
+	}
+	if err := validateActivitySelectionSize(input); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	machine, err := db.ResolveMachineFilter(ctx, s.db, input.Machine)
 	if err != nil {
 		return nil, serverError(err)
 	}
-	selection, err := resolveActivitySelection(activitySelectionInput{
-		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
-		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
-		GitBranch: in.GitBranch, Agent: in.Agent, Machine: machine,
-		Automation: in.Automation,
-	}, time.Now())
+	input.Machine = machine
+	selection, err := resolveActivitySelection(input, time.Now())
 	if err != nil {
 		return nil, err
 	}

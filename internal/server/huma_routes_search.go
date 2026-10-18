@@ -46,7 +46,7 @@ type contentSearchInput struct {
 	Reveal             bool               `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
 	Project            string             `query:"project" doc:"Filter by project"`
 	ExcludeProject     string             `query:"exclude_project" doc:"Exclude a project"`
-	Machine            string             `query:"machine" doc:"Filter by machine"`
+	Machine            string             `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	GitBranch          string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	SessionID          string             `query:"session_id" doc:"Filter by exact full stored session ID"`
 	GitBranchExact     string             `query:"git_branch_exact" doc:"Filter by exact raw git branch"`
@@ -173,6 +173,9 @@ func (s *Server) humaSearchContent(
 		}
 		if errors.Is(err, db.ErrSemanticUnavailable) {
 			return nil, apiError(http.StatusNotImplemented, err.Error())
+		}
+		if handled := machineFilterHTTPError(err); handled != nil {
+			return nil, handled
 		}
 		if _, ok := errors.AsType[*db.SearchInputError](err); ok {
 			return nil, apiError(http.StatusBadRequest, err.Error())

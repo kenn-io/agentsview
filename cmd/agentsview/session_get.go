@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -63,8 +64,9 @@ func newSessionGetCommand() *cobra.Command {
 		"machine", "local",
 		"Filter bare Codebuff/Freebuff timestamp resolution to a single "+
 			"machine identity. Use 'local' (default) to match this "+
-			"archive's own sessions, a machine name to match by exact "+
-			"sessions.machine value, or '*' to accept any. Does not "+
+			"archive's own sessions, an exact ID or alias, a unique whole "+
+			"display name, or '*' to accept any. "+
+			"Unknown or ambiguous values return an error. Does not "+
 			"affect canonical IDs or agents other than Codebuff/Freebuff.",
 	)
 	return cmd
@@ -294,7 +296,7 @@ func resolveBareCodebuffID(
 // codebuffMachineMatches reports whether a row's machine column
 // passes the user's --machine filter. "" or "local" defers to
 // localMachine (cfg.InstallationID); "*" matches anything; any
-// other non-empty value is matched exactly. This keeps the resolver
+// other non-empty value is a comma-separated ID list. This keeps the resolver
 // decoupled from cobra while still honouring the rule that
 // unspecified / "local" mean "this archive's own sessions".
 func codebuffMachineMatches(
@@ -306,7 +308,7 @@ func codebuffMachineMatches(
 	case "", "local":
 		return rowMachine == localMachine
 	default:
-		return rowMachine == filter
+		return slices.Contains(strings.Split(filter, ","), rowMachine)
 	}
 }
 

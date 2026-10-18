@@ -154,8 +154,14 @@ The display label defaults to the current hostname. Set `local_machine_name` in
 non-empty label is allowed, including `local`. Changing the label leaves session
 keys unchanged; PostgreSQL and DuckDB receive the label on the next push.
 Creating the identity does not rewrite `config.toml` or its comments. A missing
-cursor secret is still generated and saved. Machine filters use keys;
-`/api/v1/machines` returns display labels and known aliases separately.
+cursor secret is still generated and saved.
+
+Session filters accept an exact ID or alias, a comma-separated list of IDs and
+aliases, or one display label matched as the whole value, case-sensitively.
+Unknown names and labels shared by several machines return an error that lists
+known machines. Use `/api/v1/machines` to look up IDs, display labels, and aliases.
+
+Project rules and worktree mappings accept only IDs and aliases.
 
 ### Upgrading Historical Machine Keys
 

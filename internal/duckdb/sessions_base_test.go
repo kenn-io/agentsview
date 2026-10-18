@@ -3,13 +3,42 @@
 package duckdb
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestMatchingMachineIDsFindsQuotedAndTrashedIDs(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	for _, id := range []string{"id-b", "id'quoted"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Machine: id, Project: "project", Agent: "claude", ParentSessionID: new("missing-parent")}))
+	}
+	require.NoError(t, local.SoftDeleteSession(ctx, "id-b"))
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	ids, err := store.GetMatchingMachineIDs(ctx, []string{"id-b", "id'quoted", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id'quoted", "id-b"}, ids)
+}
+
+func TestMatchingMachineIDsWrapsReadErrors(t *testing.T) {
+	store := NewStoreFromDB(openTestDuckDB(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := store.GetMatchingMachineIDs(ctx, []string{"id-a"})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.ErrorContains(t, err, "reading machine metadata:")
+}
 
 func TestSessionReadErrors(t *testing.T) {
 	cause := errors.New("read failed")

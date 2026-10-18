@@ -445,7 +445,7 @@
 
   $effect(() => {
     const signature = sessionFilterSignature;
-    const ready = urlInitRan && urlWritebackReady;
+    const ready = urlInitRan && urlWritebackReady && !sessions.machineFilterPending;
     untrack(() => {
       if (!ready || !signature || router.route !== "usage" || !mounted) {
         return;

@@ -5,6 +5,7 @@ import { fireEvent, screen } from "@testing-library/svelte";
 import SessionFilterControl from "./SessionFilterControl.svelte";
 import SessionActiveFilters from "./SessionActiveFilters.svelte";
 import { sessions, filtersToParams } from "../../stores/sessions.svelte.js";
+import { ApiError } from "../../api/runtime.js";
 import { MetadataService } from "../../api/generated/index.js";
 
 let component: ReturnType<typeof mount> | undefined;
@@ -30,7 +31,9 @@ it("shows and searches machine labels while selecting the stored machine key", a
     machine_labels: { "installation-a": "Workstation A" },
     machine_aliases: {},
   };
-  vi.spyOn(MetadataService, "getApiV1Machines").mockResolvedValue(response);
+  vi.spyOn(MetadataService, "getApiV1Machines").mockImplementation(async (params) =>
+    params?.machine ? { ...response, resolved_machines: ["installation-a"] } : response,
+  );
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
   await sessions.loadMachines();
@@ -51,6 +54,50 @@ it("shows and searches machine labels while selecting the stored machine key", a
   component = mount(SessionActiveFilters, { target: document.body });
   await fireEvent.click(screen.getByRole("button", { name: "Workstation A" }));
   expect(sessions.filters.machine).toBe("");
+});
+
+it("shows a temporary machine failure, disables rows, and retries when reopened", async () => {
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  sessions.setMachineFilter("Retry label");
+  let fail!: (reason: unknown) => void;
+  vi.spyOn(MetadataService, "getApiV1Machines")
+    .mockReturnValueOnce(
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+    )
+    .mockResolvedValue({
+      machines: ["retry-machine", "another-machine"],
+      resolved_machines: ["retry-machine"],
+      machine_labels: {},
+      machine_aliases: {},
+    });
+  sessions.machines = ["retry-machine", "another-machine"];
+  component = mount(SessionFilterControl, { target: document.body });
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  expect(screen.getByRole("status").textContent).toBe("Loading machines...");
+  expect(
+    (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  fail(new ApiError(500, "internal error"));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Couldn't update the machine filter. Try again.",
+  );
+  expect(
+    (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  sessions.machines = [];
+  flushSync();
+  expect(screen.queryByText("No machines")).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  await vi.waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "another-machine" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 describe("SessionFilterControl agent options", () => {

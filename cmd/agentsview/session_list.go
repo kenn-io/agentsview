@@ -23,6 +23,8 @@ type sessionListDocument struct {
 	MachineLabels service.MachineLabelCatalog `json:"machine_labels"`
 }
 
+const machineFilterHelp = "Exact machine IDs or aliases (comma-separated), or one unique whole display name. IDs and aliases take precedence over matching names; unknown or ambiguous values return an error"
+
 func newSessionListCommand() *cobra.Command {
 	var (
 		project, excludeProject, machine, agent string
@@ -170,7 +172,7 @@ func newSessionListCommand() *cobra.Command {
 	flags.StringVar(&excludeProject, "exclude-project", "",
 		"Exclude sessions from the given project")
 	flags.StringVar(&machine, "machine", "",
-		"Filter by machine name")
+		machineFilterHelp)
 	flags.StringVar(&agent, "agent", "",
 		"Filter by agent (claude, codex, cursor, ...)")
 	flags.StringVar(&date, "date", "",

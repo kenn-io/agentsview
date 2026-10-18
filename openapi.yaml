@@ -635,6 +635,7 @@ components:
         include_one_shot:
           type: boolean
         machine:
+          description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Unknown or ambiguous values return HTTP 400 before streaming.
           type: string
         min_user_messages:
           format: int64
@@ -5073,6 +5074,12 @@ components:
             type: string
           type: object
         machines:
+          description: Picker catalog filtered by visibility flags
+          items:
+            type: string
+          type: array
+        resolved_machines:
+          description: Canonical IDs for the machine selector, independent of catalog visibility
           items:
             type: string
           type: array
@@ -8439,12 +8446,12 @@ paths:
           schema:
             description: Filter by agent
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: "Automation class: all, interactive, or automated"
           explode: false
@@ -8806,12 +8813,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -9025,12 +9032,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -9244,12 +9251,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -9451,12 +9458,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -9658,12 +9665,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -9889,12 +9896,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -10115,12 +10122,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -10322,12 +10329,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -10541,12 +10548,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -10755,12 +10762,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -10962,12 +10969,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -11181,12 +11188,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -14484,6 +14491,13 @@ paths:
           schema:
             description: Include automated sessions
             type: boolean
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
+          explode: false
+          in: query
+          name: machine
+          schema:
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
+            type: string
       responses:
         "200":
           content:
@@ -17345,12 +17359,12 @@ paths:
           schema:
             description: Exclude a project
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -18102,12 +18116,12 @@ paths:
           schema:
             description: Exclude a project
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -18490,12 +18504,12 @@ paths:
           schema:
             description: Exclude a project
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -23204,12 +23218,12 @@ paths:
           schema:
             description: IANA timezone name
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by project
           explode: false
@@ -23526,12 +23540,12 @@ paths:
           schema:
             description: Filter by an opaque project key
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -23778,12 +23792,12 @@ paths:
           schema:
             description: Filter by an opaque project key
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -24055,12 +24069,12 @@ paths:
           schema:
             description: Filter by an opaque project key
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -24297,12 +24311,12 @@ paths:
           schema:
             description: Filter by an opaque project key
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false
@@ -24532,12 +24546,12 @@ paths:
           schema:
             description: Filter by an opaque project key
             type: string
-        - description: Filter by machine
+        - description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
           explode: false
           in: query
           name: machine
           schema:
-            description: Filter by machine
+            description: Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
             type: string
         - description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
           explode: false

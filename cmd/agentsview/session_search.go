@@ -113,7 +113,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&reveal, "reveal", false, "Show full secret values (unredacted)")
 	flags.StringVar(&project, "project", "", "Filter by project name")
 	flags.StringVar(&excludeProject, "exclude-project", "", "Exclude project")
-	flags.StringVar(&machine, "machine", "", "Filter by machine")
+	flags.StringVar(&machine, "machine", "", machineFilterHelp)
 	flags.StringVar(&agent, "agent", "", "Filter by agent")
 	flags.StringVar(&date, "date", "", "Sessions active on YYYY-MM-DD")
 	flags.StringVar(&dateFrom, "date-from", "", "Sessions active on or after YYYY-MM-DD")

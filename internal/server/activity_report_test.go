@@ -44,6 +44,26 @@ func TestActivityProjectReclassificationCandidatesRouteRemoved(t *testing.T) {
 // deterministic and complete (non-partial) regardless of wall clock.
 const activityDate = "2025-06-02"
 
+func TestActivityReportValidatesSizeBeforeResolvingMachine(t *testing.T) {
+	te := setup(t)
+	for _, tt := range []struct {
+		name, message string
+		filters       url.Values
+	}{
+		{"machine", "activity machine filter exceeds 1024 bytes", url.Values{"machine": {strings.Repeat("x", 1025)}}},
+		{"total", "activity filters exceed 3072 bytes total", url.Values{
+			"project": {strings.Repeat("p", 1024)}, "agent": {strings.Repeat("a", 1024)},
+			"git_branch": {strings.Repeat("b", 1024)}, "machine": {"missing"},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := te.get(t, "/api/v1/activity/report?"+tt.filters.Encode())
+			assertStatus(t, w, http.StatusBadRequest)
+			assert.Contains(t, w.Body.String(), tt.message)
+		})
+	}
+}
+
 func TestActivityReportRejectsFilterWhoseSignedIDExceedsLimit(t *testing.T) {
 	te := setup(t)
 	values := url.Values{
@@ -52,7 +72,7 @@ func TestActivityReportRejectsFilterWhoseSignedIDExceedsLimit(t *testing.T) {
 		"timezone":   {"UTC"},
 		"project":    {strings.Repeat("\"", 1024)},
 		"agent":      {strings.Repeat("\"", 1024)},
-		"machine":    {strings.Repeat("\"", 1024)},
+		"git_branch": {strings.Repeat("\"", 1024)},
 		"automation": {"all"},
 	}
 

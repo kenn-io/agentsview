@@ -889,14 +889,6 @@ func TestAnalyticsProjects(t *testing.T) {
 		}
 		assert.Equal(t, stats.TotalMessages, total)
 	})
-
-	t.Run("MachineFilter", func(t *testing.T) {
-		w := te.get(t, buildURLWithRange("projects", map[string]string{"machine": "nonexistent"}))
-		assertStatus(t, w, http.StatusOK)
-
-		resp := decode[db.ProjectsAnalyticsResponse](t, w)
-		assert.Empty(t, resp.Projects)
-	})
 }
 
 func TestAnalyticsHourOfWeek(t *testing.T) {

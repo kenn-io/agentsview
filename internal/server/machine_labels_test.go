@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -16,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
+func TestMachineLabelsAndAliasesAcrossHTTP(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	te := setup(t, func(c *config.Config) { c.InstallationID = id })
 	_, err := te.db.EnsureInstallationIdentity(t.Context(), id)
@@ -41,7 +43,7 @@ func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
 	assert.ElementsMatch(t, []string{id, "old-host"}, resp.Machines)
 	assert.Equal(t, map[string]string{id: "Laptop"}, resp.Labels)
 	assert.Equal(t, map[string]string{"old-owner": id, "local": id}, resp.Aliases)
-	for _, machine := range []string{id, "old-owner", "local", "old-owner," + id} {
+	for _, machine := range []string{id, "old-owner", "local", "old-owner," + id, "Laptop"} {
 		for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
 			w = te.get(t, path+"?machine="+machine)
 			assertStatus(t, w, http.StatusOK)
@@ -56,14 +58,67 @@ func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
 		assertStatus(t, w, http.StatusOK)
 		assert.Equal(t, 1, decode[activity.Report](t, w).Totals.Sessions)
 	}
-	w = te.get(t, "/api/v1/sessions?machine=Laptop")
-	assertStatus(t, w, http.StatusOK)
-	assert.Empty(t, decode[db.SessionPage](t, w).Sessions)
 	w = te.upload(t, "imported.jsonl", claudeTranscriptWithMessageCount(4), "project=project&machine=old-owner")
 	assertStatus(t, w, http.StatusOK)
 	assert.Equal(t, "old-owner", decode[struct {
 		Machine string `json:"machine"`
 	}](t, w).Machine)
+}
+
+func TestMachinesResolveWholeSelectors(t *testing.T) {
+	te := setup(t)
+	for _, machine := range []string{"id-a", "id-b"} {
+		te.seedSession(t, machine, "project", 5, func(s *db.Session) {
+			s.Machine = machine
+			s.UserMessageCount = 3
+		})
+	}
+	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Work, Linux"))
+	for _, tt := range []struct {
+		selector string
+		want     []string
+	}{
+		{" \t ", nil},
+		{"Work, Linux", []string{"id-a"}},
+	} {
+		t.Run(tt.selector, func(t *testing.T) {
+			w := te.get(t, "/api/v1/machines?machine="+url.QueryEscape(tt.selector))
+			assertStatus(t, w, http.StatusOK)
+			response := decode[struct {
+				Machines         []string `json:"machines"`
+				ResolvedMachines []string `json:"resolved_machines"`
+			}](t, w)
+			assert.ElementsMatch(t, []string{"id-a", "id-b"}, response.Machines)
+			assert.Equal(t, tt.want, response.ResolvedMachines)
+		})
+	}
+}
+
+func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
+	te := setup(t)
+	for _, path := range []string{
+		"/api/v1/machines",
+		"/api/v1/sessions",
+		"/api/v1/usage/summary",
+		"/api/v1/usage/summary/stream",
+		"/api/v1/analytics/summary",
+		"/api/v1/activity/report",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine=missing", nil)
+			if path == "/api/v1/usage/summary/stream" {
+				req.Header.Set("Accept", "text/event-stream")
+			}
+			w := httptest.NewRecorder()
+			te.handler.ServeHTTP(w, req)
+			assertStatus(t, w, http.StatusBadRequest)
+			assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
+			if path == "/api/v1/usage/summary/stream" {
+				assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
+				assert.NotContains(t, w.Body.String(), "event:")
+			}
+		})
+	}
 }
 
 func TestMachineAliasesOnDuckDB(t *testing.T) {

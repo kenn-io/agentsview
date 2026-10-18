@@ -568,7 +568,17 @@ func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
 	return work()
 }
 
+func machineFilterHTTPError(err error) error {
+	if _, ok := errors.AsType[*db.MachineFilterError](err); ok {
+		return apiErrorWithCode(http.StatusBadRequest, "invalid_machine_filter", err.Error())
+	}
+	return nil
+}
+
 func serverError(err error) error {
+	if handled := machineFilterHTTPError(err); handled != nil {
+		return handled
+	}
 	if handled := hostedIdentityHTTPError(err); handled != nil {
 		return handled
 	}
@@ -585,6 +595,9 @@ func serverError(err error) error {
 }
 
 func internalError(logPrefix string, err error) error {
+	if handled := machineFilterHTTPError(err); handled != nil {
+		return handled
+	}
 	if handled := hostedIdentityHTTPError(err); handled != nil {
 		return handled
 	}

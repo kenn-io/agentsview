@@ -143,6 +143,27 @@ it("reports the analytics kind for a displayed report failure", async () => {
   }
 });
 
+it("reloads empty machine choices when clearing a rejected selector", async () => {
+  stubActivityPageCollaborators();
+  activity.setMachine("unknown");
+  activity.machines = [];
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    vi.mocked(activity.loadFilterOptions).mockClear();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "All Machines" }));
+    expect(activity.machine).toBe("");
+    expect(activity.loadFilterOptions).toHaveBeenCalledTimes(1);
+  } finally {
+    unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.setMachine("");
+  }
+});
+
 it("shows machine labels without full IDs crowding the menu and filters by ID", async () => {
   stubActivityPageCollaborators();
   const machine = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

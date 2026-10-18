@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -449,4 +450,28 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 			assert.NotEqual(t, before, after)
 		})
 	}
+}
+
+func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
+	ctx := t.Context()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	// Keep both versions in separate parts to exercise FINAL semantics.
+	for _, query := range []string{
+		`SYSTEM STOP MERGES sessions`,
+		`INSERT INTO sessions (id, machine, push_version) VALUES ('updated', 'retired-host', 1)`,
+	} {
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err)
+	}
+	// Only the newest version owns the session identity.
+	_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, machine, push_version) VALUES ('updated', 'current-host', 2)`)
+	require.NoError(t, err)
+	ids, err := NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"retired-host"})
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+	ids, err = NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"current-host"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"current-host"}, ids)
 }

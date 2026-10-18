@@ -6,6 +6,8 @@ import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { MetadataService } from "../../api/generated/index.js";
 
 // @ts-ignore
 import QualityPage from "./QualityPage.svelte";
@@ -30,6 +32,45 @@ describe("QualityPage", () => {
     router.route = "sessions";
     router.params = {};
     vi.restoreAllMocks();
+  });
+
+  it("loads quality once with the already-selected machine from a label deep link", async () => {
+    const requests: string[] = [];
+    vi.mocked(analytics.fetchSignalsForQuality).mockImplementation(async () => {
+      requests.push(analytics.machine);
+    });
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const metadata =
+      Promise.withResolvers<Awaited<ReturnType<typeof MetadataService.getApiV1Machines>>>();
+    vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(metadata.promise);
+    router.params = { machine: "Workstation", date_from: "2026-03-01", date_to: "2026-03-31" };
+    const savedFilters = sessions.filters;
+    const savedMachine = analytics.machine;
+    analytics.machine = "id-a";
+    sessions.initFromParams(router.params);
+
+    try {
+      component = mount(QualityPage, { target: document.body });
+      await tick();
+      expect(requests).toEqual([]);
+
+      metadata.resolve({
+        machines: ["id-a"],
+        resolved_machines: ["id-a"],
+        machine_labels: { "id-a": "Workstation" },
+        machine_aliases: {},
+      });
+      await sessions.loadMachines();
+      await tick();
+
+      expect(requests).toEqual(["id-a"]);
+    } finally {
+      if (component) await unmount(component);
+      component = undefined;
+      sessions.filters = savedFilters;
+      analytics.machine = savedMachine;
+    }
   });
 
   it("renders deterministic quality analysis without loading generated reports", async () => {
