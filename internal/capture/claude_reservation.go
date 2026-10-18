@@ -16,7 +16,7 @@ import (
 const (
 	claudeReservationDirName = ".agentsview-capture-reservations"
 	reservationGuardName     = "registry.lock"
-	reservationGuardWait     = time.Second
+	reservationCleanupWait   = time.Second
 )
 
 type claudeSessionReservation struct {
@@ -93,9 +93,7 @@ func ensureSecureReservationDirectory(dir string) error {
 
 func lockReservationGuard(ctx context.Context, dir string) (*flock.Flock, error) {
 	guard := flock.New(filepath.Join(dir, reservationGuardName))
-	guardCtx, cancel := context.WithTimeout(ctx, reservationGuardWait)
-	defer cancel()
-	locked, err := guard.TryLockContext(guardCtx, 10*time.Millisecond)
+	locked, err := guard.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("locking Claude reservation registry: %w", err)
 	}
@@ -127,7 +125,9 @@ func (r *claudeSessionReservation) close() {
 	if r == nil || r.lock == nil {
 		return
 	}
-	guard, err := lockReservationGuard(context.Background(), r.dir)
+	ctx, cancel := context.WithTimeout(context.Background(), reservationCleanupWait)
+	defer cancel()
+	guard, err := lockReservationGuard(ctx, r.dir)
 	if err != nil {
 		_ = r.lock.Unlock()
 		r.lock = nil
