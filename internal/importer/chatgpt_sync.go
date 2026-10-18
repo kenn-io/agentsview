@@ -174,11 +174,20 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	msgs := chatGPTMessages(result.Session.ID, result.Messages)
 	canonical := canonicalChatGPTMessages(store, chatGPTSession(result.Session), msgs, storeArchiveContent(store))
 	if chatGPTToolsChanged(archived, canonical) {
-		return replaceSyncedConversation(ctx, store, result, msgs)
+		status, err := replaceSyncedConversation(ctx, store, result, msgs)
+		if errors.Is(err, db.ErrReplaceUnchanged) {
+			// Length-only changes still need a write under the transcripts policy.
+			err = writeChatGPTSession(ctx, store, chatGPTSession(result.Session), msgs)
+		}
+		return status, err
 	}
 	status, err := upsertChatGPTConversation(ctx, store, result, nil)
 	if replaceable(err) {
 		return replaceSyncedConversation(ctx, store, result, msgs)
+	}
+	if err == nil && status == importSkipped && !storeArchiveContent(store).UsageOnly() {
+		// Sync also refreshes the source timestamp when the messages match.
+		err = appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), nil)
 	}
 	return status, err
 }
