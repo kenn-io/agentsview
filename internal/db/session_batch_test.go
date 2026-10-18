@@ -501,6 +501,45 @@ func TestWriteSessionBatchAtomicExtendedDialogueSearch(t *testing.T) {
 	}
 }
 
+func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentities(t *testing.T) {
+	for _, initial := range []Message{
+		{}, {SourceUUID: "original"}, {SourceParentUUID: "original-parent"},
+	} {
+		t.Run(initial.SourceUUID+"/"+initial.SourceParentUUID, func(t *testing.T) {
+			d := testDB(t)
+			write := messageCountWrite("identities", 1)
+			write.Messages[0].SourceUUID = initial.SourceUUID
+			write.Messages[0].SourceParentUUID = initial.SourceParentUUID
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			before, err := d.GetAllMessages(t.Context(), "identities")
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+
+			write.CompleteStoredRows = true
+			write.ReplaceMessages = false
+			write.Messages[0].SourceUUID = "incoming"
+			write.Messages[0].SourceParentUUID = "incoming-parent"
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), "identities")
+			require.NoError(t, err)
+			require.Len(t, after, 1)
+			assert.Equal(t, before[0].ID, after[0].ID)
+			assert.Equal(t, before[0].Content, after[0].Content)
+			wantID, wantParent := "incoming", "incoming-parent"
+			if initial.SourceUUID != "" {
+				wantID = "original"
+			}
+			if initial.SourceParentUUID != "" {
+				wantParent = "original-parent"
+			}
+			assert.Equal(t, wantID, after[0].SourceUUID)
+			assert.Equal(t, wantParent, after[0].SourceParentUUID)
+		})
+	}
+}
+
 func extendTestExportActive(t *testing.T, d *DB) bool {
 	t.Helper()
 	var active bool
