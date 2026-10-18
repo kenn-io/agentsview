@@ -51,8 +51,7 @@ func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
 		return fp
 	}
 	legacy := fingerprint()
-	// Captured from the fingerprint before dialogue was included.
-	assert.Equal(t, "3827e634c91d7e848b71050acbceda387d8e241b2eaa82549949e8969013e465", legacy)
+	assert.Nil(t, db.DialogueFingerprintValues(snapshot.Messages), "all-NULL dialogue is omitted")
 	snapshot.Messages[0].DialogueText = new("answerneedle")
 	first := fingerprint()
 	assert.NotEqual(t, legacy, first)

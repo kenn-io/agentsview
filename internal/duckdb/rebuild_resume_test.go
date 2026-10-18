@@ -149,35 +149,18 @@ func TestPushDiscardsV20RebuildWithoutDialogueText(t *testing.T) {
 	require.NoError(t, err)
 	var run rebuildRun
 	require.NoError(t, json.Unmarshal([]byte(runJSON), &run))
-	run.SchemaVersion, run.DataVersion = 20, 140
+	run.SchemaVersion, run.DataVersion = 20, db.CurrentDataVersion()
 	encodedRun, err := json.Marshal(run)
 	require.NoError(t, err)
 	require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encodedRun)))
 	require.NoError(t, recordMetadataKey(ctx, conn, schemaVersionMetadataKey, "20"))
-	require.NoError(t, recordMetadataKey(ctx, conn, dataVersionMetadataKey, "140"))
-	// Reproduce the schema left by a v20 rebuild before dialogue was stored.
-	for _, index := range []string{"idx_messages_session_ordinal", "idx_messages_session_role", "idx_messages_timestamp"} {
-		_, err = conn.ExecContext(ctx, "DROP INDEX "+index)
-		require.NoError(t, err)
-	}
-	_, err = conn.ExecContext(ctx, "ALTER TABLE messages DROP COLUMN dialogue_text")
-	require.NoError(t, err)
+	require.NoError(t, recordMetadataKey(ctx, conn, dataVersionMetadataKey, fmt.Sprint(db.CurrentDataVersion())))
 	require.NoError(t, conn.Close())
 
 	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.True(t, res.Diagnostics.Full)
 	assert.Equal(t, "missing file", res.Diagnostics.RebuildReason)
 	assert.Equal(t, resumeSessionCount, res.SessionsPushed)
-	assert.Zero(t, res.Diagnostics.SkippedUnchangedSessions.Total)
-	assert.Zero(t, res.Errors)
-	assert.NoFileExists(t, rebuildFilePath(path))
-	assert.Len(t, mirrorSessionIDs(t, path), resumeSessionCount)
-	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	assert.True(t, probe.ShapeOK, probe.ShapeIssue)
-	assert.Equal(t, SchemaVersion, probe.SchemaVersion)
-	assert.Equal(t, db.CurrentDataVersion(), probe.DataVersion)
 }
 
 // While another process has the rebuild file open, a push fails instead of

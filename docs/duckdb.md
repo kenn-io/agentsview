@@ -19,9 +19,10 @@ up a PostgreSQL server.
     path as suitable for trusted networks only.
 
 Content search uses dialogue for `--in messages` and searches reasoning with
-`--in thinking` in substring and regex modes. Both modes include reasoning by
-default. Existing mirrors rebuild on their next push to fill dialogue. Reads
-from a pre-upgrade mirror fail with a schema compatibility error naming
+`--in thinking` in substring and regex modes. Default substring and regex
+searches now also scan reasoning text; `--in messages` avoids that scan.
+Existing mirrors rebuild on their next push to fill dialogue. Reads from a
+pre-upgrade mirror fail with a schema compatibility error naming
 `messages.dialogue_text` until that push. Run `agentsview duckdb push` before
 serving the mirror with the upgraded binary.
 

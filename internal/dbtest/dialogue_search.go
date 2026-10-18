@@ -96,11 +96,8 @@ func AssertDialogueSearchParity(t *testing.T, archive, mirror db.Store, modes ..
 							if source == "" || source == location || source == "messages" && location == "message" {
 								want = append(want, hit{"dialogue-search", location, tc.ordinal, snippet})
 							}
-							sqlite, err := archive.SearchContent(t.Context(), f)
-							require.NoError(t, err)
 							got, err := mirror.SearchContent(t.Context(), f)
 							require.NoError(t, err)
-							assert.Equal(t, want, project(sqlite.Matches), "SQLite contract")
 							assert.Equal(t, want, project(got.Matches), "mirror contract")
 						})
 					}

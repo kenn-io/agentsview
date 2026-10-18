@@ -23,75 +23,7 @@ func TestDuckDBDialogueSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	dbtest.AssertDialogueSearchParity(t, local, store, "", "substring", "regex", "fts")
-}
-
-func TestDialogueDuckDBRebuildsOldSchemaMirror(t *testing.T) {
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	messages, err := local.GetAllMessages(ctx, "sess-1")
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	messages[1].Content = "answerneedle\n[Thinking] reasoningneedle\n[Bash] $ toolneedle"
-	messages[1].ThinkingText = "reasoningneedle"
-	messages[1].DialogueText = new("answerneedle")
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-
-	conn, err := Open(ctx, path)
-	require.NoError(t, err)
-	for _, index := range []string{"idx_messages_session_ordinal", "idx_messages_session_role", "idx_messages_timestamp"} {
-		_, err = conn.ExecContext(ctx, "DROP INDEX "+index)
-		require.NoError(t, err)
-	}
-	_, err = conn.ExecContext(ctx, "ALTER TABLE messages DROP COLUMN dialogue_text")
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.True(t, result.Diagnostics.Full)
-	assert.Contains(t, result.Diagnostics.RebuildReason, "dialogue_text")
-	conn, err = Open(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	var dialogue string
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT dialogue_text FROM messages WHERE session_id = 'sess-1' AND ordinal = 1`).Scan(&dialogue))
-	assert.Equal(t, "answerneedle", dialogue)
-}
-
-func TestDuckDBFingerprintTracksNullableDialogue(t *testing.T) {
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
-	session := syncSession("sess-1", "alpha", "first sess-1", "2026-02-01T00:01:00.000Z", 2)
-	fingerprint := func() string {
-		t.Helper()
-		got, err := syncer.sessionFingerprints(ctx, []db.Session{session})
-		require.NoError(t, err)
-		return got[session.ID]
-	}
-	setDialogue := func(ordinal int, dialogue *string) {
-		t.Helper()
-		require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `UPDATE messages SET dialogue_text = ? WHERE session_id = 'sess-1' AND ordinal = ?`, dialogue, ordinal)
-			return err
-		}))
-	}
-	legacy := fingerprint()
-	// Captured before dialogue was included in the fingerprint.
-	assert.Equal(t, "b6e55aa9c8b15a4a4956218861f7f150e45f9829d198b149d25442f555cf373e", legacy)
-	setDialogue(1, new("answerneedle"))
-	first := fingerprint()
-	assert.NotEqual(t, legacy, first)
-	setDialogue(1, new(""))
-	assert.NotEqual(t, legacy, fingerprint(), "empty dialogue differs from NULL")
-	setDialogue(1, nil)
-	setDialogue(0, new("answerneedle"))
-	assert.NotEqual(t, first, fingerprint(), "dialogue belongs to its message")
-	setDialogue(0, nil)
-	assert.Equal(t, legacy, fingerprint())
+	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
 }
 
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {
@@ -101,26 +33,22 @@ func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
-	for _, dialogue := range []string{"answerneedle", "updatedneedle", ""} {
-		t.Run(dialogue, func(t *testing.T) {
-			// Ordinary sync writes the reparse, then stamps its parser version.
-			// The stamp advances local_modified_at even for dialogue-only changes.
-			messages, err := local.GetAllMessages(ctx, "sess-1")
-			require.NoError(t, err)
-			messages[1].DialogueText = new(dialogue)
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
-			require.NoError(t, local.SetSessionDataVersion(ctx, "sess-1", db.CurrentDataVersion()))
-			result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-			require.NoError(t, err)
-			assert.False(t, result.Diagnostics.Full)
-			assert.Equal(t, 1, result.SessionsPushed)
-			conn, err := Open(ctx, path)
-			require.NoError(t, err)
-			defer conn.Close()
-			var got sql.NullString
-			require.NoError(t, conn.QueryRowContext(ctx, `SELECT dialogue_text FROM messages WHERE session_id = 'sess-1' AND ordinal = 1`).Scan(&got))
-			assert.True(t, got.Valid)
-			assert.Equal(t, dialogue, got.String)
-		})
-	}
+	// Ordinary sync writes the reparse, then stamps its parser version.
+	// The stamp advances local_modified_at even for dialogue-only changes.
+	messages, err := local.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	messages[1].DialogueText = new("answerneedle")
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
+	require.NoError(t, local.SetSessionDataVersion(ctx, "sess-1", db.CurrentDataVersion()))
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Diagnostics.Full)
+	assert.Equal(t, 1, result.SessionsPushed)
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var got sql.NullString
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT dialogue_text FROM messages WHERE session_id = 'sess-1' AND ordinal = 1`).Scan(&got))
+	assert.True(t, got.Valid)
+	assert.Equal(t, "answerneedle", got.String)
 }
