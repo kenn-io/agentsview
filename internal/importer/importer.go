@@ -610,9 +610,12 @@ func appendChatGPTMessages(
 
 // chatGPTModelRows selects model changes from matching stored-form rows.
 func chatGPTModelRows(archived, incoming []db.Message) []db.Message {
+	if incoming == nil {
+		return nil
+	}
 	var changed []int
-	for i := range archived {
-		if archived[i].Model != incoming[i].Model {
+	for i, row := range incoming {
+		if i < len(archived) && archived[i].Model != row.Model {
 			changed = append(changed, i)
 		}
 	}
