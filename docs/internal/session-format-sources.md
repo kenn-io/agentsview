@@ -3943,8 +3943,9 @@ schemas keep their existing ordering behavior.
   Reverified 2026-10-18 with
   `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata`.
   When detail `create_time` is null or absent, Sync keeps the stored start time
-  or uses the first message timestamp for a new chat. Numeric `create_time`
-  takes precedence. Reverified against the parser and synthetic importer test
+  or uses the first non-zero message timestamp for a new chat, skipping undated
+  messages. Numeric `create_time` takes precedence. Reverified against the parser
+  and synthetic importer test
   `TestSyncChatGPTMissingCreateTime` on 2026-10-18; ZIP import is unchanged.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
