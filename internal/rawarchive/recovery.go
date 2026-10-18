@@ -99,7 +99,7 @@ func (a *Archive) Backup(ctx context.Context, target string, settings RecoverySe
 	if err := validateRecoveryIdentity(identity); err != nil {
 		return report, err
 	}
-	for _, component := range []string{"telemetry-install-id", "telemetry-install-created", "assets"} {
+	for _, component := range []string{"telemetry-install-id", "telemetry-install-created", "telemetry-setup-finished", "assets"} {
 		path := filepath.Join(source, component)
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			continue
@@ -356,7 +356,7 @@ func loadRecovery(path string) (recoveryInventory, RecoverySettings, error) {
 }
 
 func recoveryComponent(name string) bool {
-	return name == "sessions.db" || name == "telemetry-install-id" || name == "telemetry-install-created" || name == "recovery-settings.json" || strings.HasPrefix(name, "assets/")
+	return name == "sessions.db" || name == "telemetry-install-id" || name == "telemetry-install-created" || name == "telemetry-setup-finished" || name == "recovery-settings.json" || strings.HasPrefix(name, "assets/")
 }
 
 func validateRecoveryIdentity(data []byte) error {

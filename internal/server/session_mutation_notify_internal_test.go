@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,12 +23,9 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-// TestSessionMutationRoutesNotify pins that the routes changing a session's
-// lifecycle — trash, restore, permanent delete — fire the mutation notifier
-// on success and stay silent on failure. Consumers (the extraction
-// scheduler's retraction pass) otherwise only learn about these changes
-// from sync activity that may never come.
-func TestSessionMutationRoutesNotify(t *testing.T) {
+// Session lifecycle changes notify background consumers. Restores also broadcast
+// sessions so open lists refresh; a failed restore emits neither notification.
+func TestSessionMutationRoutesNotifyAndRestoreBroadcasts(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -44,6 +42,9 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
 	}))
+	s.broadcaster = NewBroadcaster(0)
+	events, unsubscribe := s.broadcaster.Subscribe()
+	defer unsubscribe()
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -68,11 +69,18 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	w = do(http.MethodPost, "/api/v1/sessions/sess-1/restore", "")
 	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(2), notified.Load(), "restoring must notify")
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "restored session did not broadcast sessions")
+	}
 
 	w = do(http.MethodPost, "/api/v1/sessions/missing/restore", "")
 	require.Equal(t, http.StatusNotFound, w.Code)
 	require.Equal(t, int32(2), notified.Load(),
 		"a failed restore must not notify")
+	assert.Empty(t, events)
 
 	w = do(http.MethodPost, "/api/v1/sessions/batch-delete",
 		`{"session_ids":["sess-1"]}`)

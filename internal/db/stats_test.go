@@ -7,6 +7,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHasVisibleSession(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session *Session
+		parent  bool
+		want    bool
+	}{
+		{name: "empty session", session: &Session{}},
+		{name: "orphan subagent", session: &Session{MessageCount: 1, RelationshipType: "subagent", ParentSessionID: new("missing")}, want: true},
+		{name: "orphan fork", session: &Session{MessageCount: 1, RelationshipType: "fork", ParentSessionID: new("missing")}, want: true},
+		{name: "child of empty root", session: &Session{MessageCount: 1, RelationshipType: "subagent", ParentSessionID: new("parent")}, parent: true},
+		{name: "automated", session: &Session{MessageCount: 1, IsAutomated: true}},
+		{name: "trash", session: &Session{MessageCount: 1, DeletedAt: new("2026-01-01T00:00:00Z")}},
+		{name: "root", session: &Session{MessageCount: 1}, want: true},
+		{name: "continuation", session: &Session{MessageCount: 1, RelationshipType: "continuation"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			if tc.parent {
+				insertSession(t, d, "parent", "project-a", func(s *Session) { s.MessageCount = 0 })
+			}
+			if tc.session != nil {
+				insertSession(t, d, "session-one", "project-a", func(s *Session) {
+					s.MessageCount = tc.session.MessageCount
+					s.RelationshipType = tc.session.RelationshipType
+					s.ParentSessionID = tc.session.ParentSessionID
+					s.IsAutomated = tc.session.IsAutomated
+				})
+				if tc.session.DeletedAt != nil {
+					require.NoError(t, d.SoftDeleteSession(t.Context(), "session-one"))
+				}
+			}
+			got, err := d.HasVisibleSession(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			index, err := d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, len(index.Sessions) > 0)
+		})
+	}
+}
+
 func TestFileBackedSessionCount_ExcludesNonDevinNonFileBackedAgents(
 	t *testing.T,
 ) {

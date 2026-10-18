@@ -35,6 +35,15 @@ The latest release is
   `[model_aliases]` in `config.toml`. Scripts, exports, `usage daily`, and MCP
   keep raw model names.
 
+- Anonymous usage reports now distinguish installs waiting for their first
+  session. The server sends `setup_finished` once per installation when the
+  default session list has a session to show, including orphaned sessions and
+  excluding automated sessions and trash. The event follows the existing
+  telemetry opt-out and includes no session details. Existing installs with
+  sessions send it once on their first start after upgrading.
+
+- Open session lists now refresh after imports, uploads, and restores.
+
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
   evidence. It replaces version 4, which is no longer available: integrations

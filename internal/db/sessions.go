@@ -813,6 +813,15 @@ func (db *DB) ListSessions(
 	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
 }
 
+// HasVisibleSession reports whether the default sidebar has a session to show.
+func (db *DB) HasVisibleSession(ctx context.Context) (bool, error) {
+	where, args := buildSessionBaseFilter(SessionFilter{ExcludeAutomated: true})
+	var exists bool
+	err := db.getReader().QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM sessions WHERE "+where+" AND "+buildCanonicalRootWhere(true)+")", args...).Scan(&exists)
+	return exists, err
+}
+
 // GetSidebarSessionIndex returns the skinny session rows needed by
 // the sidebar grouper. Paginated calls page root sessions and include
 // each root's descendants so grouped sidebar trees stay complete.

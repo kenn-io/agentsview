@@ -439,10 +439,7 @@ func TestHandleImportChatGPT_RequiresZip(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
 }
 
-func TestHandleImportClaudeAI_SSE(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-
-	conversations := `[{
+const claudeAIUploadConv = `{
       "uuid": "sse-test-001",
       "name": "SSE Test",
       "created_at": "2026-03-01T10:00:00.000000Z",
@@ -452,7 +449,12 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
         "content": [{"type":"text","text":"hello"}],
         "created_at": "2026-03-01T10:00:00.000000Z"
       }]
-    }]`
+    }`
+
+func TestHandleImportClaudeAI_SSE(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+
+	conversations := "[" + claudeAIUploadConv + "]"
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -545,15 +547,17 @@ const chatGPTRefusalConvWithAppend = `[{
   }
 }]`
 
-// chatGPTExportZip packs conversations as a one-file ChatGPT export zip.
-func chatGPTExportZip(t *testing.T, conversations string) []byte {
+// chatGPTExportZip packs each conversations file as a numbered ChatGPT export shard.
+func chatGPTExportZip(t *testing.T, shards ...string) []byte {
 	t.Helper()
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
-	entry, err := zw.Create("conversations-000.json")
-	require.NoError(t, err)
-	_, err = entry.Write([]byte(conversations))
-	require.NoError(t, err)
+	for i, conversations := range shards {
+		entry, err := zw.Create(fmt.Sprintf("conversations-%03d.json", i))
+		require.NoError(t, err)
+		_, err = entry.Write([]byte(conversations))
+		require.NoError(t, err)
+	}
 	require.NoError(t, zw.Close())
 	return archive.Bytes()
 }
@@ -663,20 +667,28 @@ func TestHandleImportClaudeAIStreamsRefusalsOnlyWhenDone(t *testing.T) {
 	}, done.Refusals)
 }
 
-// postImport posts data to an import route and decodes the stats from the JSON body or the stream's done event.
-func postImport(t *testing.T, srv *Server, path, filename string, data []byte, stream bool) importer.ImportStats {
+// importRequest builds a multipart request for either import response format.
+func importRequest(t *testing.T, path, filename string, data []byte, stream bool) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", filename)
 	require.NoError(t, err)
-	_, _ = part.Write(data)
+	_, err = part.Write(data)
+	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
+	return req
+}
+
+// postImport posts data to an import route and decodes the stats from the JSON body or the stream's done event.
+func postImport(t *testing.T, srv *Server, path, filename string, data []byte, stream bool) importer.ImportStats {
+	t.Helper()
+	req := importRequest(t, path, filename, data, stream)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
@@ -844,6 +856,49 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, "Committed chat", messages[0].Content)
+		})
+	}
+}
+
+// Every import attempt that reaches the importer broadcasts, because a failed
+// import can still commit title-only changes. Uploads rejected before the
+// importer runs leave open lists alone.
+func TestHandleImportBroadcastsAfterImportAttempts(t *testing.T) {
+	for _, tt := range []struct {
+		name, path, file string
+		data             []byte
+		wantCode         int
+		titleOnly        bool
+	}{
+		{"chatgpt", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv), http.StatusOK, false},
+		{"chatgpt partial", "/api/v1/import/chatgpt", "export.zip", chatGPTExportZip(t, chatGPTRefusalConv, "["), http.StatusInternalServerError, false},
+		{"claude-ai title only then malformed", "/api/v1/import/claude-ai", "conversations.json", []byte(strings.ReplaceAll("["+claudeAIUploadConv+",{", "SSE Test", "Renamed chat")), http.StatusInternalServerError, true},
+		{"chatgpt rejected zip", "/api/v1/import/chatgpt", "export.zip", []byte("not a zip"), http.StatusBadRequest, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			if tt.titleOnly {
+				postImport(t, srv, tt.path, tt.file, []byte("["+claudeAIUploadConv+"]"), false)
+			}
+			srv.broadcaster = NewBroadcaster(0)
+			events, unsubscribe := srv.broadcaster.Subscribe()
+			defer unsubscribe()
+			req := importRequest(t, tt.path, tt.file, tt.data, false)
+			rec := httptest.NewRecorder()
+			srv.mux.ServeHTTP(rec, req)
+			require.Equal(t, tt.wantCode, rec.Code, "body: %s", rec.Body.String())
+
+			if tt.wantCode == http.StatusBadRequest {
+				// Emit delivers synchronously, so a broadcast would already be buffered.
+				assert.Empty(t, events, "rejected upload broadcast sessions")
+				return
+			}
+			select {
+			case event := <-events:
+				assert.Equal(t, "sessions", event.Scope)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "import attempt did not broadcast sessions")
+			}
 		})
 	}
 }

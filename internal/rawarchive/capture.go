@@ -249,7 +249,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 	}
 	// The application root is an allowlist; runtime settings and connections are
 	// never copied. Provider trees are handled separately above.
-	for _, name := range []string{"sessions.db", "assets", "telemetry-install-created"} {
+	for _, name := range []string{"sessions.db", "assets", "telemetry-install-created", "telemetry-setup-finished"} {
 		path := filepath.Join(source, name)
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -288,7 +288,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if slices.Contains([]string{"sessions.db", "assets", "telemetry-install-id", "telemetry-install-created"}, name) {
+		if slices.Contains([]string{"sessions.db", "assets", "telemetry-install-id", "telemetry-install-created", "telemetry-setup-finished"}, name) {
 			continue
 		}
 		reason := "runtime component excluded; only recovery settings retained"

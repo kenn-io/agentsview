@@ -113,3 +113,28 @@ func TestClaimDaemonActiveConcurrent(t *testing.T) {
 	}
 	assert.EqualValues(t, 1, sends.Load())
 }
+
+func TestClaimSetupFinished(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, telemetrySetupFinishedFilename)
+	for _, tc := range []struct {
+		name, id, record string
+		wantSent         bool
+	}{
+		{"first content", "install-one", "install-one\n", true},
+		{"restart", "install-one", "install-one\n", false},
+		{"changed identity retries", "install-two", "install-two\n", true},
+	} {
+		cfg := Config{DataDir: dir, InstallationID: tc.id}
+		sent := false
+		err := cfg.ClaimSetupFinished(func() error {
+			sent = true
+			return nil
+		})
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, tc.wantSent, sent, tc.name)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, tc.record, string(data))
+	}
+}
