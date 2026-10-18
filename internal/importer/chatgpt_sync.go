@@ -233,8 +233,13 @@ func fillChatGPTSyncStart(ctx context.Context, store db.Store, result *parser.Pa
 	if stored != nil && stored.StartedAt != nil {
 		result.Session.StartedAt, _ = db.ParseStoredTimestamp(*stored.StartedAt)
 	}
-	if result.Session.StartedAt.IsZero() && len(result.Messages) > 0 {
-		result.Session.StartedAt = result.Messages[0].Timestamp
+	if result.Session.StartedAt.IsZero() {
+		for _, message := range result.Messages {
+			if !message.Timestamp.IsZero() {
+				result.Session.StartedAt = message.Timestamp
+				break
+			}
+		}
 	}
 	return nil
 }
