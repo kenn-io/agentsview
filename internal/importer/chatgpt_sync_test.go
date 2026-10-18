@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/chromehost"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -182,11 +183,11 @@ func TestSyncChatGPTEquivalentTimestampsSkipSecondDetail(t *testing.T) {
 func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	d := testDB(t)
 	details := 0
-	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, false, "Question"), &details), nil)
+	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", chatGPTSyncDetail(1706745711, false, "Question"), &details), nil)
 	require.NoError(t, err)
 
-	renamed := strings.Replace(chatGPTSyncDetail(2, false, "Question"), `"title":"Tool"`, `"title":"Renamed"`, 1)
-	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", renamed, &details), nil)
+	renamed := strings.Replace(chatGPTSyncDetail(1706745712, false, "Question"), `"title":"Tool"`, `"title":"Renamed"`, 1)
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", renamed, &details), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Updated, "a title-only change is an update")
 	assert.Zero(t, stats.Imported)
@@ -195,6 +196,12 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	require.NotNil(t, stored)
 	require.NotNil(t, stored.SessionName)
 	assert.Equal(t, "Renamed", *stored.SessionName)
+	require.NotNil(t, stored.EndedAt)
+	assert.Equal(t, "2024-02-01T00:01:52Z", *stored.EndedAt)
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", renamed, &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 2, details)
 }
 
 // chatGPTPopulatedList returns a full first page of distinct conversation IDs.
@@ -547,6 +554,41 @@ func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
 			assert.Equal(t, 1, pins[0].Ordinal)
 		})
 	}
+}
+
+func TestSyncChatGPTUpdatesToolResultLengthsUnderTranscriptsPolicy(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	details := 0
+	for i, tc := range []struct {
+		output string
+		length int
+	}{{"41", 10}, {"42000", 13}} {
+		body := strings.ReplaceAll(chatGPTToolRunConv(tc.output, false), "cg-tool", chatGPTSyncID)
+		body = strings.Replace(body, `"update_time":1706745710.0`, fmt.Sprintf(`"update_time":%d`, i+1), 1)
+		body = strings.TrimSuffix(strings.TrimPrefix(body, "["), "]")
+		stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, strconv.Itoa(i+1), body, &details), nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		if i == 1 {
+			assert.Equal(t, 1, stats.Updated)
+		}
+		messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		require.Len(t, messages[1].ToolCalls, 1)
+		assert.Empty(t, messages[1].ToolCalls[0].ResultContent)
+		assert.Equal(t, tc.length, messages[1].ToolCalls[0].ResultContentLength)
+		if i == 0 {
+			_, err = d.PinMessage(t.Context(), "chatgpt:"+chatGPTSyncID, messages[1].ID, new("Keep this result"))
+			require.NoError(t, err)
+		}
+	}
+	pins, err := d.ListPinnedMessages(t.Context(), "chatgpt:"+chatGPTSyncID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 1, pins[0].Ordinal)
+	assert.Equal(t, new("Keep this result"), pins[0].Note)
 }
 
 func TestSyncChatGPTPagesActiveAndArchivedLists(t *testing.T) {
