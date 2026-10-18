@@ -593,8 +593,8 @@ func writeChatGPTSession(
 	})
 }
 
-// appendChatGPTMessages fills archived-empty tool results and extends
-// truncated archived text at stored ordinals, and inserts later rows, leaving
+// appendChatGPTMessages fills archived-empty tool results, extends truncated
+// text, updates models at stored ordinals, and inserts later rows, leaving
 // other stored rows untouched. Message changes clear signals for backfill;
 // metadata-only writes preserve them.
 func appendChatGPTMessages(
@@ -608,9 +608,8 @@ func appendChatGPTMessages(
 	})
 }
 
-// chatGPTFillRows copies the export rows that complete archived rows (a
-// filled result or extended text), keeping only the results being filled so
-// nothing else reaches the write.
+// chatGPTFillRows copies rows with filled results, extended text, or updated
+// models, keeping only the tool results being filled.
 func chatGPTFillRows(
 	archived, incoming []db.Message, filled []int,
 ) []db.Message {
@@ -698,10 +697,10 @@ func sameMessages(existing, incoming []db.Message) bool {
 
 // compareChatGPTPrefix reports whether the export still starts with the
 // archived messages and which archived rows the export completes: a result
-// that was empty when archived and is filled now, or archived text the export
-// extends (db.IsTextExtension). Only fields no archive policy rewrites are
-// compared: the turn (sameTurn), text and length (equal or extended), and
-// each archived call's name and category and whether its result is empty.
+// that was empty when archived and is filled now, archived text the export
+// extends (db.IsTextExtension), or a changed model. It compares turn fields,
+// conflicting source IDs, text and length, and each archived call's name,
+// category, and whether its result is empty.
 func compareChatGPTPrefix(
 	existing, incoming []db.Message,
 ) (completed []int, ok bool) {
@@ -730,7 +729,7 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended {
+		if fill || extended || a.Model != b.Model {
 			completed = append(completed, i)
 		}
 	}
