@@ -501,15 +501,19 @@ func TestWriteSessionBatchAtomicExtendedDialogueSearch(t *testing.T) {
 	}
 }
 
-func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentities(t *testing.T) {
+func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *testing.T) {
 	for _, initial := range []Message{
-		{}, {SourceUUID: "original"}, {SourceParentUUID: "original-parent"},
+		{},
+		{SourceUUID: "original", Model: "gpt-4o"},
+		{SourceParentUUID: "original-parent"},
+		{SourceUUID: "incoming", SourceParentUUID: "incoming-parent", Model: "gpt-4o"},
 	} {
 		t.Run(initial.SourceUUID+"/"+initial.SourceParentUUID, func(t *testing.T) {
 			d := testDB(t)
 			write := messageCountWrite("identities", 1)
 			write.Messages[0].SourceUUID = initial.SourceUUID
 			write.Messages[0].SourceParentUUID = initial.SourceParentUUID
+			write.Messages[0].Model = initial.Model
 			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			require.NoError(t, err)
 			before, err := d.GetAllMessages(t.Context(), "identities")
@@ -520,6 +524,7 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentities(t *testing.T)
 			write.ReplaceMessages = false
 			write.Messages[0].SourceUUID = "incoming"
 			write.Messages[0].SourceParentUUID = "incoming-parent"
+			write.Messages[0].Model = "gpt-5"
 			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			require.NoError(t, err)
 			after, err := d.GetAllMessages(t.Context(), "identities")
@@ -529,13 +534,18 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentities(t *testing.T)
 			assert.Equal(t, before[0].Content, after[0].Content)
 			wantID, wantParent := "incoming", "incoming-parent"
 			if initial.SourceUUID != "" {
-				wantID = "original"
+				wantID = initial.SourceUUID
 			}
 			if initial.SourceParentUUID != "" {
-				wantParent = "original-parent"
+				wantParent = initial.SourceParentUUID
 			}
 			assert.Equal(t, wantID, after[0].SourceUUID)
 			assert.Equal(t, wantParent, after[0].SourceParentUUID)
+			wantModel := "gpt-5"
+			if initial.Model != "" {
+				wantModel = initial.Model
+			}
+			assert.Equal(t, wantModel, after[0].Model)
 		})
 	}
 }
