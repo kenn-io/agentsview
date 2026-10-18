@@ -3910,12 +3910,13 @@ schemas keep their existing ordering behavior.
   pagination. Each detail without a `mapping` object counts toward the
   two-consecutive-failures stop and asks for an AgentsView update; Sync does not
   parse the flat format.
-  Reverified against the parser and synthetic importer regressions on 2026-10-17:
+  Reverified against the parser and synthetic importer regressions on 2026-10-18:
   tool nodes attach to assistant messages, and browser image placeholders carry
   no asset identity. The parser records user message and parent IDs in the
-  archive's existing source identity fields. Sync only preserves uploaded images
-  on user turns with matching identities, timestamps, and sanitized surrounding
-  text; generated images use the browser snapshot.
+  archive's existing source identity fields. Sync preserves uploaded images on
+  user turns with matching ordinals, roles, timestamps, and sanitized surrounding
+  text. Saved message and parent IDs must match when present in the archive;
+  older ZIP imports have neither ID. Generated images use the browser snapshot.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
   Stream errors use `chatgpt_auth_required` for sign-in and
