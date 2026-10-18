@@ -110,12 +110,14 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 
 func TestSyncChatGPTMissingCreateTime(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		zipImport bool
-		wantStart string
+		name          string
+		zipImport     bool
+		undatedSystem bool
+		wantStart     string
 	}{
 		{name: "preserve ZIP start", zipImport: true, wantStart: "2024-01-31T00:00:00Z"},
 		{name: "use first message", wantStart: "2024-02-01T00:00:00Z"},
+		{name: "skip undated system message", undatedSystem: true, wantStart: "2024-02-01T00:00:10Z"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -132,6 +134,15 @@ func TestSyncChatGPTMissingCreateTime(t *testing.T) {
 				require.Equal(t, new(tc.wantStart), stored.StartedAt)
 			}
 			detail := strings.Replace(chatGPTSyncDetail(1706745711, false, "Question"), `"create_time":1706745600.0`, `"create_time":null`, 1)
+			if tc.undatedSystem {
+				detail = strings.TrimSuffix(strings.TrimPrefix(chatGPTChainConvID(chatGPTSyncID,
+					chatGPTNodeSpec{"system", "text", "Instructions"},
+					chatGPTNodeSpec{"user", "text", "Question"},
+					chatGPTNodeSpec{"assistant", "text", "Answer"},
+				), "["), "]")
+				detail = strings.Replace(detail, `"create_time":1706745600.0`, `"create_time":null`, 1)
+				detail = strings.Replace(detail, `"create_time":1.7067456e+09,`, "", 1)
+			}
 			details := 0
 			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", detail, &details), nil)
 			require.NoError(t, err)
@@ -140,7 +151,8 @@ func TestSyncChatGPTMissingCreateTime(t *testing.T) {
 			stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
 			require.NoError(t, err)
 			require.NotNil(t, stored)
-			assert.Equal(t, new(tc.wantStart), stored.StartedAt)
+			require.NotNil(t, stored.StartedAt)
+			assert.Equal(t, tc.wantStart, *stored.StartedAt)
 		})
 	}
 }
