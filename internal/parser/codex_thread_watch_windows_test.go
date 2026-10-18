@@ -104,7 +104,7 @@ func TestCodexThreadWatchClosesInvalidatedRoot(t *testing.T) {
 	_, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	directory := cache.roots[root].Value.(*codexThreadDirectory)
-	handles := []windows.Handle{directory.watch.handle, directory.children["2026"].children["09"].children["01"].watch.handle}
+	handles := []windows.Handle{directory.watch.state.handle, directory.children["2026"].children["09"].children["01"].watch.state.handle}
 	cache.invalidate([]string{root})
 	for _, handle := range handles {
 		_, err = windows.WaitForSingleObject(handle, 0)
@@ -123,8 +123,8 @@ func TestCodexThreadWatchRecoversAfterNotificationFailure(t *testing.T) {
 	t.Cleanup(func() { cache.invalidate([]string{root}) })
 	_, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
-	handle := cache.roots[root].Value.(*codexThreadDirectory).watch.handle
-	require.NoError(t, windows.FindCloseChangeNotification(handle))
+	handle := cache.roots[root].Value.(*codexThreadDirectory).watch.state.handle
+	require.NoError(t, windows.CloseHandle(handle))
 	paths, err := cache.find(t.Context(), root, revertThread)
 	require.ErrorIs(t, err, windows.ERROR_INVALID_HANDLE)
 	assert.Empty(t, paths)
