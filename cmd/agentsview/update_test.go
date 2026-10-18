@@ -56,6 +56,48 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 	assert.Equal(t, []string{"load", "stop", "perform", "restart"}, calls)
 }
 
+func TestScopedConfigUpdateUsesDeploymentAuthForStartupFallback(t *testing.T) {
+	seedScopedConfigArchive(t)
+	dir := os.Getenv("AGENTSVIEW_DATA_DIR")
+	tokenFile := filepath.Join(dir, "deployment-token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("update-secret\n"), 0o600))
+	t.Setenv("AGENTSVIEW_MODE", "serve")
+	t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", tokenFile)
+	t.Setenv("AGENTSVIEW_HOST", "")
+	t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://127.0.0.1:1/v1")
+	writeTestConfig(t, dir, "[vector]\nenabled=false\n[insights]\nmodel='incomplete'\n")
+	host, port := testAuthenticatedPingServer(t, "update-secret")
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+	cfg, err := loadDaemonConfigForUpdate()
+	require.NoError(t, err)
+
+	// Exercise real discovery without signaling the test process or replacing
+	// a binary. A daemon without a written runtime record needs its token.
+	orig := stopDaemonRuntimeForUpgrade
+	calls := 0
+	stopDaemonRuntimeForUpgrade = func(_ context.Context, cfg config.Config, rt *DaemonRuntime) error {
+		calls++
+		assert.Equal(t, port, rt.Port)
+		assert.True(t, daemonRecordPingConfirmed(rt.Record, cfg.AuthToken))
+		return nil
+	}
+	t.Cleanup(func() { stopDaemonRuntimeForUpgrade = orig })
+	result, err := stopWritableDaemonsForUpdate(t.Context(), cfg)
+	require.NoError(t, err)
+	assert.True(t, result.Stopped)
+	assert.Equal(t, 1, calls)
+}
+
+func TestScopedConfigUpdateRejectsInvalidDeploymentAuth(t *testing.T) {
+	seedScopedConfigArchive(t)
+	t.Setenv("AGENTSVIEW_MODE", "serve")
+	t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", filepath.Join(os.Getenv("HOME"), "missing-token"))
+	_, err := loadDaemonConfigForUpdate()
+	require.ErrorContains(t, err, "AGENTSVIEW_AUTH_TOKEN_FILE")
+}
+
 func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir()}
 	installErr := errors.New("install failed")

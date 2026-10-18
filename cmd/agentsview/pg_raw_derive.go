@@ -203,7 +203,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 
 func newPGHostedProvisionCommand() *cobra.Command {
 	return &cobra.Command{Use: "hosted-provision [target]", Short: "Explicitly provision one hosted tenant schema using the configured owner connection", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.LoadMinimal()
+		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
 			return err
 		}
@@ -239,7 +239,7 @@ func newPGRawReparseCommand() *cobra.Command {
 		if runID == "" {
 			return errors.New("raw-reparse requires --run-id for its durable checkpoint")
 		}
-		cfg, err := config.LoadMinimal()
+		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
 			return err
 		}
@@ -251,7 +251,7 @@ func newPGRawReparseCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if err = pg.ValidateRawDerivation(cfg.RequireAuth); err != nil {
+		if err = cfg.ValidatePGRawDerivation(pg); err != nil {
 			return err
 		}
 		if pg.RawTenant == "" {

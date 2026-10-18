@@ -23,7 +23,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				if len(machines) != 0 {
 					return errors.New("use --list alone to inspect machine keys")
 				}
-				cfg, err := config.LoadReadOnly()
+				cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 				if err != nil {
 					return err
 				}
@@ -46,7 +46,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 			if len(machines) == 0 {
 				return errors.New("select one or more old machine keys")
 			}
-			cfg, err := config.LoadMinimal()
+			cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 			if err != nil {
 				return err
 			}

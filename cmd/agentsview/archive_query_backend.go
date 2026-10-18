@@ -75,7 +75,7 @@ func resolveArchiveQueryBackend(
 	ctx context.Context,
 	policy archiveQueryPolicy,
 ) (archiveQueryBackend, func(), error) {
-	cfg, err := config.LoadMinimal()
+	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}

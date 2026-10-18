@@ -20,7 +20,7 @@ func newArchiveCommand() *cobra.Command {
 	var identityFrom string
 	var writersStopped bool
 	captureCmd := &cobra.Command{Use: "capture DESTINATION", Short: "Copy source files and consistent databases into a new portable capture", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.LoadReadOnly()
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 		if err != nil {
 			return err
 		}
@@ -52,7 +52,7 @@ func newArchiveCommand() *cobra.Command {
 			return errors.New("--spec is required")
 		}
 		if seed {
-			cfg, err := config.LoadReadOnly()
+			cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 			if err != nil {
 				return err
 			}
@@ -80,7 +80,7 @@ func newArchiveCommand() *cobra.Command {
 	var ids []string
 	var budget int64
 	reparseCmd := &cobra.Command{Use: "reparse", Short: "Reparse selected accepted sources and publish the complete batch atomically", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg, err := config.LoadReadOnly()
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 		if err != nil {
 			return err
 		}
@@ -102,7 +102,7 @@ func newArchiveCommand() *cobra.Command {
 		})
 	}}
 	sourcesCmd := &cobra.Command{Use: "sources", Short: "List accepted generations and parse status", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg, err := config.LoadReadOnly()
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 		if err != nil {
 			return err
 		}
@@ -131,7 +131,7 @@ func newArchiveCommand() *cobra.Command {
 		}
 	}}
 	backupCmd := &cobra.Command{Use: "backup REPOSITORY", Short: "Back up the stopped archive to a Docbank repository", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.LoadReadOnly()
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 		if err != nil {
 			return err
 		}
@@ -206,7 +206,7 @@ func writeArchiveJSON(w io.Writer, value any) error {
 }
 
 func withRawArchive(cmd *cobra.Command, run func(*rawarchive.Archive) error) (retErr error) {
-	cfg, err := config.LoadReadOnly()
+	cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 	if err != nil {
 		return err
 	}

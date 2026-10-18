@@ -101,9 +101,12 @@ Add to your MCP client config (e.g. Claude Desktop):
 				// an unauthenticated remote read surface over the session
 				// archive. Loopback binds stay local-trust (no listener
 				// auth), matching the daemon.
-				cfg, err := config.LoadPFlags(cmd.Flags())
+				cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 				if err != nil {
 					return fmt.Errorf("loading config: %w", err)
+				}
+				if err := cfg.ApplyDeploymentAuth(); err != nil {
+					return fmt.Errorf("loading listener auth: %w", err)
 				}
 				// Provision a token when auth is required but none exists
 				// yet, matching serve/pg/duckdb so enabling require_auth is
@@ -231,7 +234,7 @@ func resolveMCPService(
 		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -240,7 +243,13 @@ func resolveMCPService(
 		return nil, nil, err
 	}
 	if usePG {
+		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
+			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
+		}
 		return newPGReadService(cfg, pgCfg)
+	}
+	if err := cfg.ApplyDeploymentAuth(); err != nil {
+		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)
 	}
 	return newMCPDaemonService(cfg), func() {}, nil
 }

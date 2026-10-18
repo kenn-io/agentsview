@@ -1882,6 +1882,7 @@ func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
 	require.NoError(t, err)
+	writeTestConfig(t, dir, "host='0.0.0.0'\n")
 	setTestVersion(t, "1.1.0")
 
 	stopCalls := 0

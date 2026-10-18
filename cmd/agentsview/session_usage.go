@@ -117,7 +117,7 @@ func sessionUsageDataForCommand(
 		}
 		return httpSessionUsageData(ctx, remote, token, query)
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}

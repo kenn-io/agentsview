@@ -231,7 +231,7 @@ func resolveInsightTransport(
 		}, token, nil
 	}
 
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return transport{}, "", fmt.Errorf("loading config: %w", err)
 	}

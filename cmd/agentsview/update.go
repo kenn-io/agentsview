@@ -171,8 +171,11 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 }
 
 func loadDaemonConfigForUpdate() (config.Config, error) {
-	cfg, err := config.LoadReadOnly()
+	cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 	if err == nil {
+		if err := cfg.ApplyDeploymentAuth(); err != nil {
+			return cfg, err
+		}
 		return cfg, nil
 	}
 	dataDir, dirErr := config.ResolveDataDir()

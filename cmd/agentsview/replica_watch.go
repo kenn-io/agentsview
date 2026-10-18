@@ -272,6 +272,9 @@ func resolveWatchTarget(
 	if err := backend.ValidateTarget(target.Target); err != nil {
 		return storage.ConfiguredReplica{}, nil, nil, err
 	}
+	if err := validateReplicaPushVectors(appCfg, cfg, target.Target.PushVectors); err != nil {
+		return storage.ConfiguredReplica{}, nil, nil, err
+	}
 	projects, exclude, err = resolvePushProjects(target, cfg)
 	if err != nil {
 		return storage.ConfiguredReplica{}, nil, nil, err
@@ -293,7 +296,7 @@ func runReplicaPushWatch(
 	targetName string,
 ) error {
 	name := backend.Name()
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &cfg))
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

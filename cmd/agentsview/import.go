@@ -32,7 +32,7 @@ func importSessions(cfg ImportConfig) error {
 	}
 	cfg.Path = expandedPath
 
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

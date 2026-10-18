@@ -15,7 +15,7 @@ func newExportRangeCommand(deps exportReportingDeps) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			appConfig, err := config.LoadPFlags(cmd.Flags())
+			appConfig, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}

@@ -769,6 +769,8 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 
 func TestEnsureTransport_ArchiveWriteRejectsUnsafeOlderDaemonRestart(t *testing.T) {
 	dir := daemonRuntimeDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	writeTestConfig(t, dir, "host='0.0.0.0'\n")
 	host, port := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
 
@@ -873,6 +875,8 @@ func TestEnsureTransport_ArchiveWriteRefusesUnauthenticatedNonLoopbackAutoStart(
 	t *testing.T,
 ) {
 	dir := daemonRuntimeDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	writeTestConfig(t, dir, "host='0.0.0.0'\n")
 	cfg := config.Config{DataDir: dir, Host: "0.0.0.0"}
 	forbidStartBackgroundServeForTransport(t,
 		"unsafe auto-start must be rejected before launch")
@@ -889,6 +893,8 @@ func TestEnsureTransport_ArchiveWriteAllowsAuthenticatedNonLoopbackAutoStart(
 	t *testing.T,
 ) {
 	dir := daemonRuntimeDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	writeTestConfig(t, dir, "host='0.0.0.0'\nrequire_auth=true\n")
 	cfg := config.Config{
 		DataDir:     dir,
 		Host:        "0.0.0.0",

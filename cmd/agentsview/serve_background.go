@@ -417,6 +417,25 @@ func prepareBackgroundReplacement(ctx context.Context,
 	return nil
 }
 
+// Implicit launches re-exec serve with cfg.DataDir and no server config flags.
+// Validate what that child will load before stopping a healthy incumbent.
+func prepareAutoStartReplacement(ctx context.Context, cfg *config.Config, rt *DaemonRuntime) error {
+	effective, err := config.LoadReadOnlyAt(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("loading replacement config: %w", err)
+	}
+	// Preserve the caller's archive check and discovery credentials. Runtime
+	// NoSync adoption must reach the child arguments after validation.
+	effective.DBPath = cfg.DBPath
+	effective.AuthToken = cfg.AuthToken
+	effective.NoSync = cfg.NoSync
+	if err := prepareBackgroundReplacement(ctx, &effective, rt, true); err != nil {
+		return err
+	}
+	cfg.NoSync = effective.NoSync
+	return nil
+}
+
 func ensureBackgroundServe(
 	ctx context.Context,
 	cfg *config.Config,
@@ -506,7 +525,7 @@ probeDaemon:
 			if serveReplacementTargetChanged(*cfg, rt) {
 				goto probeDaemon
 			}
-			if err := prepareBackgroundReplacement(ctx, cfg, rt, true); err != nil {
+			if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
 				return nil, err
 			}
 			if err := stopDaemonRuntimeForUpgrade(ctx, *cfg, rt); err != nil {
@@ -541,7 +560,7 @@ probeDaemon:
 			if serveReplacementTargetChanged(*cfg, rt) {
 				goto probeDaemon
 			}
-			if err := prepareBackgroundReplacement(ctx, cfg, rt, true); err != nil {
+			if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
 				return nil, err
 			}
 			if stopErr := stopDaemonRuntimeForUpgrade(ctx, *cfg, rt); stopErr != nil {
@@ -588,7 +607,7 @@ probeDaemon:
 				if serveReplacementTargetChanged(*cfg, rt) {
 					goto probeDaemon
 				}
-				if err := prepareBackgroundReplacement(ctx, cfg, rt, true); err != nil {
+				if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
 					return nil, err
 				}
 				if stopErr := stopDaemonRuntimeForUpgrade(ctx, *cfg, rt); stopErr != nil {

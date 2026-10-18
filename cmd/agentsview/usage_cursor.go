@@ -52,7 +52,7 @@ func newUsageCursorCommand() *cobra.Command {
 }
 
 func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return err
 	}

@@ -111,7 +111,7 @@ func resolveDoctorMemoryService(
 	}
 	// Diagnostics must not generate installation identity or cursor-secret
 	// state. Both local and PostgreSQL reads begin with the read-only loader.
-	cfg, err := config.LoadReadOnly()
+	cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -122,6 +122,9 @@ func resolveDoctorMemoryService(
 		}
 		if !usePG {
 			return nil, nil, errors.New("doctor memory: PostgreSQL target was not selected")
+		}
+		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
+			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
 		return newPGReadService(cfg, pgCfg)
 	}

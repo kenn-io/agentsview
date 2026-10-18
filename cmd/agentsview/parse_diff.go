@@ -116,7 +116,7 @@ func doParseDiff(ctx context.Context, cfg ParseDiffConfig) (failed bool) {
 		fatal("%v", err)
 	}
 
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		fatal("loading config: %v", err)
 	}

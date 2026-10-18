@@ -30,7 +30,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 }
 
 func runRawSyncCleanUploads() (err error) {
-	appCfg, err := config.LoadMinimal()
+	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
