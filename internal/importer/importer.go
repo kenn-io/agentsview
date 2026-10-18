@@ -710,7 +710,7 @@ func compareChatGPTPrefix(
 	}
 	for i := range existing {
 		a, b := existing[i], incoming[i]
-		if !sameTurn(a, b) {
+		if !sameTurn(a, b) || a.SourceUUID != "" && b.SourceUUID != "" && a.SourceUUID != b.SourceUUID {
 			return nil, false
 		}
 		extended := db.IsTextExtension(a.Content, b.Content)
