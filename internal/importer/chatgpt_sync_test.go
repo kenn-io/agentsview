@@ -108,6 +108,43 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID), "replacements without pin or image loss make no copy")
 }
 
+func TestSyncChatGPTMissingCreateTime(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		zipImport bool
+		wantStart string
+	}{
+		{name: "preserve ZIP start", zipImport: true, wantStart: "2024-01-31T00:00:00Z"},
+		{name: "use first message", wantStart: "2024-02-01T00:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			if tc.zipImport {
+				dir := t.TempDir()
+				body := strings.Replace(chatGPTSyncDetail(1706745710, false, "Question"), `"create_time":1706745600.0`, `"create_time":1706659200.0`, 1)
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations.json"), []byte("["+body+"]"), 0o600))
+				stats, err := ImportChatGPT(t.Context(), d, dir, t.TempDir(), nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, stats.Imported)
+				stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				require.Equal(t, new(tc.wantStart), stored.StartedAt)
+			}
+			detail := strings.Replace(chatGPTSyncDetail(1706745711, false, "Question"), `"create_time":1706745600.0`, `"create_time":null`, 1)
+			details := 0
+			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", detail, &details), nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, details)
+			stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, new(tc.wantStart), stored.StartedAt)
+		})
+	}
+}
+
 func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
@@ -361,7 +398,7 @@ func chatGPTSyncCapturedDetail(t *testing.T, id string, updated float64) string 
 	require.NoError(t, json.Unmarshal([]byte(chatGPTSyncDetail(updated, false, "Question")), &detail))
 	return fmt.Sprintf(`{
 		"title":null,
-		"create_time":null,
+		"create_time":1787016340.016941,
 		"update_time":%g,
 		"moderation_results":[],
 		"plugin_ids":[],
