@@ -64,12 +64,12 @@ async function request({ id, path, platform }, port) {
     });
     if (typeof reply?.result?.status !== "number")
       throw new Error("The browser page changed during Sync; try Sync again");
-    result = { ...reply.result, id, platform, version };
+    result = { ...reply.result, id, version };
   } catch (error) {
-    result = { id, platform, version, status: 0, error: error.message };
+    result = { id, version, status: 0, error: error.message };
   }
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 64 * 1024 * 1024)
-    result = { id, platform, version, status: 413 };
+    result = { id, version, status: 413 };
   try {
     port.postMessage(result);
   } catch {

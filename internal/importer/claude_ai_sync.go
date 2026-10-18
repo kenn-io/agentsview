@@ -40,7 +40,11 @@ const (
 )
 
 func claudeAIRequest(shape int, organization, conversation string, offset int) string {
-	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
+	return browserRequest(claudeAIRequests, shape, "{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset))
+}
+
+func browserRequest(shapes string, shape int, substitutions ...string) string {
+	return strings.NewReplacer(substitutions...).Replace(strings.Split(strings.TrimSpace(shapes), "\n")[shape])
 }
 
 // claudeAICountsMarker refreshes usage-only fingerprints that cached a shorter
@@ -53,8 +57,12 @@ func claudeAICountsMarker(store db.Store) string {
 }
 
 func claudeAIFreshness(store db.Store, updatedAt, leaf string, session *db.Session) uint64 {
+	return browserFreshness(claudeAICountsMarker(store)+updatedAt+"\x00"+leaf, session)
+}
+
+func browserFreshness(marker string, session *db.Session) uint64 {
 	hash := fnv.New64a()
-	fmt.Fprintf(hash, "%s%s\x00%s\x00%d", claudeAICountsMarker(store), updatedAt, leaf, session.MessageCount)
+	fmt.Fprintf(hash, "%s\x00%d", marker, session.MessageCount)
 	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
 		fmt.Fprint(hash, "\x00")
 		if field != nil {
@@ -347,11 +355,15 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		return status, err
 	}
+	return replaceSyncedConversation(ctx, store, result, msgs)
+}
+
+func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message) (importStatus, error) {
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
 		return importUpdated, errors.New("store cannot preserve replaced chats")
 	}
-	_, err = replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
+	_, err := replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
 		Session: chatGPTSession(result.Session), Messages: msgs,
 		KeepTrashedCopyOnlyOnPinLoss: true,
 	})
