@@ -951,6 +951,7 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 				before, err := d.GetAllMessages(t.Context(), "chatgpt:"+id)
 				require.NoError(t, err)
 				require.NotEmpty(t, before)
+				preventChatGPTMessageIDReuse(t, d)
 				assert.Contains(t, strings.Join(messageContents(before), "\n"), "![image](")
 				// Append a user turn to the same export graph; browser parsing has no assets.
 				mapping := conversation["mapping"].(map[string]any)
@@ -1017,6 +1018,7 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, before, 1)
 			require.Contains(t, before[0].Content, "asset://")
+			preventChatGPTMessageIDReuse(t, d)
 			if tc.regenerate {
 				body = strings.Replace(body, `"id":"m1"`, `"id":"m2"`, 1)
 			}
