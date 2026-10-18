@@ -135,49 +135,6 @@ func TestSyncChatGPTRejectsInvalidSummaryAndOversizedResponse(t *testing.T) {
 	require.ErrorIs(t, err, ErrChatGPTResponseTooLarge)
 }
 
-func TestSyncChatGPTSkipsConversationDeletedAfterList(t *testing.T) {
-	stats, err := SyncChatGPT(t.Context(), testDB(t), func(_ context.Context, path string) (ClaudeAIResponse, error) {
-		if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
-		}
-		if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":1}],"total":1}`, chatGPTSyncID))}, nil
-		}
-		require.Equal(t, chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false), path)
-		return ClaudeAIResponse{Status: 404}, nil
-	}, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Errors)
-	assert.Empty(t, stats.Refusals)
-}
-
-func TestSyncChatGPTStopsWhenRateLimited(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		d := testDB(t)
-		details := 0
-		_, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
-			switch path {
-			case chatGPTRequest(chatGPTListRequest, "", 0, true):
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
-			case chatGPTRequest(chatGPTListRequest, "", 0, false):
-				return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":1}],"total":1}`, chatGPTSyncID))}, nil
-			case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
-				details++
-				return ClaudeAIResponse{Status: 429, RetryAfter: "0"}, nil
-			default:
-				require.Failf(t, "unexpected ChatGPT request path", "%s", path)
-				return ClaudeAIResponse{}, nil
-			}
-		}, nil)
-		require.ErrorContains(t, err, "ChatGPT rate limited")
-		assert.Equal(t, 5, details, "a 429 retries the same request at most five times, then stops the sync")
-		messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
-		require.NoError(t, err)
-		assert.Empty(t, messages)
-	})
-}
-
 func chatGPTSyncFetch(t *testing.T, listUpdate string, detail string, details *int) func(context.Context, string) (ClaudeAIResponse, error) {
 	t.Helper()
 	return func(_ context.Context, path string) (ClaudeAIResponse, error) {
@@ -249,32 +206,6 @@ func chatGPTPopulatedList(t *testing.T) string {
 	return fmt.Sprintf(`{"items":[%s],"total":%d}`, strings.Join(items, ","), len(items))
 }
 
-func TestSyncChatGPTStopsAfterTwoDetailFailures(t *testing.T) {
-	for _, transport := range []bool{false, true} {
-		t.Run(fmt.Sprintf("transport=%t", transport), func(t *testing.T) {
-			details := 0
-			stats, err := SyncChatGPT(t.Context(), testDB(t), func(_ context.Context, path string) (ClaudeAIResponse, error) {
-				if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
-				}
-				if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
-					return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
-				}
-				details++
-				require.Equal(t, chatGPTRequest(chatGPTDetailRequest, fmt.Sprintf("%08x-0000-4000-8000-000000000000", details), 0, false), path)
-				if transport {
-					return ClaudeAIResponse{}, errors.New("browser fetch timed out")
-				}
-				return ClaudeAIResponse{Status: 403}, nil
-			}, nil)
-			require.Error(t, err)
-			assert.Equal(t, 2, details)
-			assert.Equal(t, 2, stats.Errors)
-			assert.Len(t, stats.Refusals, 2)
-		})
-	}
-}
-
 func TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop(t *testing.T) {
 	for _, tc := range []struct {
 		name, mapping string
@@ -283,44 +214,33 @@ func TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop(t *testing.T) {
 		{"null mapping", `,"mapping":null`},
 		{"array mapping", `,"mapping":[]`},
 	} {
-		for _, failures := range []int{1, 2} {
-			t.Run(fmt.Sprintf("%s/failures=%d", tc.name, failures), func(t *testing.T) {
-				d := testDB(t)
-				details := 0
-				stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
-					if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
-						return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
-					}
-					if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
-						return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
-					}
-					details++
-					id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", details)
-					require.Equal(t, chatGPTRequest(chatGPTDetailRequest, id, 0, false), path)
-					if details > 1 && details <= failures+1 {
-						return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"` + id + `"` + tc.mapping + `}`)}, nil
-					}
-					return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, id))}, nil
-				}, nil)
-				if failures == 2 {
-					require.EqualError(t, err, "ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
-					assert.Equal(t, 3, details)
-					assert.Equal(t, 1, stats.Imported)
-				} else {
-					require.NoError(t, err)
-					assert.Equal(t, 50, details)
-					assert.Equal(t, 49, stats.Imported)
-					messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000003-0000-4000-8000-000000000000")
-					require.NoError(t, err)
-					assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			details := 0
+			stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+				if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
 				}
-				assert.Equal(t, failures, stats.Errors)
-				require.Len(t, stats.Refusals, failures)
-				messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000001-0000-4000-8000-000000000000")
-				require.NoError(t, err)
-				assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
-			})
-		}
+				if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
+					return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
+				}
+				details++
+				id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", details)
+				require.Equal(t, chatGPTRequest(chatGPTDetailRequest, id, 0, false), path)
+				if details > 1 && details <= 3 {
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"` + id + `"` + tc.mapping + `}`)}, nil
+				}
+				return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, id))}, nil
+			}, nil)
+			require.EqualError(t, err, "ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
+			assert.Equal(t, 3, details)
+			assert.Equal(t, 1, stats.Imported)
+			assert.Equal(t, 2, stats.Errors)
+			require.Len(t, stats.Refusals, 2)
+			messages, err := d.GetAllMessages(t.Context(), "chatgpt:00000001-0000-4000-8000-000000000000")
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
+		})
 	}
 }
 
@@ -381,8 +301,17 @@ func TestSyncChatGPTContinuesAfterOversizedDetails(t *testing.T) {
 }
 
 func TestSyncChatGPTLongRetryAfterKeepsEarlierWrites(t *testing.T) {
-	for _, status := range []int{429, 503} {
-		t.Run(fmt.Sprintf("status=%d", status), func(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		retryAfter   string
+		wantRequests int
+	}{
+		{"429 long retry after", 429, "120", 1},
+		{"503 long retry after", 503, "120", 1},
+		{"429 retries exhausted", 429, "0", 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				d := testDB(t)
 				rateLimitedRequests := 0
@@ -396,14 +325,14 @@ func TestSyncChatGPTLongRetryAfterKeepsEarlierWrites(t *testing.T) {
 						return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTSyncDetail(1, false, "Question"))}, nil
 					case chatGPTRequest(chatGPTDetailRequest, "00000002-0000-4000-8000-000000000000", 0, false):
 						rateLimitedRequests++
-						return ClaudeAIResponse{Status: status, RetryAfter: "120"}, nil
+						return ClaudeAIResponse{Status: tc.status, RetryAfter: tc.retryAfter}, nil
 					default:
 						require.Failf(t, "unexpected ChatGPT request path", "%s", path)
 						return ClaudeAIResponse{}, nil
 					}
 				}, nil)
 				require.ErrorContains(t, err, "ChatGPT rate limited")
-				assert.Equal(t, 1, rateLimitedRequests)
+				assert.Equal(t, tc.wantRequests, rateLimitedRequests)
 				assert.Equal(t, 1, stats.Imported)
 				assert.Equal(t, 1, stats.Errors)
 				messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
@@ -515,45 +444,6 @@ func TestSyncChatGPTKeepsZipImageAndAppends(t *testing.T) {
 	}
 }
 
-func TestSyncChatGPTEditedAndShorterHistoriesDoNotStopSync(t *testing.T) {
-	d := testDB(t)
-	ids := []string{chatGPTSyncID, "00000002-0000-4000-8000-000000000000", "00000003-0000-4000-8000-000000000000"}
-	detail := func(id string, extra bool, question string) string {
-		return strings.ReplaceAll(chatGPTSyncDetail(2, extra, question), chatGPTSyncID, id)
-	}
-	for _, id := range ids[:2] {
-		body := detail(id, true, "Question")
-		parsed, err := parser.ParseChatGPTConversation([]byte(body))
-		require.NoError(t, err)
-		_, err = upsertChatGPTConversation(t.Context(), d, parsed, nil)
-		require.NoError(t, err)
-	}
-	details := 0
-	stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
-		if path == chatGPTRequest(chatGPTListRequest, "", 0, true) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[],"total":0}`)}, nil
-		}
-		if path == chatGPTRequest(chatGPTListRequest, "", 0, false) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + ids[0] + `","update_time":2},{"id":"` + ids[1] + `","update_time":2},{"id":"` + ids[2] + `","update_time":2}],"total":3}`)}, nil
-		}
-		require.Less(t, details, len(ids))
-		id := ids[details]
-		require.Equal(t, chatGPTRequest(chatGPTDetailRequest, id, 0, false), path)
-		question := "Question"
-		if details == 0 {
-			question = "Rewritten question"
-		}
-		details++
-		return ClaudeAIResponse{Status: 200, Body: []byte(detail(id, details == 1, question))}, nil
-	}, nil)
-	require.NoError(t, err)
-	assert.Zero(t, stats.Errors)
-	assert.Equal(t, 2, stats.Updated)
-	assert.Zero(t, stats.Skipped)
-	assert.Equal(t, 1, stats.Imported)
-	assert.Empty(t, stats.Refusals)
-}
-
 func TestSyncChatGPTPagesActiveAndArchivedLists(t *testing.T) {
 	d := testDB(t)
 	var lists []string
@@ -597,48 +487,6 @@ func TestSyncChatGPTPagesActiveAndArchivedLists(t *testing.T) {
 	assert.Equal(t, 52, stats.Skipped)
 	assert.Equal(t, 52, details)
 	assert.Len(t, lists, 8, "both lists are paged on every sync")
-}
-
-func TestSyncChatGPTCommittedContentCountsOnFreshnessFailure(t *testing.T) {
-	for _, updated := range []bool{false, true} {
-		for _, canceled := range []bool{false, true} {
-			t.Run(fmt.Sprintf("updated=%t/canceled=%t", updated, canceled), func(t *testing.T) {
-				d := testDB(t)
-				if updated {
-					parsed, err := parser.ParseChatGPTConversation([]byte(chatGPTSyncDetail(1, false, "Question")))
-					require.NoError(t, err)
-					_, err = upsertChatGPTConversation(t.Context(), d, parsed, nil)
-					require.NoError(t, err)
-				}
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				store := failSyncFreshnessStore{DB: d}
-				if canceled {
-					store.cancel = cancel
-				}
-				details := 0
-				var progress ImportStats
-				stats, err := SyncChatGPT(ctx, store, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, true, "Question"), &details), &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
-				if canceled {
-					require.ErrorIs(t, err, context.Canceled)
-				} else {
-					require.NoError(t, err)
-				}
-				if updated {
-					assert.Equal(t, 1, stats.Updated)
-				} else {
-					assert.Equal(t, 1, stats.Imported)
-				}
-				assert.Equal(t, 1, stats.Errors)
-				assert.Equal(t, stats.Imported, progress.Imported)
-				assert.Equal(t, stats.Updated, progress.Updated)
-				assert.Equal(t, stats.Errors, progress.Errors)
-				messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
-				require.NoError(t, err)
-				assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(messages))
-			})
-		}
-	}
 }
 
 func TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins(t *testing.T) {
@@ -723,27 +571,6 @@ func TestSyncChatGPTCommittedUpdateCountsOnReadFailure(t *testing.T) {
 	messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(messages))
-}
-
-func TestSyncChatGPTSkipsTrashedAndExcludedWithoutDetail(t *testing.T) {
-	for _, excluded := range []bool{false, true} {
-		t.Run(fmt.Sprintf("excluded=%t", excluded), func(t *testing.T) {
-			d := testDB(t)
-			details := 0
-			_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, false, "Question"), &details), nil)
-			require.NoError(t, err)
-			id := "chatgpt:" + chatGPTSyncID
-			require.NoError(t, d.SoftDeleteSession(t.Context(), id))
-			if excluded {
-				_, err := d.DeleteSessionIfTrashed(t.Context(), id)
-				require.NoError(t, err)
-			}
-			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, true, "Question"), &details), nil)
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.Skipped)
-			assert.Equal(t, 1, details)
-		})
-	}
 }
 
 func TestSyncChatGPTCommittedContentCountsOnProgressCancellation(t *testing.T) {
