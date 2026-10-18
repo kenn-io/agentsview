@@ -240,6 +240,15 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", chatGPTSyncDetail(1706745711, false, "Question"), &details), nil)
 	require.NoError(t, err)
 
+	id := "chatgpt:" + chatGPTSyncID
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{
+		HealthScore: new(42), QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+	}))
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), id, []db.SecretFinding{{RuleName: "test-secret", Confidence: "high", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 5, RedactedMatch: "[redacted]"}}, 1, "test-rules"))
+	findings, err := d.SessionSecretFindings(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+
 	renamed := strings.Replace(chatGPTSyncDetail(1706745712, false, "Question"), `"title":"Tool"`, `"title":"Renamed"`, 1)
 	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", renamed, &details), nil)
 	require.NoError(t, err)
@@ -252,6 +261,11 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	assert.Equal(t, "Renamed", *stored.SessionName)
 	require.NotNil(t, stored.EndedAt)
 	assert.Equal(t, "2024-02-01T00:01:52Z", *stored.EndedAt)
+	assert.Equal(t, new(42), stored.HealthScore)
+	assert.Equal(t, db.CurrentQualitySignalVersion, stored.QualitySignalVersion)
+	afterFindings, err := d.SessionSecretFindings(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, findings, afterFindings)
 	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", renamed, &details), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Skipped)
