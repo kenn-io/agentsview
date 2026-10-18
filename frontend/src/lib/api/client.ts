@@ -490,17 +490,8 @@ export async function syncChatGPTChrome(
   cb?: ImportCallbacks,
   signal?: AbortSignal,
 ): Promise<ImportStats> {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal?.addEventListener("abort", abort, { once: true });
-  if (signal?.aborted) abort();
-  try {
-    const response = await ImportService.postApiV1ImportChatgptSync({ signal: controller.signal });
-    return await readImportResponse(response, cb);
-  } finally {
-    signal?.removeEventListener("abort", abort);
-    controller.abort();
-  }
+  const response = await ImportService.postApiV1ImportChatgptSync({ signal });
+  return readImportResponse(response, cb);
 }
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {

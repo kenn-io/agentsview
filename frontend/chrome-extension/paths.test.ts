@@ -68,18 +68,29 @@ describe("Claude request allowlist", () => {
 });
 
 describe("ChatGPT request allowlist", () => {
-  const listPath = (offset: string) => `/backend-api/conversations?offset=${offset}&limit=50&order=updated`;
+  const listPath = (offset: string, archived = "false") =>
+    `/backend-api/conversations?offset=${offset}&limit=50&order=updated&is_archived=${archived}`;
   const detailPath = (id: string) => `/backend-api/conversation/${id}`;
 
-  it.each([listPath("0"), listPath("50"), detailPath("22222222-2222-4222-8222-222222222222")])(
-    "accepts %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(true),
-  );
+  it.each([
+    listPath("0"),
+    listPath("50"),
+    listPath("0", "true"),
+    listPath("50", "true"),
+    detailPath("22222222-2222-4222-8222-222222222222"),
+  ])("accepts %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(true));
 
   it.each([
     "", "/api/auth/session", "/backend-api/auth/session", "/backend-api/accounts/check",
     "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
-    listPath("-1"), listPath("1.5"), listPath("1&extra=true"), listPath("0").replace("limit=50", "limit=100"),
-    `${listPath("0")}&extra=true`, detailPath("not-a-uuid"), detailPath("../settings"),
+    listPath("0", "invalid"),
+    listPath("-1"),
+    listPath("1.5"),
+    listPath("1&extra=true"),
+    listPath("0").replace("limit=50", "limit=100"),
+    `${listPath("0")}&extra=true`,
+    detailPath("not-a-uuid"),
+    detailPath("../settings"),
     "/backend-api/conversation/22222222-2222-4222-8222-222222222222?include=all",
     "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0",
   ])("refuses %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(false));
