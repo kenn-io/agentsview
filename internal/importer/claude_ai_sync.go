@@ -222,6 +222,9 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
+		if result.Session.Agent == parser.AgentChatGPT && len(msgs) < existing.MessageCount {
+			return replaceSyncedConversation(ctx, store, result, msgs, true)
+		}
 		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
 			rows := chatGPTModelRows(archived, stored)
 			if len(rows) == 0 {
@@ -231,9 +234,6 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		status, err := upsertConversation(ctx, store, result, nil)
 		if refusalReason(err) == RefusalShorterExport {
-			if result.Session.Agent == parser.AgentChatGPT {
-				return importSkipped, nil
-			}
 			// Stored messages already match; update the selected branch's counts
 			// without replacing rows that may have pins.
 			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
