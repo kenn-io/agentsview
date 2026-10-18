@@ -3,8 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -76,46 +78,77 @@ func readChromePlatformRequest(t *testing.T, conn net.Conn, platform chromehost.
 }
 
 func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-	_, conn := testChromeConnection(t, srv)
-	const id = "22222222-2222-4222-8222-222222222222"
-	const detail = `{"id":"` + id + `","title":"Example","create_time":1700000000,"update_time":1700000001,"current_node":"a1","mapping":{"u1":{"id":"u1","message":{"id":"u1","author":{"role":"user"},"create_time":1700000000,"content":{"content_type":"text","parts":["Question"]}}},"a1":{"id":"a1","parent":"u1","message":{"id":"a1","author":{"role":"assistant"},"create_time":1700000001,"content":{"content_type":"text","parts":["Answer"]}}}}}`
-	response := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
-		req.RemoteAddr = "127.0.0.1:1234"
-		srv.mux.ServeHTTP(response, req)
-	}()
-	requestID, path := readChromePlatformRequest(t, conn, chromehost.ChatGPT)
-	require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated", path)
-	writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[{"id":"`+id+`","update_time":1700000001}],"total":1}`)
-	requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
-	require.Equal(t, "/backend-api/conversation/"+id, path)
-	writeChromeReply(t, conn, requestID, http.StatusOK, detail)
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "ChatGPT Sync did not finish")
-	}
-	require.Equal(t, http.StatusOK, response.Code)
-	assert.NotContains(t, response.Body.String(), "event: fetch")
-	assert.NotContains(t, response.Body.String(), "Question")
-	var stats importer.ImportStats
-	readImportEvents(t, response.Body, func(event, data string) {
-		require.NotEqual(t, "error", event, data)
-		if event == "done" {
-			require.NoError(t, json.Unmarshal([]byte(data), &stats))
-		}
-	})
-	assert.Equal(t, 1, stats.Imported)
+	for _, hashFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hash failure=%t", hashFailure), func(t *testing.T) {
+			mutations, recalls := 0, 0
+			srv := testServer(t, 5*time.Second,
+				WithSessionMutationNotifier(func() { mutations++ }),
+				WithRecallCorpusMutationNotifier(func() { recalls++ }),
+			)
+			if hashFailure {
+				require.NoError(t, srv.db.(*db.DB).Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), `CREATE TRIGGER fail_sync_hash BEFORE INSERT ON provider_freshness BEGIN SELECT RAISE(ABORT, 'freshness write failed'); END`)
+					return err
+				}))
+			}
+			srv.broadcaster = NewBroadcaster(0)
+			events, unsubscribe := srv.broadcaster.Subscribe()
+			defer unsubscribe()
+			_, conn := testChromeConnection(t, srv)
+			const id = "22222222-2222-4222-8222-222222222222"
+			const detail = `{"id":"` + id + `","title":"Example","create_time":1700000000,"update_time":1700000001,"current_node":"a1","mapping":{"u1":{"id":"u1","message":{"id":"u1","author":{"role":"user"},"create_time":1700000000,"content":{"content_type":"text","parts":["Question"]}}},"a1":{"id":"a1","parent":"u1","message":{"id":"a1","author":{"role":"assistant"},"create_time":1700000001,"content":{"content_type":"text","parts":["Answer"]}}}}}`
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
+				req.RemoteAddr = "127.0.0.1:1234"
+				srv.mux.ServeHTTP(response, req)
+			}()
+			requestID, path := readChromePlatformRequest(t, conn, chromehost.ChatGPT)
+			require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false", path)
+			writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[{"id":"`+id+`","update_time":1700000001}],"total":1}`)
+			requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
+			require.Equal(t, "/backend-api/conversation/"+id, path)
+			writeChromeReply(t, conn, requestID, http.StatusOK, detail)
+			requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
+			require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=true", path)
+			writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[],"total":0}`)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "ChatGPT Sync did not finish")
+			}
+			require.Equal(t, http.StatusOK, response.Code)
+			assert.NotContains(t, response.Body.String(), "event: fetch")
+			assert.NotContains(t, response.Body.String(), "Question")
+			var stats importer.ImportStats
+			readImportEvents(t, response.Body, func(event, data string) {
+				require.NotEqual(t, "error", event, data)
+				if event == "done" {
+					require.NoError(t, json.Unmarshal([]byte(data), &stats))
+				}
+			})
+			assert.Equal(t, 1, stats.Imported)
+			if hashFailure {
+				assert.Equal(t, 1, stats.Errors)
+			}
+			assert.Equal(t, 1, mutations)
+			assert.Equal(t, 1, recalls)
+			select {
+			case event := <-events:
+				assert.Equal(t, "sessions", event.Scope)
+			default:
+				require.FailNow(t, "committed chat did not broadcast")
+			}
 
-	remote := httptest.NewRecorder()
-	remoteRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
-	remoteRequest.RemoteAddr = "192.0.2.10:1234"
-	srv.mux.ServeHTTP(remote, remoteRequest)
-	assert.Equal(t, http.StatusForbidden, remote.Code)
+			remote := httptest.NewRecorder()
+			remoteRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
+			remoteRequest.RemoteAddr = "192.0.2.10:1234"
+			srv.mux.ServeHTTP(remote, remoteRequest)
+			assert.Equal(t, http.StatusForbidden, remote.Code)
+		})
+	}
 }
 
 func writeChromeReply(t *testing.T, conn net.Conn, id string, status int, body string) {
@@ -539,7 +572,7 @@ func TestChatGPTChromeSyncKeepsCompatibilityError(t *testing.T) {
 		srv.mux.ServeHTTP(response, req)
 	}()
 	requestID, path := readChromePlatformRequest(t, conn, chromehost.ChatGPT)
-	require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated", path)
+	require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false", path)
 	writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[{"id":"`+id+`","update_time":1700000001}],"total":1}`)
 	requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
 	require.Equal(t, "/backend-api/conversation/"+id, path)

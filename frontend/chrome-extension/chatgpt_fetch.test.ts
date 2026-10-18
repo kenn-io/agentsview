@@ -146,7 +146,18 @@ describe("ChatGPT page fetch", () => {
 
     await expect(
       chatgptFetch("https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated"),
-    ).resolves.toEqual({ status: 429, body: "", retryAfter: "120" });
+    ).resolves.toEqual({ status: 429, body: "{}", retryAfter: "120" });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it("caps session responses through the shared page reader", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(new Uint8Array(32 * 1024 * 1024 + 1)));
+    await expect(
+      loadFetch(fetch)(
+        "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false",
+      ),
+    ).resolves.toEqual({ status: 413, body: "" });
     expect(fetch).toHaveBeenCalledOnce();
   });
   it("returns 413 for an oversized conversation through the shared page reader", async () => {

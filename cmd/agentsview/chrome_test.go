@@ -352,7 +352,7 @@ func TestChromeSyncResults(t *testing.T) {
 			}
 			require.NotNil(t, response)
 			defer response.HTTPResponse.Body.Close()
-			stats, err := readChromeSync(response)
+			stats, err := readBrowserChromeSync(response.StatusCode, response.Body, response.Stream200)
 			if tt.wantError != "" {
 				if tt.status == http.StatusConflict {
 					require.EqualError(t, err, tt.wantError)

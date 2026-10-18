@@ -11,28 +11,14 @@ function jwtExpiryMs(token) {
 }
 
 async function chatgptFetch(url) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000);
   try {
     // Reuse the page token until shortly before it expires, so a sync does not
     // add a /api/auth/session request in front of every conversation request.
     let accessToken = globalThis.__agentsviewChatGPTToken;
     if (!accessToken || Date.now() > (globalThis.__agentsviewChatGPTTokenUntil ?? 0)) {
-      const session = await fetch("https://chatgpt.com/api/auth/session", {
-        method: "GET",
-        credentials: "include",
-        redirect: "error",
-        signal: controller.signal,
-      });
-      if (!session.ok) {
-        // Forward Retry-After so a longer cooldown from the session endpoint is honored.
-        return {
-          status: session.status,
-          body: "",
-          retryAfter: session.headers.get("retry-after") ?? undefined,
-        };
-      }
-      const auth = await session.json();
+      const session = await globalThis.claudeFetch("https://chatgpt.com/api/auth/session");
+      if (session.status < 200 || session.status >= 300) return session;
+      const auth = JSON.parse(session.body);
       accessToken = auth?.accessToken;
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         globalThis.__agentsviewChatGPTToken = undefined;
@@ -52,7 +38,5 @@ async function chatgptFetch(url) {
     return response;
   } catch (error) {
     return { status: 0, body: "", error: String(error) };
-  } finally {
-    clearTimeout(timer);
   }
 }
