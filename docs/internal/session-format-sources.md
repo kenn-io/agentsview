@@ -3907,8 +3907,9 @@ schemas keep their existing ordering behavior.
   (`is_archived=true`) conversation lists. Sync pages both lists each run.
   The [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
   checked 2026-10-17, describe a newer flat `messages` array with `page_info`
-  pagination. Sync stops on details without a `mapping` object and asks for an
-  AgentsView update; it does not parse the flat format.
+  pagination. Each detail without a `mapping` object counts toward the
+  two-consecutive-failures stop and asks for an AgentsView update; Sync does not
+  parse the flat format.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
   Stream errors use `chatgpt_auth_required` for sign-in and

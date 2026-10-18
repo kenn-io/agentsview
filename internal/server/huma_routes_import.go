@@ -134,17 +134,17 @@ type claudeAISyncResult struct {
 }
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
-	return s.syncBrowser(ctx, in.Browser == "chrome", results, browserSyncConfig{
+	return s.syncBrowser(ctx, in.Browser == "chrome", browserSyncConfig{
 		platform: chromehost.ClaudeAI, sync: func(ctx context.Context, store importer.BrowserSyncStore, fetch func(context.Context, string) (importer.ClaudeAIResponse, error), cb *importer.ImportCallbacks, machine ...string) (importer.ImportStats, error) {
 			return importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, cb, machine...)
-		}, authError: importer.ErrClaudeAIAuthRequired, label: "Claude.ai",
+		}, authError: importer.ErrClaudeAIAuthRequired, label: "Claude.ai", desktopResults: results,
 		hostRequired: "claude_ai_chrome_host_required", running: "claude_ai_sync_running",
 		authRequired: "claude_ai_auth_required", updateRequired: "claude_ai_chrome_host_update_required",
 	})
 }
 
 func (s *Server) humaSyncChatGPT(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
-	return s.syncBrowser(ctx, true, nil, browserSyncConfig{
+	return s.syncBrowser(ctx, true, browserSyncConfig{
 		platform: chromehost.ChatGPT, sync: importer.SyncChatGPT, authError: importer.ErrChatGPTAuthRequired, label: "ChatGPT",
 		hostRequired: "chrome_host_required", running: "chrome_sync_running",
 		authRequired: "chatgpt_auth_required", updateRequired: "chrome_host_update_required",
@@ -152,6 +152,7 @@ func (s *Server) humaSyncChatGPT(ctx context.Context, _ *struct{}) (*huma.Stream
 }
 
 type browserSyncConfig struct {
+	desktopResults                                      *sync.Map
 	platform                                            chromehost.Platform
 	sync                                                func(context.Context, importer.BrowserSyncStore, func(context.Context, string) (importer.ClaudeAIResponse, error), *importer.ImportCallbacks, ...string) (importer.ImportStats, error)
 	authError                                           error
@@ -159,7 +160,7 @@ type browserSyncConfig struct {
 	hostRequired, running, authRequired, updateRequired string
 }
 
-func (s *Server) syncBrowser(ctx context.Context, chrome bool, results *sync.Map, config browserSyncConfig) (*huma.StreamResponse, error) {
+func (s *Server) syncBrowser(ctx context.Context, chrome bool, config browserSyncConfig) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
 	}
@@ -195,8 +196,8 @@ func (s *Server) syncBrowser(ctx context.Context, chrome bool, results *sync.Map
 		fetch := func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
 			id := rand.Text()
 			answer := make(chan claudeAISyncResult, 1)
-			results.Store(id, answer)
-			defer results.Delete(id)
+			config.desktopResults.Store(id, answer)
+			defer config.desktopResults.Delete(id)
 			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
 				cancel()
 				return importer.ClaudeAIResponse{}, ctx.Err()

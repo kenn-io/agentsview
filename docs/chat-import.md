@@ -235,7 +235,8 @@ the existing ChatGPT parser, and appends compatible history to the existing
 `chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync
 replaces the archive with ChatGPT's visible branch, including shorter histories.
 If that would lose a pin or note, Sync keeps the previous version in Trash, as
-Claude.ai Sync does. Sync requires a `mapping` object in each conversation.
+Claude.ai Sync does. A conversation without a `mapping` object counts as one
+failed detail and reports that AgentsView needs an update.
 ChatGPT's private API can change without notice; sign in again if Sync reports
 that authentication expired.
 
