@@ -56,7 +56,8 @@ func TestDialogueClickHouseBackfillsExistingPushCursor(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Full)
 	assert.Zero(t, result.Errors)
-	assert.Equal(t, 1, result.SessionsPushed)
+	assert.Equal(t, 3, result.SessionsPushed, "a fresh full push rewrites every fixture session")
+	assert.Zero(t, result.SkippedUnchanged)
 	var dialogue string
 	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT dialogue_text FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID).Scan(&dialogue))
 	assert.Equal(t, "answerneedle", dialogue)
@@ -102,4 +103,29 @@ func TestDialogueClickHouseHybridKeywordSnippets(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDialogueReparseClickHouseRepushesSession(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	require.NoError(t, local.SetSessionDataVersion(ctx, fixtureAlphaID, 139))
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	// The source file and rendered content stay unchanged during a scoped
+	// reparse. Ordinary sync writes messages before stamping the parser version.
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages[0].DialogueText = new("answerneedle")
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, messages))
+	require.NoError(t, local.SetSessionDataVersion(ctx, fixtureAlphaID, db.CurrentDataVersion()))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Full)
+	assert.Zero(t, result.Errors)
+	assert.Equal(t, 1, result.SessionsPushed)
+	var dialogue string
+	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT dialogue_text FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID).Scan(&dialogue))
+	assert.Equal(t, "answerneedle", dialogue)
 }

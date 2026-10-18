@@ -65,12 +65,10 @@ func TestDuckDBFingerprintTracksNullableDialogue(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
-	session, err := local.GetSession(ctx, "sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, session)
+	session := syncSession("sess-1", "alpha", "first sess-1", "2026-02-01T00:01:00.000Z", 2)
 	fingerprint := func() string {
 		t.Helper()
-		got, err := syncer.sessionFingerprints(ctx, []db.Session{*session})
+		got, err := syncer.sessionFingerprints(ctx, []db.Session{session})
 		require.NoError(t, err)
 		return got[session.ID]
 	}
@@ -82,6 +80,8 @@ func TestDuckDBFingerprintTracksNullableDialogue(t *testing.T) {
 		}))
 	}
 	legacy := fingerprint()
+	// Captured before dialogue was included in the fingerprint.
+	assert.Equal(t, "b6e55aa9c8b15a4a4956218861f7f150e45f9829d198b149d25442f555cf373e", legacy)
 	setDialogue(1, new("answerneedle"))
 	first := fingerprint()
 	assert.NotEqual(t, legacy, first)
@@ -97,18 +97,19 @@ func TestDuckDBFingerprintTracksNullableDialogue(t *testing.T) {
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.SetSessionDataVersion(ctx, "sess-1", 139))
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	for _, dialogue := range []string{"answerneedle", "updatedneedle", ""} {
 		t.Run(dialogue, func(t *testing.T) {
-			// Keep every fingerprinted session scalar unchanged. Rewind only the
-			// mirror cursor so this session is considered an incremental candidate.
-			require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `UPDATE messages SET dialogue_text = ? WHERE session_id = 'sess-1' AND ordinal = 1`, dialogue)
-				return err
-			}))
-			setMirrorMetadataValue(t, path, lastPushCutoffMetadataKey, "2000-01-01T00:00:00.000Z")
+			// Ordinary sync writes the reparse, then stamps its parser version.
+			// The stamp advances local_modified_at even for dialogue-only changes.
+			messages, err := local.GetAllMessages(ctx, "sess-1")
+			require.NoError(t, err)
+			messages[1].DialogueText = new(dialogue)
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
+			require.NoError(t, local.SetSessionDataVersion(ctx, "sess-1", db.CurrentDataVersion()))
 			result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.False(t, result.Diagnostics.Full)

@@ -42,17 +42,6 @@ func (s *Sync) sessionFingerprints(
 
 func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, error) {
 	sess := snapshot.Session
-	// DialogueText is excluded from Message JSON. Omit all-NULL dialogue so
-	// sessions without projections retain their previous fingerprints.
-	var dialogue []*string
-	for i, m := range snapshot.Messages {
-		if m.DialogueText != nil {
-			if dialogue == nil {
-				dialogue = make([]*string, len(snapshot.Messages))
-			}
-			dialogue[i] = m.DialogueText
-		}
-	}
 	payload := struct {
 		SessionFields  []any
 		Messages       []db.Message
@@ -67,7 +56,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 	}{
 		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
 		Messages:       snapshot.Messages,
-		Dialogue:       dialogue,
+		Dialogue:       db.DialogueFingerprintValues(snapshot.Messages),
 		Usage:          snapshot.UsageFingerprint,
 		ToolCalls:      snapshot.ToolCallFingerprint,
 		SecretFindings: snapshot.Findings,
