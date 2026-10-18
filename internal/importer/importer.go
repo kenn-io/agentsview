@@ -533,12 +533,14 @@ func chatGPTMessages(
 			Timestamp: m.Timestamp.UTC().Format(
 				time.RFC3339Nano,
 			),
-			HasThinking:   m.HasThinking,
-			HasToolUse:    m.HasToolUse,
-			ContentLength: m.ContentLength,
-			IsSystem:      m.IsSystem,
-			Model:         m.Model,
-			ToolCalls:     convertToolCalls(sessionID, m.ToolCalls),
+			HasThinking:      m.HasThinking,
+			HasToolUse:       m.HasToolUse,
+			ContentLength:    m.ContentLength,
+			IsSystem:         m.IsSystem,
+			Model:            m.Model,
+			ToolCalls:        convertToolCalls(sessionID, m.ToolCalls),
+			SourceUUID:       m.SourceUUID,
+			SourceParentUUID: m.SourceParentUUID,
 		}
 	}
 	return msgs

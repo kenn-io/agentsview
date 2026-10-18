@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -440,6 +441,110 @@ func TestSyncChatGPTKeepsZipImageAndAppends(t *testing.T) {
 			unchanged, err := d.GetAllMessages(t.Context(), "chatgpt:"+id)
 			require.NoError(t, err)
 			assert.Contains(t, unchanged[0].Content, "Changed text:")
+		})
+	}
+}
+
+func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
+	for _, tc := range []struct {
+		name, role, text         string
+		regenerate, changedTime  bool
+		changedParent, missingID bool
+	}{
+		{name: "regenerated assistant image", role: "assistant", text: "See this:", regenerate: true},
+		{name: "different user branch with identical timestamp", role: "user", text: "See this:", regenerate: true},
+		{name: "different user turn", role: "user", text: "See this:", changedTime: true},
+		{name: "different parent", role: "user", text: "See this:", changedParent: true},
+		{name: "missing identity", role: "user", text: "See this:", missingID: true},
+		{name: "literal markdown and attachment", role: "user", text: "![image](https://example.com/image.png)"},
+		{name: "control character", role: "user", text: `See\u0001 this:`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			dir := t.TempDir()
+			export := testjsonl.ChatGPTImageExport()
+			body := strings.ReplaceAll(export["conversations-000.json"], "cg-1", chatGPTSyncID)
+			body = strings.Replace(body, `"role":"user"`, `"role":"`+tc.role+`"`, 1)
+			body = strings.Replace(body, "See this:", tc.text, 1)
+			if tc.missingID {
+				body = strings.Replace(body, `"id":"m1",`, "", 1)
+			}
+			export["conversations-000.json"] = body
+			for name, data := range export {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600))
+			}
+			stats, err := ImportChatGPT(t.Context(), d, dir, t.TempDir(), nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			before, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+			require.Contains(t, before[0].Content, "asset://")
+			if tc.regenerate {
+				body = strings.Replace(body, `"id":"m1"`, `"id":"m2"`, 1)
+			}
+			if tc.regenerate || tc.changedTime {
+				body = strings.Replace(body, "file-service://file-img1", "file-service://file-img2", 1)
+				body = strings.Replace(body, `"update_time":1706745660.0`, `"update_time":1706745720.0`, 1)
+			}
+			if tc.changedTime {
+				body = strings.Replace(body, `"id":"m1","create_time":1706745600.0,`, `"id":"m1","create_time":1706745720.0,`, 1)
+			}
+			if tc.changedParent {
+				body = strings.Replace(body, `"parent":"r"`, `"parent":null`, 1)
+			}
+			detail := strings.TrimSuffix(strings.TrimPrefix(body, "["), "]")
+			details := 0
+			_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745720", detail, &details), nil)
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.Len(t, after, 1)
+			if tc.regenerate || tc.changedTime || tc.changedParent || tc.missingID {
+				assert.Equal(t, "See this:\n[image unavailable]", after[0].Content)
+			} else {
+				assert.Equal(t, before[0].Content, after[0].Content)
+				assert.Equal(t, before[0].ContentLength, after[0].ContentLength)
+				assert.Equal(t, before[0].ID, after[0].ID)
+			}
+		})
+	}
+}
+
+func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name, initial, later string
+	}{
+		{"additional call", chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Run print(42)"}, chatGPTNodeSpec{"assistant", "text", "Running it."}), chatGPTToolRunConv("42", false)},
+		{"changed result", chatGPTToolRunConv("41", false), chatGPTToolRunConv("42", false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			details := 0
+			for i, body := range []string{tc.initial, tc.later} {
+				body = strings.ReplaceAll(body, "cg-tool", chatGPTSyncID)
+				body = strings.Replace(body, `"update_time":1706745710.0`, fmt.Sprintf(`"update_time":%d`, i+1), 1)
+				body = strings.TrimSuffix(strings.TrimPrefix(body, "["), "]")
+				_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, strconv.Itoa(i+1), body, &details), nil)
+				require.NoError(t, err)
+				if i == 0 {
+					messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					_, err = d.PinMessage(t.Context(), "chatgpt:"+chatGPTSyncID, messages[1].ID, nil)
+					require.NoError(t, err)
+				}
+			}
+			messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			require.Len(t, messages[1].ToolCalls, 1)
+			assert.Equal(t, "code_interpreter", messages[1].ToolCalls[0].ToolName)
+			assert.Contains(t, messages[1].ToolCalls[0].ResultContent, "42")
+			pins, err := d.ListPinnedMessages(t.Context(), "chatgpt:"+chatGPTSyncID, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, 1, pins[0].Ordinal)
 		})
 	}
 }

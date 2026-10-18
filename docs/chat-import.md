@@ -246,9 +246,11 @@ conversations do not count toward that stop. A rate limit that lasts through
 retries, or a requested wait longer than 60 seconds, ends Sync early. Completed
 conversations stay imported. Run Sync again later to continue.
 
-Images appear as `[image unavailable]`. If a ZIP import already stored an image,
-Sync keeps that reference when the surrounding text matches and can append new
-turns. ZIP imports follow the usual append and refusal rules.
+Images appear as `[image unavailable]`. Sync can keep a ZIP-imported upload when
+the user turn's saved message ID, parent, timestamp, and surrounding text match.
+Uploads archived without these identities lose their image reference on Sync.
+Generated images use the browser snapshot, so regenerating an image clears the
+old reference. ZIP imports follow the usual append and refusal rules.
 
 ## Importing via the CLI
 

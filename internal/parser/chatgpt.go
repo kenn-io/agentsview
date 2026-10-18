@@ -297,6 +297,10 @@ func buildChatGPTMessages(
 				Content:       content,
 				Timestamp:     unixFloatToTime(msg.CreateTime),
 				ContentLength: len(content),
+				SourceUUID:    msg.ID,
+			}
+			if node.Parent != nil {
+				pm.SourceParentUUID = *node.Parent
 			}
 			msgs = append(msgs, pm)
 			lastAsstID = -1
