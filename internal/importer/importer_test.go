@@ -1449,116 +1449,94 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 }
 
 func TestImportChatGPTReimportLegacyRows(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	const id = "chatgpt:cg-tool"
-	// Seed the row shape written before source identities were archived.
-	_, err := d.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session: db.Session{ID: id, Agent: "chatgpt", Project: "ChatGPT", Machine: "web"},
-		Messages: []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z"},
-			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Answer", ContentLength: 6, Timestamp: "2024-02-01T00:00:10Z", Model: "old-model"},
-		},
-	}})
-	require.NoError(t, err)
-	before, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, before, 2)
-	preventChatGPTMessageIDReuse(t, d)
-	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
-	require.NoError(t, err)
-	body := chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Question"}, chatGPTNodeSpec{"assistant", "text", "Answer"})
-	body = strings.ReplaceAll(body, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
-	dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": body}))
-	require.NoError(t, err)
-	defer cleanup()
-	stats, err := ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
-	require.NoError(t, err)
-	// A ZIP re-import leaves source identities and models to Sync.
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Updated)
-	assert.Zero(t, stats.Errors)
-	assert.Empty(t, stats.Refusals)
-	after, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, after, 2)
-	for i := range after {
-		assert.Equal(t, before[i].ID, after[i].ID)
+	for _, legacy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			id := "chatgpt:" + chatGPTSyncID
+			var stats ImportStats
+			var err error
+			var body, detail, legacyDetail string
+			details := 0
+			if legacy {
+				id = "chatgpt:cg-tool"
+				// Seed the row shape written before source identities were archived.
+				_, err = d.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+					Session: db.Session{ID: id, Agent: "chatgpt", Project: "ChatGPT", Machine: "web"},
+					Messages: []db.Message{
+						{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z"},
+						{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Answer", ContentLength: 6, Timestamp: "2024-02-01T00:00:10Z", Model: "old-model"},
+					},
+				}})
+				require.NoError(t, err)
+			} else {
+				legacyDetail = chatGPTSyncDetail(1706745710, false, "Question")
+				detail = strings.ReplaceAll(legacyDetail, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+				stats, err = SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745710", legacyDetail, &details), nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, stats.Imported)
+			}
+			before, err := d.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+			preventChatGPTMessageIDReuse(t, d)
+			_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
+			require.NoError(t, err)
+			wantModel := "old-model"
+			if legacy {
+				body = chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Question"}, chatGPTNodeSpec{"assistant", "text", "Answer"})
+				body = strings.ReplaceAll(body, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+			} else {
+				require.Empty(t, before[1].Model)
+				// A ZIP re-import does not fill the missing model; Sync does.
+				modelDir, modelCleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": "[" + detail + "]"}))
+				require.NoError(t, err)
+				defer modelCleanup()
+				stats, err = ImportChatGPT(ctx, d, modelDir, t.TempDir(), nil)
+				require.NoError(t, err)
+				assert.Equal(t, 1, stats.Skipped)
+				assert.Zero(t, stats.Updated)
+				unfilled, err := d.GetAllMessages(ctx, id)
+				require.NoError(t, err)
+				require.Len(t, unfilled, 2)
+				assert.Empty(t, unfilled[1].Model)
+				assert.Equal(t, before[1].SourceUUID, unfilled[1].SourceUUID)
+				detail = strings.Replace(detail, `"update_time":1706745710`, `"update_time":1706745720`, 1)
+				_, err = SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745720", detail, &details), nil)
+				require.NoError(t, err)
+				synced, err := d.GetAllMessages(ctx, id)
+				require.NoError(t, err)
+				require.Len(t, synced, 2)
+				require.Equal(t, "gpt-4o", synced[1].Model)
+
+				body = "[" + legacyDetail + "]"
+				wantModel = "gpt-4o"
+			}
+			dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": body}))
+			require.NoError(t, err)
+			defer cleanup()
+			stats, err = ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
+			require.NoError(t, err)
+			assert.Equal(t, ImportStats{Skipped: 1}, stats)
+			after, err := d.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, after, 2)
+			for i := range after {
+				assert.Equal(t, before[i].ID, after[i].ID)
+				if legacy {
+					assert.Empty(t, after[i].SourceUUID)
+					assert.Empty(t, after[i].SourceParentUUID)
+				}
+			}
+			assert.Empty(t, after[0].Model)
+			assert.Equal(t, wantModel, after[1].Model)
+			pins, err := d.ListPinnedMessages(ctx, id, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, before[1].ID, pins[0].MessageID)
+			assert.Equal(t, new("Saved answer"), pins[0].Note)
+		})
 	}
-	assert.Empty(t, after[0].Model)
-	assert.Equal(t, "old-model", after[1].Model)
-	assert.Empty(t, after[0].SourceUUID)
-	assert.Empty(t, after[0].SourceParentUUID)
-	assert.Empty(t, after[1].SourceUUID)
-	assert.Empty(t, after[1].SourceParentUUID)
-	pins, err := d.ListPinnedMessages(ctx, id, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, before[1].ID, pins[0].MessageID)
-	assert.Equal(t, new("Saved answer"), pins[0].Note)
-}
-
-func TestImportChatGPTReimportWithoutModelKeepsSyncedModel(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	id := "chatgpt:" + chatGPTSyncID
-	legacyDetail := chatGPTSyncDetail(1706745710, false, "Question")
-	detail := strings.ReplaceAll(legacyDetail, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
-	details := 0
-	stats, err := SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745710", legacyDetail, &details), nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Imported)
-	before, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, before, 2)
-	require.Empty(t, before[1].Model)
-	preventChatGPTMessageIDReuse(t, d)
-	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
-	require.NoError(t, err)
-
-	// A ZIP re-import does not fill the missing model; Sync does.
-	modelDir, modelCleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": "[" + detail + "]"}))
-	require.NoError(t, err)
-	defer modelCleanup()
-	stats, err = ImportChatGPT(ctx, d, modelDir, t.TempDir(), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Updated)
-	unfilled, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, unfilled, 2)
-	assert.Empty(t, unfilled[1].Model)
-	assert.Equal(t, before[1].SourceUUID, unfilled[1].SourceUUID)
-	detail = strings.Replace(detail, `"update_time":1706745710`, `"update_time":1706745720`, 1)
-	_, err = SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745720", detail, &details), nil)
-	require.NoError(t, err)
-	synced, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, synced, 2)
-	require.Equal(t, "gpt-4o", synced[1].Model)
-
-	dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": "[" + legacyDetail + "]"}))
-	require.NoError(t, err)
-	defer cleanup()
-	stats, err = ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
-	require.NoError(t, err)
-	after, err := d.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, after, 2)
-	assert.Equal(t, "gpt-4o", after[1].Model)
-	for i := range after {
-		assert.Equal(t, before[i].ID, after[i].ID)
-	}
-	pins, err := d.ListPinnedMessages(ctx, id, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, before[1].ID, pins[0].MessageID)
-	assert.Equal(t, new("Saved answer"), pins[0].Note)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Updated)
-	assert.Zero(t, stats.Imported)
-	assert.Zero(t, stats.Errors)
-	assert.Empty(t, stats.Refusals)
 }
 
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
