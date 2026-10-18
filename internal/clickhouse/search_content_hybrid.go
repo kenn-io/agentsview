@@ -124,11 +124,11 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf := f
 	kf.Mode = "fts"
 	var args []any
-	contentPred := contentSearchPredicate("m.content", kf, &args)
+	contentPred := contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, m.content
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+contentPred+`
@@ -258,8 +258,8 @@ func (s *Store) classifyUnitlessHybridHits(
 // enrichHybridMatches looks up metadata for the fused units and assembles
 // the page in fused-score order. When the keyword leg contributed a unit its
 // display wins: the match anchors on the keyword-matched message and centers
-// on the keyword snippet. Either way the snippet is built and redacted from
-// the anchor message's full content.
+// on the keyword snippet and uses dialogue for presentation. Vector-only hits
+// use the anchor message's rendered content.
 func (s *Store) enrichHybridMatches(
 	ctx context.Context, f db.ContentSearchFilter, merged []db.FusedUnit,
 	vecDisplay, kwDisplay map[string]hybridDisplay,
@@ -285,6 +285,10 @@ func (s *Store) enrichHybridMatches(
 		if !ok {
 			continue
 		}
+		content := info.content
+		if _, keyword := kwDisplay[m.Unit.Key]; keyword {
+			content = info.dialogueContent
+		}
 		score := m.Score
 		out = append(out, db.ContentMatch{
 			SessionID:       d.sessionID,
@@ -301,7 +305,7 @@ func (s *Store) enrichHybridMatches(
 			ParentSessionID: info.parentSessionID,
 			Sidechain:       info.isSidechain,
 			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
+			Snippet:         f.SemanticSnippet(content, d.snippet),
 			Score:           &score,
 		})
 	}

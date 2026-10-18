@@ -25,19 +25,20 @@ const (
 
 // Per-archive metadata key bases; see archiveMetadataKey.
 const (
-	lastPushCutoffKeyBase      = "agentsview_last_push_cutoff"
-	lastPushAtKeyBase          = "agentsview_last_push_at"
-	lastPushMachineKeyBase     = "agentsview_last_push_machine"
-	pushScopeKeyBase           = "agentsview_push_scope"
-	deletionRevisionKeyBase    = "agentsview_deletion_revision"
-	identityRevisionKeyBase    = "agentsview_identity_revision"
-	mappingRevisionKeyBase     = "agentsview_mapping_revision"
-	curationFingerprintKeyBase = "agentsview_curation_fingerprint"
-	cursorUsageMaxIDKeyBase    = "agentsview_cursor_usage_max_id"
-	usageSnapshotReadyKeyBase  = "agentsview_usage_snapshot_ready"
-	storedCountRepairKeyBase   = "agentsview_stored_message_count_repair"
-	databaseIDKeyBase          = "agentsview_source_database_id"
-	fullPushRunKeyBase         = "agentsview_full_push_run"
+	lastPushCutoffKeyBase       = "agentsview_last_push_cutoff"
+	lastPushAtKeyBase           = "agentsview_last_push_at"
+	lastPushMachineKeyBase      = "agentsview_last_push_machine"
+	pushScopeKeyBase            = "agentsview_push_scope"
+	deletionRevisionKeyBase     = "agentsview_deletion_revision"
+	identityRevisionKeyBase     = "agentsview_identity_revision"
+	mappingRevisionKeyBase      = "agentsview_mapping_revision"
+	curationFingerprintKeyBase  = "agentsview_curation_fingerprint"
+	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
+	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
+	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
+	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
+	databaseIDKeyBase           = "agentsview_source_database_id"
+	fullPushRunKeyBase          = "agentsview_full_push_run"
 )
 
 // archiveMetadataKey scopes a sync_metadata key to one source archive so
@@ -247,6 +248,7 @@ var mirrorTables = []tableSpec{
 			col("role", tString),
 			col("content", tString),
 			col("thinking_text", tString),
+			col("dialogue_text", tNullString),
 			col("timestamp", tNullTime),
 			col("has_thinking", tBool),
 			col("has_tool_use", tBool),
