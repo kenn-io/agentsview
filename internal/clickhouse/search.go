@@ -430,10 +430,11 @@ func (s *Store) collectContentRegexMatches(
 	if err != nil {
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
 	}
+	prefix, _ := re.LiteralPrefix()
 	scopeWhere, scopeArgs := contentScope(f)
 	var all []contentCandidate
 	for _, source := range f.Sources {
-		candidates, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, f)
+		candidates, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, prefix, f)
 		if err != nil {
 			return nil, err
 		}
@@ -475,19 +476,11 @@ func (s *Store) collectContentRegexMatches(
 }
 
 func (s *Store) collectContentSource(
-	ctx context.Context, source, scopeWhere string, scopeArgs []any, f db.ContentSearchFilter,
+	ctx context.Context, source, scopeWhere string, scopeArgs []any, prefix string, f db.ContentSearchFilter,
 ) ([]contentCandidate, error) {
 	var query string
 	args := append([]any{}, scopeArgs...)
-	prefilter := func(column string) string {
-		if lit := db.LiteralPrefix(f.Pattern); lit != "" {
-			b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-			predicate := b.ContainsPredicate(column, lit)
-			args = append(args, b.Args()...)
-			return " AND " + predicate
-		}
-		return ""
-	}
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -501,7 +494,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
-		query += prefilter("COALESCE(m.dialogue_text, m.content)")
+		query += b.RegexPrefixFilter("COALESCE(m.dialogue_text, m.content)", prefix)
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "thinking":
 		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
@@ -515,7 +508,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
-		query += prefilter("m.thinking_text")
+		query += b.RegexPrefixFilter("m.thinking_text", prefix)
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "tool_input":
 		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',
@@ -559,6 +552,7 @@ func (s *Store) collectContentSource(
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 	}
+	args = append(args, b.Args()...)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)

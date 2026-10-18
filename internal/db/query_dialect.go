@@ -512,6 +512,15 @@ func (b *QueryBuilder) ContainsPredicate(col, pattern string) string {
 		b.dialect.caseInsensitiveLikeEsc
 }
 
+// RegexPrefixFilter adds a substring prefilter for a required regex prefix.
+// An empty prefix leaves the query and bind parameters unchanged.
+func (b *QueryBuilder) RegexPrefixFilter(col, prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	return " AND " + b.ContainsPredicate(col, prefix)
+}
+
 // RegexPredicate renders a parameterized regex predicate in the dialect's
 // native syntax. Backends may still choose to evaluate regexes in Go.
 func (b *QueryBuilder) RegexPredicate(col, pattern string) string {

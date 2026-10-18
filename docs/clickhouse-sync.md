@@ -20,7 +20,9 @@ when `[vector]` is enabled locally and the push includes vectors (see
 
 Content search uses dialogue for `--in messages` and searches reasoning with
 `--in thinking` in substring and regex modes. Default substring and regex
-searches now also scan reasoning text; `--in messages` avoids that scan. Hybrid
+searches now also scan reasoning text; `--in messages` avoids that scan.
+Regex searches without a literal prefix load every in-scope message and reasoning
+body from the selected sources into memory before matching and pagination. Hybrid
 keyword search also uses dialogue; semantic search uses rendered messages. The
 first push after upgrading re-sends every session in the configured mirror scope
 to fill dialogue, including sessions without dialogue. Reads from a pre-upgrade

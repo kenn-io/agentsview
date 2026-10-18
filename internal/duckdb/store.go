@@ -922,44 +922,39 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
-	pattern := ""
-	if f.Mode != "regex" {
-		pattern = "%" + db.EscapeLikePattern(f.Pattern) + "%"
+	re, err := regexp.Compile(f.Pattern)
+	if err != nil {
+		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
 	}
+	prefix, _ := re.LiteralPrefix()
 	var all []duckContentCandidate
 	for _, source := range f.Sources {
-		matches, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, pattern, f)
+		matches, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, prefix, f)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, matches...)
 	}
-	if f.Mode == "regex" {
-		re, err := regexp.Compile(f.Pattern)
-		if err != nil {
-			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
-		}
-		filtered := all[:0]
-		for _, m := range all {
-			loc := re.FindStringIndex(m.body)
-			if loc != nil {
-				m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
-				filtered = append(filtered, m)
-			}
-		}
-		all = filtered
-		sortContentCandidates(all)
-		// Deduplicate legacy thinking before applying the page cursor.
-		var dedupe db.LegacyThinkingDedupe
-		filtered = all[:0]
-		for _, m := range all {
-			if dedupe.Suppress(m.match, m.legacyThinking) {
-				continue
-			}
+	filtered := all[:0]
+	for _, m := range all {
+		loc := re.FindStringIndex(m.body)
+		if loc != nil {
+			m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 			filtered = append(filtered, m)
 		}
-		all = filtered
 	}
+	all = filtered
+	sortContentCandidates(all)
+	// Deduplicate legacy thinking before applying the page cursor.
+	var dedupe db.LegacyThinkingDedupe
+	filtered = all[:0]
+	for _, m := range all {
+		if dedupe.Suppress(m.match, m.legacyThinking) {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	all = filtered
 	if f.Cursor > 0 {
 		if f.Cursor >= len(all) {
 			return nil, nil
@@ -1200,20 +1195,12 @@ func contentCandidateMatches(candidates []duckContentCandidate) []db.ContentMatc
 
 func (s *Store) collectContentSource(
 	ctx context.Context, source, scopeWhere string, scopeArgs []any,
-	pattern string, f db.ContentSearchFilter,
+	prefix string, f db.ContentSearchFilter,
 ) ([]duckContentCandidate, error) {
 	var query string
 	var orderBy string
 	args := append([]any{}, scopeArgs...)
-	prefilter := func(column string) string {
-		if lit := db.LiteralPrefix(f.Pattern); lit != "" {
-			b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-			predicate := b.ContainsPredicate(column, lit)
-			args = append(args, b.Args()...)
-			return " AND " + predicate
-		}
-		return ""
-	}
+	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -1224,12 +1211,7 @@ func (s *Store) collectContentSource(
 			0 AS call_index, 0 AS event_index, false AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		if f.Mode != "regex" {
-			query += ` AND COALESCE(m.dialogue_text, m.content) ILIKE ? ESCAPE '\'`
-			args = append(args, pattern)
-		} else {
-			query += prefilter("COALESCE(m.dialogue_text, m.content)")
-		}
+		query += b.RegexPrefixFilter("COALESCE(m.dialogue_text, m.content)", prefix)
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 		}
@@ -1243,12 +1225,7 @@ func (s *Store) collectContentSource(
 			0 AS call_index, 0 AS event_index, m.dialogue_text IS NULL AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		if f.Mode != "regex" {
-			query += ` AND m.thinking_text ILIKE ? ESCAPE '\'`
-			args = append(args, pattern)
-		} else {
-			query += prefilter("m.thinking_text")
-		}
+		query += b.RegexPrefixFilter("m.thinking_text", prefix)
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 		}
@@ -1264,19 +1241,8 @@ func (s *Store) collectContentSource(
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
 				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		if f.Mode != "regex" {
-			query += ` AND tc.input_json ILIKE ? ESCAPE '\'`
-			args = append(args, pattern)
-		}
 		orderBy = "tc.session_id, m.ordinal, COALESCE(tc.id, 0), tc.call_index"
 	case "tool_result":
-		args = append([]any{}, scopeArgs...)
-		contentPred := "TRUE"
-		eventPred := "TRUE"
-		if f.Mode != "regex" {
-			contentPred = `tc.result_content ILIKE ? ESCAPE '\'`
-			eventPred = `tre.content ILIKE ? ESCAPE '\'`
-		}
 		query = `SELECT session_id, project, agent, location, role,
 				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 				FROM (
@@ -1292,7 +1258,6 @@ func (s *Store) collectContentSource(
 					JOIN messages m ON m.session_id = tc.session_id
 						AND m.id = tc.message_id
 					WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
-						AND ` + contentPred + `
 						AND NOT EXISTS (
 							SELECT 1 FROM tool_result_events tre
 							WHERE tre.session_id = tc.session_id
@@ -1311,20 +1276,14 @@ func (s *Store) collectContentSource(
 						tre.call_index AS call_index, tre.event_index, false AS legacy_thinking
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
-						AND ` + eventPred + `
 				)`
-		if f.Mode != "regex" {
-			args = append(args, pattern)
-		}
 		args = append(args, scopeArgs...)
-		if f.Mode != "regex" {
-			args = append(args, pattern)
-		}
 		orderBy = "session_id, ordinal, src, row_id, call_index, event_index"
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 	}
 	query += ` ORDER BY ` + orderBy
+	args = append(args, b.Args()...)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)

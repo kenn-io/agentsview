@@ -50,7 +50,8 @@ func SeedDialogueSearch(t *testing.T, d *db.DB) {
 	}))
 }
 
-// AssertDialogueSearchParity compares lexical hits and snippets with SQLite.
+// AssertDialogueSearchParity checks mirror hits and snippets against expected
+// values and compares lexical pagination with SQLite.
 // Callers supply their supported modes. Substring and regex cover every source;
 // other modes search messages only.
 func AssertDialogueSearchParity(t *testing.T, archive, mirror db.Store, modes ...string) {
