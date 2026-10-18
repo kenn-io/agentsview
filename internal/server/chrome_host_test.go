@@ -84,7 +84,7 @@ func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync?browser=chrome", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		srv.mux.ServeHTTP(response, req)
 	}()
@@ -112,7 +112,7 @@ func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
 	assert.Equal(t, 1, stats.Imported)
 
 	remote := httptest.NewRecorder()
-	remoteRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync?browser=chrome", nil)
+	remoteRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
 	remoteRequest.RemoteAddr = "192.0.2.10:1234"
 	srv.mux.ServeHTTP(remote, remoteRequest)
 	assert.Equal(t, http.StatusForbidden, remote.Code)
@@ -534,7 +534,7 @@ func TestChatGPTChromeSyncKeepsCompatibilityError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync?browser=chrome", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		srv.mux.ServeHTTP(response, req)
 	}()

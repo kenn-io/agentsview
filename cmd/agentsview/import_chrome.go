@@ -13,7 +13,11 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
-func syncClaudeAIChrome(ctx context.Context) error {
+func syncChrome(ctx context.Context, importType string) error {
+	label := "claude.ai"
+	if importType == "chatgpt" {
+		label = "ChatGPT"
+	}
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return err
@@ -23,7 +27,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return err
 	}
 	if transport.Mode != transportHTTP {
-		return errors.New("claude.ai Sync requires a running server")
+		return fmt.Errorf("%s Sync requires a running server", label)
 	}
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
 	httpTransport.ResponseHeaderTimeout = 30 * time.Second
@@ -32,49 +36,29 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	browser := apiclient.PostAPIV1ImportClaudeAiSyncQueryBrowserChrome
-	response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
-	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
+	var status int
+	var body []byte
+	var stream *runtime.Stream[[]byte]
+	var httpResponse *http.Response
+	if importType == "chatgpt" {
+		response, streamErr := api.PostAPIV1ImportChatgptSyncStreamWithResponse(ctx)
+		err = streamErr
+		if response != nil {
+			status, body, stream, httpResponse = response.StatusCode, response.Body, response.Stream200, response.HTTPResponse
+		}
+	} else {
+		browser := apiclient.Chrome
+		response, streamErr := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+		err = streamErr
+		if response != nil {
+			status, body, stream, httpResponse = response.StatusCode, response.Body, response.Stream200, response.HTTPResponse
+		}
+	}
+	if err != nil && (httpResponse == nil || status == http.StatusOK) {
 		return err
 	}
-	defer response.HTTPResponse.Body.Close()
-	stats, err := readChromeSync(response)
-	printImportSummary(stats)
-	if err != nil {
-		return err
-	}
-	if stats.Errors > 0 {
-		return fmt.Errorf("sync completed with %d errors", stats.Errors)
-	}
-	return nil
-}
-
-func syncChatGPTChrome(ctx context.Context) error {
-	cfg, err := config.LoadMinimal()
-	if err != nil {
-		return err
-	}
-	transport, err := detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, startupWaitTimeout)
-	if err != nil {
-		return err
-	}
-	if transport.Mode != transportHTTP {
-		return errors.New("ChatGPT Sync requires a running server")
-	}
-	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
-	httpTransport.ResponseHeaderTimeout = 30 * time.Second
-	defer httpTransport.CloseIdleConnections()
-	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, &http.Client{Transport: httpTransport})
-	if err != nil {
-		return err
-	}
-	browser := apiclient.Chrome
-	response, err := api.PostAPIV1ImportChatgptSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportChatgptSyncRequestOptions{Query: &apiclient.PostAPIV1ImportChatgptSyncQuery{Browser: browser}})
-	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
-		return err
-	}
-	defer response.HTTPResponse.Body.Close()
-	stats, err := readChatGPTChromeSync(response)
+	defer httpResponse.Body.Close()
+	stats, err := readBrowserChromeSync(status, body, stream)
 	printImportSummary(stats)
 	if err != nil {
 		return err
@@ -86,10 +70,6 @@ func syncChatGPTChrome(ctx context.Context) error {
 }
 
 func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
-	return readBrowserChromeSync(response.StatusCode, response.Body, response.Stream200)
-}
-
-func readChatGPTChromeSync(response *apiclient.PostAPIV1ImportChatgptSyncResp) (importer.ImportStats, error) {
 	return readBrowserChromeSync(response.StatusCode, response.Body, response.Stream200)
 }
 

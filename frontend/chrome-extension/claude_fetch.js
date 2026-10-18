@@ -1,5 +1,5 @@
 // worker.js injects this file, then calls claudeFetch from a second script.
-globalThis.claudeFetch = async function claudeFetch(url) {
+globalThis.claudeFetch = async function claudeFetch(url, headers) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
@@ -7,6 +7,7 @@ globalThis.claudeFetch = async function claudeFetch(url) {
       method: "GET",
       credentials: "include",
       redirect: "error",
+      headers,
       signal: controller.signal,
     });
     const limit = 32 * 1024 * 1024; // Browser sync caps each response at 32 MiB.

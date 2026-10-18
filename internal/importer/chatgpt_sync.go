@@ -11,13 +11,13 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v7"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -33,9 +33,6 @@ const (
 // ErrChatGPTResponseTooLarge marks a conversation over the browser relay limit.
 var ErrChatGPTResponseTooLarge = errors.New("ChatGPT response exceeds 32 MiB")
 
-// ChatGPTResponseLimit matches the Chrome relay's per-response limit.
-const ChatGPTResponseLimit = 32 << 20
-
 // ErrChatGPTAuthRequired reports a missing or expired ChatGPT browser session.
 var ErrChatGPTAuthRequired = errors.New("ChatGPT sign-in required")
 
@@ -46,9 +43,9 @@ func chatGPTRequest(shape int, conversation string, offset int) string {
 	).Replace(strings.Split(strings.TrimSpace(chatGPTRequests), "\n")[shape])
 }
 
-func chatGPTFreshness(updatedAt string, session *db.Session) uint64 {
+func chatGPTFreshness(updatedAt time.Time, session *db.Session) uint64 {
 	hash := fnv.New64a()
-	fmt.Fprintf(hash, "%s\x00%d", updatedAt, session.MessageCount)
+	fmt.Fprintf(hash, "%d\x00%d", updatedAt.UnixMilli(), session.MessageCount)
 	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
 		fmt.Fprint(hash, "\x00")
 		if field != nil {
@@ -77,23 +74,10 @@ func waitChatGPTDetailGap(ctx context.Context) error {
 	}
 }
 
-// chatGPTMaxConsecutiveDetailFailures stops a sync whose detail requests keep failing.
-const chatGPTMaxConsecutiveDetailFailures = 3
-
-// ErrBrowserDisconnected marks a fetch that failed because the browser's native
-// host is gone. Failures that leave the host connected, such as a page timeout
-// or an error reported by the extension, must not wrap it.
-var ErrBrowserDisconnected = errors.New("chrome host disconnected")
-
-// chatGPTTransportError marks a failure to reach the browser at all, such as a
-// disconnected native host, as opposed to an HTTP status from ChatGPT.
-type chatGPTTransportError struct{ err error }
-
-func (e *chatGPTTransportError) Error() string { return e.err.Error() }
-
-func (e *chatGPTTransportError) Unwrap() error { return e.err }
-
-type chatGPTHTTPError struct{ status int }
+type chatGPTHTTPError struct {
+	status      int
+	rateLimited bool
+}
 
 func (e *chatGPTHTTPError) Error() string {
 	return fmt.Sprintf("ChatGPT returned HTTP %d", e.status)
@@ -110,9 +94,9 @@ func SyncChatGPT(ctx context.Context, store interface {
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, machine ...string,
 ) (stats ImportStats, retErr error) {
 	seen := make(map[string]struct{})
-	detailFailures := 0
+	failedLast := false
 	for offset := 0; ; {
-		raw, err := fetchChatGPT(ctx, fetch, chatGPTRequest(chatGPTListRequest, "", offset))
+		raw, err := fetchBrowser(ctx, fetch, chromehost.ChatGPT, chatGPTRequest(chatGPTListRequest, "", offset))
 		if err != nil {
 			return stats, err
 		}
@@ -157,24 +141,28 @@ func SyncChatGPT(ctx context.Context, store interface {
 			seen[marker.ID] = struct{}{}
 			id := "chatgpt:" + marker.ID
 			if store.IsSessionTrashed(ctx, id) || store.IsSessionExcluded(ctx, id) {
+				failedLast = false
 				stats.Skipped++
 				cb.progress(stats)
 				continue
 			}
 			detail, unchanged, fetchErr, err := fetchConversationDetailIfChanged(
 				ctx, store, parser.AgentChatGPT, id,
-				func(session *db.Session) uint64 { return chatGPTFreshness(updatedAt, session) },
+				func(session *db.Session) uint64 {
+					return chatGPTFreshness(updatedAt, session)
+				},
 				func(ctx context.Context) ([]byte, error) {
 					if err := waitChatGPTDetailGap(ctx); err != nil {
 						return nil, err
 					}
-					return fetchChatGPT(ctx, fetch, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0))
+					return fetchBrowser(ctx, fetch, chromehost.ChatGPT, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0))
 				},
 			)
 			if err != nil {
 				return stats, err
 			}
 			if unchanged {
+				failedLast = false
 				stats.Skipped++
 				cb.progress(stats)
 				continue
@@ -187,28 +175,29 @@ func SyncChatGPT(ctx context.Context, store interface {
 					return stats, fetchErr
 				}
 				detailError, _ := errors.AsType[*chatGPTHTTPError](fetchErr)
-				if detailError != nil && detailError.status == http.StatusTooManyRequests {
-					// Continuing would only deepen the rate limit; the next Sync picks up the rest.
-					return stats, fmt.Errorf("ChatGPT rate limited; sync stopped early, run Sync again later: %w", fetchErr)
-				}
 				if detailError != nil && detailError.status == http.StatusNotFound {
+					failedLast = false
 					stats.Skipped++
-					cb.progress(stats)
-					continue
+				} else {
+					stats.record(id, importSkipped, fetchErr)
+					if detailError != nil && detailError.rateLimited {
+						cb.progress(stats)
+						return stats, fetchErr
+					}
+					if !errors.Is(fetchErr, ErrChatGPTResponseTooLarge) {
+						if failedLast {
+							cb.progress(stats)
+							return stats, fetchErr
+						}
+						failedLast = true
+					} else {
+						failedLast = false
+					}
 				}
-				if transport, ok := errors.AsType[*chatGPTTransportError](fetchErr); ok {
-					// The browser is gone, so every further request would fail the same way.
-					return stats, transport.err
-				}
-				detailFailures++
-				if detailFailures >= chatGPTMaxConsecutiveDetailFailures {
-					return stats, fmt.Errorf("ChatGPT detail requests failed %d times in a row; sync stopped: %w", detailFailures, fetchErr)
-				}
-				stats.record(id, importSkipped, fetchErr)
 				cb.progress(stats)
 				continue
 			}
-			detailFailures = 0
+			failedLast = false
 			result, err := parser.ParseChatGPTConversation(detail)
 			if err == nil && result.Session.ID != id {
 				err = errors.New("conversation ID differs from requested UUID")
@@ -219,17 +208,18 @@ func SyncChatGPT(ctx context.Context, store interface {
 				continue
 			}
 			result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
-			var detailMetadata struct {
-				UpdatedAt jsontext.Value `json:"update_time"`
-			}
-			_ = json.Unmarshal(detail, &detailMetadata)
-			detailUpdatedAt, detailTimeValid := chatGPTUpdateTime(detailMetadata.UpdatedAt)
 			write := func() error {
 				before, err := store.GetSessionFull(ctx, id)
 				if err != nil {
 					stats.record(id, importSkipped, err)
 					return nil
 				}
+				archived, err := store.GetAllMessages(ctx, id)
+				if err != nil {
+					stats.record(id, importSkipped, err)
+					return nil
+				}
+				keepChatGPTImages(result.Messages, archived)
 				status, err := upsertChatGPTConversation(ctx, store, result, nil)
 				if errors.Is(err, db.ErrSessionTrashed) {
 					stats.record(id, importSkipped, nil)
@@ -251,7 +241,7 @@ func SyncChatGPT(ctx context.Context, store interface {
 					return nil //nolint:nilerr // The failure is already recorded in stats above.
 				}
 				stored, readErr := store.GetSessionFull(ctx, id)
-				if readErr == nil && stored != nil && detailTimeValid && detailUpdatedAt == updatedAt {
+				if readErr == nil && stored != nil && result.Session.EndedAt.UnixMilli() == updatedAt.UnixMilli() {
 					readErr = store.UpsertProviderStatHash(ctx, parser.AgentChatGPT, id, chatGPTFreshness(updatedAt, stored))
 				}
 				if readErr != nil {
@@ -278,64 +268,51 @@ func SyncChatGPT(ctx context.Context, store interface {
 	return stats, nil
 }
 
-func chatGPTUpdateTime(raw jsontext.Value) (string, bool) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return "", false
+// A browser detail has placeholders where ZIP imports can retain image references.
+// Substitute only for comparison, and only when the rest of the message matches.
+var chatGPTImageToken = regexp.MustCompile(`\[image unavailable\]|!\[image\]\([^)]*\)`)
+
+func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
+	byOrdinal := make(map[int]db.Message, len(archived))
+	for _, message := range archived {
+		byOrdinal[message.Ordinal] = message
 	}
-	var numeric float64
-	if err := json.Unmarshal(raw, &numeric); err == nil {
-		return strconv.FormatFloat(numeric, 'f', -1, 64), true
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil && text != "" {
-		// Browser responses may encode the same Unix time as a string; compare it as a number.
-		if parsed, err := strconv.ParseFloat(text, 64); err == nil {
-			return strconv.FormatFloat(parsed, 'f', -1, 64), true
+	for i := range incoming {
+		message := &incoming[i]
+		stored, ok := byOrdinal[message.Ordinal]
+		if !ok || stored.Role != string(message.Role) || !strings.Contains(message.Content, "[image unavailable]") {
+			continue
 		}
-		return text, true
+		tokens := chatGPTImageToken.FindAllString(message.Content, -1)
+		index := 0
+		comparison := chatGPTImageToken.ReplaceAllStringFunc(stored.Content, func(token string) string {
+			defer func() { index++ }()
+			if index < len(tokens) && tokens[index] == "[image unavailable]" {
+				return tokens[index]
+			}
+			return token
+		})
+		if index == len(tokens) && comparison == message.Content {
+			message.Content = stored.Content
+			message.ContentLength = stored.ContentLength
+		}
 	}
-	return "", false
 }
 
-func fetchChatGPT(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
-	attempt := 0
-	body, err := backoff.Retry(ctx, func() ([]byte, error) {
-		response, err := fetch(ctx, path)
-		if err != nil {
-			if errors.Is(err, ErrBrowserDisconnected) {
-				return nil, backoff.Permanent(&chatGPTTransportError{err: err})
-			}
-			// The host is still connected, so this is one page's failure and the
-			// consecutive-failure limit decides whether to keep going.
-			return nil, backoff.Permanent(err)
+func chatGPTUpdateTime(raw jsontext.Value) (time.Time, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if instant, err := time.Parse(time.RFC3339Nano, text); err == nil {
+			return instant, true
 		}
-		if len(response.Body) > ChatGPTResponseLimit {
-			return nil, backoff.Permanent(ErrChatGPTResponseTooLarge)
-		}
-		if response.Status >= 200 && response.Status < 300 {
-			return response.Body, nil
-		}
-		if response.Status == http.StatusUnauthorized {
-			return nil, backoff.Permanent(ErrChatGPTAuthRequired)
-		}
-		httpErr := &chatGPTHTTPError{status: response.Status}
-		if response.Status != http.StatusTooManyRequests && response.Status < 500 {
-			return nil, backoff.Permanent(httpErr)
-		}
-		delay := time.Duration(1<<attempt) * time.Second
-		attempt++
-		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
-			delay = min(retryAfter, 60*time.Second)
-		}
-		return nil, backoff.RetryAfter(delay, httpErr)
-	}, backoff.WithMaxTries(5), backoff.WithMaxElapsedTime(0))
-	if retryErr := backoff.AsRetryError(err); retryErr != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, retryErr.LastErr
+		raw = jsontext.Value(text)
 	}
-	return body, err
+	var numeric float64
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &numeric) != nil {
+		return time.Time{}, false
+	}
+	seconds := int64(numeric)
+	return time.Unix(seconds, int64((numeric-float64(seconds))*1e9)), true
 }
 
 func isUUID(value string) bool {

@@ -140,9 +140,18 @@ describe("Chrome native host worker", () => {
     expect(await request("/backend-api/conversations?offset=0&limit=50&order=updated", "chatgpt")).toEqual({
       id: "a", platform: "chatgpt", version: 2, status: 200, body: "conversations",
     });
-    expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://chatgpt.com/*", discarded: false });
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, { target: { tabId: 7 }, files: ["chatgpt_fetch.js"], world: "ISOLATED" });
-    expect(chatgptFetch).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated");
+    expect(chrome.tabs.query).toHaveBeenCalledWith({
+      url: "https://chatgpt.com/*",
+      discarded: false,
+    });
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, {
+      target: { tabId: 7 },
+      files: ["claude_fetch.js", "chatgpt_fetch.js"],
+      world: "ISOLATED",
+    });
+    expect(chatgptFetch).toHaveBeenCalledExactlyOnceWith(
+      "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
+    );
   });
 
   it("reconnects five seconds after disconnect without duplicating startup connections", async () => {
