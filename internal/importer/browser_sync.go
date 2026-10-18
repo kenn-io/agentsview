@@ -45,7 +45,7 @@ type browserSync struct {
 type browserConversation struct {
 	freshness func(*db.Session) uint64
 	fetch     func(context.Context) ([]byte, error)
-	parse     func([]byte) (parser.ParseResult, error)
+	parse     func([]byte) (parser.ParseResult, error) // an empty session ID skips
 	write     func(context.Context, db.Store, parser.ParseResult) (importStatus, error)
 	matches   func([]byte, parser.ParseResult) bool
 }
@@ -106,7 +106,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
-		if err != nil {
+		if err != nil || result.Session.ID == "" {
 			s.stats.record(id, importSkipped, err)
 			detailErr = err
 			return nil

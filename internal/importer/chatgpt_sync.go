@@ -133,7 +133,7 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 							return parser.ParseResult{}, errChatGPTFormat
 						}
 						result, err := parser.ParseChatGPTConversation(detail)
-						if err == nil && result.Session.ID != id {
+						if err == nil && result.Session.ID != "" && result.Session.ID != id {
 							err = errors.New("conversation ID differs from requested UUID")
 						}
 						return result, err
