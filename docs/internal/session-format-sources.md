@@ -3919,7 +3919,10 @@ schemas keep their existing ordering behavior.
   archive's existing source identity fields. Sync preserves uploaded images on
   user turns with matching ordinals, roles, timestamps, and sanitized surrounding
   text. Saved message and parent IDs must match when present in the archive;
-  older ZIP imports have neither ID. Generated images use the browser snapshot.
+  older ZIP imports have neither ID. Matching turns fill empty source identities
+  before Sync caches freshness under full and transcripts storage, verified by
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`.
+  Generated images use the browser snapshot.
   Sync replaces turns with conflicting nonempty source message IDs, preserving
   the old conversation in Trash when a pin would be lost.
   Model-only changes update retained message rows under full and transcripts
