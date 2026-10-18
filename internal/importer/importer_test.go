@@ -655,6 +655,7 @@ func TestImportChatGPTAppendsVerifiedHistory(t *testing.T) {
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 	require.NoError(t, err)
 	require.Len(t, before, 1)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, "chatgpt:cg-1", before[0].ID, nil)
 	require.NoError(t, err)
 
@@ -717,6 +718,7 @@ func TestImportChatGPTRejectsShorterOrDivergentHistory(t *testing.T) {
 			require.NoError(t, err)
 			before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 			require.NoError(t, err)
+			preventChatGPTMessageIDReuse(t, d)
 
 			require.NoError(t, os.WriteFile(path, []byte(tc.data), 0o644))
 			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
@@ -814,6 +816,7 @@ func TestImportChatGPTUsageArchiveSkipsAppend(t *testing.T) {
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 	require.NoError(t, err)
+	preventChatGPTMessageIDReuse(t, d)
 
 	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
 	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
@@ -1072,6 +1075,7 @@ func TestImportChatGPTFillsArchivedToolResult(t *testing.T) {
 			require.Len(t, before[1].ToolCalls, 1)
 			require.Empty(t, before[1].ToolCalls[0].ResultContent)
 			require.Zero(t, before[1].ToolCalls[0].ResultContentLength)
+			preventChatGPTMessageIDReuse(t, d)
 			_, err = d.PinMessage(ctx, "chatgpt:cg-tool", before[1].ID, nil)
 			require.NoError(t, err)
 			revBefore := chatGPTTranscriptRevision(t, d)
@@ -1180,6 +1184,7 @@ func TestImportChatGPTPolicyChangeBetweenImports(t *testing.T) {
 			require.Len(t, before, 4)
 			require.Positive(t, before[1].ToolCalls[0].ResultContentLength)
 			require.Zero(t, before[3].ToolCalls[0].ResultContentLength)
+			preventChatGPTMessageIDReuse(t, d)
 			require.NoError(t, d.Close())
 
 			d, err = db.OpenWithArchiveContent(ctx, dbPath, tt.archive)
@@ -1267,6 +1272,7 @@ func TestImportChatGPTKeepsCompletedToolResult(t *testing.T) {
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 	require.NoError(t, err)
 	require.Len(t, before, 2)
+	preventChatGPTMessageIDReuse(t, d)
 
 	// A result that changed from one value to another keeps the archived one.
 	require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("4242", true)), 0o644))
@@ -1322,6 +1328,7 @@ func TestImportChatGPTComparesToolCallStructure(t *testing.T) {
 			}
 			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 			require.NoError(t, err)
+			preventChatGPTMessageIDReuse(t, d)
 			require.Len(t, before, 2)
 			require.NotEmpty(t, before[1].ToolCalls)
 
@@ -1405,6 +1412,7 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	beforeMsgs, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 	require.NoError(t, err)
 	require.Len(t, beforeMsgs, 2)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, "chatgpt:cg-tool", beforeMsgs[1].ID, nil)
 	require.NoError(t, err)
 	before, err := d.GetSession(ctx, "chatgpt:cg-tool")
@@ -1653,6 +1661,7 @@ func TestImportChatGPTExtendsTruncatedText(t *testing.T) {
 		stats, err := ImportChatGPT(t.Context(), d, dir, assetsDir, nil)
 		require.NoError(t, err)
 		require.Equal(t, 1, stats.Imported)
+		preventChatGPTMessageIDReuse(t, d)
 		return d, dir, path, assetsDir
 	}
 

@@ -262,6 +262,8 @@ func TestWriteSessionBatchAtomicFillsEmptyToolResults(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.PinMessage(ctx, id, fillTestMessageID(t, d, id, 1), nil)
 	require.NoError(t, err)
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{messageCountWrite("other-session", 1)})
+	require.NoError(t, err)
 
 	const messagesQuery = `SELECT * FROM messages WHERE session_id = ? ORDER BY ordinal`
 	const unfilledCallsQuery = `SELECT tc.* FROM tool_calls tc
@@ -359,6 +361,8 @@ func TestWriteSessionBatchAtomicExtendsTruncatedText(t *testing.T) {
 		_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
 			Session: extendTestSession(id, len(msgs)), Messages: msgs, ReplaceMessages: true,
 		}})
+		require.NoError(t, err)
+		_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{messageCountWrite("other-session", 1)})
 		require.NoError(t, err)
 	}
 	candidateWrite := func(id string, complete bool) SessionBatchWrite {
@@ -519,6 +523,9 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *t
 			before, err := d.GetAllMessages(t.Context(), "identities")
 			require.NoError(t, err)
 			require.Len(t, before, 1)
+			// Keep a higher message ID so replacement cannot reuse the target row's ID.
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{messageCountWrite("other-session", 1)})
+			require.NoError(t, err)
 
 			write.CompleteStoredRows = true
 			write.ReplaceMessages = false
