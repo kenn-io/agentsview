@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -12,16 +13,20 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
+	"go.kenn.io/kit/safefileio"
 )
 
 const (
@@ -71,8 +76,67 @@ type DaemonRuntime struct {
 	RuntimeError     string
 }
 
-func runtimeStore(dataDir string) daemon.RuntimeStore {
-	return daemon.RuntimeStore{Dir: dataDir}
+type daemonRuntimeStore struct {
+	daemon.RuntimeStore
+	legacyDir string
+}
+
+func runtimeStore(dataDir string) daemonRuntimeStore {
+	dir := config.RuntimeDir(dataDir)
+	if dir != dataDir && safefileio.ValidatePrivateDir(dataDir) != nil {
+		// Kit no longer makes the data dir private on every call. Restrict it
+		// only when needed so later commands leave archive metadata alone.
+		_ = safefileio.EnsurePrivateDir(dataDir)
+	}
+	return daemonRuntimeStore{
+		Dir:       dir,
+		legacyDir: dataDir,
+	}
+}
+
+func (s daemonRuntimeStore) List() ([]daemon.RuntimeRecord, error) {
+	records, err := s.RuntimeStore.List()
+	if err != nil || s.Dir == s.legacyDir {
+		return records, err
+	}
+	legacy, err := s.legacyRecords()
+	if err != nil {
+		return nil, err
+	}
+	records = append(records, legacy...)
+	slices.SortFunc(records, func(a, b daemon.RuntimeRecord) int {
+		if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.PID, b.PID)
+	})
+	return records, nil
+}
+
+func (s daemonRuntimeStore) legacyRecords() ([]daemon.RuntimeRecord, error) {
+	// Remove this bridge once upgrades from 0.45.x and earlier are unsupported.
+	entries, err := os.ReadDir(s.legacyDir)
+	if err != nil {
+		return nil, fmt.Errorf("read legacy runtime dir: %w", err)
+	}
+	var records []daemon.RuntimeRecord
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "daemon.") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "daemon."), ".json"))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		path := filepath.Join(s.legacyDir, name)
+		rec, err := s.Read(path)
+		if err != nil || rec.PID != pid || rec.Address == "" {
+			continue
+		}
+		records = append(records, rec)
+	}
+	return records, nil
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running
@@ -215,7 +279,7 @@ func RemoveDaemonRuntime(dataDir string) {
 	}
 }
 
-var listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+var listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 	return store.List()
 }
 
@@ -823,7 +887,7 @@ func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
 }
 
 func runtimeRecordHasMismatchedIdentity(
-	store daemon.RuntimeStore,
+	store daemonRuntimeStore,
 	rec daemon.RuntimeRecord,
 ) bool {
 	if runtimeRecordIdentityState(rec) != processCreateTimeMismatch {
@@ -904,6 +968,21 @@ func isDaemonStarting(dataDir string) bool {
 }
 
 func daemonStartingWithLockProbe(dataDir string, external bool) bool {
+	if config.RuntimeDir(dataDir) != dataDir {
+		// Remove this bridge once upgrades from 0.45.x and earlier are unsupported.
+		path := filepath.Join(dataDir, "daemon.lock")
+		if _, err := os.Stat(path); err == nil {
+			lock := flock.New(path)
+			defer lock.Close()
+			acquired, err := lock.TryLock()
+			if err == nil {
+				if !acquired {
+					return true
+				}
+				_ = lock.Unlock()
+			}
+		}
+	}
 	path, err := runtimeStore(dataDir).LockPath()
 	if err != nil {
 		return false
@@ -913,7 +992,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if _, ok := startLocks.Load(path); ok {
 		return !external
 	}
-	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
 	if err == nil {
 		if locked {
 			release()
@@ -932,7 +1011,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
 		return true
 	}
-	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
 	if recoveryErr != nil || !recoveryLocked {
 		return true
 	}

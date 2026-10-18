@@ -290,6 +290,11 @@ func sessionTotalHandler(t *testing.T, total int) http.HandlerFunc {
 }
 
 func TestMCPDaemonServiceReusesVerifiedDaemon(t *testing.T) {
+	testMCPDaemonServiceReusesVerifiedDaemon(t, false)
+}
+
+func testMCPDaemonServiceReusesVerifiedDaemon(t *testing.T, legacy bool) {
+	t.Helper()
 	dir := runtimeTestDir(t)
 	forbidStartBackgroundServeForTransport(t, "MCP must reuse the running daemon")
 	host, port, pings := newMCPCacheDaemon(t, map[string]http.HandlerFunc{
@@ -299,12 +304,21 @@ func TestMCPDaemonServiceReusesVerifiedDaemon(t *testing.T) {
 		},
 	})
 	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	if legacy {
+		path, err := runtimeStore(dir).Path(os.Getpid())
+		require.NoError(t, err)
+		require.NoError(t, os.Rename(path, filepath.Join(dir, filepath.Base(path))))
+	}
 	svc := newMCPDaemonService(config.Config{DataDir: dir, AuthToken: "test-token"})
 
-	for range 3 {
+	for i := range 3 {
 		result, err := svc.List(t.Context(), service.ListFilter{})
 		require.NoError(t, err)
 		assert.Equal(t, 1, result.Total)
+		if legacy && i == 0 {
+			// A record at the new location must not replace the cached evidence.
+			writeDaemonRuntimeForTest(t, dir, host, port, "replacement", false)
+		}
 	}
 	assert.Equal(t, int32(1), pings.Load(), "only the first call discovers the daemon")
 }
@@ -554,7 +568,7 @@ func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
 	host, port = splitTestServerURL(t, readOnly.URL)
 	writeDaemonRuntimeForTest(t, readOnlyDir, host, port, "test", true)
 	oldList := listDaemonRuntimeRecords
-	listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 		records, err := store.List()
 		if err != nil {
 			return nil, err

@@ -1373,7 +1373,7 @@ func (s *Server) ListenAndServe() error {
 			Network: daemon.NetworkTCP,
 			Address: addr,
 		},
-		daemon.WithRuntimeStore(daemon.RuntimeStore{Dir: s.dataDir}),
+		daemon.WithRuntimeStore(daemon.RuntimeStore{Dir: config.RuntimeDir(s.dataDir)}),
 	)
 	if err != nil {
 		return err

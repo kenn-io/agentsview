@@ -11,6 +11,8 @@ The latest release is
 
 **Upgrade notes**
 
+- On Windows, stop the daemon before switching back to 0.45.0 or earlier.
+  Older versions can't see a daemon started by this version.
 - The container image now requires a bearer token. Read `auth_token` from
   `/data/config.toml` or set `AGENTSVIEW_AUTH_TOKEN_FILE` to a mounted token file.
   The image keeps its defaults when you pass flags:
@@ -191,6 +193,8 @@ The latest release is
 
 **Bug fixes**
 
+- On Windows, daemon commands no longer make backup and sync tools treat the
+  whole data directory as changed.
 - `agentsview prune` no longer deletes the shared `state.db` of Hermes or
   Augure Desktop. Sessions synced by 0.45.0 or earlier record the bare
   `state.db` path, and pruning one deleted the whole app database. The prune

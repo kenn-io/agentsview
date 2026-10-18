@@ -44,10 +44,10 @@ the underlying SSE events.
 
 ## Transport
 
-Detection uses kit daemon runtime records in `AGENTSVIEW_DATA_DIR` and the
-daemon ping endpoint. Runtime records include service and API metadata so
-incompatible or read-only daemons are not mistaken for a writable local archive
-owner.
+Detection uses kit daemon runtime records in `AGENTSVIEW_DATA_DIR` (its `run`
+subdirectory on Windows) and the daemon ping endpoint. Runtime records include
+service and API metadata so incompatible or read-only daemons are not mistaken
+for a writable local archive owner.
 
 - If `--server <url>` is set, supported commands proxy to that daemon over HTTP.
   `--server` and `--pg` are mutually exclusive. The local config `auth_token`
