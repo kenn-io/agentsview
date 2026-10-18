@@ -221,6 +221,13 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
+		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
+			rows := chatGPTModelRows(archived, stored)
+			if len(rows) == 0 {
+				return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
+			}
+			return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+		}
 		status, err := upsertConversation(ctx, store, result, nil)
 		rows := chatGPTModelRows(archived, stored)
 		if refusalReason(err) == RefusalShorterExport {
