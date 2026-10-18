@@ -192,13 +192,17 @@ func SyncClaudeAI(ctx context.Context, store BrowserSyncStore, fetch func(contex
 
 func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
 	id := result.Session.ID
+	msgs := claudeAIMessages(id, result.Messages)
+	if result.Session.Agent == parser.AgentChatGPT {
+		msgs = chatGPTMessages(id, result.Messages)
+	}
 	existing, err := store.GetSessionFull(ctx, id)
 	if err != nil {
 		return importNew, err
 	}
 	if existing == nil {
 		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-			Session: chatGPTSession(result.Session), Messages: claudeAIMessages(id, result.Messages),
+			Session: chatGPTSession(result.Session), Messages: msgs,
 			SkipSignalUpdates: true,
 		}})
 		if errors.Is(err, db.ErrSessionExcluded) {
@@ -206,7 +210,6 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		return importNew, err
 	}
-	msgs := claudeAIMessages(id, result.Messages)
 	archived, err := store.GetAllMessages(ctx, id)
 	if err != nil {
 		return importUpdated, err
