@@ -435,13 +435,11 @@ describe("syncChatGPTChrome", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("posts to the local Chrome route", async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response('event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n', {
-          headers: { "Content-Type": "text/event-stream" },
-        }),
-      );
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n', {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
     vi.stubGlobal("fetch", fetch);
     await syncChatGPTChrome();
     expect(fetch).toHaveBeenCalledExactlyOnceWith(
