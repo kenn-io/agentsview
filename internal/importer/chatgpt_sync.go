@@ -175,6 +175,9 @@ func parseChatGPTSyncConversation(detail []byte, id string) (parser.ParseResult,
 }
 
 func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
+	if err := fillChatGPTSyncStart(ctx, store, &result); err != nil {
+		return importSkipped, err
+	}
 	if storeArchiveContent(store).UsageOnly() {
 		return syncConversation(ctx, store, result)
 	}
@@ -208,6 +211,23 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 		return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
 	}
 	return status, err
+}
+
+func fillChatGPTSyncStart(ctx context.Context, store db.Store, result *parser.ParseResult) error {
+	if !result.Session.StartedAt.IsZero() {
+		return nil
+	}
+	stored, err := store.GetSessionFull(ctx, result.Session.ID)
+	if err != nil {
+		return err
+	}
+	if stored != nil && stored.StartedAt != nil {
+		result.Session.StartedAt, _ = db.ParseStoredTimestamp(*stored.StartedAt)
+	}
+	if result.Session.StartedAt.IsZero() && len(result.Messages) > 0 {
+		result.Session.StartedAt = result.Messages[0].Timestamp
+	}
+	return nil
 }
 
 func refreshChatGPTTimestamp(ctx context.Context, store db.Store, session db.Session) (importStatus, error) {
