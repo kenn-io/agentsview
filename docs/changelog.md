@@ -60,7 +60,8 @@ The latest release is
 
 - Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
   `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
-  and keeps the previous version of each chat it replaces in Trash.
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
 
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
