@@ -3917,6 +3917,8 @@ schemas keep their existing ordering behavior.
   user turns with matching ordinals, roles, timestamps, and sanitized surrounding
   text. Saved message and parent IDs must match when present in the archive;
   older ZIP imports have neither ID. Generated images use the browser snapshot.
+  Sync replaces turns with conflicting nonempty source message IDs, preserving
+  the old conversation in Trash when a pin would be lost.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
   Stream errors use `chatgpt_auth_required` for sign-in and
