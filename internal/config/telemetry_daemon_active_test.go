@@ -113,3 +113,50 @@ func TestClaimDaemonActiveConcurrent(t *testing.T) {
 	}
 	assert.EqualValues(t, 1, sends.Load())
 }
+
+func TestClaimDaemonActiveDoesNotBlockConfigSaves(t *testing.T) {
+	dir := t.TempDir()
+	heartbeat := Config{DataDir: dir, InstallationID: "install-one"}
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	var savesDone chan struct{}
+	go func() {
+		done <- heartbeat.ClaimDaemonActive(time.Now(), func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	defer func() {
+		close(release)
+		require.NoError(t, <-done)
+		if savesDone != nil {
+			<-savesDone
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "heartbeat callback did not start")
+	}
+	saved := make(chan error, 1)
+	savesDone = make(chan struct{})
+	go func() {
+		defer close(savesDone)
+		cfg := Config{DataDir: dir}
+		if err := cfg.SaveSettings(map[string]any{"chart_palette": ChartPaletteMatplotlib}); err != nil {
+			saved <- err
+			return
+		}
+		saved <- cfg.SaveTerminalConfig(TerminalConfig{Mode: "clipboard"})
+	}()
+	select {
+	case err := <-saved:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "config save waited for the heartbeat callback")
+	}
+	cfg := readConfigFile(t, dir)
+	assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
+	assert.Equal(t, "clipboard", cfg.Terminal.Mode)
+}

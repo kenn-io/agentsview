@@ -13,7 +13,7 @@ import (
 const telemetryDaemonActiveFilename = "telemetry-daemon-active"
 
 // ClaimDaemonActive calls send unless this installation already sent on the
-// UTC day of now. The config lock serializes daemons sharing the data
+// UTC day of now. A record-specific lock serializes daemons sharing the data
 // directory. It reserves the day in the record before calling send, so a
 // record that cannot be read or written never lets restarts send again. When
 // send fails, it undoes the reservation by putting back the previous record,
@@ -21,7 +21,7 @@ const telemetryDaemonActiveFilename = "telemetry-daemon-active"
 // installation reports nothing for that day.
 func (c *Config) ClaimDaemonActive(now time.Time, send func() error) error {
 	day := now.UTC().Format(time.DateOnly)
-	return c.withConfigLock(func() error {
+	return c.withFileLock(filepath.Join(c.DataDir, telemetryDaemonActiveFilename+".lock"), func() error {
 		path := filepath.Join(c.DataDir, telemetryDaemonActiveFilename)
 		previous, err := os.ReadFile(path)
 		existed := err == nil

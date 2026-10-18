@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	stdsync "sync"
 	"syscall"
 	"testing"
 	"time"
@@ -571,7 +573,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
-		server.WithTelemetryCapture(telemetryReporter.CaptureHandler()),
+		server.WithTelemetryCapture(telemetryCaptureHandler(cfg, telemetryReporter.CaptureHandler())),
 	}
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
@@ -1444,11 +1446,6 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 }
 
 func telemetryOptions(cfg config.Config) telemetry.Options {
-	if telemetry.EnabledFromEnv() {
-		if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
-			log.Printf("telemetry screen claims unavailable: %v", err)
-		}
-	}
 	opts := telemetry.Options{
 		InstallationID:   cfg.InstallationID,
 		InstalledAt:      cfg.InstallationCreatedAt,
@@ -1473,6 +1470,21 @@ func telemetryOptions(cfg config.Config) telemetry.Options {
 		}
 	}
 	return opts
+}
+
+func telemetryCaptureHandler(cfg config.Config, next http.Handler) http.Handler {
+	if !telemetry.EnabledFromEnv() {
+		return next
+	}
+	migrate := stdsync.OnceFunc(func() {
+		if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
+			log.Printf("telemetry screen claims unavailable: %v", err)
+		}
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		migrate()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg config.Config) {
