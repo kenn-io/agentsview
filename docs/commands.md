@@ -700,11 +700,12 @@ agentsview prune [flags]
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
 Filters combine with AND. With `--agent`, one prune removes matching parents
-and descendants, including matching trash. A descendant outside any supplied
-filter protects all its ancestors. Without `--agent`, prune excludes trash
-and parents.
+and descendants, including matching sessions in trash. A descendant that fails
+any filter keeps all its ancestors. Without `--agent`, prune skips trash and
+parents. The summary shows how many matches are in trash.
 
-To stop scanning the agent's source files too, add it to
+Prune keeps deleted sessions out of later syncs. To keep new sessions from
+that agent out of the archive, add it to
 [`disabled_agents`](/docs/configuration/#disabling-session-providers).
 
 **Examples:**

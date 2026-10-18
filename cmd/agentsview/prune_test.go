@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,85 +197,6 @@ func TestDeleteFilesDoesNotSplitHashDirectory(t *testing.T) {
 	assert.FileExists(t, prefix)
 }
 
-func TestParsePruneFlags(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		wantErr string
-		check   func(t *testing.T, cfg PruneConfig)
-	}{
-		{
-			name:    "no filters",
-			args:    []string{},
-			wantErr: "at least one filter",
-		},
-		{
-			name: "project filter",
-			args: []string{"--project", "myapp"},
-			check: func(t *testing.T, cfg PruneConfig) {
-				t.Helper()
-
-				assert.Equal(t, "myapp", cfg.Filter.Project)
-				assert.False(t, cfg.DryRun, "DryRun default")
-				assert.False(t, cfg.Yes, "Yes default")
-			},
-		},
-		{
-			name: "all flags",
-			args: []string{
-				"--project", "p",
-				"--max-messages", "5",
-				"--before", "2024-01-01",
-				"--first-message", "hello",
-				"--dry-run",
-				"--yes",
-			},
-			check: func(t *testing.T, cfg PruneConfig) {
-				t.Helper()
-
-				assert.Equal(t, "p", cfg.Filter.Project)
-				require.NotNil(t, cfg.Filter.MaxMessages)
-				assert.Equal(t, 5, *cfg.Filter.MaxMessages)
-				assert.Equal(t, "2024-01-01", cfg.Filter.Before)
-				assert.Equal(t, "hello", cfg.Filter.FirstMessage)
-				assert.True(t, cfg.DryRun, "DryRun should be true")
-				assert.True(t, cfg.Yes, "Yes should be true")
-			},
-		},
-		{
-			name:    "unknown flag",
-			args:    []string{"--bogus"},
-			wantErr: "flag provided but not defined",
-		},
-		{
-			name:    "negative max-messages",
-			args:    []string{"--max-messages", "-2"},
-			wantErr: "max-messages must be >= 0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := parsePruneFlags(tt.args)
-			if tt.wantErr != "" {
-				require.Error(t, err,
-					"expected error containing %q", tt.wantErr)
-				assert.Contains(t, err.Error(), tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			if tt.check != nil {
-				tt.check(t, cfg)
-			}
-		})
-	}
-}
-
-func TestParsePruneFlagsHelp(t *testing.T) {
-	_, err := parsePruneFlags([]string{"--help"})
-	require.ErrorIs(t, err, flag.ErrHelp)
-}
-
 func TestPrunerEmptyFilterReturnsError(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 
@@ -322,14 +242,14 @@ func TestWriteSummary(t *testing.T) {
 	sessions := []db.Session{
 		{ID: "s1", Project: "projA", FileSize: new(int64(1024))},
 		{ID: "s2", Project: "projA", FileSize: new(int64(2048))},
-		{ID: "s3", Project: "projB"},
+		{ID: "s3", Project: "projB", DeletedAt: new("2025-01-01T00:00:00Z")},
 	}
 
 	var buf bytes.Buffer
 	writeSummary(&buf, sessions)
 	out := buf.String()
 
-	want := `Found 3 sessions (3.0 KB on disk)
+	want := `Found 3 sessions (3.0 KB on disk), 1 in trash
 
 By project:
   projA                                    2

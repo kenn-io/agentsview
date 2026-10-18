@@ -6140,14 +6140,10 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 		return nil, errors.New("at least one filter is required")
 	}
 
-	where := "1 = 1"
-	if f.Agent == "" {
-		where = "deleted_at IS NULL"
-	}
+	where := "deleted_at IS NULL"
 	args := []any{}
-
 	if f.Agent != "" {
-		where += " AND agent = ?"
+		where = "agent = ?"
 		args = append(args, f.Agent)
 	}
 	if f.Project != "" {

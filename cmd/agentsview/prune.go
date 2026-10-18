@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -23,67 +22,6 @@ type PruneConfig struct {
 	Filter db.PruneFilter
 	DryRun bool
 	Yes    bool
-}
-
-func parsePruneFlags(args []string) (PruneConfig, error) {
-	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
-	project := fs.String(
-		"project", "",
-		"Sessions whose project contains this substring",
-	)
-	maxMessages := fs.Int(
-		"max-messages", -1,
-		"Sessions with at most N user messages",
-	)
-	before := fs.String(
-		"before", "",
-		"Sessions that ended before this date (YYYY-MM-DD)",
-	)
-	firstMessage := fs.String(
-		"first-message", "",
-		"Sessions whose first message starts with this text",
-	)
-	dryRun := fs.Bool(
-		"dry-run", false,
-		"Show what would be pruned without deleting",
-	)
-	yes := fs.Bool(
-		"yes", false,
-		"Skip confirmation prompt",
-	)
-
-	if err := fs.Parse(args); err != nil {
-		return PruneConfig{}, err
-	}
-
-	if *maxMessages < 0 && *maxMessages != -1 {
-		return PruneConfig{}, errors.New("max-messages must be >= 0")
-	}
-
-	var mm *int
-	if *maxMessages != -1 {
-		mm = maxMessages
-	}
-
-	cfg := PruneConfig{
-		Filter: db.PruneFilter{
-			Project:      *project,
-			MaxMessages:  mm,
-			Before:       *before,
-			FirstMessage: *firstMessage,
-		},
-		DryRun: *dryRun,
-		Yes:    *yes,
-	}
-
-	if !cfg.Filter.HasFilters() {
-		return PruneConfig{}, errors.New("at least one filter is required\n" +
-			"use --project, --max-messages, --before," +
-			" or --first-message",
-		)
-	}
-
-	return cfg, nil
 }
 
 // Pruner executes the prune workflow against a database.
@@ -163,6 +101,7 @@ func confirm(r io.Reader, w io.Writer, msg string) bool {
 
 func writeSummary(w io.Writer, sessions []db.Session) int {
 	var totalSize int64
+	trashed := 0
 	byProject := map[string]int{}
 	var projects []string
 	for _, s := range sessions {
@@ -170,6 +109,9 @@ func writeSummary(w io.Writer, sessions []db.Session) int {
 			projects = append(projects, s.Project)
 		}
 		byProject[s.Project]++
+		if s.DeletedAt != nil {
+			trashed++
+		}
 		if s.FilePath != nil && parser.OwnsAppStore(parser.AgentType(s.Agent), *s.FilePath) {
 			continue
 		}
@@ -184,6 +126,9 @@ func writeSummary(w io.Writer, sessions []db.Session) int {
 		"Found %d sessions (%s on disk)",
 		len(sessions), formatBytes(totalSize),
 	)
+	if trashed > 0 {
+		fmt.Fprintf(w, ", %d in trash", trashed)
+	}
 	kept := keptSourceFiles(sessions)
 	if kept > 0 {
 		writeKeptFiles(w, "will leave", kept)
