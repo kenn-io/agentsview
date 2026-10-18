@@ -230,6 +230,13 @@ The CLI can sync without an AgentsView tab open:
 agentsview import --type chatgpt --sync
 ```
 
+The first Sync has no stored freshness, so it fetches every chat once, including
+chats already stored by a ZIP import. At about 3 seconds per chat, a 2,000-chat
+archive takes about 100 minutes.
+
+A ZIP re-import of an archive written before this feature fills its chats'
+source IDs and models and reports them as **Updated** once.
+
 Sync checks each conversation's `update_time`, imports changed details through
 the existing ChatGPT parser, and appends compatible history to the existing
 `chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync

@@ -205,9 +205,23 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	}
 	if err == nil && status == importSkipped {
 		// Sync also refreshes the source timestamp when the messages match.
-		err = appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), nil)
+		return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
 	}
 	return status, err
+}
+
+func refreshChatGPTTimestamp(ctx context.Context, store db.Store, session db.Session) (importStatus, error) {
+	stored, err := store.GetSessionFull(ctx, session.ID)
+	if err != nil {
+		return importSkipped, err
+	}
+	if err := appendChatGPTMessages(ctx, store, session, nil); err != nil {
+		return importSkipped, err
+	}
+	if stored != nil && session.EndedAt != nil && !ptrEqual(stored.EndedAt, session.EndedAt) {
+		return importUpdated, nil
+	}
+	return importSkipped, nil
 }
 
 func chatGPTToolsChanged(archived, incoming []db.Message) bool {
@@ -217,8 +231,8 @@ func chatGPTToolsChanged(archived, incoming []db.Message) bool {
 	for i := range min(len(archived), len(incoming)) {
 		if !slices.EqualFunc(archived[i].ToolCalls, incoming[i].ToolCalls, func(a, b db.ToolCall) bool {
 			return a.ToolName == b.ToolName && a.Category == b.Category &&
-				a.InputJSON == b.InputJSON && a.ResultContent == b.ResultContent &&
-				a.ResultContentLength == b.ResultContentLength
+				a.InputJSON == b.InputJSON && (emptyToolResult(a) ||
+				a.ResultContent == b.ResultContent && a.ResultContentLength == b.ResultContentLength)
 		}) {
 			return true
 		}
