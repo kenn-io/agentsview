@@ -24,7 +24,8 @@ import (
 // observations for effectiveness rates. v19 adds session pull request links
 // and labels. v20 adds codex-cloud plan usage and capture coverage
 // (session_plan_usage).
-const SchemaVersion = 20
+// v21 adds messages.dialogue_text.
+const SchemaVersion = 21
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
