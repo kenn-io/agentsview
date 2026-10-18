@@ -3725,7 +3725,10 @@ schemas keep their existing ordering behavior.
   text, count, or title triggers a detail fetch. Title-only repairs count as
   updates and send session refresh notifications. Reverified 2026-10-11 with
   reconstructed fixtures in `TestSyncClaudeAIZipTitleFreshness` and
-  `TestClaudeAISyncMutationNotifications`. Sync stores messages in the same
+  `TestClaudeAISyncMutationNotifications`. Usage-only sync refreshes counts and end time for shorter snapshots with
+  unchanged retained rows before caching freshness. Reverified 2026-10-18 with
+  `TestSyncClaudeAIUsageArchiveShorterBranchRefreshesMetadata`. Sync stores
+  messages in the same
   shape as zip import, without source UUIDs. Pins match by role, text, and
   occurrence rank. Reverified 2026-10-08 against the reconstructed list and
   detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
@@ -3921,6 +3924,9 @@ schemas keep their existing ordering behavior.
   the old conversation in Trash when a pin would be lost.
   Model-only changes update retained message rows under full and transcripts
   storage before Sync caches freshness.
+  Usage-only sync refreshes counts and end time for shorter snapshots with
+  unchanged retained rows before caching freshness. Reverified 2026-10-18 with
+  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata`.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
   Stream errors use `chatgpt_auth_required` for sign-in and
