@@ -1,3 +1,4 @@
+import { untrack } from "svelte";
 import {
   Virtualizer,
   type VirtualizerOptions,
@@ -110,6 +111,12 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
     instance._willUpdate();
 
     postUpdate?.(instance, opts, cacheKeyChanged);
+
+    // TanStack calls onChange only when the visible range moves. Rows added
+    // below the viewport, such as new messages under a reader at the bottom,
+    // change the total size and items without moving it, so readers of
+    // `instance` would keep the old layout until the next scroll.
+    untrack(() => _version++);
 
     return () => {
       instance?._willUpdate();
