@@ -245,8 +245,13 @@ func TestSyncChatGPTEquivalentTimestampsSkipSecondDetail(t *testing.T) {
 }
 
 func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
-	for _, mapping := range []string{`{}`, `{"root":{"id":"root","message":null}}`} {
-		t.Run(mapping, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+	}{
+		{"empty mapping", `"mapping":{}`},
+		{"selected null root", `"mapping":{"root":{"id":"root","message":null}},"current_node":"root"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			details := 0
 			const laterID = "00000003-0000-4000-8000-000000000000"
@@ -258,7 +263,7 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + chatGPTSyncID + `","update_time":1},{"id":"` + laterID + `","update_time":1}],"total":2}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
 					details++
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"id":"` + chatGPTSyncID + `","update_time":1,"mapping":` + mapping + `}`)}, nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"id":"` + chatGPTSyncID + `","update_time":1,` + tc.fields + `}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, laterID, 0, false):
 					details++
 					return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), chatGPTSyncID, laterID))}, nil
