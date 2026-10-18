@@ -3927,9 +3927,11 @@ schemas keep their existing ordering behavior.
   older ZIP imports have neither ID. Matching turns fill empty source identities
   before Sync caches freshness under full and transcripts storage, verified by
   `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`.
-  Generated images use the browser snapshot. Every replacement keeps the
-  previous version in Trash under full, transcripts, and usage storage, with
-  its pins, notes, and any archived images. Usage-only preservation is verified by
+  Generated images use the browser snapshot. Sync keeps the previous version in
+  Trash when it replaces history with a different branch under full,
+  transcripts, and usage storage, with its pins, notes, and any archived images.
+  Appending turns makes no copy. Reverified with
+  `TestSyncChatGPTUsageArchiveAppendMakesNoTrashedCopy` and
   `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy` on 2026-10-18.
   Re-syncing the same chat makes no further copy, verified by
   `TestSyncChatGPTAppendFreshnessAndBranchChanges`,
