@@ -99,6 +99,12 @@ func openCodexThreadWatch(path string) (*codexThreadWatchState, error) {
 		w.port = port
 		w.states = make(map[*windows.Overlapped]*codexThreadWatchState)
 	}
+	// A cache rebuilt after invalidation only opens watches, so polls alone
+	// would never reclaim the watches the invalidation closed.
+	if err := drainCodexThreadWatches(); err != nil {
+		_ = windows.CloseHandle(handle)
+		return nil, err
+	}
 	if _, err := windows.CreateIoCompletionPort(handle, w.port, 0, 0); err != nil {
 		_ = windows.CloseHandle(handle)
 		return nil, err

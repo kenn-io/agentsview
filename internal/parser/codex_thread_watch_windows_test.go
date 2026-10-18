@@ -115,14 +115,30 @@ func TestCodexThreadWatchRecoversAfterNotificationFailure(t *testing.T) {
 	t.Cleanup(func() { cache.invalidate([]string{root}) })
 	_, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
-	handle := cache.roots[root].Value.(*codexThreadDirectory).watch.state.handle
-	require.NoError(t, windows.CloseHandle(handle))
+	state := cache.roots[root].Value.(*codexThreadDirectory).watch.state
+	require.NoError(t, windows.CancelIoEx(state.handle, &state.overlapped))
 	paths, err := cache.find(t.Context(), root, revertThread)
-	require.ErrorIs(t, err, windows.ERROR_INVALID_HANDLE)
+	require.ErrorIs(t, err, windows.ERROR_OPERATION_ABORTED)
 	assert.Empty(t, paths)
 	file := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
 	paths, err = cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	assert.Equal(t, []string{file}, paths)
+}
+
+func TestCodexThreadWatchReclaimsWatchesClosedByMissingParent(t *testing.T) {
+	factory, cfg, source := codexForkInventoryFixture(t, 0)
+	require.NoError(t, os.Remove(filepath.Join(cfg.Roots[0], "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")))
+	retained := func() int {
+		_, err := factory.NewProvider(cfg).Parse(t.Context(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		codexThreadWatches.mu.Lock()
+		defer codexThreadWatches.mu.Unlock()
+		return len(codexThreadWatches.states)
+	}
+	first := retained()
+	for range 50 {
+		require.LessOrEqual(t, retained(), first, "each parse with a missing parent closes its watches")
+	}
 }
