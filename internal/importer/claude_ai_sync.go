@@ -221,6 +221,9 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
+		if result.Session.Agent == parser.AgentChatGPT && len(msgs) < existing.MessageCount {
+			return replaceSyncedConversation(ctx, store, result, msgs, true)
+		}
 		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
 			rows := chatGPTModelRows(archived, stored)
 			if len(rows) == 0 {

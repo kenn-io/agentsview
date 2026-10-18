@@ -197,28 +197,42 @@ func TestSyncChatGPTUsageArchiveAppendMakesNoTrashedCopy(t *testing.T) {
 }
 
 func TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy(t *testing.T) {
-	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentUsage)
-	details := 0
-	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, true, "Question"), &details), nil)
-	require.NoError(t, err)
-	require.Equal(t, ImportStats{Imported: 1}, stats)
-	id := "chatgpt:" + chatGPTSyncID
-	assert.Empty(t, replacedCopies(t, d, id))
+	for _, trailingAssistant := range []bool{true, false} {
+		t.Run(fmt.Sprintf("trailingAssistant=%t", trailingAssistant), func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(config.ArchiveContentUsage)
+			details := 0
+			detail := chatGPTSyncDetail(1, true, "Question")
+			wantPreviousCount := 4
+			if !trailingAssistant {
+				detail = strings.TrimSuffix(strings.TrimPrefix(chatGPTChainConvID(chatGPTSyncID,
+					chatGPTNodeSpec{"user", "text", "Question"},
+					chatGPTNodeSpec{"assistant", "text", "Answer"},
+					chatGPTNodeSpec{"user", "text", "Follow up"},
+				), "["), "]")
+				wantPreviousCount = 3
+			}
+			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", detail, &details), nil)
+			require.NoError(t, err)
+			require.Equal(t, ImportStats{Imported: 1}, stats)
+			id := "chatgpt:" + chatGPTSyncID
+			assert.Empty(t, replacedCopies(t, d, id))
 
-	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Question"), &details), nil)
-	require.NoError(t, err)
-	assert.Equal(t, ImportStats{Updated: 1}, stats)
-	copies := replacedCopies(t, d, id)
-	require.Len(t, copies, 1)
-	assert.True(t, d.IsSessionTrashed(t.Context(), copies[0].ID))
-	assert.Equal(t, 4, copies[0].MessageCount)
-	assert.Equal(t, 2, copies[0].UserMessageCount)
-	session, err := d.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, 2, session.MessageCount)
-	assert.Equal(t, 1, session.UserMessageCount)
+			stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Question"), &details), nil)
+			require.NoError(t, err)
+			assert.Equal(t, ImportStats{Updated: 1}, stats)
+			copies := replacedCopies(t, d, id)
+			require.Len(t, copies, 1)
+			assert.True(t, d.IsSessionTrashed(t.Context(), copies[0].ID))
+			assert.Equal(t, wantPreviousCount, copies[0].MessageCount)
+			assert.Equal(t, 2, copies[0].UserMessageCount)
+			session, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, 2, session.MessageCount)
+			assert.Equal(t, 1, session.UserMessageCount)
+		})
+	}
 }
 
 func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
@@ -261,7 +275,9 @@ func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	require.Len(t, after, 1)
 	assert.Equal(t, "gpt-4o", after[0].Model)
 	before[0].Model = "gpt-4o"
+	before[0].ID = after[0].ID
 	assert.Equal(t, before, after)
+	assert.Len(t, replacedCopies(t, d, session.ID), 1)
 	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Skipped: 1}, stats)
