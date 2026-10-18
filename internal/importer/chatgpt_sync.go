@@ -160,6 +160,9 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 var errChatGPTFormat = errors.New("ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
 
 func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
+	if storeArchiveContent(store).UsageOnly() {
+		return syncConversation(ctx, store, result)
+	}
 	archived, err := store.GetAllMessages(ctx, result.Session.ID)
 	if err != nil {
 		return importSkipped, err

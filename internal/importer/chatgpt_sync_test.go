@@ -105,6 +105,39 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	assert.Equal(t, []string{"Rewritten question", "Answer"}, messageContents(messages))
 }
 
+func TestSyncChatGPTUsageArchiveUpdatesAppendedTurns(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	details := 0
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", chatGPTSyncDetail(1706745711, false, "Question"), &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Equal(t, 2, session.MessageCount)
+
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", chatGPTSyncDetail(1706745712, true, "Question"), &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	session, err = d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 4, session.MessageCount)
+	assert.Equal(t, 2, session.UserMessageCount)
+	require.NotNil(t, session.EndedAt)
+	assert.Equal(t, "2024-02-01T00:01:52Z", *session.EndedAt)
+	messages, err := d.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", ""}, messageContents(messages), "usage-only archives retain assistant activity without transcript text")
+
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", chatGPTSyncDetail(1706745712, true, "Question"), &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 2, details)
+}
+
 func TestSyncChatGPTRejectsInvalidSummaryAndOversizedResponse(t *testing.T) {
 	for _, tc := range []struct {
 		name string
