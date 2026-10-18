@@ -442,6 +442,8 @@
   "sidebar_filters_no_match": "一致しません",
   "sidebar_filters_no_agents": "エージェントなし",
   "sidebar_filters_machine": "マシン",
+  "sidebar_filters_machine_loading": "マシンを読み込み中...",
+  "sidebar_filters_machine_update_failed": "マシンのフィルターを更新できませんでした。もう一度お試しください。",
   "sidebar_filters_search_machines": "マシンを検索...",
   "sidebar_filters_no_machines": "マシンはありません",
   "sidebar_filters_min_prompts": "最小プロンプト",

@@ -16,6 +16,11 @@ MCP tool results warn when the archive is stale during a full parser rebuild.
 
 ## When To Use It
 
+Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
+unique whole display label. A valid 32-hex installation ID takes precedence even
+without stored sessions. Unknown or ambiguous names return an error with
+choices.
+
 Use the MCP server when you want a coding assistant to answer questions such as:
 
 - "Have I solved this error before?"
@@ -84,8 +89,8 @@ client will see these tools:
 | `search_docs`          | Search the AgentsView guides bundled with this version                   |
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
-(`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows include each
-session's labels, pull request links, and parent session. See
+(`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows
+include each session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
 
@@ -272,13 +277,12 @@ with `sessions_sort: "cost"`; pass `sessions_next_cursor` back as
 
 `get_tool_usage` and `get_quality_signals` use the analytics filters: `from` and
 `to` dates default to the 30 days ending today in UTC, and one-shot and
-automated sessions are excluded unless `include_one_shot` or
-`include_automated` is set. `get_tool_usage` counts tool calls by category,
-agent, and tool name with a weekly trend. `get_quality_signals` reports health
-grades, outcomes, tool failures and retries, edit churn, context pressure, and
-prompt quality, by agent and project. Set `signal`, such as
-`tool_failure_signals` or `edit_churn`, to also get up to `examples` sessions
-(default 5, maximum 20) that show it.
+automated sessions are excluded unless `include_one_shot` or `include_automated`
+is set. `get_tool_usage` counts tool calls by category, agent, and tool name
+with a weekly trend. `get_quality_signals` reports health grades, outcomes, tool
+failures and retries, edit churn, context pressure, and prompt quality, by agent
+and project. Set `signal`, such as `tool_failure_signals` or `edit_churn`, to
+also get up to `examples` sessions (default 5, maximum 20) that show it.
 
 `search_docs` searches the guides published at
 [agentsview.io/docs](https://agentsview.io/docs/) as shipped with this binary,

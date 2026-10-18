@@ -429,6 +429,8 @@
   "sidebar_filters_no_match": "無匹配",
   "sidebar_filters_no_agents": "無 agents",
   "sidebar_filters_machine": "Machine",
+  "sidebar_filters_machine_loading": "正在載入機器...",
+  "sidebar_filters_machine_update_failed": "無法更新機器篩選條件。請重試。",
   "sidebar_filters_search_machines": "搜尋 machines...",
   "sidebar_filters_no_machines": "無 machines",
   "sidebar_filters_min_prompts": "最少提示數",

@@ -3198,3 +3198,38 @@ describe("UsageStore project zoom", () => {
     },
   );
 });
+
+describe("invalid machine refetches", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+    usageServiceMocks.getApiV1UsageSummary.mockReset().mockResolvedValue(usageSummary());
+    usageServiceMocks.getApiV1UsageTopSessions.mockReset().mockResolvedValue([]);
+  });
+  it("clears cached usage scopes when the machine selector is rejected", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    sessions.filters.machine = "host-a";
+    await usage.fetchSummary({ loadComparison: false });
+    expect(usage.summary).not.toBeNull();
+    usage.setTimeRange("2024-01-10", "2024-01-20");
+    await vi.waitFor(() => expect(usage.querying.summary).toBe(false));
+    expect(usage.timeSeriesSummary).not.toBeNull();
+    usage.attributionSummary = usage.summary;
+    usage.referenceSummary = usage.summary;
+    usage.topSessions = [topSession("old-session")];
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce((params) => {
+      expect(params.machine).toBe("host-a");
+      return Promise.reject(
+        new apiRuntimeMocks.ApiError(400, "unknown machine", "invalid_machine_filter"),
+      );
+    });
+    await usage.fetchSummary({ loadComparison: false });
+    expect(usage.summary).toBeNull();
+    expect(usage.attributionSummary).toBeNull();
+    expect(usage.referenceSummary).toBeNull();
+    expect(usage.timeSeriesSummary).toBeNull();
+    expect(usage.topSessions).toBeNull();
+    expect(usage.errors.summary).toBe("unknown machine");
+  });
+});

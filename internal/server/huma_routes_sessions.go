@@ -76,7 +76,7 @@ type markdownDepth string
 type sessionFilterInput struct {
 	Project          string            `query:"project" doc:"Filter by project"`
 	ExcludeProject   string            `query:"exclude_project" doc:"Exclude a project"`
-	Machine          string            `query:"machine" doc:"Filter by machine"`
+	Machine          string            `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	GitBranch        string            `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	Agent            string            `query:"agent" doc:"Filter by agent"`
 	Date             string            `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
@@ -1092,6 +1092,9 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	if s.broadcaster != nil {
+		s.broadcaster.Emit("sessions")
+	}
 	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
@@ -1437,6 +1440,9 @@ func (s *Server) humaUploadSession(
 			"failed to save session to database")
 	}
 	cleanupCommittedUpload(uploadCommit)
+	if s.broadcaster != nil {
+		s.broadcaster.Emit("sessions")
+	}
 	main := results[0]
 	return &jsonOutput[uploadSessionResponse]{
 		Body: uploadSessionResponse{

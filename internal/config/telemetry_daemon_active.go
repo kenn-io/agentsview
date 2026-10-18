@@ -12,6 +12,8 @@ import (
 // last day a daemon_active event was accepted for sending.
 const telemetryDaemonActiveFilename = "telemetry-daemon-active"
 
+const telemetrySetupFinishedFilename = "telemetry-setup-finished"
+
 // ClaimDaemonActive calls send unless this installation already sent on the
 // UTC day of now. A record-specific lock serializes daemons sharing the data
 // directory. It reserves the day in the record before calling send, so a
@@ -21,24 +23,45 @@ const telemetryDaemonActiveFilename = "telemetry-daemon-active"
 // installation reports nothing for that day.
 func (c *Config) ClaimDaemonActive(now time.Time, send func() error) error {
 	day := now.UTC().Format(time.DateOnly)
-	return c.withFileLock(filepath.Join(c.DataDir, telemetryDaemonActiveFilename+".lock"), func() error {
-		path := filepath.Join(c.DataDir, telemetryDaemonActiveFilename)
+	return c.claimTelemetry(telemetryDaemonActiveFilename, c.InstallationID+" "+day, send)
+}
+
+// ClaimSetupFinished sends once per installation, across daemon restarts.
+func (c *Config) ClaimSetupFinished(send func() error) error {
+	return c.claimTelemetry(telemetrySetupFinishedFilename, c.InstallationID, send)
+}
+
+// SetupFinishedClaimed reports whether this installation already queued setup.
+func (c *Config) SetupFinishedClaimed() (claimed bool, err error) {
+	err = c.withConfigLock(func() error {
+		record, err := os.ReadFile(filepath.Join(c.DataDir, telemetrySetupFinishedFilename))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		claimed = err == nil && strings.TrimSpace(string(record)) == c.InstallationID
+		return err
+	})
+	return claimed, err
+}
+
+func (c *Config) claimTelemetry(filename, record string, send func() error) error {
+	path := filepath.Join(c.DataDir, filename)
+	return c.withFileLock(path+".lock", func() error {
 		previous, err := os.ReadFile(path)
 		existed := err == nil
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		id, recorded, _ := strings.Cut(strings.TrimSpace(string(previous)), " ")
-		if id == c.InstallationID && recorded == day {
+		if strings.TrimSpace(string(previous)) == record {
 			return nil
 		}
-		if err := c.writeInstallationFile(telemetryDaemonActiveFilename, c.InstallationID+" "+day); err != nil {
+		if err := c.writeInstallationFile(filename, record); err != nil {
 			return err
 		}
 		if err := send(); err != nil {
 			var undoErr error
 			if existed {
-				undoErr = c.writeInstallationFile(telemetryDaemonActiveFilename, strings.TrimSpace(string(previous)))
+				undoErr = c.writeInstallationFile(filename, strings.TrimSpace(string(previous)))
 			} else {
 				undoErr = os.Remove(path)
 			}

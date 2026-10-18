@@ -284,14 +284,15 @@ class ActivityStore {
     } catch (e) {
       if (isAbortError(e) || v !== this.loadVersion || !this.reportRead.isCurrent(signal))
         return false;
-      // A failed background refresh keeps the last good report on screen so a
+      // A temporary background failure keeps the last good report on screen so a
       // transient blip never blanks the report-first dashboard; the growing
       // "Updated Xm ago" label signals the staleness. With no report yet (a
       // first load still failing, or a refresh firing before one lands) there
       // is nothing to preserve, so fall through and surface the error rather
       // than leave a misleading empty state. First loads and range/filter
       // changes are always foreground and clear on error.
-      if (background && this.report !== null) return false;
+      const invalidMachine = e instanceof ApiError && e.code === "invalid_machine_filter";
+      if (background && this.report !== null && !invalidMachine) return false;
       this.report = null;
       this.error = e instanceof Error ? e.message : m.activity_report_load_failed();
       return false;
@@ -406,6 +407,7 @@ class ActivityStore {
     if (this.#filterOptionsPromise) return this.#filterOptionsPromise;
     const ver = this.#filterOptionsVersion;
     const signal = this.filterOptionsRead.begin();
+    const machine = this.machine;
     const opts = { include_one_shot: true, include_automated: true };
     let request!: Promise<boolean>;
     request = (async () => {
@@ -427,12 +429,31 @@ class ActivityStore {
         ok = false;
       }
       try {
-        const res = await MetadataService.getApiV1Machines(opts, { signal });
-        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
+        const res = await MetadataService.getApiV1Machines(
+          { ...opts, machine: machine || undefined },
+          { signal },
+        );
+        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal)) {
           this.machines = res.machines;
+          if (machine && this.machine === machine && res.resolved_machines?.length) {
+            this.machine = [...new Set(res.resolved_machines)].join(",");
+            this.writeUrl();
+          }
+        }
       } catch (e) {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
+        if (e instanceof ApiError && e.code === "invalid_machine_filter") {
+          const catalog = await MetadataService.getApiV1Machines(opts, { signal }).catch(
+            () => null,
+          );
+          if (
+            catalog &&
+            ver === this.#filterOptionsVersion &&
+            this.filterOptionsRead.isCurrent(signal)
+          )
+            this.machines = catalog.machines;
+        }
       }
       const current =
         ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
@@ -480,6 +501,7 @@ class ActivityStore {
     this.hydrateFromUrl(router.params);
     const onPop = () => {
       this.hydrateFromUrl(router.params);
+      void this.loadFilterOptions();
       void this.load();
     };
     window.addEventListener("popstate", onPop);
@@ -518,7 +540,9 @@ class ActivityStore {
     this.bucket = params.bucket ?? "";
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
-    this.machine = params.machine ?? "";
+    const machine = params.machine ?? "";
+    if (this.machine !== machine) this.invalidateFilterOptions();
+    this.machine = machine;
     this.automation = AUTOMATIONS.has(params.automation ?? "")
       ? (params.automation as Automation)
       : "all";

@@ -203,7 +203,7 @@ func newExportSessionsCommand() *cobra.Command {
 	flags.StringVar(&cfg.ExcludeProject, "exclude-project", "",
 		"Exclude sessions from the given project")
 	flags.StringVar(&cfg.Machine, "machine", "",
-		"Filter by machine name")
+		machineFilterHelp)
 	flags.StringVar(&cfg.GitBranch, "git-branch", "",
 		"Filter by project/branch token")
 	flags.StringVar(&cfg.Agent, "agent", "",

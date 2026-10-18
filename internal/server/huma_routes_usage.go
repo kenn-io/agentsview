@@ -51,7 +51,7 @@ type UsageFilterInput struct {
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
 	ProjectKey        string `query:"project_key" doc:"Filter by an opaque project key"`
-	Machine           string `query:"machine" doc:"Filter by machine"`
+	Machine           string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
@@ -163,7 +163,7 @@ func (s *Server) usageFilterFromInput(
 ) (db.UsageFilter, error) {
 	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
 	if err != nil {
-		return db.UsageFilter{}, serverError(err)
+		return db.UsageFilter{}, usageSummaryAPIError(err)
 	}
 	in.Machine = machine
 	req := usageRequestFromInput(in)
@@ -212,12 +212,16 @@ func usageSummaryAPIError(err error) error {
 func (s *Server) humaUsageSummaryStream(
 	ctx context.Context, in *UsageSummaryInput,
 ) (*huma.StreamResponse, error) {
-	// Resolve project keys before the stream starts so an unknown key is a
-	// 400 like /usage/summary, not a 200 followed by an SSE error event.
-	// The resolved request has no keys left, so UsageSummary skips them.
-	req, err := service.ResolveUsageProjectKeys(
-		ctx, s.db, usageSummaryRequestFromInput(*in),
-	)
+	// Resolve the machine and project keys before the stream starts so an
+	// unknown selector is a 400 like /usage/summary, not a 200 followed by an
+	// SSE error event. The resolved request has no keys left, so UsageSummary
+	// skips them.
+	req := usageSummaryRequestFromInput(*in)
+	machine, err := db.ResolveMachineFilter(ctx, s.db, req.Machine)
+	if err == nil {
+		req.Machine = machine
+		req, err = service.ResolveUsageProjectKeys(ctx, s.db, req)
+	}
 	if err == nil {
 		_, err = service.BuildUsageFilter(req, s.modelGroups)
 	}

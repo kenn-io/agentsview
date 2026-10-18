@@ -67,6 +67,7 @@ type Store interface {
 	GetActiveProjectLabels(ctx context.Context) ([]string, error)
 	GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]AgentInfo, error)
 	GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error)
+	GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error)
 	GetMachineLabels(ctx context.Context) (map[string]string, error)
 	GetMachineAliases(ctx context.Context) (map[string]string, error)
 	GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]BranchInfo, error)

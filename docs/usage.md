@@ -505,7 +505,7 @@ filter categories that can be combined:
 - **Agent** — searchable multi-select of
   [supported agents](/docs/configuration/#session-discovery). Click an agent
   to toggle its selection; multiple agents can be active at once.
-- **Machine** — searchable multi-select of machine names. Surfaces in shared
+- **Machine** — searchable multi-select of machine labels. Surfaces in shared
   [PostgreSQL sync](/docs/pg-sync/) deployments when more than five machines
   have pushed sessions.
 - **Status** — three-pill multi-select of the
@@ -574,7 +574,7 @@ Available URL filters:
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `project`                      | comma-separated project names                                                                                             |
 | `agent`                        | comma-separated agent ids                                                                                                 |
-| `machine`                      | comma-separated machine names                                                                                             |
+| `machine`                      | exact IDs or aliases, comma-separated ID/alias lists, or one unique whole display label                                   |
 | `termination`                  | comma-separated [status](#session-status-indicator) tiers — any of `active`, `stale`, `unclean`, `clean`, `awaiting_user` |
 | `date`, `date_from`, `date_to` | ISO date or activity-overlap range bounds                                                                                 |
 | `active_since`                 | `true` to limit to the last 24 hours                                                                                      |
@@ -583,6 +583,14 @@ Available URL filters:
 | `include_one_shot`             | `false` to hide single-turn sessions (default)                                                                            |
 | `include_automated`            | `true` to include automated sessions                                                                                      |
 | `exclude_project`              | comma-separated projects to hide (e.g. `unknown`)                                                                         |
+
+Unknown or ambiguous machine selectors, including stale saved filters, return
+HTTP 400 with known choices. The full selector stays selected until you edit or
+clear it.
+
+A URL with one machine's display name, such as `?machine=Workstation`, switches
+to that machine's ID after the server resolves it, so the picker shows it
+checked. Unknown or ambiguous names show an error instead of earlier results.
 
 ### Navigation
 

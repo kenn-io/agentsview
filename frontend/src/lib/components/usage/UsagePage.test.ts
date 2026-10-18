@@ -7,7 +7,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
-import { UsageService } from "../../api/generated/index";
+import { MetadataService, UsageService } from "../../api/generated/index";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -154,6 +154,49 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("loads usage once with the resolved machine from a label deep link", async () => {
+    const requests = vi
+      .spyOn(UsageService, "getApiV1UsageSummary")
+      .mockResolvedValue(usageSummaryWithUnsupported());
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
+      priorFrom: "2026-02-01",
+      priorTo: "2026-02-28",
+      priorTotalCost: testMoney(0),
+      deltaPct: 0,
+    });
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const metadata =
+      Promise.withResolvers<Awaited<ReturnType<typeof MetadataService.getApiV1Machines>>>();
+    vi.spyOn(MetadataService, "getApiV1Machines").mockReturnValue(metadata.promise);
+    router.route = "usage";
+    router.params = { machine: "Workstation", from: "2026-03-01", to: "2026-03-31" };
+    const savedFilters = sessions.filters;
+    sessions.initFromParams(router.params);
+
+    try {
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+
+      metadata.resolve({
+        machines: ["id-a"],
+        resolved_machines: ["id-a"],
+        machine_labels: { "id-a": "Workstation" },
+        machine_aliases: {},
+      });
+      await sessions.loadMachines();
+      await flushEffects();
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+
+      expect(requests.mock.calls.map(([params]) => params?.machine)).toEqual(["id-a"]);
+    } finally {
+      if (component) await unmount(component);
+      component = undefined;
+      usage.cancelInFlightReads();
+      sessions.filters = savedFilters;
+    }
+  });
+
   it("keeps session-list label and pull request filters when the URL sets a shared filter", async () => {
     vi.stubGlobal(
       "ResizeObserver",

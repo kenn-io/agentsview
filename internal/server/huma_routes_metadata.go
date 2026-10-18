@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -31,6 +32,11 @@ type statsInput struct {
 	BoolIncludeInput
 }
 
+type machinesInput struct {
+	BoolIncludeInput
+	Machine string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
+}
+
 type sessionStatsInput struct {
 	BoolIncludeInput
 	Since                 string   `query:"since" doc:"Start of window"`
@@ -48,9 +54,10 @@ type projectsResponse struct {
 }
 
 type machinesResponse struct {
-	Machines       []string          `json:"machines"`
-	MachineLabels  map[string]string `json:"machine_labels"`
-	MachineAliases map[string]string `json:"machine_aliases"`
+	Machines         []string          `json:"machines" doc:"Picker catalog filtered by visibility flags"`
+	ResolvedMachines []string          `json:"resolved_machines,omitempty" doc:"Canonical IDs for the machine selector, independent of catalog visibility"`
+	MachineLabels    map[string]string `json:"machine_labels"`
+	MachineAliases   map[string]string `json:"machine_aliases"`
 }
 
 func (s *Server) machineAliases(ctx context.Context) (map[string]string, error) {
@@ -134,12 +141,8 @@ func (s *Server) humaListProjects(
 
 func (s *Server) humaListMachines(
 	ctx context.Context,
-	in *statsInput,
+	in *machinesInput,
 ) (*jsonOutput[machinesResponse], error) {
-	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
-	if err != nil {
-		return nil, serverError(err)
-	}
 	labels, err := s.db.GetMachineLabels(ctx)
 	if err != nil {
 		return nil, serverError(err)
@@ -148,7 +151,19 @@ func (s *Server) humaListMachines(
 	if err != nil {
 		return nil, serverError(err)
 	}
-	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, MachineLabels: labels, MachineAliases: aliases}}, nil
+	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	var resolved []string
+	if strings.TrimSpace(in.Machine) != "" {
+		machine, err := db.ResolveMachineFilterWithMetadata(ctx, s.db, in.Machine, labels, aliases)
+		if err != nil {
+			return nil, serverError(err)
+		}
+		resolved = strings.Split(machine, ",")
+	}
+	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, ResolvedMachines: resolved, MachineLabels: labels, MachineAliases: aliases}}, nil
 }
 
 func (s *Server) humaListBranches(

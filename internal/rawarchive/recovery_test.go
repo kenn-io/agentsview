@@ -18,6 +18,43 @@ import (
 	"go.kenn.io/docbank"
 )
 
+func TestRecoveryPreservesSetupClaim(t *testing.T) {
+	ctx := t.Context()
+	opts := captureFixture(t)
+	opts.Roots[0].Provider = "files"
+	const installation = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dbtest.WriteTestFile(t, filepath.Join(opts.DataDir, "telemetry-install-id"), []byte(installation))
+	cfg := config.Config{DataDir: opts.DataDir, InstallationID: installation}
+	require.NoError(t, cfg.ClaimSetupFinished(func() error { return nil }))
+	capture, err := Capture(ctx, opts)
+	require.NoError(t, err)
+	for _, omission := range capture.Omissions {
+		if omission.RootID == "application" {
+			assert.NotEqual(t, "telemetry-setup-finished", omission.Path)
+		}
+	}
+	seed := filepath.Join(t.TempDir(), "seed")
+	_, err = Seed(ctx, filepath.Join(opts.Destination, "capture.json"), seed, nil)
+	require.NoError(t, err)
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	archive, err := Open(ctx, database, seed, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
+	backup := filepath.Join(t.TempDir(), "backup")
+	report, err := archive.Backup(ctx, backup, opts.Settings, "test")
+	require.NoError(t, err)
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = Restore(ctx, backup, report.SnapshotID, restored, nil)
+	require.NoError(t, err)
+	restoredCfg := config.Config{DataDir: restored, InstallationID: installation}
+	require.NoError(t, restoredCfg.ClaimSetupFinished(func() error {
+		assert.Fail(t, "restore reported setup again")
+		return nil
+	}))
+}
+
 func TestRecoveryPreservesBlockedResultCategories(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

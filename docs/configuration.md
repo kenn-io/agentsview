@@ -154,8 +154,14 @@ The display label defaults to the current hostname. Set `local_machine_name` in
 non-empty label is allowed, including `local`. Changing the label leaves session
 keys unchanged; PostgreSQL and DuckDB receive the label on the next push.
 Creating the identity does not rewrite `config.toml` or its comments. A missing
-cursor secret is still generated and saved. Machine filters use keys;
-`/api/v1/machines` returns display labels and known aliases separately.
+cursor secret is still generated and saved.
+
+Session filters accept an exact ID or alias, a comma-separated list of IDs and
+aliases, or one display label matched as the whole value, case-sensitively.
+Unknown names and labels shared by several machines return an error that lists
+known machines. Use `/api/v1/machines` to look up IDs, display labels, and aliases.
+
+Project rules and worktree mappings accept only IDs and aliases.
 
 ### Upgrading Historical Machine Keys
 
@@ -2210,6 +2216,25 @@ not send another ping that day. The web UI also reports an anonymous
 `app_opened` event to the server when it loads and on the first focus of a later
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
+
+The server sends `setup_finished` once per installation when the archive first
+has a session in the default session list. Sessions need messages to count;
+automated sessions and trash are excluded. Child sessions count when their
+parent is missing and the list shows them as roots. It checks at startup, after
+session changes, and every hour. After a failed attempt it waits for the hourly
+check before trying again. The `telemetry-setup-finished` file beside the
+installation identity records the claim across restarts and servers sharing the
+data directory. Captures, seeds, backups, and restores preserve the claim with
+the installation identity when the snapshot contains it. Restoring a snapshot
+from before the claim can queue `setup_finished` again for the same installation
+ID. Ordinary imports keep the receiving installation's claim. The event carries
+no session details and follows the same telemetry opt-out. Existing installs
+with such a session send it on their first start after upgrading.
+
+The claim records that the event entered the telemetry queue, not that PostHog
+received it. Delivery is best effort: if the server stops or the network fails
+before the queue flushes, the event is lost and is not sent again. Only the
+server sends `setup_finished`; the web UI's telemetry route rejects that event.
 
 The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
 of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,

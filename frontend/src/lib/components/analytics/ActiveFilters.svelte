@@ -23,11 +23,7 @@
       ? analytics.model.split(",").filter((model) => model.length > 0)
       : [],
   );
-  const selectedMachines = $derived(
-    analytics.machine
-      ? analytics.machine.split(",")
-      : [],
-  );
+  const selectedMachines = $derived(sessions.selectedMachines);
 
   const selectedStatuses = $derived(
     analytics.termination

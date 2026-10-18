@@ -18778,7 +18778,7 @@ type GetAPIV1ActivityReportQuery struct {
 	// Agent Filter by agent
 	Agent *string `json:"agent,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// Automation Automation class: all, interactive, or automated
@@ -18893,7 +18893,7 @@ type GetAPIV1AnalyticsSignalSessionsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// Project Filter by project
@@ -19006,7 +19006,7 @@ type GetAPIV1AnalyticsSignalsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// Project Filter by project
@@ -19100,7 +19100,7 @@ type GetAPIV1AnalyticsToolsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// Project Filter by project
@@ -19225,6 +19225,9 @@ type GetAPIV1MachinesQuery struct {
 
 	// IncludeAutomated Include automated sessions
 	IncludeAutomated *bool `json:"include_automated,omitempty"`
+
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
+	Machine *string `json:"machine,omitempty"`
 }
 
 type GetAPIV1ProjectsQuery struct {
@@ -19371,7 +19374,7 @@ type GetAPIV1SearchContentQuery struct {
 	// ExcludeProject Exclude a project
 	ExcludeProject *string `json:"exclude_project,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
@@ -19636,7 +19639,7 @@ type GetAPIV1SessionsQuery struct {
 	// ExcludeProject Exclude a project
 	ExcludeProject *string `json:"exclude_project,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
@@ -19885,7 +19888,7 @@ type GetAPIV1UsagePairwiseComparisonQuery struct {
 	// ProjectKey Filter by an opaque project key
 	ProjectKey *string `json:"project_key,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
@@ -19995,7 +19998,7 @@ type GetAPIV1UsageSummaryQuery struct {
 	// ProjectKey Filter by an opaque project key
 	ProjectKey *string `json:"project_key,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
@@ -20090,7 +20093,7 @@ type GetAPIV1UsageSummaryStreamQuery struct {
 	// ProjectKey Filter by an opaque project key
 	ProjectKey *string `json:"project_key,omitempty"`
 
-	// Machine Filter by machine
+	// Machine Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400.
 	Machine *string `json:"machine,omitempty"`
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
@@ -24452,7 +24455,12 @@ type FillStats struct {
 type MachinesResponse struct {
 	MachineAliases map[string]string `json:"machine_aliases"`
 	MachineLabels  map[string]string `json:"machine_labels"`
-	Machines       []string          `json:"machines" validate:"required"`
+
+	// Machines Picker catalog filtered by visibility flags
+	Machines []string `json:"machines" validate:"required"`
+
+	// ResolvedMachines Canonical IDs for the machine selector, independent of catalog visibility
+	ResolvedMachines []string `json:"resolved_machines,omitempty"`
 }
 
 func (m MachinesResponse) Validate() error {

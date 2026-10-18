@@ -104,7 +104,7 @@ known.
 | `--json`                     | Alias for `--format json`.                                                                                                                                                                     |
 | `--server <url>`             | Explicit daemon URL for HTTP-backed operations.                                                                                                                                                |
 | `--server-token-file <path>` | Bearer token file for an explicit `--server` URL.                                                                                                                                              |
-| `--machine <value>`          | Filter bare Codebuff/Freebuff timestamp resolution to a single machine identity (`local`, a name, or `*`). Default `local`. `session get` only; canonical IDs and other agents are unaffected. |
+| `--machine <value>`          | Filter bare Codebuff/Freebuff timestamp resolution to one machine (`local`, ID, alias, name, or `*`). Default `local`. `session get` only; canonical IDs and other agents are unaffected.      |
 | `--pg`                       | Read from configured PostgreSQL instead of SQLite.                                                                                                                                             |
 
 ## Shared metadata endpoints
@@ -121,6 +121,13 @@ GET /api/v1/machines
 GET /api/v1/branches
 GET /api/v1/agents
 ```
+
+`GET /api/v1/machines` returns the picker catalog and applies the visibility
+flags in its `machines` array. With `?machine=Workstation`, the separate
+`resolved_machines` array contains the canonical selector IDs, even when those
+IDs have no visible or stored sessions. It is omitted without a selector. Visibility
+flags do not limit resolution. Unknown or ambiguous selectors return HTTP 400
+with known choices.
 
 `GET /api/v1/branches` returns distinct `(project, branch)` pairs plus an opaque
 `token` field:
@@ -254,6 +261,13 @@ reveals it. Human stdout stays unchanged, and the JSON catalog is additive, so
 redirecting or piping structured output remains safe. The JSON `total` continues
 to describe the filtered result, not the excluded sessions. Use the
 `--include-*` flags to opt back in.
+
+Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
+unique whole display label. Exact ID/alias lists take precedence over a
+same-spelled label. Otherwise, the complete input is matched against labels,
+including labels containing commas. A valid 32-character hexadecimal installation
+ID takes precedence over a same-text label even without stored sessions. Unknown or ambiguous selectors
+return HTTP 400 with code `invalid_machine_filter`.
 
 In JSON output, `sessions[].machine` keeps the machine key. Look it up in the
 top-level `machine_labels` map when a display name is needed. A key without a
@@ -1161,7 +1175,7 @@ route and are not subject to the ordinary 30-second operation timeout.
 | `project`    | Filter by project                                          |
 | `git_branch` | Filter by opaque branch token from `GET /api/v1/branches`  |
 | `agent`      | Filter by agent                                            |
-| `machine`    | Filter by machine                                          |
+| `machine`    | Exact ID, alias, ID/alias list, or unique whole display label; unknown or ambiguous values return HTTP 400 |
 | `automation` | `all`, `interactive`, or `automated`; default `all`        |
 
 Project, branch, agent, and machine filters are limited to 1,024 UTF-8 bytes

@@ -224,3 +224,7 @@ func (s sessionsSQL) MessageWindowSQL(sessionID string, w db.MessageWindow) (str
 func (s sessionsSQL) ScanMessages(rows db.MessageRows) ([]db.Message, error) {
 	return scanMessages(rows)
 }
+
+func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
+	return s.sessions().GetMatchingMachineIDs(ctx, candidates)
+}

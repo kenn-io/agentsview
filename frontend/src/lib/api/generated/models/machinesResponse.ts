@@ -7,5 +7,8 @@ import type { MachinesResponseMachineLabels } from "./machinesResponseMachineLab
 export interface MachinesResponse {
   machine_aliases: MachinesResponseMachineAliases;
   machine_labels: MachinesResponseMachineLabels;
+  /** Picker catalog filtered by visibility flags */
   machines: string[];
+  /** Canonical IDs for the machine selector, independent of catalog visibility */
+  resolved_machines?: string[];
 }

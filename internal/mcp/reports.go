@@ -27,7 +27,7 @@ type analyticsIn struct {
 	To               string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD). Default: today (UTC)."`
 	Project          string `json:"project,omitempty" jsonschema:"Filter by project."`
 	Agent            string `json:"agent,omitempty" jsonschema:"Filter by agent."`
-	Machine          string `json:"machine,omitempty" jsonschema:"Filter by machine."`
+	Machine          string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
 	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
 	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
 }
@@ -97,7 +97,7 @@ type activityReportIn struct {
 	Timezone       string `json:"timezone,omitempty" jsonschema:"IANA timezone for the range, e.g. America/New_York. Default UTC."`
 	Project        string `json:"project,omitempty" jsonschema:"Filter by project."`
 	Agent          string `json:"agent,omitempty" jsonschema:"Filter by agent."`
-	Machine        string `json:"machine,omitempty" jsonschema:"Filter by machine."`
+	Machine        string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
 	Automation     string `json:"automation,omitempty" jsonschema:"all (default), interactive, or automated."`
 	SessionsSort   string `json:"sessions_sort,omitempty" jsonschema:"Order of the session list: agent_minutes (default) or cost, largest first."`
 	SessionsLimit  int    `json:"sessions_limit,omitempty" jsonschema:"Sessions per page, default 20, max 100."`
@@ -168,7 +168,7 @@ type compareUsageIn struct {
 	From      string `json:"from,omitempty" jsonschema:"Range start date (YYYY-MM-DD)."`
 	To        string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD)."`
 	Agent     string `json:"agent,omitempty" jsonschema:"Filter both sides by agent."`
-	Machine   string `json:"machine,omitempty" jsonschema:"Filter both sides by machine."`
+	Machine   string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
 }
 
 func (t *toolset) compareUsage(

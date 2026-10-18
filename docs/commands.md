@@ -1143,7 +1143,7 @@ agentsview activity report [flags]
 | `--bucket`   | automatic | Bucket size: `5m`, `15m`, `1h`, `1d`, or `1w`         |
 | `--project`  |           | Filter by project                                     |
 | `--agent`    |           | Filter by agent name                                  |
-| `--machine`  |           | Filter by machine name                                |
+| `--machine`  |           | ID, alias, ID/alias list, or unique display name      |
 | `--format`   | `human`   | Output format: `human` or `json`                      |
 | `--json`     | `false`   | Alias for `--format json`                             |
 | `--no-sync`  | `false`   | Skip on-demand sync before querying                   |
@@ -1636,7 +1636,7 @@ agentsview export sessions [flags]
 | `--all`               | `false` | Export every eligible page as one output stream           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
-| `--machine`           |         | Filter by machine name                                    |
+| `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
 | `--git-branch`        |         | Filter by project/branch token                            |
 | `--agent`             |         | Filter by agent name                                      |
 | `--date`              |         | Include sessions active on `YYYY-MM-DD`                   |
@@ -1738,6 +1738,10 @@ document. Refresh saved digests when changing versions.
 ______________________________________________________________________
 
 ### `agentsview session`
+
+Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
+unique whole display label. A valid 32-hex installation ID takes precedence even
+without stored sessions. Unknown or ambiguous names return an error with choices.
 
 Programmatic access to session data for scripts, automation agents, and CI jobs.
 See [Session API](/docs/session-api/) for full documentation, including

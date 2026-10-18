@@ -714,6 +714,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	fmt.Printf("Database: %s\n", cfg.DBPath)
 
 	startTelemetryPings(ctx, telemetryReporter, cfg)
+	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
 
 	if vectorServe.Scheduler != nil {
 		go vectorServe.Scheduler.Run(ctx)

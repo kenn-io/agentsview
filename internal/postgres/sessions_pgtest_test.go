@@ -584,3 +584,17 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 	assert.Equal(t, []string{"plain-id"}, got)
 	t.Logf("head: postgres_root=%v colon=%v wildcard=%v trashed=%v entry=%v exact=%v", rootIDs, colonIDs, wildcardIDs, trashedIDs, entryIDs, got)
 }
+
+func TestGetMatchingMachineIDs(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent)
+		VALUES ('machine-match', 'machine-a', 'project', 'claude')`)
+	require.NoError(t, err)
+	ids, err := store.GetMatchingMachineIDs(t.Context(), []string{"machine-a", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"machine-a"}, ids)
+}
