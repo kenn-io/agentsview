@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-const source = readFileSync("chrome-extension/chatgpt_fetch.js", "utf8");
+const source =
+  readFileSync("chrome-extension/claude_fetch.js", "utf8") +
+  "\n" +
+  readFileSync("chrome-extension/chatgpt_fetch.js", "utf8");
 
 function loadFetch(fetch: typeof globalThis.fetch) {
   const context: Record<string, unknown> = {
@@ -145,5 +148,17 @@ describe("ChatGPT page fetch", () => {
       chatgptFetch("https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated"),
     ).resolves.toEqual({ status: 429, body: "", retryAfter: "120" });
     expect(fetch).toHaveBeenCalledOnce();
+  });
+  it("returns 413 for an oversized conversation through the shared page reader", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accessToken: "synthetic-test-value" })))
+      .mockResolvedValueOnce(new Response(new Uint8Array(32 * 1024 * 1024 + 1)));
+    await expect(
+      loadFetch(fetch)(
+        "https://chatgpt.com/backend-api/conversation/22222222-2222-4222-8222-222222222222",
+      ),
+    ).resolves.toEqual({ status: 413, body: "" });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

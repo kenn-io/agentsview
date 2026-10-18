@@ -8,7 +8,6 @@ const shapeFiles = {
 async function shapesFor(platform) {
   if (!Object.hasOwn(shapeFiles, platform)) return undefined;
   const file = shapeFiles[platform];
-  if (!file) return undefined;
   if (!requestShapes.has(platform)) {
     const pending = fetch(chrome.runtime.getURL(file))
       .then(async (response) => {

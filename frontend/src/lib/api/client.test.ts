@@ -447,7 +447,7 @@ describe("syncChatGPTChrome", () => {
     const onProgress = vi.fn();
     await expect(syncChatGPTChrome({ onProgress })).resolves.toMatchObject({ imported: 1 });
     expect(fetch).toHaveBeenCalledExactlyOnceWith(
-      "/api/v1/import/chatgpt/sync?browser=chrome",
+      "/api/v1/import/chatgpt/sync",
       expect.objectContaining({ method: "POST" }),
     );
     expect(onProgress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });

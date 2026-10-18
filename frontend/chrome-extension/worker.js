@@ -32,14 +32,14 @@ const platforms = {
     origin: "https://claude.ai",
     tabURL: "https://claude.ai/*",
     newTabURL: "https://claude.ai/new",
-    script: "claude_fetch.js",
+    scripts: ["claude_fetch.js"],
     fetchFunction: "claudeFetch",
   },
   chatgpt: {
     origin: "https://chatgpt.com",
     tabURL: "https://chatgpt.com/*",
     newTabURL: "https://chatgpt.com/",
-    script: "chatgpt_fetch.js",
+    scripts: ["claude_fetch.js", "chatgpt_fetch.js"],
     fetchFunction: "chatgptFetch",
   },
 };
@@ -53,9 +53,16 @@ async function request({ id, path, platform }, port) {
     if (!tab) tab = await chrome.tabs.create({ url: config.newTabURL, active: false });
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
-    await chrome.scripting.executeScript({ target, files: [config.script], world: "ISOLATED" });
-    const [reply] = await chrome.scripting.executeScript({ target, world: "ISOLATED", func: (name, url) => typeof globalThis[name] === "function" ? globalThis[name](url) : undefined, args: [config.fetchFunction, `${config.origin}${path}`] });
-    if (typeof reply?.result?.status !== "number") throw new Error("The browser page changed during Sync; try Sync again");
+    await chrome.scripting.executeScript({ target, files: config.scripts, world: "ISOLATED" });
+    const [reply] = await chrome.scripting.executeScript({
+      target,
+      world: "ISOLATED",
+      func: (name, url) =>
+        typeof globalThis[name] === "function" ? globalThis[name](url) : undefined,
+      args: [config.fetchFunction, `${config.origin}${path}`],
+    });
+    if (typeof reply?.result?.status !== "number")
+      throw new Error("The browser page changed during Sync; try Sync again");
     result = { ...reply.result, id, platform, version };
   } catch (error) {
     result = { id, platform, version, status: 0, error: error.message };

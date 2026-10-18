@@ -134,6 +134,27 @@ type claudeAISyncResult struct {
 }
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
+	if err := s.cfg.ClaudeAI.Err; err != nil {
+		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_config_invalid", err.Error())
+	}
+	return s.syncBrowser(ctx, chromehost.ClaudeAI, in.Browser == "chrome", results, browserSyncCodes{
+		hostRequired: "claude_ai_chrome_host_required", running: "claude_ai_sync_running",
+		authRequired: "claude_ai_auth_required", updateRequired: "claude_ai_chrome_host_update_required",
+	})
+}
+
+func (s *Server) humaSyncChatGPT(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+	return s.syncBrowser(ctx, chromehost.ChatGPT, true, nil, browserSyncCodes{
+		hostRequired: "chrome_host_required", running: "chrome_sync_running",
+		authRequired: "chatgpt_auth_required", updateRequired: "chrome_host_update_required",
+	})
+}
+
+type browserSyncCodes struct {
+	hostRequired, running, authRequired, updateRequired string
+}
+
+func (s *Server) syncBrowser(ctx context.Context, platform chromehost.Platform, chrome bool, results *sync.Map, codes browserSyncCodes) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
 	}
@@ -147,17 +168,14 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
-	if err := s.cfg.ClaudeAI.Err; err != nil {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_config_invalid", err.Error())
+	if chrome && !s.chrome.Connected() {
+		return nil, apiErrorWithCode(http.StatusConflict, codes.hostRequired, "Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
 	}
-	if in.Browser == "chrome" && !s.chrome.Connected() {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
-	}
-	if in.Browser == "chrome" && !s.chrome.syncMu.TryLock() {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_sync_running", "Chrome Sync is already running")
+	if chrome && !s.chrome.syncMu.TryLock() {
+		return nil, apiErrorWithCode(http.StatusConflict, codes.running, "Chrome Sync is already running")
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
-		if in.Browser == "chrome" {
+		if chrome {
 			defer s.chrome.syncMu.Unlock()
 		}
 		stream, ok := newHumaSSEStream(hctx)
@@ -178,9 +196,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			return awaitBrowserResponse(ctx, answer)
 		}
 		var compatibilityErr error
-		if in.Browser == "chrome" {
+		if chrome {
 			fetch = func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
-				response, err := s.chrome.fetch(ctx, chromehost.ClaudeAI, path)
+				response, err := s.chrome.fetch(ctx, platform, path)
 				if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
 					compatibilityErr = err
 					cancel()
@@ -188,7 +206,13 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return response, err
 			}
 		}
-		stats, err := importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, &importer.ImportCallbacks{
+		syncChats := importer.SyncClaudeAI
+		authErr, label := importer.ErrClaudeAIAuthRequired, "Claude.ai"
+		if platform == chromehost.ChatGPT {
+			syncChats = importer.SyncChatGPT
+			authErr, label = importer.ErrChatGPTAuthRequired, "ChatGPT"
+		}
+		stats, err := syncChats(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
 				return s.SerializeArchiveWrite(ctx, write)
 			},
@@ -210,90 +234,12 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		if err != nil {
 			payload := map[string]string{"error": err.Error()}
-			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
-				payload["error"] = "Sign in to Claude.ai, then Sync again"
-				payload["code"] = "claude_ai_auth_required"
+			if errors.Is(err, authErr) {
+				payload["error"] = "Sign in to " + label + ", then Sync again"
+				payload["code"] = codes.authRequired
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {
-				payload["code"] = "claude_ai_chrome_host_update_required"
-			}
-			stream.SendJSON("error", payload)
-			return
-		}
-		stream.SendJSON("done", stats)
-	}}, nil
-}
-
-type chatGPTSyncInput struct {
-	Browser string `query:"browser" enum:"chrome" required:"true"`
-}
-
-func (s *Server) humaSyncChatGPT(ctx context.Context, in *chatGPTSyncInput) (*huma.StreamResponse, error) {
-	if s.db.ReadOnly() {
-		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
-	}
-	if err := s.rejectWriterClosedWrite(); err != nil {
-		return nil, err
-	}
-	if err := s.requireSourceSync(ctx); err != nil {
-		return nil, err
-	}
-	store, ok := s.db.(*db.DB)
-	if !ok {
-		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
-	}
-	if !s.chrome.Connected() {
-		return nil, apiErrorWithCode(http.StatusConflict, "chrome_host_required", "Run agentsview chrome setup and keep Chrome open, then Sync again")
-	}
-	if !s.chrome.syncMu.TryLock() {
-		return nil, apiErrorWithCode(http.StatusConflict, "chrome_sync_running", "Chrome Sync is already running")
-	}
-	return &huma.StreamResponse{Body: func(hctx huma.Context) {
-		defer s.chrome.syncMu.Unlock()
-		stream, ok := newHumaSSEStream(hctx)
-		if !ok {
-			return
-		}
-		ctx, cancel := context.WithCancel(hctx.Context())
-		defer cancel()
-		var compatibilityErr error
-		fetch := func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
-			response, err := s.chrome.fetch(ctx, chromehost.ChatGPT, path)
-			if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
-				// Keep the recovery error: cancelling the context makes SyncChatGPT return context.Canceled.
-				compatibilityErr = err
-				cancel()
-			}
-			return response, err
-		}
-		stats, err := importer.SyncChatGPT(ctx, store, fetch, &importer.ImportCallbacks{
-			SerializeWrite: func(write func() error) error {
-				return s.serializeArchiveWrite(ctx, write)
-			},
-			OnProgress: func(stats importer.ImportStats) {
-				if !stream.SendJSON("progress", stats) {
-					cancel()
-				}
-			},
-		}, s.cfg.InstallationID)
-		if compatibilityErr != nil {
-			err = compatibilityErr
-		}
-		if stats.Imported+stats.Updated > 0 {
-			if s.broadcaster != nil {
-				s.broadcaster.Emit("sessions")
-			}
-			s.notifySessionMutation()
-			s.notifyRecallCorpusMutation()
-		}
-		if err != nil {
-			payload := map[string]string{"error": err.Error()}
-			if errors.Is(err, importer.ErrChatGPTAuthRequired) {
-				payload["error"] = "Sign in to ChatGPT, then Sync again"
-				payload["code"] = "chatgpt_auth_required"
-			}
-			if errors.Is(err, chromehost.ErrCompatibility) {
-				payload["code"] = "chrome_host_update_required"
+				payload["code"] = codes.updateRequired
 			}
 			stream.SendJSON("error", payload)
 			return

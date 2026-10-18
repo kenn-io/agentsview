@@ -495,10 +495,7 @@ export async function syncChatGPTChrome(
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    const response = await ImportService.postApiV1ImportChatgptSync(
-      { browser: "chrome" },
-      { signal: controller.signal },
-    );
+    const response = await ImportService.postApiV1ImportChatgptSync({ signal: controller.signal });
     return await readImportResponse(response, cb);
   } finally {
     signal?.removeEventListener("abort", abort);

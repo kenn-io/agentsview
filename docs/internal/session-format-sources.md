@@ -3896,6 +3896,13 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** The contributor reports live use of the private session,
+  conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226), checked
+  2026-10-17. Sync uses the export conversation parser; list timestamps accept
+  ISO strings or Unix seconds, and detail timestamps use Unix seconds. Synthetic
+  importer tests cover these shapes; this rework did not capture a live account
+  response.
 
 ## Kiro CLI (`kiro`)
 

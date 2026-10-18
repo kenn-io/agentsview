@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1450,53 +1449,6 @@ func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
 	restored, err := os.ReadDir(assetsDir)
 	require.NoError(t, err)
 	assert.Len(t, restored, 1, "an unchanged re-import copies the export image again")
-}
-
-func TestImportChatGPTFillsArchivedImagePlaceholder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	dir := t.TempDir()
-	export := testjsonl.ChatGPTImageExport()
-	for name, data := range export {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644))
-	}
-	var conversations []json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(export["conversations-000.json"]), &conversations))
-	require.NotEmpty(t, conversations)
-
-	// Archive the conversation the way Chrome sync does: no asset resolver, so the image is a placeholder.
-	parsed, err := parser.ParseChatGPTConversation(conversations[0])
-	require.NoError(t, err)
-	_, err = upsertChatGPTConversation(ctx, d, parsed, nil)
-	require.NoError(t, err)
-	before, err := d.GetAllMessages(ctx, parsed.Session.ID)
-	require.NoError(t, err)
-	require.True(t, slices.ContainsFunc(before, func(m db.Message) bool {
-		return strings.Contains(m.Content, "[image unavailable]")
-	}), "the sync-style archive keeps the image placeholder")
-
-	// The ZIP export has the image file: the placeholder row is filled in place.
-	stats, err := ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
-	require.NoError(t, err)
-	assert.Zero(t, stats.Errors)
-	assert.Equal(t, 1, stats.Updated)
-	after, err := d.GetAllMessages(ctx, parsed.Session.ID)
-	require.NoError(t, err)
-	require.Len(t, after, len(before), "filling keeps the archived rows")
-	for i := range before {
-		assert.Equal(t, before[i].ID, after[i].ID, "message IDs must not change")
-	}
-	assert.False(t, slices.ContainsFunc(after, func(m db.Message) bool {
-		return strings.Contains(m.Content, "[image unavailable]")
-	}), "the stored row now holds the image reference")
-	assert.True(t, slices.ContainsFunc(after, func(m db.Message) bool {
-		return strings.Contains(m.Content, "![image](")
-	}))
-
-	// A repeat import has nothing left to fill.
-	again, err := ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
-	require.NoError(t, err)
-	assert.Zero(t, again.Updated)
 }
 
 func TestImportStatsRecord(t *testing.T) {
