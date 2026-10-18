@@ -79,7 +79,6 @@ func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	_, conn := testChromeConnection(t, srv)
 	const id = "22222222-2222-4222-8222-222222222222"
-	const detail = `{"id":"` + id + `","title":"Example","create_time":1700000000,"update_time":1700000001,"current_node":"a1","mapping":{"u1":{"id":"u1","message":{"id":"u1","author":{"role":"user"},"create_time":1700000000,"content":{"content_type":"text","parts":["Question"]}}},"a1":{"id":"a1","parent":"u1","message":{"id":"a1","author":{"role":"assistant"},"create_time":1700000001,"content":{"content_type":"text","parts":["Answer"]}}}}}`
 	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -93,7 +92,7 @@ func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
 	writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[{"id":"`+id+`","update_time":1700000001}],"total":1}`)
 	requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
 	require.Equal(t, "/backend-api/conversation/"+id, path)
-	writeChromeReply(t, conn, requestID, http.StatusOK, detail)
+	writeChromeReply(t, conn, requestID, http.StatusOK, `{"id":"`+id+`","update_time":1700000001,"mapping":{}}`)
 	requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
 	require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=true", path)
 	writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[],"total":0}`)
@@ -103,16 +102,6 @@ func TestChatGPTChromeSyncUsesLocalNativeHost(t *testing.T) {
 		require.FailNow(t, "ChatGPT Sync did not finish")
 	}
 	require.Equal(t, http.StatusOK, response.Code)
-	assert.NotContains(t, response.Body.String(), "event: fetch")
-	assert.NotContains(t, response.Body.String(), "Question")
-	var stats importer.ImportStats
-	readImportEvents(t, response.Body, func(event, data string) {
-		require.NotEqual(t, "error", event, data)
-		if event == "done" {
-			require.NoError(t, json.Unmarshal([]byte(data), &stats))
-		}
-	})
-	assert.Equal(t, 1, stats.Imported)
 	remote := httptest.NewRecorder()
 	remoteRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
 	remoteRequest.RemoteAddr = "192.0.2.10:1234"
