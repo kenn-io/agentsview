@@ -11,6 +11,7 @@ import type { ExportPricingBlock } from "./exportPricingBlock.ts";
 import type { ModelTotal } from "./modelTotal.ts";
 import type { ProjectTotal } from "./projectTotal.ts";
 import type { UnsupportedUsage } from "./unsupportedUsage.ts";
+import type { UsageSummaryResponseModelAliases } from "./usageSummaryResponseModelAliases.ts";
 import type { UsageSummaryResponseProjects } from "./usageSummaryResponseProjects.ts";
 
 export interface UsageSummaryResponse {
@@ -20,6 +21,7 @@ export interface UsageSummaryResponse {
   daily: DbDailyUsageEntry[];
   from: string;
   modelTotals: ModelTotal[];
+  model_aliases?: UsageSummaryResponseModelAliases;
   partlyCapturedSessions?: number;
   planOnlySessions?: number;
   pricing?: ExportPricingBlock;

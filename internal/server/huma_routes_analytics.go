@@ -55,6 +55,16 @@ type AnalyticsFilterInput struct {
 	Termination      string           `query:"termination" doc:"Filter by termination reason"`
 }
 
+type analyticsSummaryInput struct {
+	AnalyticsFilterInput
+	GroupModels bool `query:"group_models" doc:"Include model aliases for display grouping"`
+}
+
+type analyticsSummaryResponse struct {
+	db.AnalyticsSummary
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
+}
+
 type analyticsActivityInput struct {
 	AnalyticsFilterInput
 	Granularity analyticsGranularity `query:"granularity" enum:"day,week,month" default:"day" doc:"Time bucket granularity"`
@@ -113,7 +123,7 @@ func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilte
 		Project:          in.Project,
 		GitBranch:        in.GitBranch,
 		Agent:            in.Agent,
-		Model:            in.Model,
+		Model:            s.modelGroups.Expand(in.Model),
 		Timezone:         tz,
 		DayOfWeek:        optionalIntValue(in.DayOfWeek),
 		Hour:             optionalIntValue(in.Hour),
@@ -128,9 +138,9 @@ func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilte
 
 func (s *Server) humaAnalyticsSummary(
 	ctx context.Context,
-	in *AnalyticsFilterInput,
-) (*jsonOutput[db.AnalyticsSummary], error) {
-	f, err := s.analyticsFilterFromInput(ctx, *in)
+	in *analyticsSummaryInput,
+) (*jsonOutput[analyticsSummaryResponse], error) {
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +148,11 @@ func (s *Server) humaAnalyticsSummary(
 	if err != nil {
 		return nil, internalError("analytics error", err)
 	}
-	return &jsonOutput[db.AnalyticsSummary]{Body: result}, nil
+	response := analyticsSummaryResponse{AnalyticsSummary: result}
+	if in.GroupModels {
+		response.ModelAliases = s.modelGroups.Aliases()
+	}
+	return &jsonOutput[analyticsSummaryResponse]{Body: response}, nil
 }
 
 func (s *Server) humaAnalyticsActivity(

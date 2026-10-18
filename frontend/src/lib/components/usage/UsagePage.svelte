@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modelPickerItems } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
@@ -121,8 +122,7 @@
     }
   }
 
-  // Track every model we've seen in any summary response or
-  // model filter — never remove one. This keeps the model
+  // Track models from summary rows and applied filters. This keeps the model
   // dropdown usable when landing on a shared filtered URL.
   let knownModels: string[] = $state([]);
 
@@ -144,21 +144,17 @@
   // Seed from the filtered summary response.
   $effect(() => {
     const fromSummary = ((usage.attributionSummary ?? usage.summary)?.modelTotals ?? [])
-      .map((m) => m.model);
+      .map((model) => model.model);
     untrack(() => mergeIntoKnownModels(fromSummary));
   });
 
-  // Seed from URL/local model filters before a response arrives.
   $effect(() => {
-    const filtered = usage.excludedModels;
-    untrack(() => {
-      if (!filtered) return;
-      mergeIntoKnownModels(filtered.split(","));
-    });
+    const filtered = usage.excludedModels.split(",").filter(Boolean);
+    untrack(() => mergeIntoKnownModels(filtered));
   });
 
   const modelItems = $derived(
-    knownModels.map((m) => ({ name: m })),
+    modelPickerItems(knownModels, usage.excludedModels, usage.modelAliases),
   );
   const unsupportedUsageMessage = $derived.by(() => {
     const kind = usage.isTimeRangeSummaryProvisional
@@ -543,7 +539,8 @@
         label={m.usage_model()}
         selectedLabel={usage.selectedModel}
         items={modelItems}
-        excludedCsv={usage.excludedModels}
+        excludedCsv={usage.displayedModels}
+        unlistedExcludedCount={usage.partlyExcludedModelCount}
         onToggle={(name) => usage.toggleModel(name)}
         onSelectAll={() => usage.selectAllModels()}
         onDeselectAll={() =>

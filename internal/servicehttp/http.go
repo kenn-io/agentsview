@@ -981,6 +981,9 @@ func (b *httpBackend) UsageSummary(
 	ctx context.Context, req service.UsageRequest,
 ) (*service.UsageSummaryResult, error) {
 	q := &apiclient.GetAPIV1UsageSummaryQuery{}
+	if req.GroupModels {
+		q.GroupModels = new(true)
+	}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
 		if err != nil {
@@ -1083,6 +1086,7 @@ func (b *httpBackend) UsageSummary(
 		ModelTotals: wire.ModelTotals, AgentTotals: wire.AgentTotals,
 		SessionCounts: wire.SessionCounts, CacheStats: wire.CacheStats,
 		UnsupportedUsage: wire.UnsupportedUsage,
+		ModelAliases:     wire.ModelAliases,
 	}
 	if wire.PlanOnlySessions != nil {
 		out.PlanOnlySessions = int(*wire.PlanOnlySessions)
@@ -1100,6 +1104,9 @@ func (b *httpBackend) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {
 	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
+	if req.GroupModels {
+		q.GroupModels = new(true)
+	}
 	if req.FallbackToDefault {
 		q.FallbackToDefault = new(true)
 	}

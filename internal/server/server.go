@@ -83,6 +83,7 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
+	modelGroups          service.ModelGroups
 	mu                   gosync.RWMutex
 	cfg                  config.Config
 	activeDisabledAgents []parser.AgentType
@@ -256,16 +257,18 @@ func New(
 	// returns db.ErrReadOnly without an engine, while read APIs such as stats
 	// still need the local handle. Non-SQLite stores use the generic read-only
 	// backend.
+	modelGroups := service.NewModelGroups(cfg.ModelAliases)
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
 		local.SetArchiveContent(cfg.ArchiveContent)
-		sessions = service.NewDirectBackend(local, engine)
+		sessions = service.NewDirectBackend(local, engine, service.WithModelGroups(modelGroups))
 	} else {
-		sessions = service.NewReadOnlyBackend(database)
+		sessions = service.NewReadOnlyBackend(database, service.WithModelGroups(modelGroups))
 	}
 
 	s := &Server{
 		cfg:                       cfg,
+		modelGroups:               modelGroups,
 		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
 		db:                        database,
 		activityReports:           newActivityReportCache(),

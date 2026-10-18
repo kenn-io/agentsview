@@ -468,6 +468,31 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it.each(["constructor", "toString", "__proto__"])(
+    "stacks a model named %s with numeric costs",
+    async (modelName) => {
+      usage.toggles.timeSeries.groupBy = "model";
+      usage.summary = usageSummary([
+        modelDailyEntry(0, [
+          { modelName, cost: testMoney(6) },
+          { modelName: "regular-model", cost: testMoney(4) },
+        ]),
+      ]);
+
+      const component = mountChart();
+      await tick();
+
+      const bars = Array.from(document.querySelectorAll<SVGRectElement>("rect.cost-seg"));
+      expect(bars).toHaveLength(2);
+      expect(bars.map((bar) => Number(bar.getAttribute("height")))).toEqual([96, 64]);
+      const labels = Array.from(document.querySelectorAll(".legend-item")).map((item) =>
+        item.textContent?.trim(),
+      );
+      expect(labels).toEqual([modelName, "regular-model"]);
+      unmount(component);
+    },
+  );
+
   it("uses distinct active model colors for paths and legend dots", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary = usageSummary([

@@ -107,6 +107,9 @@ type UsageFilter struct {
 	// The zero value means all token types.
 	TopSessionsTokenTypes UsageTokenTypes
 
+	// ModelAliases groups plan-only model counts before per-session deduplication.
+	ModelAliases map[string]string
+
 	// Progress reports the work this query is waiting for, without session data.
 	Progress func(string) `json:"-"`
 }

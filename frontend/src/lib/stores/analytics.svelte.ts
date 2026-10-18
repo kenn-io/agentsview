@@ -1,9 +1,10 @@
+import { groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
 import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
-  DbAnalyticsSummary as AnalyticsSummary,
+  AnalyticsSummaryResponse as AnalyticsSummary,
   DbActivityResponse as ActivityResponse,
   DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
   DbHourOfWeekResponse as HourOfWeekResponse,
@@ -290,14 +291,16 @@ class AnalyticsStore {
     void this.fetchAll();
   }
 
+  get modelAliases(): Record<string, string> {
+    return this.summary?.model_aliases ?? {};
+  }
+
+  get displayedModels(): string {
+    return groupedModelCsv(this.model, this.modelAliases);
+  }
+
   toggleModel(model: string) {
-    const current = new Set(this.model.split(",").filter((value) => value.length > 0));
-    if (current.has(model)) {
-      current.delete(model);
-    } else {
-      current.add(model);
-    }
-    this.model = [...current].join(",");
+    this.model = toggleGroupedModel(this.model, model, this.modelAliases);
     void this.fetchAll();
   }
 
@@ -627,9 +630,10 @@ class AnalyticsStore {
   }
 
   async fetchSummary(): Promise<FetchResult> {
+    const params = { ...this.filterParams(), group_models: true };
     return await this.executeFetch(
       "summary",
-      (options) => AnalyticsService.getApiV1AnalyticsSummary(this.filterParams(), options),
+      (options) => AnalyticsService.getApiV1AnalyticsSummary(params, options),
       (data) => {
         this.summary = data;
       },

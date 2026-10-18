@@ -1016,6 +1016,7 @@ type Config struct {
 
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
+	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
 	// RemoteHosts is the config-file list of remote targets that
@@ -1743,6 +1744,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
+		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
@@ -1757,6 +1759,14 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.ZoomLevel != nil {
 		if err := file.ZoomLevel.Validate(); err != nil {
 			return err
+		}
+	}
+	for key, name := range file.ModelAliases {
+		if key == "" || name == "" || key == "__all__" || name == "__all__" || key == "__other__" || name == "__other__" || strings.Contains(key+name, ",") || key != strings.TrimSpace(key) || name != strings.TrimSpace(name) {
+			return fmt.Errorf("model_aliases.%q: names must be non-empty, trimmed, contain no commas, and differ from __all__ and __other__", key)
+		}
+		if target, ok := file.ModelAliases[name]; ok && target != name {
+			return fmt.Errorf("model_aliases.%q: alias chains are unsupported", key)
 		}
 	}
 	customModelPricing, err := decodeCustomModelPricing(data)
@@ -2052,6 +2062,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			cfg.Binary = strings.TrimSpace(cfg.Binary)
 			c.Agent[name] = cfg
 		}
+	}
+	if file.ModelAliases != nil {
+		c.ModelAliases = file.ModelAliases
 	}
 	if len(customModelPricing) > 0 {
 		c.CustomModelPricing = customModelPricing

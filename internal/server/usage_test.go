@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
@@ -542,4 +544,72 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.NotEmpty(t, response)
 	assert.Equal(t, "job-a", response[0]["groupKey"])
+}
+
+func TestUsageSummaryModelGroups(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
+	})
+	seedUsagePairwiseEnv(t, te)
+	for _, tt := range []struct {
+		name, grouped, suffix string
+	}{
+		{"raw", "", ""},
+		{"grouped", "true", ""},
+		{"grouped stream", "true", "/stream"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := te.get(t, buildPathURL("/api/v1/usage/summary"+tt.suffix, map[string]string{
+				"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC",
+				"group_models": tt.grouped,
+			}))
+			assertStatus(t, w, http.StatusOK)
+			payload := w.Body.String()
+			if tt.suffix == "/stream" {
+				_, done, ok := strings.Cut(payload, "event: done\ndata: ")
+				require.True(t, ok, "no done event in %s", payload)
+				payload, _, _ = strings.Cut(done, "\n")
+			}
+			var body map[string]jsontext.Value
+			require.NoError(t, json.Unmarshal([]byte(payload), &body))
+			if tt.grouped == "true" {
+				assert.JSONEq(t, `{"claude-sonnet-4-20250514":"group","gpt-4o":"group"}`, string(body["model_aliases"]))
+				assert.NotContains(t, body, "pricing")
+				assert.NotContains(t, body, "schema_version")
+			} else {
+				assert.NotContains(t, body, "model_aliases")
+				assert.Contains(t, body, "pricing")
+				assert.Contains(t, body, "schema_version")
+			}
+		})
+	}
+}
+
+func TestUsageTopSessionsModelGroup(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.ModelAliases = map[string]string{"claude-sonnet-4-20250514": "group", "gpt-4o": "group"}
+	})
+	seedUsagePairwiseEnv(t, te)
+	started := "2024-06-01T11:00:00Z"
+	te.seedSession(t, "unrelated-model", "gamma", 2, func(sess *db.Session) {
+		sess.StartedAt, sess.EndedAt = &started, &started
+		sess.UserMessageCount = 1
+	})
+	te.seedMessages(t, "unrelated-model", 2, func(_ int, m *db.Message) {
+		m.Timestamp = started
+		if m.Role == "assistant" {
+			m.Model = "unrelated"
+			m.TokenUsage = tokenUsageJSON
+		}
+	})
+	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", map[string]string{
+		"from": "2024-06-01", "to": "2024-06-01", "timezone": "UTC", "model": "group",
+	}))
+	assertStatus(t, w, http.StatusOK)
+	entries := decode[[]db.TopSessionEntry](t, w)
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.SessionID)
+	}
+	assert.ElementsMatch(t, []string{"pairwise-alpha-sonnet", "pairwise-beta-gpt"}, ids)
 }

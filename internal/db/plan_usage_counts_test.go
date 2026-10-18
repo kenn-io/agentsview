@@ -109,6 +109,12 @@ func TestPlanOnlyCountFilters(t *testing.T) {
 			count:   2,
 			byModel: map[string]int{"gpt-5-codex": 1, "gpt-5-mini": 1},
 		},
+		{
+			name:    "grouped models count each session once",
+			filter:  UsageFilter{ModelAliases: map[string]string{"gpt-5-codex": "gpt-5", "gpt-5-mini": "gpt-5"}},
+			count:   2,
+			byModel: map[string]int{"gpt-5": 1},
+		},
 		{name: "other agent", filter: UsageFilter{Agent: "claude"}, byModel: map[string]int{}},
 		{
 			name:    "excluded agent",

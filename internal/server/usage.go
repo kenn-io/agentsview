@@ -68,7 +68,7 @@ type UnsupportedUsage struct {
 // GET /api/v1/usage/summary while the handler delegates assembly to
 // the transport-neutral service layer.
 type UsageSummaryResponse struct {
-	SchemaVersion    int                               `json:"schema_version,omitempty"`
+	SchemaVersion    int                               `json:"schema_version,omitempty,omitzero"`
 	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects         map[string]export.ProjectMapEntry `json:"projects"`
 	From             string                            `json:"from"`
@@ -82,6 +82,7 @@ type UsageSummaryResponse struct {
 	CacheStats       CacheStats                        `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
 	Comparison       *Comparison                       `json:"comparison,omitempty"`
+	ModelAliases     map[string]string                 `json:"model_aliases,omitempty"`
 	// PlanOnlySessions counts matching sessions billed as plan usage, which
 	// the token and cost figures leave out.
 	PlanOnlySessions int `json:"planOnlySessions,omitempty"`
@@ -94,6 +95,7 @@ func usageSummaryResponseFromService(
 	res *service.UsageSummaryResult,
 ) UsageSummaryResponse {
 	return UsageSummaryResponse{
+		ModelAliases:           res.ModelAliases,
 		SchemaVersion:          res.SchemaVersion,
 		Pricing:                res.Pricing,
 		Projects:               res.Projects,

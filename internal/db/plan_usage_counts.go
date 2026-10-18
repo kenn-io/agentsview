@@ -65,6 +65,9 @@ func (t *PlanUsageCountTally) Add(kind, sessionID, model, date string) error {
 			t.planOnly[sessionID] = models
 		}
 		if model != "" {
+			if group, ok := t.filter.ModelAliases[model]; ok {
+				model = group
+			}
 			models[model] = struct{}{}
 		}
 	case PlanUsageCountKindPartlyCaptured:

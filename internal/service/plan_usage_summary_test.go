@@ -7,8 +7,73 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+func TestUsageModelGroupsPlanOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		group       bool
+		metered     bool
+		model       string
+		wantPlan    int
+		wantByModel map[string]int
+	}{
+		{name: "raw plan-only", wantPlan: 2, wantByModel: map[string]int{"model-a": 1, "model-b": 2, "group": 1}},
+		{name: "grouped plan-only", group: true, wantPlan: 2, wantByModel: map[string]int{"group": 2}},
+		{name: "grouped mixed", group: true, metered: true, wantPlan: 2, wantByModel: map[string]int{"group": 2}},
+		{name: "filtered variant", group: true, model: "model-a", wantPlan: 1, wantByModel: map[string]int{"group": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			const started = "2026-09-10T10:00:00Z"
+			for id, models := range map[string][]string{
+				"plan-a": {"model-a", "model-b", "model-a", "group"},
+				"plan-b": {"model-b"},
+			} {
+				messages := []db.Message{dbtest.UserMsg(id, 0, "hello")}
+				for i, model := range models {
+					msg := dbtest.AsstMsg(id, i+1, "done")
+					msg.Model, msg.Timestamp = model, started
+					messages = append(messages, msg)
+				}
+				dbtest.SeedSessionWithMessages(t, d, id, "project-a", messages,
+					func(s *db.Session) { s.Agent = "codex-cloud" },
+					dbtest.WithMessageCounts(len(messages), 1))
+				require.NoError(t, d.ReplaceSessionPlanUsage(t.Context(), id,
+					&db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.5)}))
+			}
+			if tc.metered {
+				msg := dbtest.AsstMsg("metered", 1, "done")
+				msg.Model, msg.Timestamp = "model-a", started
+				msg.TokenUsage = []byte(`{"input_tokens":40,"output_tokens":7}`)
+				dbtest.SeedSessionWithMessages(t, d, "metered", "project-a",
+					[]db.Message{dbtest.UserMsg("metered", 0, "hello"), msg},
+					dbtest.WithMessageCounts(2, 1))
+			}
+			be := service.NewReadOnlyBackend(d, service.WithModelGroups(service.NewModelGroups(
+				map[string]string{"model-a": "group", "model-b": "group"},
+			)))
+			res, err := be.UsageSummary(t.Context(), service.UsageRequest{
+				From: "2026-09-10", To: "2026-09-10", IncludeOneShot: true,
+				GroupModels: tc.group, Model: tc.model,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPlan, res.PlanOnlySessions)
+			byModel := map[string]int{}
+			for _, total := range res.ModelTotals {
+				byModel[total.Model] = total.PlanOnlySessions
+			}
+			assert.Equal(t, tc.wantByModel, byModel)
+			if tc.metered {
+				require.Len(t, res.ModelTotals, 1)
+				assert.Equal(t, 40, res.ModelTotals[0].InputTokens)
+				assert.Equal(t, 7, res.ModelTotals[0].OutputTokens)
+			}
+		})
+	}
+}
 
 // TestPlanOnlySessionsLeftOutOfTotals checks that a codex-cloud session
 // with only plan usage adds nothing to token and cost totals, is counted

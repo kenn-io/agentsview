@@ -31,6 +31,10 @@ The latest release is
   existing [telemetry opt-out](https://agentsview.io/docs/configuration/#privacy-and-telemetry)
   applies to these counts.
 
+- Combine model variants into one row in Usage and Analytics with
+  `[model_aliases]` in `config.toml`. Scripts, exports, `usage daily`, and MCP
+  keep raw model names.
+
 - Reporting export version 5 keeps verified repository activity selectable when
   another session with the same project name has missing or different identity
   evidence. It replaces version 4, which is no longer available: integrations

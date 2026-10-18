@@ -34,6 +34,7 @@ type UsageRequest struct {
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
 	ExcludeModel      string `json:"exclude_model,omitempty"`
 	Model             string `json:"model,omitempty"`
+	GroupModels       bool   `json:"group_models,omitempty"`
 	MinUserMessages   int    `json:"min_user_messages,omitempty"`
 	ActiveSince       string `json:"active_since,omitempty"`
 	Termination       string `json:"termination,omitempty"`
@@ -166,7 +167,7 @@ func (e *UsageInputError) Error() string { return e.Msg }
 // comparison/top-sessions handlers. Date defaulting matches the
 // server's analytics range (last 30 days through today, UTC) unless
 // NoDefaultRange is set.
-func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
+func BuildUsageFilter(req UsageRequest, groups ModelGroups) (db.UsageFilter, error) {
 	tz := req.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -215,8 +216,8 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 			req.ExcludeProject, req.ExcludeProjectLabels,
 		),
 		ExcludeAgent:      req.ExcludeAgent,
-		ExcludeModel:      req.ExcludeModel,
-		Model:             req.Model,
+		ExcludeModel:      groups.Expand(req.ExcludeModel),
+		Model:             groups.Expand(req.Model),
 		Timezone:          tz,
 		MinUserMessages:   req.MinUserMessages,
 		ExcludeOneShot:    !req.IncludeOneShot,
@@ -339,6 +340,7 @@ type UsageSummaryResult struct {
 	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
 	CacheStats       CacheStats                        `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	ModelAliases     map[string]string                 `json:"model_aliases,omitempty"`
 	// PlanOnlySessions counts matching sessions billed as plan usage, which
 	// the token and cost figures leave out.
 	PlanOnlySessions int `json:"planOnlySessions,omitempty"`
@@ -409,10 +411,14 @@ type UsagePairwiseComparisonRequest struct {
 	RightProjectLabels []string `json:"-"`
 }
 
-func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string) bool {
+func usagePairwiseSideInRanking(summary *UsageSummaryResult, dimension, value string, expandModels bool) bool {
 	switch dimension {
 	case "model":
-		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return total.Model == value })
+		values := []string{value}
+		if expandModels {
+			values = splitCSVTokens(value)
+		}
+		return slices.ContainsFunc(summary.ModelTotals, func(total ModelTotal) bool { return slices.Contains(values, total.Model) })
 	case "project":
 		return slices.ContainsFunc(summary.ProjectTotals, func(total ProjectTotal) bool { return total.ProjectKey == value })
 	}

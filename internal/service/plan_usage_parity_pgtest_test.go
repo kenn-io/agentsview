@@ -135,7 +135,8 @@ func planUsageParitySummary(
 	t *testing.T, store db.Store, req service.UsageRequest,
 ) planUsageParityResult {
 	t.Helper()
-	res, err := service.NewReadOnlyBackend(store).UsageSummary(t.Context(), req)
+	groups := service.NewModelGroups(map[string]string{"gpt-5-codex": "gpt-5", "gpt-5-mini": "gpt-5"})
+	res, err := service.NewReadOnlyBackend(store, service.WithModelGroups(groups)).UsageSummary(t.Context(), req)
 	require.NoError(t, err)
 	out := planUsageParityResult{
 		PlanOnly: res.PlanOnlySessions, PartlyCaptured: res.PartlyCapturedSessions,
@@ -219,6 +220,18 @@ func TestPlanUsageCountsParity(t *testing.T) {
 			req:      service.UsageRequest{From: "2026-09-01", To: "2026-09-30", Timezone: "UTC"},
 			planOnly: 2, partly: 1,
 			byModel: map[string]int{"gpt-5-codex": 1, "gpt-5-mini": 1},
+		},
+		{
+			name:     "grouped mixed usage",
+			req:      service.UsageRequest{From: "2026-09-01", To: "2026-09-30", Timezone: "UTC", GroupModels: true},
+			planOnly: 2, partly: 1,
+			byModel: map[string]int{"gpt-5": 1},
+		},
+		{
+			name:     "grouped plan-only usage",
+			req:      service.UsageRequest{From: "2026-09-12", To: "2026-09-12", Timezone: "UTC", GroupModels: true},
+			planOnly: 1,
+			byModel:  map[string]int{"gpt-5": 1},
 		},
 		{
 			name:     "day with only the no-message session",
