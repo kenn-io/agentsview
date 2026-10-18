@@ -43,8 +43,8 @@ func chatGPTFreshness(updatedAt time.Time, session *db.Session) uint64 {
 	return browserFreshness(strconv.FormatInt(updatedAt.UnixMilli(), 10), session)
 }
 
-// chatGPTDetailGap spaces conversation detail requests. hstry's extension
-// used 1.5 s; the first live run uses 3 s for a wider margin. Tests set it to 0.
+// chatGPTDetailGap delays each detail request by 3 s with jitter.
+// Tests set it to zero to disable pacing.
 var chatGPTDetailGap = 3 * time.Second
 
 func waitChatGPTDetailGap(ctx context.Context) error {
@@ -188,7 +188,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	if replaceable(err) {
 		return replaceSyncedConversation(ctx, store, result, msgs)
 	}
-	if err == nil && status == importSkipped && !storeArchiveContent(store).UsageOnly() {
+	if err == nil && status == importSkipped {
 		// Sync also refreshes the source timestamp when the messages match.
 		err = appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), nil)
 	}
