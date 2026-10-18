@@ -235,6 +235,9 @@ func upsertConversation(
 	s := result.Session
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
+	if s.Agent == parser.AgentChatGPT {
+		msgs = chatGPTMessages(s.ID, result.Messages)
+	}
 
 	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {

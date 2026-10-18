@@ -109,15 +109,21 @@ func TestSyncChatGPTUsageArchiveUpdatesAppendedTurns(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	details := 0
-	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", chatGPTSyncDetail(1706745711, false, "Question"), &details), nil)
+	detail := strings.ReplaceAll(chatGPTSyncDetail(1706745711, false, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", detail, &details), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Imported)
 	session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	require.Equal(t, 2, session.MessageCount)
+	messages, err := d.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "gpt-4o", messages[0].Model)
 
-	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", chatGPTSyncDetail(1706745712, true, "Question"), &details), nil)
+	detail = strings.ReplaceAll(chatGPTSyncDetail(1706745712, true, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", detail, &details), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Updated)
 	assert.Zero(t, stats.Errors)
@@ -128,14 +134,29 @@ func TestSyncChatGPTUsageArchiveUpdatesAppendedTurns(t *testing.T) {
 	assert.Equal(t, 2, session.UserMessageCount)
 	require.NotNil(t, session.EndedAt)
 	assert.Equal(t, "2024-02-01T00:01:52Z", *session.EndedAt)
-	messages, err := d.GetAllMessages(t.Context(), session.ID)
+	messages, err = d.GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"", ""}, messageContents(messages), "usage-only archives retain assistant activity without transcript text")
+	for _, message := range messages {
+		assert.Equal(t, "gpt-4o", message.Model)
+	}
 
-	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745712", chatGPTSyncDetail(1706745712, true, "Question"), &details), nil)
+	// A metadata-only refresh still passes through the shared upsert path.
+	detail = strings.Replace(detail, `"update_time":1.706745712e+09`, `"update_time":1706745713`, 1)
+	detail = strings.Replace(detail, `"title":"Tool"`, `"title":"Renamed"`, 1)
+	_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745713", detail, &details), nil)
+	require.NoError(t, err)
+	messages, err = d.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	for _, message := range messages {
+		assert.Equal(t, "gpt-4o", message.Model)
+	}
+
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745713", detail, &details), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Skipped)
-	assert.Equal(t, 2, details)
+	assert.Equal(t, 3, details)
 }
 
 func TestSyncChatGPTRejectsInvalidSummaryAndOversizedResponse(t *testing.T) {
