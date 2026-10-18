@@ -17,7 +17,7 @@ func SeedDialogueSearch(t *testing.T, d *db.DB) {
 	SeedSession(t, d, id, "dialogue-search", func(s *db.Session) {
 		s.StartedAt = new("2026-05-20T12:00:00Z")
 		s.UserMessageCount = 2
-		s.MessageCount = 5
+		s.MessageCount = 6
 	})
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
@@ -41,6 +41,11 @@ func SeedDialogueSearch(t *testing.T, d *db.DB) {
 		{
 			SessionID: id, Ordinal: 4, Role: "assistant", IsSystem: true,
 			Content: "systemneedle", DialogueText: new("systemneedle"), ThinkingText: "systemneedle", HasThinking: true,
+		},
+		{
+			SessionID: id, Ordinal: 5, Role: "assistant",
+			Content: `prefix_%\path tail`, DialogueText: new(`prefix_%\path tail`),
+			ThinkingText: `prefix_%\path tail`, HasThinking: true,
 		},
 	}))
 }
@@ -105,6 +110,36 @@ func AssertDialogueSearchParity(t *testing.T, archive, mirror db.Store, modes ..
 			}
 			if !lexical {
 				return
+			}
+			if mode == "regex" {
+				for _, source := range []string{"messages", "thinking"} {
+					word, upper, mixed := "answer", "ANSWER", "Answer"
+					location := "message"
+					if source == "thinking" {
+						word, upper, mixed = "reasoning", "REASONING", "Reasoning"
+						location = "thinking"
+					}
+					for _, tc := range []struct {
+						pattern string
+						ordinal int
+						snippet string
+					}{
+						{word + `.*needle`, 1, word + "needle"},
+						{`(?i)` + upper + `NEEDLE`, 1, word + "needle"},
+						{mixed + `needle`, -1, ""},
+						{`prefix_%\\path\s+tail`, 5, `prefix_%\path tail`},
+					} {
+						want := []hit{}
+						if tc.ordinal >= 0 {
+							want = append(want, hit{"dialogue-search", location, tc.ordinal, tc.snippet})
+						}
+						got, err := mirror.SearchContent(t.Context(), db.ContentSearchFilter{
+							Pattern: tc.pattern, Mode: mode, Sources: []string{source}, Project: "dialogue-search",
+						})
+						require.NoError(t, err)
+						assert.Equal(t, want, project(got.Matches), "%s: %s", source, tc.pattern)
+					}
+				}
 			}
 			// A legacy message and its thinking must consume only one slot,
 			// including when a cursor falls on their boundary.

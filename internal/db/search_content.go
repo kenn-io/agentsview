@@ -525,6 +525,21 @@ func (db *DB) searchContentTerms(
 		func() string { return timestamp })
 }
 
+// LegacyThinkingDedupe suppresses legacy thinking already matched as a message.
+// Feed confirmed matches in message-before-thinking order, before paging.
+// The zero value is ready to use.
+type LegacyThinkingDedupe struct {
+	lastMessage MessageRef
+}
+
+func (d *LegacyThinkingDedupe) Suppress(m ContentMatch, legacyThinking bool) bool {
+	ref := MessageRef{SessionID: m.SessionID, Ordinal: m.Ordinal}
+	if m.Location == "message" {
+		d.lastMessage = ref
+	}
+	return m.Location == "thinking" && legacyThinking && d.lastMessage == ref
+}
+
 // searchContentRegex compiles the pattern, narrows candidate rows with a
 // LIKE prefilter on any required literal substring (full scan when none),
 // streams candidates, and keeps RE2 matches. Snippets are built in Go.
@@ -551,7 +566,7 @@ func (db *DB) searchContentRegex(
 	defer rows.Close()
 
 	out := make([]ContentMatch, 0)
-	var lastMessageMatchRowID int64
+	var dedupe LegacyThinkingDedupe
 	// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
 	// candidates from the start, discarding the first f.Cursor confirmed
 	// matches. Ordering is deterministic so paging stays correct; deep pages
@@ -574,9 +589,7 @@ func (db *DB) searchContentRegex(
 		}
 		// Message candidates sort before thinking for the same row. Record
 		// matches before cursor filtering so later pages dedupe them too.
-		if m.Location == "message" {
-			lastMessageMatchRowID = rowID
-		} else if m.Location == "thinking" && legacyThinking && lastMessageMatchRowID == rowID {
+		if dedupe.Suppress(m, legacyThinking) {
 			continue
 		}
 		if seen < f.Cursor {

@@ -421,7 +421,7 @@ func (s *Store) collectContentSubstringMatches(
 	})
 }
 
-// collectContentRegexMatches loads every in-scope body for the requested
+// collectContentRegexMatches loads in-scope regex candidates for the requested
 // sources, filters with Go's regexp, and pages the sorted result.
 func (s *Store) collectContentRegexMatches(
 	ctx context.Context, f db.ContentSearchFilter,
@@ -449,13 +449,10 @@ func (s *Store) collectContentRegexMatches(
 	all = filtered
 	sortContentCandidates(all)
 	// Deduplicate legacy thinking before applying the page cursor.
-	var lastMessageMatch db.MessageRef
+	var dedupe db.LegacyThinkingDedupe
 	filtered = all[:0]
 	for _, m := range all {
-		ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
-		if m.match.Location == "message" {
-			lastMessageMatch = ref
-		} else if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
+		if dedupe.Suppress(m.match, m.legacyThinking) {
 			continue
 		}
 		filtered = append(filtered, m)
@@ -482,6 +479,15 @@ func (s *Store) collectContentSource(
 ) ([]contentCandidate, error) {
 	var query string
 	args := append([]any{}, scopeArgs...)
+	prefilter := func(column string) string {
+		if lit := db.LiteralPrefix(f.Pattern); lit != "" {
+			b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+			predicate := b.ContainsPredicate(column, lit)
+			args = append(args, b.Args()...)
+			return " AND " + predicate
+		}
+		return ""
+	}
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -495,6 +501,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
+		query += prefilter("COALESCE(m.dialogue_text, m.content)")
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "thinking":
 		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
@@ -508,6 +515,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
+		query += prefilter("m.thinking_text")
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "tool_input":
 		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',

@@ -10,7 +10,7 @@ import (
 // hybridDisplay carries what one fused unit needs for presentation: the
 // anchor (session, ordinal) the match reports and enriches by, the unit's
 // ordinal span and subordinate flag, plus the vector leg's approximate
-// snippet or the keyword leg's final redacted snippet.
+// snippet or the keyword leg's dialogue and snippet window.
 type hybridDisplay struct {
 	sessionID    string
 	ordinal      int
@@ -18,6 +18,7 @@ type hybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	content      string
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus
@@ -153,7 +154,8 @@ func (s *Store) fetchHybridKeywordBatch(
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
-		hit.snippet = f.SemanticSnippet(content, content[lo:hi])
+		hit.content = content
+		hit.snippet = content[lo:hi]
 		hits = append(hits, hit)
 	}
 	return hits, rows.Err()
@@ -285,10 +287,11 @@ func (s *Store) enrichHybridMatches(
 		if !ok {
 			continue
 		}
-		snippet := d.snippet
-		if _, keyword := kwDisplay[m.Unit.Key]; !keyword {
-			snippet = f.SemanticSnippet(info.content, d.snippet)
+		content := info.content
+		if _, keyword := kwDisplay[m.Unit.Key]; keyword {
+			content = d.content
 		}
+		snippet := f.SemanticSnippet(content, d.snippet)
 		score := m.Score
 		out = append(out, db.ContentMatch{
 			SessionID:       d.sessionID,

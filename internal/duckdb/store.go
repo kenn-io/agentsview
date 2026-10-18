@@ -950,13 +950,10 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 		all = filtered
 		sortContentCandidates(all)
 		// Deduplicate legacy thinking before applying the page cursor.
-		var lastMessageMatch db.MessageRef
+		var dedupe db.LegacyThinkingDedupe
 		filtered = all[:0]
 		for _, m := range all {
-			ref := db.MessageRef{SessionID: m.match.SessionID, Ordinal: m.match.Ordinal}
-			if m.match.Location == "message" {
-				lastMessageMatch = ref
-			} else if m.match.Location == "thinking" && m.legacyThinking && lastMessageMatch == ref {
+			if dedupe.Suppress(m.match, m.legacyThinking) {
 				continue
 			}
 			filtered = append(filtered, m)
@@ -1208,6 +1205,15 @@ func (s *Store) collectContentSource(
 	var query string
 	var orderBy string
 	args := append([]any{}, scopeArgs...)
+	prefilter := func(column string) string {
+		if lit := db.LiteralPrefix(f.Pattern); lit != "" {
+			b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+			predicate := b.ContainsPredicate(column, lit)
+			args = append(args, b.Args()...)
+			return " AND " + predicate
+		}
+		return ""
+	}
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -1221,6 +1227,8 @@ func (s *Store) collectContentSource(
 		if f.Mode != "regex" {
 			query += ` AND COALESCE(m.dialogue_text, m.content) ILIKE ? ESCAPE '\'`
 			args = append(args, pattern)
+		} else {
+			query += prefilter("COALESCE(m.dialogue_text, m.content)")
 		}
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
@@ -1238,6 +1246,8 @@ func (s *Store) collectContentSource(
 		if f.Mode != "regex" {
 			query += ` AND m.thinking_text ILIKE ? ESCAPE '\'`
 			args = append(args, pattern)
+		} else {
+			query += prefilter("m.thinking_text")
 		}
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
