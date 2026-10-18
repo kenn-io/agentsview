@@ -242,9 +242,10 @@ Sync checks each conversation's `update_time`, imports changed details through
 the existing ChatGPT parser, and appends compatible history to the existing
 `chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync
 replaces the archive with ChatGPT's visible branch, including shorter histories.
-Every replacement keeps the previous version in Trash under every archive
-policy, with its pins, notes, and any archived images. Re-syncing the same chat
-makes no further copy. A conversation without a `mapping` object or conversation
+Sync keeps the previous version in Trash when it replaces a chat's history with
+a different branch, under every archive policy, with its pins, notes, and any
+archived images. Appending turns makes no copy. Re-syncing the same chat makes
+no further copy. A conversation without a `mapping` object or conversation
 ID counts as one failed detail. Sync processes the remaining chats and reports
 that AgentsView needs an update.
 ChatGPT's private API can change without notice; sign in again if Sync reports
@@ -261,9 +262,8 @@ the user turn's ordinal, role, timestamp, and surrounding text match. Saved
 message and parent IDs must also match when the archive has them. Older ZIP
 imports without these IDs keep matching uploads.
 Generated images use the browser snapshot, so regenerating an image clears the
-old reference from the visible transcript. Every replacement keeps the previous
-version in Trash with its archived images. Re-syncing the same chat makes no
-further copy.
+old reference from the visible transcript. Sync keeps the previous branch in
+Trash with its archived images.
 ZIP imports follow the usual append and refusal rules.
 
 ## Importing via the CLI

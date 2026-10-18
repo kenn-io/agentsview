@@ -247,7 +247,15 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		return status, err
 	}
-	return replaceSyncedConversation(ctx, store, result, msgs, result.Session.Agent == parser.AgentChatGPT)
+	keepCopy := false
+	if result.Session.Agent == parser.AgentChatGPT {
+		prefix := false
+		if stored != nil && len(stored) >= len(archived) {
+			_, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+		}
+		keepCopy = !prefix
+	}
+	return replaceSyncedConversation(ctx, store, result, msgs, keepCopy)
 }
 
 func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {

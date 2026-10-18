@@ -17,9 +17,9 @@ The latest release is
 **New features**
 
 - Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
-  `agentsview source import --type chatgpt --sync`. Sync pages active and
-  archived chats and keeps the previous version of each chat it replaces in
-  Trash.
+  `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
 
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
   or look up a commit with `agentsview why --commit SHA`. The command uses local
