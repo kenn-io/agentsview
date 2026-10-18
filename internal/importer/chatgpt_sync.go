@@ -187,6 +187,15 @@ func SyncChatGPT(ctx context.Context, store interface {
 					continue
 				}
 				failedLast = false
+				var shape struct {
+					Mapping jsontext.Value `json:"mapping"`
+				}
+				if err := json.Unmarshal(detail, &shape); err == nil && shape.Mapping.Kind() != '{' {
+					err := errors.New("ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
+					stats.record(id, importSkipped, err)
+					cb.progress(stats)
+					return stats, err
+				}
 				result, err := parser.ParseChatGPTConversation(detail)
 				if err == nil && result.Session.ID != id {
 					err = errors.New("conversation ID differs from requested UUID")

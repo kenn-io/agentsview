@@ -233,8 +233,9 @@ agentsview import --type chatgpt --sync
 Sync checks each conversation's `update_time`, imports changed details through
 the existing ChatGPT parser, and appends compatible history to the existing
 `chatgpt:<conversation id>` session. Divergent or shorter history follows the
-same refusal rules as a ChatGPT zip import. ChatGPT's private API can change
-without notice; sign in again if Sync reports that authentication expired.
+same refusal rules as a ChatGPT zip import. Sync requires a `mapping` object in
+each conversation. ChatGPT's private API can change without notice; sign in
+again if Sync reports that authentication expired.
 
 Each conversation has a 32 MiB response limit. Larger conversations count as
 failed while Sync continues. Two detail fetch failures in a row end Sync;

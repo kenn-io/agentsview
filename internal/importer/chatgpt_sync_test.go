@@ -274,6 +274,46 @@ func TestSyncChatGPTStopsAfterTwoDetailFailures(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTUnsupportedFormatStopsAndKeepsEarlierWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name, mapping string
+	}{
+		{"missing mapping", ""},
+		{"null mapping", `,"mapping":null`},
+		{"array mapping", `,"mapping":[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			var details []string
+			stats, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+				switch path {
+				case chatGPTRequest(chatGPTListRequest, "", 0, false):
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + chatGPTSyncID + `","update_time":1},{"id":"00000002-0000-4000-8000-000000000000","update_time":1},{"id":"00000003-0000-4000-8000-000000000000","update_time":1}],"total":3}`)}, nil
+				case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
+					details = append(details, chatGPTSyncID)
+					return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTSyncDetail(1, false, "Question"))}, nil
+				case chatGPTRequest(chatGPTDetailRequest, "00000002-0000-4000-8000-000000000000", 0, false):
+					details = append(details, "00000002-0000-4000-8000-000000000000")
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"conversation_id":"00000002-0000-4000-8000-000000000000","messages":[{"id":"message-1","author":{"role":"user"},"content":{"content_type":"text","parts":["New format"]}}],"page_info":{"start_cursor":"message-1","end_cursor":"message-1","has_previous_page":true,"has_next_page":false}` + tc.mapping + `}`)}, nil
+				default:
+					require.Failf(t, "unexpected ChatGPT request path", "%s", path)
+					return ClaudeAIResponse{}, nil
+				}
+			}, nil)
+			require.EqualError(t, err, "ChatGPT returned a conversation format this version can't read. Update AgentsView and try again")
+			assert.Equal(t, []string{chatGPTSyncID, "00000002-0000-4000-8000-000000000000"}, details)
+			assert.Equal(t, 1, stats.Imported)
+			assert.Equal(t, 1, stats.Errors)
+			messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Question", "Answer"}, messageContents(messages))
+			stored, err := d.GetSessionFull(t.Context(), "chatgpt:00000002-0000-4000-8000-000000000000")
+			require.NoError(t, err)
+			assert.Nil(t, stored)
+		})
+	}
+}
+
 func TestSyncChatGPTContinuesAfterOversizedDetails(t *testing.T) {
 	d := testDB(t)
 	details := 0
