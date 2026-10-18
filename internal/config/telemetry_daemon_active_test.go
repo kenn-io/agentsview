@@ -139,42 +139,107 @@ func TestClaimSetupFinished(t *testing.T) {
 	}
 }
 
-func TestClaimDaemonActiveDoesNotBlockConfigSaves(t *testing.T) {
-	dir := t.TempDir()
-	heartbeat := Config{DataDir: dir, InstallationID: "install-one"}
+func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		claim func(Config, func() error) error
+	}{
+		{"daemon active", func(c Config, send func() error) error { return c.ClaimDaemonActive(time.Now(), send) }},
+		{"setup finished", func(c Config, send func() error) error { return c.ClaimSetupFinished(send) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			started, release := make(chan struct{}), make(chan struct{})
+			done := make(chan error, 1)
+			var savesDone chan struct{}
+			go func() {
+				done <- tc.claim(Config{DataDir: dir, InstallationID: "install-one"}, func() error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+			defer func() {
+				close(release)
+				require.NoError(t, <-done)
+				if savesDone != nil {
+					<-savesDone
+				}
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "claim callback did not start")
+			}
+			saved := make(chan error, 1)
+			savesDone = make(chan struct{})
+			go func() {
+				defer close(savesDone)
+				cfg := Config{DataDir: dir}
+				if err := cfg.SaveSettings(map[string]any{"chart_palette": ChartPaletteMatplotlib}); err != nil {
+					saved <- err
+					return
+				}
+				saved <- cfg.SaveTerminalConfig(TerminalConfig{Mode: "clipboard"})
+			}()
+			select {
+			case err := <-saved:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "config saves waited for the claim callback")
+			}
+			cfg := readConfigFile(t, dir)
+			assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
+			assert.Equal(t, "clipboard", cfg.Terminal.Mode)
+		})
+	}
+}
+
+func TestSetupFinishedClaimedWaitsForPendingClaim(t *testing.T) {
+	cfg := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+	sendErr := errors.New("queue full")
 	started, release := make(chan struct{}), make(chan struct{})
-	done := make(chan error, 1)
-	var savesDone chan struct{}
-	go func() {
-		done <- heartbeat.ClaimDaemonActive(time.Now(), func() error {
+	releaseSend := sync.OnceFunc(func() { close(release) })
+	var wg sync.WaitGroup
+	defer func() {
+		releaseSend()
+		wg.Wait()
+	}()
+	var claimErr error
+	wg.Go(func() {
+		claimErr = cfg.ClaimSetupFinished(func() error {
 			close(started)
 			<-release
-			return nil
+			return sendErr
 		})
-	}()
-	defer func() {
-		close(release)
-		require.NoError(t, <-done)
-		if savesDone != nil {
-			<-savesDone
-		}
-	}()
+	})
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
-		require.FailNow(t, "heartbeat callback did not start")
+		require.FailNow(t, "setup claim callback did not start")
 	}
-	saved := make(chan error, 1)
-	savesDone = make(chan struct{})
-	go func() {
-		defer close(savesDone)
-		cfg := Config{DataDir: dir}
-		saved <- cfg.SaveSettings(map[string]any{"chart_palette": ChartPaletteMatplotlib})
-	}()
+	var readClaimed bool
+	var readErr error
+	read := make(chan struct{})
+	wg.Go(func() {
+		defer close(read)
+		readClaimed, readErr = cfg.SetupFinishedClaimed()
+	})
 	select {
-	case err := <-saved:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "config save waited for the heartbeat callback")
+	case <-read:
+		require.FailNow(t, "setup read returned while the claim was pending", "claimed=%v err=%v", readClaimed, readErr)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows the read does not return while the claim holds the setup record lock
 	}
+	releaseSend()
+	wg.Wait()
+	require.ErrorIs(t, claimErr, sendErr)
+	require.NoError(t, readErr)
+	assert.False(t, readClaimed, "a failed send rolls back the reservation the read waited on")
+
+	sent := false
+	require.NoError(t, cfg.ClaimSetupFinished(func() error {
+		sent = true
+		return nil
+	}))
+	assert.True(t, sent, "a later claim retries after the failed send")
 }

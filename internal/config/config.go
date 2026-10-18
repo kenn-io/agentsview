@@ -2216,11 +2216,11 @@ func (c *Config) withFileLock(lockPath string, fn func() error) error {
 	// a directory is reported as an unusable lock on every platform.
 	if info, statErr := os.Stat(lockPath); statErr == nil && info.IsDir() {
 		return fmt.Errorf(
-			"locking config: %s is a directory, not a lock file", lockPath)
+			"locking %s: path is a directory, not a lock file", lockPath)
 	}
 	lock := flock.New(lockPath)
 	if err := lock.Lock(); err != nil {
-		return fmt.Errorf("locking config: %w", err)
+		return fmt.Errorf("locking %s: %w", lockPath, err)
 	}
 	defer func() {
 		_ = lock.Unlock()

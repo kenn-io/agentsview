@@ -32,9 +32,11 @@ func (c *Config) ClaimSetupFinished(send func() error) error {
 }
 
 // SetupFinishedClaimed reports whether this installation already queued setup.
+// It takes the claim's lock, so it waits for a pending send and its rollback.
 func (c *Config) SetupFinishedClaimed() (claimed bool, err error) {
-	err = c.withConfigLock(func() error {
-		record, err := os.ReadFile(filepath.Join(c.DataDir, telemetrySetupFinishedFilename))
+	path := filepath.Join(c.DataDir, telemetrySetupFinishedFilename)
+	err = c.withFileLock(path+".lock", func() error {
+		record, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}

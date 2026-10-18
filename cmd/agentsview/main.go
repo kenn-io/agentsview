@@ -560,6 +560,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	cfg = preparedCfg
 	rtOpts.BasePath = opts.BasePath
 
+	telemetryCapture, startScreenClaimMigration := telemetryCaptureHandler(cfg, telemetryReporter.CaptureHandler())
 	srvOpts := []server.Option{
 		server.WithCodexCloudStatus(codexCloudStatus),
 		server.WithVersion(server.VersionInfo{
@@ -573,7 +574,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
-		server.WithTelemetryCapture(telemetryCaptureHandler(cfg, telemetryReporter.CaptureHandler())),
+		server.WithTelemetryCapture(telemetryCapture),
 	}
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
@@ -652,6 +653,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		fatal("%v", err)
 	}
+	startScreenClaimMigration()
 
 	// Server is ready — write the definitive kit runtime record with the
 	// final port and release the start lock. If the runtime record
@@ -1473,9 +1475,12 @@ func telemetryOptions(cfg config.Config) telemetry.Options {
 	return opts
 }
 
-func telemetryCaptureHandler(cfg config.Config, next http.Handler) http.Handler {
+// telemetryCaptureHandler converts screen claims once before forwarding a
+// capture. startMigration begins that conversion in the background so a
+// restart converts claims without waiting for a browser report.
+func telemetryCaptureHandler(cfg config.Config, next http.Handler) (handler http.Handler, startMigration func()) {
 	if !telemetry.EnabledFromEnv() {
-		return next
+		return next, func() {}
 	}
 	migrate := stdsync.OnceFunc(func() {
 		if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
@@ -1485,7 +1490,7 @@ func telemetryCaptureHandler(cfg config.Config, next http.Handler) http.Handler 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		migrate()
 		next.ServeHTTP(w, r)
-	})
+	}), func() { go migrate() }
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg config.Config) {

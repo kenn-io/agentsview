@@ -20,6 +20,9 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
 ├── telemetry-install-id # Application installation ID
+├── telemetry-daemon-active.lock  # Serializes daily daemon reports
+├── telemetry-setup-finished.lock # Serializes the one-time setup report
+├── telemetry-screen-views.lock   # Serializes screen view claims
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -2251,8 +2254,10 @@ to this, so `over_30m` can undercount.
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
 It stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. When telemetry is enabled, startup moves older
-plain-text claims, malformed claims, or claims from a newer format to a unique
+installation identity. When telemetry is enabled, the server checks the file
+once in the background after it starts serving; a web UI report that arrives
+first waits for that check. The check moves older plain-text claims, malformed
+claims, or claims from a newer format to a unique
 `telemetry-screen-views.unreadable-*` file and logs the move. Earlier copies
 stay intact. Valid plain-text counts carry over for the current installation.
 If the move fails, the server logs the error and preserves the claims.
