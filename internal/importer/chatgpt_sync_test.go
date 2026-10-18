@@ -159,6 +159,51 @@ func TestSyncChatGPTUsageArchiveUpdatesAppendedTurns(t *testing.T) {
 	assert.Equal(t, 3, details)
 }
 
+func TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		for _, initialModel := range []string{"", "gpt-4o-mini"} {
+			t.Run(string(policy)+"/"+initialModel, func(t *testing.T) {
+				d := testDB(t)
+				d.SetArchiveContent(policy)
+				details := 0
+				detail := strings.ReplaceAll(chatGPTSyncDetail(1, false, "Question"), `"metadata":{}`, fmt.Sprintf(`"metadata":{"model_slug":%q}`, initialModel))
+				_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", detail, &details), nil)
+				require.NoError(t, err)
+				id := "chatgpt:" + chatGPTSyncID
+				before, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, before, 2)
+				require.Equal(t, initialModel, before[1].Model)
+				_, err = d.PinMessage(t.Context(), id, before[1].ID, new("Keep this answer"))
+				require.NoError(t, err)
+
+				detail = strings.ReplaceAll(chatGPTSyncDetail(2, false, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+				fetch := chatGPTSyncFetch(t, "2", detail, &details)
+				stats, err := SyncChatGPT(t.Context(), d, fetch, nil)
+				require.NoError(t, err)
+				assert.Zero(t, stats.Errors)
+				after, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, after, 2)
+				assert.Equal(t, "gpt-4o", after[1].Model)
+				assert.Equal(t, before[1].ID, after[1].ID)
+				assert.Equal(t, messageContents(before), messageContents(after))
+				pins, err := d.ListPinnedMessages(t.Context(), id, "")
+				require.NoError(t, err)
+				require.Len(t, pins, 1)
+				assert.Equal(t, before[1].ID, pins[0].MessageID)
+				assert.Equal(t, new("Keep this answer"), pins[0].Note)
+
+				stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+				require.NoError(t, err)
+				assert.Zero(t, stats.Errors)
+				assert.Equal(t, 1, stats.Skipped)
+				assert.Equal(t, 2, details, "the third sync makes no detail request")
+			})
+		}
+	}
+}
+
 func TestSyncChatGPTRejectsInvalidSummary(t *testing.T) {
 	for _, tc := range []struct {
 		name string
