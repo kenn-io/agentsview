@@ -377,6 +377,28 @@ func TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp(t *testing.T) {
 	assert.Equal(t, 1, details, "the next sync fetches no detail")
 }
 
+func TestSyncChatGPTUsageArchiveSkipsUnchangedImport(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	detail := chatGPTSyncDetail(1706745710, false, "Question")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations.json"), []byte("["+detail+"]"), 0o600))
+	stats, err := ImportChatGPT(t.Context(), d, dir, t.TempDir(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+
+	details := 0
+	fetch := chatGPTSyncFetch(t, "1706745710", detail, &details)
+	for range 2 {
+		stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Updated)
+		assert.Equal(t, 1, details, "only the first sync fetches detail without a freshness hash")
+	}
+}
+
 func TestSyncChatGPTRejectsInvalidSummary(t *testing.T) {
 	for _, tc := range []struct {
 		name string
