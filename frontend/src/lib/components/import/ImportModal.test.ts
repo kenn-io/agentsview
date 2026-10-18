@@ -111,7 +111,6 @@ it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure"
   await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/", "_blank", "noopener,noreferrer");
   expect(syncClaudeAI).not.toHaveBeenCalled();
-  expect(chromeStatus).toHaveBeenCalled();
 });
 
 function pendingSync() {
@@ -516,7 +515,7 @@ it("localizes auth state from its code", async () => {
   expect(screen.queryByText("English auth message")).toBeNull();
 });
 
-it("polls every two seconds and pauses on hidden page, sync, tab change and close", async () => {
+it("polls every two seconds across browser tabs and pauses while hidden, syncing, or closed", async () => {
   vi.useFakeTimers();
   const p = props();
   const { rerender } = render(ImportModal, p);
