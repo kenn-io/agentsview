@@ -15,7 +15,3 @@ linters:
       - linters:
           - modernize
         text: "omitzero:"
-formatters:
-  exclusions:
-    paths:
-      - node_modules/

@@ -181,4 +181,3 @@ formatters:
       - builtin$
       - examples$
       - testdata$
-      - node_modules/
