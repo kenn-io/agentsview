@@ -217,14 +217,15 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	if err != nil {
 		return importUpdated, err
 	}
-	if sameMessages(archived, storedFormMessages(store, msgs)) {
+	stored := storedFormMessages(store, msgs)
+	if sameMessages(archived, stored) {
 		status, err := upsertConversation(ctx, store, result, nil)
 		if refusalReason(err) == RefusalShorterExport {
 			// Stored messages already match; update the selected branch's counts
 			// without replacing rows that may have pins.
 			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: chatGPTSession(result.Session), Messages: msgs,
-				SkipSignalUpdates: true,
+				Session: chatGPTSession(result.Session), Messages: chatGPTModelRows(archived, stored),
+				CompleteStoredRows: true, SkipSignalUpdates: true,
 			}})
 			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil

@@ -3921,8 +3921,9 @@ schemas keep their existing ordering behavior.
   the old conversation in Trash when a pin would be lost.
   Model-only changes update retained message rows under full and transcripts
   storage before Sync caches freshness.
-  Usage-only sync refreshes counts and end time for shorter snapshots with
-  unchanged retained rows before caching freshness. Reverified 2026-10-18 with
+  Usage-only sync refreshes counts, end time, and retained message models for
+  shorter snapshots with matching retained turns before caching freshness.
+  Reverified 2026-10-18 with
   `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata`.
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` reports an active browser sync.
