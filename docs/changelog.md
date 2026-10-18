@@ -246,6 +246,11 @@ The latest published release is
 
 **Bug fixes**
 
+- Switching between sessions in one tab returns you to the line you were
+  reading in each one. Before, each return could land several messages further
+  down, and the gap grew with every switch. A session you open for the first
+  time now starts at the top instead of at the previous session's scroll
+  position.
 - The sidebar lists forked and continued sessions under the session they
   started from, matching the session tree in the analysis panel. Before, the
   newest fork or continuation took the original's place as the group's top row

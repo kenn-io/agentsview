@@ -1,7 +1,7 @@
 <script lang="ts">
   import VirtualizerTest from './VirtualizerTest.svelte';
 
-  type Options = { measureCacheKey: string; count: number };
+  type Options = { measureCacheKey: string; count: number; retainedMeasureCaches?: number };
 
   interface Props {
     type: 'element' | 'window';
