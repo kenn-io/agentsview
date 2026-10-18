@@ -458,7 +458,7 @@ func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
 	assert.Equal(t, []string{"beta"}, got.ExcludeProjects)
 }
 
-func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
+func TestBrowserSyncRoutesAreSSEOnly(t *testing.T) {
 	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())

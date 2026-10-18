@@ -369,11 +369,12 @@ func TestChromeSyncResults(t *testing.T) {
 
 func TestChromeSyncCommand(t *testing.T) {
 	for _, tt := range []struct {
-		name, body string
-		cancel     bool
+		name, provider, query, body, wantOutput string
+		cancel                                  bool
 	}{
-		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", false},
-		{"cancel", "", true},
+		{"partial failure", "claude-ai", "browser=chrome", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Done: 6 processed (2 new, 1 updated, 3 skipped)", false},
+		{"cancel", "claude-ai", "browser=chrome", "", "", true},
+		{"chatgpt", "chatgpt", "", "event: done\ndata: {\"imported\":1,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 1 processed (1 new)", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -381,9 +382,9 @@ func TestChromeSyncCommand(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-				"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
+				"/api/v1/import/" + tt.provider + "/sync": func(w http.ResponseWriter, r *http.Request) {
 					assert.Equal(t, http.MethodPost, r.Method)
-					assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+					assert.Equal(t, tt.query, r.URL.RawQuery)
 					if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
 						http.Error(w, "Forbidden", http.StatusForbidden)
 						return
@@ -403,43 +404,22 @@ func TestChromeSyncCommand(t *testing.T) {
 			registerTestRuntime(t, dataDir, ts.URL, false)
 			output := captureStderr(t, func() {
 				cmd := newImportCommand()
-				cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
+				cmd.SetArgs([]string{"--type", tt.provider, "--sync"})
 				err := cmd.ExecuteContext(ctx)
 				if tt.cancel {
 					require.ErrorIs(t, err, context.Canceled)
+				} else if tt.provider == "chatgpt" {
+					require.NoError(t, err)
 				}
 			})
 			if !tt.cancel {
-				assert.Contains(t, output, "Done: 6 processed (2 new, 1 updated, 3 skipped)")
-				assert.Contains(t, output, "1 errors")
+				assert.Contains(t, output, tt.wantOutput)
+				if tt.provider == "claude-ai" {
+					assert.Contains(t, output, "1 errors")
+				}
 			}
 		})
 	}
-}
-
-func TestChatGPTChromeSyncCommand(t *testing.T) {
-	dataDir := testDataDir(t)
-	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/import/chatgpt/sync": func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, http.MethodPost, r.Method)
-			assert.Empty(t, r.URL.RawQuery)
-			if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, err := io.WriteString(w, "event: done\ndata: {\"imported\":1,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n")
-			assert.NoError(t, err)
-		},
-	})
-	registerTestRuntime(t, dataDir, ts.URL, false)
-	output := captureStderr(t, func() {
-		cmd := newImportCommand()
-		cmd.SetArgs([]string{"--type", "chatgpt", "--sync"})
-		require.NoError(t, cmd.Execute())
-	})
-	assert.Contains(t, output, "Done: 1 processed (1 new)")
 }
 
 func TestChromeImportArguments(t *testing.T) {
