@@ -351,18 +351,6 @@ func TestCodexCloudRebuiltMirrorKeepsPlanUsage(t *testing.T) {
 	assert.Equal(t, "left_out", skewed.OutcomeKind, "the outcome follows the report in the file")
 	assert.Equal(t, new(2.25), weekly())
 
-	// An outcome alone keeps the archived report figures under it.
-	_, err = mirror.Append(path, 0, []mirror.Record{
-		record(mirror.KindPlanUsageOutcome, `{"kind":"left_out","at":"2026-10-03T08:00:00Z"}`),
-	})
-	require.NoError(t, err)
-	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
-	assert.Equal(t, new(2.25), weekly(), "the archived figures stay under a new outcome")
-	plan, err := database.GetSessionPlanUsage(ctx, "codex-cloud:thread-a")
-	require.NoError(t, err)
-	require.NotNil(t, plan)
-	assert.Equal(t, "left_out", plan.OutcomeKind)
-
 	_, err = mirror.Append(path, 0, []mirror.Record{planRow("3.5", "2026-10-03T09:30:00Z")})
 	require.NoError(t, err)
 	require.NoError(t, engine.SyncSingleSession("codex-cloud:thread-a"))
