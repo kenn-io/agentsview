@@ -64,20 +64,38 @@ describe("Chrome native host worker", () => {
   it("refuses unsupported paths before touching tabs", async () => {
     message({ id: "a", path: "/api/settings", platform: "claude-ai", version: 2 });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
-    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", platform: "claude-ai", version: 2, status: 0, error: "Unsupported browser fetch path" });
+    expect(port.postMessage).toHaveBeenCalledWith({
+      id: "a",
+      version: 2,
+      status: 0,
+      error: "Unsupported browser fetch path",
+    });
     expect(chrome.tabs.query).not.toHaveBeenCalled();
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, 0, 1])("stamps its own version on replies to peer version %s", async (version) => {
-    message({ id: "a", path: "/api/organizations", platform: "claude-ai", version });
-    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
-    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", platform: "claude-ai", version: 2, status: 200, body: "chats" });
-  });
+  it.each([undefined, 0, 1])(
+    "stamps its own version on replies to peer version %s",
+    async (version) => {
+      message({ id: "a", path: "/api/organizations", platform: "claude-ai", version });
+      await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
+      expect(port.postMessage).toHaveBeenCalledWith({
+        id: "a",
+        version: 2,
+        status: 200,
+        body: "chats",
+      });
+    },
+  );
 
   it("fetches in an existing Claude tab and replies by id", async () => {
-    expect(await request()).toEqual({ id: "a", platform: "claude-ai", version: 2, status: 200, body: "chats" });
+    expect(await request()).toEqual({
+      id: "a",
+      version: 2,
+      status: 200,
+      body: "chats",
+    });
     expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
     expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://claude.ai/*", discarded: false });
     expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["claudeFetch", "https://claude.ai/api/organizations"] });
@@ -94,8 +112,16 @@ describe("Chrome native host worker", () => {
       return [{ result: (await options.func(...(options.args ?? []))) ?? null }];
     });
     chrome.tabs.query.mockResolvedValue([]);
-    expect(await request()).toEqual({ id: "a", platform: "claude-ai", version: 2, status: 200, body: "chats" });
-    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "https://claude.ai/new", active: false });
+    expect(await request()).toEqual({
+      id: "a",
+      version: 2,
+      status: 200,
+      body: "chats",
+    });
+    expect(chrome.tabs.create).toHaveBeenCalledWith({
+      url: "https://claude.ai/new",
+      active: false,
+    });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, {
       target: { tabId: 8 },
@@ -114,19 +140,36 @@ describe("Chrome native host worker", () => {
     updated(9, { status: "complete" });
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
     updated(7, { status: "complete" });
-    expect(await pending).toEqual({ id: "a", platform: "claude-ai", version: 2, status: 200, body: "chats" });
+    expect(await pending).toEqual({
+      id: "a",
+      version: 2,
+      status: 200,
+      body: "chats",
+    });
     expect(chrome.tabs.onUpdated.removeListener).toHaveBeenCalledWith(updated);
   });
 
   it("replaces an oversized serialized reply with 413", async () => {
-    chrome.scripting.executeScript.mockResolvedValueOnce([{ result: true }]).mockResolvedValueOnce([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
-    expect(await request()).toEqual({ id: "a", platform: "claude-ai", version: 2, status: 413 });
+    chrome.scripting.executeScript
+      .mockResolvedValueOnce([{ result: true }])
+      .mockResolvedValueOnce([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
+    expect(await request()).toEqual({ id: "a", version: 2, status: 413 });
   });
 
-  it.each([null, {}, { status: "200" }])("rejects a fetch reply without numeric status: %s", async (result) => {
-    chrome.scripting.executeScript.mockResolvedValueOnce([{ result: true }]).mockResolvedValueOnce([{ result }]);
-    expect(await request()).toEqual({ id: "a", platform: "claude-ai", version: 2, status: 0, error: "The browser page changed during Sync; try Sync again" });
-  });
+  it.each([null, {}, { status: "200" }])(
+    "rejects a fetch reply without numeric status: %s",
+    async (result) => {
+      chrome.scripting.executeScript
+        .mockResolvedValueOnce([{ result: true }])
+        .mockResolvedValueOnce([{ result }]);
+      expect(await request()).toEqual({
+        id: "a",
+        version: 2,
+        status: 0,
+        error: "The browser page changed during Sync; try Sync again",
+      });
+    },
+  );
 
   it("routes ChatGPT requests through a ChatGPT page with its own fetch script", async () => {
     const chatgptFetch = vi.fn(() => ({ status: 200, body: "conversations" }));
@@ -137,8 +180,16 @@ describe("Chrome native host worker", () => {
       }
       return [{ result: await options.func(...(options.args ?? [])) ?? null }];
     });
-    expect(await request("/backend-api/conversations?offset=0&limit=50&order=updated", "chatgpt")).toEqual({
-      id: "a", platform: "chatgpt", version: 2, status: 200, body: "conversations",
+    expect(
+      await request(
+        "/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false",
+        "chatgpt",
+      ),
+    ).toEqual({
+      id: "a",
+      version: 2,
+      status: 200,
+      body: "conversations",
     });
     expect(chrome.tabs.query).toHaveBeenCalledWith({
       url: "https://chatgpt.com/*",
@@ -150,7 +201,7 @@ describe("Chrome native host worker", () => {
       world: "ISOLATED",
     });
     expect(chatgptFetch).toHaveBeenCalledExactlyOnceWith(
-      "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
+      "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false",
     );
   });
 

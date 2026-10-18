@@ -3902,7 +3902,9 @@ schemas keep their existing ordering behavior.
   2026-10-17. Sync uses the export conversation parser; list timestamps accept
   ISO strings or Unix seconds, and detail timestamps use Unix seconds. Synthetic
   importer tests cover these shapes; this rework did not capture a live account
-  response.
+  response. The [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and archived
+  (`is_archived=true`) conversation lists. Sync pages both lists each run.
 
 ## Kiro CLI (`kiro`)
 

@@ -47,10 +47,12 @@ export async function allowedPath(platform, path) {
     );
   }
   if (platform === "chatgpt") {
-    const [listPrefix, listSuffix] = shapes[0].split("{offset}");
-    if (path.startsWith(listPrefix) && path.endsWith(listSuffix)) {
-      const offset = path.slice(listPrefix.length, -listSuffix.length);
-      return /^\d+$/.test(offset);
+    for (const archived of ["false", "true"]) {
+      const [listPrefix, listSuffix] = shapes[0].replace("{archived}", archived).split("{offset}");
+      if (path.startsWith(listPrefix) && path.endsWith(listSuffix)) {
+        const offset = path.slice(listPrefix.length, -listSuffix.length);
+        return /^\d+$/.test(offset);
+      }
     }
     const [detailPrefix, detailSuffix = ""] = shapes[1].split("{conversation}");
     const conversation = detailSuffix
