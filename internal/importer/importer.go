@@ -595,8 +595,8 @@ func writeChatGPTSession(
 
 // appendChatGPTMessages fills archived-empty tool results and extends
 // truncated archived text at stored ordinals, and inserts later rows, leaving
-// other stored rows untouched. Signals are written as zero values so the
-// backfill recomputes them.
+// other stored rows untouched. Message changes clear signals for backfill;
+// metadata-only writes preserve them.
 func appendChatGPTMessages(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
@@ -604,6 +604,7 @@ func appendChatGPTMessages(
 		Session:            sess,
 		Messages:           msgs,
 		CompleteStoredRows: true,
+		SkipSignalUpdates:  len(msgs) == 0,
 	})
 }
 
