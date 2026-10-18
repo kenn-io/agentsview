@@ -385,8 +385,9 @@ func TestSyncChatGPTLongRetryAfterKeepsEarlierWrites(t *testing.T) {
 }
 
 func TestSyncChatGPTKeepsZipImageAndAppends(t *testing.T) {
-	for _, extend := range []bool{false, true} {
-		t.Run(fmt.Sprintf("extend=%t", extend), func(t *testing.T) {
+	for _, tc := range []struct{ extend, legacy bool }{{}, {extend: true}, {legacy: true}, {extend: true, legacy: true}} {
+		t.Run(fmt.Sprintf("extend=%t/legacy=%t", tc.extend, tc.legacy), func(t *testing.T) {
+			extend := tc.extend
 			d := testDB(t)
 			dir := t.TempDir()
 			export := testjsonl.ChatGPTImageExport()
@@ -400,6 +401,19 @@ func TestSyncChatGPTKeepsZipImageAndAppends(t *testing.T) {
 			stats, err := ImportChatGPT(t.Context(), d, dir, t.TempDir(), nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, stats.Imported)
+			if tc.legacy {
+				// ZIP imports on main predate source message identities.
+				session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				messages, err := d.GetAllMessages(t.Context(), session.ID)
+				require.NoError(t, err)
+				for i := range messages {
+					messages[i].SourceUUID, messages[i].SourceParentUUID = "", ""
+				}
+				_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: *session, Messages: messages, ReplaceMessages: true, SkipSignalUpdates: true}})
+				require.NoError(t, err)
+			}
 			var conversations []map[string]any
 			require.NoError(t, json.Unmarshal([]byte(export["conversations-000.json"]), &conversations))
 			conversation := conversations[0]
@@ -540,7 +554,7 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 			after, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 			require.NoError(t, err)
 			require.Len(t, after, 1)
-			if tc.regenerate || tc.changedTime || tc.changedParent || tc.missingID {
+			if tc.regenerate || tc.changedTime || tc.changedParent {
 				assert.Equal(t, "See this:\n[image unavailable]", after[0].Content)
 			} else {
 				assert.Equal(t, before[0].Content, after[0].Content)

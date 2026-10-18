@@ -227,8 +227,8 @@ func keepChatGPTImages(incoming []parser.ParsedMessage, archived []db.Message) {
 		// Generated images can change without changing the assistant text.
 		// Only retain uploads on the same user turn.
 		if !ok || message.Role != parser.RoleUser || stored.Role != string(message.Role) ||
-			message.Timestamp.IsZero() || message.SourceUUID == "" || stored.SourceUUID != message.SourceUUID ||
-			stored.SourceParentUUID != message.SourceParentUUID ||
+			message.Timestamp.IsZero() || stored.SourceUUID != "" && stored.SourceUUID != message.SourceUUID ||
+			stored.SourceParentUUID != "" && stored.SourceParentUUID != message.SourceParentUUID ||
 			stored.Timestamp != message.Timestamp.UTC().Format(time.RFC3339Nano) ||
 			!strings.Contains(message.Content, "[image unavailable]") {
 			continue
