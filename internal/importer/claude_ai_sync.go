@@ -220,7 +220,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		status, err := upsertConversation(ctx, store, result, nil)
 		rows := chatGPTModelRows(archived, stored)
 		if refusalReason(err) == RefusalShorterExport {
-			if !storeArchiveContent(store).UsageOnly() {
+			if result.Session.Agent != parser.AgentChatGPT || !storeArchiveContent(store).UsageOnly() {
 				return importSkipped, nil
 			}
 		} else if err != nil || len(rows) == 0 {

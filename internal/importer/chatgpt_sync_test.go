@@ -518,6 +518,26 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	assert.Equal(t, 2, details)
 }
 
+func TestSyncChatGPTTimestampOnlyCountsUpdate(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", chatGPTSyncDetail(1706745711, false, "Question"), &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, ImportStats{Imported: 1}, stats)
+	fetch := chatGPTSyncFetch(t, "1706745712", chatGPTSyncDetail(1706745712, false, "Question"), &details)
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
+	stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, new("2024-02-01T00:01:52Z"), stored.EndedAt)
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 2, details, "the third sync makes no detail request")
+}
+
 // chatGPTPopulatedList returns a full first page of distinct conversation IDs.
 func chatGPTPopulatedList(t *testing.T) string {
 	t.Helper()
@@ -851,10 +871,12 @@ func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
 	}{
 		{"additional call", chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Run print(42)"}, chatGPTNodeSpec{"assistant", "text", "Running it."}), chatGPTToolRunConv("42", false)},
 		{"changed result", chatGPTToolRunConv("41", false), chatGPTToolRunConv("42", false)},
+		{"filled result", chatGPTToolRunConv("", false), chatGPTToolRunConv("42", false)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			details := 0
+			var before []db.Message
 			for i, body := range []string{tc.initial, tc.later} {
 				body = strings.ReplaceAll(body, "cg-tool", chatGPTSyncID)
 				body = strings.Replace(body, `"update_time":1706745710.0`, fmt.Sprintf(`"update_time":%d`, i+1), 1)
@@ -865,6 +887,13 @@ func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
 					messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 					require.NoError(t, err)
 					require.Len(t, messages, 2)
+					before = messages
+					// Keep another message after these rows so a replacement cannot reuse their IDs.
+					_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+						Session:  db.Session{ID: "another-chat", Agent: "chatgpt", Project: "chatgpt"},
+						Messages: []db.Message{{SessionID: "another-chat", Ordinal: 0, Role: "user", Content: "Another chat"}},
+					}})
+					require.NoError(t, err)
 					_, err = d.PinMessage(t.Context(), "chatgpt:"+chatGPTSyncID, messages[1].ID, nil)
 					require.NoError(t, err)
 				}
@@ -875,6 +904,10 @@ func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
 			require.Len(t, messages[1].ToolCalls, 1)
 			assert.Equal(t, "code_interpreter", messages[1].ToolCalls[0].ToolName)
 			assert.Contains(t, messages[1].ToolCalls[0].ResultContent, "42")
+			if tc.name == "filled result" {
+				assert.Equal(t, before[0].ID, messages[0].ID)
+				assert.Equal(t, before[1].ID, messages[1].ID)
+			}
 			pins, err := d.ListPinnedMessages(t.Context(), "chatgpt:"+chatGPTSyncID, "")
 			require.NoError(t, err)
 			require.Len(t, pins, 1)
