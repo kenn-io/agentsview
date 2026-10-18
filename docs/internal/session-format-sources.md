@@ -3905,6 +3905,10 @@ schemas keep their existing ordering behavior.
   response. The [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
   checked 2026-10-17, document separate active (`is_archived=false`) and archived
   (`is_archived=true`) conversation lists. Sync pages both lists each run.
+  The [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with `page_info`
+  pagination. Sync stops on details without a `mapping` object and asks for an
+  AgentsView update; it does not parse the flat format.
 
 ## Kiro CLI (`kiro`)
 
