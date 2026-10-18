@@ -125,8 +125,9 @@ func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	before, err := d.GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
 	require.Len(t, before, 1)
+	require.Empty(t, before[0].Model)
 
-	detail = chatGPTSyncDetail(1706745711, false, "Question")
+	detail = strings.ReplaceAll(chatGPTSyncDetail(1706745711, false, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
 	fetch := chatGPTSyncFetch(t, "1706745711", detail, &details)
 	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
@@ -140,6 +141,9 @@ func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	assert.Equal(t, "2024-02-01T00:01:51Z", *session.EndedAt)
 	after, err := d.GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, "gpt-4o", after[0].Model)
+	before[0].Model = "gpt-4o"
 	assert.Equal(t, before, after)
 	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
 	require.NoError(t, err)

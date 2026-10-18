@@ -203,8 +203,8 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	if existing == nil {
 		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-			Session: chatGPTSession(result.Session), Messages: msgs,
-			SkipSignalUpdates: true,
+			Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
+			SkipSignalUpdates: len(rows) == 0,
 		}})
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
@@ -215,14 +215,16 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	if err != nil {
 		return importUpdated, err
 	}
-	if sameMessages(archived, storedFormMessages(store, msgs)) {
+	stored := storedFormMessages(store, msgs)
+	if sameMessages(archived, stored) {
 		status, err := upsertConversation(ctx, store, result, nil)
 		if refusalReason(err) == RefusalShorterExport {
 			// Stored messages already match; update the selected branch's counts
 			// without replacing rows that may have pins.
+			rows := chatGPTModelRows(archived, stored)
 			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: chatGPTSession(result.Session), Messages: msgs,
-				SkipSignalUpdates: true,
+				Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
+				SkipSignalUpdates: len(rows) == 0,
 			}})
 			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
@@ -241,7 +243,7 @@ func replaceSyncedConversation(ctx context.Context, store db.Store, result parse
 		return importUpdated, errors.New("store cannot preserve replaced chats")
 	}
 	_, err := replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
-		Session: chatGPTSession(result.Session), Messages: msgs,
+		Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
 		KeepTrashedCopyOnlyOnPinLoss: true,
 	})
 	return importUpdated, err
