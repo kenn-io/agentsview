@@ -3929,12 +3929,15 @@ schemas keep their existing ordering behavior.
   `TestSyncChatGPTZipImageReconciliation` on 2026-10-18.
   Sync replaces turns with conflicting nonempty source message IDs, preserving
   the old conversation in Trash when a pin would be lost.
-  Model-only changes update retained message rows under full and transcripts
-  storage before Sync caches freshness.
-  Usage-only sync also corrects retained models when turns and `update_time`
+  Sync fills missing models and keeps nonempty stored models under full,
+  transcripts, and usage storage, including when later replies cause the parser
+  to infer a different model for an older reply. Reverified 2026-10-18 with
+  `TestSyncChatGPTArchiveUpdatesAppendedTurns` and
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`.
+  Usage-only sync also fills missing models when turns and `update_time`
   match, verified by
-  `TestSyncChatGPTUsageArchiveCorrectsModelWithUnchangedTimestamp`.
-  Usage-only sync refreshes counts, end time, and retained message models for
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`.
+  Usage-only sync refreshes counts and end time and fills missing models for
   shorter snapshots with matching retained turns before caching freshness.
   Reverified 2026-10-18 with
   `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata`.

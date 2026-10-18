@@ -1462,7 +1462,7 @@ func TestImportChatGPTReimportLegacyRows(t *testing.T) {
 		assert.Equal(t, before[i].ID, after[i].ID)
 	}
 	assert.Empty(t, after[0].Model)
-	assert.Equal(t, "gpt-4o", after[1].Model)
+	assert.Equal(t, "old-model", after[1].Model)
 	assert.Equal(t, "m-n1", after[0].SourceUUID)
 	assert.Equal(t, "r", after[0].SourceParentUUID)
 	assert.Empty(t, after[1].SourceUUID)

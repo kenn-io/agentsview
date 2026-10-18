@@ -216,6 +216,11 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	if err != nil {
 		return importUpdated, err
 	}
+	for _, row := range archived {
+		if result.Session.Agent == parser.AgentChatGPT && row.Model != "" && row.Ordinal >= 0 && row.Ordinal < len(msgs) && sameTurn(row, msgs[row.Ordinal]) {
+			msgs[row.Ordinal].Model = row.Model
+		}
+	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
 		status, err := upsertConversation(ctx, store, result, nil)
