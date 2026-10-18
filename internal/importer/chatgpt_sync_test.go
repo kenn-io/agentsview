@@ -105,6 +105,48 @@ func TestSyncChatGPTAppendFreshnessAndBranchChanges(t *testing.T) {
 	assert.Equal(t, []string{"Rewritten question", "Answer"}, messageContents(messages))
 }
 
+func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	details := 0
+	detail := strings.TrimSuffix(strings.TrimPrefix(chatGPTChainConvID(chatGPTSyncID,
+		chatGPTNodeSpec{"user", "text", "Question"},
+		chatGPTNodeSpec{"assistant", "text", "Answer"},
+		chatGPTNodeSpec{"user", "text", "Follow up"},
+	), "["), "]")
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745710", detail, &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, ImportStats{Imported: 1}, stats)
+	session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Equal(t, 3, session.MessageCount)
+	require.Equal(t, 2, session.UserMessageCount)
+	before, err := d.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	detail = chatGPTSyncDetail(1706745711, false, "Question")
+	fetch := chatGPTSyncFetch(t, "1706745711", detail, &details)
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
+	session, err = d.GetSessionFull(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+	require.NotNil(t, session.EndedAt)
+	assert.Equal(t, "2024-02-01T00:01:51Z", *session.EndedAt)
+	after, err := d.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 2, details)
+}
+
 func TestSyncChatGPTUsageArchiveUpdatesAppendedTurns(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)

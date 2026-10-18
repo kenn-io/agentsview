@@ -1090,3 +1090,52 @@ func TestSyncClaudeAIOrganizationAllowlist(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncClaudeAIUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	selected := "q2"
+	updated := "2026-03-01T10:05:00.123456Z"
+	details := 0
+	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
+		detail = strings.ReplaceAll(detail, "2026-03-01T10:05:00.123456Z", updated)
+		summary := strings.ReplaceAll(strings.Replace(syncSummary, "reply", selected, 1), "2026-03-01T10:05:00.123456Z", updated)
+		return syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			details++
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		})(ctx, path)
+	}
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	require.NoError(t, err)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Equal(t, 3, session.MessageCount)
+	require.Equal(t, 2, session.UserMessageCount)
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	selected = "reply"
+	updated = "2026-03-01T10:06:00Z"
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
+	session, err = d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+	require.NotNil(t, session.EndedAt)
+	assert.Equal(t, "2026-03-01T10:06:00Z", *session.EndedAt)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 2, details)
+}
+
