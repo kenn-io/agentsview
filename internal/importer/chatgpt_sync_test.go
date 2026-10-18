@@ -196,6 +196,7 @@ func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 	require.Empty(t, before[0].Model)
+	preventChatGPTMessageIDReuse(t, d)
 
 	detail = strings.ReplaceAll(chatGPTSyncDetail(1706745711, false, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
 	fetch := chatGPTSyncFetch(t, "1706745711", detail, &details)
@@ -326,6 +327,7 @@ func TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, before, 2)
 				require.Equal(t, initialModel, before[1].Model)
+				preventChatGPTMessageIDReuse(t, d)
 				_, err = d.PinMessage(t.Context(), id, before[1].ID, new("Keep this answer"))
 				require.NoError(t, err)
 
@@ -374,6 +376,7 @@ func TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 	require.Empty(t, before[0].Model)
+	preventChatGPTMessageIDReuse(t, d)
 
 	details := 0
 	detail = strings.ReplaceAll(detail, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
@@ -1017,12 +1020,7 @@ func TestSyncChatGPTUpdatesArchivedToolCalls(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, messages, 2)
 					before = messages
-					// Keep another message after these rows so a replacement cannot reuse their IDs.
-					_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-						Session:  db.Session{ID: "another-chat", Agent: "chatgpt", Project: "chatgpt"},
-						Messages: []db.Message{{SessionID: "another-chat", Ordinal: 0, Role: "user", Content: "Another chat"}},
-					}})
-					require.NoError(t, err)
+					preventChatGPTMessageIDReuse(t, d)
 					_, err = d.PinMessage(t.Context(), "chatgpt:"+chatGPTSyncID, messages[1].ID, nil)
 					require.NoError(t, err)
 				}
@@ -1192,6 +1190,7 @@ func TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn(t *testing.
 			seeded, err := d.GetAllMessages(t.Context(), id)
 			require.NoError(t, err)
 			require.Len(t, seeded, 3)
+			preventChatGPTMessageIDReuse(t, d)
 			_, err = d.PinMessage(t.Context(), id, seeded[2].ID, new("Keep the original"))
 			require.NoError(t, err)
 			stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745710", detail, &details), nil)

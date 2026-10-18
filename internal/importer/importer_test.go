@@ -128,6 +128,19 @@ func testDB(t *testing.T) *db.DB {
 	return dbtest.OpenTestDB(t)
 }
 
+func preventChatGPTMessageIDReuse(t *testing.T, d *db.DB) {
+	t.Helper()
+	// Keep a higher message ID in another session so replacement cannot reuse the original IDs.
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:  db.Session{ID: "another-chat", Agent: "chatgpt", Project: "chatgpt"},
+		Messages: []db.Message{{SessionID: "another-chat", Ordinal: 0, Role: "assistant", Content: "Another chat"}},
+	}})
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), "another-chat")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
 func TestImportClaudeAI(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -1443,6 +1456,7 @@ func TestImportChatGPTReimportLegacyRows(t *testing.T) {
 	before, err := d.GetAllMessages(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, before, 2)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
 	require.NoError(t, err)
 	body := chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Question"}, chatGPTNodeSpec{"assistant", "text", "Answer"})
@@ -1490,6 +1504,7 @@ func TestImportChatGPTReimportWithoutModelKeepsSyncedModel(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 2)
 	require.Empty(t, before[1].Model)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
 	require.NoError(t, err)
 
