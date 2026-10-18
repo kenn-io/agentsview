@@ -203,8 +203,8 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	if existing == nil {
 		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-			Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
-			SkipSignalUpdates: len(rows) == 0,
+			Session: chatGPTSession(result.Session), Messages: msgs,
+			SkipSignalUpdates: true,
 		}})
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
@@ -218,21 +218,20 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
 		status, err := upsertConversation(ctx, store, result, nil)
+		rows := chatGPTModelRows(archived, stored)
 		if refusalReason(err) == RefusalShorterExport {
-			// Stored messages already match; update the selected branch's counts
-			// without replacing rows that may have pins.
-			rows := chatGPTModelRows(archived, stored)
-			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: chatGPTSession(result.Session), Messages: rows, CompleteStoredRows: true,
-				SkipSignalUpdates: len(rows) == 0,
-			}})
-			if errors.Is(err, db.ErrSessionExcluded) {
+			if !storeArchiveContent(store).UsageOnly() {
 				return importSkipped, nil
 			}
-			return importUpdated, err
+		} else if err != nil || len(rows) == 0 {
+			return status, err
 		}
-
-		return status, err
+		// Browser snapshots are authoritative even when retained usage rows match.
+		err = appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importUpdated, err
 	}
 	return replaceSyncedConversation(ctx, store, result, msgs)
 }

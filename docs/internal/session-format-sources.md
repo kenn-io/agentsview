@@ -3927,6 +3927,9 @@ schemas keep their existing ordering behavior.
   the old conversation in Trash when a pin would be lost.
   Model-only changes update retained message rows under full and transcripts
   storage before Sync caches freshness.
+  Usage-only sync also corrects retained models when turns and `update_time`
+  match, verified by
+  `TestSyncChatGPTUsageArchiveCorrectsModelWithUnchangedTimestamp`.
   Usage-only sync refreshes counts, end time, and retained message models for
   shorter snapshots with matching retained turns before caching freshness.
   Reverified 2026-10-18 with

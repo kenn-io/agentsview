@@ -250,6 +250,41 @@ func TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTUsageArchiveCorrectsModelWithUnchangedTimestamp(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	detail := strings.ReplaceAll(chatGPTSyncDetail(1706745710, false, "Question"), `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o-mini"}`)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations.json"), []byte("["+detail+"]"), 0o600))
+	stats, err := ImportChatGPT(t.Context(), d, dir, t.TempDir(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	id := "chatgpt:" + chatGPTSyncID
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.Equal(t, "gpt-4o-mini", before[0].Model)
+
+	details := 0
+	detail = strings.ReplaceAll(detail, "gpt-4o-mini", "gpt-4o")
+	fetch := chatGPTSyncFetch(t, "1706745710", detail, &details)
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Updated)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, "gpt-4o", after[0].Model)
+	assert.Equal(t, before[0].ID, after[0].ID)
+	assert.Empty(t, after[0].Content)
+
+	stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 1, details, "the next sync fetches no detail")
+}
+
 func TestSyncChatGPTRejectsInvalidSummary(t *testing.T) {
 	for _, tc := range []struct {
 		name string
