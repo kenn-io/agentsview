@@ -12,7 +12,7 @@ async function shapesFor(platform) {
     const pending = fetch(chrome.runtime.getURL(file))
       .then(async (response) => {
         if (!response.ok) throw new Error("Browser request shapes unavailable");
-        return (await response.text()).trim().split(/\r?\n/);
+        return (await response.text()).trim().split(/\r?\n/).map(shapePattern);
       })
       .catch((error) => {
         requestShapes.delete(platform);
@@ -23,42 +23,27 @@ async function shapesFor(platform) {
   return requestShapes.get(platform);
 }
 
+const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const parameters = {
+  organization: uuid,
+  conversation: uuid,
+  offset: "[0-9]+",
+  archived: "(?:false|true)",
+};
+
+function shapePattern(shape) {
+  const pattern = shape
+    .split(/(\{[a-z]+\})/)
+    .map((part) => {
+      if (part.startsWith("{")) return parameters[part.slice(1, -1)];
+      return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    })
+    .join("");
+  return new RegExp(`^${pattern}$`);
+}
+
 export async function allowedPath(platform, path) {
   if (typeof path !== "string") return false;
   const shapes = await shapesFor(platform);
-  if (!shapes) return false;
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (platform === "claude-ai") {
-    if (path === shapes[0]) return true;
-    const [prefix, list] = shapes[1].split("{organization}");
-    if (!path.startsWith(prefix)) return false;
-    const rest = path.slice(prefix.length);
-    const slash = rest.indexOf("/");
-    if (!uuid.test(rest.slice(0, slash))) return false;
-    const tail = rest.slice(slash);
-    const listPrefix = list.replace("{offset}", "");
-    if (tail.startsWith(listPrefix) && /^\d+$/.test(tail.slice(listPrefix.length))) return true;
-    const detail = shapes[2].split("{organization}")[1];
-    const [detailPrefix, suffix] = detail.split("{conversation}");
-    return (
-      tail.startsWith(detailPrefix) &&
-      tail.endsWith(suffix) &&
-      uuid.test(tail.slice(detailPrefix.length, -suffix.length))
-    );
-  }
-  if (platform === "chatgpt") {
-    for (const archived of ["false", "true"]) {
-      const [listPrefix, listSuffix] = shapes[0].replace("{archived}", archived).split("{offset}");
-      if (path.startsWith(listPrefix) && path.endsWith(listSuffix)) {
-        const offset = path.slice(listPrefix.length, -listSuffix.length);
-        return /^\d+$/.test(offset);
-      }
-    }
-    const [detailPrefix, detailSuffix = ""] = shapes[1].split("{conversation}");
-    const conversation = detailSuffix
-      ? path.slice(detailPrefix.length, -detailSuffix.length)
-      : path.slice(detailPrefix.length);
-    return path.startsWith(detailPrefix) && path.endsWith(detailSuffix) && uuid.test(conversation);
-  }
-  return false;
+  return shapes?.some((shape) => shape.test(path)) ?? false;
 }

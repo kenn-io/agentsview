@@ -3909,6 +3909,10 @@ schemas keep their existing ordering behavior.
   checked 2026-10-17, describe a newer flat `messages` array with `page_info`
   pagination. Sync stops on details without a `mapping` object and asks for an
   AgentsView update; it does not parse the flat format.
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` reports an active browser sync.
+  Stream errors use `chatgpt_auth_required` for sign-in and
+  `chrome_host_update_required` for an incompatible native host.
 
 ## Kiro CLI (`kiro`)
 

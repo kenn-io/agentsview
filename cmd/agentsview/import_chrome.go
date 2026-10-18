@@ -36,24 +36,24 @@ func syncChrome(ctx context.Context, importType string) error {
 	if err != nil {
 		return err
 	}
-	var status int
-	var body []byte
-	var stream *runtime.Stream[[]byte]
-	var httpResponse *http.Response
-	if importType == "chatgpt" {
-		response, streamErr := api.PostAPIV1ImportChatgptSyncStreamWithResponse(ctx)
-		err = streamErr
-		if response != nil {
-			status, body, stream, httpResponse = response.StatusCode, response.Body, response.Stream200, response.HTTPResponse
-		}
-	} else {
-		browser := apiclient.Chrome
-		response, streamErr := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
-		err = streamErr
-		if response != nil {
-			status, body, stream, httpResponse = response.StatusCode, response.Body, response.Stream200, response.HTTPResponse
-		}
-	}
+	streamCall := map[string]func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error){
+		"chatgpt": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
+			response, err := api.PostAPIV1ImportChatgptSyncStreamWithResponse(ctx)
+			if response == nil {
+				return 0, nil, nil, nil, err
+			}
+			return response.StatusCode, response.Body, response.Stream200, response.HTTPResponse, err
+		},
+		"claude-ai": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
+			browser := apiclient.Chrome
+			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+			if response == nil {
+				return 0, nil, nil, nil, err
+			}
+			return response.StatusCode, response.Body, response.Stream200, response.HTTPResponse, err
+		},
+	}[importType]
+	status, body, stream, httpResponse, err := streamCall()
 	if err != nil && (httpResponse == nil || status == http.StatusOK) {
 		return err
 	}
@@ -67,10 +67,6 @@ func syncChrome(ctx context.Context, importType string) error {
 		return fmt.Errorf("sync completed with %d errors", stats.Errors)
 	}
 	return nil
-}
-
-func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
-	return readBrowserChromeSync(response.StatusCode, response.Body, response.Stream200)
 }
 
 func readBrowserChromeSync(status int, body []byte, stream *runtime.Stream[[]byte]) (importer.ImportStats, error) {
