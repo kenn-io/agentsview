@@ -175,6 +175,31 @@ func TestSyncChatGPTMissingCreateTime(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	details := 0
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, true, "Question"), &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, ImportStats{Imported: 1}, stats)
+	id := "chatgpt:" + chatGPTSyncID
+	assert.Empty(t, replacedCopies(t, d, id))
+
+	stats, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, false, "Question"), &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	assert.True(t, d.IsSessionTrashed(t.Context(), copies[0].ID))
+	assert.Equal(t, 4, copies[0].MessageCount)
+	assert.Equal(t, 2, copies[0].UserMessageCount)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+}
+
 func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
