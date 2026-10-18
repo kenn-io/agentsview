@@ -247,7 +247,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		return status, err
 	}
-	return replaceSyncedConversation(ctx, store, result, msgs, false)
+	return replaceSyncedConversation(ctx, store, result, msgs, result.Session.Agent == parser.AgentChatGPT)
 }
 
 func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {

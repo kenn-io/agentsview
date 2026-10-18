@@ -242,11 +242,11 @@ Sync checks each conversation's `update_time`, imports changed details through
 the existing ChatGPT parser, and appends compatible history to the existing
 `chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync
 replaces the archive with ChatGPT's visible branch, including shorter histories.
-Every replacement keeps the previous version in Trash with its pins, notes, and
-archived images. Re-syncing the same chat makes no further copy. A
-conversation without a `mapping` object or conversation ID counts as one failed
-detail. Sync processes the remaining chats and reports that AgentsView needs an
-update.
+Every replacement keeps the previous version in Trash under every archive
+policy, with its pins, notes, and any archived images. Re-syncing the same chat
+makes no further copy. A conversation without a `mapping` object or conversation
+ID counts as one failed detail. Sync processes the remaining chats and reports
+that AgentsView needs an update.
 ChatGPT's private API can change without notice; sign in again if Sync reports
 that authentication expired.
 
