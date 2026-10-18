@@ -752,6 +752,54 @@ func TestSyncChatGPTPagesActiveAndArchivedLists(t *testing.T) {
 	}
 }
 
+func TestSyncChatGPTReplacesExtendedTurnWithChangedSourceID(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	detail := strings.Trim(chatGPTChainConvID(chatGPTSyncID,
+		chatGPTNodeSpec{"user", "text", "Question"},
+		chatGPTNodeSpec{"assistant", "text", "Answer"},
+		chatGPTNodeSpec{"user", "text", "Follow up"},
+	), "[]")
+	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745710", detail, &details), nil)
+	require.NoError(t, err)
+	id := "chatgpt:" + chatGPTSyncID
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 3)
+	require.Equal(t, "m-n3", before[2].SourceUUID)
+	_, err = d.PinMessage(t.Context(), id, before[2].ID, new("Keep the original"))
+	require.NoError(t, err)
+
+	detail = strings.NewReplacer(`"id":"m-n3"`, `"id":"new-user-message"`,
+		`"Follow up"`, `"Follow up with more detail"`,
+		`"update_time":1706745710.0`, `"update_time":1706745711`).Replace(detail)
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1706745711", detail, &details), nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Updated)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 3)
+	assert.Equal(t, "Follow up with more detail", after[2].Content)
+	assert.Equal(t, "new-user-message", after[2].SourceUUID)
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	assert.Empty(t, pins, "the changed source turn no longer owns the original pin")
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	assert.True(t, d.IsSessionTrashed(t.Context(), copies[0].ID))
+	original, err := d.GetAllMessages(t.Context(), copies[0].ID)
+	require.NoError(t, err)
+	require.Len(t, original, 3)
+	assert.Equal(t, "Follow up", original[2].Content)
+	assert.Equal(t, "m-n3", original[2].SourceUUID)
+	pins, err = d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, original[2].ID, pins[0].MessageID)
+	assert.Equal(t, new("Keep the original"), pins[0].Note)
+}
+
 func TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins(t *testing.T) {
 	d := testDB(t)
 	details := 0
