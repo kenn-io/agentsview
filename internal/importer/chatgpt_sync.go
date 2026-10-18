@@ -203,7 +203,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 		}
 		return status, err
 	}
-	status, err := upsertChatGPTConversation(ctx, store, result, nil)
+	status, err := upsertChatGPTConversation(ctx, store, result, nil, true)
 	if replaceable(err) {
 		return replaceSyncedConversation(ctx, store, result, msgs, chatGPTImagesLost(archived, canonical))
 	}

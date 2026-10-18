@@ -403,12 +403,14 @@ func ImportChatGPTWithOptions(
 // extended when its archived messages are a prefix of the export, where an
 // archived text the export extends (a truncated copy) counts as a match;
 // shorter exports and exports that rewrite archived history are refused
-// so a re-import can never lose or silently change stored messages.
+// so a re-import can never lose or silently change stored messages. Only
+// Sync sets sync, which also fills missing source identities and models.
 func upsertChatGPTConversation(
 	ctx context.Context,
 	store db.Store,
 	result parser.ParseResult,
 	fts *lazyFTS,
+	sync bool,
 ) (importStatus, error) {
 	s := result.Session
 	msgs := chatGPTMessages(s.ID, result.Messages)
@@ -460,7 +462,7 @@ func upsertChatGPTConversation(
 			"export history diverges from the archived messages",
 		))
 	}
-	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)])
+	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)], sync)
 	if !ok {
 		return importNew, refuse(RefusalDiverged, errors.New(
 			"export history diverges from the archived messages",
@@ -495,7 +497,7 @@ func upsertChatGPTConversation(
 	// The transcript changed, so stored quality signals and secret findings
 	// describe the older history. Clear them to version zero in the same
 	// write so the signal backfill recomputes them from the new rows.
-	rows := chatGPTFillRows(archived, msgs, filled)
+	rows := chatGPTFillRows(archived, msgs, filled, sync)
 	rows = append(rows, msgs[len(archived):]...)
 	if err := appendChatGPTMessages(
 		ctx, store, chatGPTSession(s), rows,
@@ -619,17 +621,21 @@ func chatGPTModelRows(archived, incoming []db.Message) []db.Message {
 			changed = append(changed, i)
 		}
 	}
-	return chatGPTFillRows(archived, incoming, changed)
+	return chatGPTFillRows(archived, incoming, changed, true)
 }
 
 // chatGPTFillRows copies rows with filled results, extended text, or missing
-// models, keeping only the tool results being filled.
+// models, keeping only the tool results being filled. Without sync the rows
+// carry no models or source identities, so stored ones stay as they are.
 func chatGPTFillRows(
-	archived, incoming []db.Message, filled []int,
+	archived, incoming []db.Message, filled []int, sync bool,
 ) []db.Message {
 	rows := make([]db.Message, 0, len(filled))
 	for _, i := range filled {
 		row := incoming[i]
+		if !sync {
+			row.Model, row.SourceUUID, row.SourceParentUUID = "", "", ""
+		}
 		row.ToolCalls = slices.Clone(row.ToolCalls[:len(archived[i].ToolCalls)])
 		for j := range row.ToolCalls {
 			if !emptyToolResult(archived[i].ToolCalls[j]) {
@@ -712,18 +718,18 @@ func sameMessages(existing, incoming []db.Message) bool {
 // compareChatGPTPrefix reports whether the export still starts with the
 // archived messages and which archived rows the export completes: a result
 // that was empty when archived and is filled now, archived text the export
-// extends (db.IsTextExtension), a missing model, or missing source identities. It compares turn fields,
-// conflicting source IDs, text and length, and each archived call's name,
+// extends (db.IsTextExtension), and with sync a missing model or missing source identities. It compares turn fields,
+// conflicting source IDs (with sync), text and length, and each archived call's name,
 // category, and whether its result is empty.
 func compareChatGPTPrefix(
-	existing, incoming []db.Message,
+	existing, incoming []db.Message, sync bool,
 ) (completed []int, ok bool) {
 	if len(existing) != len(incoming) {
 		return nil, false
 	}
 	for i := range existing {
 		a, b := existing[i], incoming[i]
-		if !sameTurn(a, b) || a.SourceUUID != "" && b.SourceUUID != "" && a.SourceUUID != b.SourceUUID {
+		if !sameTurn(a, b) || sync && a.SourceUUID != "" && b.SourceUUID != "" && a.SourceUUID != b.SourceUUID {
 			return nil, false
 		}
 		extended := db.IsTextExtension(a.Content, b.Content)
@@ -743,7 +749,7 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended || b.Model != "" && a.Model == "" || missingSourceIdentity(a, b) {
+		if fill || extended || sync && (b.Model != "" && a.Model == "" || missingSourceIdentity(a, b)) {
 			completed = append(completed, i)
 		}
 	}
