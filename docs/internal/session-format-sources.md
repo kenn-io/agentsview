@@ -3947,10 +3947,13 @@ schemas keep their existing ordering behavior.
   Usage-only sync also fills missing models when turns and `update_time`
   match, verified by
   `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`.
-  Usage-only sync refreshes counts and end time and fills missing models for
-  shorter snapshots with matching retained turns before caching freshness.
+  Usage-only sync keeps a Trash copy when shorter snapshots have matching
+  retained assistant turns, including when only a trailing user turn was
+  dropped. It refreshes counts and end time and fills missing models before
+  caching freshness.
   Reverified 2026-10-18 with
-  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata`.
+  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`.
   When detail `create_time` is null or absent, Sync keeps the stored start time
   or uses the first non-zero message timestamp for a new chat, skipping undated
   messages. Numeric `create_time` takes precedence. Reverified against the parser
