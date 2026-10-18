@@ -1435,7 +1435,7 @@ func TestImportChatGPTReimportLegacyRows(t *testing.T) {
 	_, err := d.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: db.Session{ID: id, Agent: "chatgpt", Project: "ChatGPT", Machine: "web"},
 		Messages: []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z", Model: "old-model"},
+			{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z"},
 			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Answer", ContentLength: 6, Timestamp: "2024-02-01T00:00:10Z", Model: "old-model"},
 		},
 	}})
@@ -1472,6 +1472,47 @@ func TestImportChatGPTReimportLegacyRows(t *testing.T) {
 	require.Len(t, pins, 1)
 	assert.Equal(t, before[1].ID, pins[0].MessageID)
 	assert.Equal(t, new("Saved answer"), pins[0].Note)
+}
+
+func TestImportChatGPTReimportWithoutModelKeepsSyncedModel(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	id := "chatgpt:" + chatGPTSyncID
+	legacyDetail := chatGPTSyncDetail(1706745710, false, "Question")
+	detail := strings.ReplaceAll(legacyDetail, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+	details := 0
+	stats, err := SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745710", detail, &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	before, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	require.Equal(t, "gpt-4o", before[1].Model)
+	_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
+	require.NoError(t, err)
+
+	dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": "[" + legacyDetail + "]"}))
+	require.NoError(t, err)
+	defer cleanup()
+	stats, err = ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
+	require.NoError(t, err)
+	after, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	assert.Equal(t, "gpt-4o", after[1].Model)
+	for i := range after {
+		assert.Equal(t, before[i].ID, after[i].ID)
+	}
+	pins, err := d.ListPinnedMessages(ctx, id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[1].ID, pins[0].MessageID)
+	assert.Equal(t, new("Saved answer"), pins[0].Note)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Updated)
+	assert.Zero(t, stats.Imported)
+	assert.Zero(t, stats.Errors)
+	assert.Empty(t, stats.Refusals)
 }
 
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {

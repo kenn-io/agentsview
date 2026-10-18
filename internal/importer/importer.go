@@ -615,7 +615,7 @@ func chatGPTModelRows(archived, incoming []db.Message) []db.Message {
 	}
 	var changed []int
 	for i, row := range incoming {
-		if i < len(archived) && archived[i].Model != row.Model {
+		if i < len(archived) && row.Model != "" && archived[i].Model != row.Model {
 			changed = append(changed, i)
 		}
 	}
@@ -743,7 +743,7 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended || a.Model != b.Model || missingSourceIdentity(a, b) {
+		if fill || extended || b.Model != "" && a.Model != b.Model || missingSourceIdentity(a, b) {
 			completed = append(completed, i)
 		}
 	}
