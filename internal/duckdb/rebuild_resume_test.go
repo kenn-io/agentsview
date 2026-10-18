@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -154,7 +155,7 @@ func TestPushDiscardsV20RebuildWithoutDialogueText(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encodedRun)))
 	require.NoError(t, recordMetadataKey(ctx, conn, schemaVersionMetadataKey, "20"))
-	require.NoError(t, recordMetadataKey(ctx, conn, dataVersionMetadataKey, fmt.Sprint(db.CurrentDataVersion())))
+	require.NoError(t, recordMetadataKey(ctx, conn, dataVersionMetadataKey, strconv.Itoa(db.CurrentDataVersion())))
 	require.NoError(t, conn.Close())
 
 	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
