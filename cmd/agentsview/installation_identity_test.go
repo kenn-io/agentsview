@@ -168,7 +168,7 @@ func TestTelemetryCaptureDisabledLeavesScreenClaimsUnchanged(t *testing.T) {
 	handler, _ := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		forwarded++
 		data, err := os.ReadFile(path)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, legacy, string(data))
 	}))
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
