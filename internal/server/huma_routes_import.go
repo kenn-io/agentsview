@@ -137,7 +137,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
 	if in.Browser == "chrome" && !s.chrome.Connected() {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview chrome setup and keep Chrome open, then Sync again")
+		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
 	}
 	if in.Browser == "chrome" && !s.chrome.syncMu.TryLock() {
 		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_sync_running", "Chrome Sync is already running")

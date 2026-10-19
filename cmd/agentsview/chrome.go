@@ -49,7 +49,7 @@ func newChromeCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Open chrome://extensions, enable Developer mode, and Load unpacked:\n%s\nIf AgentsView is already running, restart it so Chrome can connect.\n", folder)
+		fmt.Fprintf(cmd.OutOrStdout(), "Open chrome://extensions, enable Developer mode, and Load unpacked:\n%s\n\nIf AgentsView is already running, restart it so Chrome can connect.\n", folder)
 		return nil
 	}})
 	return cmd

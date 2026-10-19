@@ -2615,7 +2615,7 @@
   "import_claude_terminal": "Terminal",
   "import_claude_copy_command": "Copier la commande",
   "import_claude_setup_load": "Redémarrez ensuite AgentsView, ouvrez {url}, activez le Mode développeur, choisissez Charger l’extension non empaquetée et sélectionnez le dossier indiqué.",
-  "import_claude_open_chrome": "Ouvrez Chrome pour vous connecter.",
+  "import_claude_open_chrome": "Ouvrez Chrome avec l’extension AgentsView activée. Si vous avez lancé la configuration après avoir démarré AgentsView, redémarrez AgentsView.",
   "import_claude_tab_note": "La synchronisation ouvre un onglet claude.ai en arrière-plan si aucun n'est ouvert. L'onglet reste ouvert après la synchronisation.",
   "import_claude_signed_out": "Connectez-vous à claude.ai dans le profil Chrome avec l'extension AgentsView. Activez l'extension dans un seul profil Chrome. La synchronisation utilise le premier profil qui se connecte.",
   "import_claude_reload_extension": "Rechargez ensuite l’extension dans {url}.",

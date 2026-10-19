@@ -125,7 +125,7 @@ func TestChromeHostAbsent(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 	srv.mux.ServeHTTP(response, req)
 	assert.Equal(t, http.StatusConflict, response.Code)
-	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, response.Body.String())
+	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup, restart AgentsView, and keep Chrome open, then Sync again"}`, response.Body.String())
 }
 
 func TestClaudeAIChromeStatus(t *testing.T) {

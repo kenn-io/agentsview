@@ -82,7 +82,11 @@ it("shows setup instructions when disconnected", async () => {
   render(ImportModal, props());
   await waitFor(() => expect(screen.getByText("Not connected")).toBeTruthy());
   expect(syncButton().disabled).toBe(true);
-  expect(screen.getByText("Open Chrome to connect.")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Open Chrome with the AgentsView extension enabled. If you ran setup after starting AgentsView, restart AgentsView.",
+    ),
+  ).toBeTruthy();
   expect(screen.getByText("Terminal")).toBeTruthy();
   expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();

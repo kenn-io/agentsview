@@ -295,6 +295,8 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	assert.Equal(t, home, filepath.Dir(filepath.Dir(socket)))
+	t.Setenv("CHROME_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
 	_, err = setupChrome(dir, t.TempDir(), chromeTestExecutable(t), assets, func(string) error { return nil })
 	require.NoError(t, err)
