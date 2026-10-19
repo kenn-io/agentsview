@@ -138,7 +138,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}, nil, false},
 		{"embeddable units", func(ctx context.Context) error {
 			var units []EmbeddableUnit
-			_, err := database.ScanEmbeddableUnits(ctx, "", false, func(unit EmbeddableUnit) error {
+			_, err := database.ScanEmbeddableUnits(ctx, "", false, 0, func(unit EmbeddableUnit) error {
 				units = append(units, unit)
 				return nil
 			})

@@ -1004,11 +1004,10 @@ keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
   as new and re-embedded when their ordinal shifts. This only affects older
   parsed data predating per-message UUIDs and is an accepted cost rather than
   a bug.
-- **The active run re-embeds as it grows.** A run document is keyed on its first
-  message, so a session's trailing run keeps its identity as new assistant
-  messages append — but its content changes, so each build re-embeds the
-  current tail. That is the intended cost of grouping; finished runs never
-  re-embed.
+- **Only the last run piece re-embeds as it grows.** Assistant runs close after
+  the message that reaches `4 x max_input_chars` runes. An append re-embeds
+  only the trailing piece, bounded by that cap plus one message; earlier
+  pieces keep their vectors.
 - **DuckDB mirror has no vector backend.** `--semantic`/`--hybrid` against a
   DuckDB-backed server return the "not available" error (HTTP 501) described
   above. PostgreSQL is supported through pgvector — see

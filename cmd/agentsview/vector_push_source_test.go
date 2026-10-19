@@ -40,7 +40,7 @@ type fakePushUnitSource struct {
 }
 
 func (f fakePushUnitSource) ScanEmbeddableUnits(
-	_ context.Context, _ string, _ bool, fn func(db.EmbeddableUnit) error,
+	_ context.Context, _ string, _ bool, _ int, fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	for _, u := range f.units {
 		if err := fn(u); err != nil {

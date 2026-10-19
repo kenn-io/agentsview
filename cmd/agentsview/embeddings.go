@@ -478,7 +478,7 @@ func countEmbeddingStoreUnits(
 	}
 	var n int
 	if _, err := source.ScanEmbeddableUnits(
-		ctx, "", includeAutomated, func(db.EmbeddableUnit) error {
+		ctx, "", includeAutomated, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
 			n++
 			return nil
 		},
@@ -533,7 +533,7 @@ type recallEmbeddingSource struct {
 }
 
 func (s recallEmbeddingSource) ScanEmbeddableUnits(
-	ctx context.Context, since string, _ bool,
+	ctx context.Context, since string, _ bool, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	return s.db.ScanRecallEmbeddingUnits(

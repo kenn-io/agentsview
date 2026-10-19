@@ -69,7 +69,7 @@ func inPlaceholders(keys []string) (string, []any) {
 // *db.DB): the stream of embedding-unit documents — individual user
 // messages and runs of contiguous assistant messages.
 type UnitSource interface {
-	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool,
+	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
 		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
@@ -80,7 +80,7 @@ type sessionJournalSource interface {
 	GetDatabaseID(context.Context) (string, error)
 	SessionDeletionPublicationRevision(context.Context) (int64, error)
 	LoadSessionDeletionChanges(context.Context, int64, int64) ([]string, error)
-	ScanEmbeddableUnitsForSession(context.Context, string, bool, func(db.EmbeddableUnit) error) error
+	ScanEmbeddableUnitsForSession(context.Context, string, bool, int, func(db.EmbeddableUnit) error) error
 }
 
 const (
@@ -301,7 +301,7 @@ func (ix *Index) Refresh(
 		visited[u.SessionID] = struct{}{}
 		return nil
 	}
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, visitUnit)
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, RunMaxRunes(ix.split.MaxRunes), visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -313,7 +313,7 @@ func (ix *Index) Refresh(
 		if _, ok := visited[id]; ok {
 			continue
 		}
-		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, visitUnit); err != nil {
+		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, RunMaxRunes(ix.split.MaxRunes), visitUnit); err != nil {
 			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
 		}
 	}
@@ -334,22 +334,26 @@ func (ix *Index) Refresh(
 	}
 	stats.Deleted += finalized
 
-	// Journaled sessions were scanned whole above, so their mirror rows the
-	// scan did not see belong to a deleted session or a vanished identity.
+	// Every visited session was scanned whole, so unseen keys are obsolete,
+	// including pieces whose boundaries moved after a cap change. Journaled
+	// sessions with no emitted units still need their old rows removed.
 	for _, id := range changed {
-		deleted, err := ix.reconcileDeletions(ctx, seen, id)
-		if err != nil {
-			return RefreshStats{}, err
-		}
-		stats.Deleted += deleted
+		visited[id] = struct{}{}
 	}
-
 	if full {
 		deleted, err := ix.reconcileDeletions(ctx, seen, "")
 		if err != nil {
 			return RefreshStats{}, err
 		}
 		stats.Deleted += deleted
+	} else {
+		for id := range visited {
+			deleted, err := ix.reconcileDeletions(ctx, seen, id)
+			if err != nil {
+				return RefreshStats{}, err
+			}
+			stats.Deleted += deleted
+		}
 	}
 
 	// The watermark is settled before the journal cursor, so a failed write

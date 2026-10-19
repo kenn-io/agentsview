@@ -232,6 +232,11 @@ func ChunkOverlap(maxInputChars int) int {
 	return maxInputChars * 15 / 100
 }
 
+// RunMaxRunes keeps a re-embedded tail at about five overlapping chunks.
+func RunMaxRunes(maxInputChars int) int {
+	return 4 * maxInputChars
+}
+
 // Open opens the message-store index; see OpenSpec.
 func Open(ctx context.Context, path string, readOnly bool, maxInputChars int) (*Index, error) {
 	return OpenSpec(ctx, path, MessageIndexSpec(), readOnly, maxInputChars)

@@ -74,7 +74,7 @@ type failingRefreshSource struct {
 }
 
 func (s failingRefreshSource) ScanEmbeddableUnits(
-	_ context.Context, _ string, _ bool,
+	_ context.Context, _ string, _ bool, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	if err := fn(s.unit); err != nil {

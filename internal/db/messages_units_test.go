@@ -17,13 +17,80 @@ func scanUnits(
 	t.Helper()
 	var got []EmbeddableUnit
 	maxEnded, err := d.ScanEmbeddableUnits(
-		t.Context(), since, includeAutomated,
+		t.Context(), since, includeAutomated, 0,
 		func(u EmbeddableUnit) error {
 			got = append(got, u)
 			return nil
 		})
 	require.NoError(t, err)
 	return got, maxEnded
+}
+
+func TestScanEmbeddableUnitsRunCap(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		contents []string
+		roles    []string
+		sessions []string
+		side     []bool
+		spans    [][2]int
+	}{
+		{name: "runes and separators reach cap", contents: []string{"界界", "éé", "cc"}, spans: [][2]int{{0, 1}, {2, 2}}},
+		{name: "oversized member", contents: []string{"1234567", "bb", "cc"}, spans: [][2]int{{0, 0}, {1, 2}}},
+		{name: "user resets count", contents: []string{"aa", "ask", "bb", "cc"}, roles: []string{"assistant", "user", "assistant", "assistant"}, spans: [][2]int{{0, 0}, {1, 1}, {2, 3}}},
+		{name: "session resets count", contents: []string{"aa", "bb", "cc"}, sessions: []string{"a", "b", "b"}, spans: [][2]int{{0, 0}, {1, 2}}},
+		{name: "sidechain resets count", contents: []string{"aa", "bb", "cc"}, side: []bool{false, true, true}, spans: [][2]int{{0, 0}, {1, 2}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "a", "project")
+			insertSession(t, d, "b", "project")
+			for i, content := range tt.contents {
+				msg := Message{SessionID: "a", Ordinal: i, Role: "assistant", Content: content, Timestamp: tsZero, SourceUUID: "uuid-" + content}
+				if tt.roles != nil {
+					msg.Role = tt.roles[i]
+				}
+				if tt.sessions != nil {
+					msg.SessionID = tt.sessions[i]
+				}
+				if tt.side != nil {
+					msg.IsSidechain = tt.side[i]
+				}
+				insertMessages(t, d, msg)
+			}
+			var units []EmbeddableUnit
+			_, err := d.ScanEmbeddableUnits(t.Context(), "", true, 6, func(u EmbeddableUnit) error {
+				units = append(units, u)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, units, len(tt.spans))
+			for i, span := range tt.spans {
+				assert.Equal(t, span[0], units[i].Ordinal)
+				assert.Equal(t, span[1], units[i].OrdinalEnd)
+				assert.Equal(t, "uuid-"+tt.contents[span[0]], units[i].SourceUUID)
+				if units[i].Kind == "run" {
+					require.NotEmpty(t, units[i].Offsets)
+					assert.Equal(t, UnitOffset{Ordinal: span[0]}, units[i].Offsets[0])
+				}
+			}
+			// Append after all existing rows. Every earlier closed piece must
+			// retain its full identity, text, and offsets.
+			sid := "a"
+			if tt.sessions != nil {
+				sid = "b"
+			}
+			insertMessages(t, d, Message{SessionID: sid, Ordinal: len(tt.contents), Role: "assistant", Content: "tail", Timestamp: tsHour1})
+			var after []EmbeddableUnit
+			_, err = d.ScanEmbeddableUnits(t.Context(), "", true, 6, func(u EmbeddableUnit) error {
+				after = append(after, u)
+				return nil
+			})
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(after), len(units))
+			assert.Equal(t, units[:len(units)-1], after[:len(units)-1])
+		})
+	}
 }
 
 // TestScanEmbeddableUnitsUserAssistantAlternation asserts that alternating

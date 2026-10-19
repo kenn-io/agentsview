@@ -48,10 +48,11 @@ The index does not embed every message individually. The embeddable universe —
 - **User documents**: one document per embeddable user message.
 - **Run documents**: a maximal sequence of contiguous embeddable assistant
   messages within one session, bounded by embeddable user rows, session edges,
-  and `is_sidechain` transitions (a contiguous sidechain block forms its own
-  run and never mixes with non-sidechain messages). Member texts are joined in
-  ordinal order with a single blank line (`"\n\n"`); no role labels, markers,
-  or metadata are injected into the embedded text.
+  `is_sidechain` transitions, and a size cap of `4 x max_input_chars` runes. A
+  run closes after the message that reaches the cap; the next message starts a
+  new run keyed by its own first member. Sidechain blocks form separate runs.
+  Member texts are joined in ordinal order with a single blank line (`"\n\n"`);
+  no role labels, markers, or metadata are injected into the embedded text.
 
 The boundary term is deliberately "embeddable user row", not "human turn": user
 rows the system-prefix filter excludes (interruptions, task notifications,
@@ -436,14 +437,15 @@ uniform. The HTTP response serializes `db.ContentMatch` directly; the MCP
 - **Semantic and hybrid unit rows** carry the embedded unit's span from the
   vectors.db mirror — embedding identity, including build scope.
 - **Lexical rows and hybrid unit-less rows** carry a structurally derived unit
-  computed from the messages/sessions tables only. Deterministic, never
-  depends on whether a vector index exists or is fresh — lexical output must
-  not flicker with index state.
+  computed from the messages/sessions tables only, without the size cap.
+  Deterministic, never depends on whether a vector index exists or is fresh —
+  lexical output must not flicker with index state.
 
 Derived and embedded spans coincide except where embedding scope diverges from
-structure: sessions excluded from the build (`include_automated = false`) and
-messages newer than the last mirror refresh. There is deliberately no provenance
-discriminator field on the wire — the mode implies it.
+structure: capped assistant runs, sessions excluded from the build
+(`include_automated = false`), and messages newer than the last mirror refresh.
+There is deliberately no provenance discriminator field on the wire — the mode
+implies it.
 
 Hybrid unit-less rows (FTS hits whose message resolves to no mirror unit) are
 classified **before** scope filtering and the RRF merge, so `scope` exclusion,

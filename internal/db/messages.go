@@ -862,7 +862,9 @@ type UnitOffset struct {
 // its own "user" unit. Units are emitted in (session_id, ordinal) order of
 // their first member, closing any open run whenever an embeddable user row,
 // a session boundary, or an is_sidechain transition is reached, and finally
-// at the end of the scan.
+// at the end of the scan. A positive maxRunRunes also closes a run after
+// the member that brings its joined content to that many runes or more;
+// zero leaves runs uncapped.
 //
 // since != "" restricts the scan to sessions with ended_at >= since (RFC3339
 // or RFC3339Nano) for incremental refresh, comparing parsed timestamps
@@ -889,7 +891,7 @@ type UnitOffset struct {
 // the run first, so every member of one run shares a single is_sidechain
 // value.
 func (db *DB) ScanEmbeddableUnits(
-	ctx context.Context, since string, includeAutomated bool,
+	ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
 	release, err := db.acquireBulkRead(ctx)
@@ -898,24 +900,25 @@ func (db *DB) ScanEmbeddableUnits(
 	}
 	defer release()
 
-	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, fn)
+	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, maxRunRunes, fn)
 }
 
 // ScanEmbeddableUnitsForSession streams all embeddable units for one session,
-// without applying an ended_at watermark.
+// without applying an ended_at watermark. maxRunRunes has the same meaning
+// as in ScanEmbeddableUnits.
 func (db *DB) ScanEmbeddableUnitsForSession(
-	ctx context.Context, sessionID string, includeAutomated bool,
+	ctx context.Context, sessionID string, includeAutomated bool, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) error {
 	if sessionID == "" {
 		return errors.New("session ID is required")
 	}
-	_, err := db.scanEmbeddableUnits(ctx, "", sessionID, includeAutomated, fn)
+	_, err := db.scanEmbeddableUnits(ctx, "", sessionID, includeAutomated, maxRunRunes, fn)
 	return err
 }
 
 func (db *DB) scanEmbeddableUnits(
-	ctx context.Context, since, sessionID string, includeAutomated bool,
+	ctx context.Context, since, sessionID string, includeAutomated bool, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
 	args := make([]any, 0, 2)
@@ -933,7 +936,7 @@ func (db *DB) scanEmbeddableUnits(
 	}
 	defer rows.Close()
 
-	red := &unitReducer{fn: fn}
+	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
 	maxEnded, err = reduceUnitRows(rows, red)
 	if err != nil {
 		return "", err
@@ -1022,12 +1025,15 @@ type unitReducer struct {
 	haveSession bool
 	sessionID   string
 	run         []unitRow
+	runRunes    int
+	maxRunRunes int
 }
 
 // push feeds one row into the reducer, emitting a user unit immediately or
 // accumulating an assistant row into the open run. It closes any open run
 // first whenever the row starts a new session, is a user row, or (for an
 // assistant row) has an is_sidechain value different from the open run's.
+// After appending a member, it closes the run if its rune count reaches the cap.
 func (r *unitReducer) push(row unitRow) error {
 	newSession := r.haveSession && row.sessionID != r.sessionID
 	if err := r.closeRunIf(newSession); err != nil {
@@ -1047,8 +1053,12 @@ func (r *unitReducer) push(row unitRow) error {
 	if err := r.closeRunIf(sidechainFlip); err != nil {
 		return err
 	}
+	if len(r.run) > 0 {
+		r.runRunes += len("\n\n")
+	}
+	r.runRunes += utf8.RuneCountInString(row.content)
 	r.run = append(r.run, row)
-	return nil
+	return r.closeRunIf(r.maxRunRunes > 0 && r.runRunes >= r.maxRunRunes)
 }
 
 // closeRunIf closes the open run when cond is true; it is a no-op otherwise.
@@ -1070,6 +1080,7 @@ func (r *unitReducer) closeRun() error {
 	}
 	unit := runUnit(r.run)
 	r.run = nil
+	r.runRunes = 0
 	return r.fn(unit)
 }
 

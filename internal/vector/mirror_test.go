@@ -15,8 +15,8 @@ import (
 
 // fakeUnitSource is a slice-backed UnitSource for mirror tests. It records
 // the since/includeAutomated values it was called with and filters rows
-// whose EndedAt is below since or whose automated flag is out of scope,
-// mimicking db.ScanEmbeddableUnits's semantics.
+// whose session's latest EndedAt is below since or whose automated flag is
+// out of scope, mimicking db.ScanEmbeddableUnits's semantics.
 type fakeUnitSource struct {
 	rows                []fakeUnit
 	gotSince            string
@@ -34,14 +34,22 @@ type fakeUnit struct {
 }
 
 func (f *fakeUnitSource) ScanEmbeddableUnits(
-	_ context.Context, since string, includeAutomated bool,
+	_ context.Context, since string, includeAutomated bool, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	f.gotSince = since
 	f.gotIncludeAutomated = includeAutomated
+	// Real scans select whole sessions, even when fixture rows give members
+	// different timestamps or update only one member's timestamp.
+	sessionEnded := make(map[string]string)
+	for _, r := range f.rows {
+		if r.endedAt > sessionEnded[r.unit.SessionID] {
+			sessionEnded[r.unit.SessionID] = r.endedAt
+		}
+	}
 	var maxEnded string
 	for _, r := range f.rows {
-		if since != "" && r.endedAt < since {
+		if since != "" && sessionEnded[r.unit.SessionID] < since {
 			continue
 		}
 		if r.automated && !includeAutomated {
