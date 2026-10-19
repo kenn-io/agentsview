@@ -18,15 +18,15 @@ up a PostgreSQL server.
     core extension. Expect rough edges, and treat the Quack remote
     path as suitable for trusted networks only.
 
-Content search uses dialogue for `--in messages` and searches reasoning with
-`--in thinking` in substring and regex modes. Default substring and regex
-searches now also scan reasoning text; `--in messages` avoids that scan.
-Regex searches without a literal prefix load every in-scope message and reasoning
-body from the selected sources into memory before matching and pagination.
-Existing mirrors rebuild on their next push to fill dialogue. Reads from a
-pre-upgrade mirror fail with a schema compatibility error naming
-`messages.dialogue_text` until that push. Run `agentsview duckdb push` before
-serving the mirror with the upgraded binary.
+Content search matches dialogue for `--in messages` and reasoning for
+`--in thinking` in substring and regex modes. Substring and regex searches
+include reasoning by default; pass `--in messages` to skip it. A regex without a
+literal prefix loads every in-scope body from the selected sources into memory
+before matching and pagination.
+
+A mirror written before dialogue storage (schema version 20 or older) rejects
+reads with a schema compatibility error naming `messages.dialogue_text`. Run
+`agentsview duckdb push` to rebuild it before serving it with a newer binary.
 
 ## Quick Start
 
