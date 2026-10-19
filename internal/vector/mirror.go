@@ -172,8 +172,10 @@ func contentHash(content string) string {
 // archive (since="") and additionally deletes mirror rows (and their
 // vectors, via store.DeleteVectors) whose identity was not seen in the
 // scan; full=false scans only sessions newer than the stored watermark
-// (metadata-table key "refresh_watermark") and only upserts, leaving that
-// reconciliation to a subsequent full refresh. includeAutomated
+// (metadata-table key "refresh_watermark"), each one whole, and deletes
+// each scanned session's mirror rows the scan did not see, so run pieces
+// whose boundaries moved drop out; sessions outside the scan wait for a
+// subsequent full refresh. includeAutomated
 // is passed through to src.ScanEmbeddableUnits: false excludes automated
 // sessions from the scan entirely, so their mirror rows are absent (and, in
 // full mode, reconciled away) rather than merely unembedded. Either mode
@@ -186,11 +188,11 @@ func contentHash(content string) string {
 // rows and vectors immediately.
 //
 // When src also exposes the archive's session deletion journal
-// (sessionJournalSource), an incremental refresh reconciles every session
-// journaled since the stored revision: it rescans each one whole, whatever
-// its ended_at, and deletes that session's mirror rows the scan did not
-// observe, so permanently deleted sessions drop out and reinserted ones are
-// republished. It runs as a full refresh instead when the stored revision is
+// (sessionJournalSource), an incremental refresh also reconciles every
+// session journaled since the stored revision: it rescans each one whole,
+// whatever its ended_at, and deletes that session's mirror rows the scan did
+// not observe, so permanently deleted sessions drop out and reinserted ones
+// are republished. It runs as a full refresh instead when the stored revision is
 // missing, belongs to another archive, or is ahead of the journal. After a
 // successful refresh it stores the journal revision and archive id captured
 // before the scan. The watermark advances to the opaque value returned by
@@ -334,22 +336,27 @@ func (ix *Index) Refresh(
 	}
 	stats.Deleted += finalized
 
-	// Journaled sessions were scanned whole above, so their mirror rows the
-	// scan did not see belong to a deleted session or a vanished identity.
+	// Every visited session was scanned whole, so its unseen keys are
+	// obsolete: a deleted session, a vanished identity, or a run piece whose
+	// boundaries moved when an earlier message changed length. Journaled
+	// sessions that emitted no units still need their old rows removed.
 	for _, id := range changed {
-		deleted, err := ix.reconcileDeletions(ctx, seen, id)
-		if err != nil {
-			return RefreshStats{}, err
-		}
-		stats.Deleted += deleted
+		visited[id] = struct{}{}
 	}
-
 	if full {
 		deleted, err := ix.reconcileDeletions(ctx, seen, "")
 		if err != nil {
 			return RefreshStats{}, err
 		}
 		stats.Deleted += deleted
+	} else {
+		for id := range visited {
+			deleted, err := ix.reconcileDeletions(ctx, seen, id)
+			if err != nil {
+				return RefreshStats{}, err
+			}
+			stats.Deleted += deleted
+		}
 	}
 
 	// The watermark is settled before the journal cursor, so a failed write

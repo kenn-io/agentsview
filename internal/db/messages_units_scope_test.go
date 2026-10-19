@@ -141,7 +141,7 @@ func TestScanEmbeddableUnitsForSessionScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []string
-			err := d.ScanEmbeddableUnitsForSession(t.Context(), tt.sessionID, tt.includeAutomated, structuralRunMaxRunes,
+			err := d.ScanEmbeddableUnitsForSession(t.Context(), tt.sessionID, tt.includeAutomated, UncappedRunRunes,
 				func(u EmbeddableUnit) error {
 					assert.Equal(t, tt.sessionID, u.SessionID)
 					got = append(got, u.Content)
@@ -152,7 +152,7 @@ func TestScanEmbeddableUnitsForSessionScope(t *testing.T) {
 		})
 	}
 
-	err := d.ScanEmbeddableUnitsForSession(t.Context(), "", true, structuralRunMaxRunes,
+	err := d.ScanEmbeddableUnitsForSession(t.Context(), "", true, UncappedRunRunes,
 		func(EmbeddableUnit) error { return nil })
 	require.EqualError(t, err, "session ID is required")
 }

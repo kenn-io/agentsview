@@ -48,7 +48,7 @@ The index does not embed every message individually. The embeddable universe —
 - **User documents**: one document per embeddable user message.
 - **Run documents**: a maximal sequence of contiguous embeddable assistant
   messages within one session, bounded by embeddable user rows, session edges,
-  `is_sidechain` transitions, and a size cap of `4 x max_input_chars` runes. A
+  `is_sidechain` transitions, and a size cap of `4 × max_input_chars` runes. A
   run closes after the message that reaches the cap; the next message starts a
   new run keyed by its own first member. Sidechain blocks form separate runs.
   Member texts are joined in ordinal order with a single blank line (`"\n\n"`);
@@ -279,6 +279,11 @@ instead of being deleted outright, so a same-scan reinsert under the same
 `doc_key` survives via upsert and keeps its `embed_gen` rather than
 re-embedding.
 
+An incremental refresh scans each session newer than the watermark whole and
+removes that session's documents the scan did not produce. A re-sync that
+changes an earlier assistant message's length moves later run boundaries, and
+this drops the superseded pieces.
+
 An incremental refresh also reads the archive's session deletion journal from
 the revision stored in `vectors.db`. It removes the documents of permanently
 deleted sessions and rescans reinserted sessions whole, whatever their end time.
@@ -451,9 +456,8 @@ uniform. The HTTP response serializes `db.ContentMatch` directly; the MCP
 
 Derived and embedded spans differ for capped assistant runs, sessions excluded
 from the build (`include_automated = false`), and messages newer than the last
-mirror refresh.
-There is deliberately no provenance discriminator field on the wire — the mode
-implies it.
+mirror refresh. There is deliberately no provenance discriminator field on the
+wire — the mode implies it.
 
 Hybrid unit-less rows (FTS hits whose message resolves to no mirror unit) are
 classified **before** scope filtering and the RRF merge, so `scope` exclusion,
@@ -463,8 +467,9 @@ as top-level.
 
 ### Derived-unit rules
 
-The structural rules mirror `ScanEmbeddableUnits`'s reducer, so derived spans
-equal embedding-unit spans on in-scope data. An **embeddable user row** is
+The structural rules mirror `ScanEmbeddableUnits`'s reducer without its size
+cap, so derived spans equal embedding-unit spans on in-scope data except where
+the index split a long run. An **embeddable user row** is
 `role = 'user' AND is_system = 0` with content not system-prefixed (the dialect
 `SystemPrefixSQL` predicate); an **embeddable assistant row** is the same with
 `role = 'assistant'` — the prefix predicate constrains only user rows, so a

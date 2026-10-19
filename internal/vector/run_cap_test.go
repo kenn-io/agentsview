@@ -1,7 +1,11 @@
 package vector
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,14 +15,30 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 )
 
-func seedRunCapArchive(t *testing.T) *db.DB {
-	t.Helper()
-	archive := dbtest.OpenTestDB(t)
+// runCapMessages builds one user message and forty 2,000-rune assistant
+// messages; the first assistant message has firstRunes runes. uuid gives each
+// message a source UUID so pieces use UUID keys instead of ordinal keys.
+func runCapMessages(firstRunes int, uuid bool) []db.Message {
 	messages := []db.Message{dbtest.UserMsg("session", 0, "work")}
 	for ordinal := 1; ordinal <= 40; ordinal++ {
-		messages = append(messages, dbtest.AsstMsg("session", ordinal, strings.Repeat("a", 2000)))
+		size := 2000
+		if ordinal == 1 {
+			size = firstRunes
+		}
+		messages = append(messages, dbtest.AsstMsg("session", ordinal, strings.Repeat("a", size)))
 	}
-	dbtest.SeedSessionWithMessages(t, archive, "session", "project", messages,
+	if uuid {
+		for i := range messages {
+			messages[i].SourceUUID = fmt.Sprintf("uuid-%d", i)
+		}
+	}
+	return messages
+}
+
+func seedRunCapArchive(t *testing.T, uuid bool) *db.DB {
+	t.Helper()
+	archive := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, archive, "session", "project", runCapMessages(2000, uuid),
 		func(s *db.Session) { s.EndedAt = new("2024-01-01T00:00:00Z") })
 	return archive
 }
@@ -36,54 +56,110 @@ func assertRunCapPieces(t *testing.T, ix *Index, want int) {
 	assert.Zero(t, overlaps, "a cap change must remove obsolete pieces")
 }
 
-func TestBuildRunCapBoundsAppend(t *testing.T) {
-	archive := seedRunCapArchive(t)
-	ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, ix.Close()) })
-	enc, gen := fakeBuildEncoder(), fakeGeneration("fake-model")
-	initial, err := ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 6, initial.Fill.Documents, "one user document and five capped assistant pieces")
+func TestBuildRunCapAppendAndRewrite(t *testing.T) {
+	for _, keys := range []struct {
+		name string
+		uuid bool
+	}{{"ordinal keys", false}, {"uuid keys", true}} {
+		t.Run(keys.name, func(t *testing.T) {
+			archive := seedRunCapArchive(t, keys.uuid)
+			ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ix.Close()) })
+			enc, gen := fakeBuildEncoder(), fakeGeneration("fake-model")
+			initial, err := ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 6, initial.Fill.Documents, "one user document and five capped assistant pieces")
 
-	dbtest.SeedMessages(t, archive, dbtest.AsstMsg("session", 41, strings.Repeat("b", 2000)))
-	dbtest.SeedSession(t, archive, "session", "project",
-		func(s *db.Session) { s.EndedAt = new("2024-01-02T00:00:00Z") })
-	result, err := ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Fill.Documents, "only the trailing piece needs embedding")
-	assert.LessOrEqual(t, result.Fill.Chunks, 6, "an append must not re-embed the whole run")
+			appended := dbtest.AsstMsg("session", 41, strings.Repeat("b", 2000))
+			if keys.uuid {
+				appended.SourceUUID = "uuid-41"
+			}
+			dbtest.SeedMessages(t, archive, appended)
+			dbtest.SeedSession(t, archive, "session", "project",
+				func(s *db.Session) { s.EndedAt = new("2024-01-02T00:00:00Z") })
+			result, err := ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Fill.Documents, "only the trailing piece needs embedding")
+			assert.LessOrEqual(t, result.Fill.Chunks, 6, "an append must not re-embed the whole run")
+			assertRunCapPieces(t, ix, 7)
+
+			// A re-sync that shortens an earlier message moves every later
+			// boundary: pieces 1-8, 9-16, ... become 1-9, 10-17, ...
+			require.NoError(t, archive.ReplaceSessionMessages(t.Context(), "session",
+				append(runCapMessages(1000, keys.uuid), appended)))
+			dbtest.SeedSession(t, archive, "session", "project",
+				func(s *db.Session) { s.EndedAt = new("2024-01-03T00:00:00Z") })
+			_, err = ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
+			require.NoError(t, err)
+			assertRunCapPieces(t, ix, 6)
+		})
+	}
+}
+
+// interruptedSource fails the scan after a few units, leaving a reshape
+// half-written.
+type interruptedSource struct {
+	*db.DB
+}
+
+func (s interruptedSource) ScanEmbeddableUnits(
+	ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
+	fn func(db.EmbeddableUnit) error,
+) (string, error) {
+	units := 0
+	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, maxRunRunes, func(u db.EmbeddableUnit) error {
+		if units++; units > 4 {
+			return errors.New("interrupted")
+		}
+		return fn(u)
+	})
 }
 
 func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
-	archive := seedRunCapArchive(t)
-	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")},
-		func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
-	path := filepath.Join(t.TempDir(), "vectors.db")
-	ix, err := Open(t.Context(), path, false, 4000)
-	require.NoError(t, err)
-	gen := fakeGeneration("fake-model")
-	gen.Params = map[string]string{"max_input_chars": "4000"}
-	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	assertRunCapPieces(t, ix, 6)
-	require.NoError(t, ix.Close())
-
-	smaller, err := Open(t.Context(), path, false, 2500)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, smaller.Close()) })
-	gen.Params["max_input_chars"] = "2500"
-	_, err = smaller.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	assertRunCapPieces(t, smaller, 9)
+	tests := []struct {
+		name        string
+		caps        []int
+		want        []int
+		interrupted int
+	}{
+		{name: "smaller cap", caps: []int{4000, 2500}, want: []int{6, 9}, interrupted: -1},
+		{name: "larger cap", caps: []int{2500, 4000}, want: []int{9, 6}, interrupted: -1},
+		{name: "interrupted reshape, previous cap restored", caps: []int{4000, 2500, 4000}, want: []int{6, 0, 6}, interrupted: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			archive := seedRunCapArchive(t, false)
+			dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")},
+				func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
+			path := filepath.Join(t.TempDir(), "vectors.db")
+			gen := fakeGeneration("fake-model")
+			for i, maxInputChars := range tt.caps {
+				ix, err := Open(t.Context(), path, false, maxInputChars)
+				require.NoError(t, err)
+				gen.Params = map[string]string{"max_input_chars": strconv.Itoa(maxInputChars)}
+				var src UnitSource = archive
+				if i == tt.interrupted {
+					src = interruptedSource{archive}
+				}
+				_, err = ix.Build(t.Context(), src, fakeBuildEncoder(), gen, BuildOptions{})
+				if i == tt.interrupted {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+					assertRunCapPieces(t, ix, tt.want[i])
+				}
+				require.NoError(t, ix.Close())
+			}
+		})
+	}
 }
 
 // legacyRunSource models the uncapped documents emitted by the version-3 reducer.
 func legacyRunSource(t *testing.T, archive *db.DB) *fakeUnitSource {
 	t.Helper()
 	src := &fakeUnitSource{}
-	const structuralRunMaxRunes = 1_000_000
-	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, structuralRunMaxRunes, func(u db.EmbeddableUnit) error {
+	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, db.UncappedRunRunes, func(u db.EmbeddableUnit) error {
 		session, err := archive.GetSession(t.Context(), u.SessionID)
 		require.NoError(t, err)
 		require.NotNil(t, session)
@@ -95,7 +171,7 @@ func legacyRunSource(t *testing.T, archive *db.DB) *fakeUnitSource {
 }
 
 func TestBuildRunCapMissingResplitsLegacyRun(t *testing.T) {
-	archive := seedRunCapArchive(t)
+	archive := seedRunCapArchive(t, false)
 	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")},
 		func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
 	ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)

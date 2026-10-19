@@ -516,7 +516,7 @@ func TestMirrorSchemaVersionCappedRowsRejectOlderSpec(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)
-	_, err = ix.Build(ctx, seedRunCapArchive(t), fakeBuildEncoder(), fakeGeneration("fake-model"), BuildOptions{})
+	_, err = ix.Build(ctx, seedRunCapArchive(t, false), fakeBuildEncoder(), fakeGeneration("fake-model"), BuildOptions{})
 	require.NoError(t, err)
 	require.NoError(t, ix.Close())
 	oldSpec := MessageIndexSpec()
@@ -543,7 +543,7 @@ func TestMirrorSchemaVersionCappedRowsRejectOlderSpec(t *testing.T) {
 
 func TestMirrorSchemaVersionV3UpgradesInPlace(t *testing.T) {
 	ctx := t.Context()
-	archive := seedRunCapArchive(t)
+	archive := seedRunCapArchive(t, false)
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)

@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const structuralRunMaxRunes = 1_000_000
-
 // scanUnits runs ScanEmbeddableUnits and collects every emitted unit in
 // stream order, failing the test on error.
 func scanUnits(
@@ -19,7 +17,7 @@ func scanUnits(
 	t.Helper()
 	var got []EmbeddableUnit
 	maxEnded, err := d.ScanEmbeddableUnits(
-		t.Context(), since, includeAutomated, structuralRunMaxRunes,
+		t.Context(), since, includeAutomated, UncappedRunRunes,
 		func(u EmbeddableUnit) error {
 			got = append(got, u)
 			return nil

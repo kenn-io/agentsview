@@ -854,6 +854,10 @@ type UnitOffset struct {
 	ByteStart int `json:"b"`
 }
 
+// UncappedRunRunes is a maxRunRunes that never closes a run on size, so only
+// user rows, session boundaries, and sidechain flips split runs.
+const UncappedRunRunes = math.MaxInt
+
 // ScanEmbeddableUnits streams the embeddable universe — user/assistant
 // messages that are not is_system and not system-prefixed (per
 // SystemPrefixSQL), from non-trashed sessions — reducing contiguous runs of
