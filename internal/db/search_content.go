@@ -532,6 +532,8 @@ type LegacyThinkingDedupe struct {
 	lastMessage MessageRef
 }
 
+// Suppress records message matches and reports whether m is legacy thinking
+// for the most recent message match.
 func (d *LegacyThinkingDedupe) Suppress(m ContentMatch, legacyThinking bool) bool {
 	ref := MessageRef{SessionID: m.SessionID, Ordinal: m.Ordinal}
 	if m.Location == "message" {

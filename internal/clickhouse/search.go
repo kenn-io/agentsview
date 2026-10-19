@@ -480,7 +480,14 @@ func (s *Store) collectContentSource(
 ) ([]contentCandidate, error) {
 	var query string
 	args := append([]any{}, scopeArgs...)
-	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	// Call prefixFilter in SQL text order: its argument follows the
+	// placeholders already in args.
+	prefixFilter := func(col string) string {
+		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		filter := b.RegexPrefixFilter(col, prefix)
+		args = append(args, b.Args()...)
+		return filter
+	}
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -494,7 +501,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
-		query += b.RegexPrefixFilter("COALESCE(m.dialogue_text, m.content)", prefix)
+		query += prefixFilter("COALESCE(m.dialogue_text, m.content)")
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "thinking":
 		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
@@ -508,7 +515,7 @@ func (s *Store) collectContentSource(
 		if f.ExcludeSystem {
 			query += " AND " + embeddableMessagePredicate("m")
 		}
-		query += b.RegexPrefixFilter("m.thinking_text", prefix)
+		query += prefixFilter("m.thinking_text")
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
 	case "tool_input":
 		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',
@@ -519,9 +526,13 @@ func (s *Store) collectContentSource(
 			tc.call_index AS call_index, toInt64(0) AS event_index, false AS legacy_thinking
 			FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 			` + toolCallMessageJoin + `
-			WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+			WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)` +
+			prefixFilter("tc.input_json") + `
 			ORDER BY tc.session_id, m.ordinal, tc.message_id, tc.call_index`
 	case "tool_result":
+		resultFilter := prefixFilter("tc.result_content")
+		args = append(args, scopeArgs...)
+		eventFilter := prefixFilter("tre.content")
 		query = `SELECT session_id, project, agent, location, role,
 			tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 			FROM (
@@ -535,7 +546,7 @@ func (s *Store) collectContentSource(
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
 				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
-					AND ` + toolCallWithoutEvents + `
+					AND ` + toolCallWithoutEvents + resultFilter + `
 				UNION ALL
 				SELECT tre.session_id AS session_id, s.project AS project, s.agent AS agent,
 					'tool_result' AS location, 'assistant' AS role, '' AS tool_name,
@@ -545,14 +556,12 @@ func (s *Store) collectContentSource(
 					3 AS src, toInt64(0) AS row_id,
 					tre.call_index AS call_index, tre.event_index AS event_index, false AS legacy_thinking
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-				WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+				WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)` + eventFilter + `
 			) AS results
 			ORDER BY session_id, ordinal, src, row_id, call_index, event_index`
-		args = append(args, scopeArgs...)
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 	}
-	args = append(args, b.Args()...)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)

@@ -45,7 +45,21 @@ func SeedDialogueSearch(t *testing.T, d *db.DB) {
 		{
 			SessionID: id, Ordinal: 5, Role: "assistant",
 			Content: `prefix_%\path tail`, DialogueText: new(`prefix_%\path tail`),
-			ThinkingText: `prefix_%\path tail`, HasThinking: true,
+			ThinkingText: `prefix_%\path tail`, HasThinking: true, HasToolUse: true,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolName: "Bash", Category: "Bash", ToolUseID: "path-tool",
+					InputJSON:     `{"command":"prefix_%\\path input"}`,
+					ResultContent: `prefix_%\path result`, ResultContentLength: len(`prefix_%\path result`),
+				},
+				{
+					ToolName: "Task", Category: "Task", ToolUseID: "path-event",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "path-event", Source: "test", Status: "completed",
+						Content: `prefix_%\path event`, ContentLength: len(`prefix_%\path event`),
+					}},
+				},
+			},
 		},
 	}))
 }
@@ -140,6 +154,19 @@ func AssertDialogueSearchParity(t *testing.T, archive, mirror db.Store, modes ..
 						require.NoError(t, err)
 						assert.Equal(t, want, project(got.Matches), "%s: %s", source, tc.pattern)
 					}
+				}
+				// Tool sources apply the same literal-prefix filter, including
+				// both scoped branches of tool results.
+				for _, tc := range []struct{ source, pattern, location, snippet string }{
+					{"tool_input", `prefix_%\\\\path\s+input`, "tool_input", `{"command":"prefix_%\\path input"}`},
+					{"tool_result", `prefix_%\\path\s+result`, "tool_result", `prefix_%\path result`},
+					{"tool_result", `prefix_%\\path\s+event`, "tool_result", `prefix_%\path event`},
+				} {
+					got, err := mirror.SearchContent(t.Context(), db.ContentSearchFilter{
+						Pattern: tc.pattern, Mode: mode, Sources: []string{tc.source}, Project: "dialogue-search",
+					})
+					require.NoError(t, err)
+					assert.Equal(t, []hit{{"dialogue-search", tc.location, 5, tc.snippet}}, project(got.Matches), "%s: %s", tc.source, tc.pattern)
 				}
 			}
 			// A legacy message and its thinking must consume only one slot,

@@ -1200,7 +1200,14 @@ func (s *Store) collectContentSource(
 	var query string
 	var orderBy string
 	args := append([]any{}, scopeArgs...)
-	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	// Call prefixFilter in SQL text order: its argument follows the
+	// placeholders already in args.
+	prefixFilter := func(col string) string {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		filter := b.RegexPrefixFilter(col, prefix)
+		args = append(args, b.Args()...)
+		return filter
+	}
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
@@ -1211,7 +1218,7 @@ func (s *Store) collectContentSource(
 			0 AS call_index, 0 AS event_index, false AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		query += b.RegexPrefixFilter("COALESCE(m.dialogue_text, m.content)", prefix)
+		query += prefixFilter("COALESCE(m.dialogue_text, m.content)")
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 		}
@@ -1225,7 +1232,7 @@ func (s *Store) collectContentSource(
 			0 AS call_index, 0 AS event_index, m.dialogue_text IS NULL AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		query += b.RegexPrefixFilter("m.thinking_text", prefix)
+		query += prefixFilter("m.thinking_text")
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 		}
@@ -1241,8 +1248,12 @@ func (s *Store) collectContentSource(
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
 				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		query += prefixFilter("tc.input_json")
 		orderBy = "tc.session_id, m.ordinal, COALESCE(tc.id, 0), tc.call_index"
 	case "tool_result":
+		resultFilter := prefixFilter("tc.result_content")
+		args = append(args, scopeArgs...)
+		eventFilter := prefixFilter("tre.content")
 		query = `SELECT session_id, project, agent, location, role,
 				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 				FROM (
@@ -1263,7 +1274,7 @@ func (s *Store) collectContentSource(
 							WHERE tre.session_id = tc.session_id
 								AND tre.tool_use_id = tc.tool_use_id
 								AND tc.tool_use_id <> ''
-						)
+						)` + resultFilter + `
 					UNION ALL
 					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, '' AS tool_name,
@@ -1275,15 +1286,13 @@ func (s *Store) collectContentSource(
 						COALESCE(tre.id, 0) AS row_id,
 						tre.call_index AS call_index, tre.event_index, false AS legacy_thinking
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)` + eventFilter + `
 				)`
-		args = append(args, scopeArgs...)
 		orderBy = "session_id, ordinal, src, row_id, call_index, event_index"
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 	}
 	query += ` ORDER BY ` + orderBy
-	args = append(args, b.Args()...)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)
