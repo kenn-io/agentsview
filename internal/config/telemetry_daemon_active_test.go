@@ -229,8 +229,6 @@ func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
 				require.ErrorIs(t, claimErr, tc.sendErr)
 				require.NoError(t, readErr)
 				assert.False(t, claimed, "a failed send rolls back the reservation the read waited on")
-			} else if tc.sendErr != nil {
-				require.ErrorIs(t, claimErr, tc.sendErr)
 			} else {
 				require.NoError(t, claimErr)
 			}

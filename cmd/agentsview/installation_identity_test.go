@@ -141,7 +141,7 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-			telemetryOptions(cfg)
+			assert.Equal(t, path, telemetryOptions(cfg).ScreenClaimsPath, "the reporter must read the file the handler migrates")
 			forwarded := make(chan []byte, 1)
 			handler, _ := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 				data, err := os.ReadFile(path)
