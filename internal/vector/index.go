@@ -119,6 +119,8 @@ type IndexSpec struct {
 	// MirrorSchemaVersion versions the mirror's DDL shape and its
 	// document-identity scheme; see prepareMirrorSchema.
 	MirrorSchemaVersion string
+	// UpgradableFrom lists older stamps whose rows can be retained in place.
+	UpgradableFrom []string
 }
 
 // NormalizeIncludeAutomated applies the store's scope capability to a build
@@ -145,13 +147,13 @@ func (s IndexSpec) chunksTable() string      { return s.VectorsPrefix + "_chunks
 func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair_queue" }
 
 // MessageIndexSpec is the conversation-message embedding store. Its table
-// names, metadata keys, and schema version predate IndexSpec and must stay
-// byte-identical so existing vectors.db files open without a reset.
+// names and metadata keys predate IndexSpec.
 //
 // History: "2" added the ordinal_end/subordinate/offsets columns but still
 // held one row per message; "3" switched document identity to run-grouped
 // units (one row per user message or per run of contiguous assistant
-// messages) with no DDL change.
+// messages) with no DDL change; "4" caps assistant runs and upgrades "3"
+// in place.
 func MessageIndexSpec() IndexSpec {
 	return IndexSpec{
 		Name:                   "messages",
@@ -160,7 +162,8 @@ func MessageIndexSpec() IndexSpec {
 		MetaTable:              "vector_meta",
 		VectorsPrefix:          "message_vectors",
 		MirrorDDL:              messageMirrorDDL,
-		MirrorSchemaVersion:    "3",
+		MirrorSchemaVersion:    "4",
+		UpgradableFrom:         []string{"3"},
 	}
 }
 
@@ -232,7 +235,8 @@ func ChunkOverlap(maxInputChars int) int {
 	return maxInputChars * 15 / 100
 }
 
-// RunMaxRunes keeps a re-embedded tail at about five overlapping chunks.
+// RunMaxRunes caps runs at four inputs. Chunks step by 0.85 * maxInputChars,
+// so a full piece takes about 4.7 chunks, plus the appended message.
 func RunMaxRunes(maxInputChars int) int {
 	return 4 * maxInputChars
 }
@@ -415,12 +419,12 @@ SELECT name FROM sqlite_master
 }
 
 // mirrorVersionMismatch reports whether vectors.db's stamped
-// mirror_schema_version differs from spec.MirrorSchemaVersion. An
-// empty/fresh database (no mirror-state table at all) is never a mismatch —
+// mirror_schema_version differs from spec.MirrorSchemaVersion and is absent
+// from spec.UpgradableFrom. An empty/fresh database (no mirror-state table at
+// all) is never a mismatch —
 // there is nothing yet to be incompatible with. Otherwise, a version key
-// that is absent, or holds a different value, while any mirror-state table
-// already exists is a mismatch: that table predates versioning entirely, or
-// was stamped by a different scheme. tables is always returned so a
+// that is absent, or holds an incompatible value, while any mirror-state
+// table already exists is a mismatch. tables is always returned so a
 // write-path caller can drop exactly the set that was inspected.
 func mirrorVersionMismatch(ctx context.Context, db *sql.DB, spec IndexSpec) (mismatch bool, tables []string, err error) {
 	tables, err = mirrorStateTableNames(ctx, db, spec)
@@ -444,7 +448,7 @@ func mirrorVersionMismatch(ctx context.Context, db *sql.DB, spec IndexSpec) (mis
 	if err != nil {
 		return false, nil, fmt.Errorf("reading mirror schema version: %w", err)
 	}
-	return stamped != spec.MirrorSchemaVersion, tables, nil
+	return stamped != spec.MirrorSchemaVersion && !slices.Contains(spec.UpgradableFrom, stamped), tables, nil
 }
 
 // dropMirrorTables drops every named table, resetting vectors.db's mirror

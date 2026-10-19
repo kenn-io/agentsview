@@ -511,6 +511,84 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 		"StaleActive must apply the same version gate Search does")
 }
 
+func TestMirrorSchemaVersionCappedRowsRejectOlderSpec(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, seedRunCapArchive(t), fakeBuildEncoder(), fakeGeneration("fake-model"), BuildOptions{})
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+	oldSpec := MessageIndexSpec()
+	oldSpec.MirrorSchemaVersion = "3"
+	oldSpec.UpgradableFrom = nil
+
+	ro, err := OpenSpec(ctx, path, oldSpec, true, 4000)
+	require.NoError(t, err)
+	_, err = ro.Search(ctx, fakeSearchEncoder(), "work", 10)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	_, err = ro.StaleActive(ctx, legacySpace("any-fingerprint"), "")
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	require.NoError(t, ro.Close())
+
+	old, err := OpenSpec(ctx, path, oldSpec, false, 4000)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, old.Close()) })
+	var documents, generations int
+	require.NoError(t, old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_messages`).Scan(&documents))
+	require.NoError(t, old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_generations`).Scan(&generations))
+	assert.Zero(t, documents)
+	assert.Zero(t, generations)
+}
+
+func TestMirrorSchemaVersionV3UpgradesInPlace(t *testing.T) {
+	ctx := t.Context()
+	archive := seedRunCapArchive(t)
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	gen := fakeGeneration("fake-model")
+	_, err = ix.Build(ctx, legacyRunSource(t, archive), fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	before, err := ix.Search(ctx, fakeBuildEncoder(), "work", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+	require.NoError(t, ix.metaSet(ctx, mirrorSchemaVersionKey, "3"))
+	require.NoError(t, ix.metaDelete(ctx, runMaxRunesMetaKey))
+	require.NoError(t, ix.Close())
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err)
+	hits, err := ro.Search(ctx, fakeBuildEncoder(), "work", 10)
+	require.NoError(t, err)
+	assert.Equal(t, before, hits, "version-3 vectors remain readable before a build")
+	require.NoError(t, ro.Close())
+
+	upgraded, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	version, ok, err := upgraded.metaGet(ctx, mirrorSchemaVersionKey)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "4", version)
+	active, ok, err := upgraded.ActiveFingerprint(ctx)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, gen.Fingerprint(), active)
+	hits, err = upgraded.Search(ctx, fakeBuildEncoder(), "work", 10)
+	require.NoError(t, err)
+	assert.Equal(t, before, hits, "restamping preserves stored vectors")
+	pending, err := upgraded.countPending(ctx, active)
+	require.NoError(t, err)
+	assert.Zero(t, pending, "restamping preserves content stamps")
+
+	result, err := upgraded.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, gen.Fingerprint(), result.Fingerprint)
+	assert.Equal(t, 5, result.Fill.Documents, "only the split assistant run re-embeds")
+	assertRunCapPieces(t, upgraded, 6)
+}
+
 // TestMirrorSchemaVersionReadOnlyMismatchSearchReturnsSentinel covers the
 // read path: Open against a version-mismatched vectors.db must still
 // succeed (a read-only CLI process cannot reset the file), but Search must

@@ -862,9 +862,8 @@ type UnitOffset struct {
 // its own "user" unit. Units are emitted in (session_id, ordinal) order of
 // their first member, closing any open run whenever an embeddable user row,
 // a session boundary, or an is_sidechain transition is reached, and finally
-// at the end of the scan. A positive maxRunRunes also closes a run after
-// the member that brings its joined content to that many runes or more;
-// zero leaves runs uncapped.
+// at the end of the scan. maxRunRunes closes a run after the member that
+// brings its joined content to that many runes or more.
 //
 // since != "" restricts the scan to sessions with ended_at >= since (RFC3339
 // or RFC3339Nano) for incremental refresh, comparing parsed timestamps
@@ -1058,7 +1057,7 @@ func (r *unitReducer) push(row unitRow) error {
 	}
 	r.runRunes += utf8.RuneCountInString(row.content)
 	r.run = append(r.run, row)
-	return r.closeRunIf(r.maxRunRunes > 0 && r.runRunes >= r.maxRunRunes)
+	return r.closeRunIf(r.runRunes >= r.maxRunRunes)
 }
 
 // closeRunIf closes the open run when cond is true; it is a no-op otherwise.

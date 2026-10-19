@@ -431,16 +431,17 @@ The index embeds **unit documents**, not individual messages:
 
 - Every embeddable user message (non-system, not system-prefixed) is its own
   document.
-- Assistant messages between those user messages are concatenated — in order,
-  separated by blank lines — into one **run** document per stretch of work. A
-  run captures a whole narrative arc (analysis, tool narration, conclusions)
-  instead of scattering it across hundreds of short fragments.
+- Assistant messages between those user messages are joined in order,
+  separated by blank lines, into **run** documents. A run closes after the
+  message that brings its joined text to `4 × max_input_chars` runes or more.
+  The next assistant message starts a new piece, so appending to a long
+  session only re-embeds its trailing piece.
 
 This matters for both quality and cost. Most assistant messages are short,
 procedural narration that is meaningless as a standalone search hit; grouped
-into runs, roughly 1.1 million assistant messages collapse into ~44k documents —
-about 25x fewer assistant-side documents to embed and rank. Long documents are
-chunked at `max_input_chars` runes (default 8192) with a 15% overlap between
+into runs, related messages share a document while the cap bounds repeated
+embedding work. Long documents are chunked at `max_input_chars` runes (default
+8192) with a 15% overlap between
 consecutive chunks (1228 runes at the default; 375 at a 2500 cap), so an initial
 build sends several times fewer encode requests than a per-message scheme would.
 
@@ -697,8 +698,8 @@ What the range *means* depends on the mode:
   embedded unit) carry a **structurally derived** unit computed from the
   archive's messages alone, using the same user-message/assistant-run rules
   the index uses. Lexical citations therefore need no vector index and never
-  change with index state. Derived and embedded spans coincide except where
-  the index's scope diverges from structure: sessions excluded from the build
+  change with index state. Derived and embedded spans differ for capped
+  assistant runs, sessions excluded from the build
   (`include_automated = false`) and messages newer than the last index
   refresh.
 

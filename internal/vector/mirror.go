@@ -334,26 +334,22 @@ func (ix *Index) Refresh(
 	}
 	stats.Deleted += finalized
 
-	// Every visited session was scanned whole, so unseen keys are obsolete,
-	// including pieces whose boundaries moved after a cap change. Journaled
-	// sessions with no emitted units still need their old rows removed.
+	// Journaled sessions were scanned whole above, so their mirror rows the
+	// scan did not see belong to a deleted session or a vanished identity.
 	for _, id := range changed {
-		visited[id] = struct{}{}
+		deleted, err := ix.reconcileDeletions(ctx, seen, id)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		stats.Deleted += deleted
 	}
+
 	if full {
 		deleted, err := ix.reconcileDeletions(ctx, seen, "")
 		if err != nil {
 			return RefreshStats{}, err
 		}
 		stats.Deleted += deleted
-	} else {
-		for id := range visited {
-			deleted, err := ix.reconcileDeletions(ctx, seen, id)
-			if err != nil {
-				return RefreshStats{}, err
-			}
-			stats.Deleted += deleted
-		}
 	}
 
 	// The watermark is settled before the journal cursor, so a failed write

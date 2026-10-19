@@ -136,13 +136,15 @@ only affects data parsed before per-message UUIDs existed.
 
 ## Mirror schema versioning
 
-`vector_meta` carries a `mirror_schema_version` key (currently `"3"`). It covers
+`vector_meta` carries a `mirror_schema_version` key (currently `"4"`). It covers
 both the mirror's DDL shape and its document-identity scheme — what one
 `vector_messages` row *means* — and is bumped whenever either changes in a way
 old rows cannot simply be read as-is. History: `"2"` added the
 `ordinal_end`/`subordinate`/`offsets` columns while still holding one row per
 message; `"3"` switched document identity to run-grouped units with no DDL
-change.
+change; `"4"` caps assistant runs. A listed older stamp (`"3"` for the message
+store) is accepted for reads and restamped in place on writable open, preserving
+vectors and generations.
 
 On a mismatch — including the key being absent while any mirror state already
 exists:
@@ -321,6 +323,12 @@ one-off `--include-automated` flag — forces a full mirror *reconciliation*, no
 a re-embed: it inserts or removes rows to match the new scope, but documents
 that stay in scope and are unchanged keep their existing stamps.
 
+The run cap is stored as `run_max_runes` in the store's metadata. A missing or
+changed cap forces one full reconciliation, including idle sessions older than
+the watermark. Only pieces whose text changes re-embed. The key is cleared
+before reshaping and stored after a successful refresh, so an interrupted
+reshape still reconciles fully if the previous cap is restored.
+
 ## Concurrency and locking
 
 `vectors.db` follows the archive's single-writer model, with its own lock file
@@ -441,9 +449,9 @@ uniform. The HTTP response serializes `db.ContentMatch` directly; the MCP
   Deterministic, never depends on whether a vector index exists or is fresh —
   lexical output must not flicker with index state.
 
-Derived and embedded spans coincide except where embedding scope diverges from
-structure: capped assistant runs, sessions excluded from the build
-(`include_automated = false`), and messages newer than the last mirror refresh.
+Derived and embedded spans differ for capped assistant runs, sessions excluded
+from the build (`include_automated = false`), and messages newer than the last
+mirror refresh.
 There is deliberately no provenance discriminator field on the wire — the mode
 implies it.
 
