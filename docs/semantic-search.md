@@ -62,9 +62,12 @@ recall = false                    # default; set true to permit automatic Recall
 backstop_interval = "24h"         # periodic full reconciliation scan; negative disables (default "24h")
 ```
 
-The 4,000-character cap fits nomic-embed-text's 2,048-token window in Ollama:
-session text runs about 2 to 3 characters per token, and Ollama silently
-truncates longer input.
+The 4,000-character cap usually fits nomic-embed-text's 2,048-token window in
+Ollama for English and code session text. Lower `max_input_chars` for
+token-dense text such as Chinese, Japanese, or Korean; Ollama silently truncates
+input beyond the window. Changing this cap on an existing index
+[creates a new generation and re-embeds the archive](#building-the-index) on the
+next build.
 
 `model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
 entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
@@ -336,6 +339,8 @@ ollama pull nomic-embed-text
 
 # Ollama serves an OpenAI-compatible endpoint at /v1; no API key needed.
 ```
+
+For `max_input_chars` guidance, see [Enabling `[vector]`](#enabling-vector).
 
 ```toml
 [vector]
