@@ -2603,7 +2603,7 @@
   "import_claude_stop": "Dayandır",
   "import_claude_terminal": "Terminal",
   "import_claude_copy_command": "Əmri kopyala",
-  "import_claude_setup_load": "Sonra {url} ünvanını açın, Developer mode seçimini aktivləşdirin, Load unpacked seçin və göstərilən qovluğu seçin.",
+  "import_claude_setup_load": "Sonra AgentsView-u yenidən başladın, {url} ünvanını açın, Developer mode seçimini aktivləşdirin, Load unpacked seçin və göstərilən qovluğu seçin.",
   "import_claude_open_chrome": "Qoşulmaq üçün Chrome-u açın.",
   "import_claude_tab_note": "Açıq claude.ai vərəqi yoxdursa, sinxronizasiya arxa planda vərəq açır. Vərəq sinxronizasiyadan sonra açıq qalır.",
   "import_claude_signed_out": "AgentsView genişləndirməsinin olduğu Chrome profilində claude.ai hesabına daxil olun. Genişləndirməni yalnız bir Chrome profilində aktivləşdirin. Sinxronizasiya ilk qoşulan profildən istifadə edir.",

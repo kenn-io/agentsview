@@ -1569,13 +1569,14 @@ ______________________________________________________________________
 ### `agentsview chrome setup`
 
 Install the native host and unpacked extension for Claude.ai Sync through Google
-Chrome. The command prints the extension folder. Open `chrome://extensions`,
-enable **Developer mode**, choose **Load unpacked**, and select that folder.
-Keep Chrome open during Sync. Registration is per OS user; the last setup wins.
-The first connected Chrome profile is used. Rerun setup and reload the extension
-when the executable path or data directory changes. After an upgrade mismatch,
-restart AgentsView if you upgraded it, rerun setup, reload the extension at
-`chrome://extensions`, then Sync again.
+Chrome. The command prints the extension folder. AgentsView opens its Chrome
+connection only after setup, so restart AgentsView if it is already running.
+Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+and select that folder. Keep Chrome open during Sync. Registration is per OS
+user; the last setup wins. The first connected Chrome profile is used. Rerun
+setup and reload the extension when the executable path or data directory
+changes. After an upgrade mismatch, restart AgentsView if you upgraded it, rerun
+setup, reload the extension at `chrome://extensions`, then Sync again.
 
 See
 [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)

@@ -2515,7 +2515,7 @@
   "import_claude_stop": "停止",
   "import_claude_terminal": "终端",
   "import_claude_copy_command": "复制命令",
-  "import_claude_setup_load": "然后打开 {url}，开启开发者模式，选择加载已解压的扩展程序，再选择命令显示的文件夹。",
+  "import_claude_setup_load": "然后重启 AgentsView，打开 {url}，开启开发者模式，选择加载已解压的扩展程序，再选择命令显示的文件夹。",
   "import_claude_open_chrome": "打开 Chrome 以连接。",
   "import_claude_tab_note": "如果没有打开 claude.ai 标签页，同步会在后台打开一个。同步后，该标签页会保持打开。",
   "import_claude_signed_out": "请在安装了 AgentsView 扩展程序的 Chrome 个人资料中登录 claude.ai。请仅在一个 Chrome 个人资料中启用扩展程序。同步会使用最先连接的个人资料。",

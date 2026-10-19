@@ -234,6 +234,57 @@ func TestChromeHostRelayRefusesLoosePermissions(t *testing.T) {
 	}
 }
 
+func TestServeChromeHostRequiresSetup(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup bool
+	}{
+		{name: "disabled"},
+		{name: "enabled", setup: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CHROME_CONFIG_HOME", "")
+			t.Setenv("XDG_CONFIG_HOME", "")
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			// t.TempDir embeds the test and subtest names, which pushes the socket
+			// past macOS's 104-byte path limit and onto the home-directory fallback.
+			dir, err := os.MkdirTemp("", "av") //nolint:usetesting // Keep the socket path below macOS's limit.
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+			if tt.setup {
+				assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
+				_, err := setupChrome(dir, home, chromeTestExecutable(t), assets, func(string) error { return nil })
+				require.NoError(t, err)
+			}
+			socket, err := chromehost.SocketPath(dir)
+			require.NoError(t, err)
+			require.Equal(t, filepath.Join(dir, "chrome", "host.sock"), socket)
+			port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
+			require.NoError(t, err)
+			cfg := config.Config{Host: "127.0.0.1", Port: port, DataDir: dir}
+			srv := server.New(cfg, dbtest.OpenTestDB(t), nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve"})
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, srv.Shutdown(t.Context()))
+				require.ErrorIs(t, <-run.ServeErrCh, http.ErrServerClosed)
+			}()
+			if !tt.setup {
+				_, err := os.Lstat(filepath.Join(dir, "chrome"))
+				assert.ErrorIs(t, err, os.ErrNotExist, "serve must not create the Chrome socket directory before setup")
+				return
+			}
+			conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+		})
+	}
+}
+
 func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), strings.Repeat("data", 25))
 	socket, err := chromehost.SocketPath(dir)
@@ -244,6 +295,9 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	assert.Equal(t, home, filepath.Dir(filepath.Dir(socket)))
+	assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
+	_, err = setupChrome(dir, t.TempDir(), chromeTestExecutable(t), assets, func(string) error { return nil })
+	require.NoError(t, err)
 	port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
 	require.NoError(t, err)
 	cfg := config.Config{Host: "127.0.0.1", Port: port, DataDir: dir}

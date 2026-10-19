@@ -74,8 +74,11 @@ Setup registers Google Chrome only. Chromium, Edge, and Brave aren't supported.
 Set up Chrome once:
 
 1. Run `agentsview chrome setup`.
-2. Open `chrome://extensions` and turn on **Developer mode**.
-3. Click **Load unpacked** and select the folder printed by the command.
+2. If AgentsView is already running, restart it. AgentsView opens its Chrome
+   connection only after setup, so a server started before setup can't reach
+   Chrome.
+3. Open `chrome://extensions` and turn on **Developer mode**.
+4. Click **Load unpacked** and select the folder printed by the command.
 
 Keep Chrome open during Sync. When the executable path or data directory changes,
 rerun setup and reload the extension at `chrome://extensions`. After an upgrade
@@ -99,9 +102,10 @@ platform:
   uses `$CHROME_CONFIG_HOME/google-chrome` first, then
   `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
 
-If Sync reports a disconnected host after setup, open Chrome and enable the
-extension at `chrome://extensions`. If it still fails, check the server startup
-error log for a Chrome host endpoint bind failure.
+If Sync reports a disconnected host after setup, restart AgentsView if it was
+running during setup, then open Chrome and enable the extension at
+`chrome://extensions`. If it still fails, check the server startup error log for
+a Chrome host endpoint bind failure.
 
 Open **Import conversations** and select **Claude.ai**. Local web UIs connected
 to a writable archive show a Chrome card; other connections show file upload
