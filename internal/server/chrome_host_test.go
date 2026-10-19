@@ -33,7 +33,12 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 	socket := filepath.Join(dir, "chrome", "host.sock")
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
+	// Stop the host before removing dir: its cleanup deletes the socket
+	// directory, and Windows denies a second concurrent delete.
+	t.Cleanup(func() {
+		cancel()
+		srv.chrome.shutdown()
+	})
 	require.NoError(t, srv.ServeChromeHost(ctx, socket))
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
