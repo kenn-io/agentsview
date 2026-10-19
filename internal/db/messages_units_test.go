@@ -41,9 +41,9 @@ func TestScanEmbeddableUnitsRunCap(t *testing.T) {
 	}{
 		{name: "runes and separators reach cap", contents: []string{"界界", "éé", "cc"}, spans: [][2]int{{0, 1}, {2, 2}}},
 		{name: "oversized member", contents: []string{"1234567", "bb", "cc"}, spans: [][2]int{{0, 0}, {1, 2}}},
-		{name: "user resets count", contents: []string{"aa", "ask", "bb", "cc"}, roles: []string{"assistant", "user", "assistant", "assistant"}, spans: [][2]int{{0, 0}, {1, 1}, {2, 3}}},
-		{name: "session resets count", contents: []string{"aa", "bb", "cc"}, sessions: []string{"a", "b", "b"}, spans: [][2]int{{0, 0}, {1, 2}}},
-		{name: "sidechain resets count", contents: []string{"aa", "bb", "cc"}, side: []bool{false, true, true}, spans: [][2]int{{0, 0}, {1, 2}}},
+		{name: "user resets count", contents: []string{"aaaa", "ask", "bb", "cc"}, roles: []string{"assistant", "user", "assistant", "assistant"}, spans: [][2]int{{0, 0}, {1, 1}, {2, 3}}},
+		{name: "session resets count", contents: []string{"aaaa", "bb", "cc"}, sessions: []string{"a", "b", "b"}, spans: [][2]int{{0, 0}, {1, 2}}},
+		{name: "sidechain resets count", contents: []string{"aaaa", "bb", "cc"}, side: []bool{false, true, true}, spans: [][2]int{{0, 0}, {1, 2}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
