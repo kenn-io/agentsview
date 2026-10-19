@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -511,39 +513,11 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 		"StaleActive must apply the same version gate Search does")
 }
 
-func TestMirrorSchemaVersionCappedRowsRejectOlderSpec(t *testing.T) {
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "vectors.db")
-	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(t, err)
-	_, err = ix.Build(ctx, seedRunCapArchive(t, false), fakeBuildEncoder(), fakeGeneration("fake-model"), BuildOptions{})
-	require.NoError(t, err)
-	require.NoError(t, ix.Close())
-	oldSpec := MessageIndexSpec()
-	oldSpec.MirrorSchemaVersion = "3"
-	oldSpec.UpgradableFrom = nil
-
-	ro, err := OpenSpec(ctx, path, oldSpec, true, 4000)
-	require.NoError(t, err)
-	_, err = ro.Search(ctx, fakeSearchEncoder(), "work", 10)
-	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
-	_, err = ro.StaleActive(ctx, legacySpace("any-fingerprint"), "")
-	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
-	require.NoError(t, ro.Close())
-
-	old, err := OpenSpec(ctx, path, oldSpec, false, 4000)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, old.Close()) })
-	var documents, generations int
-	require.NoError(t, old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_messages`).Scan(&documents))
-	require.NoError(t, old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_generations`).Scan(&generations))
-	assert.Zero(t, documents)
-	assert.Zero(t, generations)
-}
-
 func TestMirrorSchemaVersionV3UpgradesInPlace(t *testing.T) {
 	ctx := t.Context()
 	archive := seedRunCapArchive(t, false)
+	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")},
+		func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)

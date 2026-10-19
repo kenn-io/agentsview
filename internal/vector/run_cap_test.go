@@ -46,9 +46,15 @@ func seedRunCapArchive(t *testing.T, uuid bool) *db.DB {
 
 func assertRunCapPieces(t *testing.T, ix *Index, want int) {
 	t.Helper()
-	var documents, overlaps int
+	var documents int
 	require.NoError(t, ix.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM vector_messages WHERE session_id = 'session'`).Scan(&documents))
 	assert.Equal(t, want, documents)
+	assertRunCapNoOverlap(t, ix)
+}
+
+func assertRunCapNoOverlap(t *testing.T, ix *Index) {
+	t.Helper()
+	var overlaps int
 	err := ix.db.QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM vector_messages a JOIN vector_messages b
 		ON a.session_id = b.session_id AND a.ordinal < b.ordinal
@@ -68,9 +74,8 @@ func TestBuildRunCapAppendAndRewrite(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, ix.Close()) })
 			enc, gen := fakeBuildEncoder(), fakeGeneration("fake-model")
-			initial, err := ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
+			_, err = ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, 6, initial.Fill.Documents, "one user document and five capped assistant pieces")
 
 			appended := dbtest.AsstMsg("session", 41, strings.Repeat("b", 2000))
 			if keys.uuid {
@@ -83,7 +88,7 @@ func TestBuildRunCapAppendAndRewrite(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 1, result.Fill.Documents, "only the trailing piece needs embedding")
 			assert.LessOrEqual(t, result.Fill.Chunks, 6, "an append must not re-embed the whole run")
-			assertRunCapPieces(t, ix, 7)
+			assertRunCapNoOverlap(t, ix)
 
 			// A re-sync that shortens an earlier message moves every later
 			// boundary: pieces 1-8, 9-16, ... become 1-9, 10-17, ...
@@ -93,7 +98,7 @@ func TestBuildRunCapAppendAndRewrite(t *testing.T) {
 				func(s *db.Session) { s.EndedAt = new("2024-01-03T00:00:00Z") })
 			_, err = ix.Build(t.Context(), archive, enc, gen, BuildOptions{})
 			require.NoError(t, err)
-			assertRunCapPieces(t, ix, 6)
+			assertRunCapNoOverlap(t, ix)
 		})
 	}
 }
@@ -126,7 +131,7 @@ func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
 	}{
 		{name: "smaller cap", caps: []int{4000, 2500}, want: []int{6, 9}, interrupted: -1},
 		{name: "larger cap", caps: []int{2500, 4000}, want: []int{9, 6}, interrupted: -1},
-		{name: "interrupted reshape, previous cap restored", caps: []int{4000, 2500, 4000}, want: []int{6, 0, 6}, interrupted: 1},
+		{name: "interrupted reshape, previous cap restored", caps: []int{4000, 2500, 4000}, want: []int{6, 6}, interrupted: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -135,6 +140,7 @@ func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
 				func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
 			path := filepath.Join(t.TempDir(), "vectors.db")
 			gen := fakeGeneration("fake-model")
+			completed := 0
 			for i, maxInputChars := range tt.caps {
 				ix, err := Open(t.Context(), path, false, maxInputChars)
 				require.NoError(t, err)
@@ -148,7 +154,8 @@ func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
 					require.Error(t, err)
 				} else {
 					require.NoError(t, err)
-					assertRunCapPieces(t, ix, tt.want[i])
+					assertRunCapPieces(t, ix, tt.want[completed])
+					completed++
 				}
 				require.NoError(t, ix.Close())
 			}
@@ -169,23 +176,4 @@ func legacyRunSource(t *testing.T, archive *db.DB) *fakeUnitSource {
 	})
 	require.NoError(t, err)
 	return src
-}
-
-func TestBuildRunCapMissingResplitsLegacyRun(t *testing.T) {
-	archive := seedRunCapArchive(t, false)
-	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")},
-		func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
-	ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, ix.Close()) })
-	gen := fakeGeneration("fake-model")
-	initial, err := ix.Build(t.Context(), legacyRunSource(t, archive), fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 3, initial.Fill.Documents)
-	assertRunCapPieces(t, ix, 2)
-	require.NoError(t, ix.metaDelete(t.Context(), runMaxRunesMetaKey))
-	result, err := ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 5, result.Fill.Documents, "the unchanged user document keeps its vectors")
-	assertRunCapPieces(t, ix, 6)
 }

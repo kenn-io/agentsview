@@ -73,7 +73,12 @@ func TestScanEmbeddableUnitsRunCap(t *testing.T) {
 				assert.Equal(t, span[0], units[i].Ordinal)
 				assert.Equal(t, span[1], units[i].OrdinalEnd)
 				assert.Equal(t, "uuid-"+tt.contents[span[0]], units[i].SourceUUID)
-				if units[i].Kind == "run" {
+				kind := "run"
+				if tt.roles != nil && tt.roles[span[0]] == "user" {
+					kind = "user"
+				}
+				assert.Equal(t, kind, units[i].Kind)
+				if kind == "run" {
 					require.NotEmpty(t, units[i].Offsets)
 					assert.Equal(t, UnitOffset{Ordinal: span[0]}, units[i].Offsets[0])
 				}
