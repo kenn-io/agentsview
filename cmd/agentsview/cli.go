@@ -685,7 +685,7 @@ func newActivityReportCommand() *cobra.Command {
 		"Continue from an Activity session page cursor")
 	cmd.Flags().StringVar(&cfg.SessionsSort, "sessions-sort", "",
 		"Session sort (default agent_minutes): "+
-			"agent_minutes, cost, first_active, project, agent")
+			"agent_minutes, cost, first_active, project, agent, session, model")
 	cmd.Flags().StringVar(&cfg.SessionsDirection, "sessions-direction", "",
 		"Session sort direction (default desc): asc or desc")
 	cmd.Flags().StringVar(&cfg.SessionsBucketStart, "sessions-bucket-start", "",

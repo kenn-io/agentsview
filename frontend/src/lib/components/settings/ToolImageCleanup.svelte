@@ -22,9 +22,9 @@
   const sort = new TableSort<NonNullable<DbStripImagesReport["projects"]>[number]>({
     project: row => row.project || m.shared_none(),
     sessions: { value: row => row.sessions, firstDirection: "desc" },
-    payloads: { value: row => Number(row.payloads), firstDirection: "desc" },
-    stored: { value: row => Number(row.stored_bytes), firstDirection: "desc" },
-    decoded: { value: row => Number(row.decoded_bytes), firstDirection: "desc" },
+    payloads: { value: row => row.payloads, firstDirection: "desc" },
+    stored: { value: row => row.stored_bytes, firstDirection: "desc" },
+    decoded: { value: row => row.decoded_bytes, firstDirection: "desc" },
   });
   const previewRead = new LatestRead();
   let disposed = false;

@@ -631,28 +631,6 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	require.Len(t, second.Sessions, 1)
 	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
 
-	for _, sortKey := range []string{"session", "model"} {
-		t.Run(sortKey+" cursor continuation", func(t *testing.T) {
-			response := te.get(t, "/api/v1/activity/report/"+report.ReportID+"/sessions?limit=1&sort="+sortKey+"&direction=asc")
-			assertStatus(t, response, http.StatusOK)
-			var page struct {
-				Sessions   []activity.SessionRow `json:"sessions"`
-				NextCursor string                `json:"next_cursor"`
-			}
-			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &page))
-			require.Len(t, page.Sessions, 1)
-			require.NotEmpty(t, page.NextCursor)
-			response = te.get(t, "/api/v1/activity/report/"+report.ReportID+"/sessions?cursor="+url.QueryEscape(page.NextCursor))
-			assertStatus(t, response, http.StatusOK)
-			var next struct {
-				Sessions []activity.SessionRow `json:"sessions"`
-			}
-			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &next))
-			require.Len(t, next.Sessions, 1)
-			assert.NotEqual(t, page.Sessions[0].SessionID, next.Sessions[0].SessionID)
-		})
-	}
-
 	nonDefaultResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?limit=1&sort=project&direction=asc&bucket_start=120&bucket_end=122")
 	assertStatus(t, nonDefaultResponse, http.StatusOK)

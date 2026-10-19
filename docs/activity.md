@@ -143,7 +143,7 @@ active window.
 ![Weekly Activity sessions table](/docs/assets/generated/screenshots/activity-sessions.png)
 
 Click a session title to open that session in the transcript viewer. Column
-headers for **Project**, **Agent**, **Agent-min**, **Cost**, and **Window** are
+headers for **Session**, **Project**, **Agent**, **Model**, **Agent-min**, **Cost**, and **Window** are
 sortable; timing-only sorts keep untimed sessions at the bottom.
 
 The table initially includes at most 200 rows and loads more as you scroll.

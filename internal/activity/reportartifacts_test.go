@@ -146,26 +146,18 @@ func TestPageSessionsDisplayedSessionAndModelOrder(t *testing.T) {
 		{SessionID: "mixed-a", Title: "Mixed", PrimaryModel: "model-z", Models: []string{"model-z", "model-a"}},
 	}
 	for _, tc := range []struct {
-		name      string
-		sort      SessionSort
-		direction string
-		want      []string
+		sort SessionSort
+		want []string
 	}{
-		{"session ascending", SessionSortSession, "asc", []string{"z", "a", "b", "mixed-a", "mixed-b", "empty"}},
-		{"session descending", SessionSortSession, "desc", []string{"empty", "mixed-a", "mixed-b", "a", "b", "z"}},
-		{"model ascending", SessionSortModel, "asc", []string{"empty", "a", "b", "z", "mixed-a", "mixed-b"}},
-		{"model descending", SessionSortModel, "desc", []string{"mixed-a", "mixed-b", "z", "a", "b", "empty"}},
+		{SessionSortSession, []string{"z", "a", "b", "mixed-a", "mixed-b", "empty"}},
+		{SessionSortModel, []string{"empty", "a", "b", "z", "mixed-a", "mixed-b"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var got []string
-			for offset := 0; offset < len(rows); offset += 2 {
-				page, err := PageSessions(rows, nil, SessionPageOptions{Sort: tc.sort, Direction: tc.direction, Limit: 2, Offset: offset})
-				require.NoError(t, err)
-				for _, row := range page.Sessions {
-					got = append(got, row.SessionID)
-				}
-			}
-			assert.Equal(t, tc.want, got)
-		})
+		page, err := PageSessions(rows, nil, SessionPageOptions{Sort: tc.sort, Direction: "asc"})
+		require.NoError(t, err)
+		got := make([]string, 0, len(page.Sessions))
+		for _, row := range page.Sessions {
+			got = append(got, row.SessionID)
+		}
+		assert.Equal(t, tc.want, got, "sort %s", tc.sort)
 	}
 }

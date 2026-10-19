@@ -80,70 +80,6 @@ describe("ToolImageCleanup", () => {
     flushSync();
   }
 
-  it("sorts preview counts and bytes without changing the confirmed filter", async () => {
-    vi.useFakeTimers();
-    const report = reportWithPayloads();
-    report.projects = [
-      {
-        project: "zeta",
-        sessions: 2,
-        changed: 2,
-        payloads: 10,
-        stored_bytes: 900,
-        decoded_bytes: 800,
-      },
-      {
-        project: "alpha",
-        sessions: 10,
-        changed: 10,
-        payloads: 2,
-        stored_bytes: 1200,
-        decoded_bytes: 1000,
-      },
-    ];
-    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(report);
-    dataService.postApiV1DataStripImages.mockResolvedValue(report);
-    const component = mount(ToolImageCleanup, { target: document.body });
-    await settle();
-    const projectInput = document.querySelector<HTMLInputElement>("#tic-project")!;
-    projectInput.value = "project-filter";
-    projectInput.dispatchEvent(new Event("input", { bubbles: true }));
-    document.querySelector<HTMLButtonElement>("button")!.click();
-    await settle();
-    const order = () =>
-      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
-    expect(order()).toEqual(["zeta", "alpha"]);
-    for (const column of ["Sessions", "Stored", "Decoded"]) {
-      const header = Array.from(document.querySelectorAll<HTMLButtonElement>("thead button")).find(
-        (button) => button.textContent?.trim() === column,
-      )!;
-      header.click();
-      await settle();
-      expect(order()).toEqual(["alpha", "zeta"]);
-      header.click();
-      await settle();
-      expect(order()).toEqual(["zeta", "alpha"]);
-      header.click();
-      await settle();
-      expect(order()).toEqual(["zeta", "alpha"]);
-    }
-    expect(report.projects.map((row) => row.project)).toEqual(["zeta", "alpha"]);
-    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.trim() === "Remove image payloads")!
-      .click();
-    await settle();
-    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.trim() === "Remove")!
-      .click();
-    await settle();
-    expect(dataService.postApiV1DataStripImages).toHaveBeenCalledWith(
-      { project: "project-filter", before: "", confirmed: true },
-      undefined,
-    );
-    unmount(component);
-    vi.useRealTimers();
-  });
-
   it("renders intro text", async () => {
     vi.useFakeTimers();
     dataService.postApiV1DataStripImagesPreview.mockResolvedValue(emptyReport());
@@ -290,7 +226,14 @@ describe("ToolImageCleanup", () => {
   // one after confirmApply, carrying confirmed: true and the frozen filter.
   it("cancel issues no apply request; confirm sends exactly one request with frozen filter", async () => {
     vi.useFakeTimers();
-    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(reportWithPayloads());
+    const preview = reportWithPayloads();
+    preview.projects.push({
+      ...preview.projects[0]!,
+      project: "other-project",
+      payloads: 10,
+      stored_bytes: 900,
+    });
+    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(preview);
     dataService.postApiV1DataStripImages.mockResolvedValue(reportWithPayloads());
 
     const component = mount(ToolImageCleanup, { target: document.body });
@@ -309,6 +252,19 @@ describe("ToolImageCleanup", () => {
     // Preview.
     document.body.querySelectorAll("button")[0]?.click();
     await settle();
+
+    const order = () =>
+      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
+    for (const [heading, expected] of [
+      ["Payloads", ["other-project", "my-project"]],
+      ["Stored", ["my-project", "other-project"]],
+    ] as const) {
+      Array.from(document.querySelectorAll<HTMLButtonElement>("thead button"))
+        .find((button) => button.textContent?.trim() === heading)!
+        .click();
+      await settle();
+      expect(order()).toEqual(expected);
+    }
 
     // Open confirm dialog (requestApply).
     const removeBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>

@@ -80,7 +80,7 @@
     project: row => row.project || derivedLayoutLabel(row),
     original: row => row.original_project || null,
     enabled: row => row.enabled ? m.worktree_on() : m.worktree_off(),
-    updated: { value: row => Number.isNaN(Date.parse(row.updated_at)) ? null : new Date(row.updated_at), firstDirection: "desc" },
+    updated: { value: row => new Date(row.updated_at), firstDirection: "desc" },
     governed: { value: row => row.governed_sessions, firstDirection: "desc" },
   });
   const mappingsRead = new LatestRead();
