@@ -42,8 +42,8 @@ func (c *Config) validateSections() error {
 		validate func() error
 	}{
 		{ScopeServer, "proxy", func() error { return normalizeProxyConfig(&c.Proxy) }},
-		{ScopeServer, "public_url", c.resolvePublicConfigURL},
-		{ScopeServer, "public_origins", c.resolvePublicConfigOrigins},
+		// The public URL joins the allowed origins, so one bad value is one warning.
+		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
 		{ScopeServer, "daemon_idle_timeout", func() error {
 			if c.DaemonIdleTimeout < 0 {
 				return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
@@ -63,16 +63,12 @@ func (c *Config) validateSections() error {
 	return nil
 }
 
-func (c *Config) resolvePublicConfigURL() error {
+func (c *Config) resolvePublicConfig() error {
 	value, err := resolvePublicURL(c.PublicURL, c.Proxy)
 	if err != nil {
 		return fmt.Errorf("invalid public url: %w", err)
 	}
 	c.PublicURL = value
-	return nil
-}
-
-func (c *Config) resolvePublicConfigOrigins() error {
 	origins, err := normalizePublicOrigins(c.PublicOrigins)
 	if err != nil {
 		return fmt.Errorf("invalid public origins: %w", err)

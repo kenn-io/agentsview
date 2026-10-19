@@ -157,6 +157,7 @@ func TestScopedConfigWarnsForEveryInvalidUnusedSection(t *testing.T) {
 	for _, section := range []string{"public_url", "[vector]", "[insights]"} {
 		assert.Contains(t, stderr, section)
 	}
+	assert.Equal(t, 3, strings.Count(stderr, "warning: invalid "), "one warning per invalid section:\n%s", stderr)
 	_, stderr, err = runScopedConfigCLI(t, nil, "daemon", "status")
 	require.NoError(t, err, stderr)
 }

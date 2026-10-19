@@ -38,7 +38,9 @@ func RunServeProcess(op Op, stdin io.Reader, stderr io.Writer) int {
 		_ = out.Close()
 	}()
 
-	cfg, err := config.LoadReadOnly()
+	// Remote sync publishes local sources only. Invalid server sections warn
+	// here, before any error line, so the collector still reads that line last.
+	cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 	if err != nil {
 		return reportServeError(stderr,
 			&ServeError{Code: CodeInternal, Message: "load config: " + err.Error()})

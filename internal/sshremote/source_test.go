@@ -195,6 +195,22 @@ func TestSSHSourceSyncsRemoteHome(t *testing.T) {
 	assert.Equal(t, []string{sourceTestDestination}, uniqueLines(t, env.ssh.Log))
 }
 
+// Remote sync reads only local archive settings, so an invalid section the
+// remote host's server would reject must not stop collection from it.
+func TestSSHSourceSyncsRemoteWithInvalidUnusedConfig(t *testing.T) {
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	configDir := filepath.Join(env.ssh.Home, ".agentsview")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.toml"),
+		[]byte("[insights]\nendpoint = 'http://models.example/v1'\nmodel = 'remote'\n"), 0o600))
+
+	stats, err := env.run(t, env.source())
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+}
+
 func TestSSHSourceSyncsAppendedSessionAsDelta(t *testing.T) {
 	env := newSourceEnv(t)
 	installTestBinary(t, env.ssh.Home, env.build)
