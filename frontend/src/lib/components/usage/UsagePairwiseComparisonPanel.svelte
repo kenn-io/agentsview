@@ -1,6 +1,6 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Card, Table, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
@@ -355,7 +355,7 @@
     </Card>
   {:else if rows.length > 0}
     <div class="table-wrap">
-      <table>
+      <Table bare unsorted>
         <thead>
           <tr>
             <th>{m.usage_pairwise_metric()}</th>
@@ -377,7 +377,7 @@
         <tbody>
           {#each rows as row}
             <tr>
-              <th>{row.label}</th>
+              <th scope="row">{row.label}</th>
               <td>{row.left}</td>
               <td>{row.right}</td>
               <td>
@@ -389,7 +389,7 @@
             </tr>
           {/each}
         </tbody>
-      </table>
+      </Table>
     </div>
   {/if}
 </section>
@@ -459,7 +459,7 @@
     overflow-x: auto;
   }
 
-  table {
+  .table-wrap :global(table) {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;

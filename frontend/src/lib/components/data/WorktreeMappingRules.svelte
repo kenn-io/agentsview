@@ -4,6 +4,7 @@
     Checkbox,
     Modal,
     TableHeaderCell,
+    TableSort,
     TextInput,
     Typeahead,
   } from "@kenn-io/kit-ui";
@@ -74,6 +75,14 @@
   let project = $state("");
   let enabled = $state(true);
   let confirmation: Confirmation | null = $state(null);
+  const sort = new TableSort<DbProjectRule>({
+    prefix: row => row.path_prefix,
+    project: row => row.project || derivedLayoutLabel(row),
+    original: row => row.original_project || null,
+    enabled: row => row.enabled ? m.worktree_on() : m.worktree_off(),
+    updated: { value: row => Number.isNaN(Date.parse(row.updated_at)) ? null : new Date(row.updated_at), firstDirection: "desc" },
+    governed: { value: row => row.governed_sessions, firstDirection: "desc" },
+  });
   const mappingsRead = new LatestRead();
   let machineGeneration = 0;
   let disposed = false;
@@ -357,14 +366,14 @@
           <table class="table">
             <thead>
               <tr>
-                <TableHeaderCell label={m.data_rules_col_prefix()} />
-                <TableHeaderCell label={m.data_rules_col_project()} />
-                <TableHeaderCell label={m.data_rules_col_original()} />
-                <TableHeaderCell label={m.data_rules_col_enabled()} />
-                <TableHeaderCell label={m.data_rules_col_updated()} />
-                <TableHeaderCell label={m.data_rules_col_governed()} numeric />
+                <TableHeaderCell label={m.data_rules_col_prefix()} {sort} column="prefix" />
+                <TableHeaderCell label={m.data_rules_col_project()} {sort} column="project" />
+                <TableHeaderCell label={m.data_rules_col_original()} {sort} column="original" />
+                <TableHeaderCell label={m.data_rules_col_enabled()} {sort} column="enabled" />
+                <TableHeaderCell label={m.data_rules_col_updated()} {sort} column="updated" />
+                <TableHeaderCell label={m.data_rules_col_governed()} {sort} column="governed" numeric />
                 {#if !readOnly}
-                  <TableHeaderCell label={m.data_rules_col_actions()} />
+                  <TableHeaderCell><span class="kit-sr-only">{m.data_rules_col_actions()}</span></TableHeaderCell>
                 {/if}
               </tr>
             </thead>
@@ -377,7 +386,7 @@
                    path_prefix) instead of id. That pair is unique on SQLite
                    too, since a single archive enforces UNIQUE(machine,
                    path_prefix). -->
-              {#each mappings as mapping (`${mapping.source_archive_id}:${mapping.path_prefix}`)}
+              {#each sort.sort(mappings) as mapping (`${mapping.source_archive_id}:${mapping.path_prefix}`)}
                 <tr class="rule-row" class:disabled={!mapping.enabled}>
                   <td class="col-prefix" title={mapping.path_prefix}>{mapping.path_prefix}</td>
                   <td>

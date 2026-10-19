@@ -13,7 +13,7 @@ type activityReportSessionsInput struct {
 	ReportID      string           `path:"report_id" required:"true" doc:"Signed Activity report ID"`
 	Limit         int              `query:"limit" minimum:"0" maximum:"500" doc:"Maximum session rows"`
 	Cursor        string           `query:"cursor" doc:"Opaque page cursor"`
-	Sort          string           `query:"sort" enum:"agent_minutes,cost,first_active,project,agent" doc:"Session sort"`
+	Sort          string           `query:"sort" enum:"agent_minutes,cost,first_active,project,agent,session,model" doc:"Session sort"`
 	Direction     string           `query:"direction" enum:"asc,desc" doc:"Sort direction"`
 	BucketStart   optionalIntParam `query:"bucket_start" minimum:"0" doc:"First timeline bucket in the half-open range"`
 	BucketEnd     optionalIntParam `query:"bucket_end" minimum:"1" doc:"Exclusive end of the timeline bucket range"`

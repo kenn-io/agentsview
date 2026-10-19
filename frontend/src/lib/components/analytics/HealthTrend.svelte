@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Table } from "@kenn-io/kit-ui";
   import { Bar, Chart, Layer } from "layerchart";
   import { scaleBand } from "d3-scale";
   import type { DbSignalsTrendBucket as SignalsTrendBucket } from "../../api/generated/index.js";
@@ -90,29 +91,31 @@
         </LargeChartFrame>
       </Layer>
     </Chart>
-    <table id="health-trend-data" class="kit-sr-only">
-      <caption>{m.analytics_health_trend_title()}</caption>
-      <thead>
-        <tr>
-          <th scope="col">{m.analytics_skill_trend_date()}</th>
-          <th scope="col">{m.analytics_session_health_avg_score()}</th>
-          <th scope="col">{m.analytics_col_sessions()}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each trend as bucket (bucket.date)}
+    <div id="health-trend-data" class="kit-sr-only">
+      <Table bare unsorted>
+        <caption>{m.analytics_health_trend_title()}</caption>
+        <thead>
           <tr>
-            <th scope="row">{bucket.date}</th>
-            <td>
-              {bucket.avg_health_score != null
-                ? Math.round(bucket.avg_health_score)
-                : m.analytics_health_trend_no_scored_sessions()}
-            </td>
-            <td>{bucket.session_count.toLocaleString()}</td>
+            <th scope="col">{m.analytics_skill_trend_date()}</th>
+            <th scope="col">{m.analytics_session_health_avg_score()}</th>
+            <th scope="col">{m.analytics_col_sessions()}</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each trend as bucket (bucket.date)}
+            <tr>
+              <th scope="row">{bucket.date}</th>
+              <td>
+                {bucket.avg_health_score != null
+                  ? Math.round(bucket.avg_health_score)
+                  : m.analytics_health_trend_no_scored_sessions()}
+              </td>
+              <td>{bucket.session_count.toLocaleString()}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </div>
     {#if tooltip}
       <div
         class="tooltip"

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Modal, TextInput } from "@kenn-io/kit-ui";
+  import { Button, Modal, TableHeaderCell, TableSort, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { DataService } from "../../api/generated/index";
@@ -19,6 +19,13 @@
   let errorText = $state("");
   let mayHavePartiallyApplied = $state(false);
   let unavailableReason = $state<string | null>(null);
+  const sort = new TableSort<NonNullable<DbStripImagesReport["projects"]>[number]>({
+    project: row => row.project || m.shared_none(),
+    sessions: { value: row => row.sessions, firstDirection: "desc" },
+    payloads: { value: row => Number(row.payloads), firstDirection: "desc" },
+    stored: { value: row => Number(row.stored_bytes), firstDirection: "desc" },
+    decoded: { value: row => Number(row.decoded_bytes), firstDirection: "desc" },
+  });
   const previewRead = new LatestRead();
   let disposed = false;
 
@@ -241,15 +248,15 @@
           <table class="project-table">
             <thead>
               <tr>
-                <th>{m.settings_image_cleanup_column_project()}</th>
-                <th>{m.settings_image_cleanup_column_sessions()}</th>
-                <th>{m.settings_image_cleanup_column_payloads()}</th>
-                <th>{m.settings_image_cleanup_column_stored()}</th>
-                <th>{m.settings_image_cleanup_column_decoded()}</th>
+                <TableHeaderCell label={m.settings_image_cleanup_column_project()} {sort} column="project" />
+                <TableHeaderCell label={m.settings_image_cleanup_column_sessions()} {sort} column="sessions" numeric />
+                <TableHeaderCell label={m.settings_image_cleanup_column_payloads()} {sort} column="payloads" numeric />
+                <TableHeaderCell label={m.settings_image_cleanup_column_stored()} {sort} column="stored" numeric />
+                <TableHeaderCell label={m.settings_image_cleanup_column_decoded()} {sort} column="decoded" numeric />
               </tr>
             </thead>
             <tbody>
-              {#each preview.projects as proj (proj.project)}
+              {#each sort.sort(preview.projects) as proj (proj.project)}
                 <tr>
                   <td class="project-name">{proj.project || m.shared_none()}</td>
                   <td>{formatCount(proj.sessions)}</td>
@@ -412,7 +419,7 @@
     min-width: 0;
   }
 
-  .project-table th,
+  .project-table :global(th),
   .project-table td {
     padding: 4px 8px;
     text-align: left;
@@ -420,7 +427,7 @@
     white-space: nowrap;
   }
 
-  .project-table th {
+  .project-table :global(th) {
     font-weight: 600;
     color: var(--text-secondary);
     background: var(--bg-inset);
@@ -428,6 +435,11 @@
 
   .project-table td {
     color: var(--text-primary);
+  }
+
+  .project-table :global(th.kit-th--numeric),
+  .project-table td:not(:first-child) {
+    text-align: right;
   }
 
   .project-name {

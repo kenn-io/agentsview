@@ -18339,13 +18339,15 @@ const (
 	AgentMinutes GetAPIV1ActivityReportReportIDSessionsQuerySort = "agent_minutes"
 	Cost         GetAPIV1ActivityReportReportIDSessionsQuerySort = "cost"
 	FirstActive  GetAPIV1ActivityReportReportIDSessionsQuerySort = "first_active"
+	Model        GetAPIV1ActivityReportReportIDSessionsQuerySort = "model"
 	Project      GetAPIV1ActivityReportReportIDSessionsQuerySort = "project"
+	Session      GetAPIV1ActivityReportReportIDSessionsQuerySort = "session"
 )
 
 // Validate checks if the GetAPIV1ActivityReportReportIDSessionsQuerySort value is valid
 func (g GetAPIV1ActivityReportReportIDSessionsQuerySort) Validate() error {
 	switch g {
-	case Agent, AgentMinutes, Cost, FirstActive, Project:
+	case Agent, AgentMinutes, Cost, FirstActive, Model, Project, Session:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1ActivityReportReportIDSessionsQuerySort value, got: %v", g))

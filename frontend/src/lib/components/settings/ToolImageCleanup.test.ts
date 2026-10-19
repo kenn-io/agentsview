@@ -80,6 +80,70 @@ describe("ToolImageCleanup", () => {
     flushSync();
   }
 
+  it("sorts preview counts and bytes without changing the confirmed filter", async () => {
+    vi.useFakeTimers();
+    const report = reportWithPayloads();
+    report.projects = [
+      {
+        project: "zeta",
+        sessions: 2,
+        changed: 2,
+        payloads: 10,
+        stored_bytes: 900,
+        decoded_bytes: 800,
+      },
+      {
+        project: "alpha",
+        sessions: 10,
+        changed: 10,
+        payloads: 2,
+        stored_bytes: 1200,
+        decoded_bytes: 1000,
+      },
+    ];
+    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(report);
+    dataService.postApiV1DataStripImages.mockResolvedValue(report);
+    const component = mount(ToolImageCleanup, { target: document.body });
+    await settle();
+    const projectInput = document.querySelector<HTMLInputElement>("#tic-project")!;
+    projectInput.value = "project-filter";
+    projectInput.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>("button")!.click();
+    await settle();
+    const order = () =>
+      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
+    expect(order()).toEqual(["zeta", "alpha"]);
+    for (const column of ["Sessions", "Stored", "Decoded"]) {
+      const header = Array.from(document.querySelectorAll<HTMLButtonElement>("thead button")).find(
+        (button) => button.textContent?.trim() === column,
+      )!;
+      header.click();
+      await settle();
+      expect(order()).toEqual(["alpha", "zeta"]);
+      header.click();
+      await settle();
+      expect(order()).toEqual(["zeta", "alpha"]);
+      header.click();
+      await settle();
+      expect(order()).toEqual(["zeta", "alpha"]);
+    }
+    expect(report.projects.map((row) => row.project)).toEqual(["zeta", "alpha"]);
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Remove image payloads")!
+      .click();
+    await settle();
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Remove")!
+      .click();
+    await settle();
+    expect(dataService.postApiV1DataStripImages).toHaveBeenCalledWith(
+      { project: "project-filter", before: "", confirmed: true },
+      undefined,
+    );
+    unmount(component);
+    vi.useRealTimers();
+  });
+
   it("renders intro text", async () => {
     vi.useFakeTimers();
     dataService.postApiV1DataStripImagesPreview.mockResolvedValue(emptyReport());

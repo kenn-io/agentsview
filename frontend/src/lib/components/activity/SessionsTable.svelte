@@ -80,7 +80,7 @@
   function setSort(key: ActivitySessionSort) {
     const direction = sortKey === key
       ? sortDir === "asc" ? "desc" : "asc"
-      : key === "project" || key === "agent" ? "asc" : "desc";
+      : key === "agent_minutes" || key === "cost" || key === "first_active" ? "desc" : "asc";
     onSort?.(key, direction);
   }
 
@@ -124,6 +124,8 @@
   }
 
   const sortColumns: Column[] = $derived([
+    { key: "session", label: m.activity_session() },
+    { key: "model", label: m.activity_model() },
     { key: "project", label: m.activity_project() },
     { key: "agent", label: m.activity_agent() },
     { key: "agent_minutes", label: m.activity_agent_min() },
@@ -168,8 +170,6 @@
         <table class="table">
           <thead>
             <tr>
-              <TableHeaderCell label={m.activity_session()} />
-              <TableHeaderCell label={m.activity_model()} />
               {#each sortColumns as col}
                 <TableHeaderCell
                   class="sort-{col.key}"

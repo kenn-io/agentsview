@@ -115,6 +115,56 @@ describe("WorktreeMappingRules", () => {
     document.body.innerHTML = "";
   });
 
+  it("sorts counts, dates, and missing labels, restores order, and keeps row actions attached", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(
+      response("remote-host", [
+        rule({
+          id: 1,
+          path_prefix: "/workspace/zeta",
+          governed_sessions: 2,
+          updated_at: "invalid",
+          original_project: "",
+        }),
+        rule({
+          id: 2,
+          path_prefix: "/workspace/alpha",
+          project: "alpha",
+          governed_sessions: 10,
+          updated_at: "2026-07-05T00:00:00Z",
+          original_project: "alpha",
+        }),
+      ]),
+    );
+    component = mountRules();
+    await flush();
+    const order = () =>
+      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
+    expect(order()).toEqual(["/workspace/zeta", "/workspace/alpha"]);
+    const governed = screen.getByRole("button", { name: "Governed sessions" });
+    await fireEvent.click(governed);
+    expect(order()).toEqual(["/workspace/alpha", "/workspace/zeta"]);
+    await fireEvent.click(governed);
+    expect(order()).toEqual(["/workspace/zeta", "/workspace/alpha"]);
+    await fireEvent.click(governed);
+    expect(order()).toEqual(["/workspace/zeta", "/workspace/alpha"]);
+    await fireEvent.click(screen.getByRole("button", { name: "Updated" }));
+    expect(order()).toEqual(["/workspace/alpha", "/workspace/zeta"]);
+    await fireEvent.click(screen.getByRole("button", { name: "Original label" }));
+    expect(order()).toEqual(["/workspace/alpha", "/workspace/zeta"]);
+    expect(
+      screen.getByRole("columnheader", { name: "Actions" }).querySelector("button"),
+    ).toBeNull();
+    await fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    expect((screen.getByRole("textbox", { name: "Path prefix" }) as HTMLInputElement).value).toBe(
+      "/workspace/alpha",
+    );
+    await fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]!);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
+    expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({
+      id: "2",
+    });
+  });
+
   it("renders the rules as a table with the seven columns", async () => {
     dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
 

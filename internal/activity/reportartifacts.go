@@ -61,6 +61,8 @@ const (
 	SessionSortFirstActive  SessionSort = "first_active"
 	SessionSortProject      SessionSort = "project"
 	SessionSortAgent        SessionSort = "agent"
+	SessionSortSession      SessionSort = "session"
+	SessionSortModel        SessionSort = "model"
 )
 
 type SessionPageOptions struct {
@@ -108,7 +110,7 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 	}
 	switch options.Sort {
 	case SessionSortAgentMinutes, SessionSortCost, SessionSortFirstActive,
-		SessionSortProject, SessionSortAgent:
+		SessionSortProject, SessionSortAgent, SessionSortSession, SessionSortModel:
 	default:
 		return SessionPageOptions{}, fmt.Errorf("invalid activity session sort %q", options.Sort)
 	}
@@ -279,6 +281,27 @@ func compareSessionRows(left, right SessionRow, sortKey SessionSort) int {
 		return compareInt64(left.Cost.Microdollars, right.Cost.Microdollars)
 	case SessionSortFirstActive:
 		return compareOptionalString(left.FirstActive, right.FirstActive)
+	case SessionSortSession:
+		leftTitle, rightTitle := left.Title, right.Title
+		if leftTitle == "" {
+			leftTitle = left.SessionID
+		}
+		if rightTitle == "" {
+			rightTitle = right.SessionID
+		}
+		return strings.Compare(leftTitle, rightTitle)
+	case SessionSortModel:
+		leftMixed, rightMixed := len(left.Models) > 1, len(right.Models) > 1
+		if leftMixed != rightMixed {
+			if leftMixed {
+				return 1
+			}
+			return -1
+		}
+		if leftMixed {
+			return 0
+		}
+		return strings.Compare(left.PrimaryModel, right.PrimaryModel)
 	case SessionSortProject:
 		return strings.Compare(left.Project, right.Project)
 	case SessionSortAgent:

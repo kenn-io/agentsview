@@ -135,3 +135,37 @@ func TestArtifactDigestIsIndependentOfMembershipMapOrder(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, leftDigest, changed)
 }
+
+func TestPageSessionsDisplayedSessionAndModelOrder(t *testing.T) {
+	rows := []SessionRow{
+		{SessionID: "z", Title: "Alpha", PrimaryModel: "model-z", Models: []string{"model-z"}},
+		{SessionID: "b", Title: "Beta", PrimaryModel: "model-a", Models: []string{"model-a"}},
+		{SessionID: "a", Title: "Beta", PrimaryModel: "model-a", Models: []string{"model-a"}},
+		{SessionID: "empty"},
+		{SessionID: "mixed-b", Title: "Mixed", PrimaryModel: "model-a", Models: []string{"model-a", "model-z"}},
+		{SessionID: "mixed-a", Title: "Mixed", PrimaryModel: "model-z", Models: []string{"model-z", "model-a"}},
+	}
+	for _, tc := range []struct {
+		name      string
+		sort      SessionSort
+		direction string
+		want      []string
+	}{
+		{"session ascending", SessionSortSession, "asc", []string{"z", "a", "b", "mixed-a", "mixed-b", "empty"}},
+		{"session descending", SessionSortSession, "desc", []string{"empty", "mixed-a", "mixed-b", "a", "b", "z"}},
+		{"model ascending", SessionSortModel, "asc", []string{"empty", "a", "b", "z", "mixed-a", "mixed-b"}},
+		{"model descending", SessionSortModel, "desc", []string{"mixed-a", "mixed-b", "z", "a", "b", "empty"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for offset := 0; offset < len(rows); offset += 2 {
+				page, err := PageSessions(rows, nil, SessionPageOptions{Sort: tc.sort, Direction: tc.direction, Limit: 2, Offset: offset})
+				require.NoError(t, err)
+				for _, row := range page.Sessions {
+					got = append(got, row.SessionID)
+				}
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

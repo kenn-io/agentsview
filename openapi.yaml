@@ -8580,6 +8580,8 @@ paths:
               - first_active
               - project
               - agent
+              - session
+              - model
             type: string
         - description: Sort direction
           explode: false

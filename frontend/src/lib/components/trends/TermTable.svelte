@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Table } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import type { DbTrendSeries as TrendsSeries } from "../../api/generated/index.js";
 
@@ -35,7 +36,7 @@
 </script>
 
 <div class="term-table-wrap">
-  <table class="term-table">
+  <Table bare unsorted class="term-table">
     <thead>
       <tr>
         <th>{m.trends_term()}</th>
@@ -67,7 +68,7 @@
         </tr>
       {/each}
     </tbody>
-  </table>
+  </Table>
 </div>
 
 <style>
@@ -78,7 +79,7 @@
     background: var(--bg-surface);
   }
 
-  .term-table {
+  .term-table-wrap :global(.term-table) {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;

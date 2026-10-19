@@ -1311,7 +1311,7 @@
                 </ul>
               {/if}
               {#if planUsageDisplay.groups.length > 0}
-                <Table
+                <Table unsorted
                   class="plan-usage-groups"
                   stickyHeader={false}
                   ariaLabel={m.plan_usage_title()}

@@ -163,6 +163,29 @@ describe("SessionsTable", () => {
     await unmount(c);
   });
 
+  it.each(["session", "model"] as const)(
+    "requests ascending %s sort then reverses it",
+    async (key) => {
+      const onSort = vi.fn();
+      const c = mount(SessionsTable, {
+        target: document.body,
+        props: { report: makeReport(fixtureRows()), onSort, sortKey: key, sortDir: "asc" },
+      });
+      await tick();
+      (document.querySelector(`th.sort-${key} button`) as HTMLElement).click();
+      expect(onSort).toHaveBeenCalledWith(key, "desc");
+      await unmount(c);
+      const initial = mount(SessionsTable, {
+        target: document.body,
+        props: { report: makeReport(fixtureRows()), onSort },
+      });
+      await tick();
+      (document.querySelector(`th.sort-${key} button`) as HTMLElement).click();
+      expect(onSort).toHaveBeenLastCalledWith(key, "asc");
+      await unmount(initial);
+    },
+  );
+
   it("intercepts a plain left-click on a session link for SPA navigation", async () => {
     const navSpy = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
     const report = makeReport(fixtureRows());

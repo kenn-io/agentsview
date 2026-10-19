@@ -706,7 +706,7 @@
             <p class="progress-state">{m.recall_page_progress_empty()}</p>
           {:else}
             <div class="progress-table-shell">
-              <Table
+              <Table unsorted
                 ariaLabel={m.recall_page_progress_table_label()}
                 stickyHeader={false}
                 zebra={false}
@@ -915,7 +915,7 @@
     <EmptyState title={m.recall_page_empty()} />
   {:else}
     <div class="recall-table-shell">
-      <Table
+      <Table unsorted
         ariaLabel={m.recall_page_table_label()}
         stickyHeader={false}
         zebra={false}

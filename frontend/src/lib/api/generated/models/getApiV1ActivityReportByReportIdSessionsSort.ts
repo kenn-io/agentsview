@@ -11,4 +11,6 @@ export const GetApiV1ActivityReportByReportIdSessionsSort = {
   first_active: "first_active",
   project: "project",
   agent: "agent",
+  session: "session",
+  model: "model",
 } as const;
