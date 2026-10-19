@@ -35,8 +35,8 @@ recall_max_revision_lag = 256     # default; Recall corpus revisions the Recall 
 [vector.embeddings]
 model = "nomic-embed-text"
 dimension = 768                   # every returned vector must have this length
-max_input_chars = 8192            # per-chunk rune cap (default 8192)
-model_context_tokens = 32000      # optional model context used to cap build request size
+max_input_chars = 4000            # per-chunk rune cap (default 8192)
+model_context_tokens = 2048       # optional model context used to cap build request size
 query_prefix = "search_query: "    # prepended only to search queries
 document_prefix = "search_document: " # prepended only to indexed document chunks
 # request_dimensions = true      # ask for Matryoshka-reduced vectors of exactly `dimension` (see below)
@@ -61,6 +61,10 @@ run_after_sync = true             # daemon embeds deltas after each sync, deboun
 recall = false                    # default; set true to permit automatic Recall embedding
 backstop_interval = "24h"         # periodic full reconciliation scan; negative disables (default "24h")
 ```
+
+The 4,000-character cap fits nomic-embed-text's 2,048-token window in Ollama:
+session text runs about 2 to 3 characters per token, and Ollama silently
+truncates longer input.
 
 `model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
 entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
@@ -340,6 +344,7 @@ enabled = true
 [vector.embeddings]
 model = "nomic-embed-text"
 dimension = 768
+max_input_chars = 4000
 
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"

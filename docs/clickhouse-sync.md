@@ -274,6 +274,7 @@ unattended and stop at the first step that does not confirm.
     [vector.embeddings]
     model = "nomic-embed-text"
     dimension = 768
+    max_input_chars = 4000
     default_server = "local"
 
     [vector.embeddings.servers.local]

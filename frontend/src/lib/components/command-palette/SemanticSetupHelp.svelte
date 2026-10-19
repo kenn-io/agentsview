@@ -71,6 +71,7 @@ enabled = true
 [vector.embeddings]
 model = "nomic-embed-text"
 dimension = 768
+max_input_chars = 4000
 
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"`;
