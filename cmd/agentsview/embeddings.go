@@ -246,9 +246,9 @@ func requireVectorEnabled(cfg config.Config) error {
 // Generation identity Build/Fill fingerprint against. Defined once here so
 // the daemon serve wiring (Task 16) can reuse the exact same mapping.
 // doc_unit_scheme and chunk_overlap_chars are part of the fingerprint so
-// that changing the run-grouped document scheme or the chunk overlap
-// formula (vector.ChunkOverlap) cuts a new generation rather than silently
-// reusing embeddings built under the old scheme.
+// that changing either value cuts a new generation. Run caps preserve
+// run_v1 and reuse embeddings by content hash; run_max_runes metadata and
+// mirror schema version "4" track the cap separately.
 func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	params := map[string]string{
 		"max_input_chars":     strconv.Itoa(c.MaxInputChars),

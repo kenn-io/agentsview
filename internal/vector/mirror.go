@@ -172,10 +172,10 @@ func contentHash(content string) string {
 // archive (since="") and additionally deletes mirror rows (and their
 // vectors, via store.DeleteVectors) whose identity was not seen in the
 // scan; full=false scans only sessions newer than the stored watermark
-// (metadata-table key "refresh_watermark"), each one whole, and deletes
-// each scanned session's mirror rows the scan did not see, so run pieces
-// whose boundaries moved drop out; sessions outside the scan wait for a
-// subsequent full refresh. includeAutomated
+// (metadata-table key "refresh_watermark"), each one whole. For sessions
+// that emit a non-deleted unit, it deletes mirror rows the scan did not see,
+// so run pieces whose boundaries moved drop out; other sessions wait for a
+// subsequent full refresh or journal reconciliation. includeAutomated
 // is passed through to src.ScanEmbeddableUnits: false excludes automated
 // sessions from the scan entirely, so their mirror rows are absent (and, in
 // full mode, reconciled away) rather than merely unembedded. Either mode

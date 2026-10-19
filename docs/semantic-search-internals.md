@@ -279,10 +279,11 @@ instead of being deleted outright, so a same-scan reinsert under the same
 `doc_key` survives via upsert and keeps its `embed_gen` rather than
 re-embedding.
 
-An incremental refresh scans each session newer than the watermark whole and
-removes that session's documents the scan did not produce. A re-sync that
-changes an earlier assistant message's length moves later run boundaries, and
-this drops the superseded pieces.
+An incremental refresh scans each session newer than the watermark whole. For
+sessions that emit a non-deleted unit, it removes documents the scan did not
+produce. A re-sync that changes an earlier assistant message's length moves
+later run boundaries, and this drops the superseded pieces. Other sessions wait
+for a full refresh or journal reconciliation.
 
 An incremental refresh also reads the archive's session deletion journal from
 the revision stored in `vectors.db`. It removes the documents of permanently
