@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 const SESSION_ID = "test-session-xlarge-5500";
 function message(ordinal: number, content: string, extra: Partial<Message> = {}): Message {
   return {

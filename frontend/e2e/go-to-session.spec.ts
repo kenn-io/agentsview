@@ -65,6 +65,10 @@ function message(id: string, content: string) {
 }
 
 test.describe("go to session", () => {
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "wait" });
+  });
+
   test("opens by shortcut, resolves an off-list UUID, and preserves session state", async ({
     page,
   }, testInfo) => {

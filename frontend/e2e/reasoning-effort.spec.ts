@@ -1,5 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 const SESSION = "test-session-duration-showcase";
 
 async function routeMessages(page: Page, effort?: string) {

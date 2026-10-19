@@ -9,6 +9,10 @@ test.describe("Navigation", () => {
     await sp.goto();
   });
 
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "wait" });
+  });
+
   test("keyboard ] navigates to next session", async () => {
     await sp.sessionItems.first().click();
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
