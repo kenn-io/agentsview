@@ -2280,10 +2280,12 @@ first waits for that check. The check moves older plain-text claims, malformed
 claims, or claims from a newer format to a unique
 `telemetry-screen-views.unreadable-*` file and logs the move. Earlier copies
 stay intact. Valid plain-text counts carry over for the current installation.
-If the move fails, the server logs the error and preserves the claims.
-Otherwise, kit starts a fresh file when counts cannot carry over, which can
-count each screen one more time that day. If the file becomes unreadable while
-the server runs, screen reports return 500 until the next startup. Requests
+If the check fails, the server logs the error and continues forwarding reports.
+It tries the check only once per process; restarting the server starts a fresh
+attempt. Forwarded reports can replace malformed or plain-text claims with a
+fresh file, losing their counts. Reports return 500 while the file cannot be
+read or written, or uses a newer format. When counts cannot carry over, kit
+starts a fresh file, which can count each screen one more time that day. Requests
 must use `application/json` with exactly one JSON value; a missing or unknown
 `screen` returns 400. The server reserves each claim before enqueueing its
 event. If reservation storage fails, the request returns 500 without

@@ -204,12 +204,19 @@ func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
 			if tc.name == "setup finished" {
 				var readClaimed bool
 				var readErr error
+				readStarted := make(chan struct{})
 				readDone = make(chan struct{})
 				go func() {
 					defer close(readDone)
 					claimConfig := Config{DataDir: dir, InstallationID: "install-one"}
+					close(readStarted)
 					readClaimed, readErr = claimConfig.SetupFinishedClaimed()
 				}()
+				select {
+				case <-readStarted:
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "setup read did not start")
+				}
 				select {
 				case <-readDone:
 					require.FailNow(t, "setup read returned while the claim was pending", "claimed=%v err=%v", readClaimed, readErr)

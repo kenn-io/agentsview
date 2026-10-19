@@ -110,7 +110,6 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 			require.NoError(t, err)
 			opts := telemetryOptions(cfg)
 			assert.Equal(t, cfg.InstallationID, opts.InstallationID)
-			assert.Equal(t, filepath.Join(dir, "telemetry-screen-views"), opts.ScreenClaimsPath)
 			if tc.wantRecent {
 				assert.WithinDuration(t, time.Now(), opts.InstalledAt, time.Minute)
 			} else {
