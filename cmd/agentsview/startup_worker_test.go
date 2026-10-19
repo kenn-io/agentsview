@@ -573,6 +573,7 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 		"AGENTSVIEW_DATA_DIR=" + cfg.DataDir,
 		"CLAUDE_PROJECTS_DIR=" + claudeDir,
 	}
+	cmd.Env = append(cmd.Env, testRuntimeRootEnv()...)
 	// The Go runtime and SQLite need core system variables on Windows;
 	// passing them through keeps the env minimal without breaking the child.
 	for _, key := range []string{"SYSTEMROOT", "TEMP", "TMP"} {

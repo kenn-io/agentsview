@@ -429,8 +429,9 @@ func TestChromeHostCloseRemovesEndpointFiles(t *testing.T) {
 			}
 
 			if tt.cancelServer {
+				// Cleanup removes the lock file, then the created directory.
 				require.Eventually(t, func() bool {
-					_, err := os.Lstat(socket + ".lock")
+					_, err := os.Lstat(dir)
 					return errors.Is(err, os.ErrNotExist)
 				}, 5*time.Second, 10*time.Millisecond)
 			}

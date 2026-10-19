@@ -86,10 +86,20 @@ func TestMain(m *testing.M) {
 // shared with helper child processes, which inherit the environment. Serve
 // tests with long t.TempDir data dirs put the Chrome host socket there, and
 // removing it at exit cleans up after children that tests kill.
+// testRuntimeRootEnv returns the runtime root variables for a helper child
+// whose environment a test builds by hand.
+func testRuntimeRootEnv() []string {
+	return []string{
+		testRuntimeRootVar + "=" + os.Getenv(testRuntimeRootVar),
+		"XDG_RUNTIME_DIR=" + os.Getenv("XDG_RUNTIME_DIR"),
+	}
+}
+
+// Some helpers strip AGENTSVIEW_* from child environments.
+const testRuntimeRootVar = "AVTEST_RUNTIME_ROOT"
+
 func runWithTestRuntimeRoot(m *testing.M) int {
-	// Some helpers strip AGENTSVIEW_* from child environments.
-	const rootEnv = "AVTEST_RUNTIME_ROOT"
-	if os.Getenv(rootEnv) != "" {
+	if os.Getenv(testRuntimeRootVar) != "" {
 		return m.Run()
 	}
 	root, err := os.MkdirTemp("", "av")
@@ -101,7 +111,7 @@ func runWithTestRuntimeRoot(m *testing.M) int {
 			panic(err)
 		}
 	}()
-	for key, value := range map[string]string{rootEnv: root, "XDG_RUNTIME_DIR": root} {
+	for key, value := range map[string]string{testRuntimeRootVar: root, "XDG_RUNTIME_DIR": root} {
 		if err := os.Setenv(key, value); err != nil {
 			panic(err)
 		}

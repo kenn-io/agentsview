@@ -87,15 +87,17 @@ then click **Sync** again. The extension reconnects when AgentsView restarts.
 Registration is per OS user; the last setup wins. The first connected Chrome
 profile is used until it disconnects.
 
-Chrome reaches AgentsView through a private socket, and setup writes its path
-into the launcher. The socket lives at `<dataDir>/chrome/host.sock`. When that
-path is too long for a Unix socket, AgentsView uses `av-chrome-<hash>/host.sock`
-inside `$XDG_RUNTIME_DIR`, or inside your temp directory (`$TMPDIR`) when
-`$XDG_RUNTIME_DIR` isn't set. That directory must belong to you with mode 0700,
-so a shared `/tmp` doesn't qualify. If no directory qualifies, setup and the
-server report an error; use a shorter data directory or set `$XDG_RUNTIME_DIR`.
-Run setup and the server with the same `$XDG_RUNTIME_DIR` and `$TMPDIR`. The
-server removes the socket and that directory when it stops.
+Most installs need nothing more. Chrome reaches AgentsView through a private
+socket at `<dataDir>/chrome/host.sock`, and setup writes that path into the
+launcher. If your data directory path is too long for a socket, AgentsView puts
+the socket in `av-chrome-<hash>/` inside `$XDG_RUNTIME_DIR`, or inside your temp
+directory when `$XDG_RUNTIME_DIR` isn't set. On macOS and Linux that directory
+must belong to you with mode 0700, so a shared `/tmp` doesn't qualify. If no
+directory qualifies, setup fails and the server logs why; use a shorter data
+directory or set `$XDG_RUNTIME_DIR`. If setup and the server see different
+values of `$XDG_RUNTIME_DIR` or `$TMPDIR`, Chrome can't connect; rerun setup
+after changing either. The server removes the socket and its directory when it
+stops.
 
 Earlier development builds put that socket in `~/av-chrome-<hash>/`. If you ran
 setup with one of them, rerun `agentsview chrome setup` and reload the

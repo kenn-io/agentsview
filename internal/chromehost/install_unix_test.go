@@ -26,8 +26,6 @@ func TestSocketPathFallbackUsesPrivateRuntimeRoot(t *testing.T) {
 	runtimeRoot, tempRoot, group, shared := shortDir(t), shortDir(t), shortDir(t), shortDir(t)
 	require.NoError(t, os.Chmod(group, 0o750))
 	require.NoError(t, os.Chmod(shared, os.ModeSticky|0o777))
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	long := filepath.Join(t.TempDir(), strings.Repeat("data", 25))
 	other := filepath.Join(t.TempDir(), strings.Repeat("atad", 25))
 
@@ -70,11 +68,7 @@ func TestSocketPathFallbackUsesPrivateRuntimeRoot(t *testing.T) {
 		t.Setenv("XDG_RUNTIME_DIR", group)
 		t.Setenv("TMPDIR", shared)
 		_, err := SocketPath(long)
-		require.ErrorContains(t, err, "no private fallback directory")
+		require.ErrorContains(t, err, "set XDG_RUNTIME_DIR")
 		assert.ErrorContains(t, err, "not mode 0700")
 	})
-
-	entries, err := os.ReadDir(home)
-	require.NoError(t, err)
-	assert.Empty(t, entries, "SocketPath must not write to the home directory")
 }

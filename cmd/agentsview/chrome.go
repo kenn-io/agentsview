@@ -252,7 +252,8 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 // to a different socket than this server listens on, such as the
 // ~/av-chrome-<hash> fallback that earlier builds used.
 func warnStaleChromeLauncher(dataDir, socket string) {
-	launcher, err := os.ReadFile(chromehost.LauncherPath(dataDir))
+	path := chromehost.LauncherPath(dataDir)
+	launcher, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
@@ -261,6 +262,6 @@ func warnStaleChromeLauncher(dataDir, socket string) {
 		return
 	}
 	if !chromehost.LauncherTargets(string(launcher), socket, runtime.GOOS) {
-		log.Printf("Chrome host launcher does not use socket %s; rerun `agentsview chrome setup` and reload the extension at chrome://extensions", socket)
+		log.Printf("Chrome sync will not connect: %s points to a different socket than %s. Run `agentsview chrome setup`, then reload the extension at chrome://extensions", path, socket)
 	}
 }

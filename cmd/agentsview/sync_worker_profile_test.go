@@ -64,6 +64,7 @@ func TestSyncWorkerProfilesActualPass(t *testing.T) {
 				"CLAUDE_PROJECTS_DIR=" + cfg.AgentDirs[parser.AgentClaude][0],
 				syncWorkerProfileTraceEnv + "=" + tc.trace,
 			}
+			cmd.Env = append(cmd.Env, testRuntimeRootEnv()...)
 			if value := os.Getenv("SYSTEMROOT"); value != "" {
 				cmd.Env = append(cmd.Env, "SYSTEMROOT="+value)
 			}

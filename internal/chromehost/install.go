@@ -74,9 +74,10 @@ const maxSocketPath = 104
 
 // SocketPath returns <dataDir>/chrome/host.sock. When that path is too long
 // for a Unix socket, it returns av-chrome-<hash>/host.sock under the first
-// fallback root that is private to the current user: $XDG_RUNTIME_DIR, then
-// the temp directory ($TMPDIR on macOS and Linux). Shared directories such as
-// /tmp fail the private check, so the socket never lands in one.
+// usable fallback root: $XDG_RUNTIME_DIR, then the temp directory. On Unix the
+// root must be private to the current user, so a shared /tmp never qualifies.
+// Windows skips that check: a per-user %TEMP% inherits its access list and
+// never passes it, and ServeChromeHost still locks down av-chrome-<hash>.
 func SocketPath(dataDir string) (string, error) {
 	dir, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -99,15 +100,18 @@ func SocketPath(dataDir string) (string, error) {
 			rejected = append(rejected, fmt.Errorf("%s is too long for a socket path", root))
 			continue
 		}
-		if err := safefileio.ValidatePrivateDir(root); err != nil {
-			rejected = append(rejected, err)
-			continue
+		if runtime.GOOS != "windows" {
+			if err := safefileio.ValidatePrivateDir(root); err != nil {
+				rejected = append(rejected, err)
+				continue
+			}
 		}
 		return fallback, nil
 	}
 	return "", fmt.Errorf(
-		"chrome socket path %s exceeds the Unix socket path limit and no private fallback directory is available; "+
-			"use a shorter data directory or set XDG_RUNTIME_DIR to a short directory with mode 0700: %w",
+		"the data directory path is too long for the Chrome socket. "+
+			"Use a shorter data directory, or set XDG_RUNTIME_DIR to a directory you own with mode 0700.\n"+
+			"Socket path: %s\nFallback directories that did not qualify:\n%w",
 		socket, errors.Join(rejected...),
 	)
 }
