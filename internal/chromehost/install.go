@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"go.kenn.io/kit/safefileio"
 )
 
 const NativeHost = "io.kenn.agentsview"
@@ -43,29 +45,69 @@ func LauncherPath(dataDir string) string {
 
 func BuildLauncher(executable, socket, platform string) string {
 	if platform == "windows" {
-		return "@echo off\r\n\"" + strings.ReplaceAll(executable, "%", "%%") + "\" chrome-host --socket \"" + strings.ReplaceAll(socket, "%", "%%") + "\"\r\n"
+		return "@echo off\r\n" + launcherArg(executable, platform) + launcherSocketArg(socket, platform) + "\r\n"
 	}
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-	return "#!/bin/sh\nexec " + quote(executable) + " chrome-host --socket " + quote(socket) + "\n"
+	return "#!/bin/sh\nexec " + launcherArg(executable, platform) + launcherSocketArg(socket, platform) + "\n"
 }
 
+// LauncherTargets reports whether a launcher written by BuildLauncher relays
+// to socket. Setup embeds the socket path, so a launcher from an older setup
+// can point at a path the server no longer uses.
+func LauncherTargets(launcher, socket, platform string) bool {
+	return strings.Contains(launcher, launcherSocketArg(socket, platform))
+}
+
+func launcherSocketArg(socket, platform string) string {
+	return " chrome-host --socket " + launcherArg(socket, platform)
+}
+
+func launcherArg(s, platform string) string {
+	if platform == "windows" {
+		return "\"" + strings.ReplaceAll(s, "%", "%%") + "\""
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+// maxSocketPath is macOS's sockaddr_un path limit, the smallest supported,
+// at 104 bytes including NUL.
+const maxSocketPath = 104
+
+// SocketPath returns <dataDir>/chrome/host.sock. When that path is too long
+// for a Unix socket, it returns av-chrome-<hash>/host.sock under the first
+// fallback root that is private to the current user: $XDG_RUNTIME_DIR, then
+// the temp directory ($TMPDIR on macOS and Linux). Shared directories such as
+// /tmp fail the private check, so the socket never lands in one.
 func SocketPath(dataDir string) (string, error) {
 	dir, err := filepath.Abs(dataDir)
 	if err != nil {
 		return "", err
 	}
 	socket := filepath.Join(dir, "chrome", "host.sock")
-	// macOS has the smallest supported sockaddr_un path, at 104 bytes including NUL.
-	if len(socket) >= 104 {
-		root, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		digest := sha256.Sum256([]byte(dir))
-		socket = filepath.Join(root, fmt.Sprintf("av-chrome-%x", digest[:8]), "host.sock")
-		if len(socket) >= 104 {
-			return "", errors.New("chrome socket path exceeds the Unix socket path limit")
-		}
+	if len(socket) < maxSocketPath {
+		return socket, nil
 	}
-	return socket, nil
+	digest := sha256.Sum256([]byte(dir))
+	name := fmt.Sprintf("av-chrome-%x", digest[:8])
+	var rejected []error
+	for _, root := range []string{os.Getenv("XDG_RUNTIME_DIR"), os.TempDir()} {
+		if root == "" {
+			continue
+		}
+		root = filepath.Clean(root)
+		fallback := filepath.Join(root, name, "host.sock")
+		if len(fallback) >= maxSocketPath {
+			rejected = append(rejected, fmt.Errorf("%s is too long for a socket path", root))
+			continue
+		}
+		if err := safefileio.ValidatePrivateDir(root); err != nil {
+			rejected = append(rejected, err)
+			continue
+		}
+		return fallback, nil
+	}
+	return "", fmt.Errorf(
+		"chrome socket path %s exceeds the Unix socket path limit and no private fallback directory is available; "+
+			"use a shorter data directory or set XDG_RUNTIME_DIR to a short directory with mode 0700: %w",
+		socket, errors.Join(rejected...),
+	)
 }

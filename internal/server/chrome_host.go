@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/json/v2"
 	"errors"
+	"io/fs"
 	"log"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -28,31 +30,72 @@ type chromeHost struct {
 	syncMu     sync.Mutex
 	mu         sync.Mutex
 	connection *chromeConnection
+	// stop closes the endpoint and removes its files; nil until served.
+	stop   func()
+	closed bool
 }
 
 // ServeChromeHost binds the private endpoint before starting its accept loop.
+// The endpoint closes when ctx ends or the server shuts down. Closing removes
+// the socket, its lock file, and the socket directory if this call created it.
 func (s *Server) ServeChromeHost(ctx context.Context, socketPath string) error {
 	if _, local := s.db.(*db.DB); !local || s.db.ReadOnly() {
 		return nil
 	}
-	if err := safefileio.EnsurePrivateDir(filepath.Dir(socketPath)); err != nil {
+	dir := filepath.Dir(socketPath)
+	_, err := os.Lstat(dir)
+	createdDir := errors.Is(err, fs.ErrNotExist)
+	if err := safefileio.EnsurePrivateDir(dir); err != nil {
 		return err
 	}
 	listener, err := daemon.Listen(ctx, daemon.Endpoint{Network: daemon.NetworkUnix, Address: socketPath})
 	if err != nil {
 		return err
 	}
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
+	stop := sync.OnceFunc(func() {
 		s.chrome.mu.Lock()
+		s.chrome.closed = true
 		if s.chrome.connection != nil {
 			_ = s.chrome.connection.Close()
 		}
 		s.chrome.mu.Unlock()
-	}()
+		// Closing a listener that net.Listen created unlinks its socket.
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("Chrome host close: %v", err)
+		}
+		removeChromeHostFiles(socketPath, createdDir)
+	})
+	s.chrome.mu.Lock()
+	s.chrome.stop = stop
+	s.chrome.mu.Unlock()
+	context.AfterFunc(ctx, stop)
 	go s.acceptChromeHost(ctx, listener)
 	return nil
+}
+
+func (h *chromeHost) shutdown() {
+	h.mu.Lock()
+	stop := h.stop
+	h.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+func removeChromeHostFiles(socketPath string, removeDir bool) {
+	if err := os.Remove(socketPath + ".lock"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("Chrome host cleanup: %v", err)
+	}
+	if !removeDir {
+		return
+	}
+	dir := filepath.Dir(socketPath)
+	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// chrome setup may have written into a directory this server created.
+		if entries, readErr := os.ReadDir(dir); readErr != nil || len(entries) == 0 {
+			log.Printf("Chrome host cleanup: %v", err)
+		}
+	}
 }
 
 func (s *Server) acceptChromeHost(ctx context.Context, listener net.Listener) {
@@ -72,7 +115,7 @@ func (s *Server) acceptChromeHost(ctx context.Context, listener net.Listener) {
 		}
 		current := &chromeConnection{Conn: conn, pending: make(map[string]chan claudeAISyncResult)}
 		s.chrome.mu.Lock()
-		if ctx.Err() != nil {
+		if s.chrome.closed {
 			s.chrome.mu.Unlock()
 			_ = conn.Close()
 			return

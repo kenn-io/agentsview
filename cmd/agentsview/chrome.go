@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -245,4 +246,21 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	return folder, nil
+}
+
+// warnStaleChromeLauncher logs when chrome setup wrote a launcher that relays
+// to a different socket than this server listens on, such as the
+// ~/av-chrome-<hash> fallback that earlier builds used.
+func warnStaleChromeLauncher(dataDir, socket string) {
+	launcher, err := os.ReadFile(chromehost.LauncherPath(dataDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		log.Printf("Chrome host launcher: %v", err)
+		return
+	}
+	if !chromehost.LauncherTargets(string(launcher), socket, runtime.GOOS) {
+		log.Printf("Chrome host launcher does not use socket %s; rerun `agentsview chrome setup` and reload the extension at chrome://extensions", socket)
+	}
 }

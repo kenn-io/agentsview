@@ -286,15 +286,14 @@ func TestServeChromeHostRequiresSetup(t *testing.T) {
 }
 
 func TestChromeLongDataDirSetupAndServe(t *testing.T) {
+	root, err := os.MkdirTemp("", "av") //nolint:usetesting // Keep the socket path below macOS's limit.
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
+	t.Setenv("XDG_RUNTIME_DIR", root)
 	dir := filepath.Join(t.TempDir(), strings.Repeat("data", 25))
 	socket, err := chromehost.SocketPath(dir)
 	require.NoError(t, err)
-	defer os.RemoveAll(filepath.Dir(socket))
-	assert.Less(t, len(socket), 104)
-	assert.NotEqual(t, filepath.Join(dir, "chrome", "host.sock"), socket)
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, home, filepath.Dir(filepath.Dir(socket)))
+	assert.Equal(t, root, filepath.Dir(filepath.Dir(socket)))
 	t.Setenv("CHROME_CONFIG_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
@@ -308,16 +307,13 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	defer cancel()
 	run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve"})
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, srv.Shutdown(t.Context()))
-		require.ErrorIs(t, <-run.ServeErrCh, http.ErrServerClosed)
-	}()
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
 	defer conn.Close()
-	again, err := chromehost.SocketPath(dir)
-	require.NoError(t, err)
-	assert.Equal(t, socket, again)
+
+	require.NoError(t, srv.Shutdown(t.Context()))
+	require.ErrorIs(t, <-run.ServeErrCh, http.ErrServerClosed)
+	assert.NoDirExists(t, filepath.Dir(socket), "shutdown must remove the fallback socket directory")
 }
 
 func TestChromeSyncResults(t *testing.T) {

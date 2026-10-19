@@ -79,7 +79,34 @@ func TestMain(m *testing.M) {
 	}
 	// Match the default daemon fixtures; replacement tests set their own versions.
 	version = "test"
-	os.Exit(m.Run())
+	os.Exit(runWithTestRuntimeRoot(m))
+}
+
+// runWithTestRuntimeRoot points XDG_RUNTIME_DIR at one short private directory
+// shared with helper child processes, which inherit the environment. Serve
+// tests with long t.TempDir data dirs put the Chrome host socket there, and
+// removing it at exit cleans up after children that tests kill.
+func runWithTestRuntimeRoot(m *testing.M) int {
+	// Some helpers strip AGENTSVIEW_* from child environments.
+	const rootEnv = "AVTEST_RUNTIME_ROOT"
+	if os.Getenv(rootEnv) != "" {
+		return m.Run()
+	}
+	root, err := os.MkdirTemp("", "av")
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			panic(err)
+		}
+	}()
+	for key, value := range map[string]string{rootEnv: root, "XDG_RUNTIME_DIR": root} {
+		if err := os.Setenv(key, value); err != nil {
+			panic(err)
+		}
+	}
+	return m.Run()
 }
 
 func TestPGRawRuntimeReadinessFailureCleansBeforeReturn(t *testing.T) {

@@ -109,6 +109,7 @@ func startChromeHost(ctx context.Context, dataDir string, srv *server.Server) er
 	if err != nil {
 		return err
 	}
+	warnStaleChromeLauncher(dataDir, socket)
 	return srv.ServeChromeHost(ctx, socket)
 }
 

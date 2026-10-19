@@ -1454,6 +1454,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for range shutdownCount {
 		err = errors.Join(err, <-shutdownErrors)
 	}
+	s.chrome.shutdown()
 	s.mu.Lock()
 	engine := s.onDemandEngine
 	s.onDemandEngine = nil

@@ -87,12 +87,25 @@ then click **Sync** again. The extension reconnects when AgentsView restarts.
 Registration is per OS user; the last setup wins. The first connected Chrome
 profile is used until it disconnects.
 
+Chrome reaches AgentsView through a private socket, and setup writes its path
+into the launcher. The socket lives at `<dataDir>/chrome/host.sock`. When that
+path is too long for a Unix socket, AgentsView uses `av-chrome-<hash>/host.sock`
+inside `$XDG_RUNTIME_DIR`, or inside your temp directory (`$TMPDIR`) when
+`$XDG_RUNTIME_DIR` isn't set. That directory must belong to you with mode 0700,
+so a shared `/tmp` doesn't qualify. If no directory qualifies, setup and the
+server report an error; use a shorter data directory or set `$XDG_RUNTIME_DIR`.
+Run setup and the server with the same `$XDG_RUNTIME_DIR` and `$TMPDIR`. The
+server removes the socket and that directory when it stops.
+
+Earlier development builds put that socket in `~/av-chrome-<hash>/`. If you ran
+setup with one of them, rerun `agentsview chrome setup` and reload the
+extension; until you do, the server logs a warning at startup and Chrome stays
+disconnected. You can delete the old `~/av-chrome-<hash>/` directories.
+
 There's no removal command. Remove the extension at `chrome://extensions`, then
 delete `<dataDir>/chrome/extension/` and the launcher,
 `<dataDir>/chrome/host.cmd` on Windows or `<dataDir>/chrome/host` on macOS and
-Linux. On macOS and Linux, delete `~/av-chrome-<hash>/` too if setup used that
-socket fallback directory. Also delete the native host registration for your
-platform:
+Linux. Also delete the native host registration for your platform:
 
 - Windows: `<dataDir>/chrome/io.kenn.agentsview.json` and the registry key
   `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`.
