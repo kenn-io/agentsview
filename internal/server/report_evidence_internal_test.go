@@ -2,12 +2,13 @@ package server
 
 import (
 	"encoding/json/v2"
+	"strings"
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
-	"strings"
-	"testing"
 )
 
 func TestReportEvidenceArchiveToGenerator(t *testing.T) {
@@ -28,6 +29,15 @@ func TestReportEvidenceArchiveToGenerator(t *testing.T) {
 		s.RelationshipType = "root"
 		s.DataVersion = 1
 		require.NoError(t, srv.db.UpsertSession(t.Context(), s))
+		require.NoError(t, srv.db.(*db.DB).UpdateSessionSignals(t.Context(), s.ID, db.SessionSignalUpdate{
+			HasContextData:     s.HasContextData,
+			ContextPressureMax: s.ContextPressureMax,
+		}))
+		stored, err := srv.db.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		require.Equal(t, s.HasContextData, stored.HasContextData)
+		require.Equal(t, s.ContextPressureMax, stored.ContextPressureMax)
 	}
 	payload, hash, _, err := srv.buildCannedPayload(t.Context(), insight.CannedWorkflowHygieneReview,
 		generateInsightRequest{DateFrom: "2025-01-15", DateTo: "2025-01-15", Agent: "claude"},

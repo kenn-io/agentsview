@@ -60,42 +60,42 @@ type cannedTemplate struct {
 var cannedTemplates = map[CannedKind]cannedTemplate{
 	CannedPromptMaturityReview: {
 		ID:      "prompt_maturity_review",
-		Version: "2026-05-26",
+		Version: "2026-10-19",
 		Title:   "Prompt Maturity Review",
 		Focus: "Review prompt maturity using only the supplied deterministic aggregates and Coach-derived prompt maturity summary. " +
 			"Focus on missing constraints, unclear starts, repeated asks, success criteria, and verification gaps.",
 	},
 	CannedContextSetupReview: {
 		ID:      "context_setup_review",
-		Version: "2026-05-27",
+		Version: "2026-10-19",
 		Title:   "Context Setup Review",
 		Focus: "Review context setup using only the supplied deterministic aggregates and Coach-derived spec/context signals. " +
 			"Focus on compactions, mid-task context loss, spec-driven starts, missing code context, and context pressure when pressure data is available.",
 	},
 	CannedWorkflowHygieneReview: {
 		ID:      "workflow_hygiene_review",
-		Version: "2026-05-26",
+		Version: "2026-10-19",
 		Title:   "Workflow Hygiene Review",
 		Focus: "Review workflow hygiene using only the supplied deterministic aggregates and Coach-derived intent/workflow summary. " +
 			"Focus on outcomes, abandonment, retries, repeated workflows, compactions, and sessions likely needing tighter loops.",
 	},
 	CannedToolReliabilityReview: {
 		ID:      "tool_reliability_review",
-		Version: "2026-05-26",
+		Version: "2026-10-19",
 		Title:   "Tool Reliability Review",
 		Focus: "Diagnose tool reliability using only the supplied deterministic aggregates. " +
 			"Focus on failure signals, retries, edit churn, and likely process or environment causes.",
 	},
 	CannedModelCostReview: {
 		ID:      "model_cost_review",
-		Version: "2026-05-26",
+		Version: "2026-10-19",
 		Title:   "Model and Cost Hygiene Review",
 		Focus: "Review model and cost hygiene using only the supplied deterministic aggregates. " +
 			"Focus on token mix, cache behavior, expensive sessions, and cost controls.",
 	},
 	CannedInstructionOpportunityReview: {
 		ID:      "instruction_opportunity_review",
-		Version: "2026-05-26",
+		Version: "2026-10-19",
 		Title:   "Instruction Opportunity Review",
 		Focus: "Suggest instruction, skill, or process improvements using only the supplied deterministic aggregates and Coach-derived repeated workflow clusters. " +
 			"Label every suggestion as a draft opportunity, not a confirmed policy or installed skill.",
@@ -176,16 +176,27 @@ type CannedEvidenceRef struct {
 	Description string `json:"description"`
 }
 
+// CannedContextCoverage distinguishes token telemetry from derived pressure.
+// A missing pressure value does not imply missing context tokens.
+type CannedContextCoverage struct {
+	SessionCount                int `json:"session_count"`
+	SessionsWithContextTokens   int `json:"sessions_with_context_tokens"`
+	SessionsWithContextPressure int `json:"sessions_with_context_pressure"`
+}
+
 // CannedCoachSummary mirrors the AI Engineer Coach insight families
 // with deterministic agentsview data. These fields are LLM inputs only;
 // they are never written back to canonical session scores or signals.
 type CannedCoachSummary struct {
-	Source             string                       `json:"source"`
-	SessionCount       int                          `json:"session_count"`
-	IntentDistribution map[string]int               `json:"intent_distribution"`
-	SpecDriven         CannedCoachSpecDriven        `json:"spec_driven"`
-	PromptMaturity     CannedCoachPromptMaturity    `json:"prompt_maturity"`
-	WorkflowClusters   []CannedCoachWorkflowCluster `json:"workflow_clusters,omitempty"`
+	ScoredPromptSessions   int                          `json:"scored_prompt_sessions"`
+	ExcludedPromptSessions int                          `json:"excluded_prompt_sessions"`
+	ContextCoverage        CannedContextCoverage        `json:"context_coverage"`
+	Source                 string                       `json:"source"`
+	SessionCount           int                          `json:"session_count"`
+	IntentDistribution     map[string]int               `json:"intent_distribution"`
+	SpecDriven             CannedCoachSpecDriven        `json:"spec_driven"`
+	PromptMaturity         CannedCoachPromptMaturity    `json:"prompt_maturity"`
+	WorkflowClusters       []CannedCoachWorkflowCluster `json:"workflow_clusters,omitempty"`
 }
 
 type CannedCoachSpecDriven struct {
@@ -385,6 +396,9 @@ func BuildCannedPrompt(
 	b.WriteString("- Copy evidence_ref IDs exactly; do not invent more specific sub-refs.\n")
 	b.WriteString("- Keep fields concise and action-oriented.\n")
 	b.WriteString("- If evidence is weak or empty, lower confidence and say what deterministic data is missing.\n\n")
+	b.WriteString("- coach.context_coverage counts context-token telemetry separately from derived context pressure over the report cohort. The legacy signals context-health sessions_with_context_data field counts pressure measurements only; never use it to claim that context tokens or supplied context are absent. Missing pressure is unknown, not zero pressure.\n")
+	b.WriteString("- Prompt maturity, intent, spec-driven starts, and workflow clusters use only eligible first-message text: known leading page-context envelopes are removed and automated or empty openers are excluded. State scored_prompt_sessions and excluded_prompt_sessions when discussing coverage; an unknown grade is missing evidence, not failure. These are opener heuristics, not verified human-authorship or full-conversation judgments.\n")
+	b.WriteString("- Canonical quality signals remain unfiltered archive heuristics and can include ambient or automated text. Do not equate those signal counts with human prompting defects. Short approvals can be appropriate after a plan; the aggregate does not establish their conversational context.\n\n")
 	writeCannedKindRules(&b, payload)
 	b.WriteString("Valid evidence_ref IDs for this request:\n")
 	if len(payload.EvidenceRefs) == 0 {
@@ -556,7 +570,7 @@ func NewCannedProvenance(
 		SourceVersions: map[string]string{
 			"signals_analytics": "v1",
 			"usage_analytics":   "v1",
-			"coach_insights":    "AI-Engineering-Coach-inspired.v1",
+			"coach_insights":    "AI-Engineering-Coach-inspired.v2",
 		},
 	}, nil
 }
@@ -648,8 +662,9 @@ func shortHash(hash string) string {
 
 func BuildCannedCoachSummary(sessions []db.Session) *CannedCoachSummary {
 	summary := &CannedCoachSummary{
-		Source:       "AI-Engineering-Coach deterministic insight model",
-		SessionCount: len(sessions),
+		Source:          "AI-Engineering-Coach deterministic insight model",
+		SessionCount:    len(sessions),
+		ContextCoverage: CannedContextCoverage{SessionCount: len(sessions)},
 		IntentDistribution: map[string]int{
 			"Planning":       0,
 			"Implementation": 0,
@@ -668,6 +683,12 @@ func BuildCannedCoachSummary(sessions []db.Session) *CannedCoachSummary {
 	var scoredPrompts int
 	var samples []CannedCoachPromptSample
 	for _, s := range sessions {
+		if s.HasContextData {
+			summary.ContextCoverage.SessionsWithContextTokens++
+		}
+		if s.ContextPressureMax != nil {
+			summary.ContextCoverage.SessionsWithContextPressure++
+		}
 		prompt := firstPromptText(s)
 		if prompt == "" {
 			continue
@@ -705,6 +726,8 @@ func BuildCannedCoachSummary(sessions []db.Session) *CannedCoachSummary {
 				100,
 		)
 	}
+	summary.ScoredPromptSessions = scoredPrompts
+	summary.ExcludedPromptSessions = len(sessions) - scoredPrompts
 	summary.PromptMaturity = buildCoachPromptMaturity(
 		dimensionSums, issueCounts, samples, scoredPrompts,
 	)
@@ -737,7 +760,7 @@ func (d *coachPromptDimensions) add(other coachPromptDimensions) {
 func emptyCoachPromptMaturity() CannedCoachPromptMaturity {
 	return CannedCoachPromptMaturity{
 		Score:       0,
-		Grade:       "F",
+		Grade:       "unknown",
 		Dimensions:  emptyCoachDimensions(),
 		IssueCounts: map[string]int{},
 	}
@@ -1010,10 +1033,24 @@ func coachWorkflowClusterID(key string) string {
 }
 
 func firstPromptText(s db.Session) string {
-	if s.FirstMessage == nil {
+	if s.FirstMessage == nil || s.IsAutomated {
 		return ""
 	}
-	return strings.TrimSpace(*s.FirstMessage)
+	prompt := strings.TrimSpace(*s.FirstMessage)
+	// Strip only complete leading ambient envelopes. Preserve quoted mentions,
+	// malformed envelopes, and short human instructions rather than guessing.
+	if s.Agent == "codex" {
+		const open = "<external_codex_apps_open_page>"
+		const close = "</external_codex_apps_open_page>"
+		for strings.HasPrefix(prompt, open) {
+			_, rest, found := strings.Cut(prompt[len(open):], close)
+			if !found {
+				break
+			}
+			prompt = strings.TrimSpace(rest)
+		}
+	}
+	return prompt
 }
 
 func normalizeCoachPrompt(raw string) string {
@@ -1140,7 +1177,7 @@ func CannedEvidenceRefs(
 		{ID: "signals:score_distribution", Description: "Scored, unscored, average health score, and grade distribution."},
 		{ID: "signals:outcomes", Description: "Outcome and outcome confidence distribution."},
 		{ID: "signals:tool_health", Description: "Tool failure, retry, edit churn, and failure-rate aggregates."},
-		{ID: "signals:context_health", Description: "Compaction, context pressure, and context-data aggregates."},
+		{ID: "signals:context_health", Description: "Compaction and context-pressure aggregates; sessions_with_context_data counts pressure measurements only."},
 		{ID: "signals:trend", Description: "Daily signal trend buckets."},
 	}
 	if len(signals.ByAgent) > 0 {
@@ -1160,6 +1197,8 @@ func CannedEvidenceRefs(
 	}
 	if coach != nil && coach.SessionCount > 0 {
 		refs = append(refs,
+			CannedEvidenceRef{ID: "coach:context_coverage", Description: "Report cohort coverage for context-token telemetry and derived context-pressure measurements, counted separately."},
+			CannedEvidenceRef{ID: "coach:prompt_coverage", Description: "Scored and excluded first-message counts for prompt heuristics."},
 			CannedEvidenceRef{ID: "coach:intent_distribution", Description: "AI Engineer Coach-style deterministic intent classification."},
 			CannedEvidenceRef{ID: "coach:prompt_maturity", Description: "AI Engineer Coach-style prompt maturity dimensions and issue counts."},
 			CannedEvidenceRef{ID: "coach:spec_driven", Description: "AI Engineer Coach-style spec-driven start rate."},
