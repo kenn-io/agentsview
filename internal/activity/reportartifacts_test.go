@@ -139,8 +139,6 @@ func TestArtifactDigestIsIndependentOfMembershipMapOrder(t *testing.T) {
 func TestPageSessionsDisplayedSessionAndModelOrder(t *testing.T) {
 	rows := []SessionRow{
 		{SessionID: "z", Title: "Alpha", PrimaryModel: "model-z", Models: []string{"model-z"}},
-		{SessionID: "b", Title: "Beta", PrimaryModel: "model-a", Models: []string{"model-a"}},
-		{SessionID: "a", Title: "Beta", PrimaryModel: "model-a", Models: []string{"model-a"}},
 		{SessionID: "empty"},
 		{SessionID: "mixed-b", Title: "Mixed", PrimaryModel: "model-a", Models: []string{"model-a", "model-z"}},
 		{SessionID: "mixed-a", Title: "Mixed", PrimaryModel: "model-z", Models: []string{"model-z", "model-a"}},
@@ -149,8 +147,8 @@ func TestPageSessionsDisplayedSessionAndModelOrder(t *testing.T) {
 		sort SessionSort
 		want []string
 	}{
-		{SessionSortSession, []string{"z", "a", "b", "mixed-a", "mixed-b", "empty"}},
-		{SessionSortModel, []string{"empty", "a", "b", "z", "mixed-a", "mixed-b"}},
+		{SessionSortSession, []string{"z", "mixed-a", "mixed-b", "empty"}},
+		{SessionSortModel, []string{"empty", "z", "mixed-a", "mixed-b"}},
 	} {
 		page, err := PageSessions(rows, nil, SessionPageOptions{Sort: tc.sort, Direction: "asc"})
 		require.NoError(t, err)

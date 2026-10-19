@@ -235,13 +235,15 @@ describe("WorktreeMappingRules", () => {
   it("cross-links target projects and shows the derived label for empty projects", async () => {
     dataService.getApiV1DataProjectRules.mockResolvedValue(
       response("remote-host", [
-        rule({ project: "zeta-project" }),
+        rule({ project: "zeta-project", governed_sessions: 10 }),
         rule({
           id: 2,
           path_prefix: "/srv/parent",
           layout: "repo_dot_worktrees",
           project: "",
           original_project: "",
+          governed_sessions: 2,
+          updated_at: "2026-07-05T00:00:00Z",
         }),
       ]),
     );
@@ -259,6 +261,12 @@ describe("WorktreeMappingRules", () => {
     expect(derivedCell?.textContent).toContain("repo.worktrees/branch");
     expect(derivedCell?.querySelector("button")).toBeNull();
     expect(rows[1]?.querySelector("td:nth-child(2)")?.textContent).toBe("zeta-project");
+    const order = () =>
+      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
+    await fireEvent.click(screen.getByRole("button", { name: "Governed sessions" }));
+    expect(order()).toEqual(["/srv/worktrees/example", "/srv/parent"]);
+    await fireEvent.click(screen.getByRole("button", { name: "Updated" }));
+    expect(order()).toEqual(["/srv/parent", "/srv/worktrees/example"]);
   });
 
   it("requests the server default machine and falls back to local_machine", async () => {
@@ -564,36 +572,20 @@ describe("WorktreeMappingRules", () => {
   });
 
   it("shows remembered original labels and confirms delete", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [
-        rule({ governed_sessions: 2 }),
-        rule({
-          id: 2,
-          path_prefix: "/srv/worktrees/other",
-          governed_sessions: 10,
-          updated_at: "2026-07-05T00:00:00Z",
-        }),
-      ]),
-    );
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
     settingsService.deleteApiV1SettingsWorktreeMappingsById.mockResolvedValue(undefined);
     component = mountRules();
     await flush();
 
     expect(document.body.textContent).toContain("branch-label");
-    const order = () =>
-      Array.from(document.querySelectorAll("tbody td:first-child"), (cell) => cell.textContent);
-    await fireEvent.click(screen.getByRole("button", { name: "Governed sessions" }));
-    expect(order()).toEqual(["/srv/worktrees/other", "/srv/worktrees/example"]);
-    await fireEvent.click(screen.getByRole("button", { name: "Updated" }));
-    expect(order()).toEqual(["/srv/worktrees/other", "/srv/worktrees/example"]);
-    await fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]!);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog").textContent).toContain("source files still exist");
     expect(screen.getByRole("dialog").textContent).toContain("Orphaned sessions");
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({
-      id: "2",
+      id: "1",
     });
   });
 

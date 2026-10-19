@@ -233,6 +233,11 @@ describe("ToolImageCleanup", () => {
       payloads: 10,
       stored_bytes: 900,
     });
+    preview.sessions = 4;
+    preview.changed = 4;
+    preview.payloads = 13;
+    preview.stored_bytes = 4996;
+    preview.decoded_bytes = 4096;
     dataService.postApiV1DataStripImagesPreview.mockResolvedValue(preview);
     dataService.postApiV1DataStripImages.mockResolvedValue(reportWithPayloads());
 
