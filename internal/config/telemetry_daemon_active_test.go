@@ -137,27 +137,31 @@ func TestClaimSetupFinished(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.record, string(data))
 	}
+}
 
+func TestSetupFinishedClaimedWaitsForPendingClaim(t *testing.T) {
+	dir := t.TempDir()
 	started, release := make(chan struct{}), make(chan struct{})
 	releaseSend := sync.OnceFunc(func() { close(release) })
-	claimDone := make(chan error, 1)
+	claimDone := make(chan struct{})
+	var claimErr error
 	sendErr := errors.New("queue full")
 	var readDone chan struct{}
 	go func() {
 		claimConfig := Config{DataDir: dir, InstallationID: "install-three"}
-		claimDone <- claimConfig.ClaimSetupFinished(func() error {
+		claimErr = claimConfig.ClaimSetupFinished(func() error {
 			close(started)
 			<-release
 			return sendErr
 		})
+		close(claimDone)
 	}()
 	defer func() {
 		releaseSend()
-		claimErr := <-claimDone
+		<-claimDone
 		if readDone != nil {
 			<-readDone
 		}
-		require.ErrorIs(t, claimErr, sendErr)
 	}()
 	select {
 	case <-started:
@@ -185,7 +189,9 @@ func TestClaimSetupFinished(t *testing.T) {
 	case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows the read does not return while the claim holds the setup record lock
 	}
 	releaseSend()
+	<-claimDone
 	<-readDone
+	require.ErrorIs(t, claimErr, sendErr)
 	require.NoError(t, readErr)
 	assert.False(t, claimed, "a failed send rolls back the reservation the read waited on")
 }
