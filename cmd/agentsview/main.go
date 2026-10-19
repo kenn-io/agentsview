@@ -1482,15 +1482,27 @@ func telemetryCaptureHandler(cfg config.Config, next http.Handler) (handler http
 	if !telemetry.EnabledFromEnv() {
 		return next, func() {}
 	}
-	migrate := stdsync.OnceFunc(func() {
-		if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
-			log.Printf("telemetry screen claims unavailable: %v", err)
-		}
+	migrated := make(chan struct{})
+	startMigration = stdsync.OnceFunc(func() {
+		go func() {
+			defer close(migrated)
+			if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
+				log.Printf("telemetry screen claims unavailable: %v", err)
+			}
+		}()
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		migrate()
+		startMigration()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-migrated:
+		}
+		if r.Context().Err() != nil {
+			return
+		}
 		next.ServeHTTP(w, r)
-	}), func() { go migrate() }
+	}), startMigration
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg config.Config) {
