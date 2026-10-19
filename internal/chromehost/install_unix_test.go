@@ -69,6 +69,7 @@ func TestSocketPathFallbackUsesPrivateRuntimeRoot(t *testing.T) {
 		t.Setenv("TMPDIR", shared)
 		_, err := SocketPath(long)
 		require.ErrorContains(t, err, "set XDG_RUNTIME_DIR")
-		assert.ErrorContains(t, err, "not mode 0700")
+		require.ErrorContains(t, err, "not mode 0700")
+		assert.NotContains(t, err.Error(), "\n", "the serve log prints this as one line")
 	})
 }

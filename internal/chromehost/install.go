@@ -2,7 +2,6 @@ package chromehost
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,7 +88,7 @@ func SocketPath(dataDir string) (string, error) {
 	}
 	digest := sha256.Sum256([]byte(dir))
 	name := fmt.Sprintf("av-chrome-%x", digest[:8])
-	var rejected []error
+	var rejected []string
 	for _, root := range []string{os.Getenv("XDG_RUNTIME_DIR"), os.TempDir()} {
 		if root == "" {
 			continue
@@ -97,21 +96,24 @@ func SocketPath(dataDir string) (string, error) {
 		root = filepath.Clean(root)
 		fallback := filepath.Join(root, name, "host.sock")
 		if len(fallback) >= maxSocketPath {
-			rejected = append(rejected, fmt.Errorf("%s is too long for a socket path", root))
+			rejected = append(rejected, root+" is too long for a socket path")
 			continue
 		}
 		if runtime.GOOS != "windows" {
 			if err := safefileio.ValidatePrivateDir(root); err != nil {
-				rejected = append(rejected, err)
+				rejected = append(rejected, err.Error())
 				continue
 			}
 		}
 		return fallback, nil
 	}
+	advice := "Use a shorter data directory"
+	if runtime.GOOS != "windows" {
+		advice += ", or set XDG_RUNTIME_DIR to a directory you own with mode 0700"
+	}
 	return "", fmt.Errorf(
-		"the data directory path is too long for the Chrome socket. "+
-			"Use a shorter data directory, or set XDG_RUNTIME_DIR to a directory you own with mode 0700.\n"+
-			"Socket path: %s\nFallback directories that did not qualify:\n%w",
-		socket, errors.Join(rejected...),
+		"the data directory path is too long for the Chrome socket %s. %s. "+
+			"Fallback directories that did not qualify: %s",
+		socket, advice, strings.Join(rejected, "; "),
 	)
 }

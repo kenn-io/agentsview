@@ -82,10 +82,6 @@ func TestMain(m *testing.M) {
 	os.Exit(runWithTestRuntimeRoot(m))
 }
 
-// runWithTestRuntimeRoot points XDG_RUNTIME_DIR at one short private directory
-// shared with helper child processes, which inherit the environment. Serve
-// tests with long t.TempDir data dirs put the Chrome host socket there, and
-// removing it at exit cleans up after children that tests kill.
 // testRuntimeRootEnv returns the runtime root variables for a helper child
 // whose environment a test builds by hand.
 func testRuntimeRootEnv() []string {
@@ -98,6 +94,10 @@ func testRuntimeRootEnv() []string {
 // Some helpers strip AGENTSVIEW_* from child environments.
 const testRuntimeRootVar = "AVTEST_RUNTIME_ROOT"
 
+// runWithTestRuntimeRoot points XDG_RUNTIME_DIR at one short private directory
+// shared with helper child processes, which inherit the environment. Serve
+// tests with long t.TempDir data dirs put the Chrome host socket there, and
+// removing it at exit cleans up after children that tests kill.
 func runWithTestRuntimeRoot(m *testing.M) int {
 	if os.Getenv(testRuntimeRootVar) != "" {
 		return m.Run()
