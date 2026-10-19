@@ -157,12 +157,16 @@ func (ix *Index) Build(
 	}
 	corpusChanged := corpusFingerprint != "" &&
 		(!hasCorpusFingerprint || storedCorpusFingerprint != corpusFingerprint)
-	runCap := strconv.Itoa(RunMaxRunes(ix.split.MaxRunes))
-	storedCap, hasCap, err := ix.metaGet(ctx, runMaxRunesMetaKey)
-	if err != nil {
-		return BuildResult{}, fmt.Errorf("reading run cap: %w", err)
+	var runCap string
+	var capChanged bool
+	if ix.spec.Name == "messages" {
+		runCap = strconv.Itoa(RunMaxRunes(ix.split.MaxRunes))
+		storedCap, hasCap, err := ix.metaGet(ctx, runMaxRunesMetaKey)
+		if err != nil {
+			return BuildResult{}, fmt.Errorf("reading run cap: %w", err)
+		}
+		capChanged = !hasCap || storedCap != runCap
 	}
-	capChanged := !hasCap || storedCap != runCap
 	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
 	if capChanged {
 		// A partial reshape must still reconcile fully if the old cap is restored.
@@ -187,8 +191,10 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
-	if err := ix.metaSet(ctx, runMaxRunesMetaKey, runCap); err != nil {
-		return BuildResult{}, fmt.Errorf("storing run cap: %w", err)
+	if ix.spec.Name == "messages" {
+		if err := ix.metaSet(ctx, runMaxRunesMetaKey, runCap); err != nil {
+			return BuildResult{}, fmt.Errorf("storing run cap: %w", err)
+		}
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err

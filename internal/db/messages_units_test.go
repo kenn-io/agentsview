@@ -1,6 +1,7 @@
 package db
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -8,6 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// UncappedRunRunes keeps runs bounded only by user rows, sessions, and sidechains.
+const UncappedRunRunes = math.MaxInt
 
 // scanUnits runs ScanEmbeddableUnits and collects every emitted unit in
 // stream order, failing the test on error.

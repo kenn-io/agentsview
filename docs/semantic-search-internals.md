@@ -500,8 +500,8 @@ Automation gating is deliberately ignored: derivation is structural, so matches
 inside automated sessions still get real ranges. The invariant, pinned by the
 reducer-equivalence test in `internal/db/unit_range_test.go`: derivation at any
 member ordinal of any unit produced by
-`ScanEmbeddableUnits(include_automated = true)` returns exactly that unit's
-`[Ordinal, OrdinalEnd]`.
+an uncapped `ScanEmbeddableUnits(include_automated = true)` scan returns
+exactly that unit's `[Ordinal, OrdinalEnd]`.
 
 `subordinate` for derived rows uses the reducer's formula: session-subordinate
 (`relationship_type IN ('subagent','fork')`, or parent-linked with

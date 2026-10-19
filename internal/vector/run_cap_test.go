@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -159,7 +160,7 @@ func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
 func legacyRunSource(t *testing.T, archive *db.DB) *fakeUnitSource {
 	t.Helper()
 	src := &fakeUnitSource{}
-	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, db.UncappedRunRunes, func(u db.EmbeddableUnit) error {
+	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, math.MaxInt, func(u db.EmbeddableUnit) error {
 		session, err := archive.GetSession(t.Context(), u.SessionID)
 		require.NoError(t, err)
 		require.NotNil(t, session)

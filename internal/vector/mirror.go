@@ -303,7 +303,8 @@ func (ix *Index) Refresh(
 		visited[u.SessionID] = struct{}{}
 		return nil
 	}
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, RunMaxRunes(ix.split.MaxRunes), visitUnit)
+	runCap := RunMaxRunes(ix.split.MaxRunes)
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -315,7 +316,7 @@ func (ix *Index) Refresh(
 		if _, ok := visited[id]; ok {
 			continue
 		}
-		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, RunMaxRunes(ix.split.MaxRunes), visitUnit); err != nil {
+		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); err != nil {
 			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
 		}
 	}
