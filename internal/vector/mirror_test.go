@@ -665,7 +665,7 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	// filter: the original s1/u1 row (endedAt == since) is re-scanned as
 	// unchanged, alongside the newly-added s2/u2 row.
 	assert.Equal(t, RefreshStats{Upserted: 1, Deleted: 0, Unchanged: 1}, stats,
-		"incremental refresh upserts only what the source rescans, never reconciles deletions")
+		"incremental refresh upserts what the source rescans; nothing in this fixture vanished, so nothing is deleted")
 
 	_, ok := readMirrorRow(t, ix, "u:s2:u2")
 	assert.True(t, ok)
