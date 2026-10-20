@@ -404,12 +404,10 @@ func workerResultFromStats(
 }
 
 // Worker lock acquisition waits briefly for a held write lock. The parent
-// released it for this worker, so a holder is usually a probe that checks the
-// lock for an instant; a real second writer still fails once the bound passes.
-var (
-	workerLockWait         = time.Second
-	workerLockRetryInitial = 10 * time.Millisecond
-)
+// released it for this worker, so a holder during the bound is either a
+// transient probe (when no runtime record is visible) or a real second writer.
+// A probe lets go within the bound; a second writer still fails once it passes.
+var workerLockWait = time.Second
 
 // openWorkerWriteDB reuses the daemon's direct-write open path — including the
 // db.write.lock acquisition — but returns errors instead of exiting. Callers
@@ -418,7 +416,7 @@ var (
 // process acquire writer ownership alongside a surviving SQLite connection.
 func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, *writeOwnerLock, error) {
 	policy := backoff.NewExponentialBackOff()
-	policy.InitialInterval = workerLockRetryInitial
+	policy.InitialInterval = reacquireBackoffInitial
 	policy.MaxInterval = reacquireBackoffMax
 	policy.Multiplier = 2
 	type opened struct {

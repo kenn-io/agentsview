@@ -1192,16 +1192,17 @@ func TestSyncWorkerRefusedWhenDaemonHoldsWriteLock(t *testing.T) {
 	_, _, err = openWorkerWriteDB(t.Context(), cfg, nil)
 	require.Error(t, err,
 		"worker must be refused while the daemon still holds the write lock")
+	require.ErrorAs(t, err, new(writeOwnerLockHeldError))
 	assert.ErrorContains(t, err, "write lock")
 }
 
 func shortenWorkerLockWaitForTest(t *testing.T, wait time.Duration) {
 	t.Helper()
-	prevWait, prevInitial := workerLockWait, workerLockRetryInitial
+	prevWait, prevInitial := workerLockWait, reacquireBackoffInitial
 	workerLockWait = wait
-	workerLockRetryInitial = time.Millisecond
+	reacquireBackoffInitial = time.Millisecond
 	t.Cleanup(func() {
-		workerLockWait, workerLockRetryInitial = prevWait, prevInitial
+		workerLockWait, reacquireBackoffInitial = prevWait, prevInitial
 	})
 }
 
@@ -1220,16 +1221,6 @@ func TestSyncWorkerWaitsOutBriefWriteLockHold(t *testing.T) {
 	database, lock, err := openWorkerWriteDB(t.Context(), cfg, nil)
 	require.NoError(t, err)
 	closeWriteDB(database, lock)
-}
-
-func TestSyncWorkerReportsHeldErrorAfterWaitBound(t *testing.T) {
-	dataDir, cfg := writeDBConfigForTest(t)
-	t.Setenv(syncWorkerChildEnvVar, "1")
-	shortenWorkerLockWaitForTest(t, 50*time.Millisecond)
-	holdWriteOwnerLockForTest(t, dataDir)
-
-	_, _, err := openWorkerWriteDB(t.Context(), cfg, nil)
-	require.ErrorAs(t, err, new(writeOwnerLockHeldError))
 }
 
 // A failed writer restoration must be retried, not logged and abandoned:

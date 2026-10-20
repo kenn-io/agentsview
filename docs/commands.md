@@ -551,9 +551,10 @@ write-owner lock before opening SQLite. If another process owns that lock, the
 command refuses. If `agentsview daemon status` shows a daemon, stop it;
 otherwise an offline agentsview command, or an agentsview server whose runtime
 record is missing (for example one started in another PID namespace), holds the
-lock, so wait for it to finish or restart that server. Auto-start reports the
-holder in the same way instead of launching a server that could not open the
-archive.
+lock, so wait for it to finish or restart that server. Auto-start (MCP and CLI
+commands that start a server on their own) reports the holder in the same way
+instead of launching a server that could not open the archive. `daemon start`
+and `serve --background` report the child's failure as before.
 
 ______________________________________________________________________
 
