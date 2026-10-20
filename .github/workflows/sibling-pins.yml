@@ -4,11 +4,10 @@ name: Sibling pins on main
 # while both are open, but it may not merge until every pin is on that
 # sibling's main. See https://github.com/kenn-io/actions/tree/main/sibling-pins.
 #
-# pull_request_target takes this workflow, and so the action's pinned commit,
-# from the target branch. The action reads only the candidate's dependency
-# files. A repository ruleset requires this job, including in merge groups.
+# Use the same permissions as normal pull request CI, including for forks.
+# The action reads only the candidate's dependency files.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, edited]
   merge_group:
     types: [checks_requested]
