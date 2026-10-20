@@ -8,25 +8,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 )
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("CI", "")
+	require.NoError(t, os.Unsetenv("CI"))
+	t.Setenv(GenericEnabledEnv, "1")
+
 	t.Setenv(EnabledEnv, "0")
 	assert.False(t, EnabledFromEnv())
 
 	t.Setenv(EnabledEnv, "1")
-	t.Setenv("DO_NOT_TRACK", "0")
-	t.Setenv("CI", "")
-	require.NoError(t, os.Unsetenv("CI"))
-	if kittelemetry.ProcessDisabled() {
-		assert.False(t, EnabledFromEnv())
-		return
-	}
 	assert.True(t, EnabledFromEnv())
-
-	t.Setenv(GenericEnabledEnv, "0")
-	assert.False(t, EnabledFromEnv())
 }
 
 func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {

@@ -162,6 +162,8 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 				return
 			}
 
+			assert.True(t, jsontext.Value(first).IsValid(), "claims must be JSON before forwarding capture")
+
 			lock := flock.New(path + ".lock")
 			require.NoError(t, lock.Lock())
 			secondStarted, secondDone := make(chan struct{}), make(chan struct{})
@@ -231,53 +233,5 @@ func TestTelemetryScreenClaimsMigration(t *testing.T) {
 		}, 5*time.Second, 10*time.Millisecond, "startup must convert claims without a capture")
 		require.NoError(t, lock.Lock())
 		require.NoError(t, lock.Unlock())
-	})
-	t.Run("capture arrives first and waits for migration", func(t *testing.T) {
-		t.Setenv(telemetry.EnabledEnv, "1")
-		restoreUnsetEnv(t, "CI")
-		t.Setenv("DO_NOT_TRACK", "0")
-		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-		path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
-		require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-		forwarded := make(chan []byte, 1)
-		handler, _ := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-			data, err := os.ReadFile(path)
-			assert.NoError(t, err)
-			forwarded <- data
-		}))
-		lock := flock.New(path + ".lock")
-		require.NoError(t, lock.Lock())
-		captureStarted, captureDone := make(chan struct{}), make(chan struct{})
-		lockHeld := true
-		defer func() {
-			if lockHeld {
-				_ = lock.Unlock()
-			}
-			<-captureDone
-		}()
-		go func() {
-			close(captureStarted)
-			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
-			close(captureDone)
-		}()
-		select {
-		case <-captureStarted:
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "capture did not start")
-		}
-		select {
-		case <-forwarded:
-			require.FailNow(t, "capture reached the forwarding handler while screen claims were locked")
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows capture waits for migration to release the claims lock
-		}
-		require.NoError(t, lock.Unlock())
-		lockHeld = false
-		select {
-		case <-captureDone:
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "capture did not finish after the screen claims lock was released")
-		}
-		result := <-forwarded
-		assert.True(t, jsontext.Value(result).IsValid(), "claims must be JSON before forwarding capture")
 	})
 }
