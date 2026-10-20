@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,9 +163,70 @@ func TestHostedDowngradeRefusesDialogueRelation(t *testing.T) {
 	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
 
-// Dropping a tenant schema must not take pg_trgm, and every other tenant's
-// trigram indexes, with it.
-func TestHostedProvisioningInstallsTrigramOutsideTenantSchema(t *testing.T) {
+// Dropping a tenant or mirror schema must not take pg_trgm, and every other
+// tenant's trigram indexes, with it.
+func TestHostedProvisioningKeepsTrigramInPublic(t *testing.T) {
+	for _, mirror := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mirror installed first %t", mirror), func(t *testing.T) {
+			owner, err := Open(isolatedPGDatabase(t), "public", false)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+			if mirror {
+				_, err = owner.ExecContext(t.Context(), `CREATE SCHEMA mirror; CREATE EXTENSION pg_trgm SCHEMA mirror;
+ CREATE TABLE mirror.messages(content text); CREATE INDEX mirror_content ON mirror.messages USING gin (content mirror.gin_trgm_ops)`)
+				require.NoError(t, err)
+			}
+			require.NoError(t, EnsureHostedTenant(t.Context(), owner, "tenant_a", "tenant-a"))
+			require.NoError(t, EnsureHostedTenant(t.Context(), owner, "tenant_b", "tenant-b"))
+
+			assert.Equal(t, "public", trigramSchema(t, owner))
+			if mirror {
+				_, err = owner.ExecContext(t.Context(), `INSERT INTO mirror.messages VALUES ('relocated')`)
+				require.NoError(t, err, "the mirror's existing index survives relocation")
+				_, err = owner.ExecContext(t.Context(), `DROP SCHEMA mirror CASCADE`)
+				require.NoError(t, err)
+			}
+			_, err = owner.ExecContext(t.Context(), `DROP SCHEMA tenant_a CASCADE`)
+			require.NoError(t, err)
+			var indexed bool
+			require.NoError(t, owner.QueryRowContext(t.Context(), `SELECT to_regclass('tenant_b.idx_messages_dialogue_trgm') IS NOT NULL`).Scan(&indexed))
+			assert.True(t, indexed, "tenant B keeps its dialogue index")
+		})
+	}
+}
+
+// A provisioner that cannot move another owner's extension leaves search
+// unindexed rather than tying tenant indexes to a droppable schema.
+func TestHostedProvisioningSkipsTrigramIndexesItCannotRelocate(t *testing.T) {
+	dsn := isolatedPGDatabase(t)
+	admin, err := Open(dsn, "public", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
+	role := fmt.Sprintf("hosted_trgm_owner_%x", rand.Uint64())
+	_, err = admin.ExecContext(t.Context(), `CREATE SCHEMA mirror; CREATE EXTENSION pg_trgm SCHEMA mirror;
+ CREATE ROLE "`+role+`" LOGIN NOSUPERUSER; GRANT USAGE ON SCHEMA mirror TO "`+role+`"; GRANT CREATE ON DATABASE "`+strings.TrimPrefix(mustParseURL(t, dsn).Path, "/")+`" TO "`+role+`"`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := admin.ExecContext(context.Background(), `DROP OWNED BY "`+role+`" CASCADE; DROP ROLE IF EXISTS "`+role+`"`)
+		assert.NoError(t, err)
+	})
+	ownerDSN, err := appendConnParams(dsn, map[string]string{"user": role, "password": setHostedFixturePassword(t, admin, role)})
+	require.NoError(t, err)
+	owner, err := Open(ownerDSN, "tenant_a", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+
+	require.NoError(t, EnsureHostedTenant(t.Context(), owner, "tenant_a", "tenant-a"))
+	assert.Equal(t, "mirror", trigramSchema(t, owner))
+	var indexed bool
+	require.NoError(t, owner.QueryRowContext(t.Context(), `SELECT to_regclass('tenant_a.idx_messages_dialogue_trgm') IS NOT NULL`).Scan(&indexed))
+	assert.False(t, indexed)
+}
+
+// isolatedPGDatabase returns a DSN for a new database dropped at cleanup, so a
+// test controls whether and where database-wide extensions are installed.
+func isolatedPGDatabase(t *testing.T) string {
+	t.Helper()
 	admin, err := Open(testPGURL(t), "public", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
@@ -176,23 +238,23 @@ func TestHostedProvisioningInstallsTrigramOutsideTenantSchema(t *testing.T) {
 		_, err := admin.ExecContext(context.Background(), `DROP DATABASE IF EXISTS `+database+` WITH (FORCE)`)
 		assert.NoError(t, err)
 	})
-	dsn, err := url.Parse(testPGURL(t))
-	require.NoError(t, err)
+	dsn := mustParseURL(t, testPGURL(t))
 	dsn.Path = "/" + database
-	owner, err := Open(dsn.String(), "tenant_a", false)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
-	require.NoError(t, EnsureHostedTenant(t.Context(), owner, "tenant_a", "tenant-a"))
-	require.NoError(t, EnsureHostedTenant(t.Context(), owner, "tenant_b", "tenant-b"))
+	return dsn.String()
+}
 
-	var extensionSchema string
-	require.NoError(t, owner.QueryRowContext(t.Context(), `SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pg_trgm'`).Scan(&extensionSchema))
-	assert.Equal(t, "public", extensionSchema)
-	_, err = owner.ExecContext(t.Context(), `DROP SCHEMA tenant_a CASCADE`)
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
 	require.NoError(t, err)
-	var indexed bool
-	require.NoError(t, owner.QueryRowContext(t.Context(), `SELECT to_regclass('tenant_b.idx_messages_dialogue_trgm') IS NOT NULL`).Scan(&indexed))
-	assert.True(t, indexed, "tenant B keeps its dialogue index")
+	return parsed
+}
+
+func trigramSchema(t *testing.T, pg *sql.DB) string {
+	t.Helper()
+	var schema string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pg_trgm'`).Scan(&schema))
+	return schema
 }
 
 func TestHostedTenantBoundCustodyRejectsMismatch(t *testing.T) {
