@@ -804,9 +804,11 @@ Troubleshooting:
 ## Privacy
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
-at most once per UTC day while the server runs. On load or focus, the browser
-sends `app_opened` at most once per selected server and UTC day, with claims
-stored in browser local storage.
+at most once per UTC day while the server runs. The browser checks with
+`app_opened` once a day; reloads and focus don't repeat it that day, and a disabled
+reply stops reports and visit tracking. See the
+[telemetry configuration](docs/configuration.md#anonymous-daemon-telemetry) for
+scope and delivery limits.
 The server also sends `setup_finished` once per installation when the archive
 first has a session in the default session list, including orphaned sessions and
 excluding automated sessions and trash. Existing installs with such a session
@@ -825,19 +827,7 @@ empty searches, visible errors, and failed sync attempts. The events include
 session, project, prompt, file path, account, or machine identity. Disable
 telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
 `DO_NOT_TRACK=1`. Only release builds send telemetry, and it stays off in CI and
-Go test binaries. After the server replies that telemetry is disabled, the
-browser stops reports and visit tracking until its first load or focus on a
-later UTC day checks again. Re-enabling telemetry takes effect after that check.
-An unauthorized check or exhausted retries also stop visit tracking and discard
-the current visit's duration until a later check enables tracking. Outcomes
-that occur while reporting is unavailable are dropped.
-
-While a telemetry check is pending, the browser keeps event outcomes in page
-memory for the selected server. It sends them only after that server confirms
-telemetry is enabled and discards them if telemetry is disabled or the page
-closes.
-Switching servers discards the old visit and starts a new tracker immediately
-for the selected server in the same tab.
+Go test binaries.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with

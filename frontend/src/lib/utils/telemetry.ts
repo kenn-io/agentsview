@@ -1,14 +1,11 @@
 import {
   startBrowserTelemetry,
-  type BrowserTelemetryEvent,
   type BrowserTelemetryReporter,
-  type TelemetryReceipt,
-  type VisitOptions,
 } from "@kenn-io/kit-ui/utils/browser-telemetry";
 import {
+  ApiError,
   getGeneratedBase,
-  getServerUrl,
-  getAuthToken,
+  orvalRequest,
   SERVER_URL_CHANGE_EVENT,
   SERVER_URL_KEY,
 } from "../api/runtime.js";
@@ -17,55 +14,41 @@ import { setupVisitEndedReporting } from "./visit-ended.js";
 let reporter: BrowserTelemetryReporter | undefined;
 let currentScreen: string | undefined;
 
-/** Posts one event; a timeout while reading a 202 receipt reaches kit-ui as a transport failure. */
-async function postReceipt(
-  url: string,
-  event: BrowserTelemetryEvent,
-  options: VisitOptions | undefined,
-  token: string,
-): Promise<TelemetryReceipt> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(event),
-      signal: controller.signal,
-    });
-    if (response.status === 401) return response;
-    if (response.status !== 202) {
-      throw new Error(`Telemetry request returned HTTP ${response.status}`);
-    }
-    // The receipt body shares the deadline; malformed JSON is an unreadable receipt.
-    const text = await response.text();
-    try {
-      return { status: 202, data: JSON.parse(text) as unknown };
-    } catch {
-      return { status: 202, data: undefined };
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 /** Owns the selected server's gate and visit tracker for the mounted app. */
 export function setupTelemetryReporting(): () => void {
   let stopVisit: (() => void) | undefined;
   const start = () => {
     if (reporter) return;
     const route = `${getGeneratedBase()}/api/v1/telemetry/events`;
-    const server = getServerUrl();
     reporter = startBrowserTelemetry({
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${route}`,
-      post: (url, event, options) =>
-        Promise.resolve().then(() => postReceipt(url, event, options, getAuthToken(server))),
+      post: (_url, event, options) =>
+        Promise.resolve().then(async () => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10_000);
+          try {
+            const response = await orvalRequest("/api/v1/telemetry/events", {
+              ...options,
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(event),
+              signal: controller.signal,
+            });
+            if (response.status !== 202) {
+              throw new ApiError(response.status, `Unexpected telemetry HTTP ${response.status}`);
+            }
+            // Keep the deadline active while kit-ui reads the receipt body.
+            return response;
+          } catch (error) {
+            clearTimeout(timeout);
+            if (error instanceof ApiError && error.status === 401) {
+              return { status: 401, data: undefined };
+            }
+            throw error;
+          }
+        }),
     });
     stopVisit = setupVisitEndedReporting(reporter);
     if (currentScreen !== undefined) reporter.reportScreen(currentScreen);
@@ -95,7 +78,6 @@ export function setupTelemetryReporting(): () => void {
 }
 
 export type TelemetryEvent =
-  | "app_opened"
   | "visit_ended"
   | "screen_viewed"
   | "search_run"

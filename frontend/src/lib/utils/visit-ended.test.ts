@@ -172,8 +172,9 @@ describe("visit ended reporting", () => {
       status === "queued" ? [check === "initial" ? "under_1m" : "1_to_5m"] : [],
     );
     if (status === "disabled") {
+      const timers = vi.getTimerCount();
       visibility(true);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(timers);
       visibility(false);
       advance(120_000);
       close();

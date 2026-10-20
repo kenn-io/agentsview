@@ -2236,9 +2236,12 @@ The automatic outbound requests are update checks and anonymous telemetry:
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 each UTC day it runs. Restarts and other servers sharing the data directory do
 not send another ping that day. The web UI also reports an anonymous
-`app_opened` event on load or focus, at most once per selected server and UTC
-day. These claims live in browser local storage. The server sends it to PostHog
-with the same fields and opt-out as the ping. The browser never contacts PostHog.
+`app_opened` event on load or focus for each selected server and UTC day;
+reloads and focus don't repeat it that day. These claims live in browser local
+storage. The server sends it to PostHog with the same fields and opt-out as the
+ping. The browser never contacts PostHog.
+Two tabs whose initial checks overlap can each send `app_opened`, such as when
+a browser restores several tabs together.
 After a disabled receipt, the browser stops sending reports and tracking visits.
 It checks again on its first load or focus on a later UTC day. Re-enabling
 telemetry takes effect after that check.
@@ -2294,9 +2297,7 @@ each screen once per installation per UTC day, across tabs and server restarts.
 The browser also deduplicates screen reports per selected server and local
 storage, so separate browsers can check the same installation independently.
 The server stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. It retains the 35 most recently accepted UTC dates per
-installation, event, and key. Rolling the clock back to an evicted date can
-count it again. When telemetry is enabled, the server checks the file
+installation identity. When telemetry is enabled, the server checks the file
 once in the background after it starts serving; a web UI report that arrives
 first waits for that check. The check moves older plain-text claims, malformed
 claims, or claims from a newer format to a unique
@@ -2308,9 +2309,6 @@ attempt. Forwarded reports can replace malformed or plain-text claims with a
 fresh file, losing their counts. Reports return 500 while the file cannot be
 read or written, or uses a newer format. When counts cannot carry over, kit
 starts a fresh file, which can count each screen one more time that day.
-Processes sharing the data directory should use the same AgentsView version.
-Mixing versions can let an older writer clear a claim a newer writer reused
-after a clock rollback, allowing a screen to count twice.
 Requests must use `application/json` with exactly one JSON value; a missing or
 unknown `screen` returns 400. The server reserves each claim before enqueueing
 its event. If reservation storage fails, the request returns 500 without

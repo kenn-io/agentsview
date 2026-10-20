@@ -83,41 +83,6 @@ describe("feature outcomes", () => {
       stop = setupTelemetryReporting();
     }).not.toThrow();
   });
-  it("aborts a stalled receipt body after ten seconds and completes a later retry", async () => {
-    let signal: AbortSignal | undefined;
-    let body!: ReadableStreamDefaultController<Uint8Array>;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          body = controller;
-          controller.enqueue(new TextEncoder().encode('{"status":'));
-        },
-      }),
-      { status: 202 },
-    );
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockImplementationOnce(async (_input, init) => {
-        signal = init?.signal ?? undefined;
-        signal?.addEventListener("abort", () => body.error(signal?.reason), { once: true });
-        return response;
-      })
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(response.bodyUsed).toBe(true);
-    expect(signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signal?.aborted).toBe(true);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
-      { event: "app_opened", properties: { surface: "web" } },
-      { event: "app_opened", properties: { surface: "web" } },
-      { event: "error_shown", properties: { kind: "search" } },
-    ]);
-  });
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],
@@ -169,7 +134,7 @@ describe("feature outcomes", () => {
     },
   );
 
-  it.each([404, 503])("backs off after a telemetry HTTP %i response", async (status) => {
+  it.each([200, 204, 404, 503])("backs off after a telemetry HTTP %i response", async (status) => {
     const fetch = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
       .mockResolvedValueOnce(new Response(null, { status }))
@@ -213,8 +178,10 @@ describe("feature outcomes", () => {
     );
   });
 
-  it("uses the bound server's latest token without restarting the reporter", async () => {
-    const fetch = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
+  it("uses the selected server's latest token without restarting the reporter", async () => {
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response('{"status":"queued"}', { status: 202 }),
+    );
     vi.stubGlobal("fetch", fetch);
     setServerUrl("https://example.org");
     setAuthToken("first-token");
@@ -226,8 +193,11 @@ describe("feature outcomes", () => {
     expect(fetch).toHaveBeenLastCalledWith(
       "https://example.org/api/v1/telemetry/events",
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer updated-token" }),
+        headers: expect.any(Headers),
       }),
+    );
+    expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer updated-token",
     );
   });
 

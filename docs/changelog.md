@@ -183,10 +183,7 @@ The latest release is
 
 **Improvements**
 
-- The browser sends `app_opened` at most once per selected server and UTC day.
-  With telemetry off, it stops tracking visits after the daily check.
-  A new UTC day's check can hold the end of a long visit until an enabled receipt
-  arrives. Closing the page before then can lose that event.
+- Browser telemetry stays quiet after a disabled reply, and reloads and focus don't repeat the day's app-open check. See [telemetry configuration](https://agentsview.io/docs/configuration/#anonymous-daemon-telemetry) for limits.
 - Load Usage totals, top sessions and model comparison faster on large archives.
 - The Usage page starts its model comparison together with totals instead of
   waiting for them. On an archive of 24,000 sessions the page finished in 4.0

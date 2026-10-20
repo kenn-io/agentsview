@@ -1959,11 +1959,13 @@ describe("App telemetry", () => {
       router.navigate(route);
       await flushEffects();
     }
-    expect(postedFor("screen_viewed")).toEqual([
-      { screen: "recall", surface: "web" },
-      { screen: "sessions", surface: "web" },
-      { screen: "usage", surface: "web" },
-    ]);
+    await vi.waitFor(() =>
+      expect(postedFor("screen_viewed")).toEqual([
+        { screen: "recall", surface: "web" },
+        { screen: "sessions", surface: "web" },
+        { screen: "usage", surface: "web" },
+      ]),
+    );
   });
   async function open(id: string | null) {
     router.route = "sessions";
