@@ -74,13 +74,7 @@ func (p *antigravityCLIProvider) ChangedPathRelevance(
 			continue
 		}
 		rel, ok := relUnder(root, filepath.Clean(req.Path))
-		if !ok || filepath.Dir(rel) != "conversations" {
-			continue
-		}
-		name := filepath.Base(rel)
-		if strings.HasSuffix(name, ".db-shm") &&
-			IsValidSessionID(strings.TrimSuffix(name, ".db-shm")) {
-			// A reader can rewrite the WAL index without changing session data.
+		if ok && antigravityConversationIndexPath(rel) {
 			return ChangedPathNonData, nil
 		}
 	}

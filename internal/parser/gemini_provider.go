@@ -72,20 +72,23 @@ func (p *geminiProvider) ChangedPathRelevance(
 	if err := ctx.Err(); err != nil {
 		return ChangedPathUnclassified, err
 	}
-	nestedCLI := false
+	// Gemini reads only chat recordings under tmp/ and two root metadata
+	// files. Everything else under a root, such as the nested Antigravity
+	// trees, belongs to other providers or to nobody.
+	outside := false
 	for _, root := range p.sources.roots {
-		rel, ok := relUnder(root, filepath.Clean(req.Path))
+		path := filepath.Clean(req.Path)
+		rel, ok := relUnder(root, path)
 		if !ok {
 			continue
 		}
-		if rel != "antigravity-cli" &&
-			!strings.HasPrefix(rel, "antigravity-cli"+string(filepath.Separator)) {
-			// An explicitly configured inner Gemini root still owns its inputs.
+		if rel == "tmp" || strings.HasPrefix(rel, "tmp"+string(filepath.Separator)) ||
+			geminiProjectMetadataPath(root, path) {
 			return ChangedPathUnclassified, nil
 		}
-		nestedCLI = true
+		outside = true
 	}
-	if nestedCLI {
+	if outside {
 		return ChangedPathNonData, nil
 	}
 	return ChangedPathUnclassified, nil

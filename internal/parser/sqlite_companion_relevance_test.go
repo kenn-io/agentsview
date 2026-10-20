@@ -12,7 +12,16 @@ import (
 func TestSQLiteCompanionChangedPathRelevance(t *testing.T) {
 	root := t.TempDir()
 	cli := filepath.Join(root, "antigravity-cli")
+	ide := filepath.Join(root, "antigravity")
 	inner := filepath.Join(cli, "another-gemini-home")
+	cliConv := filepath.Join(cli, "conversations")
+	ideConv := filepath.Join(ide, "conversations")
+	chat := filepath.Join("tmp", "project", "chats", "session-fixture.json")
+	summaries := filepath.Join(ide, AntigravitySummariesDBName)
+	const (
+		nonData = ChangedPathNonData
+		unknown = ChangedPathUnclassified
+	)
 	for _, tc := range []struct {
 		name  string
 		agent AgentType
@@ -20,16 +29,92 @@ func TestSQLiteCompanionChangedPathRelevance(t *testing.T) {
 		path  string
 		want  ChangedPathRelevance
 	}{
-		{"cli_shm", AgentAntigravityCLI, []string{cli}, filepath.Join(cli, "conversations", "session.db-shm"), ChangedPathNonData},
-		{"cli_db", AgentAntigravityCLI, []string{cli}, filepath.Join(cli, "conversations", "session.db"), ChangedPathUnclassified},
-		{"cli_wal", AgentAntigravityCLI, []string{cli}, filepath.Join(cli, "conversations", "session.db-wal"), ChangedPathUnclassified},
-		{"cli_outside", AgentAntigravityCLI, []string{cli}, filepath.Join(root, "conversations", "session.db-shm"), ChangedPathUnclassified},
-		{"cli_unknown", AgentAntigravityCLI, []string{cli}, filepath.Join(cli, "conversations", "unknown.bin"), ChangedPathUnclassified},
-		{"gemini_nested_shm", AgentGemini, []string{root}, filepath.Join(cli, "conversations", "session.db-shm"), ChangedPathNonData},
-		{"gemini_nested_db", AgentGemini, []string{root}, filepath.Join(cli, "conversations", "session.db"), ChangedPathNonData},
-		{"gemini_nested_wal", AgentGemini, []string{root}, filepath.Join(cli, "conversations", "session.db-wal"), ChangedPathNonData},
-		{"gemini_session", AgentGemini, []string{root}, filepath.Join(root, "tmp", "project", "chats", "session-fixture.json"), ChangedPathUnclassified},
-		{"gemini_explicit_inner_root", AgentGemini, []string{root, inner}, filepath.Join(inner, "tmp", "project", "chats", "session-fixture.json"), ChangedPathUnclassified},
+		{
+			"cli_shm", AgentAntigravityCLI,
+			[]string{cli},
+			filepath.Join(cliConv, "session.db-shm"), nonData,
+		},
+		{
+			"cli_db", AgentAntigravityCLI,
+			[]string{cli},
+			filepath.Join(cliConv, "session.db"), unknown,
+		},
+		{
+			"cli_wal", AgentAntigravityCLI,
+			[]string{cli},
+			filepath.Join(cliConv, "session.db-wal"), unknown,
+		},
+		{
+			"cli_outside", AgentAntigravityCLI,
+			[]string{cli},
+			filepath.Join(root, "conversations", "session.db-shm"), unknown,
+		},
+		{
+			"cli_unknown", AgentAntigravityCLI,
+			[]string{cli},
+			filepath.Join(cliConv, "unknown.bin"), unknown,
+		},
+		{
+			"ide_shm", AgentAntigravity,
+			[]string{ide},
+			filepath.Join(ideConv, "session.db-shm"), nonData,
+		},
+		{
+			"ide_db", AgentAntigravity,
+			[]string{ide},
+			filepath.Join(ideConv, "session.db"), unknown,
+		},
+		{
+			"ide_wal", AgentAntigravity,
+			[]string{ide},
+			filepath.Join(ideConv, "session.db-wal"), unknown,
+		},
+		{"ide_titles_shm", AgentAntigravity, []string{ide}, summaries + "-shm", nonData},
+		{"ide_titles_db", AgentAntigravity, []string{ide}, summaries, unknown},
+		{"ide_titles_wal", AgentAntigravity, []string{ide}, summaries + "-wal", unknown},
+		{
+			"ide_unknown", AgentAntigravity,
+			[]string{ide},
+			filepath.Join(ideConv, "unknown.bin"), unknown,
+		},
+		{
+			"gemini_nested_cli_shm", AgentGemini,
+			[]string{root},
+			filepath.Join(cliConv, "session.db-shm"), nonData,
+		},
+		{
+			"gemini_nested_cli_db", AgentGemini,
+			[]string{root},
+			filepath.Join(cliConv, "session.db"), nonData,
+		},
+		{
+			"gemini_nested_ide_wal", AgentGemini,
+			[]string{root},
+			filepath.Join(ideConv, "session.db-wal"), nonData,
+		},
+		{"gemini_nested_ide_titles", AgentGemini, []string{root}, summaries, nonData},
+		{"gemini_session", AgentGemini, []string{root}, filepath.Join(root, chat), unknown},
+		{"gemini_tmp_dir", AgentGemini, []string{root}, filepath.Join(root, "tmp"), unknown},
+		{
+			"gemini_projects", AgentGemini,
+			[]string{root},
+			filepath.Join(root, "projects.json"), unknown,
+		},
+		{
+			"gemini_trusted_folders", AgentGemini,
+			[]string{root},
+			filepath.Join(root, "trustedFolders.json"), unknown,
+		},
+		{
+			"gemini_explicit_inner_root", AgentGemini,
+			[]string{root, inner},
+			filepath.Join(inner, chat), unknown,
+		},
+		{
+			"gemini_outside_roots", AgentGemini,
+			[]string{cli},
+			filepath.Join(ide, "session.db-shm"), unknown,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: tc.roots})

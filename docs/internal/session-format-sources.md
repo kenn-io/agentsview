@@ -1435,6 +1435,12 @@ fixtures retain this field; missing identities remain source-local.
   at `38700b4b38bf387dafded6c97c3f190d084b49e9`. No local Gemini session was
   available to check. Agentsview uses the summary as the session name. The
   first message falls back to it only when there is no user message.
+- **Change detection (checked 2026-10-20):** Gemini reads only chat recordings
+  under `tmp/` and the root `projects.json` and `trustedFolders.json`. Any
+  other change under a Gemini root is non-data for Gemini, so the nested
+  `antigravity`, `antigravity-ide`, and `antigravity-cli` trees never trigger
+  a Gemini rescan. A separately configured Gemini root inside one of those
+  trees still owns its own recordings.
 
 ## Gemini Apps (`gemini-apps`)
 
@@ -3895,6 +3901,13 @@ schemas keep their existing ordering behavior.
   archived session's working-directory filter during sync and rebuilds,
   rechecked with synthetic stores on 2026-10-13.
 
+- **Change detection (checked 2026-10-20):** Parsing opens conversation
+  databases and the title store read-only, which rewrites their `-shm` WAL
+  index. Those `-shm` events, including removals, are non-data, matching the
+  CLI rule below. Without this, an HTTP remote re-imported every session after
+  the collector read its own mirror. Main-database and WAL changes still
+  resolve to their conversation or title refresh.
+
 ## Antigravity CLI (`antigravity-cli`)
 
 - **Format:** Newer per-session SQLite databases or older encrypted protobuf
@@ -3943,12 +3956,11 @@ schemas keep their existing ordering behavior.
 - **Change detection (checked 2026-10-20):** SQLite's
   [WAL-index format](https://sqlite.org/walformat.html#the_wal_index_or_shm_file)
   describes `-shm` as a transient index rather than database content.
-  Antigravity CLI conversation SHM events are non-data, including removals,
-  before remote import fallback selection. Main-database and WAL changes still
-  resolve to their conversation. Gemini excludes the nested `antigravity-cli`
-  tree from its own changes, unless a configured inner Gemini root owns the
-  path. These are import-routing rules; the closed producer format and its
-  evidence classification are unchanged.
+  Conversation `-shm` events, including removals, are non-data, so they never
+  select a session or trigger a provider-wide rescan during remote imports.
+  Main-database and WAL changes still resolve to their conversation. These are
+  import-routing rules; the closed producer format and its evidence
+  classification are unchanged.
 
 ## iFlow CLI (`iflow`)
 
