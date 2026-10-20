@@ -1935,6 +1935,7 @@ describe("App telemetry", () => {
     await flushEffects();
     now = 120_000;
     window.dispatchEvent(new Event("pagehide"));
+    await flushEffects();
     expect(postedFor("visit_ended")).toHaveLength(1);
     window.dispatchEvent(new Event("pageshow"));
     await unmount(component);

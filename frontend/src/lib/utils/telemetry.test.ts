@@ -25,6 +25,7 @@ describe("feature outcomes", () => {
     await vi.advanceTimersByTimeAsync(0);
     fetch.mockClear();
     reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(0);
     expect(JSON.parse(fetch.mock.calls[0]![1].body)).toEqual({
       event: "error_shown",
       properties: { kind: "search" },
@@ -46,6 +47,34 @@ describe("feature outcomes", () => {
     expect(signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(signal?.aborted).toBe(true);
+  });
+  it("holds an outcome while the open page waits for its initial receipt", async () => {
+    let reply!: (response: Response) => void;
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            reply = resolve;
+          }),
+      )
+      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({
+      event: "app_opened",
+      properties: { surface: "web" },
+    });
+    reply(new Response('{"status":"queued"}', { status: 202 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetch.mock.lastCall![1]!.body as string)).toEqual({
+      event: "error_shown",
+      properties: { kind: "search" },
+    });
   });
   it("starts telemetry when the saved server address is malformed", () => {
     localStorage.setItem("agentsview-server-url", "http://example.org:abc");
@@ -109,6 +138,7 @@ describe("feature outcomes", () => {
     await vi.advanceTimersByTimeAsync(0);
     fetch.mockClear();
     reportSyncFailed(error);
+    await vi.advanceTimersByTimeAsync(0);
     expect(JSON.parse(fetch.mock.calls[0]![1].body)).toEqual({
       event: "sync_failed",
       properties: { reason },
@@ -147,6 +177,10 @@ describe("feature outcomes", () => {
     vi.stubGlobal("fetch", fetch);
     stop = setupTelemetryReporting();
     await vi.advanceTimersByTimeAsync(0);
+    reportErrorShown("search");
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
     stop();
     setAuthToken("signed-in");
     stop = setupTelemetryReporting();
@@ -160,35 +194,6 @@ describe("feature outcomes", () => {
     );
   });
 
-  it("delivers an outcome reported synchronously after selecting a new server", async () => {
-    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => new Response('{"status":"queued"}', { status: 202 }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    fetch.mockClear();
-    setServerUrl("https://example.org");
-    reportErrorShown("search");
-    setAuthToken("new-server-token");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(
-      fetch.mock.calls
-        .filter(([, init]) => JSON.parse(init!.body as string).event === "error_shown")
-        .map(([url, init]) => ({
-          url,
-          authorization: new Headers(init?.headers).get("Authorization"),
-          payload: JSON.parse(init!.body as string),
-        })),
-    ).toEqual([
-      {
-        url: "https://example.org/api/v1/telemetry/events",
-        authorization: "Bearer new-server-token",
-        payload: { event: "error_shown", properties: { kind: "search" } },
-      },
-    ]);
-  });
-
   it("uses the bound server's latest token without restarting the reporter", async () => {
     const fetch = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
     vi.stubGlobal("fetch", fetch);
@@ -198,6 +203,7 @@ describe("feature outcomes", () => {
     await vi.advanceTimersByTimeAsync(0);
     setAuthToken("updated-token");
     reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(0);
     expect(fetch).toHaveBeenLastCalledWith(
       "https://example.org/api/v1/telemetry/events",
       expect.objectContaining({

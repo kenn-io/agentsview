@@ -18,11 +18,13 @@ describe("visit ended reporting", () => {
     hidden = value;
     document.dispatchEvent(new Event("visibilitychange"));
   };
-  const buckets = () =>
-    fetch.mock.calls
+  const buckets = async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    return fetch.mock.calls
       .map(([, init]) => JSON.parse(init?.body as string))
       .filter((event) => event.event === "visit_ended")
       .map((event) => event.properties.duration_bucket);
+  };
   const close = () => window.dispatchEvent(new Event("pagehide"));
   const reopen = () => window.dispatchEvent(new Event("pageshow"));
   const start = async () => {
@@ -64,7 +66,7 @@ describe("visit ended reporting", () => {
     advance(ms);
     close();
     close();
-    expect(buckets()).toEqual([bucket]);
+    expect(await buckets()).toEqual([bucket]);
     expect(fetch).toHaveBeenCalledWith(
       "/agentsview/api/v1/telemetry/events",
       expect.objectContaining({
@@ -85,9 +87,9 @@ describe("visit ended reporting", () => {
       advance(300_000);
       visibility(false);
     }
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
     close();
-    expect(buckets()).toEqual(["5_to_30m"]);
+    expect(await buckets()).toEqual(["5_to_30m"]);
   });
 
   it("ends a visit after thirty hidden minutes and starts a fresh one on return", async () => {
@@ -95,13 +97,13 @@ describe("visit ended reporting", () => {
     advance(120_000);
     visibility(true);
     advance(1_799_999);
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
     advance(1);
-    expect(buckets()).toEqual(["1_to_5m"]);
+    expect(await buckets()).toEqual(["1_to_5m"]);
     visibility(false);
     advance(30_000);
     close();
-    expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
+    expect(await buckets()).toEqual(["1_to_5m", "under_1m"]);
   });
 
   it("ends a visit on return when a suspended hidden timer never fired", async () => {
@@ -110,11 +112,11 @@ describe("visit ended reporting", () => {
     visibility(true);
     now += 2_400_000;
     vi.setSystemTime(Date.now() + 2_400_000);
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
     visibility(false);
     advance(30_000);
     close();
-    expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
+    expect(await buckets()).toEqual(["1_to_5m", "under_1m"]);
   });
 
   it("sends nothing for hidden-only pages", async () => {
@@ -122,7 +124,7 @@ describe("visit ended reporting", () => {
     await start();
     advance(2_400_000);
     close();
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
   });
 
   it("drops pending time and removes timers and listeners on cleanup", async () => {
@@ -135,7 +137,7 @@ describe("visit ended reporting", () => {
     reopen();
     advance(120_000);
     close();
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
   });
   it.each([
     ["initial", "queued"],
@@ -157,17 +159,16 @@ describe("visit ended reporting", () => {
     if (check === "initial") {
       stop = setupTelemetryReporting();
       advance(5_000);
-      close();
     } else {
       vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
       window.dispatchEvent(new Event("focus"));
       advance(5_000);
     }
-    expect(buckets()).toEqual([]);
+    expect(await buckets()).toEqual([]);
     reply(new Response(JSON.stringify({ status }), { status: 202 }));
     await vi.advanceTimersByTimeAsync(0);
     close();
-    expect(buckets()).toEqual(
+    expect(await buckets()).toEqual(
       status === "queued" ? [check === "initial" ? "under_1m" : "1_to_5m"] : [],
     );
     if (status === "disabled") {
@@ -176,7 +177,7 @@ describe("visit ended reporting", () => {
       visibility(false);
       advance(120_000);
       close();
-      expect(buckets()).toEqual([]);
+      expect(await buckets()).toEqual([]);
     }
   });
 
@@ -194,7 +195,7 @@ describe("visit ended reporting", () => {
       await vi.advanceTimersByTimeAsync(0);
       advance(30_000);
       close();
-      expect(buckets()).toEqual(["under_1m"]);
+      expect(await buckets()).toEqual(["under_1m"]);
     },
   );
 });

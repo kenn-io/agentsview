@@ -16,7 +16,6 @@ import { setupVisitEndedReporting } from "./visit-ended.js";
 
 let reporter: BrowserTelemetryReporter | undefined;
 let currentScreen: string | undefined;
-let reportDuringRestart: ((event: BrowserTelemetryEvent) => void) | undefined;
 
 /** Posts one event; a timeout while reading a 202 receipt reaches kit-ui as a transport failure. */
 async function postReceipt(
@@ -57,14 +56,14 @@ export function setupTelemetryReporting(): () => void {
   let stopVisit: (() => void) | undefined;
   const start = () => {
     if (!active || reporter) return;
-    reportDuringRestart = undefined;
     const route = `${getGeneratedBase()}/api/v1/telemetry/events`;
     const server = getServerUrl();
     reporter = startBrowserTelemetry({
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${route}`,
-      post: (url, event, options) => postReceipt(url, event, options, getAuthToken(server)),
+      post: (url, event, options) =>
+        Promise.resolve().then(() => postReceipt(url, event, options, getAuthToken(server))),
     });
     stopVisit = setupVisitEndedReporting(reporter);
     if (currentScreen !== undefined) reporter.reportScreen(currentScreen);
@@ -73,16 +72,10 @@ export function setupTelemetryReporting(): () => void {
     stopVisit?.();
     reporter?.stop();
     reporter = undefined;
-    reportDuringRestart = undefined;
   };
   const replace = () => {
     stop();
-    queueMicrotask(start);
-    reportDuringRestart = (event) => {
-      queueMicrotask(() => {
-        if (active) reporter?.reportVisit(event);
-      });
-    };
+    start();
   };
   const storage = (event: StorageEvent) => {
     if (event.storageArea === localStorage && (event.key === SERVER_URL_KEY || event.key === null))
@@ -120,9 +113,7 @@ export function reportTelemetry(event: TelemetryEvent, properties?: Record<strin
     if (currentScreen !== undefined) reporter?.reportScreen(currentScreen);
   } else {
     // All non-screen outcomes use the gate so they wait for an enabled receipt.
-    const outcome = { event, properties: properties ?? {} };
-    if (reporter) reporter.reportVisit(outcome);
-    else reportDuringRestart?.(outcome);
+    reporter?.reportVisit({ event, properties: properties ?? {} });
   }
 }
 

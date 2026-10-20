@@ -2242,6 +2242,8 @@ same fields and opt-out as the ping. The browser never contacts PostHog.
 After a disabled receipt, the browser stops sending reports and tracking visits.
 It checks again on its first load or focus on a later UTC day. Re-enabling
 telemetry takes effect after that check.
+The browser retains each daily claim's 35 most recently accepted UTC dates.
+Rolling the clock back to an evicted date can count it again.
 
 The server sends `setup_finished` once per installation when the archive first
 has a session in the default session list. Sessions need messages to count;
