@@ -35,9 +35,6 @@ describe("visit ended reporting", () => {
     hidden = false;
     fetch.mockClear();
     vi.stubGlobal("fetch", fetch);
-    vi.stubGlobal("navigator", {
-      locks: { request: async (_name: string, consume: () => void) => consume() },
-    });
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-02T12:00:00Z"));
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -158,6 +155,29 @@ describe("visit ended reporting", () => {
     expect(buckets()).toEqual([]);
   });
   it.each(["queued", "disabled"])(
+    "keeps a visit ended by the hidden timer across midnight until the %s receipt",
+    async (status) => {
+      vi.setSystemTime(new Date("2026-10-02T23:59:00Z"));
+      await start();
+      advance(120_000);
+      let reply!: (response: Response) => void;
+      fetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            reply = resolve;
+          }),
+      );
+      visibility(true);
+      advance(1_800_000);
+      expect(buckets()).toEqual([]);
+      expect(JSON.parse(fetch.mock.lastCall?.[1]?.body as string).event).toBe("app_opened");
+      reply(new Response(JSON.stringify({ status }), { status: 202 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
+    },
+  );
+
+  it.each(["queued", "disabled"])(
     "keeps visible time through a pending daily %s check",
     async (status) => {
       await start();
@@ -201,48 +221,13 @@ describe("visit ended reporting", () => {
       advance(120_000);
       close();
       expect(buckets()).toEqual([]);
-      const pendingKeys = () =>
-        Object.keys(localStorage).filter((key) =>
-          key.startsWith("agentsview.telemetry.pending-visit:"),
-        );
-      expect(pendingKeys()).toHaveLength(1);
-      const key = pendingKeys()[0]!;
-      expect(localStorage.getItem(key)).toBe("1_to_5m");
       reply(new Response(JSON.stringify({ status }), { status: 202 }));
       await vi.advanceTimersByTimeAsync(0);
       close();
       expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
-      expect(pendingKeys()).toHaveLength(0);
-      if (status === "disabled") {
-        localStorage.setItem(key, "under_1m");
-        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: localStorage }));
-        expect(pendingKeys()).toHaveLength(0);
-        expect(buckets()).toEqual([]);
-      }
     },
   );
 
-  it("leaves pending visits unsent when Web Locks is unavailable", async () => {
-    vi.stubGlobal("navigator", {});
-    let reply!: (response: Response) => void;
-    fetch.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          reply = resolve;
-        }),
-    );
-    stop = setupTelemetryReporting();
-    advance(120_000);
-    close();
-    reply(new Response('{"status":"queued"}', { status: 202 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(buckets()).toEqual([]);
-    expect(
-      Object.keys(localStorage).filter((key) =>
-        key.startsWith("agentsview.telemetry.pending-visit:"),
-      ),
-    ).toHaveLength(1);
-  });
   it.each([false, true])(
     "discards the old server's visit on replacement, cross-tab=%s",
     async (crossTab) => {

@@ -25,7 +25,7 @@ export function setupTelemetryReporting(): () => void {
     reporter = startBrowserTelemetry({
       route,
       surface: "web",
-      storageKey: `agentsview.telemetry:${new URL(route, window.location.href).href}`,
+      storageKey: `agentsview.telemetry:${route}`,
       post: (url, event, options) => {
         const token = getAuthToken(server);
         return fetch(url, {
@@ -39,7 +39,7 @@ export function setupTelemetryReporting(): () => void {
         });
       },
     });
-    stopVisit = setupVisitEndedReporting(reporter, new URL(route, window.location.href).href);
+    stopVisit = setupVisitEndedReporting(reporter);
     if (currentScreen !== undefined) reporter.reportScreen(currentScreen);
   };
   const stop = () => {
@@ -84,7 +84,7 @@ export type TelemetryEvent =
 export function reportTelemetry(
   event: TelemetryEvent,
   properties?: Record<string, string>,
-  options?: Pick<RequestInit, "keepalive" | "signal">,
+  options?: Pick<RequestInit, "keepalive">,
 ): void {
   if (event === "screen_viewed") {
     currentScreen = properties?.screen;

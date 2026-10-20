@@ -6,6 +6,38 @@ const SERVER_KEY = "agentsview-server-url";
 const REVISION_KEY = "agentsview-server-url-revision";
 const TOKEN = "visit-test-token";
 
+test("the daemon's disabled receipt stops all browser telemetry through a reload", async ({
+  page,
+}) => {
+  const events: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/telemetry/events"
+    ) {
+      events.push(request.postDataJSON().event);
+    }
+  });
+  const receipt = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/v1/telemetry/events",
+  );
+  await new SessionsPage(page).goto();
+  const response = await receipt;
+  expect(response.status()).toBe(202);
+  expect(await response.json()).toEqual({ status: "disabled" });
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("pageshow"));
+    window.dispatchEvent(new Event("focus"));
+  });
+  await page.reload();
+  // Allow a stray visit or screen report to reach the actual daemon.
+  await page.waitForTimeout(1000);
+  expect(events).toEqual(["app_opened"]);
+});
+
 async function visitServer(upstream: string, authenticated = false) {
   const visits: {
     payload: unknown;
@@ -100,6 +132,12 @@ for (const remote of [false, true]) {
     }) => {
       const server = await visitServer(baseURL!, remote);
       try {
+        const enabled = page.waitForResponse(
+          (response) =>
+            response.request().method() === "POST" &&
+            new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
+            response.request().postDataJSON()?.event === "app_opened",
+        );
         if (remote) {
           await page.addInitScript(
             ({ url, token }) => {
@@ -113,6 +151,7 @@ for (const remote of [false, true]) {
           await page.goto(server.url);
           await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
         }
+        expect(await (await enabled).json()).toEqual({ status: "queued" });
         server.preflights.length = 0;
         if (action === "close") await page.close();
         else await page.reload();

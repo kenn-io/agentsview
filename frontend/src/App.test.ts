@@ -177,6 +177,21 @@ it("reports a direct usage visit once after the enabled receipt", async () => {
   expect(outcomes()).toHaveLength(1);
 });
 
+it("continues app startup when the saved server address is malformed", async () => {
+  stubAppDependencies();
+  localStorage.setItem("agentsview-server-url", "http://example.org:abc");
+  const fetch = vi.fn().mockRejectedValue(new TypeError("Failed to parse URL"));
+  vi.stubGlobal("fetch", fetch);
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  expect(fetch).toHaveBeenCalledWith(
+    "http://example.org:abc/api/v1/telemetry/events",
+    expect.objectContaining({ method: "POST" }),
+  );
+  expect(settings.load).toHaveBeenCalledOnce();
+  expect(sync.startPolling).toHaveBeenCalledOnce();
+});
+
 function appSourceSlice(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
   expect(start).toBeGreaterThan(-1);
