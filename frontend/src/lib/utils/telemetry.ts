@@ -26,17 +26,24 @@ export function setupTelemetryReporting(): () => void {
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${route}`,
-      post: (url, event, options) => {
+      post: async (url, event, options) => {
         const token = getAuthToken(server);
-        return fetch(url, {
-          ...options,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify(event),
-        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10_000);
+        try {
+          return await fetch(url, {
+            ...options,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(event),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
       },
     });
     stopVisit = setupVisitEndedReporting(reporter);

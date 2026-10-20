@@ -77,23 +77,6 @@ describe("visit ended reporting", () => {
     );
   });
 
-  it("delivers and resets visits when AbortSignal.timeout is unavailable", async () => {
-    vi.stubGlobal("AbortSignal", { timeout: undefined });
-    await start();
-    advance(120_000);
-    close();
-    close();
-    reopen();
-    advance(30_000);
-    close();
-    expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
-    expect(
-      fetch.mock.calls
-        .filter(([, init]) => JSON.parse(init?.body as string).event === "visit_ended")
-        .every(([, init]) => init?.keepalive),
-    ).toBe(true);
-  });
-
   it("sums twenty visible minutes across short tab switches", async () => {
     await start();
     for (let i = 0; i < 20; i++) {

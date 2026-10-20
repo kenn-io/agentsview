@@ -31,6 +31,33 @@ describe("feature outcomes", () => {
     });
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it("aborts a stalled daily check after ten seconds and releases a waiting outcome on retry", async () => {
+    let signal: AbortSignal | undefined;
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce(
+        (_input, init) =>
+          new Promise((_resolve, reject) => {
+            signal = init?.signal ?? undefined;
+            signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+          }),
+      )
+      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal?.aborted).toBe(false);
+    expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+      { event: "app_opened", properties: { surface: "web" } },
+      { event: "app_opened", properties: { surface: "web" } },
+      { event: "error_shown", properties: { kind: "search" } },
+    ]);
+  });
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],

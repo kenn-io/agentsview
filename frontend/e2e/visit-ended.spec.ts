@@ -25,6 +25,10 @@ test("the daemon's disabled receipt stops all browser telemetry through a reload
   const response = await receipt;
   expect(response.status()).toBe(202);
   expect(await response.json()).toEqual({ status: "disabled" });
+  expect(response.request().postDataJSON()).toEqual({
+    event: "app_opened",
+    properties: { surface: "web" },
+  });
   await page.evaluate(() => {
     window.dispatchEvent(new Event("pagehide"));
     window.dispatchEvent(new Event("pageshow"));
