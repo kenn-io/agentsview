@@ -2287,7 +2287,9 @@ each screen once per installation per UTC day, across tabs and server restarts.
 The browser also deduplicates screen reports per selected server and local
 storage, so separate browsers can check the same installation independently.
 The server stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. When telemetry is enabled, the server checks the file
+installation identity. It retains the 35 most recently accepted UTC dates per
+installation, event, and key. Rolling the clock back to an evicted date can
+count it again. When telemetry is enabled, the server checks the file
 once in the background after it starts serving; a web UI report that arrives
 first waits for that check. The check moves older plain-text claims, malformed
 claims, or claims from a newer format to a unique
