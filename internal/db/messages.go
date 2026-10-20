@@ -579,14 +579,7 @@ type MessageSnapshot struct {
 
 // BeginMessageSnapshot starts a MessageSnapshot. Close it when done.
 func (db *DB) BeginMessageSnapshot(ctx context.Context) (*MessageSnapshot, error) {
-	db.connMu.RLock()
-	reader := db.reader.Load()
-	if reader == nil {
-		db.connMu.RUnlock()
-		return nil, errors.New("database is closed")
-	}
-	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	db.connMu.RUnlock()
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("beginning message snapshot: %w", err)
 	}

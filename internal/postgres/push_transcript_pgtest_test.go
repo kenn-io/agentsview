@@ -67,10 +67,10 @@ func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 	require.Len(t, pins, 1, "the push dropped a pin whose message moved during the copy")
 	assert.Equal(t, pinned, pins[0].Ordinal, "the push copied a transcript that changed after it started")
 
-	// The next push copies the rewritten transcript, and the pin follows its
-	// message.
+	// The rewrite landed after the push's cutoff, so the next incremental push
+	// copies it, and the pin follows its message.
 	syncer.afterMessagePage = nil
-	result, err = syncer.Push(ctx, true, nil)
+	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	pins, err = store.ListPinnedMessages(ctx, id, "")
