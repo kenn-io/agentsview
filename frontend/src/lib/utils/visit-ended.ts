@@ -10,7 +10,37 @@ function durationBucket(ms: number): string {
 }
 
 /** Reports visible visit time as a duration bucket when a visit ends; returns a cleanup. */
-export function setupVisitEndedReporting(reporter: BrowserTelemetryReporter): () => void {
+export function setupVisitEndedReporting(
+  reporter: BrowserTelemetryReporter,
+  route: string,
+): () => void {
+  // Tab storage keeps ended visits through reloads while permission is pending.
+  const pendingKey = `agentsview.telemetry.pending-visit:${route}`;
+  let checking = true;
+  let pending: string[] = [];
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(pendingKey) ?? "[]");
+    if (Array.isArray(saved)) {
+      pending = saved
+        .filter((bucket) => ["under_1m", "1_to_5m", "5_to_30m", "over_30m"].includes(bucket))
+        .slice(0, 64);
+    }
+  } catch {
+    // Visits remain optional when browser storage is blocked.
+  }
+  const savePending = () => {
+    try {
+      if (pending.length) sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+      else sessionStorage.removeItem(pendingKey);
+    } catch {
+      // The current page can still deliver pending visits.
+    }
+  };
+  const report = (bucket: string) =>
+    reporter.reportVisit(
+      { event: "visit_ended", properties: { surface: "web", duration_bucket: bucket } },
+      { keepalive: true },
+    );
   let visibleMs = 0;
   let started: number | undefined;
   let tracking = false;
@@ -27,13 +57,11 @@ export function setupVisitEndedReporting(reporter: BrowserTelemetryReporter): ()
     hiddenAt = undefined;
     pause();
     if (visibleMs > 0) {
-      reporter.reportVisit(
-        {
-          event: "visit_ended",
-          properties: { surface: "web", duration_bucket: durationBucket(visibleMs) },
-        },
-        { keepalive: true },
-      );
+      const bucket = durationBucket(visibleMs);
+      if (checking) {
+        if (pending.length < 64) pending.push(bucket);
+        savePending();
+      } else report(bucket);
     }
     visibleMs = 0;
   };
@@ -65,6 +93,14 @@ export function setupVisitEndedReporting(reporter: BrowserTelemetryReporter): ()
     window.removeEventListener("pageshow", resume);
   };
   const unsubscribe = reporter.onQuietChange((quiet, reason) => {
+    checking = reason === "checking";
+    if (!checking) {
+      const ready = pending;
+      pending = [];
+      // Claim before posting so reloads cannot submit the same visit twice.
+      savePending();
+      if (!quiet) ready.forEach(report);
+    }
     if (quiet && reason !== "checking") {
       stop();
     } else if (!tracking) {
@@ -78,5 +114,7 @@ export function setupVisitEndedReporting(reporter: BrowserTelemetryReporter): ()
   return () => {
     unsubscribe();
     stop();
+    pending = [];
+    savePending();
   };
 }

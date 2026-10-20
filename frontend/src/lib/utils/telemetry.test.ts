@@ -154,6 +154,23 @@ describe("feature outcomes", () => {
     );
   });
 
+  it("uses the bound server's latest token without restarting the reporter", async () => {
+    const fetch = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    setServerUrl("https://example.org");
+    setAuthToken("first-token");
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    setAuthToken("updated-token");
+    reportErrorShown("search");
+    expect(fetch).toHaveBeenLastCalledWith(
+      "https://example.org/api/v1/telemetry/events",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer updated-token" }),
+      }),
+    );
+  });
+
   it.each([false, true])(
     "replaces server claims and credentials after a server change, cross-tab=%s",
     async (crossTab) => {

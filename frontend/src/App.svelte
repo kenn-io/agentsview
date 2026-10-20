@@ -588,6 +588,8 @@
     });
   });
 
+  onMount(setupTelemetryReporting);
+
   // Telemetry: one session_viewed per transcript visit, sent once the
   // session's metadata hydrates. The store keeps the active id while
   // another page shows, so leaving the transcript resets the visit.
@@ -811,7 +813,6 @@
     sync.loadVersion();
     sync.checkForUpdate();
     sync.startPolling();
-    const telemetryCleanup = setupTelemetryReporting();
 
     const healthCleanup = setupVisibilityHealthCheck({
       onBackendDegraded: () => sync.markBackendDegraded(),
@@ -823,7 +824,6 @@
       navigateUserPrompt,
     });
     return () => {
-      telemetryCleanup();
       healthCleanup();
       cleanup();
       window.removeEventListener("show-about", showAbout);

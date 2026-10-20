@@ -50,6 +50,7 @@ describe("visit ended reporting", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   it.each([
@@ -184,22 +185,32 @@ describe("visit ended reporting", () => {
     },
   );
 
-  it("holds a visit ended during the initial check, including its waiting time", async () => {
-    let reply!: (response: Response) => void;
-    fetch.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          reply = resolve;
-        }),
-    );
-    stop = setupTelemetryReporting();
-    advance(120_000);
-    close();
-    expect(buckets()).toEqual([]);
-    reply(new Response('{"status":"queued"}', { status: 202 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(buckets()).toEqual(["1_to_5m"]);
-  });
+  it.each(["queued", "disabled"])(
+    "holds an ended visit until the initial %s receipt",
+    async (status) => {
+      let reply!: (response: Response) => void;
+      fetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            reply = resolve;
+          }),
+      );
+      stop = setupTelemetryReporting();
+      advance(120_000);
+      close();
+      expect(buckets()).toEqual([]);
+      expect(
+        sessionStorage.getItem(
+          `agentsview.telemetry.pending-visit:${window.location.origin}/agentsview/api/v1/telemetry/events`,
+        ),
+      ).toBe('["1_to_5m"]');
+      reply(new Response(JSON.stringify({ status }), { status: 202 }));
+      await vi.advanceTimersByTimeAsync(0);
+      close();
+      expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
+      expect(sessionStorage.length).toBe(0);
+    },
+  );
   it.each([false, true])(
     "discards the old server's visit on replacement, cross-tab=%s",
     async (crossTab) => {

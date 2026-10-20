@@ -141,6 +141,42 @@ it("shows settings save errors through the app shell", async () => {
   expect(flash?.textContent).toContain("settings endpoint unavailable");
 });
 
+it("reports a direct usage visit once after the enabled receipt", async () => {
+  stubAppDependencies();
+  window.history.replaceState(null, "", "/usage");
+  router.route = "usage";
+  let reply!: (response: Response) => void;
+  const fetch = vi
+    .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+    .mockImplementation(async (input, init) => {
+      if (
+        requestUrl(input).endsWith("/api/v1/telemetry/events") &&
+        JSON.parse(init!.body as string).event === "app_opened"
+      ) {
+        return new Promise((resolve) => {
+          reply = resolve;
+        });
+      }
+      return new Response('{"status":"queued"}', { status: 202 });
+    });
+  vi.stubGlobal("fetch", fetch);
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  const outcomes = () =>
+    fetch.mock.calls
+      .filter(
+        ([, init]) => init?.body && JSON.parse(init.body as string).event === "analytics_viewed",
+      )
+      .map(([, init]) => JSON.parse(init!.body as string));
+  expect(outcomes()).toEqual([]);
+  reply(new Response('{"status":"queued"}', { status: 202 }));
+  await vi.waitFor(() =>
+    expect(outcomes()).toEqual([{ event: "analytics_viewed", properties: { page: "usage" } }]),
+  );
+  await flushEffects();
+  expect(outcomes()).toHaveLength(1);
+});
+
 function appSourceSlice(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
   expect(start).toBeGreaterThan(-1);

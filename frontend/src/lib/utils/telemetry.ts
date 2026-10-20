@@ -4,6 +4,7 @@ import {
 } from "@kenn-io/kit-ui/utils/browser-telemetry";
 import {
   getGeneratedBase,
+  getServerUrl,
   getAuthToken,
   SERVER_URL_CHANGE_EVENT,
   SERVER_URL_KEY,
@@ -20,13 +21,14 @@ export function setupTelemetryReporting(): () => void {
   const start = () => {
     if (!active || reporter) return;
     const route = `${getGeneratedBase()}/api/v1/telemetry/events`;
-    const token = getAuthToken();
+    const server = getServerUrl();
     reporter = startBrowserTelemetry({
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${new URL(route, window.location.href).href}`,
-      post: (url, event, options) =>
-        fetch(url, {
+      post: (url, event, options) => {
+        const token = getAuthToken(server);
+        return fetch(url, {
           ...options,
           method: "POST",
           headers: {
@@ -34,9 +36,10 @@ export function setupTelemetryReporting(): () => void {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify(event),
-        }),
+        });
+      },
     });
-    stopVisit = setupVisitEndedReporting(reporter);
+    stopVisit = setupVisitEndedReporting(reporter, new URL(route, window.location.href).href);
     if (currentScreen !== undefined) reporter.reportScreen(currentScreen);
   };
   const stop = () => {
