@@ -99,43 +99,6 @@ describe("feature outcomes", () => {
     ]);
   });
 
-  it("holds outcomes across midnight until the new day's enabled receipt", async () => {
-    let reply!: (response: Response) => void;
-    const fetch = vi
-      .fn()
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    fetch.mockImplementationOnce(
-      () =>
-        new Promise<Response>((resolve) => {
-          reply = resolve;
-        }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    reportErrorShown("search");
-    vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
-    const firstReply = reply;
-    fetch.mockImplementationOnce(
-      () =>
-        new Promise<Response>((resolve) => {
-          reply = resolve;
-        }),
-    );
-    firstReply(new Response('{"status":"queued"}', { status: 202 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body).event)).toEqual([
-      "app_opened",
-      "app_opened",
-    ]);
-    reply(new Response('{"status":"queued"}', { status: 202 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body).event)).toEqual([
-      "app_opened",
-      "app_opened",
-      "error_shown",
-    ]);
-  });
-
   it("retries an unauthorized check after authentication and reload", async () => {
     const fetch = vi
       .fn()

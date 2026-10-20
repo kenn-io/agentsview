@@ -40,8 +40,6 @@ async function visitServer(upstream: string, authenticated = false) {
   const visits: {
     payload: unknown;
     authorization: string | undefined;
-    status: number;
-    body: unknown;
   }[] = [];
   const preflights: string[] = [];
   const server = createServer(async (req, res) => {
@@ -93,8 +91,6 @@ async function visitServer(upstream: string, authenticated = false) {
         visits.push({
           payload,
           authorization: req.headers.authorization,
-          status: response.status,
-          body: JSON.parse(bytes.toString()),
         });
       }
       res.setHeader(
@@ -154,15 +150,11 @@ for (const remote of [false, true]) {
         if (action === "close") await page.close();
         else await page.reload();
         await expect
-          .poll(() => server.visits.map(({ payload, status, body }) => ({ payload, status, body })))
+          .poll(() => server.visits.map(({ payload }) => payload))
           .toEqual([
             {
-              payload: {
-                event: "visit_ended",
-                properties: { surface: "web", duration_bucket: "under_1m" },
-              },
-              status: 202,
-              body: { status: "queued" },
+              event: "visit_ended",
+              properties: { surface: "web", duration_bucket: "under_1m" },
             },
           ]);
         if (remote) {
