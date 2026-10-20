@@ -822,7 +822,9 @@ func TestEnsureBackgroundServeRefusesWhenWriteLockHeldWithoutDaemon(t *testing.T
 	require.Error(t, err)
 	assert.Nil(t, rt)
 	assert.False(t, started, "must not spawn a server that cannot open the archive")
-	assertErrorContainsAll(t, err, writeOwnerLockPath(dir), "cannot auto-start", "find the agentsview process holding")
+	var held writeOwnerLockHeldError
+	require.ErrorAs(t, err, &held)
+	assert.ErrorContains(t, err, "cannot auto-start")
 }
 
 func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
@@ -866,6 +868,8 @@ func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 		cfg config.Config, _ []string,
 	) (*exec.Cmd, string, error) {
 		gotCfg = cfg
+		requireWriteOwnerLockReleased(t, dir,
+			"the probe must release the write lock before spawning")
 		_, err := WriteDaemonRuntime(dir, host, port, version, false)
 		if err != nil {
 			return nil, "", err
@@ -1950,8 +1954,6 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
-		requireWriteOwnerLockReleased(t, dir,
-			"the probe must release the write lock before spawning")
 		if _, err := WriteDaemonRuntime(
 			dir, host, port, "test", false,
 		); err != nil {
