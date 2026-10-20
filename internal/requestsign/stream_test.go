@@ -68,13 +68,24 @@ func TestVerifierBoundsEventStreamsAndRejectUndeclaredTrailers(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "closing an event stream should stop its handler")
 	}
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/events", nil)
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer test")
-	resp, err = client.Do(req) //nolint:bodyclose // Keep the replacement stream open while testing permits.
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "a finished event stream should release its permit")
-	streams = append(streams, resp) //nolint:bodyclose // Closed after the permit-release assertions.
+	// The handler signals just before it returns, and the verifier releases
+	// the permit after that, so a replacement can briefly still see 503.
+	var replacement *http.Response
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/events", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test")
+		resp, err := client.Do(req) //nolint:bodyclose // Keep the replacement stream open while testing permits.
+		require.NoError(t, err)
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			require.NoError(t, resp.Body.Close())
+			return false
+		}
+		replacement = resp
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "a finished event stream should release its permit")
+	assert.Equal(t, http.StatusOK, replacement.StatusCode, "a finished event stream should release its permit")
+	streams = append(streams, replacement) //nolint:bodyclose // Closed after the permit-release assertions.
 
 	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api", strings.NewReader("body"))
 	require.NoError(t, err)
