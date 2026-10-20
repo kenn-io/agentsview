@@ -228,12 +228,15 @@ func captureCollector(t *testing.T) (string, func() []capturedEvent) {
 
 func captureReporter(t *testing.T, endpoint string, opts Options) *Reporter {
 	t.Helper()
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("CI", "")
+	require.NoError(t, os.Unsetenv("CI"))
 	if opts.ScreenClaimsPath == "" {
 		opts.ScreenClaimsPath = filepath.Join(t.TempDir(), "screens")
 	}
 	client, err := kittelemetry.NewReporter(kittelemetry.Options{
 		APIKey: "phc_test", Application: application, EnvPrefix: envPrefix,
-		DistinctID: "install-id", Source: "daemon", Endpoint: endpoint,
+		DistinctID: "install-id", Source: "daemon", Endpoint: endpoint, Version: "v1.2.3",
 	}, allowedEventOptions(opts)...)
 	require.NoError(t, err)
 	return &Reporter{client: client}

@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -15,6 +16,9 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	assert.False(t, EnabledFromEnv())
 
 	t.Setenv(EnabledEnv, "1")
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("CI", "")
+	require.NoError(t, os.Unsetenv("CI"))
 	if kittelemetry.ProcessDisabled() {
 		assert.False(t, EnabledFromEnv())
 		return
@@ -27,9 +31,12 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 
 func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("CI", "")
+	require.NoError(t, os.Unsetenv("CI"))
 	t.Setenv(GenericEnabledEnv, "1")
 
-	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id"})
+	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id", Version: "v1.2.3"})
 	require.NoError(t, err)
 
 	assert.False(t, reporter.Enabled())
@@ -50,6 +57,9 @@ func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
 
 func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("CI", "")
+	require.NoError(t, os.Unsetenv("CI"))
 	t.Setenv(GenericEnabledEnv, "1")
 
 	client, err := newKitReporter(Options{

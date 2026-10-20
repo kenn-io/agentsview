@@ -77,6 +77,7 @@ func TestTelemetryOptionsAllowCoreActionValues(t *testing.T) {
 		{telemetry.EventSessionViewed, "agent", "freebuff"},
 		{telemetry.EventInsightGenerated, "kind", "daily_activity"},
 		{telemetry.EventInsightGenerated, "kind", "agent_analysis"},
+		{telemetry.EventInsightGenerated, "kind", "tool_effectiveness"},
 		{telemetry.EventInsightGenerated, "kind", "prompt_maturity_review"},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
@@ -137,6 +138,8 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(telemetry.EnabledEnv, tc.enabled)
+			restoreUnsetEnv(t, "CI")
+			t.Setenv("DO_NOT_TRACK", "0")
 			t.Setenv(telemetry.GenericEnabledEnv, "1")
 			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
@@ -201,6 +204,8 @@ func TestTelemetryScreenClaimsMigration(t *testing.T) {
 	const legacy = "install-one 2026-10-08 sessions"
 	t.Run("startup converts claims without a capture", func(t *testing.T) {
 		t.Setenv(telemetry.EnabledEnv, "1")
+		restoreUnsetEnv(t, "CI")
+		t.Setenv("DO_NOT_TRACK", "0")
 		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 		path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 		require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
@@ -229,6 +234,8 @@ func TestTelemetryScreenClaimsMigration(t *testing.T) {
 	})
 	t.Run("capture arrives first and waits for migration", func(t *testing.T) {
 		t.Setenv(telemetry.EnabledEnv, "1")
+		restoreUnsetEnv(t, "CI")
+		t.Setenv("DO_NOT_TRACK", "0")
 		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 		path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 		require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))

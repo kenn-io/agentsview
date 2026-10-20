@@ -9,6 +9,10 @@ The latest release is
 
 ## Unreleased
 
+- Telemetry stays off when `DO_NOT_TRACK` opts out, any `CI` variable is present,
+  or the build lacks a plain release version. See the
+  [privacy guide](/docs/configuration/#privacy-and-telemetry) for opt-out details.
+
 **Upgrade notes**
 
 - On Windows, stop the daemon before switching back to 0.45.0 or earlier.

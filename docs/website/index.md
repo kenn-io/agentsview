@@ -126,10 +126,12 @@ SQLite is the archive of record. From there:
 ## Local by default. Shared when you choose
 
 Your agent transcripts are some of the most sensitive data on your machine.
-AgentsView starts with one local SQLite archive and a loopback-only server. Data
-leaves the machine only when you choose a feature such as PostgreSQL or
-ClickHouse sync, remote DuckDB access, Generated Insights, GitHub publishing, or
-hosted raw sync. Each feature documents what it sends and where it goes.
+AgentsView starts with one local SQLite archive and a loopback-only server.
+Session content leaves the machine only when you choose a feature such as
+PostgreSQL or ClickHouse sync, remote DuckDB access, Generated Insights, GitHub
+publishing, or hosted raw sync. Each feature documents what it sends and where
+it goes. The [privacy guide](/docs/configuration/#privacy-and-telemetry) also
+covers anonymous telemetry, opt-outs, and Google Fonts requests.
 
 ## Start
 

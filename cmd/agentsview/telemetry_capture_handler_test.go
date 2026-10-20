@@ -18,6 +18,8 @@ import (
 
 func TestTelemetryCanceledCaptureLeavesMigrationRunning(t *testing.T) {
 	t.Setenv(telemetry.EnabledEnv, "1")
+	restoreUnsetEnv(t, "CI")
+	t.Setenv("DO_NOT_TRACK", "0")
 	const legacy = "install-one 2026-10-08 sessions"
 	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 	path := cfg.TelemetryScreenClaimsPath()
