@@ -315,6 +315,10 @@ read-only, could not write its runtime record, or runs as a process whose
 identity cannot be checked. This lets a writable daemon take over as soon as one
 is available.
 
+When no daemon is visible and another process holds the write lock, the MCP
+call fails with the lock error instead of starting a daemon that could not open
+the archive. The next call checks again.
+
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP
 process holding its own archive handle.

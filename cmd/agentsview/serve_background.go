@@ -635,12 +635,9 @@ probeDaemon:
 	// direct writers from taking the write lock during this probe.
 	lock, err := tryAcquireWriteOwnerLock(writeLockDataDir(*cfg))
 	if err != nil {
-		if _, held := errors.AsType[writeOwnerLockHeldError](err); held {
-			return nil, fmt.Errorf(
-				"cannot auto-start the agentsview daemon: %w", err,
-			)
-		}
-		return nil, err
+		return nil, fmt.Errorf(
+			"cannot auto-start the agentsview daemon: %w", err,
+		)
 	}
 	if err := lock.Close(); err != nil {
 		return nil, err

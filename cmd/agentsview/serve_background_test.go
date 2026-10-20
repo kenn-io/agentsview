@@ -1972,6 +1972,9 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
+	probe, err := tryAcquireWriteOwnerLock(dir)
+	require.NoError(t, err, "the probe must release the write lock before spawning")
+	require.NoError(t, probe.Close())
 }
 
 func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
