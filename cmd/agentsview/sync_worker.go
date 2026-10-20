@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -400,15 +403,38 @@ func workerResultFromStats(
 	return result
 }
 
+// Worker lock acquisition waits briefly for a held write lock. The parent
+// released it for this worker, so a holder is usually a probe that checks the
+// lock for an instant; a real second writer still fails once the bound passes.
+var (
+	workerLockWait         = time.Second
+	workerLockRetryInitial = 10 * time.Millisecond
+)
+
 // openWorkerWriteDB reuses the daemon's direct-write open path — including the
 // db.write.lock acquisition — but returns errors instead of exiting. Callers
 // must tear down through closeWriteDB so a failed database close (undrained
 // connections) retains the write-owner flock instead of letting another
 // process acquire writer ownership alongside a surviving SQLite connection.
 func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, *writeOwnerLock, error) {
-	return openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
-		return openDBWithProgress(ctx, cfg, progress)
-	})
+	policy := backoff.NewExponentialBackOff()
+	policy.InitialInterval = workerLockRetryInitial
+	policy.MaxInterval = reacquireBackoffMax
+	policy.Multiplier = 2
+	type opened struct {
+		database *db.DB
+		lock     *writeOwnerLock
+	}
+	got, err := backoff.Retry(ctx, func() (opened, error) {
+		database, lock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
+			return openDBWithProgress(ctx, cfg, progress)
+		})
+		if err != nil && !errors.As(err, new(writeOwnerLockHeldError)) {
+			return opened{}, backoff.Permanent(err)
+		}
+		return opened{database, lock}, err
+	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(workerLockWait))
+	return got.database, got.lock, err
 }
 
 // workerEngineConfig mirrors the sync.EngineConfig literal in runServe minus the
