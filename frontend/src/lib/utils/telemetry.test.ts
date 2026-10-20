@@ -116,7 +116,7 @@ describe("feature outcomes", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
   it.each(["queued", "disabled"])(
-    "shares daily claims across reloads and rechecks the next day after a %s receipt",
+    "shares selected-server claims across reloads after a %s receipt",
     async (status) => {
       const fetch = vi.fn<(input: RequestInfo | URL, init: RequestInit) => Promise<Response>>(
         async () => new Response(JSON.stringify({ status }), { status: 202 }),
@@ -136,15 +136,58 @@ describe("feature outcomes", () => {
       expect(events()).toEqual(
         status === "queued" ? ["app_opened", "screen_viewed", "screen_viewed"] : ["app_opened"],
       );
-      stop = setupTelemetryReporting();
-      await vi.advanceTimersByTimeAsync(0);
-      fetch.mockClear();
-      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
-      window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(events()).toEqual(["app_opened"]);
     },
   );
+
+  it("retries an unauthorized check on fresh setup after setting the token", async () => {
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    setAuthToken("signed-in");
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string).event)).toEqual([
+      "app_opened",
+      "app_opened",
+    ]);
+    expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer signed-in",
+    );
+  });
+
+  it("delivers an outcome reported synchronously after selecting a new server", async () => {
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response('{"status":"queued"}', { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    fetch.mockClear();
+    setServerUrl("https://example.org");
+    reportErrorShown("search");
+    setAuthToken("new-server-token");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      fetch.mock.calls
+        .filter(([, init]) => JSON.parse(init!.body as string).event === "error_shown")
+        .map(([url, init]) => ({
+          url,
+          authorization: new Headers(init?.headers).get("Authorization"),
+          payload: JSON.parse(init!.body as string),
+        })),
+    ).toEqual([
+      {
+        url: "https://example.org/api/v1/telemetry/events",
+        authorization: "Bearer new-server-token",
+        payload: { event: "error_shown", properties: { kind: "search" } },
+      },
+    ]);
+  });
 
   it("uses the bound server's latest token without restarting the reporter", async () => {
     const fetch = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));

@@ -156,18 +156,20 @@ describe("visit ended reporting", () => {
     );
     if (check === "initial") {
       stop = setupTelemetryReporting();
-      advance(120_000);
+      advance(5_000);
       close();
     } else {
       vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
       window.dispatchEvent(new Event("focus"));
-      advance(30_000);
+      advance(5_000);
     }
     expect(buckets()).toEqual([]);
     reply(new Response(JSON.stringify({ status }), { status: 202 }));
     await vi.advanceTimersByTimeAsync(0);
     close();
-    expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
+    expect(buckets()).toEqual(
+      status === "queued" ? [check === "initial" ? "under_1m" : "1_to_5m"] : [],
+    );
     if (status === "disabled") {
       visibility(true);
       expect(vi.getTimerCount()).toBe(0);

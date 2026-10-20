@@ -2239,9 +2239,9 @@ not send another ping that day. The web UI also reports an anonymous
 `app_opened` event on load or focus, with daily checks scoped to the selected
 server and the browser's local storage. The server sends it to PostHog with the
 same fields and opt-out as the ping. The browser never contacts PostHog.
-After a disabled receipt, the browser stops
-reports and visit tracking until its first load or focus on a later UTC day
-checks again. Re-enabling telemetry takes effect after that check.
+After a disabled receipt, the browser stops reports and visit tracking.
+It checks again on its first load or focus on a later UTC day. Re-enabling
+telemetry takes effect after that check.
 
 The server sends `setup_finished` once per installation when the archive first
 has a session in the default session list. Sessions need messages to count;
@@ -2273,8 +2273,9 @@ can send one event, with no daily limit.
 While permission is pending, the browser holds visit events and other outcomes
 in page memory for the selected server, up to 64 events total. Additional
 events are dropped. An enabled receipt releases the held events; a disabled
-receipt discards them. Closing the page before an enabled receipt can lose
-those events.
+receipt discards them. A visit ending after UTC midnight also waits in page
+memory while that day's check is pending. Closing the page before an enabled
+receipt can lose those events.
 Delivery is best effort: a visit can be lost if the browser crashes, quits, or
 discards the tab before the event is sent. Long-lived tabs are the most exposed
 to this, so `over_30m` can undercount.
