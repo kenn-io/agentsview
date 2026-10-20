@@ -3,7 +3,6 @@ import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
 const SERVER_KEY = "agentsview-server-url";
-const REVISION_KEY = "agentsview-server-url-revision";
 const TOKEN = "visit-test-token";
 
 test("the daemon's disabled receipt stops all browser telemetry through a reload", async ({
@@ -227,15 +226,10 @@ test.describe("Back restoration", () => {
       await page.goto(`${server.url}/away`);
       await expect.poll(() => server.visits.length).toBe(1);
       await otherTab.goto(`${server.url}/away`);
-      await otherTab.evaluate(
-        ({ serverKey, revisionKey }) => {
-          localStorage.setItem(serverKey, "https://example.com/remote");
-          localStorage.setItem(revisionKey, "away");
-          localStorage.removeItem(serverKey);
-          localStorage.setItem(revisionKey, "back");
-        },
-        { serverKey: SERVER_KEY, revisionKey: REVISION_KEY },
-      );
+      await otherTab.evaluate((serverKey) => {
+        localStorage.setItem(serverKey, "https://example.com/remote");
+        localStorage.removeItem(serverKey);
+      }, SERVER_KEY);
       await page.goBack({ waitUntil: "commit" });
       await expect
         .poll(() => page.evaluate(() => (window as unknown as { restored: boolean }).restored))

@@ -90,6 +90,7 @@ export function reportTelemetry(
     currentScreen = properties?.screen;
     if (currentScreen !== undefined) reporter?.reportScreen(currentScreen);
   } else {
+    // All non-screen outcomes use the gate so they wait for an enabled receipt.
     reporter?.reportVisit({ event, properties: properties ?? {} }, options);
   }
 }
