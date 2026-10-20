@@ -828,9 +828,10 @@ Go test binaries. After the server replies that telemetry is disabled, the
 browser stops reports and visit tracking until its first load or focus on a
 later UTC day checks again. Re-enabling telemetry takes effect after that check.
 
-While a telemetry check is pending, the browser stores event outcomes locally
-for the selected server. It sends them only after that server confirms telemetry
-is enabled and deletes them if that server reports that telemetry is disabled.
+While a telemetry check is pending, the browser keeps event outcomes in page
+memory for the selected server. It sends them only after that server confirms
+telemetry is enabled and discards them if telemetry is disabled or the page
+closes.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with

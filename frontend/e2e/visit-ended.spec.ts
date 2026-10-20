@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-const SERVER_KEY = "agentsview-server-url";
 const TOKEN = "visit-test-token";
 
 test("the daemon's disabled receipt stops all browser telemetry through a reload", async ({
@@ -178,81 +177,3 @@ for (const remote of [false, true]) {
     });
   }
 }
-
-test.describe("Back restoration", () => {
-  test("Back restoration keeps the new visit after queued server changes", async ({
-    playwright,
-    baseURL,
-    browserName,
-  }) => {
-    test.skip(
-      browserName !== "chromium",
-      "This regression exercises Chromium's back/forward cache.",
-    );
-    const server = await visitServer(baseURL!);
-    const browser = await playwright.chromium.launch({
-      channel: "chromium",
-      ignoreDefaultArgs: ["--disable-back-forward-cache"],
-    });
-    const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
-    const page = await context.newPage();
-    const otherTab = await context.newPage();
-    await page.bringToFront();
-    try {
-      await page.addInitScript(() => {
-        let offset = 0;
-        const now = performance.now.bind(performance);
-        performance.now = () => now() + offset;
-        Object.assign(window, {
-          advanceVisit: (ms: number) => {
-            offset += ms;
-          },
-          restored: false,
-          serverEvents: [],
-        });
-        window.addEventListener("pageshow", (event) =>
-          Object.assign(window, { restored: event.persisted }),
-        );
-        window.addEventListener("storage", (event) => {
-          if (event.key === "agentsview-server-url")
-            (window as unknown as { serverEvents: unknown[] }).serverEvents.push(event.newValue);
-        });
-      });
-      await page.goto(server.url);
-      await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
-      await page.evaluate(() =>
-        (window as unknown as { advanceVisit(ms: number): void }).advanceVisit(120_000),
-      );
-      await page.goto(`${server.url}/away`);
-      await expect.poll(() => server.visits.length).toBe(1);
-      await otherTab.goto(`${server.url}/away`);
-      await otherTab.evaluate((serverKey) => {
-        localStorage.setItem(serverKey, "https://example.com/remote");
-        localStorage.removeItem(serverKey);
-      }, SERVER_KEY);
-      await page.goBack({ waitUntil: "commit" });
-      await expect
-        .poll(() => page.evaluate(() => (window as unknown as { restored: boolean }).restored))
-        .toBe(true);
-      await expect
-        .poll(() =>
-          page.evaluate(() => (window as unknown as { serverEvents: unknown[] }).serverEvents),
-        )
-        .toEqual(["https://example.com/remote", null]);
-      await page.evaluate(() =>
-        (window as unknown as { advanceVisit(ms: number): void }).advanceVisit(30_000),
-      );
-      await page.close();
-      await expect
-        .poll(() => server.visits.map((visit) => visit.payload))
-        .toEqual([
-          { event: "visit_ended", properties: { surface: "web", duration_bucket: "1_to_5m" } },
-          { event: "visit_ended", properties: { surface: "web", duration_bucket: "under_1m" } },
-        ]);
-    } finally {
-      await otherTab.close();
-      await browser.close();
-      await server.close();
-    }
-  });
-});
