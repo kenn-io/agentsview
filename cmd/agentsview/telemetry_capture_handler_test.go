@@ -13,13 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/telemetry"
 )
 
 func TestTelemetryCanceledCaptureLeavesMigrationRunning(t *testing.T) {
-	t.Setenv(telemetry.EnabledEnv, "1")
-	restoreUnsetEnv(t, "CI")
-	t.Setenv("DO_NOT_TRACK", "0")
 	const legacy = "install-one 2026-10-08 sessions"
 	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 	path := cfg.TelemetryScreenClaimsPath()
@@ -28,7 +24,7 @@ func TestTelemetryCanceledCaptureLeavesMigrationRunning(t *testing.T) {
 	require.NoError(t, lock.Lock())
 	t.Cleanup(func() { require.NoError(t, lock.Unlock()) })
 	forwarded := make(chan struct{}, 1)
-	handler, _ := telemetryCaptureHandler(cfg, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler, _ := telemetryCaptureHandler(cfg, true, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		forwarded <- struct{}{}
 	}))
 	ctx, cancel := context.WithCancel(t.Context())

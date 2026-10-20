@@ -2209,26 +2209,27 @@ prompts, file paths, or hostnames anywhere.
 Optional features that send data externally when you enable them:
 
 - [Hosted Raw Sync](/docs/hosted-raw-sync/) sends original provider files to a
-  hosted custody service configured by your deployment operator.
+    hosted custody service configured by your deployment operator.
 - [PostgreSQL sync](/docs/pg-sync/) (`pg push`) sends session data to a
   PostgreSQL database you configure.
 - [ClickHouse sync](/docs/clickhouse-sync/) (`clickhouse push`) sends session
   data to a ClickHouse database you configure.
 - The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data
-  only leaves the machine if you expose the mirror over a remote Quack endpoint.
+    only leaves the machine if you expose the mirror over a remote Quack
+    endpoint.
 - [Generated insights](/docs/recall/#current-surface) sends scoped session
-  content to the configured endpoint when `[insights]` sets `endpoint` and
-  `model`, or to the selected agent CLI when neither is set.
+    content to the configured endpoint when `[insights]` sets `endpoint` and
+    `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
 Automatic outbound requests include update checks, anonymous telemetry, and
 Google Fonts:
 
 - **CLI and web UI** — on startup, the server contacts the GitHub API to check
-  for new releases. No identifying information is sent beyond what a standard
-  GitHub API request includes (IP address, user-agent).
+    for new releases. No identifying information is sent beyond what a standard
+    GitHub API request includes (IP address, user-agent).
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
-  feed independently.
+    feed independently.
 - **Anonymous daemon telemetry** — see below.
 - **Google Fonts** — the web app loads Inter and JetBrains Mono from
   `https://fonts.googleapis.com` and `https://fonts.gstatic.com`. The telemetry
@@ -2351,9 +2352,10 @@ disabled. PostHog's project settings separately control IP address retention;
 `$geoip_disable` does not configure retention. The ping runs in the background.
 
 Telemetry is on by default only for plain release versions matching `vX.Y.Z` or
-`X.Y.Z`. Source builds and other version formats keep it off, including the
-first heartbeat. Go test binaries also disable it. Any present `CI` variable,
-even an empty value, disables reporting.
+`X.Y.Z`. Development versions and other version formats keep it off, including
+the first heartbeat. A source or fork build with a plain release version is
+eligible. Go test binaries also disable it. Any present `CI` variable, even an
+empty value, disables reporting.
 
 Disable reporting with either `AGENTSVIEW_TELEMETRY_ENABLED` or
 `TELEMETRY_ENABLED` set to `0`, `false`, `no`, or `off`. A present

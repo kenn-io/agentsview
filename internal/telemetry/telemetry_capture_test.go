@@ -228,9 +228,7 @@ func captureCollector(t *testing.T) (string, func() []capturedEvent) {
 
 func captureReporter(t *testing.T, endpoint string, opts Options) *Reporter {
 	t.Helper()
-	t.Setenv("DO_NOT_TRACK", "0")
-	t.Setenv("CI", "")
-	require.NoError(t, os.Unsetenv("CI"))
+	clearTelemetryVetoes(t)
 	if opts.ScreenClaimsPath == "" {
 		opts.ScreenClaimsPath = filepath.Join(t.TempDir(), "screens")
 	}

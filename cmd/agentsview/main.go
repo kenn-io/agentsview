@@ -560,7 +560,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	cfg = preparedCfg
 	rtOpts.BasePath = opts.BasePath
 
-	telemetryCapture, startScreenClaimMigration := telemetryCaptureHandler(cfg, telemetryReporter.CaptureHandler())
+	telemetryCapture, startScreenClaimMigration := telemetryCaptureHandler(cfg, telemetryReporter.Enabled(), telemetryReporter.CaptureHandler())
 	srvOpts := []server.Option{
 		server.WithCodexCloudStatus(codexCloudStatus),
 		server.WithVersion(server.VersionInfo{
@@ -1478,8 +1478,8 @@ func telemetryOptions(cfg config.Config) telemetry.Options {
 // telemetryCaptureHandler converts screen claims once before forwarding a
 // capture. startMigration begins that conversion in the background so a
 // restart converts claims without waiting for a browser report.
-func telemetryCaptureHandler(cfg config.Config, next http.Handler) (handler http.Handler, startMigration func()) {
-	if !telemetry.EnabledFromEnv() {
+func telemetryCaptureHandler(cfg config.Config, enabled bool, next http.Handler) (handler http.Handler, startMigration func()) {
+	if !enabled {
 		return next, func() {}
 	}
 	migrated := make(chan struct{})

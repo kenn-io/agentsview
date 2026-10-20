@@ -131,22 +131,18 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 	const legacy = "install-one 2026-10-08 sessions"
 	for _, tc := range []struct {
 		name    string
-		enabled string
+		enabled bool
 	}{
-		{name: "enabled", enabled: "1"},
-		{name: "disabled", enabled: "0"},
+		{name: "enabled", enabled: true},
+		{name: "disabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(telemetry.EnabledEnv, tc.enabled)
-			restoreUnsetEnv(t, "CI")
-			t.Setenv("DO_NOT_TRACK", "0")
-			t.Setenv(telemetry.GenericEnabledEnv, "1")
 			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
 			assert.Equal(t, path, telemetryOptions(cfg).ScreenClaimsPath, "the reporter must read the file the handler migrates")
 			forwarded := make(chan []byte, 1)
-			handler, _ := telemetryCaptureHandler(cfg, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			handler, startMigration := telemetryCaptureHandler(cfg, tc.enabled, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 				data, err := os.ReadFile(path)
 				assert.NoError(t, err)
 				forwarded <- data
@@ -157,7 +153,11 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
 
 			first := <-forwarded
-			if tc.enabled == "0" {
+			if !tc.enabled {
+				startMigration()
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, legacy, string(data), "disabled reporter must leave claims unchanged at startup")
 				assert.Equal(t, legacy, string(first))
 				return
 			}
@@ -205,13 +205,10 @@ func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
 func TestTelemetryScreenClaimsMigration(t *testing.T) {
 	const legacy = "install-one 2026-10-08 sessions"
 	t.Run("startup converts claims without a capture", func(t *testing.T) {
-		t.Setenv(telemetry.EnabledEnv, "1")
-		restoreUnsetEnv(t, "CI")
-		t.Setenv("DO_NOT_TRACK", "0")
 		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 		path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
 		require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-		_, startMigration := telemetryCaptureHandler(cfg, http.NotFoundHandler())
+		_, startMigration := telemetryCaptureHandler(cfg, true, http.NotFoundHandler())
 		lock := flock.New(path + ".lock")
 		require.NoError(t, lock.Lock())
 		started := make(chan struct{})
@@ -233,5 +230,50 @@ func TestTelemetryScreenClaimsMigration(t *testing.T) {
 		}, 5*time.Second, 10*time.Millisecond, "startup must convert claims without a capture")
 		require.NoError(t, lock.Lock())
 		require.NoError(t, lock.Unlock())
+	})
+	t.Run("capture arrives first and waits for migration", func(t *testing.T) {
+		cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+		path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
+		require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+		forwarded := make(chan []byte, 1)
+		handler, _ := telemetryCaptureHandler(cfg, true, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			data, err := os.ReadFile(path)
+			assert.NoError(t, err)
+			forwarded <- data
+		}))
+		lock := flock.New(path + ".lock")
+		require.NoError(t, lock.Lock())
+		captureStarted, captureDone := make(chan struct{}), make(chan struct{})
+		lockHeld := true
+		defer func() {
+			if lockHeld {
+				_ = lock.Unlock()
+			}
+			<-captureDone
+		}()
+		go func() {
+			close(captureStarted)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/telemetry", nil))
+			close(captureDone)
+		}()
+		select {
+		case <-captureStarted:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "capture did not start")
+		}
+		select {
+		case <-forwarded:
+			require.FailNow(t, "capture reached the forwarding handler while screen claims were locked")
+		case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows capture waits for migration to release the claims lock
+		}
+		require.NoError(t, lock.Unlock())
+		lockHeld = false
+		select {
+		case <-captureDone:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "capture did not finish after the screen claims lock was released")
+		}
+		result := <-forwarded
+		assert.True(t, jsontext.Value(result).IsValid(), "claims must be JSON before forwarding capture")
 	})
 }
