@@ -2236,9 +2236,9 @@ The automatic outbound requests are update checks and anonymous telemetry:
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 each UTC day it runs. Restarts and other servers sharing the data directory do
 not send another ping that day. The web UI also reports an anonymous
-`app_opened` event on load or focus, with daily checks scoped to the selected
-server and the browser's local storage. The server sends it to PostHog with the
-same fields and opt-out as the ping. The browser never contacts PostHog.
+`app_opened` event on load or focus, at most once per selected server and UTC
+day. These claims live in browser local storage. The server sends it to PostHog
+with the same fields and opt-out as the ping. The browser never contacts PostHog.
 After a disabled receipt, the browser stops sending reports and tracking visits.
 It checks again on its first load or focus on a later UTC day. Re-enabling
 telemetry takes effect after that check.
@@ -2247,6 +2247,8 @@ and discard its accumulated duration. Tracking starts fresh when a later check
 enables reporting. Outcomes that occur while reporting is unavailable are
 dropped. A fresh page retries after authentication; otherwise, the next UTC
 day's load or focus starts a new check.
+Unexpected HTTP statuses other than 401 retry up to five times with increasing
+delays before reporting becomes unavailable.
 The browser retains each daily claim's 35 most recently accepted UTC dates.
 Rolling the clock back to an evicted date can count it again.
 
@@ -2306,6 +2308,9 @@ attempt. Forwarded reports can replace malformed or plain-text claims with a
 fresh file, losing their counts. Reports return 500 while the file cannot be
 read or written, or uses a newer format. When counts cannot carry over, kit
 starts a fresh file, which can count each screen one more time that day.
+Processes sharing the data directory should use the same AgentsView version.
+Mixing versions can let an older writer clear a claim a newer writer reused
+after a clock rollback, allowing a screen to count twice.
 Requests must use `application/json` with exactly one JSON value; a missing or
 unknown `screen` returns 400. The server reserves each claim before enqueueing
 its event. If reservation storage fails, the request returns 500 without

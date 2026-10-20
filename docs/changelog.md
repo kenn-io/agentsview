@@ -183,9 +183,10 @@ The latest release is
 
 **Improvements**
 
-- With telemetry off, the browser sends at most one check per UTC day and stops
-  tracking visits. A new UTC day's check can hold the end of a long visit until
-  an enabled receipt arrives. Closing the page before then can lose that event.
+- The browser sends `app_opened` at most once per selected server and UTC day.
+  With telemetry off, it stops tracking visits after the daily check.
+  A new UTC day's check can hold the end of a long visit until an enabled receipt
+  arrives. Closing the page before then can lose that event.
 - Load Usage totals, top sessions and model comparison faster on large archives.
 - The Usage page starts its model comparison together with totals instead of
   waiting for them. On an archive of 24,000 sessions the page finished in 4.0

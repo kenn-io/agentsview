@@ -804,9 +804,9 @@ Troubleshooting:
 ## Privacy
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
-at most once per UTC day while the server runs, and an `app_opened` event when
-the web UI first loads or gains focus each UTC day. The browser remembers daily
-checks per selected server in its local storage.
+at most once per UTC day while the server runs. On load or focus, the browser
+sends `app_opened` at most once per selected server and UTC day, with claims
+stored in browser local storage.
 The server also sends `setup_finished` once per installation when the archive
 first has a session in the default session list, including orphaned sessions and
 excluding automated sessions and trash. Existing installs with such a session
