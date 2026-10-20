@@ -2236,9 +2236,11 @@ The automatic outbound requests are update checks and anonymous telemetry:
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 each UTC day it runs. Restarts and other servers sharing the data directory do
 not send another ping that day. The web UI also reports an anonymous
-`app_opened` event to the server when it loads and on the first focus of a later
-UTC day. The server sends it to PostHog with the same fields and opt-out as the
-ping. The browser never contacts PostHog.
+`app_opened` event once per selected server per UTC day, on load or focus. The
+server sends it to PostHog with the same fields and opt-out as the ping. The
+browser never contacts PostHog. After a disabled receipt, the browser stops
+reports and visit tracking until its first load or focus on a later UTC day
+checks again. Re-enabling telemetry takes effect after that check.
 
 The server sends `setup_finished` once per installation when the archive first
 has a session in the default session list. Sessions need messages to count;

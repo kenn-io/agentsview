@@ -88,9 +88,7 @@
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
-  import { setupAppOpenedReporting } from "./lib/utils/app-opened.js";
-  import { reportTelemetry } from "./lib/utils/telemetry.js";
-  import { setupVisitEndedReporting } from "./lib/utils/visit-ended.js";
+  import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -813,9 +811,7 @@
     sync.loadVersion();
     sync.checkForUpdate();
     sync.startPolling();
-    const appOpenedCleanup = setupAppOpenedReporting();
-    const visitEndedCleanup = setupVisitEndedReporting();
-    window.addEventListener("focus", reportScreenView);
+    const telemetryCleanup = setupTelemetryReporting();
 
     const healthCleanup = setupVisibilityHealthCheck({
       onBackendDegraded: () => sync.markBackendDegraded(),
@@ -827,9 +823,7 @@
       navigateUserPrompt,
     });
     return () => {
-      appOpenedCleanup();
-      visitEndedCleanup();
-      window.removeEventListener("focus", reportScreenView);
+      telemetryCleanup();
       healthCleanup();
       cleanup();
       window.removeEventListener("show-about", showAbout);

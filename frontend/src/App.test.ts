@@ -1894,7 +1894,7 @@ describe("App telemetry", () => {
         if (requestUrl(input).includes("/api/v1/telemetry/events")) {
           if (typeof init?.body !== "string") throw new Error("telemetry body is not a string");
           posted.push(JSON.parse(init.body));
-          return new Response('{"status":"disabled"}', { status: 202, headers });
+          return new Response('{"status":"queued"}', { status: 202, headers });
         }
         return new Response("{}", { status: 200, headers });
       }),
@@ -1923,7 +1923,7 @@ describe("App telemetry", () => {
     expect(postedFor("visit_ended")).toHaveLength(1);
   });
 
-  it("reports authenticated route changes, the usage alias, and focus until unmount", async () => {
+  it("reports authenticated route changes and the usage alias once daily", async () => {
     setup();
     router.replace("recall");
     settings.needsAuth = true;
@@ -1944,11 +1944,11 @@ describe("App telemetry", () => {
     window.dispatchEvent(new Event("focus"));
     await flushEffects();
     expect(postedFor("screen_viewed").at(-1)).toEqual({ screen: "usage", surface: "web" });
-    expect(postedFor("screen_viewed")).toHaveLength(4);
+    expect(postedFor("screen_viewed")).toHaveLength(3);
     await unmount(component!);
     component = undefined;
     window.dispatchEvent(new Event("focus"));
-    expect(postedFor("screen_viewed")).toHaveLength(4);
+    expect(postedFor("screen_viewed")).toHaveLength(3);
   });
   async function open(id: string | null) {
     router.route = "sessions";

@@ -43,14 +43,20 @@ async function visitServer(upstream: string, authenticated = false) {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks);
-      const response = await fetch(new URL(req.url!, upstream), {
-        method: req.method,
-        headers: {
-          Origin: new URL(upstream).origin,
-          ...(body.length ? { "Content-Type": "application/json" } : {}),
-        },
-        body: body.length ? body : undefined,
-      });
+      const response =
+        req.url === "/api/v1/telemetry/events"
+          ? new Response('{"status":"queued"}', {
+              status: 202,
+              headers: { "Content-Type": "application/json" },
+            })
+          : await fetch(new URL(req.url!, upstream), {
+              method: req.method,
+              headers: {
+                Origin: new URL(upstream).origin,
+                ...(body.length ? { "Content-Type": "application/json" } : {}),
+              },
+              body: body.length ? body : undefined,
+            });
       const bytes = Buffer.from(await response.arrayBuffer());
       const payload = body.length ? JSON.parse(body.toString()) : undefined;
       if (req.url === "/api/v1/telemetry/events" && payload?.event === "visit_ended") {
@@ -119,7 +125,7 @@ for (const remote of [false, true]) {
                 properties: { surface: "web", duration_bucket: "under_1m" },
               },
               status: 202,
-              body: { status: "disabled" },
+              body: { status: "queued" },
             },
           ]);
         if (remote) {

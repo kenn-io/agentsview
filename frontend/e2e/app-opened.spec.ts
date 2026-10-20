@@ -7,7 +7,7 @@ function isTelemetryPost(request: Request): boolean {
   return (
     request.method() === "POST" &&
     new URL(request.url()).pathname === TELEMETRY_PATH &&
-    request.postDataJSON()?.event === "app_opened"
+    Boolean(request.postDataJSON()?.event)
   );
 }
 
@@ -25,9 +25,16 @@ test("loading the UI reports app_opened once and a same-day focus sends nothing 
 
   expect(res.status()).toBe(202);
   expect(await res.json()).toEqual({ status: "disabled" });
-  expect(res.request().postDataJSON()).toEqual({ event: "app_opened" });
+  expect(res.request().postDataJSON()).toEqual({
+    event: "app_opened",
+    properties: { surface: "web" },
+  });
 
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("pagehide"));
+  });
+  await page.reload();
   // Absence can't be awaited, so give a stray request time to show up.
   await page.waitForTimeout(1000);
   expect(recorded).toHaveLength(1);

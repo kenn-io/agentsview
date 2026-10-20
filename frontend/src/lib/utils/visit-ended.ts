@@ -1,10 +1,4 @@
-import {
-  getGeneratedBase,
-  SERVER_URL_CHANGE_EVENT,
-  SERVER_URL_KEY,
-  SERVER_URL_REVISION_KEY,
-} from "../api/runtime.js";
-import { reportTelemetry } from "./telemetry.js";
+import type { BrowserTelemetryReporter } from "@kenn-io/kit-ui/utils/browser-telemetry";
 
 const HIDDEN_VISIT_TIMEOUT_MS = 1_800_000;
 
@@ -16,12 +10,10 @@ function durationBucket(ms: number): string {
 }
 
 /** Reports visible visit time as a duration bucket when a visit ends; returns a cleanup. */
-export function setupVisitEndedReporting(): () => void {
+export function setupVisitEndedReporting(reporter: BrowserTelemetryReporter): () => void {
   let visibleMs = 0;
-  let started = document.hidden ? undefined : performance.now();
-  let destination = started === undefined ? undefined : getGeneratedBase();
-  let revision = localStorage.getItem(SERVER_URL_REVISION_KEY);
-  let invalid = false;
+  let started: number | undefined;
+  let tracking = false;
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   let hiddenAt: number | undefined;
 
@@ -34,52 +26,23 @@ export function setupVisitEndedReporting(): () => void {
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     pause();
-    if (
-      visibleMs > 0 &&
-      !invalid &&
-      destination === getGeneratedBase() &&
-      revision === localStorage.getItem(SERVER_URL_REVISION_KEY)
-    ) {
-      reportTelemetry(
-        "visit_ended",
-        { surface: "web", duration_bucket: durationBucket(visibleMs) },
+    if (visibleMs > 0) {
+      reporter.reportVisit(
+        {
+          event: "visit_ended",
+          properties: { surface: "web", duration_bucket: durationBucket(visibleMs) },
+        },
         { keepalive: true },
       );
     }
     visibleMs = 0;
-    destination = undefined;
-    invalid = false;
   };
   const resume = () => {
     if (document.hidden) return;
     if (hiddenAt !== undefined && Date.now() - hiddenAt >= HIDDEN_VISIT_TIMEOUT_MS) end();
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
-    if (started === undefined) {
-      if (destination === undefined) {
-        destination = getGeneratedBase();
-        revision = localStorage.getItem(SERVER_URL_REVISION_KEY);
-      }
-      started = performance.now();
-    }
-  };
-  const serverChanged = () => {
-    // Queued storage events can predate this visit's shared revision.
-    if (
-      destination !== undefined &&
-      (destination !== getGeneratedBase() ||
-        revision !== localStorage.getItem(SERVER_URL_REVISION_KEY))
-    ) {
-      invalid = true;
-    }
-  };
-  const storage = (event: StorageEvent) => {
-    if (
-      event.storageArea === localStorage &&
-      (event.key === SERVER_URL_KEY || event.key === null)
-    ) {
-      serverChanged();
-    }
+    if (started === undefined) started = performance.now();
   };
   const visibility = () => {
     if (document.hidden) {
@@ -91,17 +54,29 @@ export function setupVisitEndedReporting(): () => void {
       resume();
     }
   };
-  document.addEventListener("visibilitychange", visibility);
-  window.addEventListener("pagehide", end);
-  window.addEventListener("pageshow", resume);
-  window.addEventListener("storage", storage);
-  window.addEventListener(SERVER_URL_CHANGE_EVENT, serverChanged);
-  return () => {
+  const stop = () => {
+    tracking = false;
     clearTimeout(hiddenTimer);
+    hiddenAt = undefined;
+    started = undefined;
+    visibleMs = 0;
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("pagehide", end);
     window.removeEventListener("pageshow", resume);
-    window.removeEventListener("storage", storage);
-    window.removeEventListener(SERVER_URL_CHANGE_EVENT, serverChanged);
+  };
+  const unsubscribe = reporter.onQuietChange((quiet, reason) => {
+    if (quiet && reason !== "checking") {
+      stop();
+    } else if (!tracking) {
+      tracking = true;
+      resume();
+      document.addEventListener("visibilitychange", visibility);
+      window.addEventListener("pagehide", end);
+      window.addEventListener("pageshow", resume);
+    }
+  });
+  return () => {
+    unsubscribe();
+    stop();
   };
 }
