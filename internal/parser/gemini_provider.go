@@ -65,6 +65,32 @@ func (p *geminiProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *geminiProvider) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	nestedCLI := false
+	for _, root := range p.sources.roots {
+		rel, ok := relUnder(root, filepath.Clean(req.Path))
+		if !ok {
+			continue
+		}
+		if rel != "antigravity-cli" &&
+			!strings.HasPrefix(rel, "antigravity-cli"+string(filepath.Separator)) {
+			// An explicitly configured inner Gemini root still owns its inputs.
+			return ChangedPathUnclassified, nil
+		}
+		nestedCLI = true
+	}
+	if nestedCLI {
+		return ChangedPathNonData, nil
+	}
+	return ChangedPathUnclassified, nil
+}
+
 func (p *geminiProvider) SourceForReconciliation(
 	ctx context.Context,
 	path, project string,
@@ -671,6 +697,7 @@ func geminiProviderCapabilities() Capabilities {
 			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
+			ChangedPathRelevance: CapabilitySupported,
 			FindSource:           CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
 			IncrementalAppend:    CapabilityNotApplicable,

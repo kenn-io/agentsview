@@ -62,6 +62,31 @@ func (p *antigravityCLIProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *antigravityCLIProvider) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	for _, root := range p.sources.roots {
+		if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
+			continue
+		}
+		rel, ok := relUnder(root, filepath.Clean(req.Path))
+		if !ok || filepath.Dir(rel) != "conversations" {
+			continue
+		}
+		name := filepath.Base(rel)
+		if strings.HasSuffix(name, ".db-shm") &&
+			IsValidSessionID(strings.TrimSuffix(name, ".db-shm")) {
+			// A reader can rewrite the WAL index without changing session data.
+			return ChangedPathNonData, nil
+		}
+	}
+	return ChangedPathUnclassified, nil
+}
+
 func (p *antigravityCLIProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
@@ -776,6 +801,7 @@ func antigravityCLIProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
+	source.ChangedPathRelevance = CapabilitySupported
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{

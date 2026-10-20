@@ -3940,6 +3940,15 @@ schemas keep their existing ordering behavior.
   when the value is missing or relative. The exact absolute workspace remains
   the CWD. The project label is derived from the path text without probing the
   recorded folder when filesystem discovery is disabled.
+- **Change detection (checked 2026-10-20):** SQLite's
+  [WAL-index format](https://sqlite.org/walformat.html#the_wal_index_or_shm_file)
+  describes `-shm` as a transient index rather than database content.
+  Antigravity CLI conversation SHM events are non-data, including removals,
+  before remote import fallback selection. Main-database and WAL changes still
+  resolve to their conversation. Gemini excludes the nested `antigravity-cli`
+  tree from its own changes, unless a configured inner Gemini root owns the
+  path. These are import-routing rules; the closed producer format and its
+  evidence classification are unchanged.
 
 ## iFlow CLI (`iflow`)
 
