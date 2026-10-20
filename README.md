@@ -828,6 +828,9 @@ telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
 Go test binaries. After the server replies that telemetry is disabled, the
 browser stops reports and visit tracking until its first load or focus on a
 later UTC day checks again. Re-enabling telemetry takes effect after that check.
+An unauthorized check or exhausted retries also stop visit tracking and discard
+the current visit's duration until a later check enables tracking. Outcomes
+that occur while reporting is unavailable are dropped.
 
 While a telemetry check is pending, the browser keeps event outcomes in page
 memory for the selected server. It sends them only after that server confirms

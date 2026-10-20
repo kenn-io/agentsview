@@ -37,7 +37,10 @@ async function postReceipt(
       body: JSON.stringify(event),
       signal: controller.signal,
     });
-    if (response.status !== 202) return response;
+    if (response.status === 401) return response;
+    if (response.status !== 202) {
+      throw new Error(`Telemetry request returned HTTP ${response.status}`);
+    }
     // The receipt body shares the deadline; malformed JSON is an unreadable receipt.
     const text = await response.text();
     try {

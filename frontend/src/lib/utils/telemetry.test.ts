@@ -169,6 +169,25 @@ describe("feature outcomes", () => {
     },
   );
 
+  it.each([404, 503])("backs off after a telemetry HTTP %i response", async (status) => {
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response(null, { status }))
+      .mockImplementation(() => new Promise(() => {}));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetch.mock.lastCall![1]!.body as string)).toEqual({
+      event: "app_opened",
+      properties: { surface: "web" },
+    });
+  });
+
   it("retries an unauthorized check on fresh setup after setting the token", async () => {
     const fetch = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()

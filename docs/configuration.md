@@ -2242,6 +2242,11 @@ same fields and opt-out as the ping. The browser never contacts PostHog.
 After a disabled receipt, the browser stops sending reports and tracking visits.
 It checks again on its first load or focus on a later UTC day. Re-enabling
 telemetry takes effect after that check.
+An unauthorized check (HTTP 401) or exhausted retries also stop visit tracking
+and discard its accumulated duration. Tracking starts fresh when a later check
+enables reporting. Outcomes that occur while reporting is unavailable are
+dropped. A fresh page retries after authentication; otherwise, the next UTC
+day's load or focus starts a new check.
 The browser retains each daily claim's 35 most recently accepted UTC dates.
 Rolling the clock back to an evicted date can count it again.
 
