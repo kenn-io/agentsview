@@ -10,11 +10,18 @@ scheduled checks, and desktop builds. Select labels from
 [GitHub's supported runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 Keep the explicit architecture labels for Linux ARM64 and macOS desktop builds.
 
-Use the built-in Go cache in `actions/setup-go` and npm caching in
+Use the local `go-cache-restore` and `go-cache-save` actions for Go caches and
+disable the built-in cache in `actions/setup-go`. Use npm caching in
 `actions/setup-node`. Set `cache-dependency-path` to the lockfiles for the
 packages the job installs. Desktop jobs cache Rust dependencies through
-`Swatinem/rust-cache` with the GitHub cache backend. Playwright jobs install
-browsers and system dependencies on each run.
+`Swatinem/rust-cache` with the GitHub cache backend. Pull-request workflow
+callers set `cache-mode: read` so jobs can restore caches without saving copies.
+Playwright jobs install browsers and system dependencies on each run.
+
+Desktop sidecar builds use `-trimpath` by default. Pull-request desktop builds
+set `AGENTSVIEW_SIDECAR_TRIMPATH=false` to reuse Go compile results from test
+jobs. Other desktop builds keep `-trimpath`.
+
 Windows Go test and lint jobs in `ci.yml` put caches and temp files under
 `RUNNER_TEMP`. Capture tests use a private system-drive temporary directory so
 ancestor permissions satisfy their checks.

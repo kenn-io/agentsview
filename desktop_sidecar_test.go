@@ -60,3 +60,30 @@ func TestPrepareSidecarStopsWhenPricingSnapshotRestoreFails(t *testing.T) {
 		"go run ./internal/pricing/cmd/litellm-snapshot -restore")
 	assertNoEventContains(t, events, "go build")
 }
+
+func TestPrepareSidecarTrimpath(t *testing.T) {
+	requireUnixShell(t)
+
+	for _, trimpath := range []string{"", "false"} {
+		t.Run("trimpath="+trimpath, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_SIDECAR_TRIMPATH", trimpath)
+			root := t.TempDir()
+			installRepoFile(t, root, "desktop/scripts/prepare-sidecar.sh", 0o755)
+			writeDesktopDevWorkspace(t, root)
+			stubs := installUnixBuildStubs(t, root)
+
+			out, err := runInWorkspace(t, root,
+				stubs.env("AGENTSVIEW_VERSION=v1.2.3"),
+				"bash", "desktop/scripts/prepare-sidecar.sh")
+			require.NoError(t, err, "%s", out)
+			events := stubs.events(t)
+			assertEventContains(t, events, "go build -tags fts5")
+			if trimpath == "false" {
+				assertNoEventContains(t, events, "-trimpath")
+			} else {
+				assertEventContains(t, events, "-trimpath")
+			}
+			require.FileExists(t, filepath.Join(root, "desktop", "src-tauri", "binaries", "agentsview-x86_64-unknown-linux-gnu"))
+		})
+	}
+}

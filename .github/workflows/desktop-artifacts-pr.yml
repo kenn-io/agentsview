@@ -16,4 +16,5 @@ permissions: read-all
 
 jobs:
   run:
+    cache-mode: read
     uses: ./.github/workflows/desktop-artifacts.yml

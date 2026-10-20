@@ -8,4 +8,5 @@ permissions: read-all
 
 jobs:
   run:
+    cache-mode: read
     uses: ./.github/workflows/ci.yml

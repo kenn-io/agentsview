@@ -173,10 +173,15 @@ main() {
   build_bin="$tmp_dir/agentsview$ext"
   restore_pricing_snapshot
 
+  local build_flags=(-tags fts5 -ldflags "$ldflags")
+  if [ "${AGENTSVIEW_SIDECAR_TRIMPATH:-true}" != "false" ]; then
+    build_flags+=(-trimpath)
+  fi
+
   (
     cd "$REPO_ROOT"
     CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" \
-      go build -tags fts5 -ldflags "$ldflags" -trimpath \
+      go build "${build_flags[@]}" \
       -o "$build_bin" ./cmd/agentsview
   )
 
