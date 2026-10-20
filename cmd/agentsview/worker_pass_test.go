@@ -1187,41 +1187,11 @@ func TestSyncWorkerRefusedWhenDaemonHoldsWriteLock(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 	holdWriteOwnerLockForTest(t, dataDir) // daemon has NOT yielded the flock
-	shortenWorkerLockWaitForTest(t, 50*time.Millisecond)
 
 	_, _, err = openWorkerWriteDB(t.Context(), cfg, nil)
 	require.Error(t, err,
 		"worker must be refused while the daemon still holds the write lock")
-	require.ErrorAs(t, err, new(writeOwnerLockHeldError))
 	assert.ErrorContains(t, err, "write lock")
-	assert.NotContains(t, err.Error(), "backoff:")
-}
-
-func shortenWorkerLockWaitForTest(t *testing.T, wait time.Duration) {
-	t.Helper()
-	prevWait, prevInitial := workerLockWait, reacquireBackoffInitial
-	workerLockWait = wait
-	reacquireBackoffInitial = time.Millisecond
-	t.Cleanup(func() {
-		workerLockWait, reacquireBackoffInitial = prevWait, prevInitial
-	})
-}
-
-// A probe that checks the write lock for an instant must not fail the worker
-// pass the daemon released the lock for.
-func TestSyncWorkerWaitsOutBriefWriteLockHold(t *testing.T) {
-	dataDir, cfg := writeDBConfigForTest(t)
-	t.Setenv(syncWorkerChildEnvVar, "1")
-	shortenWorkerLockWaitForTest(t, 5*time.Second)
-	probe := acquireWriteOwnerLockForTest(t, dataDir)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_ = probe.Close()
-	}()
-
-	database, lock, err := openWorkerWriteDB(t.Context(), cfg, nil)
-	require.NoError(t, err)
-	closeWriteDB(database, lock)
 }
 
 // A failed writer restoration must be retried, not logged and abandoned:

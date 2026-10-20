@@ -4,14 +4,11 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/cenkalti/backoff/v7"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -403,42 +400,15 @@ func workerResultFromStats(
 	return result
 }
 
-// Worker lock acquisition waits briefly for a held write lock. The parent
-// released it for this worker, so a holder during the bound is either a
-// transient probe (when no runtime record is visible) or a real second writer.
-// A probe lets go within the bound; a second writer still fails once it passes.
-var workerLockWait = time.Second
-
 // openWorkerWriteDB reuses the daemon's direct-write open path — including the
 // db.write.lock acquisition — but returns errors instead of exiting. Callers
 // must tear down through closeWriteDB so a failed database close (undrained
 // connections) retains the write-owner flock instead of letting another
 // process acquire writer ownership alongside a surviving SQLite connection.
 func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, *writeOwnerLock, error) {
-	policy := backoff.NewExponentialBackOff()
-	policy.InitialInterval = reacquireBackoffInitial
-	policy.MaxInterval = reacquireBackoffMax
-	policy.Multiplier = 2
-	type opened struct {
-		database *db.DB
-		lock     *writeOwnerLock
-	}
-	var lastErr error
-	got, err := backoff.Retry(ctx, func() (opened, error) {
-		database, lock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
-			return openDBWithProgress(ctx, cfg, progress)
-		})
-		if err != nil && !errors.As(err, new(writeOwnerLockHeldError)) {
-			return opened{}, backoff.Permanent(err)
-		}
-		lastErr = err
-		return opened{database, lock}, err
-	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(workerLockWait))
-	if err != nil && lastErr != nil && ctx.Err() == nil {
-		// Surface the holder error, not the retry library's timeout wrapper.
-		err = lastErr
-	}
-	return got.database, got.lock, err
+	return openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
+		return openDBWithProgress(ctx, cfg, progress)
+	})
 }
 
 // workerEngineConfig mirrors the sync.EngineConfig literal in runServe minus the
