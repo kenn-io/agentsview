@@ -1,0 +1,26 @@
+name: Sibling pins on main
+
+# A pull request may pin a sibling kenn-io repository's pull request build
+# while both are open, but it may not merge until every pin is on that
+# sibling's main. See https://github.com/kenn-io/actions/tree/main/sibling-pins.
+#
+# pull_request_target takes this workflow, and so the action's pinned commit,
+# from the target branch. The action reads only the candidate's dependency
+# files. A repository ruleset requires this job, including in merge groups.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  sibling-pins:
+    name: Sibling pins on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check sibling pins
+        uses: kenn-io/actions/sibling-pins@e3eb5366caaebc21a8951c39da85456d04e57103
