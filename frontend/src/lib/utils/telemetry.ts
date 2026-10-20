@@ -52,10 +52,9 @@ async function postReceipt(
 
 /** Owns the selected server's gate and visit tracker for the mounted app. */
 export function setupTelemetryReporting(): () => void {
-  let active = true;
   let stopVisit: (() => void) | undefined;
   const start = () => {
-    if (!active || reporter) return;
+    if (reporter) return;
     const route = `${getGeneratedBase()}/api/v1/telemetry/events`;
     const server = getServerUrl();
     reporter = startBrowserTelemetry({
@@ -85,7 +84,6 @@ export function setupTelemetryReporting(): () => void {
   window.addEventListener(SERVER_URL_CHANGE_EVENT, replace);
   window.addEventListener("storage", storage);
   return () => {
-    active = false;
     stop();
     currentScreen = undefined;
     window.removeEventListener(SERVER_URL_CHANGE_EVENT, replace);

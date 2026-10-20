@@ -183,11 +183,9 @@ The latest release is
 
 **Improvements**
 
-- After the server reports that telemetry is disabled, the browser stops
-  sending reports and tracking visits. It checks again on the first load or
-  focus of a later UTC day. The new UTC day's permission check can hold a long
-  visit's ending event in page memory. Closing the page before an enabled
-  receipt can lose it.
+- With telemetry off, the browser sends at most one check per UTC day and stops
+  tracking visits. A new UTC day's check can hold the end of a long visit until
+  an enabled receipt arrives. Closing the page before then can lose that event.
 - Load Usage totals, top sessions and model comparison faster on large archives.
 - The Usage page starts its model comparison together with totals instead of
   waiting for them. On an archive of 24,000 sessions the page finished in 4.0
