@@ -822,8 +822,7 @@ func TestEnsureBackgroundServeRefusesWhenWriteLockHeldWithoutDaemon(t *testing.T
 	require.Error(t, err)
 	assert.Nil(t, rt)
 	assert.False(t, started, "must not spawn a server that cannot open the archive")
-	assertErrorContainsAll(t, err, writeOwnerLockPath(dir), "PID namespace")
-	assert.NotContains(t, err.Error(), "agentsview daemon stop")
+	assertErrorContainsAll(t, err, writeOwnerLockPath(dir), "cannot auto-start", "restart that server")
 }
 
 func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {

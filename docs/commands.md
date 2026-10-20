@@ -549,10 +549,11 @@ Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. Commands that require
 the daemon refuse while it is disabled. Direct write commands acquire the local
 write-owner lock before opening SQLite. If another process owns that lock, the
 command refuses. When `agentsview daemon status` shows a daemon, stop it;
-otherwise retry after the offline agentsview command, or the agentsview server in
-another container or PID namespace, releases the lock. Auto-start applies the
-same rule: with no daemon visible and the write lock held, it reports the holder
-instead of launching a server that could not open the archive.
+otherwise an offline agentsview command, or an agentsview server whose runtime
+record is missing (for example one started in another PID namespace), holds the
+lock. Wait for the command to finish or restart that server. Auto-start applies
+the same rule: with no daemon visible and the write lock held, it reports the
+holder instead of launching a server that could not open the archive.
 
 ______________________________________________________________________
 

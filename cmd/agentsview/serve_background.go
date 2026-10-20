@@ -630,7 +630,19 @@ probeDaemon:
 		}
 	}
 
-	if err := requireWriteLockFreeForAutoStart(*cfg); err != nil {
+	// With no daemon visible, a held write lock means a server started here
+	// could not open the archive. The launch lock keeps a foreground serve and
+	// direct writers from taking the write lock during this probe.
+	lock, err := tryAcquireWriteOwnerLock(writeLockDataDir(*cfg))
+	if err != nil {
+		if _, held := errors.AsType[writeOwnerLockHeldError](err); held {
+			return nil, fmt.Errorf(
+				"cannot auto-start the agentsview daemon: %w", err,
+			)
+		}
+		return nil, err
+	}
+	if err := lock.Close(); err != nil {
 		return nil, err
 	}
 
@@ -666,29 +678,6 @@ probeDaemon:
 		)
 	}
 	return rt, nil
-}
-
-// requireWriteLockFreeForAutoStart refuses to spawn a server that could not
-// open the archive. With no daemon visible, a held write lock belongs to an
-// offline agentsview command or to a server in another container or PID
-// namespace. The caller holds the background launch lock, so a foreground
-// serve and direct writers cannot take the write lock during the probe.
-func requireWriteLockFreeForAutoStart(cfg config.Config) error {
-	lock, err := tryAcquireWriteOwnerLock(writeLockDataDir(cfg))
-	if err != nil {
-		if held, ok := errors.AsType[writeOwnerLockHeldError](err); ok {
-			return fmt.Errorf(
-				"no agentsview daemon is running here, but another process "+
-					"holds the archive write lock %s, such as an offline "+
-					"agentsview command or an agentsview server in another "+
-					"container or PID namespace; not starting a daemon that "+
-					"could not open the archive. Retry after it exits",
-				held.path,
-			)
-		}
-		return err
-	}
-	return lock.Close()
 }
 
 func waitForExternalServeStartup(
