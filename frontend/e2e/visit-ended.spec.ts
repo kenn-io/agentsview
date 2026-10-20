@@ -149,7 +149,7 @@ for (const remote of [false, true]) {
           await page.goto(server.url);
           await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
         }
-        await (await enabled).json();
+        await enabled;
         server.preflights.length = 0;
         if (action === "close") await page.close();
         else await page.reload();

@@ -2239,7 +2239,7 @@ not send another ping that day. The web UI also reports an anonymous
 `app_opened` event on load or focus, with daily checks scoped to the selected
 server and the browser's local storage. The server sends it to PostHog with the
 same fields and opt-out as the ping. The browser never contacts PostHog.
-After a disabled receipt, the browser stops reports and visit tracking.
+After a disabled receipt, the browser stops sending reports and tracking visits.
 It checks again on its first load or focus on a later UTC day. Re-enabling
 telemetry takes effect after that check.
 
