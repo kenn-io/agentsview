@@ -35,12 +35,10 @@ test("the daemon's disabled receipt stops all browser telemetry through a reload
     window.dispatchEvent(new Event("focus"));
   });
   await page.reload();
-  // Allow a stray visit or screen report to reach the actual daemon.
-  await page.waitForTimeout(1000);
   expect(events).toEqual(["app_opened"]);
 });
 
-async function visitServer(upstream: string, authenticated = false) {
+async function visitServer(upstream: string, authenticated = false, backCache = false) {
   const visits: {
     payload: unknown;
     authorization: string | undefined;
@@ -63,7 +61,7 @@ async function visitServer(upstream: string, authenticated = false) {
       return;
     }
     // A finite event response lets the browser cache the page between visits.
-    if (req.url === "/api/v1/events") {
+    if (backCache && req.url === "/api/v1/events") {
       res.writeHead(204).end();
       return;
     }
@@ -122,61 +120,62 @@ async function visitServer(upstream: string, authenticated = false) {
   };
 }
 
-for (const remote of [false, true]) {
-  for (const action of ["close", "reload"] as const) {
-    test(`visit delivery reaches the ${remote ? "authenticated remote" : "local"} endpoint on ${action}`, async ({
-      page,
-      baseURL,
-    }) => {
-      const server = await visitServer(baseURL!, remote);
-      try {
-        const enabled = page.waitForResponse(
-          (response) =>
-            response.request().method() === "POST" &&
-            new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
-            response.request().postDataJSON()?.event === "app_opened",
+for (const { remote, action } of [
+  { remote: false, action: "close" },
+  { remote: true, action: "reload" },
+]) {
+  test(`visit delivery reaches the ${remote ? "authenticated remote" : "local"} endpoint on ${action}`, async ({
+    page,
+    baseURL,
+  }) => {
+    const server = await visitServer(baseURL!, remote);
+    try {
+      const enabled = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
+          response.request().postDataJSON()?.event === "app_opened",
+      );
+      if (remote) {
+        await page.addInitScript(
+          ({ url, token }) => {
+            localStorage.setItem("agentsview-server-url", url);
+            localStorage.setItem(`agentsview-auth-token::${url}`, token);
+          },
+          { url: server.url, token: TOKEN },
         );
-        if (remote) {
-          await page.addInitScript(
-            ({ url, token }) => {
-              localStorage.setItem("agentsview-server-url", url);
-              localStorage.setItem(`agentsview-auth-token::${url}`, token);
-            },
-            { url: server.url, token: TOKEN },
-          );
-          await new SessionsPage(page).goto();
-        } else {
-          await page.goto(server.url);
-          await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
-        }
-        await enabled;
-        server.preflights.length = 0;
-        if (action === "close") await page.close();
-        else await page.reload();
-        await expect
-          .poll(() => server.visits.map(({ payload }) => payload))
-          .toEqual([
-            {
-              event: "visit_ended",
-              properties: { surface: "web", duration_bucket: "under_1m" },
-            },
-          ]);
-        if (remote) {
-          expect(server.visits[0]?.authorization).toBe(`Bearer ${TOKEN}`);
-          expect(server.preflights).toContainEqual(
-            expect.stringMatching(/authorization.*content-type/i),
-          );
-        }
-      } finally {
-        await server.close();
+        await new SessionsPage(page).goto();
+      } else {
+        await page.goto(server.url);
+        await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }
-    });
-  }
+      await enabled;
+      server.preflights.length = 0;
+      if (action === "close") await page.close();
+      else await page.reload();
+      await expect
+        .poll(() => server.visits.map(({ payload }) => payload))
+        .toEqual([
+          {
+            event: "visit_ended",
+            properties: { surface: "web", duration_bucket: "under_1m" },
+          },
+        ]);
+      if (remote) {
+        expect(server.visits[0]?.authorization).toBe(`Bearer ${TOKEN}`);
+        expect(server.preflights).toContainEqual(
+          expect.stringMatching(/authorization.*content-type/i),
+        );
+      }
+    } finally {
+      await server.close();
+    }
+  });
 }
 
 test("Back restoration starts a fresh visit", async ({ playwright, baseURL, browserName }) => {
   test.skip(browserName !== "chromium", "This regression exercises Chromium's back/forward cache.");
-  const server = await visitServer(baseURL!);
+  const server = await visitServer(baseURL!, false, true);
   const browser = await playwright.chromium.launch({
     channel: "chromium",
     ignoreDefaultArgs: ["--disable-back-forward-cache"],

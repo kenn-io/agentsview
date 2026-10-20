@@ -141,27 +141,6 @@ it("shows settings save errors through the app shell", async () => {
   expect(flash?.textContent).toContain("settings endpoint unavailable");
 });
 
-it("reports analytics for a direct usage visit", async () => {
-  stubAppDependencies();
-  window.history.replaceState(null, "", "/usage");
-  router.route = "usage";
-  const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-    async () => new Response('{"status":"queued"}', { status: 202 }),
-  );
-  vi.stubGlobal("fetch", fetch);
-  component = mount(App, { target: document.body });
-  await flushEffects();
-  const outcomes = () =>
-    fetch.mock.calls
-      .filter(
-        ([, init]) => init?.body && JSON.parse(init.body as string).event === "analytics_viewed",
-      )
-      .map(([, init]) => JSON.parse(init!.body as string));
-  await vi.waitFor(() =>
-    expect(outcomes()).toContainEqual({ event: "analytics_viewed", properties: { page: "usage" } }),
-  );
-});
-
 function appSourceSlice(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
   expect(start).toBeGreaterThan(-1);
@@ -1987,35 +1966,39 @@ describe("App telemetry", () => {
     expect(postedFor("session_viewed")).toEqual([]);
 
     await open("session-1");
-    expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]);
+    await vi.waitFor(() => expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]));
 
     sessions.sessions = [hydratedSession("session-1", "codex", { message_count: 3 })];
     await flushEffects();
-    expect(postedFor("session_viewed")).toHaveLength(1);
+    await vi.waitFor(() => expect(postedFor("session_viewed")).toHaveLength(1));
 
     await open(null);
     await open("session-1");
-    expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }, { agent: "codex" }]);
+    await vi.waitFor(() =>
+      expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }, { agent: "codex" }]),
+    );
 
     router.route = "usage";
     router.sessionId = null;
     await flushEffects();
     await open("session-1");
-    expect(postedFor("session_viewed")).toHaveLength(3);
+    await vi.waitFor(() => expect(postedFor("session_viewed")).toHaveLength(3));
   });
 
   it("reports analytics_viewed once per analytics page and never for the sessions landing page", async () => {
     setup();
-    router.route = "sessions";
+    window.history.replaceState(null, "", "/usage");
+    router.route = "usage";
     component = mount(App, { target: document.body });
-    await flushEffects();
-    expect(postedFor("analytics_viewed")).toEqual([]);
+    await vi.waitFor(() => expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }]));
 
-    for (const route of ["usage", "token-usage", "activity"] as const) {
+    for (const route of ["token-usage", "activity"] as const) {
       router.route = route;
       await flushEffects();
     }
     await open(null);
-    expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }, { page: "activity" }]);
+    await vi.waitFor(() =>
+      expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }, { page: "activity" }]),
+    );
   });
 });

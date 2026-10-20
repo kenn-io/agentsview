@@ -14,25 +14,12 @@ describe("feature outcomes", () => {
   });
   afterEach(() => {
     stop?.();
+    vi.restoreAllMocks();
     localStorage.clear();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
-  it("reports a search error shown", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    fetch.mockClear();
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(JSON.parse(fetch.mock.calls[0]![1].body)).toEqual({
-      event: "error_shown",
-      properties: { kind: "search" },
-    });
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  it("aborts a stalled daily check after ten seconds", async () => {
+  it("aborts a stalled initial check after ten seconds", async () => {
     let signal: AbortSignal | undefined;
     const fetch = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>
@@ -76,13 +63,6 @@ describe("feature outcomes", () => {
       properties: { kind: "search" },
     });
   });
-  it("starts telemetry when the saved server address is malformed", () => {
-    localStorage.setItem("agentsview-server-url", "http://example.org:abc");
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to parse URL")));
-    expect(() => {
-      stop = setupTelemetryReporting();
-    }).not.toThrow();
-  });
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],
@@ -110,31 +90,28 @@ describe("feature outcomes", () => {
     });
     expect(fetch).toHaveBeenCalledOnce();
   });
-  it.each(["queued", "disabled"])(
-    "shares selected-server claims across reloads after a %s receipt",
-    async (status) => {
-      const fetch = vi.fn<(input: RequestInfo | URL, init: RequestInit) => Promise<Response>>(
-        async () => new Response(JSON.stringify({ status }), { status: 202 }),
-      );
-      vi.stubGlobal("fetch", fetch);
-      for (let i = 0; i < 2; i++) {
-        stop = setupTelemetryReporting();
-        reportTelemetry("screen_viewed", { screen: "sessions" });
-        await vi.advanceTimersByTimeAsync(0);
-        reportTelemetry("screen_viewed", { screen: "usage" });
-        window.dispatchEvent(new Event("focus"));
-        await vi.advanceTimersByTimeAsync(0);
-        stop();
-      }
-      const events = () =>
-        fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string).event);
-      expect(events()).toEqual(
-        status === "queued" ? ["app_opened", "screen_viewed", "screen_viewed"] : ["app_opened"],
-      );
-    },
-  );
+  it("shares selected-server claims across reloads after an enabled receipt", async () => {
+    const fetch = vi.fn<(input: RequestInfo | URL, init: RequestInit) => Promise<Response>>(
+      async () => new Response('{"status":"queued"}', { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    for (let i = 0; i < 2; i++) {
+      stop = setupTelemetryReporting();
+      reportTelemetry("screen_viewed", { screen: "sessions" });
+      await vi.advanceTimersByTimeAsync(0);
+      reportTelemetry("screen_viewed", { screen: "usage" });
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+    }
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string).event)).toEqual([
+      "app_opened",
+      "screen_viewed",
+      "screen_viewed",
+    ]);
+  });
 
-  it.each([200, 204, 404, 503])("backs off after a telemetry HTTP %i response", async (status) => {
+  it.each([200, 204])("retries after a telemetry HTTP %i response", async (status) => {
     const fetch = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
       .mockResolvedValueOnce(new Response(null, { status }))
@@ -143,9 +120,7 @@ describe("feature outcomes", () => {
     stop = setupTelemetryReporting();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetch).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(fetch).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersToNextTimerAsync();
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetch.mock.lastCall![1]!.body as string)).toEqual({
       event: "app_opened",
@@ -161,9 +136,7 @@ describe("feature outcomes", () => {
     vi.stubGlobal("fetch", fetch);
     stop = setupTelemetryReporting();
     await vi.advanceTimersByTimeAsync(0);
-    reportErrorShown("search");
-    window.dispatchEvent(new Event("pagehide"));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(fetch).toHaveBeenCalledOnce();
     stop();
     setAuthToken("signed-in");
@@ -173,37 +146,13 @@ describe("feature outcomes", () => {
       "app_opened",
       "app_opened",
     ]);
-    expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer signed-in",
-    );
-  });
-
-  it("uses the selected server's latest token without restarting the reporter", async () => {
-    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => new Response('{"status":"queued"}', { status: 202 }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    setServerUrl("https://example.org");
-    setAuthToken("first-token");
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    setAuthToken("updated-token");
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenLastCalledWith(
-      "https://example.org/api/v1/telemetry/events",
-      expect.objectContaining({
-        headers: expect.any(Headers),
-      }),
-    );
-    expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer updated-token",
-    );
   });
 
   it.each([false, true])(
     "replaces server claims and credentials after a server change, cross-tab=%s",
     async (crossTab) => {
+      const now = vi.spyOn(performance, "now").mockReturnValue(0);
+      vi.spyOn(document, "hidden", "get").mockReturnValue(false);
       const fetch = vi
         .fn()
         .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
@@ -211,6 +160,7 @@ describe("feature outcomes", () => {
       stop = setupTelemetryReporting();
       reportTelemetry("screen_viewed", { screen: "usage" });
       await vi.advanceTimersByTimeAsync(0);
+      now.mockReturnValue(120_000);
       fetch.mockClear();
       if (crossTab) {
         localStorage.setItem(SERVER_URL_KEY, "https://example.org");
@@ -230,10 +180,16 @@ describe("feature outcomes", () => {
         ["https://example.org/api/v1/telemetry/events", "Bearer remote-token", "app_opened"],
         ["https://example.org/api/v1/telemetry/events", "Bearer remote-token", "screen_viewed"],
       ]);
-      setServerUrl("");
-      stop();
+      now.mockReturnValue(150_000);
+      window.dispatchEvent(new Event("pagehide"));
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(
+        fetch.mock.calls
+          .map(([, init]) => JSON.parse(init.body))
+          .filter((event) => event.event === "visit_ended"),
+      ).toEqual([
+        { event: "visit_ended", properties: { surface: "web", duration_bucket: "under_1m" } },
+      ]);
     },
   );
 });

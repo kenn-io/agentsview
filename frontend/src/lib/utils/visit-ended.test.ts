@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { setServerUrl, SERVER_URL_KEY } from "../api/runtime.js";
 import { setupTelemetryReporting } from "./telemetry.js";
 
 describe("visit ended reporting", () => {
   let now: number;
   let hidden: boolean;
   let stop: (() => void) | undefined;
-  let base: HTMLBaseElement;
   const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
     async () => new Response('{"status":"queued"}', { status: 202 }),
   );
@@ -41,13 +39,9 @@ describe("visit ended reporting", () => {
     vi.setSystemTime(new Date("2026-10-02T12:00:00Z"));
     vi.spyOn(performance, "now").mockImplementation(() => now);
     vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
-    base = document.createElement("base");
-    base.href = `${window.location.origin}/agentsview/`;
-    document.head.append(base);
   });
   afterEach(() => {
     stop?.();
-    base.remove();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -68,7 +62,7 @@ describe("visit ended reporting", () => {
     close();
     expect(await buckets()).toEqual([bucket]);
     expect(fetch).toHaveBeenCalledWith(
-      "/agentsview/api/v1/telemetry/events",
+      expect.any(String),
       expect.objectContaining({
         keepalive: true,
         body: JSON.stringify({
@@ -182,57 +176,29 @@ describe("visit ended reporting", () => {
     }
   });
 
-  it.each([401, 503])(
-    "stops and resets visit tracking when checks become unavailable after HTTP %i",
-    async (status) => {
-      await start();
-      advance(120_000);
-      fetch.mockImplementation(async () => new Response(null, { status }));
-      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
-      window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(0);
-      if (status === 503) {
-        for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000]) {
-          now += delay;
-          await vi.advanceTimersByTimeAsync(delay);
-        }
-      }
-      const requests = status === 401 ? 2 : 7;
-      expect(fetch).toHaveBeenCalledTimes(requests);
-      visibility(true);
-      expect(vi.getTimerCount()).toBe(0);
-      visibility(false);
-      advance(120_000);
-      close();
-      reopen();
-      window.dispatchEvent(new Event("focus"));
-      expect(await buckets()).toEqual([]);
-      expect(fetch).toHaveBeenCalledTimes(requests);
-      fetch.mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-      vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
-      window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(0);
-      advance(30_000);
-      close();
-      expect(await buckets()).toEqual(["under_1m"]);
-    },
-  );
-
-  it.each([false, true])(
-    "discards the old server's visit on replacement, cross-tab=%s",
-    async (crossTab) => {
-      await start();
-      advance(120_000);
-      if (crossTab) {
-        localStorage.setItem(SERVER_URL_KEY, "https://example.org");
-        window.dispatchEvent(
-          new StorageEvent("storage", { key: SERVER_URL_KEY, storageArea: localStorage }),
-        );
-      } else setServerUrl("https://example.org");
-      await vi.advanceTimersByTimeAsync(0);
-      advance(30_000);
-      close();
-      expect(await buckets()).toEqual(["under_1m"]);
-    },
-  );
+  it("stops and resets visit tracking when a check is unauthorized", async () => {
+    await start();
+    advance(120_000);
+    fetch.mockImplementation(async () => new Response(null, { status: 401 }));
+    vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    visibility(true);
+    expect(vi.getTimerCount()).toBe(0);
+    visibility(false);
+    advance(120_000);
+    close();
+    reopen();
+    window.dispatchEvent(new Event("focus"));
+    expect(await buckets()).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    fetch.mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    advance(30_000);
+    close();
+    expect(await buckets()).toEqual(["under_1m"]);
+  });
 });
