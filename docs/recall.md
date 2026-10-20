@@ -45,6 +45,22 @@ The top-level **Recall** page has two tabs:
   for the next report. Saved reports can be exported, published, linked, or
   deleted from the archive.
 
+Reports separate context-token coverage from context-pressure coverage. Context
+pressure is a derived measurement; a session can have recorded context tokens
+without a pressure value. Missing pressure does not mean zero pressure or missing
+context.
+
+Prompt maturity and repeated-workflow suggestions use eligible session openers.
+Complete leading Codex page-context envelopes are removed, and automated or empty
+openers are excluded. Reports receive the scored and excluded session counts. If
+no eligible opener remains, the prompt grade is unknown. These heuristics do not
+verify who wrote each opener or assess the full conversation; a short approval
+may be appropriate after a plan. Canonical quality signals remain unchanged and
+can still include ambient or automated text.
+
+These changes affect newly generated reports. Existing saved reports retain their
+original content; generate a new report to use the updated evidence rules.
+
 Open Recall from the header or navigate directly to `/recall`. Generated-report
 links use `/recall?tab=generated&insight=<id>`.
 
