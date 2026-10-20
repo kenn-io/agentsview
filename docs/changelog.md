@@ -218,6 +218,10 @@ The latest release is
 
 **Bug fixes**
 
+- `agentsview mcp` and other auto-starting commands report that another process
+  holds the archive write lock instead of launching a server that can't start,
+  and the lock error no longer sends you to `agentsview daemon stop` when no
+  daemon is running.
 - On Windows, daemon commands no longer make backup and sync tools treat the
   whole data directory as changed.
 - A ClickHouse server whose data directory is on NFS no longer logs an

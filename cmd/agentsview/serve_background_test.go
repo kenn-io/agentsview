@@ -804,6 +804,28 @@ func TestEnsureBackgroundServeCancellationLeavesChildRunning(t *testing.T) {
 	assert.True(t, daemon.ProcessAlive(child.Process.Pid))
 }
 
+func TestEnsureBackgroundServeRefusesWhenWriteLockHeldWithoutDaemon(t *testing.T) {
+	dir := testDataDir(t)
+	holdWriteOwnerLockForTest(t, dir)
+	oldStart := startServeBackgroundProcessForEnsure
+	started := false
+	startServeBackgroundProcessForEnsure = func(context.Context, config.Config, []string) (*exec.Cmd, string, error) {
+		started = true
+		return nil, "", errors.New("unexpected spawn")
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStart })
+
+	rt, err := ensureBackgroundServe(
+		t.Context(), &config.Config{DataDir: dir}, time.Second, false,
+	)
+
+	require.Error(t, err)
+	assert.Nil(t, rt)
+	assert.False(t, started, "must not spawn a server that cannot open the archive")
+	assertErrorContainsAll(t, err, writeOwnerLockPath(dir), "PID namespace")
+	assert.NotContains(t, err.Error(), "agentsview daemon stop")
+}
+
 func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
 	dir := runtimeTestDir(t)
 	holdExternalDaemonStartLock(t, dir)
