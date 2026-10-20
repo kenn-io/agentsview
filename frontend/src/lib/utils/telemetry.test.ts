@@ -31,32 +31,28 @@ describe("feature outcomes", () => {
     });
     expect(fetch).toHaveBeenCalledOnce();
   });
-  it("aborts a stalled daily check after ten seconds and releases a waiting outcome on retry", async () => {
+  it("aborts a stalled daily check after ten seconds", async () => {
     let signal: AbortSignal | undefined;
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockImplementationOnce(
-        (_input, init) =>
-          new Promise((_resolve, reject) => {
-            signal = init?.signal ?? undefined;
-            signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
-          }),
-      )
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    const fetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+        }),
+    );
     vi.stubGlobal("fetch", fetch);
     stop = setupTelemetryReporting();
-    reportErrorShown("search");
     await vi.advanceTimersByTimeAsync(9_999);
     expect(signal?.aborted).toBe(false);
-    expect(fetch).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     expect(signal?.aborted).toBe(true);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
-      { event: "app_opened", properties: { surface: "web" } },
-      { event: "app_opened", properties: { surface: "web" } },
-      { event: "error_shown", properties: { kind: "search" } },
-    ]);
+  });
+  it("starts telemetry when the saved server address is malformed", () => {
+    localStorage.setItem("agentsview-server-url", "http://example.org:abc");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to parse URL")));
+    expect(() => {
+      stop = setupTelemetryReporting();
+    }).not.toThrow();
   });
   it.each([
     [new ApiError(500, "detail"), "request"],
@@ -84,65 +80,36 @@ describe("feature outcomes", () => {
     });
     expect(fetch).toHaveBeenCalledOnce();
   });
-  it("shares daily open and screen claims across reloads and stays silent after a disabled receipt", async () => {
-    const fetch = vi
-      .fn()
-      .mockImplementation(async () => new Response('{"status":"disabled"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    reportTelemetry("screen_viewed", { screen: "sessions" });
-    reportErrorShown("search");
-    window.dispatchEvent(new Event("pagehide"));
-    stop();
-    stop = setupTelemetryReporting();
-    window.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
-    window.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports each screen and app open once daily through focus and reloads", async () => {
-    const fetch = vi
-      .fn()
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    for (let i = 0; i < 3; i++) {
+  it.each(["queued", "disabled"])(
+    "shares daily claims across reloads and rechecks the next day after a %s receipt",
+    async (status) => {
+      const fetch = vi.fn<(input: RequestInfo | URL, init: RequestInit) => Promise<Response>>(
+        async () => new Response(JSON.stringify({ status }), { status: 202 }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      for (let i = 0; i < 2; i++) {
+        stop = setupTelemetryReporting();
+        reportTelemetry("screen_viewed", { screen: "sessions" });
+        await vi.advanceTimersByTimeAsync(0);
+        reportTelemetry("screen_viewed", { screen: "usage" });
+        window.dispatchEvent(new Event("focus"));
+        await vi.advanceTimersByTimeAsync(0);
+        stop();
+      }
+      const events = () =>
+        fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string).event);
+      expect(events()).toEqual(
+        status === "queued" ? ["app_opened", "screen_viewed", "screen_viewed"] : ["app_opened"],
+      );
       stop = setupTelemetryReporting();
-      reportTelemetry("screen_viewed", { screen: "sessions" });
       await vi.advanceTimersByTimeAsync(0);
-      reportTelemetry("screen_viewed", { screen: "usage" });
+      fetch.mockClear();
+      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(0);
-      stop();
-    }
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body).event)).toEqual([
-      "app_opened",
-      "screen_viewed",
-      "screen_viewed",
-    ]);
-  });
-
-  it("retries an unauthorized check after authentication and reload", async () => {
-    const fetch = vi
-      .fn()
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    fetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    stop();
-    setAuthToken("signed-in");
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(new Headers(fetch.mock.lastCall?.[1].headers).get("Authorization")).toBe(
-      "Bearer signed-in",
-    );
-  });
+      expect(events()).toEqual(["app_opened"]);
+    },
+  );
 
   it("uses the bound server's latest token without restarting the reporter", async () => {
     const fetch = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));

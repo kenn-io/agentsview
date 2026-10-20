@@ -88,17 +88,13 @@ export type TelemetryEvent =
   | "analytics_viewed";
 
 /** Posts a UI event to the daemon, which applies its allowlist; failures are ignored. */
-export function reportTelemetry(
-  event: TelemetryEvent,
-  properties?: Record<string, string>,
-  options?: Pick<RequestInit, "keepalive">,
-): void {
+export function reportTelemetry(event: TelemetryEvent, properties?: Record<string, string>): void {
   if (event === "screen_viewed") {
     currentScreen = properties?.screen;
     if (currentScreen !== undefined) reporter?.reportScreen(currentScreen);
   } else {
     // All non-screen outcomes use the gate so they wait for an enabled receipt.
-    reporter?.reportVisit({ event, properties: properties ?? {} }, options);
+    reporter?.reportVisit({ event, properties: properties ?? {} });
   }
 }
 

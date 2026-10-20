@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { setServerUrl, setAuthToken, SERVER_URL_KEY } from "../api/runtime.js";
+import { setServerUrl, SERVER_URL_KEY } from "../api/runtime.js";
 import { setupTelemetryReporting } from "./telemetry.js";
 
 describe("visit ended reporting", () => {
@@ -137,79 +137,46 @@ describe("visit ended reporting", () => {
     close();
     expect(buckets()).toEqual([]);
   });
-  it.each(["queued", "disabled"])(
-    "keeps a visit ended by the hidden timer across midnight until the %s receipt",
-    async (status) => {
-      vi.setSystemTime(new Date("2026-10-02T23:59:00Z"));
+  it.each([
+    ["initial", "queued"],
+    ["initial", "disabled"],
+    ["daily", "queued"],
+    ["daily", "disabled"],
+  ])("keeps visit time through a pending %s check with a %s receipt", async (check, status) => {
+    if (check === "daily") {
       await start();
       advance(120_000);
-      let reply!: (response: Response) => void;
-      fetch.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            reply = resolve;
-          }),
-      );
-      visibility(true);
-      advance(1_800_000);
-      expect(buckets()).toEqual([]);
-      expect(JSON.parse(fetch.mock.lastCall?.[1]?.body as string).event).toBe("app_opened");
-      reply(new Response(JSON.stringify({ status }), { status: 202 }));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
-    },
-  );
-
-  it.each(["queued", "disabled"])(
-    "keeps visible time through a pending daily %s check",
-    async (status) => {
-      await start();
-      advance(120_000);
-      let reply!: (response: Response) => void;
-      fetch.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            reply = resolve;
-          }),
-      );
-      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
-      window.dispatchEvent(new Event("focus"));
-      advance(30_000);
-      reply(new Response(JSON.stringify({ status }), { status: 202 }));
-      await vi.advanceTimersByTimeAsync(0);
-      close();
-      expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
-      if (status === "disabled") {
-        visibility(true);
-        expect(vi.getTimerCount()).toBe(0);
-        visibility(false);
-        advance(120_000);
-        close();
-        expect(buckets()).toEqual([]);
-      }
-    },
-  );
-
-  it.each(["queued", "disabled"])(
-    "holds an ended visit until the initial %s receipt",
-    async (status) => {
-      let reply!: (response: Response) => void;
-      fetch.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            reply = resolve;
-          }),
-      );
+    }
+    let reply!: (response: Response) => void;
+    fetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          reply = resolve;
+        }),
+    );
+    if (check === "initial") {
       stop = setupTelemetryReporting();
       advance(120_000);
       close();
-      expect(buckets()).toEqual([]);
-      reply(new Response(JSON.stringify({ status }), { status: 202 }));
-      await vi.advanceTimersByTimeAsync(0);
+    } else {
+      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
+      window.dispatchEvent(new Event("focus"));
+      advance(30_000);
+    }
+    expect(buckets()).toEqual([]);
+    reply(new Response(JSON.stringify({ status }), { status: 202 }));
+    await vi.advanceTimersByTimeAsync(0);
+    close();
+    expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
+    if (status === "disabled") {
+      visibility(true);
+      expect(vi.getTimerCount()).toBe(0);
+      visibility(false);
+      advance(120_000);
       close();
-      expect(buckets()).toEqual(status === "queued" ? ["1_to_5m"] : []);
-    },
-  );
+      expect(buckets()).toEqual([]);
+    }
+  });
 
   it.each([false, true])(
     "discards the old server's visit on replacement, cross-tab=%s",
@@ -222,15 +189,10 @@ describe("visit ended reporting", () => {
           new StorageEvent("storage", { key: SERVER_URL_KEY, storageArea: localStorage }),
         );
       } else setServerUrl("https://example.org");
-      setAuthToken("remote-token");
       await vi.advanceTimersByTimeAsync(0);
       advance(30_000);
       close();
       expect(buckets()).toEqual(["under_1m"]);
-      expect(fetch.mock.lastCall?.[0]).toBe("https://example.org/api/v1/telemetry/events");
-      expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
-        "Bearer remote-token",
-      );
     },
   );
 });

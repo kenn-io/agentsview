@@ -2236,9 +2236,10 @@ The automatic outbound requests are update checks and anonymous telemetry:
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 each UTC day it runs. Restarts and other servers sharing the data directory do
 not send another ping that day. The web UI also reports an anonymous
-`app_opened` event once per selected server per UTC day, on load or focus. The
-server sends it to PostHog with the same fields and opt-out as the ping. The
-browser never contacts PostHog. After a disabled receipt, the browser stops
+`app_opened` event on load or focus, with daily checks scoped to the selected
+server and the browser's local storage. The server sends it to PostHog with the
+same fields and opt-out as the ping. The browser never contacts PostHog.
+After a disabled receipt, the browser stops
 reports and visit tracking until its first load or focus on a later UTC day
 checks again. Re-enabling telemetry takes effect after that check.
 
@@ -2266,16 +2267,18 @@ of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
 1 to below 5 minutes, 5 to below 30 minutes, and 30 minutes or more. Visible
 time adds up across tab switches and includes idle visible time; hidden time
 adds nothing. Closing or reloading the page, or leaving it hidden for 30
-minutes, ends a visit. Visits that span a server change are discarded in full.
-The next visit uses the selected server after a reload, reopening, or return
-from 30 minutes hidden. Each visit can send one event, with no daily limit.
+minutes, ends a visit. Switching servers discards the old visit and starts a
+new tracker immediately for the selected server in the same tab. Each visit
+can send one event, with no daily limit.
 Delivery is best effort: a visit can be lost if the browser crashes, quits, or
 discards the tab before the event is sent. Long-lived tabs are the most exposed
 to this, so `over_30m` can undercount.
 
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
-It stores versioned JSON claims in `telemetry-screen-views` beside the
+The browser also deduplicates screen reports per selected server and local
+storage, so separate browsers can check the same installation independently.
+The server stores versioned JSON claims in `telemetry-screen-views` beside the
 installation identity. When telemetry is enabled, the server checks the file
 once in the background after it starts serving; a web UI report that arrives
 first waits for that check. The check moves older plain-text claims, malformed

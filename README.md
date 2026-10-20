@@ -805,7 +805,8 @@ Troubleshooting:
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
 at most once per UTC day while the server runs, and an `app_opened` event when
-the web UI first loads or gains focus each UTC day, once per selected server.
+the web UI first loads or gains focus each UTC day. The browser remembers daily
+checks per selected server in its local storage.
 The server also sends `setup_finished` once per installation when the archive
 first has a session in the default session list, including orphaned sessions and
 excluding automated sessions and trash. Existing installs with such a session
@@ -813,10 +814,10 @@ send it on their first start after upgrading. The web UI sends `visit_ended`
 with `surface: web` and visible visit duration in fixed buckets: `under_1m`,
 `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also reports searches (search
 mode), session views (the session's agent type), screen views (screen name, once
-per install per UTC day), exports (format), generated insights (insight kind)
-and analytics page views (page name), each with one value from a fixed list in
-the server that drops anything else. All events use a stable random install ID
-as the event `DistinctId`.
+per installation per UTC day on the server), exports (format), generated
+insights (insight kind), and analytics page views (page name), each with one
+value from a fixed list in the server that drops anything else. All events use
+a stable random install ID as the event `DistinctId`.
 [Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
 empty searches, visible errors, and failed sync attempts. The events include
 `application=agentsview`, app version, commit, OS, and CPU architecture, with
@@ -832,6 +833,8 @@ While a telemetry check is pending, the browser keeps event outcomes in page
 memory for the selected server. It sends them only after that server confirms
 telemetry is enabled and discards them if telemetry is disabled or the page
 closes.
+Switching servers discards the old visit and starts a new tracker immediately
+for the selected server in the same tab.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with
