@@ -54,6 +54,41 @@ describe("feature outcomes", () => {
       stop = setupTelemetryReporting();
     }).not.toThrow();
   });
+  it("aborts a stalled receipt body after ten seconds and completes a later retry", async () => {
+    let signal: AbortSignal | undefined;
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          body = controller;
+          controller.enqueue(new TextEncoder().encode('{"status":'));
+        },
+      }),
+      { status: 202 },
+    );
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce(async (_input, init) => {
+        signal = init?.signal ?? undefined;
+        signal?.addEventListener("abort", () => body.error(signal?.reason), { once: true });
+        return response;
+      })
+      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(response.bodyUsed).toBe(true);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+      { event: "app_opened", properties: { surface: "web" } },
+      { event: "app_opened", properties: { surface: "web" } },
+      { event: "error_shown", properties: { kind: "search" } },
+    ]);
+  });
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],
