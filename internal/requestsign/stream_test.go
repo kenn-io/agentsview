@@ -75,7 +75,7 @@ func TestVerifierBoundsEventStreamsAndRejectUndeclaredTrailers(t *testing.T) {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/events", nil)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer test")
-		resp, err := client.Do(req) //nolint:bodyclose // Keep the replacement stream open while testing permits.
+		resp, err := client.Do(req)
 		require.NoError(t, err)
 		if resp.StatusCode == http.StatusServiceUnavailable {
 			require.NoError(t, resp.Body.Close())
