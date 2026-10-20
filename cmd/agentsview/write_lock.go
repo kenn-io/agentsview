@@ -116,10 +116,8 @@ func (e writeOwnerLockHeldError) Error() string {
 	return fmt.Sprintf(
 		"write lock %s is held by another process; if `agentsview daemon "+
 			"status` shows a daemon, run `agentsview daemon stop`; otherwise "+
-			"an offline agentsview command, or an agentsview server whose "+
-			"runtime record is missing (for example one started in another "+
-			"PID namespace), holds it. Wait for the command to finish or "+
-			"restart that server",
-		e.path,
+			"find the agentsview process holding %s, then wait for it to "+
+			"finish or stop it",
+		e.path, e.path,
 	)
 }

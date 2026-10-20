@@ -423,6 +423,7 @@ func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenP
 		database *db.DB
 		lock     *writeOwnerLock
 	}
+	var lastErr error
 	got, err := backoff.Retry(ctx, func() (opened, error) {
 		database, lock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 			return openDBWithProgress(ctx, cfg, progress)
@@ -430,8 +431,13 @@ func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenP
 		if err != nil && !errors.As(err, new(writeOwnerLockHeldError)) {
 			return opened{}, backoff.Permanent(err)
 		}
+		lastErr = err
 		return opened{database, lock}, err
 	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(workerLockWait))
+	if err != nil && lastErr != nil && ctx.Err() == nil {
+		// Surface the holder error, not the retry library's timeout wrapper.
+		err = lastErr
+	}
 	return got.database, got.lock, err
 }
 

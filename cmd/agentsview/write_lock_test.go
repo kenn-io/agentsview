@@ -143,7 +143,8 @@ func TestWriteOwnerLockErrorNamesHolders(t *testing.T) {
 	holdWriteOwnerLockForTest(t, dataDir)
 
 	_, err := tryAcquireWriteOwnerLock(dataDir)
-	assertErrorContainsAll(t, err, "agentsview daemon status", "PID namespace")
+	assertErrorContainsAll(t, err, "agentsview daemon status",
+		"find the agentsview process holding "+writeOwnerLockPath(dataDir))
 }
 
 func TestOpenWriteDBRefusesSecondOwner(t *testing.T) {

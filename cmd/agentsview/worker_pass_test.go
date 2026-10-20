@@ -1194,6 +1194,7 @@ func TestSyncWorkerRefusedWhenDaemonHoldsWriteLock(t *testing.T) {
 		"worker must be refused while the daemon still holds the write lock")
 	require.ErrorAs(t, err, new(writeOwnerLockHeldError))
 	assert.ErrorContains(t, err, "write lock")
+	assert.NotContains(t, err.Error(), "backoff:")
 }
 
 func shortenWorkerLockWaitForTest(t *testing.T, wait time.Duration) {
