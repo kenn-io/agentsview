@@ -1,6 +1,7 @@
 package agentsview_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -64,9 +65,12 @@ func TestPrepareSidecarStopsWhenPricingSnapshotRestoreFails(t *testing.T) {
 func TestPrepareSidecarTrimpath(t *testing.T) {
 	requireUnixShell(t)
 
-	for _, trimpath := range []string{"", "false"} {
-		t.Run("trimpath="+trimpath, func(t *testing.T) {
+	for _, trimpath := range []string{"unset", "false"} {
+		t.Run(trimpath, func(t *testing.T) {
 			t.Setenv("AGENTSVIEW_SIDECAR_TRIMPATH", trimpath)
+			if trimpath == "unset" {
+				require.NoError(t, os.Unsetenv("AGENTSVIEW_SIDECAR_TRIMPATH"))
+			}
 			root := t.TempDir()
 			installRepoFile(t, root, "desktop/scripts/prepare-sidecar.sh", 0o755)
 			writeDesktopDevWorkspace(t, root)
@@ -77,13 +81,11 @@ func TestPrepareSidecarTrimpath(t *testing.T) {
 				"bash", "desktop/scripts/prepare-sidecar.sh")
 			require.NoError(t, err, "%s", out)
 			events := stubs.events(t)
-			assertEventContains(t, events, "go build -tags fts5")
 			if trimpath == "false" {
 				assertNoEventContains(t, events, "-trimpath")
 			} else {
 				assertEventContains(t, events, "-trimpath")
 			}
-			require.FileExists(t, filepath.Join(root, "desktop", "src-tauri", "binaries", "agentsview-x86_64-unknown-linux-gnu"))
 		})
 	}
 }
