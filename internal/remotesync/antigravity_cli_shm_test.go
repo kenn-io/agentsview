@@ -86,10 +86,15 @@ func TestHTTPAntigravityCLIShmChangesDoNotReimport(t *testing.T) {
 			idx = 2
 		}
 		appendMessage(idx, "Another user message for the remote fixture")
+		changedPath := path + "-wal"
 		if checkpoint {
 			_, err = writer.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 			require.NoError(t, err)
+			changedPath = path
 		}
+		// Windows can defer metadata updates while the SQLite writer is open.
+		mtime := time.Now().Add(time.Duration(idx) * time.Hour)
+		require.NoError(t, os.Chtimes(changedPath, mtime, mtime))
 		updated, err := hs.Run(t.Context())
 		require.NoError(t, err)
 		assert.Zero(t, updated.Failed)
