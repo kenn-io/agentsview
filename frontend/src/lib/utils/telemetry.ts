@@ -1,6 +1,9 @@
 import {
   startBrowserTelemetry,
+  type BrowserTelemetryEvent,
   type BrowserTelemetryReporter,
+  type TelemetryReceipt,
+  type VisitOptions,
 } from "@kenn-io/kit-ui/utils/browser-telemetry";
 import {
   getGeneratedBase,
@@ -14,6 +17,39 @@ import { setupVisitEndedReporting } from "./visit-ended.js";
 let reporter: BrowserTelemetryReporter | undefined;
 let currentScreen: string | undefined;
 
+/** Posts one event; a timeout while reading a 202 receipt reaches kit-ui as a transport failure. */
+async function postReceipt(
+  url: string,
+  event: BrowserTelemetryEvent,
+  options: VisitOptions | undefined,
+  token: string,
+): Promise<TelemetryReceipt> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(event),
+      signal: controller.signal,
+    });
+    if (response.status !== 202) return response;
+    // The receipt body shares the deadline; malformed JSON is an unreadable receipt.
+    const text = await response.text();
+    try {
+      return { status: 202, data: JSON.parse(text) as unknown };
+    } catch {
+      return { status: 202, data: undefined };
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Owns the selected server's gate and visit tracker for the mounted app. */
 export function setupTelemetryReporting(): () => void {
   let active = true;
@@ -26,25 +62,7 @@ export function setupTelemetryReporting(): () => void {
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${route}`,
-      post: async (url, event, options) => {
-        const token = getAuthToken(server);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10_000);
-        try {
-          return await fetch(url, {
-            ...options,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify(event),
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
-      },
+      post: (url, event, options) => postReceipt(url, event, options, getAuthToken(server)),
     });
     stopVisit = setupVisitEndedReporting(reporter);
     if (currentScreen !== undefined) reporter.reportScreen(currentScreen);

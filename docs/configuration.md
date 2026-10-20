@@ -2270,6 +2270,11 @@ adds nothing. Closing or reloading the page, or leaving it hidden for 30
 minutes, ends a visit. Switching servers discards the old visit and starts a
 new tracker immediately for the selected server in the same tab. Each visit
 can send one event, with no daily limit.
+While permission is pending, the browser holds visit events and other outcomes
+in page memory for the selected server, up to 64 events total. Additional
+events are dropped. An enabled receipt releases the held events; a disabled
+receipt discards them. Closing the page before an enabled receipt can lose
+those events.
 Delivery is best effort: a visit can be lost if the browser crashes, quits, or
 discards the tab before the event is sent. Long-lived tabs are the most exposed
 to this, so `over_30m` can undercount.
