@@ -251,6 +251,13 @@ The latest published release is
   latest messages** off, the transcript kept its old length until you scrolled
   or switched to another session and back, so a reader at the bottom saw
   nothing new.
+- The **Sync** button now refreshes the session you have open, and live updates
+  resume on their own after the server restarts or the connection drops. Before,
+  if the server was unreachable for more than about 12 seconds, the open
+  session stopped receiving new messages for good: **Sync** refreshed only the
+  sidebar, and the transcript caught up only after you switched to another
+  session and back. Messages that synced during a shorter outage could also be
+  missed until the next change.
 - Switching between sessions in one tab returns you to the line you were
   reading in each one. Before, each return could land several messages further
   down, and the gap grew with every switch. A session you open for the first

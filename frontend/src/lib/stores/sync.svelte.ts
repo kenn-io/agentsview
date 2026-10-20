@@ -13,7 +13,17 @@ import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js
 
 type SyncCompleteListener = () => void;
 
+interface WatchedSession {
+  id: string;
+  onUpdate: () => void;
+  onTiming?: (t: SessionTiming) => void;
+}
+
 const POLL_INTERVAL_MS = 10_000;
+
+// EventSource.CLOSED per the HTML spec, without touching the global,
+// which not every test environment defines.
+const EVENT_SOURCE_CLOSED = 2;
 
 /**
  * Compare two commit hashes, tolerating short vs full SHA.
@@ -58,6 +68,7 @@ class SyncStore {
   }
 
   private watchEventSource: EventSource | null = null;
+  private watchedSession: WatchedSession | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
     include_one_shot?: boolean;
@@ -74,10 +85,27 @@ class SyncStore {
     this.syncCompleteListeners.push(listener);
   }
 
-  private notifySyncComplete() {
+  /**
+   * A sync the user asked for refreshes the open session even when its
+   * watch looks healthy. Any other sync refreshes it only when its watch
+   * had given up, since a live watch reports the change itself.
+   */
+  private notifySyncComplete(refreshOpenSession = false) {
+    this.resumeSessionWatch(refreshOpenSession);
     for (const fn of this.syncCompleteListeners) {
       fn();
     }
+  }
+
+  /** Reopen the open session's watch after it gave up, and refresh the session when asked or when the watch missed updates. */
+  private resumeSessionWatch(refresh: boolean) {
+    const watched = this.watchedSession;
+    if (!watched) return;
+    const gaveUp = this.watchEventSource?.readyState === EVENT_SOURCE_CLOSED;
+    if (gaveUp) {
+      this.watchEventSource = watchSession(watched.id, watched.onUpdate, watched.onTiming);
+    }
+    if (refresh || gaveUp) watched.onUpdate();
   }
 
   /** Record whether the backend process responded. Only flags a
@@ -247,7 +275,7 @@ class SyncStore {
     try {
       this.pendingHydration = true;
       await Promise.all([this.loadStatus(), this.loadStats()]);
-      this.notifySyncComplete();
+      this.notifySyncComplete(true);
       onComplete?.();
       return true;
     } finally {
@@ -280,7 +308,7 @@ class SyncStore {
         this.lastSyncStats = s;
         this.loadStats();
         finalizeSync();
-        this.notifySyncComplete();
+        this.notifySyncComplete(true);
         // Hydrate the authoritative server timestamp.
         // pendingHydration suppresses the notification so
         // the poll path won't double-fire.
@@ -305,10 +333,12 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
+    this.watchedSession = { id: sessionId, onUpdate, onTiming };
     this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
   }
 
   unwatchSession() {
+    this.watchedSession = null;
     if (this.watchEventSource) {
       this.watchEventSource.close();
       this.watchEventSource = null;

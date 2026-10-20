@@ -631,6 +631,24 @@ describe("watchSession", () => {
     expect(es.closed).toBe(false);
   });
 
+  it("refreshes once when the stream reconnects after dropping", () => {
+    const seen: string[] = [];
+    watchSession("abc", () => seen.push("update"));
+    const es = FakeEventSource.instances[0]!;
+
+    es.fireOpen();
+    expect(seen).toEqual([]);
+
+    es.fireError();
+    es.fireError();
+    expect(seen).toEqual([]);
+    es.fireOpen();
+    expect(seen).toEqual(["update"]);
+
+    es.fireUpdate();
+    expect(seen).toEqual(["update", "update"]);
+  });
+
   it("encodes the session ID as one URL path segment", () => {
     watchSession("deepseek-harness:child%7E/%25?#", () => {});
 

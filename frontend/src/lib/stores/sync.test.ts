@@ -812,3 +812,140 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(sync.remoteUnreachable).toBe(true);
   });
 });
+
+describe("SyncStore open session refresh", () => {
+  const LIVE = 1;
+  const GAVE_UP = 2;
+
+  function watchStream(readyState: number) {
+    return { readyState, close: vi.fn() } as unknown as ReturnType<typeof api.watchSession>;
+  }
+
+  function mockSyncSuccess(): void {
+    vi.mocked(api.triggerSync).mockReturnValue({
+      abort: vi.fn(),
+      done: Promise.resolve(MOCK_STATS),
+    });
+    vi.mocked(api.getStats).mockResolvedValue({
+      earliest_session: null,
+      machine_count: 1,
+      message_count: 100,
+      project_count: 3,
+      session_count: 8,
+    });
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "2024-01-01T00:05:00Z",
+      stats: MOCK_STATS,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sync.unwatchSession();
+    const s = sync as unknown as Record<string, unknown>;
+    s.syncing = false;
+    s.progress = null;
+    s.lastSync = "2024-01-01T00:00:00Z";
+    s.serverVersion = null;
+    s.statusHydrated = true;
+    s.pendingHydration = false;
+    s.statusProgressActive = false;
+    s.syncCompleteListeners = [];
+  });
+
+  it.each([
+    { mode: "manual sync", readOnly: false },
+    { mode: "read-only refresh", readOnly: true },
+  ])("refreshes the open session after a $mode while its watch is live", async ({ readOnly }) => {
+    if (readOnly) {
+      const s = sync as unknown as Record<string, unknown>;
+      s.serverVersion = { build_date: "", commit: "unknown", read_only: true, version: "dev" };
+    }
+    mockSyncSuccess();
+    vi.mocked(api.watchSession).mockReturnValueOnce(watchStream(LIVE));
+    const onUpdate = vi.fn();
+    sync.watchSession("s1", onUpdate);
+
+    sync.triggerSync();
+
+    await vi.waitFor(() => {
+      expect(sync.lastSync).toBe("2024-01-01T00:05:00Z");
+      expect(sync.syncing).toBe(false);
+    });
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(api.watchSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens a watch that gave up when a manual sync finishes", async () => {
+    mockSyncSuccess();
+    vi.mocked(api.watchSession)
+      .mockReturnValueOnce(watchStream(GAVE_UP))
+      .mockReturnValueOnce(watchStream(LIVE));
+    const onUpdate = vi.fn();
+    const onTiming = vi.fn();
+    sync.watchSession("s1", onUpdate, onTiming);
+
+    sync.triggerSync();
+
+    await vi.waitFor(() => {
+      expect(sync.lastSync).toBe("2024-01-01T00:05:00Z");
+    });
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(api.watchSession).toHaveBeenLastCalledWith("s1", onUpdate, onTiming);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens a watch that gave up and catches up when polling sees a sync", async () => {
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "2024-01-01T00:05:00Z",
+      stats: MOCK_STATS,
+    });
+    vi.mocked(api.watchSession)
+      .mockReturnValueOnce(watchStream(GAVE_UP))
+      .mockReturnValueOnce(watchStream(LIVE));
+    const onUpdate = vi.fn();
+    sync.watchSession("s1", onUpdate);
+
+    await sync.loadStatus();
+
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(api.watchSession).toHaveBeenLastCalledWith("s1", onUpdate, undefined);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a live watch to report a sync that polling sees", async () => {
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "2024-01-01T00:05:00Z",
+      stats: MOCK_STATS,
+    });
+    vi.mocked(api.watchSession).mockReturnValueOnce(watchStream(LIVE));
+    const onUpdate = vi.fn();
+    const listener = vi.fn();
+    sync.onSyncComplete(listener);
+    sync.watchSession("s1", onUpdate);
+
+    await sync.loadStatus();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(api.watchSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh or reopen a session after it is unwatched", async () => {
+    mockSyncSuccess();
+    vi.mocked(api.watchSession).mockReturnValueOnce(watchStream(GAVE_UP));
+    const onUpdate = vi.fn();
+    const listener = vi.fn();
+    sync.onSyncComplete(listener);
+    sync.watchSession("s1", onUpdate);
+    sync.unwatchSession();
+
+    sync.triggerSync();
+
+    await vi.waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(api.watchSession).toHaveBeenCalledTimes(1);
+  });
+});

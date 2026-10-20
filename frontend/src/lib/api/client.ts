@@ -111,9 +111,16 @@ export function watchSession(
   // reconnect in a loop. Counter resets on `open` or a delivered
   // event so a healthy-but-quiet stream isn't tripped.
   let consecutiveErrors = 0;
+  // A reconnected stream watches from the session's current state, so
+  // changes that landed while it was down are never sent.
+  let dropped = false;
 
   es.addEventListener("open", () => {
     consecutiveErrors = 0;
+    if (dropped) {
+      dropped = false;
+      onUpdate();
+    }
   });
 
   es.addEventListener("session_updated", () => {
@@ -132,6 +139,7 @@ export function watchSession(
   }
 
   es.onerror = () => {
+    dropped = true;
     consecutiveErrors += 1;
     if (consecutiveErrors >= WATCH_SESSION_MAX_CONSECUTIVE_ERRORS) {
       es.close();
