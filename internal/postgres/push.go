@@ -3313,41 +3313,9 @@ func (s *Sync) pushMessages(
 	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
 		return 0, err
 	}
-	// Local sync can rewrite this transcript while the copy reads it page by
-	// page. A pinned message that moves into a page the copy already read is
-	// missed, and restoring the pins would then drop its pin, so copy again
-	// when the transcript changed and a pin lost its message. Other gaps from
-	// a changed transcript need no retry: the change stamps the session after
-	// this push's cutoff, so the next push copies it again.
-	var count int
-	for attempt := 1; ; attempt++ {
-		before, err := s.localTranscriptRevision(ctx, sessionID)
-		if err != nil {
-			return 0, err
-		}
-		count, err = s.copySessionMessages(ctx, tx, sessionID)
-		if err != nil {
-			return count, err
-		}
-		after, err := s.localTranscriptRevision(ctx, sessionID)
-		if err != nil {
-			return count, err
-		}
-		if before == after {
-			break
-		}
-		found, err := pinsFindMessages(ctx, tx, sessionID, savedPins)
-		if err != nil {
-			return count, err
-		}
-		if found {
-			break
-		}
-		if attempt == maxTranscriptCopyAttempts {
-			return count, errors.New(
-				"the session changed while it was being copied; push again once it stops changing",
-			)
-		}
+	count, err := s.copySessionMessages(ctx, tx, sessionID)
+	if err != nil {
+		return count, err
 	}
 
 	if err := restorePinnedMessages(
@@ -3359,38 +3327,20 @@ func (s *Sync) pushMessages(
 	return count, nil
 }
 
-// maxTranscriptCopyAttempts bounds how often pushMessages copies a transcript
-// that local sync keeps rewriting.
-const maxTranscriptCopyAttempts = 3
-
-// pinsFindMessages reports whether every snapshotted pin still identifies a
-// message among the rows copied for sessionID.
-func pinsFindMessages(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-	pins []savedPostgresPin,
-) (bool, error) {
-	for _, pin := range pins {
-		_, _, ok, err := resolvePinnedMessageTarget(ctx, tx, sessionID, pin)
-		if err != nil || !ok {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-// localTranscriptRevision returns a session's local transcript revision, or
-// "" once the session is gone locally.
-func (s *Sync) localTranscriptRevision(ctx context.Context, sessionID string) (string, error) {
-	rev, err := s.local.TranscriptRevision(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return rev, err
-}
-
 // copySessionMessages replaces a session's PostgreSQL messages, tool calls,
-// and tool result events with the local transcript.
-func (s *Sync) copySessionMessages(ctx context.Context, tx *sql.Tx, sessionID string) (int, error) {
+// and tool result events with the local transcript. It reads every page from
+// one SQLite snapshot. Local sync keeps writing during a push, and a rewrite
+// between two page reads could move a pinned message into a range already
+// copied, so restoring the pins would drop that pin. Messages that arrive
+// after the snapshot go out with the next push.
+func (s *Sync) copySessionMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (count int, err error) {
+	snapshot, err := s.local.BeginMessageSnapshot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_result_events
 		WHERE session_id = $1
@@ -3415,10 +3365,9 @@ func (s *Sync) copySessionMessages(ctx context.Context, tx *sql.Tx, sessionID st
 			"deleting pg messages: %w", err,
 		)
 	}
-	count := 0
 	startOrdinal := 0
 	for {
-		msgs, err := s.local.GetMessages(
+		msgs, err := snapshot.GetMessages(
 			ctx, sessionID, startOrdinal,
 			db.MaxMessageLimit, true,
 		)

@@ -65,16 +65,29 @@ func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 	pins, err := store.ListPinnedMessages(ctx, id, "")
 	require.NoError(t, err)
 	require.Len(t, pins, 1, "the push dropped a pin whose message moved during the copy")
+	assert.Equal(t, pinned, pins[0].Ordinal, "the push copied a transcript that changed after it started")
+
+	// The next push copies the rewritten transcript, and the pin follows its
+	// message.
+	syncer.afterMessagePage = nil
+	result, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	pins, err = store.ListPinnedMessages(ctx, id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
 	assert.Equal(t, pinned-dropped, pins[0].Ordinal)
 }
 
-// An agent that keeps writing to a long session changes its transcript during
-// every copy. Appends cannot move a pinned message, so the push must still
-// copy the session and keep its pin.
-func TestPushCopiesSessionThatGrowsDuringEveryCopy(t *testing.T) {
+// An agent that keeps writing to a long session adds messages while the push
+// copies it. The copy must stop at the transcript it started with, keep the
+// pin whose message is still there, and drop only the pin whose message is
+// gone, as it would without the writes.
+func TestPushCopiesSessionThatGrowsDuringTheCopy(t *testing.T) {
 	const id = "claude:pin-grow"
 	const schema = "agentsview_pin_grow_test"
 	const total = db.MaxMessageLimit + 500
+	const orphaned = 5
 	ctx := t.Context()
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -87,15 +100,18 @@ func TestPushCopiesSessionThatGrowsDuringEveryCopy(t *testing.T) {
 			Timestamp: "2026-09-25T12:00:00Z",
 		}
 	}
-	msgs := make([]db.Message, 0, total)
-	for i := range total {
-		msgs = append(msgs, message(i))
+	transcript := func() []db.Message {
+		msgs := make([]db.Message, 0, total)
+		for i := range total {
+			msgs = append(msgs, message(i))
+		}
+		return msgs
 	}
 	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID: id, Agent: "claude", Project: "sample", Machine: "machine",
 		MessageCount: total, CreatedAt: "2026-09-25T12:00:00Z",
 	}))
-	require.NoError(t, local.InsertMessages(ctx, msgs))
+	require.NoError(t, local.InsertMessages(ctx, transcript()))
 	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -106,16 +122,20 @@ func TestPushCopiesSessionThatGrowsDuringEveryCopy(t *testing.T) {
 	pinned := db.MaxMessageLimit + 200
 	_, err = store.PinMessage(ctx, id, int64(pinned), new("remote note"))
 	require.NoError(t, err)
+	_, err = store.PinMessage(ctx, id, orphaned, new("orphaned note"))
+	require.NoError(t, err)
+	// Replace the orphaned pin's message, so that pin has nothing to match.
+	rewritten := transcript()
+	rewritten[orphaned].SourceUUID = "uuid-replaced"
+	rewritten[orphaned].Content = "replaced message"
+	require.NoError(t, local.ReplaceSessionMessages(ctx, id, rewritten))
 
-	// Each copy reads two pages. Append after the first page of every copy,
-	// so the revision changes during each one.
 	next, pages := total, 0
 	syncer.afterMessagePage = func() {
 		pages++
-		if pages%2 == 1 {
-			require.NoError(t, local.InsertMessages(ctx, []db.Message{message(next)}))
-			next++
-		}
+		require.LessOrEqual(t, pages, 3, "the copy kept following new messages")
+		require.NoError(t, local.InsertMessages(ctx, []db.Message{message(next)}))
+		next++
 	}
 	result, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
@@ -125,4 +145,7 @@ func TestPushCopiesSessionThatGrowsDuringEveryCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pins, 1)
 	assert.Equal(t, pinned, pins[0].Ordinal)
+	tail, err := store.GetMessages(ctx, id, total-1, 10, true)
+	require.NoError(t, err)
+	assert.Len(t, tail, 1, "the copy included messages written after it started")
 }

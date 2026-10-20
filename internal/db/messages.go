@@ -568,6 +568,52 @@ func (db *DB) GetMessages(
 	ctx context.Context,
 	sessionID string, from, limit int, asc bool,
 ) ([]Message, error) {
+	return getMessagesWith(ctx, db.getReader(), sessionID, from, limit, asc)
+}
+
+// MessageSnapshot reads messages from one read-only transaction, so every
+// page sees the same transcript while sync keeps writing the archive.
+type MessageSnapshot struct {
+	tx *sql.Tx
+}
+
+// BeginMessageSnapshot starts a MessageSnapshot. Close it when done.
+func (db *DB) BeginMessageSnapshot(ctx context.Context) (*MessageSnapshot, error) {
+	db.connMu.RLock()
+	reader := db.reader.Load()
+	if reader == nil {
+		db.connMu.RUnlock()
+		return nil, errors.New("database is closed")
+	}
+	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	db.connMu.RUnlock()
+	if err != nil {
+		return nil, fmt.Errorf("beginning message snapshot: %w", err)
+	}
+	return &MessageSnapshot{tx: tx}, nil
+}
+
+// GetMessages works like DB.GetMessages, reading from the snapshot.
+func (s *MessageSnapshot) GetMessages(
+	ctx context.Context,
+	sessionID string, from, limit int, asc bool,
+) ([]Message, error) {
+	return getMessagesWith(ctx, s.tx, sessionID, from, limit, asc)
+}
+
+// Close ends the snapshot. A snapshot whose context already ended has
+// nothing left to release.
+func (s *MessageSnapshot) Close() error {
+	if err := s.tx.Rollback(); !errors.Is(err, sql.ErrTxDone) {
+		return err
+	}
+	return nil
+}
+
+func getMessagesWith(
+	ctx context.Context, q messageRowsQuerier,
+	sessionID string, from, limit int, asc bool,
+) ([]Message, error) {
 	if limit <= 0 || limit > MaxMessageLimit {
 		limit = DefaultMessageLimit
 	}
@@ -586,7 +632,7 @@ func (db *DB) GetMessages(
 		ORDER BY ordinal %s
 		LIMIT ?`, selectMessageCols, op, dir)
 
-	rows, err := db.getReader().QueryContext(
+	rows, err := q.QueryContext(
 		ctx, query, sessionID, from, limit,
 	)
 	if err != nil {
@@ -597,7 +643,7 @@ func (db *DB) GetMessages(
 	if err != nil {
 		return nil, err
 	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	if err := attachToolCallsWithQuerier(ctx, q, msgs); err != nil {
 		return nil, err
 	}
 	return msgs, nil

@@ -173,7 +173,7 @@ func (s *Sync) migrateCodexPages(
 			return fmt.Errorf("publishing retained Codex page: %w", err)
 		}
 		if _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
-			return fmt.Errorf("publishing retained Codex page %s: %w", pageID, err)
+			return err
 		}
 		if _, err := s.pushSecretFindings(ctx, tx, pageID); err != nil {
 			return err

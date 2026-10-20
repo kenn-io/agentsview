@@ -3920,6 +3920,42 @@ func TestGetMessagesReturnsToolCalls(t *testing.T) {
 	assert.Equal(t, 42, tc.ResultContentLength, "ResultContentLength =")
 }
 
+// A message snapshot keeps reading the transcript it started with, tool calls
+// included, while sync rewrites the session.
+func TestMessageSnapshotIgnoresLaterWrites(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "assistant", Content: "first",
+			Timestamp: tsZero, HasToolUse: true,
+			ToolCalls: []ToolCall{{SessionID: "s1", ToolName: "Read", Category: "Read", ToolUseID: "toolu_1"}},
+		},
+		Message{SessionID: "s1", Ordinal: 1, Role: "user", Content: "second", Timestamp: tsZero},
+	)
+	snapshot, err := d.BeginMessageSnapshot(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
+	first, err := snapshot.GetMessages(t.Context(), "s1", 0, 1, true)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	require.Len(t, first[0].ToolCalls, 1)
+
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{
+		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "rewritten", Timestamp: tsZero},
+		{SessionID: "s1", Ordinal: 1, Role: "user", Content: "rewritten too", Timestamp: tsZero},
+		{SessionID: "s1", Ordinal: 2, Role: "user", Content: "added", Timestamp: tsZero},
+	}))
+
+	rest, err := snapshot.GetMessages(t.Context(), "s1", 1, 100, true)
+	require.NoError(t, err)
+	require.Len(t, rest, 1)
+	assert.Equal(t, "second", rest[0].Content)
+	current, err := d.GetMessages(t.Context(), "s1", 0, 100, true)
+	require.NoError(t, err)
+	assert.Len(t, current, 3)
+}
+
 func TestToolCallResultContent(t *testing.T) {
 	database := testDB(t)
 	sess := Session{
