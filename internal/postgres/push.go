@@ -3122,105 +3122,10 @@ func (s *Sync) pushMessages(
 	pgAgg, _, _ := comparisonAggregates(sessionID, comparisons)
 
 	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
-		localFP := pushLocalMessageFingerprint{}
-
-		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(ctx,
-			sessionID,
-		)
+		usageFP, usageKnown := sessionUsageFingerprints[sessionID]
+		localFP, err := localPushMessageFingerprint(ctx, s.local, sessionID, usageFP, usageKnown, comparisonPushFingerprint)
 		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content fingerprint: %w",
-				err,
-			)
-		}
-		localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(ctx,
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content hash fingerprint: %w",
-				err,
-			)
-		}
-		localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(ctx,
-			s.local, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local role/time fingerprint: %w",
-				err,
-			)
-		}
-		localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local message flags fingerprint: %w",
-				err,
-			)
-		}
-		dialogueFP, err := s.local.MessageDialogueFingerprints(ctx, []string{sessionID})
-		if err != nil {
-			return 0, fmt.Errorf("computing local dialogue fingerprint: %w", err)
-		}
-		localFP.DialogueFP = dialogueFP[sessionID]
-		localFP.SystemFP, err = s.local.SystemMessageFingerprint(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local system message fingerprint: %w", err,
-			)
-		}
-		localFP.ToolCallCount, err = s.local.ToolCallCount(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"counting local tool_calls: %w", err,
-			)
-		}
-		localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(ctx,
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call content fingerprint: %w",
-				err,
-			)
-		}
-		localToolCalls, err := s.local.ToolCallComparisonFingerprints(ctx, []string{sessionID})
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call fingerprint: %w", err,
-			)
-		}
-		localFP.ToolCallFP = localToolCalls[sessionID]
-		localFP.ToolResultFP, err = localToolResultEventPGFingerprint(ctx,
-			s.local, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_result_event fingerprint: %w", err,
-			)
-		}
-		localFP.TokenFP, err = s.local.MessageTokenFingerprint(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local token fingerprint: %w",
-				err,
-			)
-		}
-
-		usageFromMap := false
-		if sessionUsageFingerprints != nil {
-			var ok bool
-			localFP.UsageEventFP, ok = sessionUsageFingerprints[sessionID]
-			usageFromMap = ok
-		}
-		if !usageFromMap {
-			localFP.UsageEventFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing local usage event fingerprint: %w",
-					err,
-				)
-			}
+			return 0, err
 		}
 
 		if shouldSkipSessionMessages(

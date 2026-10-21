@@ -57,11 +57,8 @@ func TestPushCompactComparisons(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, compact.MessageContentHash, id)
 	assert.Contains(t, compact.ToolCallFingerprint, id)
-	localFP, err := localPushMessageFingerprint(ctx, local, id, "", false)
+	localFP, err := localPushMessageFingerprint(ctx, local, id, "", false, comparisonPushFingerprint)
 	require.NoError(t, err)
-	calls, err := local.ToolCallComparisonFingerprints(ctx, []string{id})
-	require.NoError(t, err)
-	localFP.ToolCallFP = calls[id]
 	assert.True(t, shouldSkipSessionMessages(id, 1, localFP, false, compact))
 	for _, change := range []struct{ name, statement string }{
 		{"content", `UPDATE messages SET content = 'x' || substring(content from 2) WHERE session_id = $1`},

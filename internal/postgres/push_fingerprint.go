@@ -79,7 +79,7 @@ func localSessionDependencyPushFingerprint(
 	usageKnown bool,
 ) (string, error) {
 	msgFP, err := localPushMessageFingerprint(ctx,
-		local, sessionID, usageEventFingerprint, usageKnown,
+		local, sessionID, usageEventFingerprint, usageKnown, persistedPushFingerprint,
 	)
 	if err != nil {
 		return "", err
@@ -251,11 +251,19 @@ func (st *localPushDependencyState) dependencyFingerprint(
 	)
 }
 
+type localPushFingerprintMode uint8
+
+const (
+	persistedPushFingerprint localPushFingerprintMode = iota
+	comparisonPushFingerprint
+)
+
 func localPushMessageFingerprint(ctx context.Context,
 	local *db.DB,
 	sessionID string,
 	usageEventFingerprint string,
 	usageKnown bool,
+	mode localPushFingerprintMode,
 ) (pushLocalMessageFingerprint, error) {
 	fp := pushLocalMessageFingerprint{}
 	var err error
@@ -287,7 +295,15 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call content fingerprint: %w", err)
 	}
-	fp.ToolCallFP, err = local.ToolCallFingerprint(ctx, sessionID)
+	if mode == comparisonPushFingerprint {
+		var calls map[string]string
+		calls, err = local.ToolCallComparisonFingerprints(ctx, []string{sessionID})
+		if err == nil {
+			fp.ToolCallFP = calls[sessionID]
+		}
+	} else {
+		fp.ToolCallFP, err = local.ToolCallFingerprint(ctx, sessionID)
+	}
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call fingerprint: %w", err)
 	}
@@ -299,16 +315,18 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local token fingerprint: %w", err)
 	}
-	planUsageFP, err := local.PlanUsageFingerprints(ctx, []string{sessionID})
-	if err != nil {
-		return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
+	if mode == persistedPushFingerprint {
+		planUsageFP, err := local.PlanUsageFingerprints(ctx, []string{sessionID})
+		if err != nil {
+			return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
+		}
+		fp.PlanUsageFP = planUsageFP[sessionID]
 	}
 	dialogueFP, err := local.MessageDialogueFingerprints(ctx, []string{sessionID})
 	if err != nil {
 		return fp, fmt.Errorf("computing local dialogue fingerprint: %w", err)
 	}
 	fp.DialogueFP = dialogueFP[sessionID]
-	fp.PlanUsageFP = planUsageFP[sessionID]
 	if usageKnown {
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil
