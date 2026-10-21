@@ -31,12 +31,12 @@ const (
 const grokPageLimit = 200
 
 // ErrGrokResponseTooLarge marks a conversation over the browser relay limit.
-var ErrGrokResponseTooLarge = errors.New("Grok response exceeds 32 MiB")
+var ErrGrokResponseTooLarge = errors.New("response from Grok exceeds 32 MiB")
 
 // ErrGrokAuthRequired reports a missing or expired Grok browser session.
-var ErrGrokAuthRequired = errors.New("Grok sign-in required")
+var ErrGrokAuthRequired = errors.New("sign in to Grok again")
 
-var errGrokFormat = errors.New("Grok returned a conversation format this version can't read. Update AgentsView and try again")
+var errGrokFormat = errors.New("this AgentsView version can't read the conversation format Grok returned. Update AgentsView and try again")
 
 // grokDetailGap delays each conversation request by 3 s with jitter, the
 // same pacing as ChatGPT. Tests set it to zero to disable pacing.
@@ -72,7 +72,7 @@ func SyncGrok(ctx context.Context, store BrowserSyncStore, fetch func(context.Co
 	token := ""
 	for page := 0; ; page++ {
 		if page == grokPageLimit {
-			return stats, errors.New("Grok chat list exceeded the page limit")
+			return stats, errors.New("the Grok chat list exceeded the page limit")
 		}
 		path := grokRequest(grokListRequest, "", "")
 		if token != "" {
@@ -135,7 +135,7 @@ func SyncGrok(ctx context.Context, store BrowserSyncStore, fetch func(context.Co
 			break
 		}
 		if next == token {
-			return stats, errors.New("Grok chat list repeated its page token")
+			return stats, errors.New("the Grok chat list repeated its page token")
 		}
 		if !parser.ValidGrokWebID(next) {
 			return stats, errGrokFormat

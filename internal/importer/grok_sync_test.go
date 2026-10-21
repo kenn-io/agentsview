@@ -62,8 +62,10 @@ func TestSyncGrokCapturedPages(t *testing.T) {
 	require.NoError(t, err)
 	// The newest branch with text: 12 responses, with the regenerated and
 	// failed replies and the resent prompt's first copy left out.
-	want := []string{"Text 11", "Text 13", "Text 130", "Text 145", "Text 266", "Text 267",
-		"Text 336", "Text 482", "Text 537", "Text 538", "Text 556", "Text 557"}
+	want := []string{
+		"Text 11", "Text 13", "Text 130", "Text 145", "Text 266", "Text 267",
+		"Text 336", "Text 482", "Text 537", "Text 538", "Text 556", "Text 557",
+	}
 	assert.Equal(t, want, messageContents(messages))
 	for i, m := range messages {
 		assert.Equal(t, map[bool]string{true: "user", false: "assistant"}[i%2 == 0], m.Role)
@@ -78,8 +80,10 @@ func TestSyncGrokCapturedPages(t *testing.T) {
 }
 
 func grokSyncResponse(id, parent, sender, message, at string) map[string]any {
-	return map[string]any{"responseId": id, "parentResponseId": parent, "sender": sender,
-		"message": message, "createTime": at, "model": "grok-4", "partial": false}
+	return map[string]any{
+		"responseId": id, "parentResponseId": parent, "sender": sender,
+		"message": message, "createTime": at, "model": "grok-4", "partial": false,
+	}
 }
 
 const grokTestChat = "11111111-1111-4111-8111-111111111111"

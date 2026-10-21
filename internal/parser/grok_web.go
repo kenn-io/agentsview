@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -103,9 +104,7 @@ func grokWebPath(responses []grokWebResponse) []grokWebResponse {
 		seen[responses[i].ResponseID] = true
 		path = append(path, responses[i])
 	}
-	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
-		path[i], path[j] = path[j], path[i]
-	}
+	slices.Reverse(path)
 	return path
 }
 

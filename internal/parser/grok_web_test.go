@@ -84,6 +84,7 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "prompt still waiting for a reply",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return grokTestConversation(t, "", at, []any{map[string]any{"responseId": "r2"}},
 					grokTestResponse("r1", "", "human", "Pending question", at))
 			},
@@ -92,6 +93,7 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "unreadable times keep zero times",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return grokTestConversation(t, "t", "not a time", nil,
 					grokTestResponse("r1", "", "human", "Q", "yesterday"),
 					grokTestResponse("r2", "r1", "assistant", "A", ""))
@@ -101,6 +103,7 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "a parent cycle stops",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return grokTestConversation(t, "t", at, nil,
 					grokTestResponse("r1", "r3", "human", "Q", at),
 					grokTestResponse("r2", "r1", "assistant", "A", at),
@@ -112,12 +115,14 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "no text yields an empty result",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return grokTestConversation(t, "t", at, nil, grokTestResponse("r1", "", "human", " ", at))
 			},
 		},
 		{
 			name: "invalid conversation ID",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return []byte(`{"id":"../x","responses":{"responses":[]}}`)
 			},
 			wantErr: ErrGrokWebFormat,
@@ -125,6 +130,7 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "missing responses array",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return []byte(`{"id":"` + grokTestChat + `","responses":{"error":"x"}}`)
 			},
 			wantErr: ErrGrokWebFormat,
@@ -132,6 +138,7 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 		{
 			name: "response without a sender",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return grokTestConversation(t, "t", at, nil, grokTestResponse("r1", "", "", "Q", at))
 			},
 			wantErr: ErrGrokWebFormat,
