@@ -317,6 +317,12 @@ written.
   remaining message tail, whose argument boundaries are unknown.
 - Usage-only rows retain normalized context/output token values and their
   presence flags as well as `token_usage`; model-mix totals use these columns.
+- PostgreSQL `message_file_evidence` rows key on session and message ordinal
+  and cascade from `sessions`, not `messages`: the message push replaces rows
+  wholesale. Pushes compare `sessions.file_evidence_digest` with the local
+  evidence digest, because message fingerprints exclude evidence. Bindings use
+  the `file_evidence_generation` row in `sync_metadata` plus the pushed
+  `transcript_revision`.
 - PostgreSQL pushes record `prompt_evidence_discarded` per session from the
   source archive policy. Automation audits preserve the stored verdict only
   when this marker explains the missing prompt evidence. Full-content rows

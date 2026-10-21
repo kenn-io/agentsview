@@ -135,3 +135,22 @@ func TestSearchContentContextFromNewerRevisionIsNotBound(t *testing.T) {
 	require.Len(t, result.Matches[0].ContextBefore, 1)
 	assert.Equal(t, "changed lead-in", result.Matches[0].ContextBefore[0].Content)
 }
+
+// staleEvidenceStore reports that it could not pair a message window with
+// one revision's evidence, as a replica does when pushes keep racing reads.
+type staleEvidenceStore struct{ *db.DB }
+
+func (staleEvidenceStore) ReadMessagesWithFileEvidence(context.Context, string, db.MessageWindow) (db.FileEvidenceMessagePage, error) {
+	return db.FileEvidenceMessagePage{}, db.ErrFileEvidenceStale
+}
+
+func TestMessagesMapsStaleEvidenceToSourceChanged(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, database, "racing", "proj", []db.Message{
+		dbtest.UserMsg("racing", 0, "question"),
+	}, dbtest.WithMessageCounts(1, 1))
+	backend := service.NewReadOnlyBackend(staleEvidenceStore{database})
+
+	_, err := backend.Messages(t.Context(), "racing", service.MessageFilter{Limit: 20})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}

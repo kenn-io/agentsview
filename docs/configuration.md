@@ -349,8 +349,11 @@ Lookup sends SHA-256 digests to Docbank, without uploading files or transcript
 text. Ordinary messages, search, exports and the memory MCP profile do not
 contact Docbank. Explicit lookup uses a three-second operation budget and small
 bounded in-memory caches. Unavailable lookup leaves the transcript readable.
-The evidence capability covers SQLite, including read-only SQLite; PostgreSQL,
-DuckDB and ClickHouse return unavailable. PostgreSQL transport is a follow-on.
+The evidence capability covers SQLite, including read-only SQLite, and
+`agentsview pg serve`: `agentsview pg push` carries each session's evidence and
+coverage, so the server answers lookups for pushed sessions. A database upgraded
+from an older release reports unavailable until its next push creates the
+evidence table. Hosted tenants, DuckDB and ClickHouse return unavailable.
 See [transcript attachments](/docs/usage/#files-and-attachments) for proof limits.
 
 ### Container deployment

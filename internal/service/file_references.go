@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -100,8 +99,7 @@ type FileReferenceOccurrence struct {
 
 func localFileEvidence(ordinal int, r fileevidence.Record, binding string) LocalFileEvidence {
 	slot, _ := r.Position.Slot()
-	raw, _ := json.Marshal([]any{ordinal, slot, binding})
-	out := LocalFileEvidence{OccurrenceID: base64.RawURLEncoding.EncodeToString(raw), MessageOrdinal: ordinal, BlockIndex: r.Position.Block, Kind: r.Kind, MediaType: r.MediaType, DisplayName: r.DisplayName, DisplayPath: r.DisplayPath, ProofMethod: r.ProofMethod, Size: r.Size, SHA256: r.SHA256, AssetRef: r.AssetRef, IneligibleReason: r.IneligibleReason}
+	out := LocalFileEvidence{OccurrenceID: db.EncodeFileEvidenceOccurrence(ordinal, slot, binding), MessageOrdinal: ordinal, BlockIndex: r.Position.Block, Kind: r.Kind, MediaType: r.MediaType, DisplayName: r.DisplayName, DisplayPath: r.DisplayPath, ProofMethod: r.ProofMethod, Size: r.Size, SHA256: r.SHA256, AssetRef: r.AssetRef, IneligibleReason: r.IneligibleReason}
 	if r.Position.Call >= 0 {
 		out.ToolCallIndex = new(r.Position.Call)
 	}

@@ -452,6 +452,9 @@ func (b *directBackend) Messages(
 			// Preserve ordinary missing-session reads; bound reads below still reject them.
 			err = nil
 			msgs = []db.Message{}
+		} else if errors.Is(err, db.ErrFileEvidenceStale) {
+			// A store that could not pair messages with one revision's evidence.
+			err = fmt.Errorf("%w: transcript changed during read", ErrSourceChanged)
 		} else if err == nil {
 			page = &p
 			msgs = p.Messages

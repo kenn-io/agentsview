@@ -5,12 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/fileevidence"
@@ -180,12 +178,7 @@ func evidenceHeader(ctx context.Context, tx *sql.Tx, id string) (fileevidence.Sn
 	if strings.TrimSpace(generation) == "" {
 		return s, ErrDatabaseIDMissing
 	}
-	var tuple strings.Builder
-	for _, v := range []string{generation, id, s.Revision} {
-		tuple.WriteString(strconv.Itoa(len(v)) + ":" + v)
-	}
-	sum := sha256.Sum256([]byte(tuple.String()))
-	s.Binding = "v1." + base64.RawURLEncoding.EncodeToString(sum[:])
+	s.Binding = FileEvidenceBinding(generation, id, s.Revision)
 	s.Coverage.State = "unavailable"
 	has, err := hasFileEvidence(ctx, tx)
 	if err != nil {
@@ -241,21 +234,9 @@ func (db *DB) ReadFileEvidenceSnapshot(ctx context.Context, id string, w fileevi
 		args = append(args, *w.LastOrdinal)
 	}
 	if w.OccurrenceID != "" {
-		if len(w.OccurrenceID) > 4096 {
-			return s, ErrFileEvidenceStale
-		}
-		raw, e := base64.RawURLEncoding.DecodeString(w.OccurrenceID)
-		var selector []jsontext.Value
-		if e != nil || json.Unmarshal(raw, &selector) != nil || len(selector) != 3 {
-			return s, ErrFileEvidenceStale
-		}
-		var ordinal int
-		var slot, binding string
-		if json.Unmarshal(selector[0], &ordinal) != nil || json.Unmarshal(selector[1], &slot) != nil || json.Unmarshal(selector[2], &binding) != nil || binding != s.Binding || len(slot) > 1024 || ordinal < 0 {
-			return s, ErrFileEvidenceStale
-		}
-		if _, err := parseEvidenceSlot(slot); err != nil {
-			return s, ErrFileEvidenceStale
+		ordinal, slot, err := DecodeFileEvidenceOccurrence(w.OccurrenceID, s.Binding)
+		if err != nil {
+			return s, err
 		}
 		where += " AND m.ordinal=? AND e.slot=?"
 		args = append(args, ordinal, slot)

@@ -396,6 +396,21 @@ func schemaColumnMigrations() []columnMigration {
 			"adding sessions.friction_hash",
 		},
 		{
+			"sessions", "file_evidence_version",
+			`file_evidence_version INT NOT NULL DEFAULT 0`,
+			"adding sessions.file_evidence_version",
+		},
+		{
+			"sessions", "file_evidence_coverage",
+			`file_evidence_coverage TEXT NOT NULL DEFAULT 'unavailable'`,
+			"adding sessions.file_evidence_coverage",
+		},
+		{
+			"sessions", "file_evidence_digest",
+			`file_evidence_digest TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.file_evidence_digest",
+		},
+		{
 			"sessions", "session_name",
 			`session_name TEXT`,
 			"adding sessions.session_name",

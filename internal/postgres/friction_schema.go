@@ -36,8 +36,14 @@ var hostedFrictionTables = []HostedTable{
 // installHostedFrictionUpgrade adds missing derived tables and repairs their
 // ordinary indexes before the hosted catalog is checked.
 func installHostedFrictionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant string) error {
-	missing := make([]HostedTable, 0, len(hostedFrictionTables))
-	for _, table := range hostedFrictionTables {
+	return installHostedDerivedUpgrade(ctx, tx, schema, tenant, frictionDDL, hostedFrictionTables)
+}
+
+// installHostedDerivedUpgrade runs a derived table's idempotent DDL and
+// inventories any table the hosted schema did not have yet.
+func installHostedDerivedUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant, ddl string, tables []HostedTable) error {
+	missing := make([]HostedTable, 0, len(tables))
+	for _, table := range tables {
 		var exists bool
 		if err := tx.QueryRowContext(ctx, `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, schema, table.Name).Scan(&exists); err != nil {
 			return err
@@ -46,7 +52,7 @@ func installHostedFrictionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenan
 			missing = append(missing, table)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, frictionDDL); err != nil {
+	if _, err := tx.ExecContext(ctx, ddl); err != nil {
 		return err
 	}
 	if len(missing) > 0 {

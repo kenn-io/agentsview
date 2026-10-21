@@ -224,6 +224,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     friction_count            INT NOT NULL DEFAULT 0,
     friction_rules_version    TEXT NOT NULL DEFAULT '',
     friction_hash             TEXT NOT NULL DEFAULT '',
+    file_evidence_version     INT NOT NULL DEFAULT 0,
+    file_evidence_coverage    TEXT NOT NULL DEFAULT 'unavailable',
+    file_evidence_digest      TEXT NOT NULL DEFAULT '',
     transcript_revision       TEXT NOT NULL DEFAULT '0',
     source_archive_id          TEXT NOT NULL DEFAULT '',
     source_database_generation TEXT NOT NULL DEFAULT '',
@@ -997,6 +1000,9 @@ func EnsureSchema(
 	}
 	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
 		return fmt.Errorf("creating pg friction tables: %w", err)
+	}
+	if err := ensureFileEvidenceSchema(ctx, db); err != nil {
+		return err
 	}
 	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
 		return err
@@ -2432,6 +2438,12 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf(
 			"sessions table missing friction columns: %w", err)
 	}
+	_, err = db.ExecContext(ctx,
+		`SELECT file_evidence_version, file_evidence_coverage, file_evidence_digest FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing file evidence columns: %w", err)
+	}
 	return nil
 }
 
@@ -2463,7 +2475,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") ||
-		!pgHasTable(ctx, db, "friction_findings") {
+		!pgHasTable(ctx, db, "friction_findings") ||
+		!pgHasTable(ctx, db, "message_file_evidence") {
 		return false
 	}
 	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT
