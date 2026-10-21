@@ -195,12 +195,28 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
-    name: Go Test (${{ matrix.os }})
+    name: Go Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-latest, Sync
+            package: ./internal/sync
+          - os: ubuntu-latest
+            name: ubuntu-latest, DuckDB
+            package: ./internal/duckdb
+          - os: ubuntu-latest
+            name: ubuntu-latest, Other packages
+            testSet: other
+          - os: ubuntu-latest
+            name: ubuntu-latest, Eval ingest
+            testSet: evalingest
+          - os: windows-latest
+            name: windows-latest
+          - os: macos-latest
+            name: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -250,9 +266,17 @@ jobs:
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
-      - name: Run Go tests (Linux)
-        if: runner.os == 'Linux'
-        run: go test -tags "fts5" -coverprofile=coverage.out ./... -v -count=1 -timeout=20m
+      - name: Run Go tests (Linux, single package)
+        if: runner.os == 'Linux' && matrix.package != ''
+        run: go test -tags "fts5" -coverprofile=coverage.out ${{ matrix.package }} -v -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      # Keep exclusions aligned with the race job's Other packages shard.
+      - name: Run other Go tests (Linux)
+        if: runner.os == 'Linux' && matrix.testSet == 'other'
+        shell: bash
+        run: go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -tags "fts5" -coverprofile=coverage.out -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -316,11 +340,11 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Run eval-ingest build-tag tests
-        if: runner.os == 'Linux'
+        if: matrix.testSet == 'evalingest'
         run: make test-evalingest
 
       - name: Upload coverage
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.testSet != 'evalingest'
         id: codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
@@ -332,6 +356,7 @@ jobs:
         run: echo "::warning::Codecov upload failed"
 
       - name: Save Go caches
+        if: runner.os != 'Linux' || matrix.testSet == 'other'
         uses: ./.github/actions/go-cache-save
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
@@ -624,7 +649,7 @@ jobs:
 
       # internal/duckdb is excluded from -race (CGo-heavy, race-insensitive,
       # and 7+ minutes on its own); it is still covered without -race by the
-      # main test job's ./... run. Limit package fan-out because the race
+      # Linux DuckDB shard. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
