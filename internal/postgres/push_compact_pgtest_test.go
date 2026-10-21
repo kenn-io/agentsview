@@ -47,17 +47,23 @@ func TestPushCompactComparisons(t *testing.T) {
 	aggregate := mismatchedCounts[id]
 	aggregate.Count = 2
 	mismatchedCounts[id] = aggregate
-	skipped, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, mismatchedCounts, true)
+	skipped, err := readPushSessionMessageComparisons(
+		ctx, tx, []string{id}, mismatchedCounts, true,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, skipped.MessageAggregates[id].Count)
 	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageSystemOrdinals, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
-	compact, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts, true)
+	compact, err := readPushSessionMessageComparisons(
+		ctx, tx, []string{id}, counts, true,
+	)
 	require.NoError(t, err)
 	assert.Contains(t, compact.MessageContentHash, id)
 	assert.Contains(t, compact.ToolCallFingerprint, id)
-	localFP, err := localPushMessageFingerprint(ctx, local, id, "", false, comparisonPushFingerprint)
+	localFP, err := localPushMessageFingerprint(
+		ctx, local, id, "", false, comparisonPushFingerprint,
+	)
 	require.NoError(t, err)
 	assert.True(t, shouldSkipSessionMessages(id, 1, localFP, false, compact))
 	for _, change := range []struct{ name, statement string }{
@@ -73,7 +79,9 @@ func TestPushCompactComparisons(t *testing.T) {
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, change.statement, id)
 			require.NoError(t, err)
-			changed, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts, true)
+			changed, err := readPushSessionMessageComparisons(
+				ctx, tx, []string{id}, counts, true,
+			)
 			require.NoError(t, err)
 			assert.False(t, shouldSkipSessionMessages(id, 1, localFP, false, changed))
 			_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT change`)
@@ -135,93 +143,97 @@ func TestPushCompactMixedResponseBytes(t *testing.T) {
 	var measured []int64
 	for _, size := range []int{4 << 10, 256 << 10} {
 		t.Run(fmt.Sprintf("%d_bytes", size), func(t *testing.T) {
-			ctx := t.Context()
-			const schema = "agentsview_push_response_bytes_test"
-			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
-			local := testDB(t)
-			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "sample-model"}}))
-			require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
-				Version: "test", SourceRef: "test", Source: db.GenAIPricingSourceFetched, Data: []byte(`[]`),
-			}))
-			for _, id := range []string{"growing", "unchanged", "edited"} {
-				count := 1
-				if id == "growing" {
-					count = 2000
-				}
-				require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: count}))
-			}
-			growing := make([]db.Message, 2000)
-			for i := range growing {
-				growing[i] = db.Message{SessionID: "growing", Ordinal: i, Role: "user", Content: "small message"}
-			}
-			require.NoError(t, local.InsertMessages(ctx, growing))
-			body := strings.Repeat("c", size)
-			edited := []db.Message{{SessionID: "edited", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), HasThinking: true, HasToolUse: true,
-				ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: "call", InputJSON: strings.Repeat("i", size), ResultContent: strings.Repeat("r", size), ResultContentLength: size, FilePath: "example.txt",
-					ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Status: "completed", Content: strings.Repeat("e", size), ContentLength: size}},
-				}},
-			}}
-			require.NoError(t, local.InsertMessages(ctx, edited))
-			unchanged := edited[0]
-			unchanged.SessionID = "unchanged"
-			require.NoError(t, local.InsertMessages(ctx, []db.Message{unchanged}))
-			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-			initial, err := syncer.Push(ctx, true, nil)
-			require.NoError(t, err)
-			require.Zero(t, initial.Errors)
-			// Keep unrelated pricing downloads outside the measured comparison response.
-			_, err = syncer.pg.ExecContext(ctx, `TRUNCATE model_pricing_bands, model_pricing, genai_pricing`)
-			require.NoError(t, err)
-			var pricingRows int
-			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM model_pricing_bands) + (SELECT COUNT(*) FROM model_pricing) + (SELECT COUNT(*) FROM genai_pricing)`).Scan(&pricingRows))
-			require.Zero(t, pricingRows)
-			before := pgMessageCTID(t, syncer.pg, "unchanged", 0)
-			growing = append(growing, db.Message{SessionID: "growing", Ordinal: 2000, Role: "user", Content: "appended"})
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "growing", growing))
-			require.NoError(t, local.RenameSession(ctx, "unchanged", new("renamed session")))
-			edited[0].Content = "x" + body[1:]
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "edited", edited))
-			quoted, err := quoteIdentifier(schema)
-			require.NoError(t, err)
-			connStr, err := appendConnParams(url, map[string]string{"search_path": quoted, "TimeZone": "UTC"})
-			require.NoError(t, err)
-			config, err := pgx.ParseConfig(connStr)
-			require.NoError(t, err)
-			var received atomic.Int64
-			config.AfterNetConnect = func(_ context.Context, _ *pgconn.Config, conn net.Conn) (net.Conn, error) {
-				return &pushResponseConn{Conn: conn, received: &received}, nil
-			}
-			metered := stdlib.OpenDB(*config)
-			metered.SetMaxOpenConns(5)
-			metered.SetMaxIdleConns(5)
-			require.NoError(t, syncer.pg.Close())
-			syncer.pg = metered
-			require.NoError(t, metered.PingContext(ctx))
-			received.Store(0)
-			result, err := syncer.Push(ctx, false, nil)
-			bytes := received.Load()
-			require.NoError(t, err)
-			require.Zero(t, result.Errors)
-			assert.False(t, result.Full, "normal push history must select an incremental run")
-			assert.Equal(t, 3, result.SessionsPushed)
-			assert.Positive(t, bytes)
-			assert.Less(t, bytes, int64(640<<10), "640 KiB budget covers the integrated stack's row-count-dependent suffix traffic; separate count-map and 32 KiB growth assertions protect Slice 1 alone")
-			measured = append(measured, bytes)
-			t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
-			assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
-			var appended, name, content string
-			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id='growing' AND ordinal=2000`).Scan(&appended))
-			assert.Equal(t, "appended", appended)
-			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT display_name FROM sessions WHERE id='unchanged'`).Scan(&name))
-			assert.Equal(t, "renamed session", name)
-			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id='edited' AND ordinal=0`).Scan(&content))
-			assert.Equal(t, "x"+body[1:], content)
+			measured = append(measured, mixedPushResponseBytes(t, size))
 		})
 	}
 	require.Len(t, measured, 2)
 	assert.LessOrEqual(t, measured[1]-measured[0], int64(32<<10), "response traffic must not grow with transcript bodies")
+}
+
+func mixedPushResponseBytes(t *testing.T, size int) int64 {
+	t.Helper()
+	ctx := t.Context()
+	const schema = "agentsview_push_response_bytes_test"
+	url := testPGURL(t)
+	cleanNamedPGSchema(t, url, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	local := testDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "sample-model"}}))
+	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
+		Version: "test", SourceRef: "test", Source: db.GenAIPricingSourceFetched, Data: []byte(`[]`),
+	}))
+	for _, id := range []string{"growing", "unchanged", "edited"} {
+		count := 1
+		if id == "growing" {
+			count = 2000
+		}
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: count}))
+	}
+	growing := make([]db.Message, 2000)
+	for i := range growing {
+		growing[i] = db.Message{SessionID: "growing", Ordinal: i, Role: "user", Content: "small message"}
+	}
+	require.NoError(t, local.InsertMessages(ctx, growing))
+	body := strings.Repeat("c", size)
+	edited := []db.Message{{SessionID: "edited", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), HasThinking: true, HasToolUse: true,
+		ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: "call", InputJSON: strings.Repeat("i", size), ResultContent: strings.Repeat("r", size), ResultContentLength: size, FilePath: "example.txt",
+			ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Status: "completed", Content: strings.Repeat("e", size), ContentLength: size}},
+		}},
+	}}
+	require.NoError(t, local.InsertMessages(ctx, edited))
+	unchanged := edited[0]
+	unchanged.SessionID = "unchanged"
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{unchanged}))
+	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	initial, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, initial.Errors)
+	// Keep unrelated pricing downloads outside the measured comparison response.
+	_, err = syncer.pg.ExecContext(ctx, `TRUNCATE model_pricing_bands, model_pricing, genai_pricing`)
+	require.NoError(t, err)
+	var pricingRows int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM model_pricing_bands) + (SELECT COUNT(*) FROM model_pricing) + (SELECT COUNT(*) FROM genai_pricing)`).Scan(&pricingRows))
+	require.Zero(t, pricingRows)
+	before := pgMessageCTID(t, syncer.pg, "unchanged", 0)
+	growing = append(growing, db.Message{SessionID: "growing", Ordinal: 2000, Role: "user", Content: "appended"})
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "growing", growing))
+	require.NoError(t, local.RenameSession(ctx, "unchanged", new("renamed session")))
+	edited[0].Content = "x" + body[1:]
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "edited", edited))
+	quoted, err := quoteIdentifier(schema)
+	require.NoError(t, err)
+	connStr, err := appendConnParams(url, map[string]string{"search_path": quoted, "TimeZone": "UTC"})
+	require.NoError(t, err)
+	config, err := pgx.ParseConfig(connStr)
+	require.NoError(t, err)
+	var received atomic.Int64
+	config.AfterNetConnect = func(_ context.Context, _ *pgconn.Config, conn net.Conn) (net.Conn, error) {
+		return &pushResponseConn{Conn: conn, received: &received}, nil
+	}
+	metered := stdlib.OpenDB(*config)
+	metered.SetMaxOpenConns(5)
+	metered.SetMaxIdleConns(5)
+	require.NoError(t, syncer.pg.Close())
+	syncer.pg = metered
+	require.NoError(t, metered.PingContext(ctx))
+	received.Store(0)
+	result, err := syncer.Push(ctx, false, nil)
+	bytes := received.Load()
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	assert.False(t, result.Full, "normal push history must select an incremental run")
+	assert.Equal(t, 3, result.SessionsPushed)
+	assert.Positive(t, bytes)
+	t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
+	assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
+	var appended, name, content string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id='growing' AND ordinal=2000`).Scan(&appended))
+	assert.Equal(t, "appended", appended)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT display_name FROM sessions WHERE id='unchanged'`).Scan(&name))
+	assert.Equal(t, "renamed session", name)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id='edited' AND ordinal=0`).Scan(&content))
+	assert.Equal(t, "x"+body[1:], content)
+	return bytes
 }

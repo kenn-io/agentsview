@@ -3123,7 +3123,9 @@ func (s *Sync) pushMessages(
 
 	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
 		usageFP, usageKnown := sessionUsageFingerprints[sessionID]
-		localFP, err := localPushMessageFingerprint(ctx, s.local, sessionID, usageFP, usageKnown, comparisonPushFingerprint)
+		localFP, err := localPushMessageFingerprint(
+			ctx, s.local, sessionID, usageFP, usageKnown, comparisonPushFingerprint,
+		)
 		if err != nil {
 			return 0, err
 		}
