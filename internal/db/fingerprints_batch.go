@@ -66,9 +66,10 @@ func (m fingerprintBuilders) mergeInto(out map[string]string) {
 // MessageContentAggregate mirrors MessageContentFingerprint's
 // sum/max/min triple for the batched lookup.
 type MessageContentAggregate struct {
-	Sum int64
-	Max int64
-	Min int64
+	Count int
+	Sum   int64
+	Max   int64
+	Min   int64
 }
 
 // MessageContentFingerprints is the batched twin of
@@ -81,7 +82,7 @@ func (db *DB) MessageContentFingerprints(ctx context.Context,
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(ctx, `
-			SELECT session_id, COALESCE(SUM(content_length), 0),
+			SELECT session_id, COUNT(*), COALESCE(SUM(content_length), 0),
 				COALESCE(MAX(content_length), 0),
 				COALESCE(MIN(content_length), 0)
 			FROM messages
@@ -97,7 +98,7 @@ func (db *DB) MessageContentFingerprints(ctx context.Context,
 			var sessionID string
 			var agg MessageContentAggregate
 			if err := rows.Scan(
-				&sessionID, &agg.Sum, &agg.Max, &agg.Min,
+				&sessionID, &agg.Count, &agg.Sum, &agg.Max, &agg.Min,
 			); err != nil {
 				return err
 			}
@@ -450,6 +451,16 @@ func (db *DB) ToolCallContentFingerprints(ctx context.Context,
 func (db *DB) ToolCallFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
+	return db.toolCallFingerprints(ctx, sessionIDs, false)
+}
+
+// ToolCallComparisonFingerprints hashes large fields for remote comparison.
+// ToolCallFingerprints keeps the persisted dependency fingerprint unchanged.
+func (db *DB) ToolCallComparisonFingerprints(ctx context.Context, sessionIDs []string) (map[string]string, error) {
+	return db.toolCallFingerprints(ctx, sessionIDs, true)
+}
+
+func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, compact bool) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
@@ -485,7 +496,7 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 				return err
 			}
 			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
-			r.appendTo(builders.get(sessionID))
+			r.appendFields(builders.get(sessionID), compact)
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -745,6 +756,10 @@ type toolCallFingerprintRow struct {
 }
 
 func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
+	r.appendFields(b, false)
+}
+
+func (r toolCallFingerprintRow) appendFields(b *strings.Builder, compact bool) {
 	toolName := SanitizeUTF8(r.toolName)
 	category := SanitizeUTF8(r.category)
 	toolUseID := SanitizeUTF8(r.toolUseID)
@@ -753,18 +768,24 @@ func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 	subagentSessionID := SanitizeUTF8(r.subagentSessionID)
 	resultContent := SanitizeUTF8(r.resultContent)
 	filePath := SanitizeUTF8(r.filePath)
+	inputLength, resultLength, pathLength := len(inputJSON), len(resultContent), len(filePath)
+	if compact {
+		inputJSON = fmt.Sprintf("%x", sha256.Sum256([]byte(inputJSON)))
+		resultContent = fmt.Sprintf("%x", sha256.Sum256([]byte(resultContent)))
+		filePath = fmt.Sprintf("%x", sha256.Sum256([]byte(filePath)))
+	}
 	fmt.Fprintf(b,
 		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
 		r.messageOrdinal, r.callIndex,
 		len(toolName), toolName,
 		len(category), category,
 		len(toolUseID), toolUseID,
-		len(inputJSON), inputJSON,
+		inputLength, inputJSON,
 		len(skillName), skillName,
 		len(subagentSessionID), subagentSessionID,
 		r.resultContentLength,
-		len(resultContent), resultContent,
-		len(filePath), filePath,
+		resultLength, resultContent,
+		pathLength, filePath,
 	)
 	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
 }

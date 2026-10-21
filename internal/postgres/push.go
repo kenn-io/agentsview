@@ -1376,8 +1376,13 @@ func (s *Sync) pushBatchAttempt(
 	}
 	comparisons := (*pushMessageComparison)(nil)
 	if preloadComparisons && len(sessionIDs) > 0 {
+		localCounts, err := s.local.MessageContentFingerprints(ctx, sessionIDs)
+		if err != nil {
+			_ = tx.Rollback()
+			return batchResult{}, err
+		}
 		comparisonsBatch, err := readPushSessionMessageComparisons(
-			ctx, tx, sessionIDs,
+			ctx, tx, sessionIDs, localCounts,
 		)
 		if err != nil {
 			_ = tx.Rollback()
@@ -3209,7 +3214,8 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
-		localFP.ToolCallFP, err = s.local.ToolCallFingerprint(ctx, sessionID)
+		localToolCalls, err := s.local.ToolCallComparisonFingerprints(ctx, []string{sessionID})
+		localFP.ToolCallFP = localToolCalls[sessionID]
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local tool_call fingerprint: %w", err,
@@ -3966,31 +3972,11 @@ func pgMessageTokenFingerprint(
 func pgMessageContentHashFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, COALESCE(content, ''), content_length
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushMessageContentHashFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal, contentLength int
-		var content string
-		if err := rows.Scan(
-			&ordinal, &content, &contentLength,
-		); err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(content)))
-		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 func localMessageRoleTimePGFingerprint(ctx context.Context,
@@ -4051,86 +4037,21 @@ func pgMessageRoleTimeFingerprint(
 func pgMessageFlagsFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, is_system, has_thinking, has_tool_use,
-			COALESCE(thinking_text, '')
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushMessageFlagFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal int
-		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
-		if err := rows.Scan(
-			&ordinal, &isSystem, &hasThinking, &hasToolUse,
-			&thinkingText,
-		); err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(thinkingText)))
-		fmt.Fprintf(&b, "%d|%t|%t|%t|%x;",
-			ordinal, isSystem, hasThinking, hasToolUse, sum)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 func pgToolCallFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_ordinal, call_index, tool_name, category,
-			tool_use_id, COALESCE(input_json, ''),
-			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
-			COALESCE(result_content_length, 0),
-			COALESCE(result_content, ''),
-			COALESCE(file_path, ''), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
-		 FROM tool_calls
-		 WHERE session_id = $1
-		 ORDER BY message_ordinal ASC, call_index ASC`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushToolCallFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var messageOrdinal, callIndex, resultContentLength int
-		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
-		var observedOutcome, observedRepeat, sequenceEnding string
-		if err := rows.Scan(
-			&messageOrdinal, &callIndex, &toolName, &category,
-			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
-		); err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-			messageOrdinal, callIndex,
-			len(toolName), toolName,
-			len(category), category,
-			len(toolUseID), toolUseID,
-			len(inputJSON), inputJSON,
-			len(skillName), skillName,
-			len(subagentSessionID), subagentSessionID,
-			resultContentLength,
-			len(resultContent), resultContent,
-			len(filePath), filePath,
-		)
-		fmt.Fprintf(&b, "%d:%s|%d:%s|%d:%s;", len(observedOutcome), observedOutcome, len(observedRepeat), observedRepeat, len(sequenceEnding), sequenceEnding)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 func pgUsageEventFingerprint(

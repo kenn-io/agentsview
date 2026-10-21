@@ -335,6 +335,7 @@ func readPushSessionMessageComparisons(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionIDs []string,
+	localCounts map[string]db.MessageContentAggregate,
 ) (*pushMessageComparison, error) {
 	comparisons := &pushMessageComparison{
 		MessageAggregates:       make(map[string]pushMessageAggregate, len(sessionIDs)),
@@ -360,6 +361,16 @@ func readPushSessionMessageComparisons(
 		}
 		if err := loadPushMessageAggregates(ctx, tx, chunk, comparisons.MessageAggregates); err != nil {
 			return nil, err
+		}
+		eligible := make([]string, 0, len(chunk))
+		for _, id := range chunk {
+			if count := localCounts[id].Count; count > 0 && comparisons.MessageAggregates[id].Count == count {
+				eligible = append(eligible, id)
+			}
+		}
+		chunk = eligible
+		if len(chunk) == 0 {
+			continue
 		}
 		if err := loadPushMessageContentHashFingerprints(
 			ctx, tx, chunk, comparisons.MessageContentHash,
@@ -498,7 +509,7 @@ func loadPushMessageContentHashFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, ordinal, COALESCE(content, ''),
+		SELECT session_id, ordinal, sha256(convert_to(COALESCE(content, ''), 'UTF8')),
 			content_length
 		FROM messages
 		WHERE session_id = ANY($1)
@@ -513,17 +524,17 @@ func loadPushMessageContentHashFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var ordinal, contentLength int
-		var content string
+		var content pushDigest
 		if err := rows.Scan(&sessionID, &ordinal, &content, &contentLength); err != nil {
 			return err
 		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(content)))
+		sum := content
 		b := builders[sessionID]
 		if b == nil {
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
-		fmt.Fprintf(b, "%d|%d|%x;", ordinal, contentLength, sum)
+		fmt.Fprintf(b, "%d|%d|%s;", ordinal, contentLength, sum)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -593,7 +604,7 @@ func loadPushMessageFlagFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, ordinal, is_system, has_thinking, has_tool_use,
-			COALESCE(thinking_text, '')
+			sha256(convert_to(COALESCE(thinking_text, ''), 'UTF8'))
 		 FROM messages
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, ordinal ASC
@@ -608,21 +619,21 @@ func loadPushMessageFlagFingerprints(
 		var sessionID string
 		var ordinal int
 		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
+		var thinkingText pushDigest
 		if err := rows.Scan(
 			&sessionID, &ordinal, &isSystem, &hasThinking, &hasToolUse,
 			&thinkingText,
 		); err != nil {
 			return err
 		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(thinkingText)))
+		sum := thinkingText
 		b := builders[sessionID]
 		if b == nil {
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
 		fmt.Fprintf(
-			b, "%d|%t|%t|%t|%x;", ordinal, isSystem, hasThinking,
+			b, "%d|%t|%t|%t|%s;", ordinal, isSystem, hasThinking,
 			hasToolUse, sum,
 		)
 	}
@@ -780,11 +791,11 @@ func loadPushToolCallFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, message_ordinal, call_index, tool_name, category,
-			tool_use_id, COALESCE(input_json, ''),
+			tool_use_id, octet_length(COALESCE(input_json, '')), sha256(convert_to(COALESCE(input_json, ''), 'UTF8')),
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
-			COALESCE(result_content, ''),
-			COALESCE(file_path, ''), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
+			octet_length(COALESCE(result_content, '')), sha256(convert_to(COALESCE(result_content, ''), 'UTF8')),
+			octet_length(COALESCE(file_path, '')), sha256(convert_to(COALESCE(file_path, ''), 'UTF8')), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -798,14 +809,16 @@ func loadPushToolCallFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var messageOrdinal, callIndex, resultContentLength int
-		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
+		var toolName, category, toolUseID string
+		var inputJSON, resultContent, filePath pushDigest
+		var inputLength, resultLength, pathLength int
+		var skillName, subagentSessionID string
 		var observedOutcome, observedRepeat, sequenceEnding string
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &toolName,
-			&category, &toolUseID, &inputJSON,
+			&category, &toolUseID, &inputLength, &inputJSON,
 			&skillName, &subagentSessionID, &resultContentLength,
-			&resultContent, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
+			&resultLength, &resultContent, &pathLength, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
 		); err != nil {
 			return err
 		}
@@ -821,12 +834,12 @@ func loadPushToolCallFingerprints(
 			len(toolName), toolName,
 			len(category), category,
 			len(toolUseID), toolUseID,
-			len(inputJSON), inputJSON,
+			inputLength, inputJSON,
 			len(skillName), skillName,
 			len(subagentSessionID), subagentSessionID,
 			resultContentLength,
-			len(resultContent), resultContent,
-			len(filePath), filePath,
+			resultLength, resultContent,
+			pathLength, filePath,
 		)
 		fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(observedOutcome), observedOutcome, len(observedRepeat), observedRepeat, len(sequenceEnding), sequenceEnding)
 	}
@@ -927,7 +940,7 @@ func loadPushToolResultEventFingerprints(
 		SELECT session_id, tool_call_message_ordinal, call_index, event_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
-			content, content_length, timestamp
+			sha256(convert_to(COALESCE(content, ''), 'UTF8')), content_length, timestamp
 		 FROM tool_result_events
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, tool_call_message_ordinal ASC, call_index ASC, event_index ASC
@@ -942,7 +955,8 @@ func loadPushToolResultEventFingerprints(
 		var sessionID string
 		var messageOrdinal, callIndex, eventIndex, contentLength int
 		var toolUseID, agentID, subagentSessionID string
-		var source, status, content string
+		var source, status string
+		var content pushDigest
 		var timestamp sql.NullTime
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &eventIndex,
@@ -965,11 +979,10 @@ func loadPushToolResultEventFingerprints(
 		subagentSessionID = db.SanitizeUTF8(subagentSessionID)
 		source = db.SanitizeUTF8(source)
 		status = db.SanitizeUTF8(status)
-		content = db.SanitizeUTF8(content)
-		contentSum := sha256.Sum256([]byte(content))
+		contentSum := content
 		fmt.Fprintf(
 			b,
-			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%x|%d:%s;",
+			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%s|%d:%s;",
 			messageOrdinal, callIndex, eventIndex,
 			len(toolUseID), toolUseID,
 			len(agentID), agentID,
@@ -1002,59 +1015,11 @@ func localToolResultEventPGFingerprint(ctx context.Context,
 func pgToolResultEventFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT tool_call_message_ordinal, call_index, event_index,
-			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
-			COALESCE(subagent_session_id, ''), source, status,
-			content, content_length, timestamp
-		 FROM tool_result_events
-		 WHERE session_id = $1
-		 ORDER BY tool_call_message_ordinal ASC, call_index ASC, event_index ASC`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushToolResultEventFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var messageOrdinal, callIndex, eventIndex, contentLength int
-		var toolUseID, agentID, subagentSessionID string
-		var source, status, content string
-		var timestamp sql.NullTime
-		if err := rows.Scan(
-			&messageOrdinal, &callIndex, &eventIndex,
-			&toolUseID, &agentID, &subagentSessionID,
-			&source, &status, &content, &contentLength, &timestamp,
-		); err != nil {
-			return "", err
-		}
-		timestampText := ""
-		if timestamp.Valid {
-			timestampText = FormatISO8601(timestamp.Time)
-		}
-		toolUseID = db.SanitizeUTF8(toolUseID)
-		agentID = db.SanitizeUTF8(agentID)
-		subagentSessionID = db.SanitizeUTF8(subagentSessionID)
-		source = db.SanitizeUTF8(source)
-		status = db.SanitizeUTF8(status)
-		content = db.SanitizeUTF8(content)
-		contentSum := sha256.Sum256([]byte(content))
-		fmt.Fprintf(&b,
-			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%x|%d:%s;",
-			messageOrdinal, callIndex, eventIndex,
-			len(toolUseID), toolUseID,
-			len(agentID), agentID,
-			len(subagentSessionID), subagentSessionID,
-			len(source), source,
-			len(status), status,
-			contentLength,
-			contentSum,
-			len(timestampText), timestampText,
-		)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 func shouldSkipSessionMessages(
@@ -1136,6 +1101,28 @@ func loadPushMessageDialogueFingerprints(ctx context.Context, tx *sql.Tx, sessio
 	}
 	for id, b := range builders {
 		out[id] = b.String()
+	}
+	return nil
+}
+
+// pushDigest accepts PostgreSQL bytea and CockroachDB hexadecimal text.
+type pushDigest string
+
+func (d *pushDigest) Scan(value any) error {
+	switch value := value.(type) {
+	case []byte:
+		if len(value) != sha256.Size {
+			return fmt.Errorf("invalid binary SHA-256 length %d", len(value))
+		}
+		*d = pushDigest(hex.EncodeToString(value))
+	case string:
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != sha256.Size {
+			return fmt.Errorf("invalid hexadecimal SHA-256 digest")
+		}
+		*d = pushDigest(hex.EncodeToString(decoded))
+	default:
+		return fmt.Errorf("unexpected SHA-256 type %T", value)
 	}
 	return nil
 }
