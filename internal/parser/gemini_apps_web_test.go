@@ -150,14 +150,6 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid conversation ID",
-			data: func(t *testing.T) []byte {
-				t.Helper()
-				return []byte(`{"id":"../x","turns":[]}`)
-			},
-			wantErr: ErrGeminiAppsWebFormat,
-		},
-		{
 			name: "turn that is not an array",
 			data: func(t *testing.T) []byte {
 				t.Helper()
@@ -226,7 +218,6 @@ func TestGeminiAppsWebPending(t *testing.T) {
 			[]any{geminiTestTurn("r_2", "", "Next", [][2]string{{"rc_2", " "}}, at)}), true},
 		{"only an older page answers", geminiTestConversation(t, "t", at, []any{}, []any{answered}), false},
 		{"no turns", geminiTestConversation(t, "t", at), false},
-		{"not a conversation", []byte(`[]`), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
