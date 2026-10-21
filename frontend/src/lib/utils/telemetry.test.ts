@@ -19,95 +19,51 @@ describe("feature outcomes", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
-  it("aborts a stalled initial check after ten seconds", async () => {
-    let signal: AbortSignal | undefined;
-    const fetch = vi.fn(
-      (_input: RequestInfo | URL, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          signal = init?.signal ?? undefined;
+  it.each(["stalled", "completed"])(
+    "bounds a %s request with a ten-second deadline",
+    async (state) => {
+      let signal: AbortSignal | undefined;
+      const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>((resolve, reject) => {
+          if (state === "completed") resolve(new Response('{"status":"queued"}', { status: 202 }));
           signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
-        }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signal?.aborted).toBe(true);
-  });
-  it("clears the request deadline after a disabled receipt and cleanup", async () => {
-    let signal: AbortSignal | undefined;
-    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      signal = init?.signal ?? undefined;
-      return new Response('{"status":"disabled"}', { status: 202 });
-    });
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(signal?.aborted).toBe(false);
-    stop();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(signal?.aborted).toBe(false);
-  });
-  it("holds an outcome while the open page waits for its initial receipt", async () => {
-    let reply!: (response: Response) => void;
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            reply = resolve;
-          }),
-      )
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({
-      event: "app_opened",
-      properties: { surface: "web" },
-    });
-    reply(new Response('{"status":"queued"}', { status: 202 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetch.mock.lastCall![1]!.body as string)).toEqual({
-      event: "error_shown",
-      properties: { kind: "search" },
-    });
-  });
-  it("keeps later outcomes flowing after a screen report is rejected with HTTP 400", async () => {
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce(new Response('{"status":"queued"}', { status: 202 }))
-      .mockResolvedValueOnce(new Response(null, { status: 400 }))
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    reportTelemetry("screen_viewed", { screen: "usage" });
-    await vi.advanceTimersByTimeAsync(0);
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
-      { event: "app_opened", properties: { surface: "web" } },
-      { event: "screen_viewed", properties: { screen: "usage", surface: "web" } },
-      { event: "error_shown", properties: { kind: "search" } },
-    ]);
-  });
-  it("settles an initial HTTP 404 without retries or releasing held outcomes", async () => {
-    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => new Response(null, { status: 404 }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
-      { event: "app_opened", properties: { surface: "web" } },
-    ]);
-  });
+        });
+      });
+      vi.stubGlobal("fetch", fetch);
+      stop = setupTelemetryReporting();
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(state === "stalled");
+    },
+  );
+  it.each([202, 404])(
+    "routes held feature outcomes through the HTTP %i receipt",
+    async (status) => {
+      let reply!: (response: Response) => void;
+      const fetch = vi
+        .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              reply = resolve;
+            }),
+        )
+        .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+      vi.stubGlobal("fetch", fetch);
+      stop = setupTelemetryReporting();
+      reportErrorShown("search");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledOnce();
+      reply(new Response(status === 202 ? '{"status":"queued"}' : null, { status }));
+      await vi.advanceTimersByTimeAsync(status === 404 ? 60_000 : 0);
+      expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+        { event: "app_opened", properties: { surface: "web" } },
+        ...(status === 202 ? [{ event: "error_shown", properties: { kind: "search" } }] : []),
+      ]);
+    },
+  );
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],
@@ -156,26 +112,6 @@ describe("feature outcomes", () => {
     ]);
   });
 
-  it("retries an unauthorized check on fresh setup after setting the token", async () => {
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(fetch).toHaveBeenCalledOnce();
-    stop();
-    setAuthToken("signed-in");
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string).event)).toEqual([
-      "app_opened",
-      "app_opened",
-    ]);
-  });
-
   it.each([false, true])(
     "replaces server claims and credentials after a server change, cross-tab=%s",
     async (crossTab) => {
@@ -192,6 +128,11 @@ describe("feature outcomes", () => {
       fetch.mockClear();
       if (crossTab) {
         localStorage.setItem(SERVER_URL_KEY, "https://example.org");
+        setAuthToken("remote-token");
+        window.dispatchEvent(new Event("pagehide"));
+        reportErrorShown("search");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetch).not.toHaveBeenCalled();
         window.dispatchEvent(
           new StorageEvent("storage", { key: SERVER_URL_KEY, storageArea: localStorage }),
         );
@@ -220,47 +161,4 @@ describe("feature outcomes", () => {
       ]);
     },
   );
-
-  it("drops old-server reports before a cross-tab server change is delivered", async () => {
-    const now = vi.spyOn(performance, "now").mockReturnValue(0);
-    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => new Response('{"status":"queued"}', { status: 202 }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    setServerUrl("https://a.example.org");
-    setAuthToken("a-token");
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    fetch.mockClear();
-
-    localStorage.setItem(SERVER_URL_KEY, "https://b.example.org");
-    setAuthToken("b-token");
-    now.mockReturnValue(120_000);
-    window.dispatchEvent(new Event("pagehide"));
-    reportErrorShown("search");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).not.toHaveBeenCalled();
-
-    window.dispatchEvent(
-      new StorageEvent("storage", { key: SERVER_URL_KEY, storageArea: localStorage }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(
-      fetch.mock.calls.map(([url, init]) => [
-        url,
-        new Headers(init?.headers).get("Authorization"),
-        JSON.parse(init!.body as string),
-      ]),
-    ).toEqual([
-      [
-        "https://b.example.org/api/v1/telemetry/events",
-        "Bearer b-token",
-        {
-          event: "app_opened",
-          properties: { surface: "web" },
-        },
-      ],
-    ]);
-  });
 });

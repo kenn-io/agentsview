@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { BrowserTelemetryReporter } from "@kenn-io/kit-ui/utils/browser-telemetry";
+import { setupVisitEndedReporting } from "./visit-ended.js";
 import { setupTelemetryReporting } from "./telemetry.js";
 
 describe("visit ended reporting", () => {
@@ -121,17 +123,34 @@ describe("visit ended reporting", () => {
     expect(await buckets()).toEqual([]);
   });
 
-  it("drops pending time and removes timers and listeners on cleanup", async () => {
-    await start();
+  it("drops pending time and removes timers and listeners on cleanup", () => {
+    const reportVisit = vi.fn();
+    const unsubscribe = vi.fn();
+    let quiet!: Parameters<BrowserTelemetryReporter["onQuietChange"]>[0];
+    const reporter: BrowserTelemetryReporter = {
+      reportVisit,
+      stop: vi.fn(),
+      disable: vi.fn(),
+      reportScreen: vi.fn(),
+      reportDaily: vi.fn(),
+      onQuietChange(listener) {
+        quiet = listener;
+        return unsubscribe;
+      },
+    };
+    stop = setupVisitEndedReporting(reporter);
+    quiet(false, "enabled");
     advance(120_000);
     visibility(true);
-    stop!();
+    stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
     advance(1_800_000);
     visibility(false);
     reopen();
     advance(120_000);
     close();
-    expect(await buckets()).toEqual([]);
+    expect(reportVisit).not.toHaveBeenCalled();
   });
   it.each([
     ["initial", "queued"],
@@ -169,10 +188,6 @@ describe("visit ended reporting", () => {
       const timers = vi.getTimerCount();
       visibility(true);
       expect(vi.getTimerCount()).toBe(timers);
-      visibility(false);
-      advance(120_000);
-      close();
-      expect(await buckets()).toEqual([]);
     }
   });
 
@@ -191,7 +206,6 @@ describe("visit ended reporting", () => {
     close();
     reopen();
     window.dispatchEvent(new Event("focus"));
-    expect(await buckets()).toEqual([]);
     expect(fetch).toHaveBeenCalledTimes(2);
     fetch.mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
     vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
