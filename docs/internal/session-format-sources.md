@@ -1809,6 +1809,28 @@ fixtures retain this field; missing identities remain source-local.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
+- **Chrome Sync format:** gemini.google.com answers batchexecute POSTs to
+  `/_/BardChatUi/data/batchexecute` with a `)]}'` prefix, length lines, and
+  chunks whose `["wrb.fr", <rpc>, "<payload JSON>", ...]` entry carries the
+  result. `MaZiqc` lists chats: payload `[_, cursor, [entry...]]`, entry
+  `[0]` is the `c_` chat ID, `[1]` the title, and `[5]` the `[seconds, nanos]`
+  update time. `hNvQHb` returns `[turns, cursor, ...]` with turns newest first;
+  turn `[0]` is `[chat, response]`, `[2][0][0]` the prompt, `[3][0]` the reply
+  drafts (`[id, [text, ...], ...]`), `[3][3]` the shown draft's ID, and the last
+  `[seconds, nanos]` child the turn time. Turn `[1]` names the previous turn,
+  not this one. Cursors are base64 text with `+` and `/`.
+- **Chrome Sync evidence:** `no-public-source`. A read-only probe of a signed-in web
+  app (build `boq_gemini-web-uiserver_20261020.01_p0`) on 2026-10-21 checked
+  every position above, list and turn paging with real cursors, and that the
+  list update time equals the newest turn time. Sanitized captures with the
+  real array layout are `internal/importer/testdata/gemini_web/`, exercised by
+  `TestSyncGeminiCapturedPages` and `TestGeminiRPCPayload`. The account had no
+  pinned chats, so whether pinned chats appear in the default list is
+  unverified. Gemini publishes no schema; RPC names and positions can change
+  with any web app build.
+- **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
+  `internal/importer/gemini_sync.go`, and
+  `frontend/chrome-extension/gemini_fetch.js`.
 
 ## Grok Build (`grok`)
 

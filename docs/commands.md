@@ -1843,7 +1843,7 @@ ______________________________________________________________________
 
 ### `agentsview source chrome setup`
 
-Install the native host and unpacked extension for Claude.ai and ChatGPT Sync through Google
+Install the native host and unpacked extension for Claude.ai, ChatGPT, and Gemini Apps Sync through Google
 Chrome. The command prints the extension folder. AgentsView opens its Chrome
 connection only after setup, so restart AgentsView if it is already running.
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
@@ -1874,12 +1874,13 @@ agentsview source import --type <type> <path>
 | ----------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
 | `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                                 |
 | `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)                        |
-| `--sync`    | `false` | Sync Claude.ai or ChatGPT through Chrome; requires a running server and Chrome host, with no path or `--replace` |
+| `--sync`    | `false` | Sync Claude.ai, ChatGPT, or Gemini Apps through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Set up the
 [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
 and keep Chrome open for `agentsview source import --type claude-ai --sync` or
-`agentsview source import --type chatgpt --sync`. The desktop app also syncs ChatGPT
+`agentsview source import --type chatgpt --sync` or
+`agentsview source import --type gemini-apps --sync`. The desktop app also syncs ChatGPT
 through Chrome.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a

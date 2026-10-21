@@ -266,6 +266,46 @@ old reference from the visible transcript. Sync keeps the previous branch in
 Trash with its archived images.
 ZIP imports follow the usual append and refusal rules.
 
+## Sync Gemini Apps chats
+
+Chrome Sync also reads your chats from gemini.google.com. Set up the AgentsView
+Chrome extension using the steps above, then sign in to Gemini in the Chrome
+profile that has the extension enabled, and run:
+
+```bash
+agentsview import --type gemini-apps --sync
+```
+
+The import dialog does not offer Gemini Sync yet; use the CLI. If no Gemini tab
+is open, Sync opens one in the background and leaves it open. When the open tab
+is a second Google account (`/u/1/`), Sync reads that account.
+
+Gemini has no public API. The extension calls the same two read requests the
+Gemini web app uses: the chat list and one chat's turns. It reads the page's
+request token inside the Gemini tab and does not send it to AgentsView; only the
+responses return to the local server.
+
+Each Gemini chat becomes one `gemini-apps:<chat id>` session with every visible
+turn. When Gemini kept several drafts of a reply, Sync stores the draft Gemini
+shows. Attachments, images, and Canvas content are not imported; only prompt
+and reply text is. Sessions from a Takeout import are separate one-prompt
+sessions, so a chat imported both ways appears twice.
+
+Sync compares each chat's update time from the list with what it stored last
+time and fetches only chats that changed. Requests are about 3 seconds apart,
+and a chat's turns arrive 20 at a time. A chat whose newest reply is still being
+written is fetched again on the next Sync. When the new transcript only adds
+turns or completes a reply that was cut off, Sync updates the session in place.
+When a reply was regenerated or turns disappeared, Sync replaces the session
+with what Gemini shows now and keeps the previous version in Trash.
+
+Each chat has a 32 MiB limit. Larger chats count as failed while Sync continues.
+Two chat failures in a row, an expired sign-in, or a rate limit ends Sync.
+A Gemini response this version can't read ends Sync with a message to update
+AgentsView. Completed chats stay imported; run Sync again later to continue.
+Pinned chats were not available to check; if a pinned chat is missing after
+Sync, unpin it and run Sync again.
+
 ## Importing via the CLI
 
 Use `agentsview source import` to import from the command line:
@@ -279,7 +319,7 @@ agentsview source import --type gemini-apps ~/Downloads/takeout.zip
 | Flag | Description |
 |------|-------------|
 | `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
-| `--sync` | Sync Claude.ai or ChatGPT from Chrome instead of importing a file (`claude-ai` and `chatgpt` only) |
+| `--sync` | Sync Claude.ai, ChatGPT, or Gemini Apps from Chrome instead of importing a file (`claude-ai`, `chatgpt`, and `gemini-apps` only) |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file
