@@ -227,7 +227,9 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 			(len(msgs) < existing.MessageCount || sourceIdentityChanged(archived, stored)) {
 			return replaceSyncedConversation(ctx, store, result, msgs, true)
 		}
-		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
+		// Usage-only rows keep no text, so a reply that only gained its model
+		// still compares equal; fill the model in place.
+		if keepsReplacedHistory(result.Session.Agent) && storeArchiveContent(store).UsageOnly() {
 			rows := chatGPTModelRows(archived, stored)
 			if len(rows) == 0 {
 				return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
