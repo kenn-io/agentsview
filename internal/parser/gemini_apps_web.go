@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -92,9 +93,9 @@ func ParseGeminiAppsWebConversation(data []byte) (ParseResult, error) {
 
 	var msgs []ParsedMessage
 	// Pages arrive newest first, so walk the combined list backwards.
-	for i := len(turns) - 1; i >= 0; i-- {
+	for _, raw := range slices.Backward(turns) {
 		var turn []jsontext.Value
-		if err := json.Unmarshal(turns[i], &turn); err != nil || len(turn) <= geminiTurnReply {
+		if err := json.Unmarshal(raw, &turn); err != nil || len(turn) <= geminiTurnReply {
 			return ParseResult{}, fmt.Errorf("%w: turn is not an array", ErrGeminiAppsWebFormat)
 		}
 		timestamp := geminiTurnTime(turn)

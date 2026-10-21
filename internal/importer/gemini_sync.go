@@ -38,12 +38,12 @@ const (
 )
 
 // ErrGeminiResponseTooLarge marks a conversation over the browser relay limit.
-var ErrGeminiResponseTooLarge = errors.New("Gemini response exceeds 32 MiB")
+var ErrGeminiResponseTooLarge = errors.New("response from Gemini exceeds 32 MiB")
 
 // ErrGeminiAuthRequired reports a missing or expired Gemini browser session.
-var ErrGeminiAuthRequired = errors.New("Gemini sign-in required")
+var ErrGeminiAuthRequired = errors.New("sign in to Gemini again")
 
-var errGeminiFormat = errors.New("Gemini returned a conversation format this version can't read. Update AgentsView and try again")
+var errGeminiFormat = errors.New("this AgentsView version can't read the conversation format Gemini returned. Update AgentsView and try again")
 
 // geminiDetailGap delays each conversation page request by 3 s with jitter,
 // the same pacing as ChatGPT. Tests set it to zero to disable pacing.
@@ -79,7 +79,7 @@ func geminiRPCPayload(body []byte, rpc string) (jsontext.Value, error) {
 			}
 			if json.Unmarshal(fields[2], &payload) != nil || payload == "" {
 				// A null payload is Gemini refusing the call.
-				return nil, fmt.Errorf("Gemini rejected the %s request", rpc)
+				return nil, fmt.Errorf("the %s request was rejected by Gemini", rpc)
 			}
 			value := jsontext.Value(payload)
 			if !value.IsValid() {
@@ -156,7 +156,7 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 	cursor := ""
 	for page := 0; ; page++ {
 		if page == geminiPageLimit {
-			return stats, errors.New("Gemini chat list exceeded the page limit")
+			return stats, errors.New("the Gemini chat list exceeded the page limit")
 		}
 		raw, err := fetchBrowser(ctx, fetch, chromehost.Gemini, geminiRequest(geminiListRequest, "", cursor))
 		if err != nil {
@@ -194,7 +194,11 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 					return browserFreshness(strconv.FormatInt(chat.updatedAt.UnixNano(), 10), session)
 				},
 				fetch: func(ctx context.Context) ([]byte, error) {
-					return fetchGeminiConversation(ctx, fetch, chat)
+					detail, err := fetchGeminiConversation(ctx, fetch, chat)
+					if errors.Is(err, errGeminiFormat) {
+						formatErr = errGeminiFormat
+					}
+					return detail, err
 				},
 				parse: func(detail []byte) (parser.ParseResult, error) {
 					result, err := parser.ParseGeminiAppsWebConversation(detail)
@@ -215,7 +219,7 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 			break
 		}
 		if next == cursor {
-			return stats, errors.New("Gemini chat list repeated its page cursor")
+			return stats, errors.New("the Gemini chat list repeated its page cursor")
 		}
 		cursor = next
 	}
@@ -230,7 +234,7 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 	size, cursor := 0, ""
 	for page := 0; ; page++ {
 		if page == geminiPageLimit {
-			return nil, fmt.Errorf("Gemini conversation %s exceeded the page limit", chat.id)
+			return nil, fmt.Errorf("the Gemini conversation %s exceeded the page limit", chat.id)
 		}
 		if err := waitBrowserGap(ctx, geminiDetailGap); err != nil {
 			return nil, err
@@ -255,7 +259,7 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 			break
 		}
 		if next == cursor {
-			return nil, fmt.Errorf("Gemini conversation %s repeated its page cursor", chat.id)
+			return nil, fmt.Errorf("the Gemini conversation %s repeated its page cursor", chat.id)
 		}
 		cursor = next
 	}

@@ -98,20 +98,24 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 		{
 			name: "reply still generating keeps the prompt",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return geminiTestConversation(t, "", at, []any{geminiTestTurn("r_1", "", "Pending question", nil, at)})
 			},
 			wantMsgs: []string{"Pending question"},
 			check: func(t *testing.T, result ParseResult) {
+				t.Helper()
 				assert.Empty(t, result.Session.SessionName, "an untitled chat keeps no name")
 			},
 		},
 		{
 			name: "turn without a timestamp keeps a zero time",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return geminiTestConversation(t, "t", nil, []any{geminiTestTurn("r_1", "", "Q", [][2]string{{"rc_1", "A"}}, nil)})
 			},
 			wantMsgs: []string{"Q", "A"},
 			check: func(t *testing.T, result ParseResult) {
+				t.Helper()
 				assert.True(t, result.Messages[0].Timestamp.IsZero())
 				assert.True(t, result.Session.EndedAt.IsZero(), "an unreadable list time is not borrowed")
 			},
@@ -119,6 +123,7 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 		{
 			name: "selection that names no draft falls back to the first",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return geminiTestConversation(t, "t", at, []any{geminiTestTurn("r_1", "rc_gone", "Q", [][2]string{{"rc_1", "first"}, {"rc_2", "second"}}, at)})
 			},
 			wantMsgs: []string{"Q", "first"},
@@ -126,24 +131,28 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 		{
 			name: "small integer pairs are not timestamps",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				turn := geminiTestTurn("r_1", "", "Q", [][2]string{{"rc_1", "A"}}, nil)
 				turn = append(turn, []any{1, 2})
 				return geminiTestConversation(t, "t", at, []any{turn})
 			},
 			wantMsgs: []string{"Q", "A"},
 			check: func(t *testing.T, result ParseResult) {
+				t.Helper()
 				assert.True(t, result.Messages[0].Timestamp.IsZero())
 			},
 		},
 		{
 			name: "no text yields an empty result",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return geminiTestConversation(t, "t", at, []any{geminiTestTurn("r_1", "", " ", nil, at)})
 			},
 		},
 		{
 			name: "invalid conversation ID",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return []byte(`{"id":"../x","turns":[]}`)
 			},
 			wantErr: ErrGeminiAppsWebFormat,
@@ -151,6 +160,7 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 		{
 			name: "turn that is not an array",
 			data: func(t *testing.T) []byte {
+				t.Helper()
 				return []byte(`{"id":"c_1","turns":[[{"prompt":"x"}]]}`)
 			},
 			wantErr: ErrGeminiAppsWebFormat,
