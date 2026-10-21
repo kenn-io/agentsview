@@ -204,7 +204,8 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 					return result, err
 				},
 				write:   syncConversation,
-				matches: geminiReplyComplete,
+				matches: func([]byte, parser.ParseResult) bool { return true },
+				pending: parser.GeminiAppsWebPending,
 			})
 			if err != nil {
 				return stats, err
@@ -259,12 +260,4 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 		cursor = next
 	}
 	return json.Marshal(conv)
-}
-
-// geminiReplyComplete keeps a conversation fresh only when its newest turn has
-// a reply. A reply still being generated reads as empty, so the next Sync
-// fetches the conversation again instead of keeping a cut-off transcript.
-func geminiReplyComplete(_ []byte, result parser.ParseResult) bool {
-	n := len(result.Messages)
-	return n > 0 && result.Messages[n-1].Role == parser.RoleAssistant
 }

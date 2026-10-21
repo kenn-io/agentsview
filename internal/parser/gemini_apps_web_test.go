@@ -198,3 +198,29 @@ func TestGeminiAppsTime(t *testing.T) {
 		assert.True(t, tc.want.Equal(got), tc.raw)
 	}
 }
+
+func TestGeminiAppsWebPending(t *testing.T) {
+	at := []int64{1_790_000_000, 0}
+	answered := geminiTestTurn("r_1", "", "Q", [][2]string{{"rc_1", "A"}}, at)
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"newest turn answered", geminiTestConversation(t, "t", at, []any{answered}), false},
+		{"newest turn has no reply", geminiTestConversation(t, "t", at,
+			[]any{geminiTestTurn("r_2", "", "Next", nil, at), answered}), true},
+		{"attachment-only turn has no reply", geminiTestConversation(t, "t", at,
+			[]any{geminiTestTurn("r_2", "", "", nil, at)}, []any{answered}), true},
+		{"blank reply", geminiTestConversation(t, "t", at,
+			[]any{geminiTestTurn("r_2", "", "Next", [][2]string{{"rc_2", " "}}, at)}), true},
+		{"only an older page answers", geminiTestConversation(t, "t", at, []any{}, []any{answered}), false},
+		{"no turns", geminiTestConversation(t, "t", at), false},
+		{"not a conversation", []byte(`[]`), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, GeminiAppsWebPending(tc.data))
+		})
+	}
+}

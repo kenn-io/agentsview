@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -310,6 +311,106 @@ func TestSyncGeminiStops(t *testing.T) {
 				assert.Contains(t, err.Error(), tc.wantText)
 			}
 			assert.Zero(t, stats.Imported)
+		})
+	}
+}
+
+// TestSyncGeminiKeepsPinsInPlace checks that appends and completed replies
+// write in place: stored message IDs and pins survive, even on repeated text.
+func TestSyncGeminiKeepsPinsInPlace(t *testing.T) {
+	d := testDB(t)
+	id := "gemini-apps:" + geminiTestChat
+	fake := &geminiFake{t: t}
+	const t0 = 1_790_000_000
+	sync := func(listAt int64, turns ...any) {
+		t.Helper()
+		fake.listAt, fake.turns = listAt, turns
+		stats, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+	}
+	messages := func() []db.Message {
+		t.Helper()
+		got, err := d.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		return got
+	}
+	ids := func(rows []db.Message) []int64 {
+		out := make([]int64, len(rows))
+		for i, m := range rows {
+			out[i] = m.ID
+		}
+		return out
+	}
+	first := geminiSyncTurn("1", "Question", "Answer", t0)
+	sync(t0, first)
+	before := messages()
+	require.Len(t, before, 2)
+	_, err := d.PinMessage(t.Context(), id, before[1].ID, new("First answer"))
+	require.NoError(t, err)
+
+	// The second turn repeats the first one's text while its reply is cut off.
+	sync(t0+60, geminiSyncTurn("2", "Question", "Ans", t0+60), first)
+	appended := messages()
+	require.Len(t, appended, 4)
+	assert.Equal(t, ids(before), ids(appended[:2]), "an append keeps stored rows")
+	_, err = d.PinMessage(t.Context(), id, appended[3].ID, nil)
+	require.NoError(t, err)
+
+	sync(t0+90, geminiSyncTurn("2", "Question", "Answer", t0+60), first)
+	after := messages()
+	assert.Equal(t, []string{"Question", "Answer", "Question", "Answer"}, messageContents(after))
+	assert.Equal(t, ids(appended), ids(after), "a completed reply keeps its row")
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 2)
+	byMessage := map[int64]*string{}
+	for _, pin := range pins {
+		byMessage[pin.MessageID] = pin.Note
+	}
+	assert.Equal(t, map[int64]*string{after[1].ID: new("First answer"), after[3].ID: nil}, byMessage)
+	assert.Empty(t, replacedCopies(t, d, id))
+}
+
+// TestSyncGeminiRefetchesAttachmentOnlyTurn covers a newest turn with no
+// prompt text, which the parser drops, while its reply is still being written.
+func TestSyncGeminiRefetchesAttachmentOnlyTurn(t *testing.T) {
+	const t0 = 1_790_000_000
+	answered := geminiSyncTurn("1", "Question", "Answer", t0)
+	tests := []struct {
+		name  string
+		older []any
+		want  []string
+	}{
+		{name: "only turn", want: []string{"Answer"}},
+		{name: "after an answered turn", older: []any{answered}, want: []string{"Question", "Answer", "Image answer"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			fake := &geminiFake{t: t, listAt: t0 + 60}
+			reply := "Answer"
+			if tc.older != nil {
+				reply = "Image answer"
+			}
+			fake.turns = append([]any{geminiSyncTurn("2", "", "", t0+60)}, tc.older...)
+			for range 2 {
+				_, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+				require.NoError(t, err)
+			}
+			assert.Equal(t, 2, fake.details, "a pending turn is not cached as fresh")
+
+			fake.turns[0] = geminiSyncTurn("2", "", reply, t0+60)
+			_, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			messages, err := d.GetAllMessages(t.Context(), "gemini-apps:"+geminiTestChat)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, messageContents(messages))
+
+			stats, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 3, fake.details)
 		})
 	}
 }
