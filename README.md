@@ -815,24 +815,19 @@ their first start after upgrading. The web UI sends `visit_ended` with
 mode), session views (the session's agent type), screen views (screen name, once
 per install per UTC day), exports (format), generated insights (insight kind)
 and analytics page views (page name), each with one value from a fixed list in
-the server that drops anything else. All events use a stable random installation
-ID as `distinct_id`. The
-[privacy guide](docs/configuration.md#privacy-and-telemetry) lists every product
-event and property, including feature outcomes, and links the
-[shared kit field inventory](https://github.com/kenn-io/kit/blob/v0.39.0/telemetry/posthog/fields.md)
-for timestamps, event IDs, SDK metadata, installation age, and shared
-properties. Person-profile processing and GeoIP lookup are disabled; PostHog
-project settings separately control IP address retention. Session content stays
-local unless you choose a feature that sends it elsewhere.
+the server that drops anything else. All events use a stable random install ID
+as the event `DistinctId`.
+[Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
+empty searches, visible errors, and failed sync attempts. The events include
+`application=agentsview`, app version, commit, OS, and CPU architecture, with
+`$process_person_profile=false` and `$geoip_disable=true`. It does not include
+session, project, prompt, file path, account, or machine identity. Disable
+telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
+`DO_NOT_TRACK=1`. Only release builds send telemetry, and it stays off in CI and
+Go test binaries.
 
-Telemetry defaults on only for plain release versions such as `v1.2.3` or
-`1.2.3`. Any present `CI` variable and Go test binaries disable it. Set
-`DO_NOT_TRACK=1`, `AGENTSVIEW_TELEMETRY_ENABLED=0`, or `TELEMETRY_ENABLED=0` to
-opt out, then restart the server. The privacy guide covers accepted values.
-
-The web app loads Inter and JetBrains Mono from `https://fonts.googleapis.com`
-and `https://fonts.gstatic.com`, independently of the telemetry toggle. The
-server binds to `127.0.0.1` by default. Disable its update check with
+All session data stays on your machine. The server binds to `127.0.0.1` by
+default. The update check is optional and can be disabled with
 `--no-update-check`.
 
 ## Documentation

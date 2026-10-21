@@ -2222,8 +2222,7 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-Automatic outbound requests include update checks, anonymous telemetry, and
-Google Fonts:
+The automatic outbound requests are update checks and anonymous telemetry:
 
 - **CLI and web UI** — on startup, the server contacts the GitHub API to check
     for new releases. No identifying information is sent beyond what a standard
@@ -2231,10 +2230,6 @@ Google Fonts:
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
     feed independently.
 - **Anonymous daemon telemetry** — see below.
-- **Google Fonts** — the desktop app uses the same web UI, which loads Inter
-  and JetBrains Mono from
-  `https://fonts.googleapis.com` and `https://fonts.gstatic.com`. The telemetry
-  toggle does not control these browser requests.
 
 ### Anonymous Daemon Telemetry
 
@@ -2305,14 +2300,14 @@ generating; opening a cached insight does not count.
 Downloads and Gist publishes count export attempts, including attempts that
 fail. Markdown links count after the link is copied successfully.
 
-| Event               | Property     | Allowed values                                                                                                                                                                                                          |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                                                                                                                                                                            |
-| `session_viewed`    | `agent`      | the session's agent type                                                                                                                                                                                                |
-| `export_run`        | `format`     | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist`                                                                                                                                                  |
-| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, `tool_effectiveness`, `prompt_maturity_review`, `context_setup_review`, `workflow_hygiene_review`, `tool_reliability_review`, `model_cost_review`, `instruction_opportunity_review` |
-| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                                                                                                                                |
-| `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings`                                                                                                   |
+| Event               | Property     | Allowed values                                                                                                        |
+| ------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                                                                          |
+| `session_viewed`    | `agent`      | the session's agent type                                                                                              |
+| `export_run`        | `format`     | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist`                                                |
+| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name                                              |
+| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                              |
+| `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings` |
 
 Feature outcomes use fixed categories; unknown strings become `other`.
 
@@ -2329,47 +2324,31 @@ Hidden failures, cached warnings, the Sessions dashboard, settings, data
 management, pins, stars, and in-session find send no outcomes. Query and error
 text, paths, and identifiers stay out of outcome properties.
 
-Every event uses the
-[shared kit field inventory](https://github.com/kenn-io/kit/blob/v0.39.0/telemetry/posthog/fields.md):
+Every event contains only:
 
-- `event`, the anonymous installation ID as `distinct_id`, a random event
-  `uuid`, and a UTC `timestamp`.
-- Shared `properties`: `application=agentsview`, `source=daemon`, `version`,
-  `commit`, `goos`, `goarch`, `$lib`, `$lib_version`,
-  `$process_person_profile=false`, and `$geoip_disable=true`.
-- `install_age_hours` under `properties` when the installation creation time is
-  known. Existing installations without that time omit it.
-- The product properties listed in the tables above. Screen views and visits
-  also carry `surface: web`. Visits include a duration bucket, without exact
-  duration.
+- app version and git commit
+- operating system and CPU architecture
+- the application-owned installation ID stored in
+  `~/.agentsview/telemetry-install-id`
+- for the five UI actions, the one listed value above
+- for feature outcomes, the listed kind or reason
+- for screen views, the listed screen name and `surface: web`
+- for visits, the duration bucket and `surface: web`, without exact times
 
-The installation ID is stored in `~/.agentsview/telemetry-install-id`. The batch
-envelope contains `api_key`, the public project key, and `batch`, which holds
-the events. `api_key` is batch metadata, outside each event.
+It contains no session data, prompts, project names, file paths, account
+information, or hostname, and the events are sent with person-profile processing
+and GeoIP lookup disabled. The ping runs in the background and never blocks
+startup or operation.
 
-Events exclude session data, prompts, project names, file paths, account
-information, and hostnames. Person-profile processing and GeoIP lookup are
-disabled. PostHog's project settings separately control IP address retention;
-`$geoip_disable` does not configure retention. The ping runs in the background.
-
-Telemetry is on by default only for plain release versions matching `vX.Y.Z` or
-`X.Y.Z`. Development versions and other version formats keep it off, including
-the first heartbeat. A source or fork build with a plain release version is
-eligible. Go test binaries also disable it. Any present `CI` variable, even an
-empty value, disables reporting.
-
-Disable reporting with either `AGENTSVIEW_TELEMETRY_ENABLED` or
-`TELEMETRY_ENABLED` set to `0`, `false`, `no`, or `off`. A present
-`DO_NOT_TRACK` disables reporting unless its value is `0` or `false`. These
-values are trimmed and compared without regard to case. For example:
+Only release builds send telemetry, and it stays off in CI. Disable it with an
+environment variable, then restart the server:
 
 ```bash
-export DO_NOT_TRACK=1
+export AGENTSVIEW_TELEMETRY_ENABLED=0  # or DO_NOT_TRACK=1
 ```
 
-Restart the server after changing its environment. These opt-outs disable
-outbound telemetry; the installation identity remains for local session
-attribution.
+This disables outbound telemetry, not the installation identity used for local
+session attribution.
 
 ### Disabling Update Checks
 
