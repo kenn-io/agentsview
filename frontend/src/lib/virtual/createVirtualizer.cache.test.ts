@@ -38,6 +38,7 @@ vi.mock("@tanstack/virtual-core", async () => {
     }
 
     _willUpdate() {}
+    cancelScroll() {}
   }
 
   return {

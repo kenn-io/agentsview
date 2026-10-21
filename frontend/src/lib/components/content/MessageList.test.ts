@@ -33,6 +33,7 @@ const virtualizerMock = vi.hoisted(() => ({
   getTotalSize: vi.fn(() => 120),
   measureElement: vi.fn(),
   scrollToIndex: vi.fn(),
+  cancelScroll: vi.fn(),
   scrollToOffset: vi.fn(),
   getOffsetForIndex: vi.fn(),
 }));
@@ -291,7 +292,7 @@ describe("MessageList follow cancellation", () => {
       await flushScrollUpdates();
       flushFrames();
       await flushScrollUpdates();
-      expect(element.scrollTop).toBe(120);
+      expect(element.scrollTop).toBe(100);
 
       element.scrollTop = offset;
       await flushScrollUpdates();

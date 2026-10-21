@@ -110,12 +110,12 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
 }
 
 function scrollReconcileState(v: Virtualizer<HTMLElement, HTMLElement>) {
-  // Public cancelScroll() arrives in @tanstack/virtual-core 3.18.0; switch to it on upgrade.
+  // TanStack has no public read of the in-flight scroll target.
   return v as unknown as { scrollState: { index: number | null } | null };
 }
 
 export function cancelScrollReconcile(v: Virtualizer<HTMLElement, HTMLElement> | undefined) {
-  if (v) scrollReconcileState(v).scrollState = null;
+  v?.cancelScroll();
 }
 
 export function createVirtualizer(optsFn: () => ElementOpts) {

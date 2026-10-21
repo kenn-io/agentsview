@@ -34,6 +34,7 @@ vi.mock("@tanstack/virtual-core", async () => {
         lastOptions.value = opts;
       }
       _willUpdate() {}
+      cancelScroll() {}
     },
     observeElementOffset: vi.fn(),
     observeElementRect: vi.fn(),
