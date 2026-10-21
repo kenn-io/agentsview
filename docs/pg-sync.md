@@ -154,7 +154,8 @@ For nonempty sessions with matching counts, PostgreSQL computes SHA-256
 hashes of message text, thinking text, tool inputs, results, and file paths.
 Only hashes and comparison metadata cross the connection. Same-length text
 changes still trigger publication. Use `--full` to bypass both layers and
-re-push everything, for example, after a schema reset.
+re-push everything, for example, after a schema reset or when message content
+was rewritten in place.
 
 Every push sends the most recently active sessions first, so recent activity
 reaches PostgreSQL before older history. A full push that stops partway, for

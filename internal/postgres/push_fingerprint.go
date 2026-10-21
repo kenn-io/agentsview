@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -791,11 +792,11 @@ func loadPushToolCallFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, message_ordinal, call_index, tool_name, category,
-			tool_use_id, octet_length(COALESCE(input_json, '')), sha256(convert_to(COALESCE(input_json, ''), 'UTF8')),
+			tool_use_id, octet_length(convert_to(COALESCE(input_json, ''), 'UTF8')), sha256(convert_to(COALESCE(input_json, ''), 'UTF8')),
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
-			octet_length(COALESCE(result_content, '')), sha256(convert_to(COALESCE(result_content, ''), 'UTF8')),
-			octet_length(COALESCE(file_path, '')), sha256(convert_to(COALESCE(file_path, ''), 'UTF8')), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
+			octet_length(convert_to(COALESCE(result_content, ''), 'UTF8')), sha256(convert_to(COALESCE(result_content, ''), 'UTF8')),
+			octet_length(convert_to(COALESCE(file_path, ''), 'UTF8')), sha256(convert_to(COALESCE(file_path, ''), 'UTF8')), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -1012,16 +1013,6 @@ func localToolResultEventPGFingerprint(ctx context.Context,
 	)
 }
 
-func pgToolResultEventFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	fingerprints := make(map[string]string, 1)
-	if err := loadPushToolResultEventFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
-		return "", err
-	}
-	return fingerprints[sessionID], nil
-}
-
 func shouldSkipSessionMessages(
 	sessionID string,
 	localCount int,
@@ -1118,7 +1109,7 @@ func (d *pushDigest) Scan(value any) error {
 	case string:
 		decoded, err := hex.DecodeString(value)
 		if err != nil || len(decoded) != sha256.Size {
-			return fmt.Errorf("invalid hexadecimal SHA-256 digest")
+			return errors.New("invalid hexadecimal SHA-256 digest")
 		}
 		*d = pushDigest(hex.EncodeToString(decoded))
 	default:

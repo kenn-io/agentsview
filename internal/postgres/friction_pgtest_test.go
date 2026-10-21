@@ -239,7 +239,7 @@ func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
 					`SELECT owner_marker FROM sessions WHERE id = $1`, id,
 				).Scan(&markerID))
 				var pushed []db.Session
-				result, err := ps.pushBatchAttempt(ctx, sessions, false, markerID, nil, nil, &pushed, false)
+				result, err := ps.pushBatchAttempt(ctx, sessions, false, markerID, nil, nil, nil, &pushed, false)
 				require.NoError(t, err)
 				require.True(t, result.ok)
 				require.Equal(t, 1, result.sessions)

@@ -451,16 +451,16 @@ func (db *DB) ToolCallContentFingerprints(ctx context.Context,
 func (db *DB) ToolCallFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
-	return db.toolCallFingerprints(ctx, sessionIDs, false)
+	return db.toolCallFingerprints(ctx, sessionIDs, toolCallFingerprintRow.appendTo)
 }
 
 // ToolCallComparisonFingerprints hashes large fields for remote comparison.
 // ToolCallFingerprints keeps the persisted dependency fingerprint unchanged.
 func (db *DB) ToolCallComparisonFingerprints(ctx context.Context, sessionIDs []string) (map[string]string, error) {
-	return db.toolCallFingerprints(ctx, sessionIDs, true)
+	return db.toolCallFingerprints(ctx, sessionIDs, toolCallFingerprintRow.appendComparisonTo)
 }
 
-func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, compact bool) (map[string]string, error) {
+func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, appendRow func(toolCallFingerprintRow, *strings.Builder)) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
@@ -496,7 +496,7 @@ func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, com
 				return err
 			}
 			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
-			r.appendFields(builders.get(sessionID), compact)
+			appendRow(r, builders.get(sessionID))
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -755,34 +755,42 @@ type toolCallFingerprintRow struct {
 	sequenceEnding      string
 }
 
-func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
-	r.appendFields(b, false)
+func (r toolCallFingerprintRow) sanitized() toolCallFingerprintRow {
+	r.toolName = SanitizeUTF8(r.toolName)
+	r.category = SanitizeUTF8(r.category)
+	r.toolUseID = SanitizeUTF8(r.toolUseID)
+	r.inputJSON = SanitizeUTF8(r.inputJSON)
+	r.skillName = SanitizeUTF8(r.skillName)
+	r.subagentSessionID = SanitizeUTF8(r.subagentSessionID)
+	r.resultContent = SanitizeUTF8(r.resultContent)
+	r.filePath = SanitizeUTF8(r.filePath)
+	return r
 }
 
-func (r toolCallFingerprintRow) appendFields(b *strings.Builder, compact bool) {
-	toolName := SanitizeUTF8(r.toolName)
-	category := SanitizeUTF8(r.category)
-	toolUseID := SanitizeUTF8(r.toolUseID)
-	inputJSON := SanitizeUTF8(r.inputJSON)
-	skillName := SanitizeUTF8(r.skillName)
-	subagentSessionID := SanitizeUTF8(r.subagentSessionID)
-	resultContent := SanitizeUTF8(r.resultContent)
-	filePath := SanitizeUTF8(r.filePath)
-	inputLength, resultLength, pathLength := len(inputJSON), len(resultContent), len(filePath)
-	if compact {
-		inputJSON = fmt.Sprintf("%x", sha256.Sum256([]byte(inputJSON)))
-		resultContent = fmt.Sprintf("%x", sha256.Sum256([]byte(resultContent)))
-		filePath = fmt.Sprintf("%x", sha256.Sum256([]byte(filePath)))
-	}
+func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
+	r = r.sanitized()
+	r.appendFields(b, len(r.inputJSON), r.inputJSON, len(r.resultContent), r.resultContent, len(r.filePath), r.filePath)
+}
+
+func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
+	r = r.sanitized()
+	r.appendFields(b,
+		len(r.inputJSON), fmt.Sprintf("%x", sha256.Sum256([]byte(r.inputJSON))),
+		len(r.resultContent), fmt.Sprintf("%x", sha256.Sum256([]byte(r.resultContent))),
+		len(r.filePath), fmt.Sprintf("%x", sha256.Sum256([]byte(r.filePath))),
+	)
+}
+
+func (r toolCallFingerprintRow) appendFields(b *strings.Builder, inputLength int, inputJSON string, resultLength int, resultContent string, pathLength int, filePath string) {
 	fmt.Fprintf(b,
 		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
 		r.messageOrdinal, r.callIndex,
-		len(toolName), toolName,
-		len(category), category,
-		len(toolUseID), toolUseID,
+		len(r.toolName), r.toolName,
+		len(r.category), r.category,
+		len(r.toolUseID), r.toolUseID,
 		inputLength, inputJSON,
-		len(skillName), skillName,
-		len(subagentSessionID), subagentSessionID,
+		len(r.skillName), r.skillName,
+		len(r.subagentSessionID), r.subagentSessionID,
 		r.resultContentLength,
 		resultLength, resultContent,
 		pathLength, filePath,

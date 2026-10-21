@@ -154,9 +154,9 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
-	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	fingerprints := make(map[string]string, 1)
+	require.NoError(t, loadPushUsageEventFingerprints(ctx, tx, []string{"exact-money"}, fingerprints))
+	assert.Equal(t, want, fingerprints["exact-money"])
 }
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
