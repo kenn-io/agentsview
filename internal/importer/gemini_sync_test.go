@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,7 +39,8 @@ func geminiRPCBody(t *testing.T, rpc string, payload any) []byte {
 	require.NoError(t, err)
 	chunk, err := json.Marshal([]any{
 		[]any{"wrb.fr", rpc, string(inner), nil, nil, nil, "generic"},
-		[]any{"di", 120}, []any{"af.httprm", 120, "0", 31},
+		[]any{"di", 120},
+		[]any{"af.httprm", 120, "0", 31},
 	})
 	require.NoError(t, err)
 	return []byte(")]}'\n\n" + "999\n" + string(chunk) + "\n25\n" + `[["e",4,null,null,1330]]` + "\n")
@@ -102,7 +104,7 @@ func TestGeminiRPCPayload(t *testing.T) {
 		{name: "captured empty list", body: geminiFixture(t, "list-pinned.txt"), rpc: geminiListRPC, want: `[]`},
 		{name: "captured detail", body: geminiFixture(t, "detail-full.txt"), rpc: geminiDetailRPC, want: `[[[["c_`},
 		{name: "other RPC", body: geminiFixture(t, "list1.txt"), rpc: geminiDetailRPC, wantErr: errGeminiFormat.Error()},
-		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "Gemini rejected the MaZiqc request"},
+		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "the MaZiqc request was rejected by Gemini"},
 		{name: "HTML page", body: []byte("<html>Sign in</html>"), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 		{name: "invalid payload", body: []byte(")]}'\n" + `[["wrb.fr","MaZiqc","[1,",null]]`), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 	}
@@ -196,8 +198,8 @@ func TestSyncGeminiIncrementalAndHistory(t *testing.T) {
 		t.Helper()
 		fake.listAt = listAt
 		fake.turns = nil
-		for i := len(turns) - 1; i >= 0; i-- { // the web app sends newest first
-			fake.turns = append(fake.turns, turns[i])
+		for _, turn := range slices.Backward(turns) { // the web app sends newest first
+			fake.turns = append(fake.turns, turn)
 		}
 		stats, err := SyncGemini(t.Context(), d, fake.fetch, nil)
 		require.NoError(t, err)
@@ -281,17 +283,31 @@ func TestSyncGeminiStops(t *testing.T) {
 		{name: "signed out", status: map[string]int{list: 401}, wantErr: ErrGeminiAuthRequired},
 		{name: "rate limited", status: map[string]int{detail: 429}, wantText: "Gemini rate limited"},
 		{name: "unreadable list", pages: map[string]func(*testing.T) []byte{
-			list: func(*testing.T) []byte { return []byte("<html></html>") },
+			list: func(t *testing.T) []byte {
+				t.Helper()
+				return []byte("<html></html>")
+			},
 		}, wantErr: errGeminiFormat},
 		{name: "repeated list cursor", pages: map[string]func(*testing.T) []byte{
-			list: func(t *testing.T) []byte { return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}}) },
+			list: func(t *testing.T) []byte {
+				t.Helper()
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
+			},
 			geminiRequest(geminiListRequest, "", "same"): func(t *testing.T) []byte {
+				t.Helper()
 				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
 			},
 		}, wantText: "repeated its page cursor"},
 		{name: "unrecognized turns", pages: map[string]func(*testing.T) []byte{
 			detail: func(t *testing.T) []byte {
+				t.Helper()
 				return geminiRPCBody(t, geminiDetailRPC, []any{[]any{map[string]string{"prompt": "x"}}})
+			},
+		}, wantErr: errGeminiFormat},
+		{name: "unreadable detail", pages: map[string]func(*testing.T) []byte{
+			detail: func(t *testing.T) []byte {
+				t.Helper()
+				return []byte("<html></html>")
 			},
 		}, wantErr: errGeminiFormat},
 	}
@@ -348,6 +364,8 @@ func TestSyncGeminiKeepsPinsInPlace(t *testing.T) {
 	require.Len(t, before, 2)
 	_, err := d.PinMessage(t.Context(), id, before[1].ID, new("First answer"))
 	require.NoError(t, err)
+	// A replacement would then get new, higher IDs instead of reusing these.
+	preventChatGPTMessageIDReuse(t, d)
 
 	// The second turn repeats the first one's text while its reply is cut off.
 	sync(t0+60, geminiSyncTurn("2", "Question", "Ans", t0+60), first)
