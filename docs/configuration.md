@@ -2235,7 +2235,8 @@ The automatic outbound requests are update checks and anonymous telemetry:
 
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 each UTC day it runs. Restarts and other servers sharing the data directory do
-not send another ping that day. The web UI also reports an anonymous
+not send another ping that day. When telemetry is disabled, the server skips
+hourly telemetry wake-ups. The web UI also reports an anonymous
 `app_opened` event on load or focus for each selected server and UTC day;
 reloads and focus don't repeat it that day. These claims live in browser local
 storage. The server sends it to PostHog with the same fields and opt-out as the
@@ -2252,6 +2253,8 @@ dropped. A fresh page retries after authentication; otherwise, the next UTC
 day's load or focus starts a new check.
 Unexpected HTTP statuses other than 401 retry up to five times with increasing
 delays before reporting becomes unavailable.
+Each browser telemetry request has a 10-second deadline, including reading its
+receipt.
 The browser retains each daily claim's 35 most recently accepted UTC dates.
 Rolling the clock back to an evicted date can count it again.
 
@@ -2297,7 +2300,9 @@ each screen once per installation per UTC day, across tabs and server restarts.
 The browser also deduplicates screen reports per selected server and local
 storage, so separate browsers can check the same installation independently.
 The server stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. When telemetry is enabled, the server checks the file
+installation identity. For each installation and screen, it retains the 35 most
+recently accepted UTC dates. A clock rollback to an evicted date can count that
+screen again. When telemetry is enabled, the server checks the file
 once in the background after it starts serving; a web UI report that arrives
 first waits for that check. The check moves older plain-text claims, malformed
 claims, or claims from a newer format to a unique

@@ -1987,11 +1987,14 @@ describe("App telemetry", () => {
 
   it("reports analytics_viewed once per analytics page and never for the sessions landing page", async () => {
     setup();
-    window.history.replaceState(null, "", "/usage");
-    router.route = "usage";
+    window.history.replaceState(null, "", "/");
+    router.route = "sessions";
     component = mount(App, { target: document.body });
-    await vi.waitFor(() => expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }]));
+    await vi.waitFor(() => expect(postedFor("app_opened")).toHaveLength(1));
+    expect(postedFor("analytics_viewed")).toEqual([]);
 
+    router.route = "usage";
+    await vi.waitFor(() => expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }]));
     for (const route of ["token-usage", "activity"] as const) {
       router.route = route;
       await flushEffects();
