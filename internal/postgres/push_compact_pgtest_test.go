@@ -47,13 +47,13 @@ func TestPushCompactComparisons(t *testing.T) {
 	aggregate := mismatchedCounts[id]
 	aggregate.Count = 2
 	mismatchedCounts[id] = aggregate
-	skipped, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, mismatchedCounts)
+	skipped, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, mismatchedCounts, true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, skipped.MessageAggregates[id].Count)
 	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageSystemOrdinals, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
-	compact, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts)
+	compact, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts, true)
 	require.NoError(t, err)
 	assert.Contains(t, compact.MessageContentHash, id)
 	assert.Contains(t, compact.ToolCallFingerprint, id)
@@ -76,7 +76,7 @@ func TestPushCompactComparisons(t *testing.T) {
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, change.statement, id)
 			require.NoError(t, err)
-			changed, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts)
+			changed, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts, true)
 			require.NoError(t, err)
 			assert.False(t, shouldSkipSessionMessages(id, 1, localFP, false, changed))
 			_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT change`)
@@ -212,7 +212,7 @@ func TestPushCompactMixedResponseBytes(t *testing.T) {
 			assert.False(t, result.Full, "normal push history must select an incremental run")
 			assert.Equal(t, 3, result.SessionsPushed)
 			assert.Positive(t, bytes)
-			assert.Less(t, bytes, int64(640<<10), "whole-Push cap includes row-count-dependent suffix hashes")
+			assert.Less(t, bytes, int64(640<<10), "640 KiB budget covers the integrated stack's row-count-dependent suffix traffic; separate count-map and 32 KiB growth assertions protect Slice 1 alone")
 			measured = append(measured, bytes)
 			t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 			assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))

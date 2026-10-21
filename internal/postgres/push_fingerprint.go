@@ -337,6 +337,7 @@ func readPushSessionMessageComparisons(
 	tx *sql.Tx,
 	sessionIDs []string,
 	localCounts map[string]db.MessageContentAggregate,
+	includeFriction bool,
 ) (*pushMessageComparison, error) {
 	comparisons := &pushMessageComparison{
 		MessageAggregates:       make(map[string]pushMessageAggregate, len(sessionIDs)),
@@ -357,8 +358,10 @@ func readPushSessionMessageComparisons(
 		end := min(i+pushComparisonBatchSize, len(sessionIDs))
 		chunk := sessionIDs[i:end]
 
-		if err := loadPushFrictionComparisons(ctx, tx, chunk, comparisons.Friction); err != nil {
-			return nil, err
+		if includeFriction {
+			if err := loadPushFrictionComparisons(ctx, tx, chunk, comparisons.Friction); err != nil {
+				return nil, err
+			}
 		}
 		if err := loadPushMessageAggregates(ctx, tx, chunk, comparisons.MessageAggregates); err != nil {
 			return nil, err

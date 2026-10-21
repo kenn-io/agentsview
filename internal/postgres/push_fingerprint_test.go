@@ -10,7 +10,7 @@ import (
 
 func TestReadPushSessionMessageComparisonsNoSessions(t *testing.T) {
 	comparisons, err := readPushSessionMessageComparisons(
-		t.Context(), nil, nil, nil,
+		t.Context(), nil, nil, nil, true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, comparisons)
