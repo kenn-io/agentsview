@@ -140,7 +140,11 @@ func (s *Server) humaUpdateSettings(
 	ctx context.Context,
 	in *settingsInput,
 ) (*jsonOutput[settingsResponse], error) {
-	if s.db.ReadOnly() {
+	// A read-only store blocks writes to session data, not to config.toml.
+	// Display preferences only change how this server renders data, so they
+	// stay editable; fields that change ingestion, archive content, or
+	// access control do not.
+	if s.db.ReadOnly() && !in.Body.displayOnly() {
 		return nil, apiError(http.StatusNotImplemented,
 			"settings cannot be modified in read-only mode")
 	}

@@ -58,6 +58,13 @@ type settingsUpdateRequest struct {
 	AgentHomes *map[string][]string `json:"agent_homes,omitempty"`
 }
 
+// displayOnly reports whether the request changes only display preferences,
+// which a read-only server still accepts.
+func (r settingsUpdateRequest) displayOnly() bool {
+	return r.Terminal == nil && r.AuthToken == nil && r.RequireAuth == nil &&
+		r.ToolResultImages == nil && r.DisabledAgents == nil && r.AgentHomes == nil
+}
+
 // toolResultImagesKeepValue is the documented spelling of the keep policy.
 // config.ToolResultImagesKeep is the empty string, which neither the API nor
 // a settings-written config.toml ever emits.

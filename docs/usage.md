@@ -1397,7 +1397,8 @@ The **Chart colors** control selects the categorical palette used by the
 dashboard skill trend, Trends, and Usage charts. Choose **Agentsview** for the
 project palette or **Matplotlib** for its gray-free categorical families. This
 setting is server-wide rather than browser-local, so all clients connected to
-the same writable server use the same palette.
+the same server use the same palette. You can change it even when the server
+reads from a read-only store such as PostgreSQL, ClickHouse, or DuckDB.
 
 ### Iframe Embedding
 

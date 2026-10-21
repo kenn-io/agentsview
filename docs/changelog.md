@@ -218,6 +218,10 @@ The latest release is
 
 **Bug fixes**
 
+- **Settings > Appearance > Chart colors** now works when AgentsView serves
+  a read-only store, such as `pg serve` or a ClickHouse or DuckDB mirror. The
+  server saves chart colors and the default zoom to `config.toml`; settings
+  that change ingestion, archive content, or access stay locked.
 - `agentsview mcp` and other auto-starting commands report that another process
   holds the archive write lock instead of launching a server that can't start,
   and the lock error no longer sends you to `agentsview daemon stop` when no

@@ -71,7 +71,7 @@
       options={CHART_PALETTE_OPTIONS}
       value={settings.chartPalette}
       ariaLabel={m.appearance_chart_palette()}
-      disabled={settings.saving || settings.readOnly}
+      disabled={settings.saving}
       onchange={(value) => {
         if (!isChartPalette(value)) return;
         void settings.save({ chart_palette: value });

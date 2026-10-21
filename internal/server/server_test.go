@@ -3653,6 +3653,57 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
 }
 
+func TestReadOnlySettingsAcceptDisplayPreferences(t *testing.T) {
+	putSettings := func(te *testEnv, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"chart palette", `{"chart_palette":"matplotlib"}`, http.StatusOK},
+		{"zoom level", `{"zoom_level":125}`, http.StatusOK},
+		{"disabled agents", `{"disabled_agents":["codex"]}`, http.StatusNotImplemented},
+		{"tool result images", `{"tool_result_images":"drop"}`, http.StatusNotImplemented},
+		{"require auth", `{"require_auth":true}`, http.StatusNotImplemented},
+		{"display mixed with ingestion", `{"chart_palette":"matplotlib","disabled_agents":["codex"]}`, http.StatusNotImplemented},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setupPGMode(t)
+			w := putSettings(te, tt.body)
+			assertStatus(t, w, tt.want)
+		})
+	}
+
+	te := setupPGMode(t)
+	assertStatus(t, putSettings(te, `{"chart_palette":"matplotlib"}`), http.StatusOK)
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var resp struct {
+		ChartPalette config.ChartPalette `json:"chart_palette"`
+		ReadOnly     bool                `json:"read_only"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.ReadOnly)
+	assert.Equal(t, config.ChartPaletteMatplotlib, resp.ChartPalette)
+
+	var persisted struct {
+		ChartPalette config.ChartPalette `toml:"chart_palette"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
+}
+
 func TestOpenAPISettingsZoomLevels(t *testing.T) {
 	te := setup(t)
 	w := te.get(t, "/api/openapi.json")
@@ -3918,20 +3969,6 @@ func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "config.toml must not be written by a read-only backend")
 }
 
-func TestSettingsZoomLevelReadOnlyBackend(t *testing.T) {
-	te := setupPGMode(t)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
-		strings.NewReader(`{"zoom_level":120}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", "http://127.0.0.1:0")
-	w := httptest.NewRecorder()
-	te.handler.ServeHTTP(w, req)
-	assertStatus(t, w, http.StatusNotImplemented)
-
-	_, err := os.Stat(filepath.Join(te.dataDir, "config.toml"))
-	assert.True(t, os.IsNotExist(err), "config.toml must not be written by a read-only backend")
-}
-
 func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	te := setup(t, func(cfg *config.Config) {
@@ -4055,7 +4092,7 @@ func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	assert.True(t, resp.ReadOnly)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
-		strings.NewReader(`{"chart_palette":"matplotlib"}`))
+		strings.NewReader(`{"disabled_agents":["codex"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w = httptest.NewRecorder()

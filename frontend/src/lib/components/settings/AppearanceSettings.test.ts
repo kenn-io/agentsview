@@ -196,11 +196,27 @@ describe("AppearanceSettings", () => {
     expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("disables chart palette controls in read-only mode", () => {
+  it("saves the chart palette when the server is read-only", async () => {
     settings.readOnly = true;
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "matplotlib",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: true,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
     const { getByRole } = render(AppearanceSettings);
 
-    expect((getByRole("radio", { name: "Agentsview" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((getByRole("radio", { name: "Matplotlib" }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.click(getByRole("radio", { name: "Matplotlib" }));
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({
+      chart_palette: "matplotlib",
+    });
+    await waitFor(() =>
+      expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked")).toBe("true"),
+    );
   });
 });
