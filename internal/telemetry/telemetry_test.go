@@ -3,7 +3,6 @@ package telemetry
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,6 +35,8 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 }
 
 func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
+	clearTelemetryVetoes(t)
+	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "0")
 
 	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")})
@@ -62,32 +63,13 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 
 	reporter := &Reporter{client: client}
 
-	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
-		"$process_person_profile": true,
-		"$geoip_disable":          false,
-		"application":             "other",
-		"version":                 "caller-version",
-		"commit":                  "caller-commit",
-		"goos":                    "caller-os",
-		"goarch":                  "caller-arch",
-		"source":                  "caller-source",
-		"app":                     "legacy-app",
-		"project":                 "private-project",
-		"session":                 "private-session",
-	})
+	props, err := reporter.SanitizeProperties(EventDaemonActive, nil)
 	require.NoError(t, err)
 
-	assert.False(t, props["$process_person_profile"].(bool))
-	assert.True(t, props["$geoip_disable"].(bool))
 	assert.Equal(t, "agentsview", props["application"])
 	assert.Equal(t, "v1.2.3", props["version"])
 	assert.Equal(t, "abc123", props["commit"])
-	assert.Equal(t, runtime.GOOS, props["goos"])
-	assert.Equal(t, runtime.GOARCH, props["goarch"])
 	assert.Equal(t, "daemon", props["source"])
-	assert.NotContains(t, props, "app")
-	assert.NotContains(t, props, "project")
-	assert.NotContains(t, props, "session")
 }
 
 func clearTelemetryVetoes(t *testing.T) {

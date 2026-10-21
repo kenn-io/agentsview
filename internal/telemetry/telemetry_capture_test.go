@@ -164,6 +164,7 @@ func TestScreenViewWithoutScreenLeavesValidRetry(t *testing.T) {
 }
 
 func TestScreenViewDisabled(t *testing.T) {
+	clearTelemetryVetoes(t)
 	t.Setenv(EnabledEnv, "0")
 	t.Setenv(GenericEnabledEnv, "1")
 	path := filepath.Join(t.TempDir(), "screens")
