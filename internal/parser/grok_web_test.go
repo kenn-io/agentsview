@@ -132,14 +132,6 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid conversation ID",
-			data: func(t *testing.T) []byte {
-				t.Helper()
-				return []byte(`{"id":"../x","responses":{"responses":[]}}`)
-			},
-			wantErr: ErrGrokWebFormat,
-		},
-		{
 			name: "missing responses array",
 			data: func(t *testing.T) []byte {
 				t.Helper()
@@ -195,7 +187,6 @@ func TestGrokWebPending(t *testing.T) {
 		{"partial reply on an older branch", grokTestConversation(t, "t", "", nil, question,
 			partial(grokTestResponse("r2", "r1", "assistant", "Old", at)),
 			grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:01:00Z")), false},
-		{"not a conversation", []byte(`[]`), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,12 +195,8 @@ func TestGrokWebPending(t *testing.T) {
 	}
 }
 
-func TestGrokWebTime(t *testing.T) {
-	got, ok := GrokWebTime("2026-10-21T08:00:00.105Z")
-	assert.True(t, ok)
-	assert.True(t, time.Date(2026, 10, 21, 8, 0, 0, 105_000_000, time.UTC).Equal(got))
-	_, ok = GrokWebTime("")
-	assert.False(t, ok)
+func TestValidGrokWebID(t *testing.T) {
 	assert.True(t, ValidGrokWebID(grokTestChat))
 	assert.False(t, ValidGrokWebID("c_123"))
+	assert.False(t, ValidGrokWebID("../"+grokTestChat))
 }

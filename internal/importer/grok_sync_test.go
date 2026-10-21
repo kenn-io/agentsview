@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -277,4 +278,40 @@ func TestSyncGrokStops(t *testing.T) {
 			assert.Zero(t, stats.Imported)
 		})
 	}
+}
+
+// TestSyncGrokUsageOnlyAppendBackfillsModel covers usage-only storage, which
+// keeps only reply rows: an append that also fills an earlier reply's model
+// must update that reply, not the dropped prompt row at the same index.
+func TestSyncGrokUsageOnlyAppendBackfillsModel(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	id := "grok-web:" + grokTestChat
+	fake := &grokFake{t: t}
+	q1 := grokSyncResponse("r1", "", "human", "Question", "2026-10-21T08:00:00Z")
+	a1 := grokSyncResponse("r2", "r1", "assistant", "Answer", "2026-10-21T08:00:05Z")
+	a1["model"] = ""
+	q2 := grokSyncResponse("r3", "r2", "human", "Follow up", "2026-10-21T08:01:00Z")
+	a2 := grokSyncResponse("r4", "r3", "assistant", "Second answer", "2026-10-21T08:01:05Z")
+	fake.modified, fake.responses = "2026-10-21T08:01:05Z", []map[string]any{q1, a1, q2, a2}
+	_, err := SyncGrok(t.Context(), d, fake.fetch, nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 2, "usage-only storage keeps the two replies")
+	assert.Equal(t, []string{"", "grok-4"}, []string{before[0].Model, before[1].Model})
+	preventChatGPTMessageIDReuse(t, d)
+
+	modeled := grokSyncResponse("r2", "r1", "assistant", "Answer", "2026-10-21T08:00:05Z")
+	q3 := grokSyncResponse("r5", "r4", "human", "Third question", "2026-10-21T08:02:00Z")
+	a3 := grokSyncResponse("r6", "r5", "assistant", "Third answer", "2026-10-21T08:02:05Z")
+	fake.modified, fake.responses = "2026-10-21T08:02:05Z", []map[string]any{q1, modeled, q2, a2, q3, a3}
+	_, err = SyncGrok(t.Context(), d, fake.fetch, nil)
+	require.NoError(t, err)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 3)
+	assert.Equal(t, []int64{before[0].ID, before[1].ID}, []int64{after[0].ID, after[1].ID}, "the append keeps the stored replies")
+	assert.Equal(t, []string{"grok-4", "grok-4", "grok-4"}, []string{after[0].Model, after[1].Model, after[2].Model})
+	assert.Equal(t, []string{"r2", "r4", "r6"}, []string{after[0].SourceUUID, after[1].SourceUUID, after[2].SourceUUID})
 }
