@@ -229,6 +229,7 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 			content_rowid='id',
 			tokenize='simple'
 		);
+		INSERT INTO messages_cjk_fts(messages_cjk_fts) VALUES('rebuild');
 		DELETE FROM stats WHERE key = '`+cjkFTSFingerprintStatsKey+`'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Reopen())

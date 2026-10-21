@@ -93,6 +93,7 @@ func ConvertMessagesContext(
 			SessionID: sessionID, Ordinal: message.Ordinal,
 			Role: string(message.Role), Content: message.Content,
 			ThinkingText: message.ThinkingText,
+			DialogueText: message.DialogueText,
 			Timestamp:    timeutil.Format(message.Timestamp),
 			HasThinking:  message.HasThinking, HasToolUse: message.HasToolUse,
 			ContentLength: message.ContentLength, IsSystem: message.IsSystem,

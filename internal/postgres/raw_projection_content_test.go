@@ -17,6 +17,19 @@ func TestRawProjectionRejectsImageOffload(t *testing.T) {
 	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")
 }
 
+func TestRawPayloadKeepsDialogueInDerivedState(t *testing.T) {
+	p := ingest.PreparedSession{Messages: []db.Message{{Ordinal: 0, Role: "assistant", Content: "rendered answer"}}}
+	original, err := encodeRawPayload(p)
+	require.NoError(t, err)
+	for _, dialogue := range []string{"answer", ""} {
+		p.Messages[0].DialogueText = new(dialogue)
+		encoded, err := encodeRawPayload(p)
+		require.NoError(t, err)
+		assert.Equal(t, original, encoded, "dialogue changes preserve the immutable payload")
+		assert.Equal(t, new(dialogue), p.Messages[0].DialogueText, "encoding preserves the caller's derived state")
+	}
+}
+
 func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 	original := ingest.PreparedSession{Session: db.Session{ID: "physical", Machine: "device", SessionName: new("provider title")}, Messages: []db.Message{{Ordinal: 0, Role: "assistant", Content: "same", ToolCalls: []db.ToolCall{{ToolName: "Bash", InputJSON: `{"a":1,"b":2}`, ResultEvents: []db.ToolResultEvent{{Content: "same", RawContentDigest: []byte("transport")}}}}}}}
 	digest, err := rawContentRevision(original)
@@ -209,4 +222,11 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	derivedKey, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	assert.Equal(t, key, derivedKey)
+	p.Messages[0].DialogueText = new("<>&\u2028\u2029")
+	projected, err := rawContentRevision(p)
+	require.NoError(t, err)
+	assert.Equal(t, got, projected, "local search projections preserve capture identity")
+	projectedKey, err := rawMessageKey(p.Messages[0])
+	require.NoError(t, err)
+	assert.Equal(t, key, projectedKey)
 }

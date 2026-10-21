@@ -112,7 +112,7 @@ func (db *DB) LoadArtifactExportData(
 		SELECT %s FROM messages
 		WHERE session_id = ?
 		ORDER BY ordinal ASC
-		LIMIT ?`, selectMessageCols), sessionID, limits.Messages+1)
+		LIMIT ?`, selectTranscriptMessageCols), sessionID, limits.Messages+1)
 	if err != nil {
 		return ArtifactExportData{}, fmt.Errorf("loading artifact export messages: %w", err)
 	}

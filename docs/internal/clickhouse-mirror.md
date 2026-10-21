@@ -34,6 +34,14 @@ empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is true once
 `clickhouse serve` finds a pushed embedding generation matching the local
 `[vector.embeddings]` fingerprint (see the vector decision below).
 
+Content search matches dialogue in `messages` and reasoning in `thinking` for
+substring and regex modes. Hybrid keyword hits use dialogue for matching and
+snippets; vector-only hits use rendered messages. A per-archive dialogue marker
+forces a full push after upgrading. That push re-sends every session in the
+configured mirror scope, including sessions without dialogue. Session
+fingerprints include nullable dialogue values so later dialogue-only changes
+trigger another write. The marker is set after a clean full push.
+
 ## Boundaries
 
 - SQLite is never deleted, dropped, truncated, or recreated for a ClickHouse

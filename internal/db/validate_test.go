@@ -136,3 +136,44 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		})
 	}
 }
+
+// TestSanitizeMessageDropsDuplicateDialogue pins the dialogue storage
+// contract: search falls back to Content when DialogueText is NULL, so a
+// dialogue copy whose sanitized bytes equal sanitized Content is not stored
+// unless ThinkingText marks the row as reasoning-classified.
+func TestSanitizeMessageDropsDuplicateDialogue(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, thinking string
+		dialogue, want          *string
+	}{
+		{name: "duplicate after content sanitization dropped", content: "ans\x00wer", dialogue: Ptr("answer")},
+		{name: "duplicate after dialogue sanitization dropped", content: "answer", dialogue: Ptr("ans\x00wer\xff")},
+		{name: "distinct dialogue kept", content: "answer [Read: file.txt]", dialogue: Ptr("answer"), want: Ptr("answer")},
+		{name: "empty dialogue for tool-only message kept", content: "[Read: file.txt]", dialogue: Ptr(""), want: Ptr("")},
+		{name: "duplicate with thinking kept", content: "answer", thinking: "reasoning", dialogue: Ptr("answer"), want: Ptr("answer")},
+		{name: "nil dialogue kept", content: "answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Message{
+				SessionID: "s1", Ordinal: 0, Role: "assistant",
+				Content: tc.content, ThinkingText: tc.thinking, DialogueText: tc.dialogue,
+			}
+			sanitized := m
+			if tc.dialogue != nil {
+				sanitized.DialogueText = Ptr(*tc.dialogue)
+			}
+			SanitizeMessage(&sanitized)
+			assert.Equal(t, tc.want, sanitized.DialogueText, "sanitized")
+		})
+	}
+
+	d := testDB(t)
+	insertSession(t, d, "s1", "project")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{{
+		SessionID: "s1", Role: "assistant", Content: "answer", DialogueText: Ptr("answer"),
+	}}))
+	stored, err := d.GetMessageByOrdinal(t.Context(), "s1", 0)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.DialogueText)
+}

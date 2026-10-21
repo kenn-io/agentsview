@@ -12,6 +12,36 @@ The latest release is
 - Telemetry now honors `DO_NOT_TRACK` and stays off in CI and non-release
   builds.
 
+- `--fts`, terms, and hybrid message search no longer match command, path, and reasoning text.
+
+- SQLite, PostgreSQL, DuckDB, and ClickHouse message search matches dialogue and keeps tool
+  renderings and reasoning out of snippets for
+  [supported providers](https://github.com/kenn-io/agentsview/blob/main/docs/session-api.md#agentsview-session-search).
+  Substring and regex search on these backends include reasoning as `thinking`
+  by default; use `--in thinking` to search it alone. FTS, terms,
+  semantic, and hybrid reject that source. Existing sessions reparse when source
+  files are available; source-less sessions, v4 imports, and unpaired OpenHands
+  observations keep searching their saved text as `message` hits. The first
+  writable open refreshes full-text indexes once and waits for the scan.
+  DuckDB mirrors rebuild on their next push. The first ClickHouse push after
+  upgrading re-sends every session in the configured mirror scope, including
+  sessions without dialogue, and needs schema permissions. Reads from either
+  pre-upgrade mirror fail with a schema compatibility error naming
+  `messages.dialogue_text` until the first push.
+  PostgreSQL performs one full push per scope after upgrading. A `pg serve`
+  mirror reader accepts the schema once `messages.dialogue_text` exists.
+  Rows awaiting a push or reparse still search rendered text. For hosted
+  servers, first run `agentsview pg hosted-provision provision` and apply the
+  [runtime grants](https://agentsview.io/docs/hosted-raw-sync/#provision-a-hosted-instance),
+  including
+  `GRANT UPDATE (dialogue_text) ON hosted_sessions.messages TO hosted_runtime`,
+  as the database owner. Refresh existing uploads with
+  `agentsview pg raw-reparse hosted --run-id <id>`. Repeat the same run ID until
+  it reports `complete=true`. After provisioning, older hosted runtimes refuse
+  the schema with `uninventoried relation raw_message_dialogue`.
+  Artifact transport is a separate follow-up;
+  semantic search continues to use rendered messages.
+
 **Upgrade notes**
 
 - On Windows, stop the daemon before switching back to 0.45.0 or earlier.
@@ -183,7 +213,6 @@ The latest release is
 
 **Improvements**
 
-- Browser telemetry stays quiet after a disabled reply, and reloads and focus don't repeat the day's app-open check. Each request has a 10-second deadline. Disabled telemetry avoids hourly server wake-ups, and server screen claims retain the 35 most recently accepted UTC dates. See [telemetry configuration](https://agentsview.io/docs/configuration/#anonymous-daemon-telemetry) for limits.
 - Load Usage totals, top sessions and model comparison faster on large archives.
 - The Usage page starts its model comparison together with totals instead of
   waiting for them. On an archive of 24,000 sessions the page finished in 4.0
@@ -222,10 +251,6 @@ The latest release is
 
 **Bug fixes**
 
-- **Settings > Appearance > Chart colors** now works when AgentsView serves
-  a read-only store, such as `pg serve` or a ClickHouse or DuckDB mirror. The
-  server saves chart colors and the default zoom to `config.toml`; settings
-  that change ingestion, archive content, or access stay locked.
 - `agentsview mcp` and other auto-starting commands report that another process
   holds the archive write lock instead of launching a server that can't start,
   and the lock error no longer sends you to `agentsview daemon stop` when no

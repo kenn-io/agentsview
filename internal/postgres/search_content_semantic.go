@@ -147,6 +147,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 // sessions/messages rows; isSidechain is the ANCHOR ordinal's message flag.
 type pgSemanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	dialogueContent                          string
 	machine                                  string
 	displayName                              *string
 	transcriptRevision                       string
@@ -177,7 +178,7 @@ func (s *Store) enrichSemanticHitsPG(
 
 	const query = `
 SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal,
-       m.timestamp, m.content,
+       m.timestamp, m.content, COALESCE(m.dialogue_text, m.content),
        COALESCE(s.transcript_revision, ''),
        COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
        m.is_sidechain
@@ -198,7 +199,7 @@ SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.s
 		var info pgSemanticHitInfo
 		var ts *time.Time
 		if err := rows.Scan(&ref.SessionID, &info.project, &info.agent, &info.machine, &info.displayName,
-			&info.role, &ref.Ordinal, &ts, &info.content,
+			&info.role, &ref.Ordinal, &ts, &info.content, &info.dialogueContent,
 			&info.transcriptRevision,
 			&info.relationshipType, &info.parentSessionID,
 			&info.isSidechain); err != nil {

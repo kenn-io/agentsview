@@ -234,3 +234,20 @@ func TestBatchedFindingsAndPinsMatchPerSession(t *testing.T) {
 	_, hasEmptyPins := pins["fp-empty"]
 	assert.False(t, hasEmptyPins, "pin map omits sessions without pins")
 }
+
+func TestMessageDialogueFingerprints(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "classified", "proj")
+	insertSession(t, d, "legacy", "proj")
+	insertMessages(t, d,
+		Message{SessionID: "classified", Ordinal: 2, Role: "assistant", DialogueText: new("a\x00bc\xff")},
+		Message{SessionID: "classified", Ordinal: 1, Role: "tool", DialogueText: new("")},
+		Message{SessionID: "classified", Ordinal: 0, Role: "assistant", Content: "unclassified"},
+		Message{SessionID: "legacy", Ordinal: 0, Role: "assistant", Content: "legacy"},
+	)
+	got, err := d.MessageDialogueFingerprints(t.Context(), []string{"classified", "legacy", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, "1|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855;2|ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad;", got["classified"])
+	assert.Empty(t, got["legacy"])
+	assert.Empty(t, got["missing"])
+}

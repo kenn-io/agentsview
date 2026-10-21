@@ -362,7 +362,8 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, _, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		dialogue := new(dialogueText)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -371,6 +372,7 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 		if e.entryType == "user" {
 			if cmdText, ok := extractCommandText(text); ok {
 				text = cmdText
+				dialogue = new(cmdText)
 			} else if isCommandEnvelope(text) {
 				continue
 			}
@@ -390,6 +392,8 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 			Role:          RoleType(e.entryType),
 			Content:       text,
 			Timestamp:     e.timestamp,
+			DialogueText:  dialogue,
+			ThinkingText:  thinkingText,
 			HasThinking:   hasThinking,
 			HasToolUse:    hasToolUse,
 			ContentLength: len(text),

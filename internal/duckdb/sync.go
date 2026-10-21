@@ -1004,6 +1004,7 @@ func (s *Sync) sessionFingerprints(
 		payload := struct {
 			SessionFields  []any
 			Messages       []db.Message
+			Dialogue       []*string `json:",omitzero"`
 			Usage          string
 			ToolCalls      string
 			SecretFindings []db.SecretFinding
@@ -1014,6 +1015,7 @@ func (s *Sync) sessionFingerprints(
 				sess, db.MirroredSessionMachine(sess, s.machine),
 			),
 			Messages:       msgs,
+			Dialogue:       db.DialogueFingerprintValues(msgs),
 			Usage:          usage[sess.ID],
 			ToolCalls:      toolCalls,
 			SecretFindings: findings,

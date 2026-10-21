@@ -59,6 +59,9 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
 	}
+	if err := CheckDataVersionCompat(ctx, database); err != nil {
+		return nil, err
+	}
 	var indexes bool
 	if err := database.QueryRowContext(ctx, `SELECT to_regclass('raw_selected_job') IS NOT NULL AND to_regclass('raw_pending_signals') IS NOT NULL AND to_regclass('raw_hosted_jobs_due') IS NOT NULL AND to_regclass('raw_hosted_jobs_expired') IS NOT NULL`).Scan(&indexes); err != nil {
 		return nil, err

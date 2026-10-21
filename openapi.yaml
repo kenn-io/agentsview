@@ -1243,6 +1243,7 @@ components:
         is_sidechain:
           type: boolean
         location:
+          description: "Where the match occurred: message, thinking, tool_input, or tool_result."
           type: string
         machine:
           type: string

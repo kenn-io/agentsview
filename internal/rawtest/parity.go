@@ -111,6 +111,8 @@ func normalizeMessages(t *testing.T, messages []db.Message) []db.Message {
 	for i := range messages {
 		m := &messages[i]
 		m.ID = 0
+		// DialogueText is a SQLite-only search projection, not captured source content.
+		m.DialogueText = nil
 		// PostgreSQL JSONB changes key order/whitespace, never the usage values.
 		if len(m.TokenUsage) > 0 {
 			var v any

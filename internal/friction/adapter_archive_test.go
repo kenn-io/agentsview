@@ -32,7 +32,7 @@ func ts(minutes int) string {
 // parser.ExtractTextContent over Anthropic content blocks.
 func claudeAssistant(t *testing.T, ord int, blocks string, results ...db.ToolResultEvent) db.Message {
 	t.Helper()
-	content, thinking, hasThinking, hasToolUse, calls, _ := parser.ExtractTextContent(t.Context(), gjson.Parse(blocks))
+	content, thinking, _, hasThinking, hasToolUse, calls, _ := parser.ExtractTextContent(t.Context(), gjson.Parse(blocks))
 	m := dbtest.AsstMsg(sid, ord, content)
 	m.ThinkingText, m.HasThinking, m.HasToolUse = thinking, hasThinking, hasToolUse
 	m.Timestamp = ts(ord)

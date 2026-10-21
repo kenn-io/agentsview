@@ -9,8 +9,8 @@ import (
 
 // hybridDisplay carries what one fused unit needs for presentation: the
 // anchor (session, ordinal) the match reports and enriches by, the unit's
-// ordinal span and subordinate flag, plus the leg's raw approximate snippet
-// text used only to center the redacted window.
+// ordinal span and subordinate flag, plus the vector leg's approximate
+// snippet or the keyword leg's dialogue and snippet window.
 type hybridDisplay struct {
 	sessionID    string
 	ordinal      int
@@ -18,6 +18,7 @@ type hybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	content      string
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus
@@ -124,11 +125,11 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf := f
 	kf.Mode = "fts"
 	var args []any
-	contentPred := contentSearchPredicate("m.content", kf, &args)
+	contentPred := contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, m.content
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+contentPred+`
@@ -153,6 +154,7 @@ func (s *Store) fetchHybridKeywordBatch(
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
+		hit.content = content
 		hit.snippet = content[lo:hi]
 		hits = append(hits, hit)
 	}
@@ -258,8 +260,8 @@ func (s *Store) classifyUnitlessHybridHits(
 // enrichHybridMatches looks up metadata for the fused units and assembles
 // the page in fused-score order. When the keyword leg contributed a unit its
 // display wins: the match anchors on the keyword-matched message and centers
-// on the keyword snippet. Either way the snippet is built and redacted from
-// the anchor message's full content.
+// on the keyword snippet and uses dialogue for presentation. Vector-only hits
+// use the anchor message's rendered content.
 func (s *Store) enrichHybridMatches(
 	ctx context.Context, f db.ContentSearchFilter, merged []db.FusedUnit,
 	vecDisplay, kwDisplay map[string]hybridDisplay,
@@ -285,6 +287,11 @@ func (s *Store) enrichHybridMatches(
 		if !ok {
 			continue
 		}
+		content := info.content
+		if _, keyword := kwDisplay[m.Unit.Key]; keyword {
+			content = d.content
+		}
+		snippet := f.SemanticSnippet(content, d.snippet)
 		score := m.Score
 		out = append(out, db.ContentMatch{
 			SessionID:       d.sessionID,
@@ -301,7 +308,7 @@ func (s *Store) enrichHybridMatches(
 			ParentSessionID: info.parentSessionID,
 			Sidechain:       info.isSidechain,
 			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
+			Snippet:         snippet,
 			Score:           &score,
 		})
 	}

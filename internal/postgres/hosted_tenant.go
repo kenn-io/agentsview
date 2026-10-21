@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
-	archivedb "go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -74,6 +74,12 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = checkDataVersionCompat(ctx, tx); err != nil {
+			return err
+		}
+		if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if err = preflightHostedAdoption(ctx, tx, schema, tenant); err != nil {
@@ -98,12 +104,11 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = ensureColumns(ctx, tx, columns, migrations); err != nil {
 		return err
 	}
-	var dataVersion int
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(data_version),0) FROM sessions`).Scan(&dataVersion); err != nil {
+	if err = checkDataVersionCompat(ctx, tx); err != nil {
 		return err
 	}
-	if dataVersion > archivedb.CurrentDataVersion() {
-		return &archivedb.DataVersionTooNewError{DatabaseVersion: dataVersion, BinaryVersion: archivedb.CurrentDataVersion()}
+	if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
+		return err
 	}
 	if err = createPartialIndexesPG(ctx, tx); err != nil {
 		return err
@@ -139,6 +144,47 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	return tx.Commit()
+}
+
+// Keep optional search indexes from aborting tenant provisioning when pg_trgm
+// is unavailable. The savepoint contains errors inside the owner transaction.
+// The extension is database-wide, so it must live in public: in a tenant or
+// mirror schema, dropping that schema would drop every tenant's indexes.
+func createHostedContentSearchIndexes(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT content_search_indexes`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public`)
+	if err == nil {
+		err = relocateTrigramToPublic(ctx, tx)
+	}
+	if err == nil {
+		err = createContentSearchIndexesPG(ctx, tx)
+	}
+	if err != nil {
+		if _, rollbackErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT content_search_indexes`); rollbackErr != nil {
+			return rollbackErr
+		}
+		log.Printf("pg schema: content search indexes unavailable, search will scan: %v", err)
+	}
+	_, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT content_search_indexes`)
+	return err
+}
+
+// A mirror's schema setup installs pg_trgm in the mirror schema. Existing
+// indexes reference the operator class by OID, so moving it breaks none.
+func relocateTrigramToPublic(ctx context.Context, tx *sql.Tx) error {
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pg_trgm'`).Scan(&current); err != nil {
+		return err
+	}
+	if current == "public" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER EXTENSION pg_trgm SET SCHEMA public`); err != nil {
+		return fmt.Errorf("pg_trgm is installed in schema %q; a role that owns it and can create in public must run ALTER EXTENSION pg_trgm SET SCHEMA public, then provision again: %w", current, err)
+	}
+	return nil
 }
 
 type hostedQuerier interface {

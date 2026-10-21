@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:cfc47ab188fce1b0a39f208b8ca190de4bc4a6012ba8a5932be73762de459030 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:d3dd56edc8dee6a5ea9bccb6ef45e699eed8466084d970b069c4a6323bea51f7 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
@@ -33,7 +33,7 @@ decision.
    for substring mode. Do not fall back on authentication or wrong-target
    errors.
 
-A `search_content` hit located in `tool_input` or `tool_result` cannot be
+A `search_content` hit located in `thinking`, `tool_input`, or `tool_result` cannot be
 opened through `get_messages`, which returns message text and a `has_tool_use`
 flag but not tool payloads. Report such hits as incomplete evidence. Name the
 hit, its location, and what could not be verified.

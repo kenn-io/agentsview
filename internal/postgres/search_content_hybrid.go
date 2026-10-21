@@ -152,12 +152,12 @@ func (s *Store) fetchHybridKeywordBatchPG(
 
 	kf := f
 	kf.Mode = "fts"
-	contentPred := pgContentSearchPredicate("m.content", kf, escapeLike(f.Pattern), pb)
+	contentPred := pgContentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, escapeLike(f.Pattern), pb)
 	limitP := pb.add(k)
 	offsetP := pb.add(offset)
 
 	query := fmt.Sprintf(`
-		SELECT m.session_id, m.ordinal, m.content
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE %s
@@ -344,6 +344,10 @@ func (s *Store) enrichHybridMatchesPG(
 		if !ok {
 			continue
 		}
+		content := info.content
+		if _, keyword := kwDisplay[m.Unit.Key]; keyword {
+			content = info.dialogueContent
+		}
 		score := m.Score
 		out = append(out, db.ContentMatch{
 			SessionID:          d.sessionID,
@@ -361,7 +365,7 @@ func (s *Store) enrichHybridMatchesPG(
 			ParentSessionID:    info.parentSessionID,
 			Sidechain:          info.isSidechain,
 			Timestamp:          info.timestamp,
-			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Snippet:            f.SemanticSnippet(content, d.snippet),
 			Score:              &score,
 		})
 	}

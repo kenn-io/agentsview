@@ -315,16 +315,16 @@ func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
 func TestTranscriptRevisionBackfillForcesOneFullPush(t *testing.T) {
 	store := &syncStateStoreStub{}
 
-	full, needed, err := applyTranscriptRevisionBackfillRequirement(
-		t.Context(), store, false,
+	full, needed, err := applyBackfillRequirement(
+		t.Context(), store, transcriptRevisionBackfillStateKey, false,
 	)
 	require.NoError(t, err)
 	assert.True(t, full)
 	assert.True(t, needed)
 
-	require.NoError(t, markTranscriptRevisionBackfillDone(t.Context(), store))
-	full, needed, err = applyTranscriptRevisionBackfillRequirement(
-		t.Context(), store, false,
+	require.NoError(t, markBackfillDone(t.Context(), store, transcriptRevisionBackfillStateKey))
+	full, needed, err = applyBackfillRequirement(
+		t.Context(), store, transcriptRevisionBackfillStateKey, false,
 	)
 	require.NoError(t, err)
 	assert.False(t, full)

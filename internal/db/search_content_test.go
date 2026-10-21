@@ -30,6 +30,64 @@ func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, out), "ReplaceSessionMessages")
 }
 
+func TestSearchContentThinkingDedupeMatches(t *testing.T) {
+	for _, mode := range []string{"substring", "regex"} {
+		for _, tc := range []struct {
+			name      string
+			content   string
+			thinking  string
+			dialogue  *string
+			pattern   string
+			locations []string
+		}{
+			{"codebuddy", "Answer", "needle", nil, "needle", []string{"thinking"}},
+			{"codebuddy_literal_marker", "The literal marker is [Thinking]", "needle", nil, "needle", []string{"thinking"}},
+			{"multiple_inline_blocks", "[Thinking]\nab\n[/Thinking]\n[Thinking]\ncd\n[/Thinking]\nanswer", "ab\n\ncd", nil, "cd", []string{"message"}},
+			{"shared_start", strings.Repeat("shared ", 12) + "answer", strings.Repeat("shared ", 12) + "reasoningneedle", nil, "reasoningneedle", []string{"thinking"}},
+			{"projected_dialogue", "answerneedle [Thinking]\nanswerneedle\n[/Thinking]", "answerneedle", new("answerneedle"), "answerneedle", []string{"message", "thinking"}},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				d := testDB(t)
+				seedSearchSession(t, d, "s1", "proj", nil)
+				insertMessages(t, d, Message{
+					SessionID: "s1", Ordinal: 0, Role: "assistant",
+					Content: tc.content, ThinkingText: tc.thinking, DialogueText: tc.dialogue,
+				})
+				for _, sources := range []struct {
+					name    string
+					sources []string
+				}{
+					{"default", nil},
+					{"messages_and_thinking", []string{"messages", "thinking"}},
+					{"thinking_only", []string{"thinking"}},
+				} {
+					t.Run(sources.name, func(t *testing.T) {
+						pattern := tc.pattern
+						if mode == "regex" && tc.name == "shared_start" {
+							// Both fields pass the literal-prefix prefilter, but
+							// only reasoning matches the complete expression.
+							pattern = "shared.*reasoningneedle"
+						}
+						got, err := d.SearchContent(t.Context(), ContentSearchFilter{
+							Pattern: pattern, Mode: mode, Sources: sources.sources,
+						})
+						require.NoError(t, err)
+						locations := tc.locations
+						if sources.name == "thinking_only" {
+							locations = []string{"thinking"}
+						}
+						require.Len(t, got.Matches, len(locations))
+						for i, location := range locations {
+							assert.Equal(t, location, got.Matches[i].Location)
+							assert.Contains(t, got.Matches[i].Snippet, tc.pattern)
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
 func TestSearchContentSubstringMessages(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "s1", "proj", [][2]string{
@@ -357,6 +415,46 @@ func TestSearchContentFTS(t *testing.T) {
 	require.NoError(t, err, "SearchContent fts")
 	require.Len(t, got.Matches, 1, "fts match")
 	assert.Equal(t, "message", got.Matches[0].Location, "fts match Location")
+}
+
+func TestSearchContentFTSContentColumnFilter(t *testing.T) {
+	for _, mode := range []string{"fts", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			requireFTS(t, d)
+			seedSearchSession(t, d, "column-filter", "proj", nil)
+			insertMessages(t, d, Message{
+				SessionID: "column-filter", Role: "assistant",
+				Content: "needle [Thinking] hiddenneedle", DialogueText: new("needle"),
+			})
+			if mode == "hybrid" {
+				d.SetVectorSearcher(&fakeVectorSearcher{})
+			}
+			for _, tc := range []struct {
+				pattern string
+				want    int
+				wantErr bool
+			}{
+				{`"needle" AND content:needle`, 1, false},
+				{`"hiddenneedle" AND content:hiddenneedle`, 0, false},
+				{`"absent") OR (hiddenneedle`, 0, true},
+			} {
+				t.Run(tc.pattern, func(t *testing.T) {
+					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+						Pattern: tc.pattern, Mode: mode, Sources: []string{"messages"},
+					})
+					if tc.wantErr {
+						var inputErr *SearchInputError
+						require.ErrorAs(t, err, &inputErr)
+						assert.Contains(t, inputErr.Error(), "invalid FTS query")
+						return
+					}
+					require.NoError(t, err)
+					assert.Len(t, page.Matches, tc.want)
+				})
+			}
+		})
+	}
 }
 
 func TestSearchContentTermsAcrossExchange(t *testing.T) {
@@ -790,24 +888,28 @@ func TestSearchContentToolResultDedup(t *testing.T) {
 
 func TestSearchContentCursorPagination(t *testing.T) {
 	d := testDB(t)
-	seedSearchSession(t, d, "pg", "proj", [][2]string{
-		{"user", "alpha NEEDLE one"},
-		{"user", "beta NEEDLE two"},
-		{"user", "gamma NEEDLE three"},
-	})
-	first, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 2,
-	})
-	require.NoError(t, err, "SearchContent page1")
-	require.Len(t, first.Matches, 2, "page1 matches")
-	require.Equal(t, 2, first.NextCursor, "page1 cursor")
-	second, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
-		Limit: 2, Cursor: first.NextCursor,
-	})
-	require.NoError(t, err, "SearchContent page2")
-	require.Len(t, second.Matches, 1, "page2 matches")
-	require.Equal(t, 0, second.NextCursor, "page2 cursor")
+	insertSession(t, d, "pg", "proj", func(s *Session) { s.UserMessageCount = 2 })
+	insertMessages(t, d,
+		Message{SessionID: "pg", Ordinal: 0, Role: "user", Content: "alpha NEEDLE one"},
+		Message{SessionID: "pg", Ordinal: 1, Role: "user", Content: "beta NEEDLE two"},
+		Message{SessionID: "pg", Ordinal: 2, Role: "user", Content: "gamma NEEDLE three"},
+	)
+	for _, mode := range []string{"substring", "fts"} {
+		first, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"}, Limit: 2,
+		})
+		require.NoError(t, err, "SearchContent page1")
+		require.Len(t, first.Matches, 2, "page1 matches")
+		require.Equal(t, 2, first.NextCursor, "page1 cursor")
+		second, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"},
+			Limit: 2, Cursor: first.NextCursor,
+		})
+		require.NoError(t, err, "SearchContent page2")
+		require.Len(t, second.Matches, 1, "page2 matches")
+		require.Equal(t, 0, second.NextCursor, "page2 cursor")
+		assert.ElementsMatch(t, []int{0, 1, 2}, []int{first.Matches[0].Ordinal, first.Matches[1].Ordinal, second.Matches[0].Ordinal})
+	}
 }
 
 func TestSearchContentMultiSourceWithProjectFilter(t *testing.T) {

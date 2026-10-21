@@ -130,6 +130,91 @@ real prompt'),
 	}, got)
 }
 
+func TestHasFTSColumnFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"words", "alpha beta", false},
+		{"phrase", `"alpha beta"`, false},
+		{"quoted colon", `"content:alpha"`, false},
+		{"escaped quote before colon", `"alpha"":beta"`, false},
+		{"escaped quotes around colon", `"alpha"":""beta"`, false},
+		{"or expression", `"alpha beta" OR absent`, false},
+		{"and expression", `"alpha beta" AND gamma`, false},
+		{"not expression", `"alpha beta" NOT absent`, false},
+		{"column", `content:alpha`, true},
+		{"column after phrase", `"alpha" AND content:alpha`, true},
+		{"column before phrase", `rendered:"alpha beta"`, true},
+		{"column set", `{content rendered}:alpha`, true},
+		{"column after escaped quote", `"alpha""beta" AND content:gamma`, true},
+		{"empty phrase then colon", `"":alpha`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, hasFTSColumnFilter(tc.query))
+		})
+	}
+}
+
+func TestSearchRenderedTranscript(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	insertSession(t, d, "classified", "proj")
+	insertMessages(t, d, Message{
+		SessionID: "classified", Role: "assistant",
+		Content:      "alpha [Thinking] consider options [/Thinking] beta [Bash: go test ./widget] gamma delta",
+		DialogueText: new("alpha beta gamma delta"),
+	})
+	insertSession(t, d, "legacy", "proj")
+	insertMessages(t, d, Message{
+		SessionID: "legacy", Role: "user", Content: "legacy phrase",
+	})
+	for _, tc := range []struct {
+		query   string
+		id      string
+		snippet string
+	}{
+		{`"alpha beta"`, "", ""},
+		{`"alpha beta" OR absent`, "", ""},
+		{`"alpha beta" NOT absent`, "", ""},
+		{`"alpha" NOT "alpha beta"`, "classified", "<mark>alpha</mark>"},
+		{`"alpha beta" AND gamma`, "", ""},
+		{`alpha`, "classified", "<mark>alpha</mark>"},
+		{`"alpha" AND content:alpha`, "classified", "<mark>alpha</mark>"},
+		{`"go test"`, "classified", "[Bash: <mark>go test</mark> ./widget]"},
+		{`"gamma delta"`, "classified", "<mark>gamma delta</mark>"},
+		{`"gamma delta" AND alpha`, "classified", "<mark>gamma delta</mark>"},
+		{`"legacy phrase"`, "legacy", "<mark>legacy phrase</mark>"},
+		{`"legacy phrase" OR absent`, "legacy", "<mark>legacy phrase</mark>"},
+		{`"legacy phrase" NOT absent`, "legacy", "<mark>legacy phrase</mark>"},
+		{`"legacy phrase" AND content:legacy`, "legacy", "<mark>legacy phrase</mark>"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			page, err := d.Search(t.Context(), SearchFilter{Query: tc.query, Project: "proj"})
+			require.NoError(t, err)
+			if tc.id == "" {
+				assert.Empty(t, page.Results)
+				return
+			}
+			require.Len(t, page.Results, 1)
+			assert.Equal(t, tc.id, page.Results[0].SessionID)
+			assert.Contains(t, page.Results[0].Snippet, tc.snippet)
+			if tc.id == "classified" && tc.query != `"alpha" AND content:alpha` {
+				assert.Contains(t, page.Results[0].Snippet, "[Thinking]")
+			}
+		})
+	}
+	_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET display_name = 'alpha beta' WHERE id = 'classified'")
+	require.NoError(t, err)
+	page, err := d.Search(t.Context(), SearchFilter{Query: `"alpha beta"`, Project: "proj"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "classified", page.Results[0].SessionID)
+	assert.Equal(t, -1, page.Results[0].Ordinal, "dialogue-only phrases must leave the name match visible")
+}
+
 func TestSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)

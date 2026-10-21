@@ -56,7 +56,7 @@ func TestGptmeModelUpgradeReparsesUnchangedSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	assert.Equal(t, []parser.AgentType{parser.AgentGptme}, db.ScopedDataVersionProviders(previousVersion, db.CurrentDataVersion()),
+	assert.Equal(t, []parser.AgentType{parser.AgentGptme}, db.ScopedDataVersionProviders(previousVersion, previousVersion+1),
 		"the model repair must reparse only gptme sources in place")
 	reopened, err := db.Open(t.Context(), archivePath)
 	require.NoError(t, err)

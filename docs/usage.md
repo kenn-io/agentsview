@@ -1026,7 +1026,7 @@ sessions. Results update after a 300ms typing pause.
 
 !!! tip
 
-    For deeper searches across full transcripts — including tool inputs, tool result
+    For deeper searches across full transcripts — including thinking, tool inputs, tool result
     content, and regex patterns — use the
     [`agentsview session search`](/docs/session-api/#agentsview-session-search) CLI
     or the `GET /api/v1/search/content` HTTP endpoint added in 0.30.0. The command

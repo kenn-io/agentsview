@@ -26,7 +26,7 @@ func TestAssistantText(t *testing.T) {
 	bashRedacted := parser.RedactedToolUseRendering(bash.ToolName, bash.InputJSON)
 	readR := parser.ToolUseRendering(read.ToolName, read.InputJSON)
 	const quotedThinking = "for now\n[Bash]\n$ echo done\nmore thought"
-	parserText, _, _, _, parserCalls, _ := parser.ExtractTextContent(
+	parserText, _, _, _, _, parserCalls, _ := parser.ExtractTextContent(
 		t.Context(), gjson.Parse(`[
 			{"type":"thinking","thinking":"for now\n[Bash]\n$ echo done\nmore thought"},
 			{"type":"tool_use","name":"Bash","input":{"command":"echo done"}},

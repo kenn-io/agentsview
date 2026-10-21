@@ -4,8 +4,10 @@ package duckdb
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -133,6 +135,33 @@ func TestRebuildRestartsWhenScopeChangedSinceInterruption(t *testing.T) {
 	assert.Equal(t, "missing file", res.Diagnostics.RebuildReason)
 	assert.Equal(t, resumeSessionCount, res.SessionsPushed)
 	assert.Zero(t, res.Diagnostics.SkippedUnchangedSessions.Total)
+}
+
+func TestPushDiscardsV20RebuildWithoutDialogueText(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+
+	conn, err := Open(ctx, rebuildFilePath(path))
+	require.NoError(t, err)
+	runJSON, err := readMetadataKey(ctx, conn, rebuildRunMetadataKey)
+	require.NoError(t, err)
+	var run rebuildRun
+	require.NoError(t, json.Unmarshal([]byte(runJSON), &run))
+	run.SchemaVersion, run.DataVersion = 20, db.CurrentDataVersion()
+	encodedRun, err := json.Marshal(run)
+	require.NoError(t, err)
+	require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encodedRun)))
+	require.NoError(t, recordMetadataKey(ctx, conn, schemaVersionMetadataKey, "20"))
+	require.NoError(t, recordMetadataKey(ctx, conn, dataVersionMetadataKey, strconv.Itoa(db.CurrentDataVersion())))
+	require.NoError(t, conn.Close())
+
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "missing file", res.Diagnostics.RebuildReason)
+	assert.Equal(t, resumeSessionCount, res.SessionsPushed)
 }
 
 // While another process has the rebuild file open, a push fails instead of

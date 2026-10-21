@@ -294,6 +294,47 @@ func (db *DB) MessageFlagsFingerprints(ctx context.Context,
 	return out, nil
 }
 
+// MessageDialogueFingerprints hashes classified dialogue in ordinal order.
+// Sessions with no classified rows have an empty fingerprint.
+func (db *DB) MessageDialogueFingerprints(ctx context.Context, sessionIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(sessionIDs))
+	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
+		ph, args := sessionIDArgs(chunk)
+		rows, err := db.getReader().Query(ctx, `SELECT session_id, ordinal, dialogue_text
+            FROM messages WHERE session_id IN (`+ph+`) AND dialogue_text IS NOT NULL
+            ORDER BY session_id, ordinal`, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		builders := fingerprintBuilders{}
+		for rows.Next() {
+			var id, dialogue string
+			var ordinal int
+			if err := rows.Scan(&id, &ordinal, &dialogue); err != nil {
+				return err
+			}
+			EncodeMessageDialogueFingerprint(builders.get(id), ordinal, dialogue)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		builders.mergeInto(out)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EncodeMessageDialogueFingerprint appends one classified message's record.
+// Callers omit unclassified messages and encode records in ordinal order.
+func EncodeMessageDialogueFingerprint(b *strings.Builder, ordinal int, dialogue string) {
+	sum := sha256.Sum256([]byte(SanitizeUTF8(dialogue)))
+	fmt.Fprintf(b, "%d|%x;", ordinal, sum)
+}
+
 // SystemMessageFingerprints is the batched twin of SystemMessageFingerprint.
 // The ordinal list is joined in Go rather than with GROUP_CONCAT so the
 // per-session ordering never depends on SQLite's aggregate scan order.

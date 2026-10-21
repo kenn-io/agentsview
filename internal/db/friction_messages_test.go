@@ -62,3 +62,24 @@ func TestFrictionBudgetCountsDeduplicatedResultOnce(t *testing.T) {
 	require.Equal(t, output, got[0].ToolCalls[0].ResultContent, "loading restores the summary")
 	assert.True(t, FrictionInputFits(got), "the restored summary must not be counted twice")
 }
+
+func TestGetFrictionMessagesOmitsDialogueProjection(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "bounded", "test")
+	dialogue := strings.Repeat("x", 3<<20)
+	content := dialogue + " [Thinking] ponder"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "bounded", []Message{{
+		SessionID: "bounded", Role: "assistant", Content: content, DialogueText: new(dialogue),
+	}}))
+	got, ok, err := d.GetFrictionMessages(t.Context(), "bounded")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, got, 1)
+	loadedBytes := len(got[0].Content) + len(got[0].ThinkingText)
+	if got[0].DialogueText != nil {
+		loadedBytes += len(*got[0].DialogueText)
+	}
+	assert.LessOrEqual(t, loadedBytes, frictionMaxBytes)
+	assert.Equal(t, content, got[0].Content)
+	assert.Nil(t, got[0].DialogueText)
+}

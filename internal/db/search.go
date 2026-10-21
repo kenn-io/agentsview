@@ -333,6 +333,26 @@ type SearchPage struct {
 	NextCursor int            `json:"next_cursor,omitempty"`
 }
 
+// hasFTSColumnFilter reports whether query contains a colon outside FTS quotes.
+func hasFTSColumnFilter(query string) bool {
+	quoted := false
+	for i := 0; i < len(query); i++ {
+		switch query[i] {
+		case '"':
+			if quoted && i+1 < len(query) && query[i+1] == '"' {
+				i++
+				continue
+			}
+			quoted = !quoted
+		case ':':
+			if !quoted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
@@ -370,10 +390,14 @@ func (db *DB) Search(
 		orderBy = "julianday(session_ended_at) DESC, session_id ASC"
 	}
 
-	// innerWhere is used in three places: the ROW_NUMBER inner subquery,
-	// the outer MATCH re-filter, and the NOT IN subquery for the name branch.
+	// innerWhere is used in the ROW_NUMBER inner subquery and the NOT IN
+	// subquery for the name branch.
+	matchSQL := "messages_fts.rendered MATCH ?"
+	if hasFTSColumnFilter(f.Query) {
+		matchSQL = "messages_fts MATCH ?"
+	}
 	innerWhere := []string{
-		"messages_fts MATCH ?",
+		matchSQL,
 		"s2.deleted_at IS NULL",
 		"m2.is_system = 0",
 		SystemPrefixSQL("m2.content", "m2.role"),
@@ -412,25 +436,8 @@ func (db *DB) Search(
 	}
 	likePattern := "%" + escapeLike(plainQuery) + "%"
 
-	// Build args in the order the SQL placeholders appear.
-	// Position 0 (? AS best_query in the ROW_NUMBER SELECT) is
-	// prepended after this block — see args2 below.
-	//
-	//  pos | SQL clause                                  | value
-	//  ----+---------------------------------------------+------------
-	//   0  | SELECT ? AS best_query (ROW_NUMBER)         | plainQuery  ← prepended in args2
-	//   1  | WHERE messages_fts MATCH ? (ROW_NUMBER)     | ftsArgs[0] (f.Query)
-	//  [1+]| AND s2.project = ? (if project set)         | ftsArgs[1] (f.Project)
-	//   2  | WHERE messages_fts MATCH ? (outer JOIN)     | f.Query
-	//   3  | WHEN COALESCE(display_name,session_name) LIKE ? (CASE) | likePattern
-	//   4  | WHEN s.first_message LIKE ? (CASE)          | likePattern
-	//   5  | WHERE COALESCE(display_name,session_name) LIKE ? (name WHERE) | likePattern
-	//   6  | WHERE s.first_message LIKE ? (name WHERE)   | likePattern
-	//  [7] | AND s.project = ? (name branch, optional)   | f.Project
-	//   8  | WHERE messages_fts MATCH ? (NOT IN)         | ftsArgs[0]
-	//  [8+]| AND s2.project = ? (NOT IN, if set)         | ftsArgs[1]
-	//   9  | LIMIT ? OFFSET ?                            | f.Limit+1, f.Cursor
-	args := make([]any, 0, len(ftsArgs)*2+6+len(nameProjectArgs))
+	// Build args in SQL order, with best_query prepended below.
+	args := make([]any, 0, 2*len(ftsArgs)+7+len(nameProjectArgs))
 	args = append(args, ftsArgs...)          // (1) ROW_NUMBER WHERE
 	args = append(args, f.Query)             // (2) outer MATCH re-filter
 	args = append(args, likePattern)         // (3) CASE COALESCE(display_name,session_name) LIKE
@@ -450,7 +457,7 @@ func (db *DB) Search(
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
 				best.best_ordinal AS ordinal,
-				snippet(messages_fts, 0, '<mark>', '</mark>',
+				snippet(messages_fts, -1, '<mark>', '</mark>',
 					'...', %d) AS snippet,
 				best.best_rank AS rank,
 				instr(LOWER(m.content), LOWER(best.best_query))
@@ -478,7 +485,7 @@ func (db *DB) Search(
 			JOIN messages_fts ON messages_fts.rowid = best.best_rowid
 			JOIN messages m ON m.id = best.best_rowid
 			JOIN sessions s ON m.session_id = s.id
-			WHERE messages_fts MATCH ?
+			WHERE %s
 
 			UNION ALL
 
@@ -519,19 +526,14 @@ func (db *DB) Search(
 		LIMIT ? OFFSET ?`,
 		snippetTokenLength,
 		innerWhereSQL,     // ROW_NUMBER inner WHERE (%s at rn subquery)
+		matchSQL,          // outer MATCH re-filter (%s)
 		nameProjectClause, // optional project filter for name branch (%s)
 		innerWhereSQL,     // NOT IN subquery WHERE (%s)
 		orderBy,           // ORDER BY (%s)
 	)
 	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
-	// Replace the ROW_NUMBER inner subquery's ? for best_query with args
-	// re-ordered: the first innerWhere param (f.Query) was already included in
-	// ftsArgs above at position (1); best_query needs a second copy of f.Query
-	// injected at the right position. Re-build args with the extra copy.
-	//
-	// The inner subquery's SELECT has `? AS best_query` before the WHERE, so
-	// its ? comes before innerWhere's ?s. Rebuild:
+	// The ROW_NUMBER SELECT's best_query placeholder precedes its WHERE args.
 	args2 := make([]any, 0, len(args)+1)
 	args2 = append(args2, plainQuery) // best_query: plain text for instr()
 	args2 = append(args2, args...)

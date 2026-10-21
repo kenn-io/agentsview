@@ -377,7 +377,7 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 			"claude_request_id", "source_type",
 			"source_subtype", "source_uuid",
 			"source_parent_uuid", "is_sidechain",
-			"is_compact_boundary", "thinking_text",
+			"is_compact_boundary", "thinking_text", "dialogue_text",
 		},
 		"tool_calls": {
 			"call_index",
@@ -452,7 +452,7 @@ func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
 			"has_context_tokens", "has_output_tokens", "claude_message_id",
 			"claude_request_id", "source_type", "source_subtype", "source_uuid",
 			"source_parent_uuid", "is_sidechain", "is_compact_boundary",
-			"thinking_text",
+			"thinking_text", "dialogue_text",
 		},
 		"tool_calls": {"call_index", "file_path"},
 	})
@@ -499,7 +499,7 @@ func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
 			"claude_request_id", "source_type",
 			"source_subtype", "source_uuid",
 			"source_parent_uuid", "is_sidechain",
-			"is_compact_boundary", "thinking_text",
+			"is_compact_boundary", "thinking_text", "dialogue_text",
 		},
 		"tool_calls": {
 			"call_index", "file_path",

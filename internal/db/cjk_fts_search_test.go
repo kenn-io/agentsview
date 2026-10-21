@@ -7,6 +7,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCJKFTSRenderedTranscript(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS5 runtime is not installed for this test process")
+	}
+	d := testDB(t)
+	seedSearchSession(t, d, "classified", "proj", nil)
+	insertMessages(t, d, Message{
+		SessionID: "classified", Role: "assistant",
+		Content:      "かな [Thinking] consider options [/Thinking] カタカナ [Read: 検索方法]",
+		DialogueText: new("かな カタカナ"),
+	})
+	page, err := d.Search(t.Context(), SearchFilter{Query: `"かな カタカナ"`})
+	require.NoError(t, err)
+	assert.Empty(t, page.Results)
+
+	page, err = d.Search(t.Context(), SearchFilter{Query: `"検索方法"`})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "classified", page.Results[0].SessionID)
+}
+
 // These searches exercise the store's choice of query preparation against the
 // real optional index. Chinese segmentation must not turn kana or Hangul terms
 // into unordered character matches.

@@ -82,6 +82,7 @@ func (s *Sync) pushWithOptions(
 		s.archiveKey(identityRevisionKeyBase),
 		s.archiveKey(mappingRevisionKeyBase),
 		s.archiveKey(usageSnapshotReadyKeyBase),
+		s.archiveKey(messageDialogueReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
 		s.archiveKey(databaseIDKeyBase),
 		s.archiveKey(fullPushRunKeyBase),
@@ -108,6 +109,9 @@ func (s *Sync) pushWithOptions(
 	}
 	if !full && meta[s.archiveKey(usageSnapshotReadyKeyBase)] == "" {
 		full, reason = true, "preparing complete usage snapshots"
+	}
+	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
+		full, reason = true, "preparing message dialogue"
 	}
 	// Rows from before stored_message_count, or from an older writer, read as unknown until a full push republishes them.
 	repairing := meta[s.archiveKey(storedCountRepairKeyBase)] != ""
@@ -341,6 +345,7 @@ func (s *Sync) pushWithOptions(
 			pushed[s.archiveKey(storedCountRepairKeyBase)] = ""
 		}
 		if full {
+			pushed[s.archiveKey(messageDialogueReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(fullPushRunKeyBase)] = ""
 		}
 		if err := writeMetadata(ctx, conn, pushed); err != nil {
@@ -1021,7 +1026,7 @@ func lastMessageAt(msgs []db.Message) *time.Time {
 
 func messageRow(m db.Message, version uint64) []any {
 	return []any{
-		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText,
+		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText, m.DialogueText,
 		timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
 		m.IsSystem, m.Model, m.ReasoningEffort, string(m.TokenUsage),
 		int64(m.ContextTokens), int64(m.OutputTokens), m.ProviderID,

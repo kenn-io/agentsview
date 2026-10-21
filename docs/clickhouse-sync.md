@@ -18,6 +18,19 @@ the SQLite archive; the ClickHouse UI does not write them. Semantic search works
 when `[vector]` is enabled locally and the push includes vectors (see
 [Vector Push](#vector-push)). Hosted raw sync is not part of this path.
 
+Content search matches dialogue for `--in messages` and reasoning for
+`--in thinking` in substring and regex modes. Substring and regex searches
+include reasoning by default; pass `--in messages` to skip it. A regex without a
+literal prefix loads every in-scope body from the selected sources into memory
+before matching and pagination. Hybrid keyword search matches dialogue; semantic
+search uses rendered messages.
+
+Each archive's first push from a binary that stores dialogue is a full push. It
+re-sends every session in the configured mirror scope, including sessions
+without dialogue, and needs a role that can update the ClickHouse schema. Until
+the schema has `messages.dialogue_text`, reads fail with a schema compatibility
+error naming that column.
+
 ## Quick Start
 
 ### 1. Configure ClickHouse

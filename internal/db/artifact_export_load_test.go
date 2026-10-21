@@ -209,6 +209,28 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 }
 
 func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
+	t.Run("dialogue projection is omitted", func(t *testing.T) {
+		database := artifactExportLoadTestDB(t)
+		dialogue := strings.Repeat("x", 1024)
+		content := dialogue + " [Thinking] ponder"
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
+			SessionID: "session", Role: "assistant", Content: content, DialogueText: new(dialogue),
+		}}))
+		limits := smallArtifactExportLoadLimits()
+		limits.MessageBytes = 1200
+		data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.NoError(t, err)
+		require.Len(t, data.Messages, 1)
+		message := data.Messages[0]
+		loadedBytes := len(message.Role) + len(message.Content)
+		if message.DialogueText != nil {
+			loadedBytes += len(*message.DialogueText)
+		}
+		assert.LessOrEqual(t, int64(loadedBytes), limits.MessageBytes)
+		assert.Equal(t, content, message.Content)
+		assert.Nil(t, message.DialogueText)
+	})
+
 	t.Run("message data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{

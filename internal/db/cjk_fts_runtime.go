@@ -176,7 +176,7 @@ func fingerprintSimpleFTSRuntime(
 	libraryPath, dictionaryPath string,
 ) (string, error) {
 	h := sha256.New()
-	_, _ = io.WriteString(h, cjkFTSSchemaVersion+"\n")
+	_, _ = io.WriteString(h, cjkFTSSchemaVersion+"\n"+searchCorpusVersion+"\n")
 
 	type fingerprintFile struct {
 		name string

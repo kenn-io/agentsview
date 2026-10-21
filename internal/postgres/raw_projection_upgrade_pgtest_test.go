@@ -13,7 +13,7 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 	f := newHostedFixture(t, "tenant-upgrade")
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','codex')`)
 	require.NoError(t, err)
-	_, err = f.admin.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN raw_content_revision; ALTER TABLE raw_ingest_jobs DROP COLUMN projection_selected; ALTER TABLE raw_content_revisions DROP COLUMN recency_state; DROP INDEX idx_tool_result_events_terminal; DROP INDEX raw_session_sources_source; DROP INDEX raw_session_sources_content; DROP INDEX raw_session_sources_physical`)
+	_, err = f.admin.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN raw_content_revision; ALTER TABLE raw_ingest_jobs DROP COLUMN projection_selected; ALTER TABLE raw_content_revisions DROP COLUMN recency_state; DROP INDEX idx_tool_result_events_terminal; DROP INDEX raw_session_sources_source; DROP INDEX raw_session_sources_content; DROP INDEX raw_session_sources_physical; DROP INDEX idx_messages_dialogue_trgm; DROP INDEX idx_messages_thinking_trgm`)
 	require.NoError(t, err)
 	_, constructorErr := NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.Error(t, constructorErr)
@@ -27,7 +27,7 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 	var exists bool
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT to_regclass('idx_tool_result_events_terminal') IS NOT NULL`).Scan(&exists))
 	assert.True(t, exists)
-	for _, index := range []string{"raw_session_sources_source", "raw_session_sources_content", "raw_session_sources_physical"} {
+	for _, index := range []string{"raw_session_sources_source", "raw_session_sources_content", "raw_session_sources_physical", "idx_messages_dialogue_trgm", "idx_messages_thinking_trgm"} {
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, index).Scan(&exists))
 		assert.True(t, exists, index)
 	}

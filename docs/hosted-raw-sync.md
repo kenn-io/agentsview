@@ -107,6 +107,7 @@ this as the owner before starting the runtime:
 ```sql
 GRANT USAGE ON SCHEMA hosted_sessions TO hosted_runtime;
 GRANT SELECT ON ALL TABLES IN SCHEMA hosted_sessions TO hosted_runtime;
+GRANT UPDATE (dialogue_text) ON hosted_sessions.messages TO hosted_runtime;
 
 GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_manifest_entries, hosted_sessions.raw_manifest_objects,
@@ -129,6 +130,8 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
+  TO hosted_runtime;
 
 GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.sessions, hosted_sessions.session_sources,
@@ -143,6 +146,22 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   hosted_sessions.usage_events_id_seq, hosted_sessions.pinned_messages_id_seq
   TO hosted_runtime;
 ```
+
+For an existing deployment, run `agentsview pg hosted-provision provision`, then
+apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
+the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
+The runtime fails startup until provisioning and these grants are complete.
+
+Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
+into materialized message rows.
+
+Provisioning keeps `pg_trgm` in `public`, so dropping a tenant or mirror schema
+cannot remove the extension that every tenant's message-search indexes use. It
+installs the extension there, or moves it there when a PostgreSQL mirror in the
+same database installed it in the mirror schema. If the owner cannot do either,
+provisioning logs the command to run and search scans `messages`. A database
+superuser can run `CREATE EXTENSION pg_trgm SCHEMA public` or
+`ALTER EXTENSION pg_trgm SET SCHEMA public`, then provision again.
 
 Sequence names above are those created by provisioning. For an adopted schema,
 resolve the actual owned sequence with `pg_get_serial_sequence`; serial IDs need

@@ -31,6 +31,7 @@ const (
 	sessionAliasBackfillStateKey           = "pg_session_alias_backfill_v1"
 	legacyProjectIdentityStateKey          = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey     = "project_identity_publication_revision_v3"
+	messageDialogueBackfillStateKey        = "pg_message_dialogue_backfill_v1"
 	transcriptRevisionBackfillStateKey     = "pg_transcript_revision_backfill_v1"
 	sessionProvenanceBackfillStateKey      = "pg_session_provenance_backfill_v2"
 	timestampNormalizationBackfillStateKey = "pg_timestamp_normalization_backfill_v1"
@@ -301,7 +302,7 @@ func (s *Sync) pushWithOptions(
 		noteFull("backfilling session provenance")
 	}
 	var transcriptRevisionBackfillNeeded bool
-	full, transcriptRevisionBackfillNeeded, err = applyTranscriptRevisionBackfillRequirement(ctx, state, full)
+	full, transcriptRevisionBackfillNeeded, err = applyBackfillRequirement(ctx, state, transcriptRevisionBackfillStateKey, full)
 	if err != nil {
 		return result, err
 	}
@@ -310,6 +311,14 @@ func (s *Sync) pushWithOptions(
 			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
 		noteFull("backfilling transcript revisions")
+	}
+	var messageDialogueBackfillNeeded bool
+	full, messageDialogueBackfillNeeded, err = applyBackfillRequirement(ctx, state, messageDialogueBackfillStateKey, full)
+	if err != nil {
+		return result, err
+	}
+	if messageDialogueBackfillNeeded {
+		noteFull("backfilling message dialogue")
 	}
 	var timestampNormalizationBackfillNeeded bool
 	full, timestampNormalizationBackfillNeeded, err = applyTimestampNormalizationBackfillRequirement(ctx, state, full)
@@ -328,6 +337,7 @@ func (s *Sync) pushWithOptions(
 		sessionProvenanceBackfillStateKey:      provenanceBackfillNeeded,
 		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
 		timestampNormalizationBackfillStateKey: timestampNormalizationBackfillNeeded,
+		messageDialogueBackfillStateKey:        messageDialogueBackfillNeeded,
 	} {
 		if needed {
 			backfills = append(backfills, key)
@@ -653,9 +663,12 @@ func (s *Sync) pushWithOptions(
 		); err != nil {
 			return result, err
 		}
-		if err := completeTranscriptRevisionBackfill(ctx,
-			state, transcriptRevisionBackfillNeeded, result,
+		if err := completeBackfill(ctx,
+			state, transcriptRevisionBackfillStateKey, transcriptRevisionBackfillNeeded, result,
 		); err != nil {
+			return result, err
+		}
+		if err := completeBackfill(ctx, state, messageDialogueBackfillStateKey, messageDialogueBackfillNeeded, result); err != nil {
 			return result, err
 		}
 		if err := completeTimestampNormalizationBackfill(ctx,
@@ -789,9 +802,12 @@ func (s *Sync) pushWithOptions(
 	); err != nil {
 		return result, err
 	}
-	if err := completeTranscriptRevisionBackfill(ctx,
-		state, transcriptRevisionBackfillNeeded, result,
+	if err := completeBackfill(ctx,
+		state, transcriptRevisionBackfillStateKey, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
+		return result, err
+	}
+	if err := completeBackfill(ctx, state, messageDialogueBackfillStateKey, messageDialogueBackfillNeeded, result); err != nil {
 		return result, err
 	}
 	if err := completeTimestampNormalizationBackfill(ctx,
@@ -1745,13 +1761,13 @@ func completeSessionProvenanceBackfill(ctx context.Context,
 	return markSessionProvenanceBackfillDone(ctx, local)
 }
 
-func applyTranscriptRevisionBackfillRequirement(ctx context.Context,
-	local syncStateStore, full bool,
+func applyBackfillRequirement(ctx context.Context,
+	local syncStateStore, key string, full bool,
 ) (bool, bool, error) {
-	done, err := local.GetSyncState(ctx, transcriptRevisionBackfillStateKey)
+	done, err := local.GetSyncState(ctx, key)
 	if err != nil {
 		return full, false, fmt.Errorf(
-			"reading %s: %w", transcriptRevisionBackfillStateKey, err,
+			"reading %s: %w", key, err,
 		)
 	}
 	if done == "1" {
@@ -1760,24 +1776,24 @@ func applyTranscriptRevisionBackfillRequirement(ctx context.Context,
 	return true, true, nil
 }
 
-func markTranscriptRevisionBackfillDone(ctx context.Context, local syncStateStore) error {
+func markBackfillDone(ctx context.Context, local syncStateStore, key string) error {
 	if err := local.SetSyncState(ctx,
-		transcriptRevisionBackfillStateKey, "1",
+		key, "1",
 	); err != nil {
 		return fmt.Errorf(
-			"updating %s: %w", transcriptRevisionBackfillStateKey, err,
+			"updating %s: %w", key, err,
 		)
 	}
 	return nil
 }
 
-func completeTranscriptRevisionBackfill(ctx context.Context,
-	local syncStateStore, needed bool, result storage.PushResult,
+func completeBackfill(ctx context.Context,
+	local syncStateStore, key string, needed bool, result storage.PushResult,
 ) error {
 	if !needed || result.Errors > 0 {
 		return nil
 	}
-	return markTranscriptRevisionBackfillDone(ctx, local)
+	return markBackfillDone(ctx, local, key)
 }
 
 func applyTimestampNormalizationBackfillRequirement(ctx context.Context,
@@ -3167,6 +3183,11 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
+		dialogueFP, err := s.local.MessageDialogueFingerprints(ctx, []string{sessionID})
+		if err != nil {
+			return 0, fmt.Errorf("computing local dialogue fingerprint: %w", err)
+		}
+		localFP.DialogueFP = dialogueFP[sessionID]
 		localFP.SystemFP, err = s.local.SystemMessageFingerprint(ctx, sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -3252,6 +3273,10 @@ func (s *Sync) pushMessages(
 					err,
 				)
 			}
+			pgDialogueFP := make(map[string]string, 1)
+			if err := loadPushMessageDialogueFingerprints(ctx, tx, []string{sessionID}, pgDialogueFP); err != nil {
+				return 0, fmt.Errorf("computing pg dialogue fingerprint: %w", err)
+			}
 			pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
@@ -3287,6 +3312,7 @@ func (s *Sync) pushMessages(
 				localFP.ContentHashFP == pgContentHashFP &&
 				localFP.RoleTimeFP == pgRoleTimeFP &&
 				localFP.FlagsFP == pgFlagsFP &&
+				localFP.DialogueFP == pgDialogueFP[sessionID] &&
 				localFP.SystemFP == pgAgg.SysFP &&
 				localFP.ToolCallCount == pgToolAgg.Count &&
 				localFP.ToolCallSum == pgToolAgg.Sum &&
@@ -4130,7 +4156,7 @@ func bulkInsertMessages(
 
 		var b strings.Builder
 		b.WriteString(`INSERT INTO messages (
-			session_id, ordinal, role, content, thinking_text,
+			session_id, ordinal, role, content, thinking_text, dialogue_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, reasoning_effort, token_usage,
 			context_tokens, output_tokens,
@@ -4140,19 +4166,19 @@ func bulkInsertMessages(
 			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*27)
+		args := make([]any, 0, len(batch)*28)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*27 + 1
+			p := j*28 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4,
 				p+5, p+6, p+7, p+8, p+9,
 				p+10, p+11, p+12, p+13, p+14, p+15,
 				p+16, p+17, p+18, p+19, p+20,
-				p+21, p+22, p+23, p+24, p+25, p+26,
+				p+21, p+22, p+23, p+24, p+25, p+26, p+27,
 			)
 			ts, err := optionalSQLiteTimestamp(m.Timestamp)
 			if err != nil {
@@ -4166,10 +4192,14 @@ func bulkInsertMessages(
 			// third-party session files and have carried NUL
 			// bytes (e.g. raw protobuf fragments), which PG
 			// rejects with SQLSTATE 22021.
+			var dialogue any
+			if m.DialogueText != nil {
+				dialogue = sanitizePG(*m.DialogueText)
+			}
 			args = append(args,
 				sessionID, m.Ordinal, sanitizePG(m.Role),
 				sanitizePG(m.Content),
-				sanitizePG(m.ThinkingText), ts,
+				sanitizePG(m.ThinkingText), dialogue, ts,
 				m.HasThinking,
 				m.HasToolUse, m.ContentLength, m.IsSystem,
 				sanitizePG(m.Model),

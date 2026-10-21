@@ -123,6 +123,27 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 	assert.ElementsMatch(t, []string{"fts-only", "vec-only"}, ids)
 }
 
+func TestSearchContentHybridFTSSnippetUsesDialogue(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "fts-only", "proj", nil)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "fts-only", []Message{{
+		SessionID: "fts-only", Ordinal: 0, Role: "assistant",
+		Content:      "[Thinking] reasoningneedle [/Thinking] answerneedle [Read: secretpath]",
+		DialogueText: new("answerneedle"),
+	}}))
+	d.SetVectorSearcher(&fakeVectorSearcher{})
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "answerneedle", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "answerneedle", page.Matches[0].Snippet)
+}
+
 // TestSearchContentHybridScoresStrictlyDescending pins that fused RRF scores
 // order the page strictly descending, with no inversions or unexpected ties
 // across a mix of a double-leg hit and single-leg (vector-only) hits.

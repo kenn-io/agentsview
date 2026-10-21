@@ -6988,7 +6988,7 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		afterSession()
 	}
 	result := &SessionMirrorSnapshot{Session: *session}
-	if result.Messages, err = allMessagesWithQuerier(ctx, tx, id); err != nil {
+	if result.Messages, err = allMessagesWithQuerier(ctx, tx, id, selectMessageCols); err != nil {
 		return nil, err
 	}
 	if result.Usage, err = usageEventsWithQuerier(ctx, tx, id, 0); err != nil {

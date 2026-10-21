@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -65,6 +66,7 @@ func TestRawProjectionEqualContentSettlesSignalsWithoutNewIdentity(t *testing.T)
 			now := ended.Add(time.Minute)
 			f.sink.options.Now = func() time.Time { return now }
 			outcome := projectionOutcome("Implement the requested change")
+			outcome.Outcome.Results[0].Result.Messages[0].DialogueText = new("requested change")
 			outcome.Outcome.Results[0].Result.Session.EndedAt = ended
 			outcome.Outcome.Results[0].Result.Session.Agent = agent
 			outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].ToolName = "Grep"
@@ -136,10 +138,18 @@ func TestRawProjectionEqualContentSettlesSignalsWithoutNewIdentity(t *testing.T)
 			assert.Equal(t, RawIdentityUnique, shared.State)
 			var outbox int
 			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_embedding_outbox`).Scan(&outbox))
+			// Model a pending session projected before dialogue derivation.
+			_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=139; DELETE FROM raw_message_dialogue`)
+			require.NoError(t, err)
 			now = ended.Add(11 * time.Minute)
 			changed, err := f.sink.SettlePendingSignals(t.Context(), 10)
 			require.NoError(t, err)
 			assert.Equal(t, 1, changed)
+			var version int
+			var dialogue sql.NullString
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT s.data_version,m.dialogue_text FROM sessions s JOIN messages m ON m.session_id=s.id WHERE s.id=$1 AND m.ordinal=0`, first.SessionID).Scan(&version, &dialogue))
+			assert.Equal(t, 139, version, "settling signals does not upgrade unproduced dialogue")
+			assert.Equal(t, sql.NullString{String: "requested change", Valid: true}, dialogue, "settling leaves message dialogue unchanged")
 			assertCoverage()
 			a, ar = f.accept(t, "device-a", "settled-a", ar.Receipt, agent)
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome))
@@ -147,7 +157,7 @@ func TestRawProjectionEqualContentSettlesSignalsWithoutNewIdentity(t *testing.T)
 			require.NoError(t, err)
 			assert.Equal(t, shared.SessionID, settled.SessionID)
 			assert.Equal(t, shared.IdentityRevision, settled.IdentityRevision)
-			assert.Equal(t, shared.CorpusRevision+1, settled.CorpusRevision)
+			assert.Equal(t, shared.CorpusRevision+2, settled.CorpusRevision, "settling and the subsequent dialogue upgrade each publish a change")
 			var score *int
 			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT outcome,signals_pending_since::text,health_score FROM sessions WHERE id=$1`, settled.SessionID).Scan(&outcomeName, &pending, &score))
 			assert.Equal(t, "abandoned", outcomeName)

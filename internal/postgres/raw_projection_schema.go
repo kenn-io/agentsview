@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS raw_content_revisions (
  session_id TEXT PRIMARY KEY, group_id TEXT NOT NULL, content_revision TEXT NOT NULL,
  payload BYTEA NOT NULL, recency_state JSONB NOT NULL DEFAULT '{}', UNIQUE(group_id,content_revision)
 );
+CREATE TABLE IF NOT EXISTS raw_message_dialogue (
+ session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, dialogue_text TEXT NOT NULL,
+ PRIMARY KEY(session_id, ordinal)
+);
 CREATE TABLE IF NOT EXISTS raw_session_branches (
  branch_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, group_id TEXT NOT NULL,
  member_id TEXT NOT NULL, session_id TEXT NOT NULL, content_revision TEXT NOT NULL,
@@ -108,6 +112,7 @@ var rawProjectionTables = []HostedTable{
 	}},
 	{Name: "raw_session_groups", Key: []string{"group_id"}},
 	{Name: "raw_content_revisions", Key: []string{"session_id"}, ForeignKeys: rawGroupFK()},
+	{Name: "raw_message_dialogue", Key: []string{"session_id", "ordinal"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"session_id"}, Table: "raw_content_revisions", References: []string{"session_id"}, Delete: "RESTRICT"}}},
 	{Name: "raw_session_branches", Key: []string{"branch_id"}, ForeignKeys: append(rawGroupFK(),
 		HostedForeignKey{Columns: []string{"source_id"}, Table: "raw_source_projections", References: []string{"source_id"}, Delete: "RESTRICT"},
 		HostedForeignKey{Columns: []string{"session_id"}, Table: "raw_content_revisions", References: []string{"session_id"}, Delete: "RESTRICT"},

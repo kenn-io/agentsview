@@ -124,7 +124,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 	switch role {
 	case "user":
 		content := msg.Get("content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
 		text = strings.TrimSpace(text)
 		if text == "" && len(tcs) == 0 && len(trs) == 0 {
 			return nil
@@ -137,6 +137,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 			Ordinal:       b.ordinal,
 			Role:          RoleUser,
 			Content:       text,
+			DialogueText:  new(strings.TrimSpace(dialogueText)),
 			Timestamp:     ts,
 			HasThinking:   hasThinking,
 			ThinkingText:  thinkingText,
@@ -150,7 +151,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 
 	case "assistant":
 		content := msg.Get("content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
 		text = strings.TrimSpace(text)
 		if text == "" && len(tcs) == 0 && len(trs) == 0 {
 			return nil
@@ -159,6 +160,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 			Ordinal:            b.ordinal,
 			Role:               RoleAssistant,
 			Content:            text,
+			DialogueText:       new(strings.TrimSpace(dialogueText)),
 			Timestamp:          ts,
 			HasThinking:        hasThinking,
 			ThinkingText:       thinkingText,

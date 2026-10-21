@@ -45,6 +45,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 	payload := struct {
 		SessionFields  []any
 		Messages       []db.Message
+		Dialogue       []*string `json:",omitzero"`
 		Usage          string
 		ToolCalls      string
 		SecretFindings []db.SecretFinding
@@ -55,6 +56,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 	}{
 		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
 		Messages:       snapshot.Messages,
+		Dialogue:       db.DialogueFingerprintValues(snapshot.Messages),
 		Usage:          snapshot.UsageFingerprint,
 		ToolCalls:      snapshot.ToolCallFingerprint,
 		SecretFindings: snapshot.Findings,

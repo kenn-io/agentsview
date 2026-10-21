@@ -224,6 +224,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
+		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
+		if err != nil {
+			return err
+		}
+		derivedChanged = derivedChanged || dialogueChanged
 		visibleChange, err := publishRawRecency(ctx, tx, sessionID, prepared.Signals)
 		if err != nil {
 			return err
@@ -363,6 +368,26 @@ func loadRawPayload(ctx context.Context, tx *sql.Tx, id string) (ingest.Prepared
 			return p, err
 		}
 		state.apply(&p.Signals)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT ordinal, dialogue_text FROM raw_message_dialogue WHERE session_id=$1`, id)
+	if err != nil {
+		return p, err
+	}
+	defer rows.Close()
+	dialogue := make(map[int]*string)
+	for rows.Next() {
+		var ordinal int
+		var text string
+		if err := rows.Scan(&ordinal, &text); err != nil {
+			return p, err
+		}
+		dialogue[ordinal] = &text
+	}
+	if err := rows.Err(); err != nil {
+		return p, err
+	}
+	for i := range p.Messages {
+		p.Messages[i].DialogueText = dialogue[p.Messages[i].Ordinal]
 	}
 	return p, nil
 }

@@ -37,3 +37,31 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 	snapshot.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(2.0)}
 	assert.NotEqual(t, first, fingerprint())
 }
+
+func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
+	s := &Sync{machine: "m"}
+	snapshot := &db.SessionMirrorSnapshot{
+		Session:  db.Session{ID: "dialogue"},
+		Messages: []db.Message{{Content: "rendered", Ordinal: 0}, {Content: "legacy", Ordinal: 1}},
+	}
+	fingerprint := func() string {
+		t.Helper()
+		fp, err := s.snapshotFingerprint(snapshot)
+		require.NoError(t, err)
+		return fp
+	}
+	legacy := fingerprint()
+	assert.Nil(t, db.DialogueFingerprintValues(snapshot.Messages), "all-NULL dialogue is omitted")
+	snapshot.Messages[0].DialogueText = new("answerneedle")
+	first := fingerprint()
+	assert.NotEqual(t, legacy, first)
+	snapshot.Messages[0].DialogueText = new("updatedneedle")
+	assert.NotEqual(t, first, fingerprint())
+	snapshot.Messages[0].DialogueText = new("")
+	assert.NotEqual(t, legacy, fingerprint(), "empty dialogue differs from a legacy NULL")
+	snapshot.Messages[0].DialogueText = nil
+	snapshot.Messages[1].DialogueText = new("answerneedle")
+	assert.NotEqual(t, first, fingerprint(), "dialogue remains associated with its message")
+	snapshot.Messages[1].DialogueText = nil
+	assert.Equal(t, legacy, fingerprint())
+}

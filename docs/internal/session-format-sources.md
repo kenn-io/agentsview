@@ -140,6 +140,13 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
+  and ingest fixtures. Text blocks retain literal thinking and tool markers;
+  separate thinking blocks remain available as reasoning. Cowork, iCodeMate
+  CLI, and Qoder share this parser. Amp and OpenClaude use the same block
+  extraction. Hosted changes to dialogue derivation alone preserve session
+  identity and content revisions. Parser changes to other fields, such as Pi
+  reasoning text, still produce a new revision.
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
@@ -2154,6 +2161,17 @@ schemas keep their existing ordering behavior.
 
 ## OpenHands (`openhands`)
 
+- **Action event shape:** Reverified 2026-10-17 against the SDK's
+  [ActionEvent](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-sdk/openhands/sdk/event/llm_convertible/action.py).
+  `thought` contains text blocks; `reasoning_content` and `thinking_blocks`
+  carry reasoning, and `action` and `tool_call` carry the tool invocation.
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls. Unpaired observations retain their stored-content `message`
+  search behavior and add no tool call. The `thinking` source on SQLite,
+  PostgreSQL, DuckDB, and ClickHouse searches reasoning with substring or
+  regex mode; source-less sessions and v4 imports retain their stored-content
+  fallback.
 - **Format:** A CLI conversation directory containing `base_state.json` and one
   JSON file per event under `events/`; Agentsview also fingerprints optional
   legacy `TASKS.json` files.
@@ -2191,6 +2209,9 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
+  shared block fixtures. Assistant text and thinking blocks remain separate.
+  Cursor IDE uses a different parser.
 - **Format:** Legacy text and newer JSONL transcripts under per-project
   `agent-transcripts` directories in three layouts: flat (`<id>.ext`), nested
   (`<id>/<id>.ext`), and subagent (`<parent>/subagents/<id>.ext`), where a
@@ -2573,6 +2594,10 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
+  ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
+  `thinking_text`, and tool calls retain their separate inputs and results.
+  OMP, OMO, Prime Agent, and StepCode share this parser.
 - **Format:** A tree-structured JSONL log with a session header and entries
   connected by `id` and `parentId`.
 - **Evidence:** `source`.
@@ -2986,6 +3011,9 @@ schemas keep their existing ordering behavior.
 
 ## OpenClaw (`openclaw`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** Per-agent session JSONL managed by the OpenClaw session store.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openclaw/openclaw.git` at
@@ -3052,6 +3080,9 @@ schemas keep their existing ordering behavior.
 
 ## QClaw (`qclaw`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** OpenClaw-compatible agent session JSONL with QClaw-specific root
   discovery.
 - **Evidence:** `no-public-source`.
@@ -3535,6 +3566,9 @@ schemas keep their existing ordering behavior.
 
 ## Devin CLI (`devin`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against parser fixtures.
+  Structured text blocks retain literal markers separately from reasoning and
+  tool calls.
 - **Format:** `cli/sessions.db` for session metadata plus transcript JSON
   artifacts. The `sessions.created_at`, `sessions.last_activity_at`, and
   `message_nodes.created_at` columns are Unix epoch seconds (not
@@ -3964,6 +3998,9 @@ schemas keep their existing ordering behavior.
 
 ## iFlow CLI (`iflow`)
 
+- **Dialogue projection:** Reverified 2026-10-17 against the observed-format
+  ingest fixture. Assistant thinking blocks populate `thinking_text`; text
+  blocks supply dialogue. This adds no upstream format claim.
 - **Format:** Claude-like JSONL with UUID/parent UUID links and streaming
   message records.
 - **Evidence:** `no-public-source`.
@@ -4136,16 +4173,16 @@ schemas keep their existing ordering behavior.
   and cache-creation tokens with model data. Agentsview catalog-prices the
   normalized usage unless `metadata.cost_source` is `"provider"` and
   `metadata.cost` is a valid non-negative USD amount. In that case it imports
-  an exact-cost usage event, retaining message token display fields but not
-  a duplicate billable message token row. Reverified 2026-10-20 against
-  gptme commit `54c3a29fc3d5089f211528e206b50d7ee3f775c8`:
+  an exact-cost usage event, retaining message token display fields but not a
+  duplicate billable message token row. Reverified 2026-10-20 against gptme
+  commit `54c3a29fc3d5089f211528e206b50d7ee3f775c8`:
   [`_record_usage`](https://github.com/gptme/gptme/blob/54c3a29fc3d5089f211528e206b50d7ee3f775c8/gptme/llm/llm_openai.py#L317-L398)
   writes this marker only for reported direct OpenRouter costs, including
   zero; estimates, BYOK fees and proxied routes do not receive the marker.
   Parser data version 141 reparses unchanged gptme sources in place to import
-  these events without changing source or session identities.
-  Reverified 2026-10-20 at the pinned commit: assistant metadata stores the
-  requested model ID, including any `@host` provider pin
+  these events without changing source or session identities. Reverified
+  2026-10-20 at the pinned commit: assistant metadata stores the requested
+  model ID, including any `@host` provider pin
   ([metadata](https://github.com/gptme/gptme/blob/8f71713f3d1151b3141927aa014db62b9d756117/gptme/llm/llm_openai.py#L357)).
   The suffix is a comma-separated OpenRouter host allowlist
   ([routing](https://github.com/gptme/gptme/blob/8f71713f3d1151b3141927aa014db62b9d756117/gptme/llm/llm_openai.py#L1579-L1588))

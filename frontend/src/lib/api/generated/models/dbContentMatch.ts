@@ -10,6 +10,7 @@ export interface DbContentMatch {
   /** @nullable */
   display_name: string | null;
   is_sidechain?: boolean;
+  /** Where the match occurred: message, thinking, tool_input, or tool_result. */
   location: string;
   machine: string;
   ordinal: number;

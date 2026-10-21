@@ -32,7 +32,7 @@ decision.
    for substring mode. Do not fall back on authentication or wrong-target
    errors.
 
-A `search_content` hit located in `tool_input` or `tool_result` cannot be
+A `search_content` hit located in `thinking`, `tool_input`, or `tool_result` cannot be
 opened through `get_messages`, which returns message text and a `has_tool_use`
 flag but not tool payloads. Report such hits as incomplete evidence. Name the
 hit, its location, and what could not be verified.

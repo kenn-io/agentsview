@@ -39,6 +39,7 @@ type pushMessageComparison struct {
 	MessageContentHash      map[string]string
 	MessageRoleTime         map[string]string
 	MessageFlags            map[string]string
+	MessageDialogue         map[string]string
 	MessageSystemOrdinals   map[string]string
 	MessageTokenFingerprint map[string]string
 	ToolCallAggregates      map[string]pushToolCallAggregate
@@ -66,6 +67,7 @@ type pushLocalMessageFingerprint struct {
 	// db.PlanUsageFingerprints renders it. It is omitted when empty so
 	// sessions without plan usage keep their stored fingerprints.
 	PlanUsageFP string `json:",omitzero"`
+	DialogueFP  string `json:",omitzero"`
 }
 
 func localSessionDependencyPushFingerprint(
@@ -128,6 +130,7 @@ type localPushDependencyState struct {
 	contentHashFP  map[string]string
 	roleTimeFP     map[string]string
 	flagsFP        map[string]string
+	dialogueFP     map[string]string
 	systemFP       map[string]string
 	tokenFP        map[string]string
 	toolCallCount  map[string]int
@@ -197,6 +200,9 @@ func readLocalPushDependencyState(
 	if st.planUsageFP, err = local.PlanUsageFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local plan usage fingerprints: %w", err)
 	}
+	if st.dialogueFP, err = local.MessageDialogueFingerprints(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("computing local dialogue fingerprints: %w", err)
+	}
 	return st, nil
 }
 
@@ -226,6 +232,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		ToolResultFP:  st.toolResultFP[sessionID],
 		TokenFP:       st.tokenFP[sessionID],
 		PlanUsageFP:   st.planUsageFP[sessionID],
+		DialogueFP:    st.dialogueFP[sessionID],
 	}
 	if usageKnown {
 		msgFP.UsageEventFP = usageEventFingerprint
@@ -295,6 +302,11 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
 	}
+	dialogueFP, err := local.MessageDialogueFingerprints(ctx, []string{sessionID})
+	if err != nil {
+		return fp, fmt.Errorf("computing local dialogue fingerprint: %w", err)
+	}
+	fp.DialogueFP = dialogueFP[sessionID]
 	fp.PlanUsageFP = planUsageFP[sessionID]
 	if usageKnown {
 		fp.UsageEventFP = usageEventFingerprint
@@ -329,6 +341,7 @@ func readPushSessionMessageComparisons(
 		MessageContentHash:      make(map[string]string, len(sessionIDs)),
 		MessageRoleTime:         make(map[string]string, len(sessionIDs)),
 		MessageFlags:            make(map[string]string, len(sessionIDs)),
+		MessageDialogue:         make(map[string]string, len(sessionIDs)),
 		MessageSystemOrdinals:   make(map[string]string, len(sessionIDs)),
 		MessageTokenFingerprint: make(map[string]string, len(sessionIDs)),
 		ToolCallAggregates:      make(map[string]pushToolCallAggregate, len(sessionIDs)),
@@ -361,6 +374,9 @@ func readPushSessionMessageComparisons(
 		if err := loadPushMessageFlagFingerprints(
 			ctx, tx, chunk, comparisons.MessageFlags,
 		); err != nil {
+			return nil, err
+		}
+		if err := loadPushMessageDialogueFingerprints(ctx, tx, chunk, comparisons.MessageDialogue); err != nil {
 			return nil, err
 		}
 		if err := loadPushMessageSystemOrdinals(
@@ -1062,6 +1078,7 @@ func shouldSkipSessionMessages(
 		localFP.ContentHashFP == comparisons.MessageContentHash[sessionID] &&
 		localFP.RoleTimeFP == comparisons.MessageRoleTime[sessionID] &&
 		localFP.FlagsFP == comparisons.MessageFlags[sessionID] &&
+		localFP.DialogueFP == comparisons.MessageDialogue[sessionID] &&
 		localFP.SystemFP == comparisons.MessageSystemOrdinals[sessionID] &&
 		localFP.ToolCallCount == comparisons.ToolCallAggregates[sessionID].Count &&
 		localFP.ToolCallSum == comparisons.ToolCallAggregates[sessionID].Sum &&
@@ -1090,4 +1107,35 @@ func pgUsageEventTimestampFingerprintText(value string) string {
 		return value
 	}
 	return normalized
+}
+
+func loadPushMessageDialogueFingerprints(ctx context.Context, tx *sql.Tx, sessionIDs []string, out map[string]string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT session_id, ordinal, dialogue_text
+        FROM messages WHERE session_id = ANY($1) AND dialogue_text IS NOT NULL
+        ORDER BY session_id, ordinal`, sessionIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	builders := make(map[string]*strings.Builder, len(sessionIDs))
+	for rows.Next() {
+		var id, dialogue string
+		var ordinal int
+		if err := rows.Scan(&id, &ordinal, &dialogue); err != nil {
+			return err
+		}
+		b := builders[id]
+		if b == nil {
+			b = &strings.Builder{}
+			builders[id] = b
+		}
+		db.EncodeMessageDialogueFingerprint(b, ordinal, dialogue)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id, b := range builders {
+		out[id] = b.String()
+	}
+	return nil
 }

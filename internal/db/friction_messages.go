@@ -52,7 +52,7 @@ func (db *DB) GetFrictionMessages(ctx context.Context, sessionID string) (msgs [
 		return nil, false, err
 	}
 	db.messagesLoadCount.Add(1)
-	msgs, err = allMessagesWithQuerier(ctx, tx, sessionID)
+	msgs, err = allMessagesWithQuerier(ctx, tx, sessionID, selectTranscriptMessageCols)
 	if err != nil {
 		return nil, false, err
 	}

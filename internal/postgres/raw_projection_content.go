@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
@@ -47,6 +48,11 @@ func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
 }
 
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
+	// Dialogue belongs to mutable derived state, outside immutable content.
+	p.Messages = slices.Clone(p.Messages)
+	for i := range p.Messages {
+		p.Messages[i].DialogueText = nil
+	}
 	var b bytes.Buffer
 	err := gob.NewEncoder(&b).Encode(p)
 	return b.Bytes(), err
@@ -194,7 +200,9 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// Projection bookkeeping and inherited trash scope add no content.
 			// Omit empty GroupKey and PlanUsage values so existing revisions stay stable. Derived tool
 			// observation fields preserve the historical normalized-content-v1 representation.
+			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
+				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
 				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "PlanUsage" && v.Field(i).IsZero()) {

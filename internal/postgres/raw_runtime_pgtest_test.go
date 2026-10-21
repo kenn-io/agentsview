@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -66,6 +67,8 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	now := ended.Add(time.Minute)
 	f.sink.options.Now = func() time.Time { return now }
 	out := projectionOutcome("Implement the change")
+	out.Outcome.Results[0].Result.Messages[0].DialogueText = new("")
+	out.Outcome.Results[0].Result.Messages[1].DialogueText = new("assistant dialogue")
 	out.Outcome.Results[0].Result.Session.EndedAt = ended
 	out.Outcome.Results[0].Result.Messages = append(out.Outcome.Results[0].Result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Continue implementing this change"})
 	m, _ := f.accept(t, "device-a", "recent", "")
@@ -97,9 +100,21 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	assert.True(t, starred)
 	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_embedding_outbox`).Scan(&count))
 	assert.Equal(t, outbox, count)
+	for ordinal, want := range []sql.NullString{{Valid: true}, {String: "assistant dialogue", Valid: true}, {}} {
+		var got sql.NullString
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT dialogue_text FROM messages WHERE session_id=$1 AND ordinal=$2`, after.SessionID, ordinal).Scan(&got))
+		assert.Equal(t, want, got, "settling preserves dialogue at ordinal %d", ordinal)
+	}
 	n, err = f.sink.SettlePendingSignals(t.Context(), 1)
 	require.NoError(t, err)
 	assert.Zero(t, n)
+	tx, err := f.runtime.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	payload, err := loadRawPayload(t.Context(), tx, after.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new(""), payload.Messages[0].DialogueText, "signal settling preserves classified empty dialogue")
+	require.NoError(t, tx.Commit())
 }
 
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
@@ -335,6 +350,9 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 		require.NoError(t, err)
 	}
 	_, err = f.admin.Exec(`REVOKE USAGE ON SEQUENCE secret_findings_id_seq FROM "` + f.role + `"`)
+	require.NoError(t, err)
+	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "messages.dialogue_text")
+	_, err = f.admin.Exec(`GRANT UPDATE(dialogue_text) ON messages TO "` + f.role + `"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	m, receipt := f.accept(t, "device-a", "first", "")

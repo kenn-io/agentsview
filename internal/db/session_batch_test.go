@@ -460,6 +460,47 @@ func TestWriteSessionBatchAtomicExtendsTruncatedText(t *testing.T) {
 	})
 }
 
+func TestWriteSessionBatchAtomicExtendedDialogueSearch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		dialogue *string
+	}{
+		{"classified", new("cut short and finished with quillword")},
+		{"unclassified", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			const id = "dialogue-extend"
+			stored := extendTestMsg(id, 0, "cut short [Thinking] reasoning")
+			stored.DialogueText = new("cut short")
+			_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+				Session: extendTestSession(id, 1), Messages: []Message{stored}, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+			messages, err := d.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Equal(t, new("cut short"), messages[0].DialogueText)
+
+			candidate := extendTestMsg(id, 0, "cut short [Thinking] reasoning and finished with quillword")
+			candidate.DialogueText = tc.dialogue
+			_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+				Session: extendTestSession(id, 1), Messages: []Message{candidate}, CompleteStoredRows: true,
+			}})
+			require.NoError(t, err)
+
+			results, err := d.SearchContent(ctx, ContentSearchFilter{
+				Pattern: "quillword", Mode: "substring", Sources: []string{"messages"},
+				IncludeOneShot: true, IncludeAutomated: true, Limit: 10,
+			})
+			require.NoError(t, err)
+			require.Len(t, results.Matches, 1)
+			require.Equal(t, id, results.Matches[0].SessionID)
+		})
+	}
+}
+
 func extendTestExportActive(t *testing.T, d *DB) bool {
 	t.Helper()
 	var active bool
