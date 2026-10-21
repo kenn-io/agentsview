@@ -259,8 +259,10 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		}
 		if prefix && result.Session.Agent == parser.AgentGeminiApps {
 			// Appends and completed replies keep stored rows, their IDs, and pins.
-			rows := chatGPTFillRows(archived, msgs, filled, true)
-			rows = append(rows, msgs[len(archived):]...)
+			// The fill indices count stored-form rows, which usage-only
+			// storage thins, so the rows written come from the same slice.
+			rows := chatGPTFillRows(archived, stored, filled, true)
+			rows = append(rows, stored[len(archived):]...)
 			return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
 		}
 		keepCopy = !prefix
