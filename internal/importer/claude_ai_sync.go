@@ -194,9 +194,9 @@ func SyncClaudeAI(ctx context.Context, store BrowserSyncStore, fetch func(contex
 
 func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
 	id := result.Session.ID
-	msgs := claudeAIMessages(id, result.Messages)
-	if result.Session.Agent == parser.AgentChatGPT {
-		msgs = chatGPTMessages(id, result.Messages)
+	msgs := chatGPTMessages(id, result.Messages)
+	if result.Session.Agent == parser.AgentClaudeAI {
+		msgs = claudeAIMessages(id, result.Messages)
 	}
 	existing, err := store.GetSessionFull(ctx, id)
 	if err != nil {

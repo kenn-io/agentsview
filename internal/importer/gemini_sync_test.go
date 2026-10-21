@@ -432,3 +432,40 @@ func TestSyncGeminiRefetchesAttachmentOnlyTurn(t *testing.T) {
 		})
 	}
 }
+
+// TestSyncGeminiDraftSwitchKeepsHistory covers choosing another draft whose
+// text extends the stored one: the draft IDs differ, so it is a rewrite and
+// the previous answer stays in Trash instead of being extended in place.
+func TestSyncGeminiDraftSwitchKeepsHistory(t *testing.T) {
+	d := testDB(t)
+	id := "gemini-apps:" + geminiTestChat
+	const t0 = 1_790_000_000
+	turn := func(selected string) []any {
+		t.Helper()
+		turn := geminiSyncTurn("1", "Question", "Answer", t0)
+		turn[3] = []any{[]any{
+			[]any{"rc_a", []any{"Answer"}},
+			[]any{"rc_b", []any{"Answer, with more detail"}},
+		}, nil, nil, selected}
+		return turn
+	}
+	fake := &geminiFake{t: t, listAt: t0, turns: []any{turn("rc_a")}}
+	_, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+	require.NoError(t, err)
+	stored, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, []string{"r_1", "rc_a"}, []string{stored[0].SourceUUID, stored[1].SourceUUID})
+
+	fake.listAt, fake.turns = t0+60, []any{turn("rc_b")}
+	_, err = SyncGemini(t.Context(), d, fake.fetch, nil)
+	require.NoError(t, err)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "Answer, with more detail"}, messageContents(after))
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "Answer"}, messageContents(saved))
+}
