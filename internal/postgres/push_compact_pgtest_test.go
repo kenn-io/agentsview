@@ -38,6 +38,15 @@ func TestPushCompactComparisons(t *testing.T) {
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
+	var inputNull, resultNull, pathNull bool
+	err = syncer.pg.QueryRowContext(ctx, `
+		SELECT input_json IS NULL, result_content IS NULL, file_path IS NULL
+		FROM tool_calls WHERE session_id = $1 AND call_index = 1`, id,
+	).Scan(&inputNull, &resultNull, &pathNull)
+	require.NoError(t, err)
+	require.True(t, inputNull)
+	require.True(t, resultNull)
+	require.True(t, pathNull)
 	counts, err := local.MessageContentFingerprints(ctx, []string{id})
 	require.NoError(t, err)
 	tx, err := syncer.pg.BeginTx(ctx, nil)
@@ -65,7 +74,8 @@ func TestPushCompactComparisons(t *testing.T) {
 		ctx, local, id, "", false, comparisonPushFingerprint,
 	)
 	require.NoError(t, err)
-	assert.True(t, shouldSkipSessionMessages(id, 1, localFP, false, compact))
+	assert.True(t, shouldSkipSessionMessages(id, 1, localFP, false, compact),
+		"empty local tool fields must compare unchanged against PostgreSQL NULLs")
 	for _, change := range []struct{ name, statement string }{
 		{"content", `UPDATE messages SET content = 'x' || substring(content from 2) WHERE session_id = $1`},
 		{"thinking", `UPDATE messages SET thinking_text = 'x' || substring(thinking_text from 2) WHERE session_id = $1`},
