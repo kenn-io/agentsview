@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -42,8 +43,20 @@ func TestPushCompactComparisons(t *testing.T) {
 	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
+	mismatchedCounts := maps.Clone(counts)
+	aggregate := mismatchedCounts[id]
+	aggregate.Count = 2
+	mismatchedCounts[id] = aggregate
+	skipped, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, mismatchedCounts)
+	require.NoError(t, err)
+	assert.Equal(t, 1, skipped.MessageAggregates[id].Count)
+	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageSystemOrdinals, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
+		assert.NotContains(t, fingerprints, id)
+	}
 	compact, err := readPushSessionMessageComparisons(ctx, tx, []string{id}, counts)
 	require.NoError(t, err)
+	assert.Contains(t, compact.MessageContentHash, id)
+	assert.Contains(t, compact.ToolCallFingerprint, id)
 	localFP, err := localPushMessageFingerprint(ctx, local, id, "", false)
 	require.NoError(t, err)
 	calls, err := local.ToolCallComparisonFingerprints(ctx, []string{id})
@@ -199,7 +212,7 @@ func TestPushCompactMixedResponseBytes(t *testing.T) {
 			assert.False(t, result.Full, "normal push history must select an incremental run")
 			assert.Equal(t, 3, result.SessionsPushed)
 			assert.Positive(t, bytes)
-			assert.Less(t, bytes, int64(128<<10), "PostgreSQL comparison responses must stay compact")
+			assert.Less(t, bytes, int64(640<<10), "whole-Push cap includes row-count-dependent suffix hashes")
 			measured = append(measured, bytes)
 			t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 			assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
