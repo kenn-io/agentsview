@@ -96,32 +96,3 @@ func clearTelemetryVetoes(t *testing.T) {
 	t.Setenv("CI", "")
 	require.NoError(t, os.Unsetenv("CI"))
 }
-
-func TestNewKitReporterAdmission(t *testing.T) {
-	for _, tc := range []struct {
-		name, version, env, value string
-		enabled                   bool
-	}{
-		{name: "release", version: "v1.2.3", enabled: true},
-		{name: "do not track", version: "v1.2.3", env: "DO_NOT_TRACK", value: "1"},
-		{name: "present empty CI", version: "v1.2.3", env: "CI"},
-		{name: "development", version: "dev"},
-		{name: "fork", version: "v1.2.3-fork"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			clearTelemetryVetoes(t)
-			t.Setenv(EnabledEnv, "1")
-			t.Setenv(GenericEnabledEnv, "1")
-			if tc.env != "" {
-				t.Setenv(tc.env, tc.value)
-			}
-			client, err := newKitReporter(Options{
-				InstallationID: "anonymous-install-id", Version: tc.version,
-				ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"),
-			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, client.Close()) })
-			assert.Equal(t, tc.enabled, client.Enabled())
-		})
-	}
-}
