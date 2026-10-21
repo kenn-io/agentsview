@@ -145,6 +145,28 @@ func ParseGeminiAppsWebConversation(data []byte) (ParseResult, error) {
 	return ParseResult{Session: sess, Messages: msgs}, nil
 }
 
+// GeminiAppsWebPending reports whether the newest turn of an assembled
+// conversation has no reply text yet, as while Gemini is still writing it.
+// It reads the raw turn, so a turn the parser drops (no prompt text, only an
+// attachment) still counts.
+func GeminiAppsWebPending(data []byte) bool {
+	var conv GeminiAppsWebConversation
+	if json.Unmarshal(data, &conv) != nil {
+		return false
+	}
+	for _, page := range conv.Turns {
+		var turns [][]jsontext.Value
+		if json.Unmarshal(page, &turns) != nil {
+			return false
+		}
+		if len(turns) > 0 {
+			// The first page's first turn is the newest.
+			return len(turns[0]) <= geminiTurnReply || strings.TrimSpace(geminiSelectedReply(turns[0])) == ""
+		}
+	}
+	return false
+}
+
 // geminiTurnTime returns the turn's own [seconds, nanos] pair. Its index has
 // moved between web app versions, so scan from the end for the last
 // plausible pair. A turn without one keeps a zero time rather than borrowing

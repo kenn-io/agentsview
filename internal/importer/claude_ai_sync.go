@@ -250,8 +250,15 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	keepCopy := false
 	if keepsReplacedHistory(result.Session.Agent) {
 		prefix := false
+		var filled []int
 		if stored != nil && len(stored) >= len(archived) {
-			_, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+			filled, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+		}
+		if prefix && result.Session.Agent == parser.AgentGeminiApps {
+			// Appends and completed replies keep stored rows, their IDs, and pins.
+			rows := chatGPTFillRows(archived, msgs, filled, true)
+			rows = append(rows, msgs[len(archived):]...)
+			return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
 		}
 		keepCopy = !prefix
 	}

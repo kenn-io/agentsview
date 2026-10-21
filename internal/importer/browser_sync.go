@@ -48,6 +48,9 @@ type browserConversation struct {
 	parse     func([]byte) (parser.ParseResult, error) // an empty session ID skips
 	write     func(context.Context, db.Store, parser.ParseResult) (importStatus, error)
 	matches   func([]byte, parser.ParseResult) bool
+	// pending, when set, reports a source still being written; Sync then
+	// keeps the conversation stale, including when it parses to nothing.
+	pending func([]byte) bool
 }
 
 func (s *browserSync) conversation(ctx context.Context, id string, chat browserConversation) (retErr error) {
@@ -106,7 +109,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
-		if err == nil && result.Session.ID == "" {
+		if err == nil && result.Session.ID == "" && (chat.pending == nil || !chat.pending(detail)) {
 			err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(before))
 		}
 		if err != nil || result.Session.ID == "" {
@@ -130,7 +133,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 					s.stats.Skipped--
 					s.stats.Updated++
 				}
-				if chat.matches(detail, result) {
+				if chat.matches(detail, result) && (chat.pending == nil || !chat.pending(detail)) {
 					err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(stored))
 				}
 			}
