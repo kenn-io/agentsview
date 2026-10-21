@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesource"
@@ -257,6 +258,9 @@ func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.
 		initCtx = context.WithoutCancel(ctx)
 	}
 	s.onDemandEngine = syncpkg.NewEngine(initCtx, local, syncpkg.EngineConfig{
+		RebuildSources: func(ctx context.Context) (syncpkg.RebuildOptions, error) {
+			return archivesource.RebuildContributors(ctx, s.ingestionConfig())
+		},
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
 		ProviderMetadata:        cfg.ProviderMetadata,
@@ -404,7 +408,7 @@ func (s *Server) runSyncWithResyncFallback(
 	if err != nil {
 		return stats, err
 	}
-	return stats, requireProcessingComplete(stats)
+	return s.finishLocalSync(ctx, engine, stats, progress)
 }
 
 func (s *Server) humaTriggerResync(
@@ -462,7 +466,47 @@ func (s *Server) runResyncWithFallback(
 	if err != nil {
 		return stats, err
 	}
-	return stats, requireProcessingComplete(stats)
+	return s.finishLocalSync(ctx, engine, stats, progress)
+}
+
+// Manual sync creates attachment state lazily in --no-sync mode. Startup-only
+// requests never reach this path, and the manager starts no automatic scans.
+func (s *Server) finishLocalSync(
+	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	if err := requireProcessingComplete(stats); err != nil {
+		return stats, err
+	}
+	manager := s.archiveSources
+	if manager == nil {
+		cfg := s.ingestionConfig()
+		if len(cfg.ArchiveSources) == 0 {
+			return stats, nil
+		}
+		local, ok := s.db.(*db.DB)
+		if !ok {
+			return stats, errors.New("archive sources require a local archive")
+		}
+		s.mu.Lock()
+		if s.onDemandArchiveSources == nil {
+			ownerCtx := s.baseCtx
+			if ownerCtx == nil {
+				ownerCtx = context.WithoutCancel(ctx)
+			}
+			var err error
+			s.onDemandArchiveSources, err = archivesource.NewManager(ownerCtx, cfg, local, engine, nil)
+			if err != nil {
+				s.mu.Unlock()
+				return stats, err
+			}
+		}
+		manager = s.onDemandArchiveSources
+		s.mu.Unlock()
+	}
+	archiveStats, err := manager.Drain(ctx, progress)
+	stats.Merge(archiveStats)
+	return stats, err
 }
 
 func (s *Server) humaSyncRemotes(
@@ -660,6 +704,9 @@ func (s *Server) runRemoteSyncRequest(
 			} else {
 				blocked = syncpkg.ErrUnifiedRebuildAborted
 			}
+		} else if localStats != nil {
+			// The manager takes the engine lock per source, after coordination releases it.
+			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress)
 		}
 	} else {
 		exclusiveRun := func() (remotesync.SyncStats, error) {

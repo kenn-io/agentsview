@@ -1612,3 +1612,36 @@ CREATE TABLE IF NOT EXISTS raw_archive_sessions (
     root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), source_key TEXT NOT NULL,
     PRIMARY KEY(device_id,provider,parser_id)
 );
+
+-- Attached history remains in an external archive. These rows own the local
+-- projection independently of disposable source indexes and mount paths.
+CREATE TABLE IF NOT EXISTS archive_attachments (
+    repository_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, archive_id TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '', pending_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(repository_id,snapshot_id)
+);
+CREATE TABLE IF NOT EXISTS archive_source_bindings (
+    archive_id TEXT NOT NULL, device_id TEXT NOT NULL, root_id TEXT NOT NULL,
+    source_key TEXT NOT NULL, manifest_id TEXT NOT NULL,
+    PRIMARY KEY(archive_id,device_id,root_id,source_key)
+);
+CREATE TABLE IF NOT EXISTS archive_attachment_sources (
+    repository_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+    archive_id TEXT NOT NULL, device_id TEXT NOT NULL, root_id TEXT NOT NULL, source_key TEXT NOT NULL,
+    target TEXT NOT NULL, completed_target TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(repository_id,snapshot_id,archive_id,device_id,root_id,source_key),
+    FOREIGN KEY(repository_id,snapshot_id) REFERENCES archive_attachments(repository_id,snapshot_id),
+    FOREIGN KEY(archive_id,device_id,root_id,source_key) REFERENCES archive_source_bindings(archive_id,device_id,root_id,source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_archive_attachment_pending
+    ON archive_attachment_sources(repository_id,snapshot_id,root_id,source_key)
+    WHERE completed_target != target;
+
+CREATE TABLE IF NOT EXISTS archive_session_provenance (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    archive_id TEXT NOT NULL, device_id TEXT NOT NULL, root_id TEXT NOT NULL, source_key TEXT NOT NULL,
+    manifest_id TEXT NOT NULL, native_session_id TEXT NOT NULL,
+    FOREIGN KEY(archive_id,device_id,root_id,source_key) REFERENCES archive_source_bindings(archive_id,device_id,root_id,source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_archive_session_source
+    ON archive_session_provenance(archive_id,device_id,root_id,source_key);

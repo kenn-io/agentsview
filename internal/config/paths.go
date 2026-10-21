@@ -56,6 +56,14 @@ func expandLocalPaths(cfg *Config) error {
 	if err := expandSlice("sync cwd prefix", cfg.SyncIncludeCwdPrefixes); err != nil {
 		return err
 	}
+	for i := range cfg.ArchiveSources {
+		if err := expand("archive directory", &cfg.ArchiveSources[i].Directory); err != nil {
+			return err
+		}
+		if err := expand("archive repository", &cfg.ArchiveSources[i].Repository); err != nil {
+			return err
+		}
+	}
 	for agent, dirs := range cfg.AgentDirs {
 		if err := expandSlice(fmt.Sprintf("%s session directory", agent), dirs); err != nil {
 			return err

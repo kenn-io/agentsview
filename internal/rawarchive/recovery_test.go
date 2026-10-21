@@ -15,7 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 )
 
 func TestRecoveryPreservesSetupClaim(t *testing.T) {

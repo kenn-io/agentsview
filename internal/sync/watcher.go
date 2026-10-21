@@ -738,6 +738,7 @@ type Watcher struct {
 	startErr            error
 	stop                chan struct{}
 	done                chan struct{}
+	flushRequests       chan chan error
 	backendStopOnce     sync.Once
 	doneOnce            sync.Once
 }
@@ -869,6 +870,7 @@ func newWatcherWithBackendOptions(
 		rootScopes:         make(map[string][]WatchScope),
 		stop:               make(chan struct{}),
 		done:               make(chan struct{}),
+		flushRequests:      make(chan chan error),
 	}
 	if direct, ok := backend.(directEventBackend); ok {
 		direct.bindEventSink(w.eventSink)
@@ -1112,6 +1114,33 @@ func (w *Watcher) OpenDispatch() {
 	w.eventSink.signal()
 }
 
+// FlushPending waits for the current callback and a snapshot of fresh work.
+// The dispatch loop owns both callbacks; retained retries keep their backoff.
+func (w *Watcher) FlushPending(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !w.dispatchEnabled.Load() {
+		return errors.New("watcher dispatch is not open")
+	}
+	result := make(chan error, 1)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return os.ErrClosed
+	case w.flushRequests <- result:
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return os.ErrClosed
+	case err := <-result:
+		return err
+	}
+}
+
 // Stop stops the watcher and waits for it to finish.
 func (w *Watcher) Stop() {
 	w.lifecycleMu.Lock()
@@ -1190,6 +1219,11 @@ func (w *Watcher) loop() {
 	// retryDueAt gates the sink's retained retry; fresh work keeps its own delay.
 	var retryDueAt time.Time
 	dispatchedRetry := false
+	var flush chan error
+	var flushBatch WatchBatch
+	var flushHasBatch bool
+	var flushErr error
+	flushStarted := false
 
 	stopTimer := func() {
 		if timer != nil {
@@ -1206,7 +1240,7 @@ func (w *Watcher) loop() {
 	}()
 
 	schedule := func() {
-		if !w.dispatchEnabled.Load() || callbackBusy || timerC != nil {
+		if !w.dispatchEnabled.Load() || callbackBusy || timerC != nil || flush != nil {
 			return
 		}
 		var deadline time.Time
@@ -1231,7 +1265,7 @@ func (w *Watcher) loop() {
 	}
 
 	dispatch := func() bool {
-		if !w.dispatchEnabled.Load() || callbackBusy || w.eventSink.Empty() {
+		if !w.dispatchEnabled.Load() || callbackBusy || w.eventSink.Empty() || flush != nil {
 			return true
 		}
 		w.dispatchMu.Lock()
@@ -1262,6 +1296,27 @@ func (w *Watcher) loop() {
 	}
 
 	for {
+		if flush != nil && !callbackBusy {
+			if flushStarted || !flushHasBatch {
+				flush <- flushErr
+				flush, flushErr = nil, nil
+				flushStarted = false
+				schedule()
+			} else {
+				w.dispatchMu.Lock()
+				if w.stopping {
+					w.dispatchMu.Unlock()
+					return
+				}
+				callbackBusy, flushStarted, dispatchedRetry = true, true, false
+				batches <- flushBatch
+				w.dispatchMu.Unlock()
+			}
+		}
+		requests := w.flushRequests
+		if flush != nil {
+			requests = nil
+		}
 		// Give shutdown priority over ready event and timer channels. Pending
 		// changes are recovered by the next startup sync.
 		select {
@@ -1272,6 +1327,13 @@ func (w *Watcher) loop() {
 		select {
 		case <-w.stop:
 			return
+
+		case flush = <-requests:
+			stopTimer()
+			flushBatch, flushHasBatch = w.eventSink.TakePending(w.agentsForRoot)
+			firstPendingAt = time.Time{}
+			pendingDelay = w.batchDelay
+			immediatePending = false
 
 		case event, ok := <-w.backend.Events():
 			if !ok {
@@ -1323,6 +1385,9 @@ func (w *Watcher) loop() {
 
 		case result := <-callbackDone:
 			callbackBusy = false
+			if flush != nil {
+				flushErr = errors.Join(flushErr, result.err)
+			}
 			if result.err != nil {
 				lastDispatch = time.Now()
 				consecutiveFailures++

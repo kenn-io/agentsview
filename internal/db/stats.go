@@ -79,6 +79,26 @@ func (db *DB) FileBackedSessionCountForSource(
 	return db.fileBackedSessionCount(ctx, machine, idPrefix, true)
 }
 
+// FileBackedSessionCountForArchiveSource counts protected sessions belonging to
+// one accepted source, regardless of which attachment originally imported it.
+func (db *DB) FileBackedSessionCountForArchiveSource(
+	ctx context.Context, provenance ArchiveSourceProvenance,
+) (int, error) {
+	source := provenance.Source
+	args := []any{source.ArchiveID, source.DeviceID, source.RootID, source.SourceKey, provenance.ManifestID}
+	args = append(args, nonSourceBackedAgentArgs()...)
+	var count int
+	err := db.getReader().QueryRowContext(ctx, `SELECT COUNT(*)
+		FROM archive_session_provenance p JOIN sessions ON sessions.id=p.session_id
+		WHERE p.archive_id=? AND p.device_id=? AND p.root_id=? AND p.source_key=? AND p.manifest_id=?
+		AND agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
+		AND `+rootSessionFilter, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting archive source file sessions: %w", err)
+	}
+	return count, nil
+}
+
 // RebuildAgentExclusion names an agent whose sessions leave the protected
 // rebuild count. KeepJSONLRows spares the agent's Claude-layout .jsonl
 // transcript rows: ICodeMate shares one agent label across self-preserving

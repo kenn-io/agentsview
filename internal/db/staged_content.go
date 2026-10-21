@@ -105,7 +105,7 @@ func (db *DB) ReplaceSessionContentStaged(
 	signalsFn StagedSignalsFunc,
 ) error {
 	return db.replaceSessionContentStaged(
-		ctx, sessionID, msgs, staged, blocked, signalsFn, nil, nil,
+		ctx, sessionID, msgs, staged, blocked, signalsFn, nil, nil, nil,
 	)
 }
 
@@ -120,7 +120,7 @@ func (db *DB) ReplaceSessionContentStagedWithCheckpoint(
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
 	return db.replaceSessionContentStaged(
-		ctx, sessionID, msgs, staged, blocked, signalsFn, cp, blobs,
+		ctx, sessionID, msgs, staged, blocked, signalsFn, cp, blobs, nil,
 	)
 }
 
@@ -319,17 +319,22 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	return digest, nil
 }
 
-func commitStagedDerivedStateAndCheckpoint(
+func (db *DB) commitStagedDerivedStateAndCheckpoint(
 	ctx context.Context, conn *sql.Conn, sessionID string,
 	signals *SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 	msgs []Message,
+	write *SessionBatchWrite,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+		return err
+	}
+
 	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, false); err != nil {
 		return err
 	}
@@ -379,6 +384,7 @@ func (db *DB) replaceSessionContentStaged(
 	staged StagedToolResults, blocked map[string]bool,
 	signalsFn StagedSignalsFunc,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	write *SessionBatchWrite,
 ) error {
 	if db.ArchiveContent().OmitsToolContent() {
 		// The in-memory rows contain all retained metadata. Staged output is
@@ -391,6 +397,12 @@ func (db *DB) replaceSessionContentStaged(
 			if err != nil {
 				return err
 			}
+		}
+		if write != nil {
+			projected := *write
+			projected.Signals, projected.Findings = update, findings
+			_, err := db.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{projected})
+			return err
 		}
 		return db.ReplaceSessionContent(ctx, sessionID, msgs, update, findings)
 	}
@@ -417,6 +429,9 @@ func (db *DB) replaceSessionContentStaged(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+		return err
+	}
 
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
@@ -475,8 +490,8 @@ func (db *DB) replaceSessionContentStaged(
 		if err := tx.Rollback(); err != nil {
 			return err
 		}
-		return commitStagedDerivedStateAndCheckpoint(
-			ctx, conn, sessionID, signals, findings, cp, blobs, msgs,
+		return db.commitStagedDerivedStateAndCheckpoint(
+			ctx, conn, sessionID, signals, findings, cp, blobs, msgs, write,
 		)
 	}
 	// Summary resolution above recorded per-call content-failure
@@ -685,3 +700,45 @@ func replaceSessionMessagesTxStaged(
 // toolCallStagedChunkBytes bounds resolved summary content in addition to
 // the shared SQL parameter limit, since one summary can dwarf ordinary rows.
 const toolCallStagedChunkBytes = 16 << 20
+
+// WriteSessionBatchStaged publishes metadata and ownership in the same transaction
+// as the streamed transcript, including unchanged-content retries.
+func (db *DB) WriteSessionBatchStaged(ctx context.Context, write SessionBatchWrite,
+	staged StagedToolResults, blocked map[string]bool, signals StagedSignalsFunc,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
+	if err != nil {
+		return err
+	}
+	write = db.storageSessionBatchWrite(sanitized)
+	if err := db.replaceSessionContentStaged(ctx, write.Session.ID, write.Messages, staged, blocked, signals,
+		write.Checkpoint, write.CheckpointBlobs, &write); err != nil {
+		return err
+	}
+	db.notifyUsageSessions([]string{write.Session.ID})
+	return nil
+}
+
+func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, write *SessionBatchWrite) error {
+	if write == nil {
+		return nil
+	}
+	result, err := db.upsertSessionBatchTx(ctx, tx, *write)
+	if err != nil {
+		return err
+	}
+	queries := contextTransaction{ctx: ctx, tx: tx}
+	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
+		return err
+	}
+	if write.DataVersion > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=? WHERE id=?`, write.DataVersion, write.Session.ID); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET source_missing_at=NULL WHERE id=?`, write.Session.ID)
+	return err
+}

@@ -49,6 +49,7 @@ type ingestionWatchers struct {
 	stopWatcher  func()
 	openDispatch func()
 	queueRetry   func(agentsync.WatchBatch)
+	flushPending func(context.Context) error
 	poller       *sharedUnwatchedPollCoordinator
 }
 
@@ -99,6 +100,17 @@ func (d *daemonIngestion) QueueWatchRetry(batch agentsync.WatchBatch) {
 	watchers := d.watchers
 	d.mu.Unlock()
 	watchers.queueRetry(batch)
+}
+
+// FlushPending acknowledges fresh work from the current watcher generation.
+func (d *daemonIngestion) FlushPending(ctx context.Context) error {
+	d.mu.Lock()
+	watchers, stopped := d.watchers, d.stopped
+	d.mu.Unlock()
+	if stopped {
+		return errIngestionStopped
+	}
+	return watchers.flushPending(ctx)
 }
 
 // StartLiveActivity starts polling live agent processes for the current
@@ -200,7 +212,7 @@ func (d *daemonIngestion) applySaved() {
 
 func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 	poller := newUnwatchedPollCoordinator(d.ctx, d.engine, d.idleTracker)
-	stopWatcher, openDispatch, _, queueRetry := startFileWatcher(
+	stopWatcher, openDispatch, _, queueRetry, flushPending := startFileWatcher(
 		cfg, d.engine, d.syncWatchBatch,
 		agentsync.WatcherOptions{
 			OnCoverageDegraded: func(degradedRoots []string) error {
@@ -222,6 +234,7 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 		stopWatcher:  stopWatcher,
 		openDispatch: openDispatch,
 		queueRetry:   queueRetry,
+		flushPending: flushPending,
 		poller:       poller,
 	}
 }

@@ -1431,6 +1431,16 @@ spinning animation while syncing.
 The status bar also shows a version mismatch warning (red) if the frontend and
 backend versions differ. Click it to reload.
 
+### History from another machine
+
+[Attach a saved archive](/docs/configuration/#history-from-a-saved-archive) to
+browse a retired machine's Claude and Codex sessions beside your current ones.
+Choose a backup snapshot or an existing archive directory. Use `machine_name`
+to label a single-machine archive without changing its captured identity.
+Ordinary sync reads pending archive sources after local work. Once indexed, the
+history remains browsable with the drive disconnected. Reparsing requires the
+archive to be available again.
+
 ### Full Resync
 
 ![Resync modal](/docs/assets/generated/screenshots/resync-modal.png)

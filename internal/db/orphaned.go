@@ -519,6 +519,10 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		}
 	}
 
+	if err := copyAttachedArchiveStateTx(ctx, tx); err != nil {
+		return err
+	}
+
 	headRevisionExpr := "0"
 	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "publication_revision") {
 		headRevisionExpr = "publication_revision"
@@ -2300,6 +2304,17 @@ func copySessionDataForIDs(
 			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_s.id",
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
+	}
+	if oldDBHasTable(ctx, tx, "archive_session_provenance") {
+		if err := copyAttachedArchiveStateTx(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.archive_session_provenance
+   (session_id,archive_id,device_id,root_id,source_key,manifest_id,native_session_id)
+   SELECT copied.id,p.archive_id,p.device_id,p.root_id,p.source_key,p.manifest_id,p.native_session_id
+   FROM old_db.archive_session_provenance p JOIN `+tempIDsTable+` copied ON copied.source_id=p.session_id`); err != nil {
+			return err
+		}
 	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
 		if _, err := tx.ExecContext(ctx, `

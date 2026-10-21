@@ -104,6 +104,26 @@ func removeMaterializationTree(root string) error {
 	return os.RemoveAll(root)
 }
 
+// CleanAbandonedMaterializations removes interrupted copies in a private scratch
+// directory. The caller must exclude active materializations until this returns.
+func CleanAbandonedMaterializations(directory string) error {
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "agentsview-raw-") {
+			if err := removeMaterializationTree(filepath.Join(directory, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Materialize verifies and reconstructs every object in manifest before making
 // the resulting source tree read-only.
 func (m Materializer) Materialize(

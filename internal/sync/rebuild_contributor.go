@@ -19,8 +19,13 @@ var ErrUnifiedRebuildAborted = errors.New(
 // RebuildContributor adds another configured sync source to an atomic full
 // rebuild. Contributors run sequentially against the same temporary database.
 type RebuildContributor struct {
-	Name   string
-	Config EngineConfig
+	Name       string
+	Config     EngineConfig
+	Run        func(context.Context, *Engine, *db.DB, ProgressFunc) (SyncStats, error)
+	IDPrefixes []string
+	// ArchiveSources scopes discovery safety to selected accepted sources.
+	// A non-nil empty slice represents an archive with no supported sources.
+	ArchiveSources []db.ArchiveSourceProvenance
 
 	// ForceParse bypasses freshness gates for every contributor source. Remote
 	// explicit-full imports use this to preserve their parsing contract while
@@ -173,3 +178,6 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	}
 	dst.Deferred += src.Deferred
 }
+
+// Merge combines source-level counters, including discovery safety accounting.
+func (s *SyncStats) Merge(other SyncStats) { mergeSyncStats(s, other) }

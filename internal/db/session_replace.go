@@ -85,7 +85,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", err
 	}
 	var pins []savedPin
-	if _, err := writeOneSessionBatchTx(
+	if _, err := db.writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), &pins,
 	); err != nil {
 		return "", err
@@ -109,7 +109,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 			copyWrite.UsageEvents[i] = ev
 		}
 		copyWrite.PlanUsage = planUsage
-		if _, err := writeOneSessionBatchTx(
+		if _, err := db.writeOneSessionBatchTx(
 			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(), nil,
 		); err != nil {
 			return "", fmt.Errorf("writing replaced session copy: %w", err)

@@ -133,42 +133,39 @@ the archive; S3 materializations do not record temporary paths.
 ### Claude persisted tool results
 
 Claude Code (and iCodeMate CLI, which shares its transcript layout and parser)
-moves a large tool output to a side file in the session's `tool-results`
-folder and leaves a placeholder in the transcript. The parser inlines the side
-file while it exists, so the first sync archives the full output. Once Claude
-Code deletes the side file after its cleanup period, a later full parse sees
-only the placeholder. The parser marks exactly the tool_result block that
-genuinely tried and failed to resolve a `persistedOutputPath`
+moves a large tool output to a side file in the session's `tool-results` folder
+and leaves a placeholder in the transcript. The parser inlines the side file
+while it exists, so the first sync archives the full output. Once Claude Code
+deletes the side file after its cleanup period, a later full parse sees only the
+placeholder. The parser marks exactly the tool_result block that genuinely tried
+and failed to resolve a `persistedOutputPath`
 (`parser.ParsedToolResult.PersistedOutputUnresolved`; never derived from the
 placeholder text's own shape). `ingest.ReconcileProviderHistory`
-(`internal/ingest/history.go`) restores each flagged current event from the
-one archived event whose `tool_use_id`, source, and timestamp all match —
-never by array position, so a dedup collapse or a retry/branch reorder can
-never pair the wrong occurrence; no unique match leaves the event untouched,
-and a later, unflagged occurrence of the same `tool_use_id` is never
-overwritten. Restoration only happens when the archive held real text; that
-text, its length, and its raw digest are restored. When the archive held
-only a length without text (the `transcripts`/`usage` archive-content
-policies, or a blocked category), the event is left alone: "blank content,
-kept length" already means something else to every reader of
-`tool_result_events` (a deduped summary, re-derived from its one
-content-bearing event), and restoring a bare length would reproduce that
+(`internal/ingest/history.go`) restores each flagged current event from the one
+archived event whose `tool_use_id`, source, and timestamp all match — never by
+array position, so a dedup collapse or a retry/branch reorder can never pair the
+wrong occurrence; no unique match leaves the event untouched, and a later,
+unflagged occurrence of the same `tool_use_id` is never overwritten. Restoration
+only happens when the archive held real text; that text, its length, and its raw
+digest are restored. When the archive held only a length without text (the
+`transcripts`/`usage` archive-content policies, or a blocked category), the
+event is left alone: "blank content, kept length" already means something else
+to every reader of `tool_result_events` (a deduped summary, re-derived from its
+one content-bearing event), and restoring a bare length would reproduce that
 same shape for an unrelated reason with no way to tell the two apart later.
-Accepted limit: once such an event's side file ages out, its archived
-length cannot be recovered on a later reparse; the event keeps whatever
-length its current placeholder text itself resolves to, not the archived
-length.
+Accepted limit: once such an event's side file ages out, its archived length
+cannot be recovered on a later reparse; the event keeps whatever length its
+current placeholder text itself resolves to, not the archived length.
 
 This is the same provider-history dispatcher every other agent's archive
 preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`
 (the agent and a `.jsonl` path, covering both Claude Code and iCodeMate CLI;
 `ingest.IsClaudeFormatAgent` alone would also match iCodeMate's unrelated
 VSCode-extension storage path), so hosted Postgres mirrors reach it with no
-separate wiring. `internal/sync/engine.go`'s
-`reconcileProviderHistoryContext` checks cheaply, over the parsed messages and
-before any store read, whether anything is flagged before loading the
-archived session. Rebuilds read the old archive, and S3 Claude sessions follow
-the same rule.
+separate wiring. `internal/sync/engine.go`'s `reconcileProviderHistoryContext`
+checks cheaply, over the parsed messages and before any store read, whether
+anything is flagged before loading the archived session. Rebuilds read the old
+archive, and S3 Claude sessions follow the same rule.
 
 ### Codex deletion scope
 
@@ -297,6 +294,33 @@ Transcript-only and usage-only writes omit parser checkpoints because resumable
 hash state can contain raw trailing transcript bytes. They retain staged parsing
 but publish projected messages and tool metadata without staged output. Late
 result updates use the same projection as newly inserted messages.
+
+## Attached archive source state
+
+Ordinary installations can read fixed Docbank backup snapshots through
+`internal/archivesource`. See the
+[configuration guide](../configuration.md#history-from-a-saved-archive) for the
+user contract and limits. Archive-only installations cannot attach sources.
+
+The compact index under `archive-sources/` is disposable. It contains accepted
+source metadata, not messages. Rebuild it from the verified saved application
+database. Do not migrate that saved database or adopt its runtime identity.
+
+`archive_attachments` and `archive_attachment_sources` track membership and
+per-source completion targets. `archive_source_bindings` binds original
+archive/device/root/source identity to an immutable manifest.
+`archive_session_provenance` binds each namespaced session to that source.
+Publish provenance and content in the same ordinary or staged write transaction;
+ordinary ingestion must refuse IDs owned by an attached source. Completion
+follows successful parsing and scratch cleanup. Global parser markers do not
+clear unfinished attachment work.
+
+Rebuilds copy registrations and ownership bindings before parsing, and copy
+session provenance with retained rows. Available sources run as contributors
+against the replacement database. Initially offline or detached sources retain
+their previous content and completion. After a contributor starts, a failed read
+discards the replacement; only repository-writer contention waits and retries.
+Keep explicit column lists when carrying these tables forward.
 
 ## Archive Content Policy
 
@@ -497,9 +521,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
 - All four backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
-  message counts and project maps; SQL, pricing, caches and read lifetimes stay
-  in each backend. Daily usage query strategies and aggregation loops remain
-  per backend.
+  message counts and project maps; SQL, pricing, caches and read lifetimes
+  stay in each backend. Daily usage query strategies and aggregation loops
+  remain per backend.
 
 ### Usage cache divergence
 
@@ -554,8 +578,8 @@ rollup installs of every other session holding a changed identity; rollup
 installation re-verifies inside its transaction that no finalized identity
 gained an outside member and, when one did, reclassifies against the newly
 committed facts rather than failing the caller. A finalized daily row must never
-survive gaining a sibling. The daemon requeues invalidated sessions after
-commit and rebuilds their rollups; CLI writes leave rebuilding to the request.
+survive gaining a sibling. The daemon requeues invalidated sessions after commit
+and rebuilds their rollups; CLI writes leave rebuilding to the request.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching
@@ -609,15 +633,15 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty sessions
-use only the entry budget. A week report then a month report keep separate
-entries for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and
-remain valid while the transcript revision and session creation time match.
-Reader swaps clear the entries and reject stores from earlier generations.
-Reports exceeding the entry limit reuse retained hits and store up to the cap.
-Reports exceeding the candidate budget skip storing new entries. Warm reads
-still load session revisions and merge the per-session candidates in SQLite's
-microsecond order.
+with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
+sessions use only the entry budget. A week report then a month report keep
+separate entries for their range starts. Entries run to
+`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
+session creation time match. Reader swaps clear the entries and reject stores
+from earlier generations. Reports exceeding the entry limit reuse retained hits
+and store up to the cap. Reports exceeding the candidate budget skip storing new
+entries. Warm reads still load session revisions and merge the per-session
+candidates in SQLite's microsecond order.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial

@@ -127,7 +127,7 @@ func (db *DB) applyArtifactImportedSession(
 
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
-	messagesWritten, err := writeOneSessionBatchTx(
+	messagesWritten, err := db.writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pendingRecallRevocations,
 		db.usageOnlyStorage(), nil,
 	)

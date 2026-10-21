@@ -823,6 +823,10 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: s}); err != nil {
+		return sessionUpsertResult{}, err
+	}
+
 	result, err := upsertSessionExec(
 		ctx,
 		tx.ExecContext,

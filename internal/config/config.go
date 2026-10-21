@@ -1024,6 +1024,8 @@ type Config struct {
 	// pass. CLI/config-file only; never serialized to the
 	// settings API, so there is no web-UI editing of this list.
 	RemoteHosts []RemoteHost `json:"-" toml:"-"`
+	// ArchiveSources is file-only configuration, never exposed by settings APIs.
+	ArchiveSources []ArchiveSource `json:"-" toml:"-"`
 
 	// HostExplicit is true when the user passed --host on the CLI.
 	// Used to prevent auto-bind to 0.0.0.0 when the user
@@ -1781,12 +1783,22 @@ func (c *Config) applyConfigTOML(data string) error {
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
+		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
 		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
+	}
+	for _, key := range meta.Undecoded() {
+		if len(key) > 0 && key[0] == "archive_sources" {
+			return fmt.Errorf("unknown archive source setting %s", key.String())
+		}
+	}
+	c.ArchiveSources = file.ArchiveSources
+	if err := c.ValidateArchiveSources(); err != nil {
+		return err
 	}
 	if meta.IsDefined("vector") {
 		if err := rejectUnknownVectorKeys(meta); err != nil {

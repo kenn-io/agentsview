@@ -1900,6 +1900,128 @@ aborts, AgentsView falls back to an incremental sync and leaves the
 data-version marker stale. The running daemon retries the rebuild after an hour,
 backing off to daily; a restart also retries.
 
+## History from a saved archive
+
+This feature is unreleased. It lets an ordinary AgentsView installation browse
+and search a retired machine's history alongside current local sessions. The
+original Claude and Codex files stay in their Docbank storage; you can attach a
+backup snapshot or an existing archive directory. Neither requires a permanent
+extracted transcript directory.
+
+Copy an AgentsView archive backup repository to a local disk or mounted share.
+Add its path and the exact snapshot ID from the backup report to `config.toml`:
+
+```toml
+[[archive_sources]]
+name = "retired-desktop"
+repository = "/mnt/archives/desktop/backup-repo"
+snapshot = "<snapshot ID>"
+```
+
+If you already have an archive directory, use `directory` instead of
+`repository` and `snapshot`:
+
+```toml
+[[archive_sources]]
+name = "saved-history"
+directory = "/mnt/archives/restored"
+machine_name = "Previous workstation" # Optional; defaults to the captured name.
+```
+
+The directory can be an original AgentsView archive, the output of
+`agentsview archive restore`, or a Docbank-restored vault that retains its
+`application/sessions.db`. A vault containing only blobs is insufficient: the
+application database records accepted sources and their machine identities.
+Stop the source archive's AgentsView or Docbank process before attaching it.
+The directory must be writable for Docbank's catalog, locks, and maintenance;
+it is held exclusively for each import pass. Opening it may apply Docbank
+catalog upgrades. AgentsView opens the source `sessions.db` read-only and writes
+parsed results to the receiving installation.
+
+Restart a running daemon after editing the file, then run `agentsview sync`. The
+first sync reads the supported sources and reports pending work, captured
+deletion rules, and supplemental files. Sessions retain the original machine's
+identity and label. `name` labels the configuration entry; changing it does not
+change session ownership.
+
+A daemon started with `--no-sync` still handles manual `agentsview sync` and
+`agentsview sync --full`; automatic ingestion stays disabled.
+
+Use the optional `machine_name` to change the display name of a single-machine
+archive. Restart the daemon and sync to apply a name change; no reparse is
+needed. Omit it for an archive containing several machines, which retain their
+individual captured names. The underlying installation IDs come from the
+archive automatically and stay unchanged when you rename or move it.
+
+Later syncs skip transcripts whose parser and content-policy versions are
+current. The snapshot stays fixed until you change the configuration. A later
+snapshot containing a different version of an already accepted source is a
+conflict; this feature does not advance captures or follow the newest backup.
+
+### Space, reconnecting, and reparsing
+
+A backup source temporarily copies the snapshot's application database to build
+a small source index on its first sync. A directory source reads acceptance
+records directly from its application database on each pass, without copying
+that database or its transcripts. Backup bootstrap reports the required bytes
+before copying and removes the database afterward. Each parse also needs
+temporary space for one source and its companion files, up to 16 GiB, plus parser
+staging. Parsed sessions and retained images occupy the receiving installation's
+normal database and assets directory.
+
+Disconnecting the archive leaves already indexed history browsable. Sync reports
+the unavailable source and retries on a later pass. To move the archive, change
+`repository` and restart the daemon. A copied repository with the same
+repository ID and pinned snapshot continues the same history. A different
+repository at that path is refused. For a directory source, update `directory`;
+the archive identity and accepted source records remain independent of its path.
+
+Parser upgrades reparse available sources. Use `agentsview sync --full` to
+request a full reparse; individual session refresh directs attached history to
+that command. Local ingestion runs first and gets a turn between archive
+sources. It can still wait for one large source's parse: 16 GiB is a size limit,
+not a time limit.
+
+During a full rebuild, the old database stays readable, but writes pause with a
+retryable HTTP 503. Available archives extend that pause. Offline or removed
+sources keep their indexed history and unfinished parser work. If a backup
+starts between sources, the rebuild waits with progress and resumes afterward;
+cancelling leaves the original database in place. Ordinary sync defers a busy
+repository to a later pass. A backup blocked by an active reader can itself fail
+after 60 seconds and need a retry.
+
+### What is included
+
+- Accepted Claude and Codex sources become browsable. Supplemental originals
+  from other providers remain in the repository but are not parsed by this
+  feature.
+- The receiver's content and image policies apply. Its stars, names, pins, and
+  deletions survive reparsing. Curation from the saved database is not merged.
+- Capture-time deletion rules are honored. Sessions deleted in the saved archive
+  *after* capture can reappear; those later deletions are not imported.
+- History already received through artifacts or HTTP/SSH sync can appear again
+  under a different identity. Matching native session IDs does not prove that
+  two machines hold the same history. Exact-ID ownership conflicts are refused.
+- Attachments belong in an ordinary installation, not an archive-only one. The
+  receiving machine's own identity and aliases cannot be attached as foreign
+  history. Credentials and telemetry identity are never adopted from the source.
+- Both storage forms use the same source identities, content policies and
+  parser. Directory sources can discover additional accepted sources on a later
+  pass; changing an already accepted source remains a conflict. Concurrent
+  access to a running vault, direct object-storage access, and archive
+  configuration in the UI are outside this delivery.
+
+### Which sync feature should I use?
+
+| Feature                                   | Purpose                                                                                                                                                        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `archive_sources`                         | Read a backup snapshot or archive directory alongside local sessions, retaining its original machine attribution.                                                          |
+| `session_sources`                         | Scan original session files already accessible in folders or mounted shares.                                                                                   |
+| HTTP/SSH remote sync                      | Collect session files from another running machine.                                                                                                            |
+| Artifact exchange                         | Exchange parsed session data and curation between installations. Attached originals are not republished as local artifacts.                                    |
+| Hosted raw sync                           | Capture and publish provider files to a hosted service for server-side parsing. Attached archives do not become local capture roots.                           |
+| Archive capture, backup, restore, extract | Preserve originals and recovery state, recover a standalone archive, or export captured files. These commands are not required to browse an attached snapshot. |
+
 ## Sync Behavior
 
 AgentsView keeps the database in sync with session files through three

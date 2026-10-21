@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // TestShutdownClosesOnDemandEngine guards the lifecycle of the
@@ -33,6 +34,31 @@ func TestShutdownClosesOnDemandEngine(t *testing.T) {
 	defer srv.mu.RUnlock()
 	assert.Nil(t, srv.onDemandEngine,
 		"shutdown must close and release the on-demand engine")
+}
+
+func TestShutdownCancelsOnDemandArchiveSources(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	srv := New(config.Config{
+		DataDir: t.TempDir(),
+		ArchiveSources: []config.ArchiveSource{{
+			Name: "saved", Repository: filepath.Join(t.TempDir(), "offline"), Snapshot: "pinned",
+		}},
+	}, database, nil)
+	t.Cleanup(func() { require.NoError(t, srv.Shutdown(context.WithoutCancel(t.Context()))) })
+	engine := srv.syncEngineForLocal(t.Context(), database)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := srv.finishLocalSync(ctx, engine, syncpkg.SyncStats{}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	manager := srv.onDemandArchiveSources
+	require.NotNil(t, manager)
+	_, err = manager.Drain(t.Context(), nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.Canceled, "the first request must not own later attachment work")
+
+	require.NoError(t, srv.Shutdown(t.Context()))
+	_, err = manager.Drain(t.Context(), nil)
+	require.ErrorIs(t, err, context.Canceled, "shutdown must cancel attachment work before closing the engine")
 }
 
 func TestOnDemandEngineInitializationSurvivesRequestCancellation(t *testing.T) {

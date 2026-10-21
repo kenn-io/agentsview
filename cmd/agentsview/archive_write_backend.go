@@ -129,7 +129,7 @@ func startArchivePushWatcher(
 	if hooks != nil && hooks.startWatcher != nil {
 		return hooks.startWatcher(cfg, engine, callback, options)
 	}
-	stop, open, unwatched, _ := startFileWatcher(cfg, engine, callback, options)
+	stop, open, unwatched, _, _ := startFileWatcher(cfg, engine, callback, options)
 	return stop, open, unwatched
 }
 

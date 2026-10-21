@@ -23,6 +23,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -357,13 +358,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	var engine *sync.Engine
+	var attachedSources *archivesource.Manager
 	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
 	var memoryRefresh *memoryRefreshQueue
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
 		engine = sync.NewEngine(ctx, database, sync.EngineConfig{
-			AgentDirs:               cfg.AgentDirs,
+			AgentDirs: cfg.AgentDirs,
+			RebuildSources: func(ctx context.Context) (sync.RebuildOptions, error) {
+				return archivesource.RebuildContributors(ctx, cfg)
+			},
 			SourceMachines:          cfg.SourceMachines,
 			ProviderMetadata:        cfg.ProviderMetadata,
 			DisabledAgents:          cfg.DisabledAgents,
@@ -396,11 +401,24 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
 		}
-		onStartupReconciled = newStartupReconciliationHandler(
-			ctx,
-			database.CheckpointWALTruncateWithRetry,
-			ingestion.OpenWatcherDispatch,
+		attachedSources, err = archivesource.NewManager(ctx, cfg, database, engine, ingestion.FlushPending)
+		if err != nil {
+			fatal("configuring archive sources: %v", err)
+		}
+		defer attachedSources.Close()
+		acknowledgeStartup := newStartupReconciliationHandler(
+			ctx, database.CheckpointWALTruncateWithRetry, ingestion.OpenWatcherDispatch,
 		)
+		onStartupReconciled = func(stats sync.SyncStats, err error) {
+			acknowledgeStartup(stats, err)
+			if err == nil && stats.ProcessingComplete() && !database.NeedsResync() {
+				go idleTracker.Do(func() {
+					if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
+						log.Printf("archive sources: %v", err)
+					}
+				})
+			}
+		}
 
 		if !opts.SkipInitialSync && !startupRebuild {
 			if workerSyncDone {
@@ -475,7 +493,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		ingestion.StartLiveActivity()
 		go startPeriodicSync(
 			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
-			validRemotes, emitter,
+			validRemotes, emitter, attachedSources,
 		)
 		memoryRefresh = newMemoryRefreshQueue()
 		go runMemoryRefreshScheduler(
@@ -596,11 +614,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}
 	if engine != nil {
+		srvOpts = append(srvOpts, server.WithArchiveSources(attachedSources))
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(
-			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
+			withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock)),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			newForegroundResyncRunner(ctx, cfg, engine, database),
+			server.LocalResyncRunner(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database)))),
 		))
 	}
 	if memoryRefresh != nil {
@@ -2265,7 +2284,7 @@ func startFileWatcher(
 	options sync.WatcherOptions,
 ) (
 	stopWatcher func(), openDispatch func(), unwatchedDirs []string,
-	queueRetry func(sync.WatchBatch),
+	queueRetry func(sync.WatchBatch), flushPending func(context.Context) error,
 ) {
 	t := time.Now()
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
@@ -2290,7 +2309,7 @@ func startFileWatcher(
 				"; will poll every %s",
 			err, unwatchedPollInterval,
 		)
-		return func() {}, func() {}, []string{"all"}, func(sync.WatchBatch) {}
+		return func() {}, func() {}, []string{"all"}, func(sync.WatchBatch) {}, func(context.Context) error { return nil }
 	}
 
 	var totalWatched int
@@ -2358,7 +2377,7 @@ func startFileWatcher(
 		log.Printf("warning: file watcher startup failed: %v", err)
 	}
 	return watcher.Stop, watcher.OpenDispatch, unwatchedDirs,
-		watcher.QueueRetryBatch
+		watcher.QueueRetryBatch, watcher.FlushPending
 }
 
 // watchPollingObligations builds the polling obligations for the watch plan.
@@ -3057,6 +3076,7 @@ func startPeriodicSync(
 	idleTracker *server.IdleTracker,
 	validRemotes bool,
 	emitter sync.Emitter,
+	attachedSources *archivesource.Manager,
 ) {
 	if validRemotes {
 		for _, rh := range cfg.RemoteHosts {
@@ -3084,6 +3104,9 @@ func startPeriodicSync(
 			current := sourceConfig()
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
+			if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
+				log.Printf("archive sources: %v", err)
+			}
 			recomputePendingSessions(engine, database)
 			recomputeStaleFriction(ctx, engine)
 		})

@@ -75,7 +75,7 @@ func (e *Engine) codexCheckpointFingerprint(
 ) (codexCheckpointResult, error) {
 	res := codexCheckpointResult{decision: codexCheckpointFallback}
 	if e.db.ArchiveContent().OmitsToolContent() ||
-		e.forceParse || file.ForceParse || e.checkpointAudit.Load() {
+		e.forceParseRequested(file) || e.checkpointAudit.Load() {
 		// Audit mode deliberately bypasses the checkpoint gate so the
 		// provider's full-source fingerprint can verify content and repair
 		// same-stat in-place rewrites that append-trust would otherwise miss.
