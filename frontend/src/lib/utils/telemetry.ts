@@ -48,14 +48,14 @@ export function setupTelemetryReporting(): () => void {
               body: JSON.stringify(event),
               signal: controller.signal,
             });
-            // Keep the deadline active while kit-ui reads the receipt body.
-            return response;
+            return { status: response.status, data: await response.json().catch(() => undefined) };
           } catch (error) {
-            clearTimeout(timeout);
             if (error instanceof ApiError && error.status === 401) {
               return { status: 401, data: undefined };
             }
             throw error;
+          } finally {
+            clearTimeout(timeout);
           }
         }),
     });

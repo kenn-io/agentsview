@@ -35,6 +35,20 @@ describe("feature outcomes", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(signal?.aborted).toBe(true);
   });
+  it("clears the request deadline after a disabled receipt and cleanup", async () => {
+    let signal: AbortSignal | undefined;
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response('{"status":"disabled"}', { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal?.aborted).toBe(false);
+    stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signal?.aborted).toBe(false);
+  });
   it("holds an outcome while the open page waits for its initial receipt", async () => {
     let reply!: (response: Response) => void;
     const fetch = vi
