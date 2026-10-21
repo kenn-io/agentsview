@@ -227,14 +227,17 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 			(len(msgs) < existing.MessageCount || sourceIdentityChanged(archived, stored)) {
 			return replaceSyncedConversation(ctx, store, result, msgs, true)
 		}
-		// Usage-only rows keep no text, so a reply that only gained its model
-		// still compares equal; fill the model in place.
-		if keepsReplacedHistory(result.Session.Agent) && storeArchiveContent(store).UsageOnly() {
-			rows := chatGPTModelRows(archived, stored)
-			if len(rows) == 0 {
+		// Equal rows ignore models, so a reply that only gained its model
+		// (a completed reply, or any change under usage-only storage, which
+		// keeps no text) gets it filled in place.
+		usageOnly := storeArchiveContent(store).UsageOnly()
+		if keepsReplacedHistory(result.Session.Agent) && (usageOnly || result.Session.Agent != parser.AgentChatGPT) {
+			if rows := chatGPTModelRows(archived, stored); len(rows) > 0 {
+				return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+			}
+			if usageOnly {
 				return refreshChatGPTTimestamp(ctx, store, chatGPTSession(result.Session))
 			}
-			return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
 		}
 		status, err := upsertConversation(ctx, store, result, nil)
 		rows := chatGPTModelRows(archived, stored)

@@ -316,36 +316,44 @@ func TestSyncGrokUsageOnlyAppendBackfillsModel(t *testing.T) {
 	assert.Equal(t, []string{"r2", "r4", "r6"}, []string{after[0].SourceUUID, after[1].SourceUUID, after[2].SourceUUID})
 }
 
-// TestSyncGrokUsageOnlyCompletionFillsModel covers a reply that was still
-// being written with no model and later completes with the same response ID
-// and times: usage-only rows compare equal, so the model is filled in place.
-func TestSyncGrokUsageOnlyCompletionFillsModel(t *testing.T) {
-	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentUsage)
-	id := "grok-web:" + grokTestChat
-	const at = "2026-10-21T08:00:00Z"
-	q := grokSyncResponse("r1", "", "human", "Question", at)
-	partial := grokSyncResponse("r2", "r1", "assistant", "Ans", at)
-	partial["model"], partial["partial"] = "", true
-	fake := &grokFake{t: t, modified: at, responses: []map[string]any{q, partial}}
-	_, err := SyncGrok(t.Context(), d, fake.fetch, nil)
-	require.NoError(t, err)
-	before, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Len(t, before, 1)
-	assert.Empty(t, before[0].Model)
+// TestSyncGrokCompletionFillsModel covers a reply that was saved while
+// still being written, with no model, and later completes with the same
+// response ID, text, and times. The rows compare equal under every storage
+// policy, so the model is filled in place.
+func TestSyncGrokCompletionFillsModel(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(policy)
+			id := "grok-web:" + grokTestChat
+			const at = "2026-10-21T08:00:00Z"
+			q := grokSyncResponse("r1", "", "human", "Question", at)
+			partial := grokSyncResponse("r2", "r1", "assistant", "Answer", at)
+			partial["model"], partial["partial"] = "", true
+			fake := &grokFake{t: t, modified: at, responses: []map[string]any{q, partial}}
+			_, err := SyncGrok(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			before, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.NotEmpty(t, before)
+			reply := before[len(before)-1]
+			assert.Empty(t, reply.Model)
+			// A replacement would then get new, higher IDs instead of reusing these.
+			preventChatGPTMessageIDReuse(t, d)
 
-	fake.responses = []map[string]any{q, grokSyncResponse("r2", "r1", "assistant", "Answer", at)}
-	_, err = SyncGrok(t.Context(), d, fake.fetch, nil)
-	require.NoError(t, err)
-	after, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.Equal(t, before[0].ID, after[0].ID)
-	assert.Equal(t, "grok-4", after[0].Model)
+			fake.responses = []map[string]any{q, grokSyncResponse("r2", "r1", "assistant", "Answer", at)}
+			_, err = SyncGrok(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, after, len(before))
+			assert.Equal(t, reply.ID, after[len(after)-1].ID, "the reply is updated in place")
+			assert.Equal(t, "grok-4", after[len(after)-1].Model)
 
-	stats, err := SyncGrok(t.Context(), d, fake.fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Equal(t, 2, fake.details)
+			stats, err := SyncGrok(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 2, fake.details)
+		})
+	}
 }
