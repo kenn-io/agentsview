@@ -11,10 +11,15 @@ The latest release is
 
 **Upgrade notes**
 
-- Claude.ai Chrome users must rerun `agentsview source chrome setup` and reload
-  the extension once because the native-host protocol moved to version 2.
+- Chrome Sync users must rerun `agentsview source chrome setup` and reload the
+  extension once because the native-host protocol moved to version 3.
 
 **New features**
+
+- Sync Gemini chats from gemini.google.com through the Chrome extension with
+  `agentsview source import --type gemini-apps --sync`. Each chat becomes one session
+  with all of its turns; regenerated or shortened chats keep the previous
+  version in Trash.
 
 - Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
   `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
