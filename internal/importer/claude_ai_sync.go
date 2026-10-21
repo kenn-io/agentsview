@@ -222,7 +222,10 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
-		if keepsReplacedHistory(result.Session.Agent) && len(msgs) < existing.MessageCount {
+		// Equal rows can still be another branch: identical text, or text
+		// that usage-only storage does not keep.
+		if keepsReplacedHistory(result.Session.Agent) &&
+			(len(msgs) < existing.MessageCount || sourceIdentityChanged(archived, stored)) {
 			return replaceSyncedConversation(ctx, store, result, msgs, true)
 		}
 		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
@@ -263,6 +266,22 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		keepCopy = !prefix
 	}
 	return replaceSyncedConversation(ctx, store, result, msgs, keepCopy)
+}
+
+// sourceIdentityChanged reports whether a stored row and its incoming row
+// name different source messages, such as another Gemini draft or Grok
+// response with the same text.
+func sourceIdentityChanged(archived, incoming []db.Message) bool {
+	for i, row := range incoming {
+		if i >= len(archived) {
+			break
+		}
+		a, b := archived[i].SourceUUID, row.SourceUUID
+		if a != "" && b != "" && a != b {
+			return true
+		}
+	}
+	return false
 }
 
 // keepsReplacedHistory reports whether Sync keeps a Trash copy whenever a
