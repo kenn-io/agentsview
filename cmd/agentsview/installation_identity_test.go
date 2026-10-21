@@ -89,8 +89,10 @@ func TestTelemetryOptionsAllowCoreActionValues(t *testing.T) {
 }
 
 func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
-	cfg := config.Config{DataDir: t.TempDir()}
-	assert.Equal(t, cfg.TelemetryScreenClaimsPath(), telemetryOptions(cfg).ScreenClaimsPath, "the reporter must read the file the handler migrates")
+	t.Run("screen claims path", func(t *testing.T) {
+		cfg := config.Config{DataDir: t.TempDir()}
+		assert.Equal(t, cfg.TelemetryScreenClaimsPath(), telemetryOptions(cfg).ScreenClaimsPath, "the reporter must read the file the handler migrates")
+	})
 
 	const existingID = "0123456789abcdef0123456789abcdef"
 	tests := []struct {
@@ -130,7 +132,7 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 	}
 }
 
-func TestTelemetryCaptureMigratesClaimsOnceBeforeForwarding(t *testing.T) {
+func TestTelemetryCaptureHandlerScreenClaimsMigration(t *testing.T) {
 	const legacy = "install-one 2026-10-08 sessions"
 	setup := func(t *testing.T) (config.Config, chan []byte, http.Handler) {
 		t.Helper()

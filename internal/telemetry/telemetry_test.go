@@ -28,7 +28,7 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 	clearTelemetryVetoes(t)
 	t.Setenv(GenericEnabledEnv, "1")
 
-	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id", Version: "v1.2.3"})
+	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id"})
 	require.NoError(t, err)
 
 	assert.False(t, reporter.Enabled())
