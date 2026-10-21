@@ -35,10 +35,15 @@
     },
     {
       "description": [
-        "Update Vite+ and its Vite alias together. Review bundled tool pins with each toolchain upgrade."
+        "Update Vite+, its Vite alias, and Vitest together so npm can regenerate the lockfile."
       ],
       "matchManagers": ["npm"],
-      "matchPackageNames": ["vite-plus", "@voidzero-dev/vite-plus-core"],
+      "matchPackageNames": [
+        "vite-plus",
+        "@voidzero-dev/vite-plus-core",
+        "vitest",
+        "@vitest/**"
+      ],
       "groupName": "Vite+ toolchain",
       "groupSlug": "vite-plus-toolchain"
     },
@@ -51,8 +56,6 @@
         "vite",
         "rolldown",
         "tsdown",
-        "vitest",
-        "@vitest/**",
         "oxlint",
         "oxlint-tsgolint",
         "oxfmt"
