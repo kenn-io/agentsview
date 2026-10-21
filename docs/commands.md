@@ -2246,9 +2246,9 @@ agentsview help
 | `AGENTSVIEW_NO_DAEMON`                |                                                      | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                 |
 | `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                | Override idle self-shutdown duration for detached background daemons                                |
 | `AGENTSVIEW_TELEMETRY_ENABLED`        |                                                      | Set to `0`, `false`, `no`, or `off` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry) |
-| `TELEMETRY_ENABLED` | | Set to `0`, `false`, `no`, or `off` to disable telemetry |
-| `DO_NOT_TRACK` | | Any value except `0` or `false` disables telemetry |
-| `CI` | | Any present value, including an empty value, disables telemetry |
+| `TELEMETRY_ENABLED`                   |                                                      | Set to `0`, `false`, `no`, or `off` to disable telemetry                                                                     |
+| `DO_NOT_TRACK`                        |                                                      | Any value except `0` or `false` disables telemetry                                                                           |
+| `CI`                                  |                                                      | Any present value, including an empty value, disables telemetry                                                              |
 
 Telemetry opt-out values are trimmed and compared without regard to case.
 Restart the server after changing its environment. Reporting requires a plain
