@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"unsafe"
 
-	"modernc.org/libc/v2"
+	"modernc.org/libc"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )

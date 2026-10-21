@@ -47,7 +47,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	modernc.org/libc/v2 v2.1.30
+	modernc.org/libc v1.78.0
 	modernc.org/sqlite v1.60.1
 )
 
@@ -179,7 +179,6 @@ require (
 	gonum.org/v1/gonum v0.17.0 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )

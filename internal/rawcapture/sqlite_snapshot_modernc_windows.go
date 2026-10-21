@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"modernc.org/libc/v2"
+	"modernc.org/libc"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
