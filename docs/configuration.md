@@ -2231,7 +2231,8 @@ Google Fonts:
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
     feed independently.
 - **Anonymous daemon telemetry** — see below.
-- **Google Fonts** — the web app loads Inter and JetBrains Mono from
+- **Google Fonts** — the desktop app uses the same web UI, which loads Inter
+  and JetBrains Mono from
   `https://fonts.googleapis.com` and `https://fonts.gstatic.com`. The telemetry
   toggle does not control these browser requests.
 

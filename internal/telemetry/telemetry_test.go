@@ -63,13 +63,20 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 
 	reporter := &Reporter{client: client}
 
-	props, err := reporter.SanitizeProperties(EventDaemonActive, nil)
+	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
+		"app":     "legacy-app",
+		"project": "private-project",
+		"session": "private-session",
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, "agentsview", props["application"])
 	assert.Equal(t, "v1.2.3", props["version"])
 	assert.Equal(t, "abc123", props["commit"])
 	assert.Equal(t, "daemon", props["source"])
+	assert.NotContains(t, props, "app")
+	assert.NotContains(t, props, "project")
+	assert.NotContains(t, props, "session")
 }
 
 func clearTelemetryVetoes(t *testing.T) {
