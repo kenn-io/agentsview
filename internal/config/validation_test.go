@@ -132,22 +132,25 @@ func TestInvalidDeploymentModeAppliesNoDeploymentSettings(t *testing.T) {
 		name, env, value string
 		// apply reports whether the deployment value took effect.
 		apply func(cfg *Config) (bool, error)
+		// validate replaces apply for a reader whose error is its only
+		// observable result.
+		validate func(cfg *Config) error
 	}{
-		{"auth token file", "AGENTSVIEW_AUTH_TOKEN_FILE", "deployment-secret", func(cfg *Config) (bool, error) {
+		{name: "auth token file", env: "AGENTSVIEW_AUTH_TOKEN_FILE", value: "deployment-secret", apply: func(cfg *Config) (bool, error) {
 			err := cfg.ApplyDeploymentAuth()
 			return cfg.AuthToken != "", err
 		}},
-		{"embeddings", "AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://127.0.0.1:30000/v1", func(cfg *Config) (bool, error) {
+		{name: "embeddings", env: "AGENTSVIEW_EMBEDDINGS_ENDPOINT", value: "http://127.0.0.1:30000/v1", apply: func(cfg *Config) (bool, error) {
 			err := cfg.ApplyDeploymentEmbeddings()
 			return cfg.DeploymentEmbeddings != nil, err
 		}},
-		{"pg allow insecure", "AGENTSVIEW_PG_ALLOW_INSECURE", "true", func(cfg *Config) (bool, error) {
+		{name: "pg allow insecure", env: "AGENTSVIEW_PG_ALLOW_INSECURE", value: "true", apply: func(cfg *Config) (bool, error) {
 			pg, err := cfg.ResolvePG()
 			return pg.AllowInsecure, err
 		}},
-		{"hosted raw auth policy", "AGENTSVIEW_REQUIRE_AUTH", "false", func(cfg *Config) (bool, error) {
+		{name: "hosted raw auth policy", env: "AGENTSVIEW_REQUIRE_AUTH", value: "false", validate: func(cfg *Config) error {
 			// Applying false would fail with the auth requirement instead.
-			return false, cfg.ValidatePGRawDerivation(PGConfig{Schema: "tenant_schema", RawTenant: "tenant"})
+			return cfg.ValidatePGRawDerivation(PGConfig{Schema: "tenant_schema", RawTenant: "tenant"})
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,18 +161,22 @@ func TestInvalidDeploymentModeAppliesNoDeploymentSettings(t *testing.T) {
 			require.NoError(t, err)
 			cfg.RequireAuth = true
 			t.Setenv("AGENTSVIEW_MODE", "srve")
-			applied, err := tt.apply(&cfg)
-			require.NoError(t, err, "a reader with no variables set ignores the mode")
-			assert.False(t, applied)
+			check := func() error {
+				if tt.validate != nil {
+					return tt.validate(&cfg)
+				}
+				applied, err := tt.apply(&cfg)
+				assert.False(t, applied)
+				return err
+			}
+			require.NoError(t, check(), "a reader with no variables set ignores the mode")
 
 			value := tt.value
 			if strings.HasSuffix(tt.env, "_FILE") {
 				value = writeSecret(t, t.TempDir(), "secret", tt.value)
 			}
 			t.Setenv(tt.env, value)
-			applied, err = tt.apply(&cfg)
-			require.ErrorContains(t, err, `AGENTSVIEW_MODE must be "serve" or "pg-serve", got "srve"`)
-			assert.False(t, applied)
+			require.ErrorContains(t, check(), `AGENTSVIEW_MODE must be "serve" or "pg-serve", got "srve"`)
 		})
 	}
 }
