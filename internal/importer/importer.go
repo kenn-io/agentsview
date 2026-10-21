@@ -234,9 +234,10 @@ func upsertConversation(
 ) (importStatus, error) {
 	s := result.Session
 
-	msgs := claudeAIMessages(s.ID, result.Messages)
-	if s.Agent == parser.AgentChatGPT {
-		msgs = chatGPTMessages(s.ID, result.Messages)
+	// Claude.ai rows keep no models or source IDs; other chats keep both.
+	msgs := chatGPTMessages(s.ID, result.Messages)
+	if s.Agent == parser.AgentClaudeAI {
+		msgs = claudeAIMessages(s.ID, result.Messages)
 	}
 
 	existing, err := store.GetSession(ctx, s.ID)

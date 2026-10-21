@@ -41,6 +41,7 @@ func ValidGeminiAppsChatID(id string) bool {
 // 2026-10-21. Index 1 names the previous turn ([conversation, response,
 // selected candidate]), not this one, so it is not read.
 const (
+	geminiTurnIDs       = 0 // [conversation, response]
 	geminiTurnPrompt    = 2 // [[prompt text, ...], ...]
 	geminiTurnReply     = 3 // [[candidate, ...], _, _, selected candidate ID, ...]
 	geminiReplySelected = 3 // index inside geminiTurnReply
@@ -99,16 +100,19 @@ func ParseGeminiAppsWebConversation(data []byte) (ParseResult, error) {
 			return ParseResult{}, fmt.Errorf("%w: turn is not an array", ErrGeminiAppsWebFormat)
 		}
 		timestamp := geminiTurnTime(turn)
+		// Source IDs name the turn and the shown draft, so switching to
+		// another draft reads as a rewrite even when its text extends the old.
 		if prompt := geminiString(turn[geminiTurnPrompt], 0, 0); strings.TrimSpace(prompt) != "" {
 			msgs = append(msgs, ParsedMessage{
 				Ordinal: len(msgs), Role: RoleUser, Content: prompt,
 				Timestamp: timestamp, ContentLength: len(prompt),
+				SourceUUID: geminiString(turn[geminiTurnIDs], 1),
 			})
 		}
-		if reply := geminiSelectedReply(turn); strings.TrimSpace(reply) != "" {
+		if draft, reply := geminiSelectedReply(turn); strings.TrimSpace(reply) != "" {
 			msgs = append(msgs, ParsedMessage{
 				Ordinal: len(msgs), Role: RoleAssistant, Content: reply,
-				Timestamp: timestamp, ContentLength: len(reply),
+				Timestamp: timestamp, ContentLength: len(reply), SourceUUID: draft,
 			})
 		}
 	}
@@ -162,7 +166,7 @@ func GeminiAppsWebPending(data []byte) bool {
 		}
 		if len(turns) > 0 {
 			// The first page's first turn is the newest.
-			return len(turns[0]) <= geminiTurnReply || strings.TrimSpace(geminiSelectedReply(turns[0])) == ""
+			return len(turns[0]) <= geminiTurnReply || geminiReplyText(turns[0]) == ""
 		}
 	}
 	return false
@@ -183,22 +187,22 @@ func geminiTurnTime(turn []jsontext.Value) time.Time {
 
 // geminiSelectedReply returns the draft the web app shows: the candidate the
 // turn selects, or the first candidate when the selection is missing.
-func geminiSelectedReply(turn []jsontext.Value) string {
+func geminiSelectedReply(turn []jsontext.Value) (draft, text string) {
 	var reply []jsontext.Value
 	var candidates []jsontext.Value
 	if json.Unmarshal(turn[geminiTurnReply], &reply) != nil || len(reply) == 0 ||
 		json.Unmarshal(reply[0], &candidates) != nil || len(candidates) == 0 {
-		return ""
+		return "", ""
 	}
 	selected := geminiString(turn[geminiTurnReply], geminiReplySelected)
 	if selected != "" {
 		for _, candidate := range candidates {
 			if geminiString(candidate, geminiCandidateID) == selected {
-				return geminiString(candidate, geminiCandidateText, 0)
+				return selected, geminiString(candidate, geminiCandidateText, 0)
 			}
 		}
 	}
-	return geminiString(candidates[0], geminiCandidateText, 0)
+	return geminiString(candidates[0], geminiCandidateID), geminiString(candidates[0], geminiCandidateText, 0)
 }
 
 // geminiString follows array indices and returns the string found there, or
@@ -216,4 +220,9 @@ func geminiString(raw jsontext.Value, path ...int) string {
 		return ""
 	}
 	return text
+}
+
+func geminiReplyText(turn []jsontext.Value) string {
+	_, text := geminiSelectedReply(turn)
+	return strings.TrimSpace(text)
 }
