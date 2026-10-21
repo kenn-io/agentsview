@@ -375,6 +375,7 @@ func TestChromeSyncCommand(t *testing.T) {
 		{"partial failure", "claude-ai", "browser=chrome", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Done: 6 processed (2 new, 1 updated, 3 skipped)", false},
 		{"cancel", "claude-ai", "browser=chrome", "", "", true},
 		{"chatgpt", "chatgpt", "", "event: done\ndata: {\"imported\":1,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 1 processed (1 new)", false},
+		{"gemini", "gemini-apps", "", "event: done\ndata: {\"imported\":2,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 2 processed (2 new)", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -408,7 +409,7 @@ func TestChromeSyncCommand(t *testing.T) {
 				err := cmd.ExecuteContext(ctx)
 				if tt.cancel {
 					require.ErrorIs(t, err, context.Canceled)
-				} else if tt.provider == "chatgpt" {
+				} else if tt.provider != "claude-ai" {
 					require.NoError(t, err)
 				}
 			})
@@ -431,7 +432,8 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync", []string{"--type", "claude-ai", "--sync"}, nil, true},
 		{"file", []string{"--type", "claude-ai"}, []string{"conversations.json"}, true},
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
-		{"sync provider", []string{"--type", "gemini-apps", "--sync"}, nil, false},
+		{"sync gemini", []string{"--type", "gemini-apps", "--sync"}, nil, true},
+		{"sync provider", []string{"--type", "copilot", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},
 	} {

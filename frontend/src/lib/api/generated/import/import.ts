@@ -198,3 +198,19 @@ export const postApiV1ImportClaudeAiSyncResultsById = async (
     body: JSON.stringify(claudeAISyncResultInputBody),
   });
 };
+
+export const getPostApiV1ImportGeminiAppsSyncUrl = () => {
+  return `/api/v1/import/gemini-apps/sync`;
+};
+
+/**
+ * @summary Sync Gemini Apps conversations
+ */
+export const postApiV1ImportGeminiAppsSync = async (
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getPostApiV1ImportGeminiAppsSyncUrl(), {
+    ...options,
+    method: "POST",
+  });
+};

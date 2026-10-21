@@ -5,12 +5,10 @@
   "minimum_chrome_version": "105",
   "host_permissions": [
     "https://claude.ai/*",
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*"
   ],
-  "permissions": [
-    "scripting",
-    "nativeMessaging"
-  ],
+  "permissions": ["scripting", "nativeMessaging"],
   "background": {
     "service_worker": "worker.js",
     "type": "module"

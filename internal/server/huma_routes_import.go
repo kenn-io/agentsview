@@ -30,7 +30,7 @@ func (s *Server) registerImportRoutes() {
 				response.Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml."
 			}
 		}
-		if op.Method == http.MethodPost && op.Path == "/api/v1/import/chatgpt/sync" {
+		if op.Method == http.MethodPost && (op.Path == "/api/v1/import/chatgpt/sync" || op.Path == "/api/v1/import/gemini-apps/sync") {
 			if response := op.Responses["409"]; response != nil {
 				response.Description = "Before streaming, code chrome_host_required reports a disconnected Chrome host; chrome_sync_running reports that a browser sync is already running."
 			}
@@ -68,6 +68,13 @@ func (s *Server) registerImportRoutes() {
 		func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, localChrome)
 			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: chatgpt_auth_required, chrome_host_update_required."
+		},
+	)
+	s.stream(group, http.MethodPost, "/gemini-apps/sync", "Sync Gemini Apps conversations",
+		s.humaSyncGemini,
+		func(op *huma.Operation) {
+			op.Middlewares = append(op.Middlewares, localChrome)
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: gemini_auth_required, chrome_host_update_required."
 		},
 	)
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
@@ -148,6 +155,14 @@ func (s *Server) humaSyncChatGPT(ctx context.Context, _ *struct{}) (*huma.Stream
 		platform: chromehost.ChatGPT, sync: importer.SyncChatGPT, authError: importer.ErrChatGPTAuthRequired, label: "ChatGPT",
 		hostRequired: "chrome_host_required", running: "chrome_sync_running",
 		authRequired: "chatgpt_auth_required", updateRequired: "chrome_host_update_required",
+	})
+}
+
+func (s *Server) humaSyncGemini(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+	return s.syncBrowser(ctx, true, browserSyncConfig{
+		platform: chromehost.Gemini, sync: importer.SyncGemini, authError: importer.ErrGeminiAuthRequired, label: "Gemini",
+		hostRequired: "chrome_host_required", running: "chrome_sync_running",
+		authRequired: "gemini_auth_required", updateRequired: "chrome_host_update_required",
 	})
 }
 

@@ -1,10 +1,12 @@
 // worker.js injects this file, then calls claudeFetch from a second script.
-globalThis.claudeFetch = async function claudeFetch(url, headers) {
+// A request body turns the request into a POST; only gemini_fetch.js sends one.
+globalThis.claudeFetch = async function claudeFetch(url, headers, requestBody) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
     const response = await fetch(url, {
-      method: "GET",
+      method: requestBody === undefined ? "GET" : "POST",
+      body: requestBody,
       credentials: "include",
       redirect: "error",
       headers,

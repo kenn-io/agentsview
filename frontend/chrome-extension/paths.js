@@ -3,6 +3,7 @@ const requestShapes = new Map();
 const shapeFiles = {
   "claude-ai": "claude_ai_requests.txt",
   chatgpt: "chatgpt_requests.txt",
+  gemini: "gemini_requests.txt",
 };
 
 async function shapesFor(platform) {
@@ -29,6 +30,9 @@ const parameters = {
   conversation: uuid,
   offset: "[0-9]+",
   archived: "(?:false|true)",
+  // Gemini values arrive query-escaped, so a cursor cannot add a parameter.
+  chat: "c_[0-9A-Za-z_-]+",
+  cursor: "[0-9A-Za-z%._~-]*",
 };
 
 function shapePattern(shape) {
