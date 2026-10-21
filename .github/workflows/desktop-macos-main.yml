@@ -38,7 +38,8 @@ jobs:
             artifact_name: agentsview-desktop-macos-aarch64
             artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
           - name: macOS (x86_64)
-            os: macos-26-intel
+            # macOS 26 Intel runners hang: https://github.com/actions/runner-images/issues/13882
+            os: macos-15-intel
             bundle: app
             target_triple: x86_64-apple-darwin
             artifact_name: agentsview-desktop-macos-x86_64
