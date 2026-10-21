@@ -39,7 +39,7 @@ const parameters = {
 
 function shapePattern(shape) {
   const pattern = shape
-    .split(/(\{[a-z]+\})/)
+    .split(/(\{[a-zA-Z]+\})/)
     .map((part) => {
       if (part.startsWith("{")) return parameters[part.slice(1, -1)];
       return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

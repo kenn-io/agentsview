@@ -101,6 +101,18 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 			wantMsgs: []string{"Q", "A"},
 		},
 		{
+			name: "a failed last reply keeps the text before it",
+			data: func(t *testing.T) []byte {
+				t.Helper()
+				return grokTestConversation(t, "t", at, nil,
+					grokTestResponse("r1", "", "human", "Q", at),
+					grokTestResponse("r2", "r1", "assistant", "A", at),
+					grokTestResponse("r3", "r2", "human", "Again", at),
+					grokTestResponse("r4", "r3", "assistant", "", "2026-10-21T08:05:00Z"))
+			},
+			wantMsgs: []string{"Q", "A", "Again"},
+		},
+		{
 			name: "a parent cycle stops",
 			data: func(t *testing.T) []byte {
 				t.Helper()

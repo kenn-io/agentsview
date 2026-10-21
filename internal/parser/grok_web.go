@@ -79,18 +79,29 @@ func decodeGrokWebConversation(data []byte) (GrokWebConversation, grokWebRespons
 }
 
 // grokWebPath returns the branch the web app shows, root first: the path to
-// the newest leaf with text. Failed regenerations leave empty leaves, which
-// are never picked.
+// the newest response with text that has no descendant with text. Failed
+// regenerations are empty, so they never end the shown branch, whether they
+// sit beside a successful reply or end the chat.
 func grokWebPath(responses []grokWebResponse) []grokWebResponse {
 	byID := make(map[string]int, len(responses))
-	parents := make(map[string]bool, len(responses))
 	for i, r := range responses {
 		byID[r.ResponseID] = i
-		parents[r.ParentResponseID] = true
+	}
+	// textBelow marks every response that has a descendant with text.
+	textBelow := make(map[string]bool, len(responses))
+	for _, r := range responses {
+		if strings.TrimSpace(r.Message) == "" {
+			continue
+		}
+		seen := map[string]bool{r.ResponseID: true}
+		for i, ok := byID[r.ParentResponseID]; ok && !seen[responses[i].ResponseID]; i, ok = byID[responses[i].ParentResponseID] {
+			seen[responses[i].ResponseID] = true
+			textBelow[responses[i].ResponseID] = true
+		}
 	}
 	leaf, leafAt := -1, time.Time{}
 	for i, r := range responses {
-		if parents[r.ResponseID] || strings.TrimSpace(r.Message) == "" {
+		if textBelow[r.ResponseID] || strings.TrimSpace(r.Message) == "" {
 			continue
 		}
 		// Later entries win ties, matching the web app's oldest-first order.

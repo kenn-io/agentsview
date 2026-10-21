@@ -155,8 +155,12 @@ func TestSyncGrokIncrementalAndHistory(t *testing.T) {
 	assert.Equal(t, 1, fake.details, "an unchanged list time skips the detail request")
 	before := messages()
 	require.Len(t, before, 2)
+	assert.Equal(t, []string{"r1", "r2"}, []string{before[0].SourceUUID, before[1].SourceUUID})
+	assert.Equal(t, []string{"", "grok-4"}, []string{before[0].Model, before[1].Model})
 	_, err := d.PinMessage(t.Context(), id, before[1].ID, new("Keep this answer"))
 	require.NoError(t, err)
+	// A replacement would then get new, higher IDs instead of reusing these.
+	preventChatGPTMessageIDReuse(t, d)
 
 	// A follow-up appends in place: stored rows, their IDs, and pins stay.
 	f := grokSyncResponse("r3", "r2", "human", "Follow up", "2026-10-21T08:01:00Z")
