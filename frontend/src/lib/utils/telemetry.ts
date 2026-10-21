@@ -50,8 +50,8 @@ export function setupTelemetryReporting(): () => void {
             });
             return { status: response.status, data: await response.json().catch(() => undefined) };
           } catch (error) {
-            if (error instanceof ApiError && error.status === 401) {
-              return { status: 401, data: undefined };
+            if (error instanceof ApiError) {
+              return { status: error.status, data: undefined };
             }
             throw error;
           } finally {

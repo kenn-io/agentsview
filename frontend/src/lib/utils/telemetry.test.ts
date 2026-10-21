@@ -77,6 +77,37 @@ describe("feature outcomes", () => {
       properties: { kind: "search" },
     });
   });
+  it("keeps later outcomes flowing after a screen report is rejected with HTTP 400", async () => {
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response('{"status":"queued"}', { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockImplementation(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    reportTelemetry("screen_viewed", { screen: "usage" });
+    await vi.advanceTimersByTimeAsync(0);
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+      { event: "app_opened", properties: { surface: "web" } },
+      { event: "screen_viewed", properties: { screen: "usage", surface: "web" } },
+      { event: "error_shown", properties: { kind: "search" } },
+    ]);
+  });
+  it("settles an initial HTTP 404 without retries or releasing held outcomes", async () => {
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(null, { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    stop = setupTelemetryReporting();
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+      { event: "app_opened", properties: { surface: "web" } },
+    ]);
+  });
   it.each([
     [new ApiError(500, "detail"), "request"],
     [new ApiError(409, "detail", "claude_ai_sync_running"), "already_running"],

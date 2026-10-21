@@ -2251,8 +2251,10 @@ and discard its accumulated duration. Tracking starts fresh when a later check
 enables reporting. Outcomes that occur while reporting is unavailable are
 dropped. A fresh page retries after authentication; otherwise, the next UTC
 day's load or focus starts a new check.
-Unexpected HTTP statuses other than 401 retry up to five times with increasing
-delays before reporting becomes unavailable.
+HTTP 401 makes reporting unavailable immediately. Server errors (HTTP 5xx) and
+network failures retry up to five times with increasing delays before reporting
+becomes unavailable. Other HTTP errors settle without retries and don't grant
+permission to report.
 Each browser telemetry request has a 10-second deadline, including reading its
 receipt.
 The browser retains each daily claim's 35 most recently accepted UTC dates.
