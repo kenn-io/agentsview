@@ -50,12 +50,13 @@ func chatGPTFreshness(updatedAt time.Time, session *db.Session) uint64 {
 // Tests set it to zero to disable pacing.
 var chatGPTDetailGap = 3 * time.Second
 
-func waitChatGPTDetailGap(ctx context.Context) error {
-	if chatGPTDetailGap <= 0 {
+// waitBrowserGap waits gap with ±400 ms jitter before a browser detail request.
+func waitBrowserGap(ctx context.Context, gap time.Duration) error {
+	if gap <= 0 {
 		return nil
 	}
 	jitter := time.Duration(rand.Int64N(int64(800*time.Millisecond))) - 400*time.Millisecond
-	timer := time.NewTimer(chatGPTDetailGap + jitter)
+	timer := time.NewTimer(gap + jitter)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -125,7 +126,7 @@ func SyncChatGPT(ctx context.Context, store BrowserSyncStore, fetch func(context
 				err := runner.conversation(ctx, id, browserConversation{
 					freshness: func(session *db.Session) uint64 { return chatGPTFreshness(updatedAt, session) },
 					fetch: func(ctx context.Context) ([]byte, error) {
-						if err := waitChatGPTDetailGap(ctx); err != nil {
+						if err := waitBrowserGap(ctx, chatGPTDetailGap); err != nil {
 							return nil, err
 						}
 						return fetchBrowser(ctx, fetch, chromehost.ChatGPT, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0, false))

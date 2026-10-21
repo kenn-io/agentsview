@@ -29,8 +29,8 @@ const chromeNativeHost = chromehost.NativeHost
 
 func newChromeCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "chrome", Short: "Set up browser Sync in Chrome", GroupID: groupData}
-	cmd.Long = "Set up the Chrome native-host integration used by Claude.ai and ChatGPT synchronization. " +
-		"Import conversations through the import command with the Claude.ai or ChatGPT sync option."
+	cmd.Long = "Set up the Chrome native-host integration used by browser synchronization. " +
+		"Import conversations through the import command with its sync option."
 	cmd.AddCommand(&cobra.Command{Use: "setup", Short: "Install the Chrome native host", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 		if err != nil {

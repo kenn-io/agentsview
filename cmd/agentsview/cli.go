@@ -538,16 +538,16 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt)",
+		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt, gemini-apps)",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Claude.ai and ChatGPT can instead use --type <type> --sync with the configured Chrome integration.",
+			"Claude.ai, ChatGPT, and Gemini can instead use --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				if (importType != "claude-ai" && importType != "chatgpt") || len(replace) > 0 {
-					return errors.New("--sync requires --type claude-ai or chatgpt and cannot use --replace")
+				if !slices.Contains([]string{"claude-ai", "chatgpt", "gemini-apps"}, importType) || len(replace) > 0 {
+					return errors.New("--sync requires --type claude-ai, chatgpt, or gemini-apps and cannot use --replace")
 				}
 				return cobra.NoArgs(cmd, args)
 			}

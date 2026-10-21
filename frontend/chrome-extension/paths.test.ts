@@ -3,9 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const getURL = vi.fn((file: string) => `chrome-extension://test/${file}`);
 const fetchShapes = vi.fn(async (url: string) => {
-  const file = url.endsWith("chatgpt_requests.txt")
-    ? "chatgpt_requests.txt"
-    : "claude_ai_requests.txt";
+  const file = url.slice(url.lastIndexOf("/") + 1);
   return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
 });
 vi.stubGlobal("chrome", { runtime: { getURL } });
@@ -103,6 +101,33 @@ describe("ChatGPT request allowlist", () => {
   ])("refuses %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(false));
 
   it("rejects unknown platforms", async () => {
-    expect(await allowedPath("gemini", listPath("0"))).toBe(false);
+    expect(await allowedPath("grok", listPath("0"))).toBe(false);
   });
+});
+
+describe("Gemini request allowlist", () => {
+  const rpc = "/_/BardChatUi/data/batchexecute?rpcids=";
+  const list = (cursor = "") => `${rpc}MaZiqc&cursor=${cursor}`;
+  const detail = (chat: string, cursor = "") => `${rpc}hNvQHb&chat=${chat}&cursor=${cursor}`;
+
+  it.each([
+    list(),
+    list("Ab12%2Bcd%2F%3D"),
+    detail("c_0123456789abcdef"),
+    detail("c_0123456789abcdef", "Ab12%2Bcd%2F%3D"),
+  ])("accepts %s", async (path) => expect(await allowedPath("gemini", path)).toBe(true));
+
+  it.each([
+    "",
+    "/app",
+    `${rpc}ESY5D&cursor=`,
+    `${list()}&rpcids=ESY5D`,
+    list("a&rpcids=ESY5D"),
+    list("a/b"),
+    detail("0123456789abcdef"),
+    detail("c_../app"),
+    detail("c_0123%2F"),
+    `${detail("c_0123456789abcdef")}#x`,
+    `https://gemini.google.com${list()}`,
+  ])("refuses %s", async (path) => expect(await allowedPath("gemini", path)).toBe(false));
 });

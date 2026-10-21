@@ -40,9 +40,7 @@ beforeEach(async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      const file = url.endsWith("chatgpt_requests.txt")
-        ? "chatgpt_requests.txt"
-        : "claude_ai_requests.txt";
+      const file = url.slice(url.lastIndexOf("/") + 1);
       return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
     }),
   );
@@ -60,18 +58,18 @@ afterEach(() => {
 });
 
 async function request(path = "/api/organizations", platform = "claude-ai") {
-  message({ id: "a", path, platform, version: 2 });
+  message({ id: "a", path, platform, version: 3 });
   await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
   return port.postMessage.mock.calls[0]![0];
 }
 
 describe("Chrome native host worker", () => {
   it("refuses unsupported paths before touching tabs", async () => {
-    message({ id: "a", path: "/api/settings", platform: "claude-ai", version: 2 });
+    message({ id: "a", path: "/api/settings", platform: "claude-ai", version: 3 });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
     expect(port.postMessage).toHaveBeenCalledWith({
       id: "a",
-      version: 2,
+      version: 3,
       status: 0,
       error: "Unsupported browser fetch path",
     });
@@ -87,7 +85,7 @@ describe("Chrome native host worker", () => {
       await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
       expect(port.postMessage).toHaveBeenCalledWith({
         id: "a",
-        version: 2,
+        version: 3,
         status: 200,
         body: "chats",
       });
@@ -97,7 +95,7 @@ describe("Chrome native host worker", () => {
   it("fetches in an existing Claude tab and replies by id", async () => {
     expect(await request()).toEqual({
       id: "a",
-      version: 2,
+      version: 3,
       status: 200,
       body: "chats",
     });
@@ -127,7 +125,7 @@ describe("Chrome native host worker", () => {
     chrome.tabs.query.mockResolvedValue([]);
     expect(await request()).toEqual({
       id: "a",
-      version: 2,
+      version: 3,
       status: 200,
       body: "chats",
     });
@@ -155,7 +153,7 @@ describe("Chrome native host worker", () => {
     updated(7, { status: "complete" });
     expect(await pending).toEqual({
       id: "a",
-      version: 2,
+      version: 3,
       status: 200,
       body: "chats",
     });
@@ -166,7 +164,7 @@ describe("Chrome native host worker", () => {
     chrome.scripting.executeScript
       .mockResolvedValueOnce([{ result: true }])
       .mockResolvedValueOnce([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
-    expect(await request()).toEqual({ id: "a", version: 2, status: 413 });
+    expect(await request()).toEqual({ id: "a", version: 3, status: 413 });
   });
 
   it.each([null, {}, { status: "200" }])(
@@ -177,7 +175,7 @@ describe("Chrome native host worker", () => {
         .mockResolvedValueOnce([{ result }]);
       expect(await request()).toEqual({
         id: "a",
-        version: 2,
+        version: 3,
         status: 0,
         error: "The browser page changed during Sync; try Sync again",
       });
@@ -200,7 +198,7 @@ describe("Chrome native host worker", () => {
       ),
     ).toEqual({
       id: "a",
-      version: 2,
+      version: 3,
       status: 200,
       body: "conversations",
     });
@@ -216,6 +214,35 @@ describe("Chrome native host worker", () => {
     expect(chatgptFetch).toHaveBeenCalledExactlyOnceWith(
       "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false",
     );
+  });
+
+  it("routes Gemini requests through a Gemini page with its own fetch script", async () => {
+    const geminiFetch = vi.fn(() => ({ status: 200, body: "chats" }));
+    chrome.scripting.executeScript.mockImplementation(async (options) => {
+      if (options.files) {
+        vi.stubGlobal("geminiFetch", geminiFetch);
+        return [];
+      }
+      return [{ result: (await options.func(...(options.args ?? []))) ?? null }];
+    });
+    const path =
+      "/_/BardChatUi/data/batchexecute?rpcids=hNvQHb&chat=c_0123456789abcdef&cursor=next%2Bpage%2F";
+    expect(await request(path, "gemini")).toEqual({
+      id: "a",
+      version: 3,
+      status: 200,
+      body: "chats",
+    });
+    expect(chrome.tabs.query).toHaveBeenCalledWith({
+      url: "https://gemini.google.com/*",
+      discarded: false,
+    });
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, {
+      target: { tabId: 7 },
+      files: ["claude_fetch.js", "gemini_fetch.js"],
+      world: "ISOLATED",
+    });
+    expect(geminiFetch).toHaveBeenCalledExactlyOnceWith(`https://gemini.google.com${path}`);
   });
 
   it("reconnects five seconds after disconnect without duplicating startup connections", async () => {

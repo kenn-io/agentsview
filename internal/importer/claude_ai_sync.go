@@ -222,7 +222,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	stored := storedFormMessages(store, msgs)
 	if sameMessages(archived, stored) {
-		if result.Session.Agent == parser.AgentChatGPT && len(msgs) < existing.MessageCount {
+		if keepsReplacedHistory(result.Session.Agent) && len(msgs) < existing.MessageCount {
 			return replaceSyncedConversation(ctx, store, result, msgs, true)
 		}
 		if result.Session.Agent == parser.AgentChatGPT && storeArchiveContent(store).UsageOnly() {
@@ -248,7 +248,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return status, err
 	}
 	keepCopy := false
-	if result.Session.Agent == parser.AgentChatGPT {
+	if keepsReplacedHistory(result.Session.Agent) {
 		prefix := false
 		if stored != nil && len(stored) >= len(archived) {
 			_, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
@@ -256,6 +256,13 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		keepCopy = !prefix
 	}
 	return replaceSyncedConversation(ctx, store, result, msgs, keepCopy)
+}
+
+// keepsReplacedHistory reports whether Sync keeps a Trash copy whenever a
+// chat stops being an append or text extension of the archive. Claude.ai
+// keeps one only when a pin or note would be lost.
+func keepsReplacedHistory(agent parser.AgentType) bool {
+	return agent == parser.AgentChatGPT || agent == parser.AgentGeminiApps
 }
 
 func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {
@@ -275,11 +282,28 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 }
 
 // fetchBrowser shares browser response limits and retries across platforms.
+// browserPlatform holds what differs between browser-synced services.
+type browserPlatform struct {
+	service      string // service name in error text
+	tooLarge     error
+	authRequired error
+	// stopOnRateLimit stops the run on HTTP 429 or a long Retry-After
+	// instead of retrying inside the request.
+	stopOnRateLimit bool
+}
+
+var browserPlatforms = map[chromehost.Platform]browserPlatform{
+	chromehost.ClaudeAI: {service: "claude", tooLarge: ErrClaudeAIResponseTooLarge, authRequired: ErrClaudeAIAuthRequired},
+	chromehost.ChatGPT:  {service: "ChatGPT", tooLarge: ErrChatGPTResponseTooLarge, authRequired: ErrChatGPTAuthRequired, stopOnRateLimit: true},
+	chromehost.Gemini:   {service: "Gemini", tooLarge: ErrGeminiResponseTooLarge, authRequired: ErrGeminiAuthRequired, stopOnRateLimit: true},
+}
+
 func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), platform chromehost.Platform, path string) ([]byte, error) {
-	tooLarge, authRequired := ErrClaudeAIResponseTooLarge, ErrClaudeAIAuthRequired
-	if platform == chromehost.ChatGPT {
-		tooLarge, authRequired = ErrChatGPTResponseTooLarge, ErrChatGPTAuthRequired
+	config, ok := browserPlatforms[platform]
+	if !ok {
+		return nil, fmt.Errorf("unsupported browser platform %q", platform)
 	}
+	tooLarge, authRequired := config.tooLarge, config.authRequired
 	attempt := 0
 	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
@@ -307,18 +331,14 @@ func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (Clau
 		if status == 413 {
 			return nil, backoff.Permanent(tooLarge)
 		}
-		service := "claude"
-		if platform == chromehost.ChatGPT {
-			service = "ChatGPT"
-		}
-		httpErr := &browserHTTPError{service: service, status: status, rateLimited: platform == chromehost.ChatGPT && status == 429}
+		httpErr := &browserHTTPError{service: config.service, status: status, rateLimited: config.stopOnRateLimit && status == 429}
 		if status != 429 && status < 500 {
 			return nil, backoff.Permanent(httpErr)
 		}
 		delay := time.Duration(1<<attempt) * time.Second
 		attempt++
 		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
-			if platform == chromehost.ChatGPT && retryAfter > 60*time.Second {
+			if config.stopOnRateLimit && retryAfter > 60*time.Second {
 				httpErr.rateLimited = true
 				return nil, backoff.Permanent(httpErr)
 			}
@@ -333,7 +353,7 @@ func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (Clau
 		err = retryErr.LastErr
 	}
 	if httpErr, ok := errors.AsType[*browserHTTPError](err); ok && httpErr.rateLimited {
-		err = fmt.Errorf("ChatGPT rate limited; sync stopped early, run Sync again later: %w", err)
+		err = fmt.Errorf("%s rate limited; sync stopped early, run Sync again later: %w", config.service, err)
 	}
 	return body, err
 }
