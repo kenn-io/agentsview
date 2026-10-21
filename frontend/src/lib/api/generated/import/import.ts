@@ -214,3 +214,19 @@ export const postApiV1ImportGeminiAppsSync = async (
     method: "POST",
   });
 };
+
+export const getPostApiV1ImportGrokWebSyncUrl = () => {
+  return `/api/v1/import/grok-web/sync`;
+};
+
+/**
+ * @summary Sync Grok conversations
+ */
+export const postApiV1ImportGrokWebSync = async (
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getPostApiV1ImportGrokWebSyncUrl(), {
+    ...options,
+    method: "POST",
+  });
+};

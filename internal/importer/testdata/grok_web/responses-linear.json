@@ -1,0 +1,260 @@
+{
+ "responses": [
+  {
+   "responseId": "00000000-0000-4000-8000-00000000003d",
+   "message": "Text 564",
+   "sender": "human",
+   "createTime": "2026-03-04T07:13:23.093Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000003e",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {},
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "",
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000003f",
+   "message": "Text 565",
+   "sender": "assistant",
+   "createTime": "2026-03-04T07:13:23.105Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000003d",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 566"
+     ],
+     "tags": [
+      "Text 567"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    },
+    {
+     "text": [
+      "Text 568"
+     ],
+     "tags": [
+      "Text 567"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    },
+    {
+     "text": [
+      "Text 569"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000040",
+       "xThreadFetch": {
+        "args": {
+         "postId": "Text 570"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    },
+    {
+     "text": [
+      "Text 571"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000041",
+       "viewImage": {}
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    },
+    {
+     "text": [
+      "Text 572"
+     ],
+     "tags": [
+      "Text 567"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    },
+    {
+     "text": [
+      "Text 573"
+     ],
+     "tags": [
+      "Text 567"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "request_metadata": {
+     "effort": "Text 574",
+     "model": "auto",
+     "source": "Text 575"
+    },
+    "ui_layout": {
+     "effort": 2,
+     "reasoning_ui_layout": "Text 576",
+     "rollout_ids": [],
+     "steer_model_id": "Text 131",
+     "will_think_long": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 576",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "steerModelId": "Text 131",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2026-03-04T07:13:23.093Z",
+   "thinkingEndTime": "2026-03-04T07:13:23.093Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-3",
+   "requestMetadata": {
+    "model": "auto",
+    "effort": "Text 577"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  }
+ ],
+ "inflightResponses": []
+}

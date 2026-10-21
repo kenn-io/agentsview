@@ -154,6 +154,10 @@ export default defineConfig(({ command }) => {
             fileURLToPath(new URL("../internal/importer/gemini_requests.txt", import.meta.url)),
             fileURLToPath(new URL("./dist/chrome-extension/gemini_requests.txt", import.meta.url)),
           );
+          cpSync(
+            fileURLToPath(new URL("../internal/importer/grok_requests.txt", import.meta.url)),
+            fileURLToPath(new URL("./dist/chrome-extension/grok_requests.txt", import.meta.url)),
+          );
         },
       },
       svelte(),

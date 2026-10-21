@@ -12,7 +12,7 @@ The latest release is
 **Upgrade notes**
 
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
-  extension once because the native-host protocol moved to version 3.
+  extension once because the native-host protocol moved to version 4.
 
 **New features**
 
@@ -57,6 +57,11 @@ The latest release is
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
   a PostgreSQL archive. Transcript text and tool arguments stay out of the
   report.
+
+- Sync Grok chats from grok.com through the Chrome extension with
+  `agentsview source import --type grok-web --sync`. Each chat becomes one `grok-web`
+  session, separate from local Grok Build sessions, holding the branch Grok
+  shows; when that branch changes, the previous version stays in Trash.
 
 - Sync Gemini chats from gemini.google.com through the Chrome extension with
   `agentsview source import --type gemini-apps --sync`. Each chat becomes one session

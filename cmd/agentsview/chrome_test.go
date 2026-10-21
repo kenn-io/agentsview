@@ -376,6 +376,7 @@ func TestChromeSyncCommand(t *testing.T) {
 		{"cancel", "claude-ai", "browser=chrome", "", "", true},
 		{"chatgpt", "chatgpt", "", "event: done\ndata: {\"imported\":1,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 1 processed (1 new)", false},
 		{"gemini", "gemini-apps", "", "event: done\ndata: {\"imported\":2,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 2 processed (2 new)", false},
+		{"grok", "grok-web", "", "event: done\ndata: {\"imported\":3,\"updated\":0,\"skipped\":0,\"errors\":0}\n\n", "Done: 3 processed (3 new)", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -432,6 +433,7 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync", []string{"--type", "claude-ai", "--sync"}, nil, true},
 		{"file", []string{"--type", "claude-ai"}, []string{"conversations.json"}, true},
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
+		{"sync grok web", []string{"--type", "grok-web", "--sync"}, nil, true},
 		{"sync provider", []string{"--type", "copilot", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},

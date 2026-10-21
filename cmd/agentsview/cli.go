@@ -538,7 +538,7 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt, gemini-apps)",
+		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt, gemini-apps; --sync also grok-web)",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
 			"Browser conversations can instead use --type <type> --sync with the configured Chrome integration.",
@@ -546,8 +546,8 @@ func newImportCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				if !slices.Contains([]string{"claude-ai", "chatgpt", "gemini-apps"}, importType) || len(replace) > 0 {
-					return errors.New("--sync requires --type claude-ai, chatgpt, or gemini-apps and cannot use --replace")
+				if !slices.Contains([]string{"claude-ai", "chatgpt", "gemini-apps", "grok-web"}, importType) || len(replace) > 0 {
+					return errors.New("--sync requires --type claude-ai, chatgpt, gemini-apps, or grok-web and cannot use --replace")
 				}
 				return cobra.NoArgs(cmd, args)
 			}
@@ -561,7 +561,7 @@ func newImportCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync conversations through Chrome")
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps, grok-web (--sync only)")
 	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd

@@ -14,7 +14,7 @@ import (
 )
 
 func syncChrome(ctx context.Context, importType string) error {
-	label := map[string]string{"claude-ai": "claude.ai", "chatgpt": "ChatGPT", "gemini-apps": "Gemini"}[importType]
+	label := map[string]string{"claude-ai": "claude.ai", "chatgpt": "ChatGPT", "gemini-apps": "Gemini", "grok-web": "Grok"}[importType]
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return err
@@ -43,6 +43,13 @@ func syncChrome(ctx context.Context, importType string) error {
 		},
 		"gemini-apps": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
 			response, err := api.PostAPIV1ImportGeminiAppsSyncStreamWithResponse(ctx)
+			if response == nil {
+				return 0, nil, nil, nil, err
+			}
+			return response.StatusCode, response.Body, response.Stream200, response.HTTPResponse, err
+		},
+		"grok-web": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
+			response, err := api.PostAPIV1ImportGrokWebSyncStreamWithResponse(ctx)
 			if response == nil {
 				return 0, nil, nil, nil, err
 			}

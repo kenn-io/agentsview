@@ -4,6 +4,7 @@ const shapeFiles = {
   "claude-ai": "claude_ai_requests.txt",
   chatgpt: "chatgpt_requests.txt",
   gemini: "gemini_requests.txt",
+  grok: "grok_requests.txt",
 };
 
 async function shapesFor(platform) {
@@ -28,6 +29,7 @@ const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
 const parameters = {
   organization: uuid,
   conversation: uuid,
+  pageToken: uuid,
   offset: "[0-9]+",
   archived: "(?:false|true)",
   // Gemini values arrive query-escaped, so a cursor cannot add a parameter.

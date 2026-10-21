@@ -96,7 +96,7 @@ describe("ChatGPT request allowlist", () => {
   ])("refuses %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(false));
 
   it("rejects unknown platforms", async () => {
-    expect(await allowedPath("grok", listPath("0"))).toBe(false);
+    expect(await allowedPath("grok-web", listPath("0"))).toBe(false);
   });
 });
 
@@ -125,4 +125,29 @@ describe("Gemini request allowlist", () => {
     `${detail("c_0123456789abcdef")}#x`,
     `https://gemini.google.com${list()}`,
   ])("refuses %s", async (path) => expect(await allowedPath("gemini", path)).toBe(false));
+});
+
+describe("Grok request allowlist", () => {
+  const conversations = "/rest/app-chat/conversations";
+  const token = "33333333-3333-4333-8333-333333333333";
+  const chat = "44444444-4444-4444-8444-444444444444";
+
+  it.each([
+    `${conversations}?pageSize=100`,
+    `${conversations}?pageSize=100&pageToken=${token}`,
+    `${conversations}/${chat}/responses`,
+  ])("accepts %s", async (path) => expect(await allowedPath("grok", path)).toBe(true));
+
+  it.each([
+    "",
+    `${conversations}?pageSize=100&pageToken=`,
+    `${conversations}?pageSize=1000`,
+    `${conversations}?pageSize=100&pageToken=${token}&extra=1`,
+    `${conversations}?pageSize=100&pageToken=a%26b`,
+    `${conversations}/${chat}/response-node?includeThreads=true`,
+    `${conversations}/${chat}/load-responses`,
+    `${conversations}/../settings/responses`,
+    `${conversations}/${chat}`,
+    `https://grok.com${conversations}?pageSize=100`,
+  ])("refuses %s", async (path) => expect(await allowedPath("grok", path)).toBe(false));
 });

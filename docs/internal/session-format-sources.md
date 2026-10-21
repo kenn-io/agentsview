@@ -1832,6 +1832,39 @@ fixtures retain this field; missing identities remain source-local.
   `internal/importer/gemini_sync.go`, and
   `frontend/chrome-extension/gemini_fetch.js`.
 
+## Grok Web (`grok-web`)
+
+- **Format:** grok.com REST JSON read by Chrome Sync. `GET
+  /rest/app-chat/conversations?pageSize=100` lists chats newest first as
+  `{conversations, nextPageToken}`; later pages add `&pageToken=<uuid>`, an
+  empty token is rejected with HTTP 400, and the last page omits
+  `nextPageToken`. Entries carry `conversationId` (UUID), `title`, and RFC 3339
+  `createTime` and `modifyTime`. `GET
+  /rest/app-chat/conversations/{id}/responses` returns `{responses,
+  inflightResponses}` with every branch in one body. Each response has
+  `responseId`, `parentResponseId` (absent on the root), `sender` (`human`,
+  `assistant`, `ASSISTANT`, or `model`), Markdown `message`, `createTime`,
+  `model`, and `partial`. A failed regeneration is an assistant response with an
+  empty `message`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** xAI publishes no schema for the grok.com web API; public
+  references were searched 2026-10-21. A read-only probe of a signed-in web app
+  checked 2026-10-21 listed 79 chats (23 with branches, up to 74 responses and 287 KB in
+  one unpaged `/responses` body) and compared two branched chats with the
+  rendered page: every rendered response lay on the path from the newest
+  non-empty leaf, and its older siblings were not shown. Earlier turns were not
+  rendered by the virtualized page, so the rule is inferred for them. No reply
+  was in progress during the probe, and signed-out responses were not observed.
+  Sanitized captures with the real keys and branch structure are
+  `internal/importer/testdata/grok_web/`, exercised by
+  `TestSyncGrokCapturedPages`.
+- **Usage and cost:** responses name a `model` but expose no token, credit, or
+  monetary-cost fields.
+- **Agentsview:** `internal/parser/grok_web.go`,
+  `internal/importer/grok_sync.go`, and
+  `frontend/chrome-extension/grok_fetch.js`. The `grok-web` type is
+  import-only and does not affect Grok Build discovery or parsing.
+
 ## Grok Build (`grok`)
 
 - **Account CSV export (observed 2026-11-06):** A user-supplied xAI unified usage

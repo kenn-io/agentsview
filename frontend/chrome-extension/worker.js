@@ -1,7 +1,7 @@
 import { allowedPath } from "./paths.js";
 
 // Covers message encoding and request shapes; bump both peers together.
-const version = 3;
+const version = 4;
 
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
@@ -48,6 +48,13 @@ const platforms = {
     newTabURL: "https://gemini.google.com/app",
     scripts: ["claude_fetch.js", "gemini_fetch.js"],
     fetchFunction: "geminiFetch",
+  },
+  grok: {
+    origin: "https://grok.com",
+    tabURL: "https://grok.com/*",
+    newTabURL: "https://grok.com/",
+    scripts: ["claude_fetch.js", "grok_fetch.js"],
+    fetchFunction: "grokFetch",
   },
 };
 

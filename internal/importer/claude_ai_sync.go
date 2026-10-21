@@ -257,7 +257,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		if stored != nil && len(stored) >= len(archived) {
 			filled, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
 		}
-		if prefix && result.Session.Agent == parser.AgentGeminiApps {
+		if prefix && result.Session.Agent != parser.AgentChatGPT {
 			// Appends and completed replies keep stored rows, their IDs, and pins.
 			rows := chatGPTFillRows(archived, msgs, filled, true)
 			rows = append(rows, msgs[len(archived):]...)
@@ -272,7 +272,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 // chat stops being an append or text extension of the archive. Claude.ai
 // keeps one only when a pin or note would be lost.
 func keepsReplacedHistory(agent parser.AgentType) bool {
-	return agent == parser.AgentChatGPT || agent == parser.AgentGeminiApps
+	return agent == parser.AgentChatGPT || agent == parser.AgentGeminiApps || agent == parser.AgentGrokWeb
 }
 
 func replaceSyncedConversation(ctx context.Context, store db.Store, result parser.ParseResult, msgs []db.Message, keepCopy bool) (importStatus, error) {
@@ -306,6 +306,7 @@ var browserPlatforms = map[chromehost.Platform]browserPlatform{
 	chromehost.ClaudeAI: {service: "claude", tooLarge: ErrClaudeAIResponseTooLarge, authRequired: ErrClaudeAIAuthRequired},
 	chromehost.ChatGPT:  {service: "ChatGPT", tooLarge: ErrChatGPTResponseTooLarge, authRequired: ErrChatGPTAuthRequired, stopOnRateLimit: true},
 	chromehost.Gemini:   {service: "Gemini", tooLarge: ErrGeminiResponseTooLarge, authRequired: ErrGeminiAuthRequired, stopOnRateLimit: true},
+	chromehost.Grok:     {service: "Grok", tooLarge: ErrGrokResponseTooLarge, authRequired: ErrGrokAuthRequired, stopOnRateLimit: true},
 }
 
 func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), platform chromehost.Platform, path string) ([]byte, error) {
@@ -335,7 +336,8 @@ func fetchBrowser(ctx context.Context, fetch func(context.Context, string) (Clau
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(response.Body, &apiError)
-		if status == 401 || platform == chromehost.ClaudeAI && apiError.Error.Details.Code == "account_session_invalid" {
+		if status == 401 || platform == chromehost.Grok && status == 403 ||
+			platform == chromehost.ClaudeAI && apiError.Error.Details.Code == "account_session_invalid" {
 			return nil, backoff.Permanent(authRequired)
 		}
 		if status == 413 {

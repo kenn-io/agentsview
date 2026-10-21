@@ -306,6 +306,41 @@ AgentsView. Completed chats stay imported; run Sync again later to continue.
 Pinned chats were not available to check; if a pinned chat is missing after
 Sync, unpin it and run Sync again.
 
+## Sync Grok chats
+
+Chrome Sync also reads your chats from grok.com. These sessions use the
+`grok-web` type, separate from local Grok Build sessions (`grok`). Set up the
+AgentsView Chrome extension using the steps above, then sign in to Grok in the
+Chrome profile that has the extension enabled, and run:
+
+```bash
+agentsview import --type grok-web --sync
+```
+
+The import dialog does not offer Grok Sync yet; use the CLI. If no Grok tab is
+open, Sync opens one in the background and leaves it open. The extension sends
+the same read requests the Grok web app uses, the chat list and one chat's
+responses, with the tab's sign-in cookies; only the responses return to the
+local server.
+
+Each Grok chat becomes one `grok-web:<chat id>` session. Grok keeps every
+regenerated reply and edited prompt as a branch; Sync stores the branch Grok
+shows, which ends at the newest response with text, and records each reply's
+model. Older branches, reasoning steps, attachments, images, and search results
+are not imported.
+
+Sync compares each chat's update time from the list with what it stored last
+time and fetches only chats that changed. Requests are about 3 seconds apart. A
+chat with a reply still being written is fetched again on the next Sync. When
+the new transcript only adds turns, Sync updates the session in place. When the
+shown branch changed, Sync replaces the session with what Grok shows now and
+keeps the previous version in Trash.
+
+Each chat has a 32 MiB limit. Two chat failures in a row, an expired sign-in
+(HTTP 401 or 403), or a rate limit ends Sync. A Grok response this version
+can't read ends Sync with a message to update AgentsView. Completed chats stay
+imported; run Sync again later to continue.
+
 ## Importing via the CLI
 
 Use `agentsview source import` to import from the command line:

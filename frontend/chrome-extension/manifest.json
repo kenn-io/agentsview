@@ -6,7 +6,8 @@
   "host_permissions": [
     "https://claude.ai/*",
     "https://chatgpt.com/*",
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://grok.com/*"
   ],
   "permissions": ["scripting", "nativeMessaging"],
   "background": {
