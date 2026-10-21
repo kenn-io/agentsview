@@ -29,13 +29,12 @@ export function setServerUrl(url: string): void {
   }
 }
 
-function authTokenKey(): string {
-  const server = getServerUrl();
+function authTokenKey(server = getServerUrl()): string {
   return server ? `${AUTH_TOKEN_KEY}::${server}` : AUTH_TOKEN_KEY;
 }
 
-export function getAuthToken(): string {
-  return localStorage.getItem(authTokenKey()) ?? "";
+export function getAuthToken(server = getServerUrl()): string {
+  return localStorage.getItem(authTokenKey(server)) ?? "";
 }
 
 export function setAuthToken(token: string): void {

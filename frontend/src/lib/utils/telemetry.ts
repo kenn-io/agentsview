@@ -4,7 +4,9 @@ import {
 } from "@kenn-io/kit-ui/utils/browser-telemetry";
 import {
   ApiError,
+  getAuthToken,
   getGeneratedBase,
+  getServerUrl,
   orvalRequest,
   SERVER_URL_CHANGE_EVENT,
   SERVER_URL_KEY,
@@ -19,26 +21,33 @@ export function setupTelemetryReporting(): () => void {
   let stopVisit: (() => void) | undefined;
   const start = () => {
     if (reporter) return;
-    const route = `${getGeneratedBase()}/api/v1/telemetry/events`;
+    const server = getServerUrl();
+    const base = getGeneratedBase();
+    const route = `${base}/api/v1/telemetry/events`;
     reporter = startBrowserTelemetry({
       route,
       surface: "web",
       storageKey: `agentsview.telemetry:${route}`,
       post: (_url, event, options) =>
         Promise.resolve().then(async () => {
+          if (getServerUrl() !== server || getGeneratedBase() !== base) {
+            throw new Error("Telemetry server changed");
+          }
+          const token = getAuthToken(server);
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 10_000);
           try {
             const response = await orvalRequest("/api/v1/telemetry/events", {
               ...options,
+              baseUrl: base,
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
               body: JSON.stringify(event),
               signal: controller.signal,
             });
-            if (response.status !== 202) {
-              throw new ApiError(response.status, `Unexpected telemetry HTTP ${response.status}`);
-            }
             // Keep the deadline active while kit-ui reads the receipt body.
             return response;
           } catch (error) {

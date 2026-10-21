@@ -111,23 +111,6 @@ describe("feature outcomes", () => {
     ]);
   });
 
-  it.each([200, 204])("retries after a telemetry HTTP %i response", async (status) => {
-    const fetch = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce(new Response(null, { status }))
-      .mockImplementation(() => new Promise(() => {}));
-    vi.stubGlobal("fetch", fetch);
-    stop = setupTelemetryReporting();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledOnce();
-    await vi.advanceTimersToNextTimerAsync();
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetch.mock.lastCall![1]!.body as string)).toEqual({
-      event: "app_opened",
-      properties: { surface: "web" },
-    });
-  });
-
   it("retries an unauthorized check on fresh setup after setting the token", async () => {
     const fetch = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
@@ -192,4 +175,47 @@ describe("feature outcomes", () => {
       ]);
     },
   );
+
+  it("drops old-server reports before a cross-tab server change is delivered", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response('{"status":"queued"}', { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    setServerUrl("https://a.example.org");
+    setAuthToken("a-token");
+    stop = setupTelemetryReporting();
+    await vi.advanceTimersByTimeAsync(0);
+    fetch.mockClear();
+
+    localStorage.setItem(SERVER_URL_KEY, "https://b.example.org");
+    setAuthToken("b-token");
+    now.mockReturnValue(120_000);
+    window.dispatchEvent(new Event("pagehide"));
+    reportErrorShown("search");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: SERVER_URL_KEY, storageArea: localStorage }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      fetch.mock.calls.map(([url, init]) => [
+        url,
+        new Headers(init?.headers).get("Authorization"),
+        JSON.parse(init!.body as string),
+      ]),
+    ).toEqual([
+      [
+        "https://b.example.org/api/v1/telemetry/events",
+        "Bearer b-token",
+        {
+          event: "app_opened",
+          properties: { surface: "web" },
+        },
+      ],
+    ]);
+  });
 });
