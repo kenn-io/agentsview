@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/fileevidence"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -510,6 +511,12 @@ func SummarizeToolResultEvents(events []ToolResultEvent) string {
 
 // Message represents a row in the messages table.
 type Message struct {
+	StagedFileEvidenceEntry string                   `json:"-"`
+	FileEvidence            []fileevidence.Record    `json:"-"`
+	FileEvidenceCandidates  []fileevidence.Candidate `json:"-"`
+	FileEvidenceCoverage    fileevidence.Coverage    `json:"-"`
+	evidenceSupport         []evidenceSupport
+
 	ID        int64  `json:"id"`
 	SessionID string `json:"session_id"`
 	Ordinal   int    `json:"ordinal"`
@@ -1318,6 +1325,9 @@ func insertMessagesTx(
 			)
 		}
 	}
+	if err := storeFileEvidenceTx(tx, msgs, ids); err != nil {
+		return nil, err
+	}
 	return ids, nil
 }
 
@@ -1531,6 +1541,10 @@ func (db *DB) insertMessages(ctx context.Context,
 		return err
 	}
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
+	msgs, err := db.publishFileEvidence(msgs, policy)
+	if err != nil {
+		return err
+	}
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 	if len(rawMessages) == 0 {
@@ -1586,7 +1600,15 @@ func (db *DB) insertMessages(ctx context.Context,
 	}
 	sessionIDs := messageSessionIDs(rawMessages)
 	for _, sessionID := range sessionIDs {
-		var err error
+		coverageChanged, err := setEvidenceCoverageTx(tx, sessionID, evidenceCoverage(messagesForSession(rawMessages, sessionID)), false)
+		if err != nil {
+			return err
+		}
+		if coverageChanged && db.usageOnlyStorage() {
+			if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+				return err
+			}
+		}
 		if db.usageOnlyStorage() {
 			err = updateUsageOnlyAutomationTx(
 				tx, sessionID, messagesForSession(rawMessages, sessionID),
@@ -1768,9 +1790,13 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		return false, err
 	}
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
+	msgs, err := db.publishFileEvidence(msgs, policy)
+	if err != nil {
+		return false, err
+	}
 
 	rawMessages := msgs
-	msgs = db.messagesForStorage(msgs)
+	msgs = db.messagesForStorageWithImagePolicy(msgs, policy)
 	update.SubagentLinks = db.subagentLinksForStorage(update.SubagentLinks)
 	update.ToolCallResultUpdates = db.toolCallResultUpdatesForStorage(update.ToolCallResultUpdates)
 	if db.ArchiveContent().OmitsToolContent() {
@@ -1868,6 +1894,11 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			)
 		}
 	}
+	coverageChanged, err := setEvidenceCoverageTx(tx, sessionID, evidenceCoverage(rawMessages), false)
+	if err != nil {
+		return false, err
+	}
+	transcriptChanged = transcriptChanged || coverageChanged
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return false, err
@@ -2057,16 +2088,23 @@ func (db *DB) ReplaceSessionMessages(ctx context.Context,
 // policy selected by the sync engine.
 func (db *DB) ReplaceSessionMessagesWithToolResultImages(ctx context.Context,
 	sessionID string, msgs []Message, policy config.ToolResultImages,
+	coverage ...fileevidence.Coverage,
 ) error {
-	return db.replaceSessionMessages(ctx, sessionID, msgs, policy)
+	return db.replaceSessionMessages(ctx, sessionID, msgs, policy, coverage...)
 }
 
 func (db *DB) replaceSessionMessages(ctx context.Context,
 	sessionID string, msgs []Message, policy config.ToolResultImages,
+	coverage ...fileevidence.Coverage,
 ) error {
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
+	msgs, err := db.publishFileEvidence(msgs, policy)
+	if err != nil {
+		return err
+	}
+	targetCoverage := evidenceCoverage(msgs, coverage...)
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 
@@ -2129,6 +2167,11 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	coverageChanged, err := setEvidenceCoverageTx(tx, sessionID, targetCoverage, true)
+	if err != nil {
+		return err
+	}
+	transcriptChanged = transcriptChanged || coverageChanged
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
@@ -2483,9 +2526,10 @@ func (db *DB) ReplaceSessionContentWithCheckpointAndToolResultImages(ctx context
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 	policy config.ToolResultImages,
+	coverage ...fileevidence.Coverage,
 ) error {
 	return db.replaceSessionContent(ctx,
-		sessionID, msgs, signals, findings, cp, blobs, policy,
+		sessionID, msgs, signals, findings, cp, blobs, policy, coverage...,
 	)
 }
 
@@ -2495,9 +2539,10 @@ func (db *DB) ReplaceSessionContentWithToolResultImages(ctx context.Context,
 	sessionID string, msgs []Message,
 	signals SessionSignalUpdate, findings []SecretFinding,
 	policy config.ToolResultImages,
+	coverage ...fileevidence.Coverage,
 ) error {
 	return db.replaceSessionContent(ctx,
-		sessionID, msgs, signals, findings, nil, nil, policy,
+		sessionID, msgs, signals, findings, nil, nil, policy, coverage...,
 	)
 }
 
@@ -2506,12 +2551,18 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 	policy config.ToolResultImages,
+	coverage ...fileevidence.Coverage,
 ) error {
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	if len(msgs) > 0 {
 		msgs = append([]Message(nil), msgs...)
 		_ = ValidateAndSanitize(nil, msgs, nil)
 	}
+	msgs, err := db.publishFileEvidence(msgs, policy)
+	if err != nil {
+		return err
+	}
+	targetCoverage := evidenceCoverage(msgs, coverage...)
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 	if db.usageOnlyStorage() {
@@ -2570,6 +2621,11 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 		signals.ToolObservations = nil
 	}
+	coverageChanged, err := setEvidenceCoverageTx(tx, sessionID, targetCoverage, true)
+	if err != nil {
+		return err
+	}
+	transcriptChanged = transcriptChanged || coverageChanged
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
@@ -3026,7 +3082,7 @@ func attachToolCallsWithQuerier(
 	// A summary that only repeated its single event is not stored. Refill it
 	// here, once, so no consumer of a loaded message has to know that.
 	RestoreMessageResultContent(msgs)
-	return nil
+	return hydrateFileEvidence(ctx, q, msgs)
 }
 
 func attachToolCallsBatch(

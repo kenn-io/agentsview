@@ -20,12 +20,13 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 5 includes native image identity in the first-user digest.
 	// Version 4 stores the current reasoning effort alongside the model.
 	// Version 3 replaces duplicate IDs with their latest occurrence, matching
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 4
+	codexCursorCheckpointVersion   = 5
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -338,7 +339,10 @@ func (s *codexCursorState) forgetToolCall(id string) {
 // replay reports the one positively identified post-abort re-emission that the
 // caller must suppress.
 func (s *codexCursorState) observeUserPrompt(content string) (first, replay bool) {
-	digest := sha256.Sum256([]byte(content))
+	return s.observeUserPromptDigest(sha256.Sum256([]byte(content)))
+}
+
+func (s *codexCursorState) observeUserPromptDigest(digest [sha256.Size]byte) (first, replay bool) {
 	if !s.firstUserSeen {
 		s.firstUserDigest = digest
 		s.firstUserSeen = true

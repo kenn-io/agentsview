@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/fileevidence"
 	"go.kenn.io/agentsview/internal/ingest"
 )
 
@@ -203,6 +204,11 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}
 	call := &p.Messages[0].ToolCalls[0]
 	call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = new("empty"), new("exact"), new("abandoned")
+	p.Session.FileEvidenceCoverage = fileevidence.Coverage{Version: 1, State: "complete"}
+	p.Messages[0].FileEvidenceCoverage = fileevidence.Coverage{Version: 1, State: "complete"}
+	p.Messages[0].FileEvidence = []fileevidence.Record{{SHA256: "derived"}}
+	p.Messages[0].FileEvidenceCandidates = []fileevidence.Candidate{{}}
+	p.Messages[0].StagedFileEvidenceEntry = "line:3"
 	derived, err := rawContentRevision(p)
 	require.NoError(t, err)
 	assert.Equal(t, got, derived)

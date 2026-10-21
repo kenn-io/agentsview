@@ -1,4 +1,7 @@
 <script lang="ts">
+  import type { ServiceLocalFileEvidence } from "../../api/generated/index.js";
+  import type { SessionFileReferencesStore } from "../../stores/file-references.svelte.js";
+
   import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
   import { formatTimestamp } from "../../utils/format.js";
@@ -9,6 +12,7 @@
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
+  import FileEvidence from "./FileEvidence.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import { collectSearchBlocks } from "../../search/block-text.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -20,13 +24,15 @@
 
   interface Props {
     messages: Message[];
+    fileEvidence?: Map<number, ServiceLocalFileEvidence[]>;
+    fileStore?: SessionFileReferencesStore;
     timestamp: string;
     searchable?: boolean;
     sortNewestFirst?: boolean;
     divider?: { ordinal: number; label: string };
   }
 
-  let { messages, timestamp, searchable = false, sortNewestFirst = false, divider }: Props = $props();
+  let { fileEvidence = new Map(), fileStore, messages, timestamp, searchable = false, sortNewestFirst = false, divider }: Props = $props();
   let copied = $state(false);
 
   function messageToolCount(message: Message): number {
@@ -106,9 +112,11 @@
       {#if divider?.ordinal === message.ordinal}
         <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>{divider.label}</div>
       {/if}
+      {@const evidence = (fileEvidence.get(message.ordinal) ?? []).filter((r) => r.message_ordinal === message.ordinal)}
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
       <div data-message-ordinal={message.ordinal}>
+        <FileEvidence records={evidence.filter((r) => r.tool_call_index === null)} store={fileStore} />
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
             <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
@@ -116,7 +124,7 @@
         {/if}
         {#if calls.length === 1}
           {@const soloCall = calls[0]!}
-          <ToolBlock
+          <ToolBlock fileEvidence={evidence.filter((r) => r.tool_call_index === 0)} {fileStore}
             toolCall={soloCall}
             content=""
             label={displayToolName(soloCall)}
@@ -129,7 +137,7 @@
             searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
           />
         {:else if calls.length >= 2}
-          <ParallelGroup
+          <ParallelGroup fileEvidence={evidence} {fileStore}
             toolCalls={calls}
             callTimingByID={callByToolUseID}
             isRunning={isRunningTurn(message)}

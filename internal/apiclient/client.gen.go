@@ -2100,6 +2100,68 @@ func (o *GetAPIV1SessionsIDChildrenRequestOptions) GetHeader() (map[string]strin
 	return nil, nil
 }
 
+// GetAPIV1SessionsIDFileReferencesRequestOptions is the options needed to make a request to GetAPIV1SessionsIDFileReferences.
+type GetAPIV1SessionsIDFileReferencesRequestOptions struct {
+	PathParams *GetAPIV1SessionsIDFileReferencesPath
+	Query      *GetAPIV1SessionsIDFileReferencesQuery
+	Header     *GetAPIV1SessionsIDFileReferencesHeaders
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1SessionsIDFileReferencesRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+
+	if o.Header != nil {
+		if v, ok := any(o.Header).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Header", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1SessionsIDFileReferencesRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1SessionsIDFileReferencesRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1SessionsIDFileReferencesRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1SessionsIDFileReferencesRequestOptions) GetHeader() (map[string]string, error) {
+	return runtime.AsMap[string](o.Header)
+}
+
 // PatchAPIV1SessionsIDLabelsRequestOptions is the options needed to make a request to PatchAPIV1SessionsIDLabels.
 type PatchAPIV1SessionsIDLabelsRequestOptions struct {
 	PathParams *PatchAPIV1SessionsIDLabelsPath
@@ -5220,6 +5282,7 @@ type ClientInterface interface {
 	PostAPIV1SessionsSyncWithResponse(ctx context.Context, options *PostAPIV1SessionsSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsSyncResp, error)
 	GetAPIV1SessionsIDWithResponse(ctx context.Context, options *GetAPIV1SessionsIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDResp, error)
 	GetAPIV1SessionsIDChildrenWithResponse(ctx context.Context, options *GetAPIV1SessionsIDChildrenRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDChildrenResp, error)
+	GetAPIV1SessionsIDFileReferencesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDFileReferencesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDFileReferencesResp, error)
 	PatchAPIV1SessionsIDLabelsWithResponse(ctx context.Context, options *PatchAPIV1SessionsIDLabelsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PatchAPIV1SessionsIDLabelsResp, error)
 	GetAPIV1SessionsIDMessagesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDMessagesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDMessagesResp, error)
 	PutAPIV1SessionsIDParentWithResponse(ctx context.Context, options *PutAPIV1SessionsIDParentRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1SessionsIDParentResp, error)
@@ -15107,6 +15170,229 @@ func (c *Client) GetAPIV1SessionsIDChildrenWithResponse(ctx context.Context, opt
 	}
 }
 
+// GetAPIV1SessionsIDFileReferences Find exact session bytes in Docbank
+func (c *Client) GetAPIV1SessionsIDFileReferencesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDFileReferencesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDFileReferencesResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/sessions/{id}/file-references",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/{id}/file-references")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1SessionsIDFileReferencesResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1SessionsIDFileReferencesResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1SessionsIDFileReferencesErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1SessionsIDFileReferencesErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDFileReferencesErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // PatchAPIV1SessionsIDLabels Change session labels
 func (c *Client) PatchAPIV1SessionsIDLabelsWithResponse(ctx context.Context, options *PatchAPIV1SessionsIDLabelsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PatchAPIV1SessionsIDLabelsResp, error) {
 	var err error
@@ -18586,6 +18872,11 @@ type GetAPIV1SearchContentHeaders struct {
 	XAgentsViewSearchIntent *string `json:"X-AgentsView-Search-Intent,omitempty"`
 }
 
+type GetAPIV1SessionsIDFileReferencesHeaders struct {
+	// XAgentsViewLookupIntent Explicit lookup intent: docbank
+	XAgentsViewLookupIntent *string `json:"X-AgentsView-Lookup-Intent,omitempty"`
+}
+
 type GetAPIV1ActivityReportReportIDSessionsPath struct {
 	// ReportID Signed Activity report ID
 	ReportID string `json:"report_id" validate:"required"`
@@ -18644,6 +18935,15 @@ type GetAPIV1SessionsIDChildrenPath struct {
 }
 
 func (g GetAPIV1SessionsIDChildrenPath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
+type GetAPIV1SessionsIDFileReferencesPath struct {
+	// ID Session ID
+	ID string `json:"id" validate:"required"`
+}
+
+func (g GetAPIV1SessionsIDFileReferencesPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
@@ -19778,6 +20078,32 @@ func (g GetAPIV1SessionsQuery) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type GetAPIV1SessionsIDFileReferencesQuery struct {
+	// Binding Opaque archive generation and transcript binding
+	Binding *string `json:"binding,omitempty"`
+
+	// OccurrenceID Local occurrence selector for reference pagination
+	OccurrenceID *string `json:"occurrence_id,omitempty"`
+
+	// Offset Occurrence offset
+	Offset *int64 `json:"offset,omitempty"`
+
+	// Limit Occurrence page size, default 20, maximum 50
+	Limit *int64 `json:"limit,omitempty"`
+
+	// ReferenceOffset Raw remote reference offset for the selected occurrence
+	ReferenceOffset *int64 `json:"reference_offset,omitempty"`
+
+	// FirstOrdinal First message ordinal, inclusive; requires last_ordinal
+	FirstOrdinal *int64 `json:"first_ordinal,omitempty"`
+
+	// LastOrdinal Last message ordinal, inclusive; requires first_ordinal
+	LastOrdinal *int64 `json:"last_ordinal,omitempty"`
+
+	// Refresh Explicitly refresh the first reference page
+	Refresh *bool `json:"refresh,omitempty"`
 }
 
 type GetAPIV1SessionsIDMessagesQuery struct {
@@ -21279,6 +21605,30 @@ type GetAPIV1SessionsIDChildrenErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDChildrenErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1SessionsIDFileReferencesResponse = service.FileReferencesResult
+
+type GetAPIV1SessionsIDFileReferencesErrorResponse = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1SessionsIDFileReferencesErrorResponseJSON504 = APIErrorResponse
+
 type PatchAPIV1SessionsIDLabelsResponse = db.SessionLabels
 
 type PatchAPIV1SessionsIDLabelsErrorResponse = APIErrorResponse
@@ -22488,6 +22838,24 @@ type GetAPIV1SessionsIDChildrenResp struct {
 	JSON502      *GetAPIV1SessionsIDChildrenErrorResponseJSON502
 	JSON503      *GetAPIV1SessionsIDChildrenErrorResponseJSON503
 	JSON504      *GetAPIV1SessionsIDChildrenErrorResponseJSON504
+}
+
+type GetAPIV1SessionsIDFileReferencesResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1SessionsIDFileReferencesResponse
+	JSON400      *GetAPIV1SessionsIDFileReferencesErrorResponse
+	JSON401      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON
+	JSON403      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON403
+	JSON404      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON404
+	JSON409      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON409
+	JSON422      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON422
+	JSON500      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON500
+	JSON501      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON501
+	JSON502      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON502
+	JSON503      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON503
+	JSON504      *GetAPIV1SessionsIDFileReferencesErrorResponseJSON504
 }
 
 type PatchAPIV1SessionsIDLabelsResp struct {
@@ -24454,6 +24822,21 @@ type FillStats struct {
 	Stale     int64 `json:"Stale"`
 }
 
+type IntegrationsdocbankMatch struct {
+	Name      string  `json:"name" validate:"required"`
+	NodeID    int64   `json:"node_id"`
+	OpenURL   *string `json:"open_url,omitempty"`
+	Path      *string `json:"path,omitempty"`
+	Sha256    string  `json:"sha256" validate:"required"`
+	Size      int64   `json:"size"`
+	State     string  `json:"state" validate:"required"`
+	VersionID string  `json:"version_id" validate:"required"`
+}
+
+func (i IntegrationsdocbankMatch) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(i))
+}
+
 type MachinesResponse struct {
 	MachineAliases map[string]string `json:"machine_aliases"`
 	MachineLabels  map[string]string `json:"machine_labels"`
@@ -24965,6 +25348,101 @@ func (s SearchResponse) Validate() error {
 
 type ServiceContentSearchResult = service.ContentSearchResult
 
+type ServiceFileReferenceOccurrence struct {
+	AssetRef            string                     `json:"asset_ref" validate:"required"`
+	BlockIndex          int64                      `json:"block_index"`
+	CheckedAt           *time.Time                 `json:"checked_at,omitempty" validate:"required"`
+	DisplayName         string                     `json:"display_name" validate:"required"`
+	DisplayPath         string                     `json:"display_path" validate:"required"`
+	IneligibleReason    string                     `json:"ineligible_reason" validate:"required"`
+	Kind                string                     `json:"kind" validate:"required"`
+	Matches             []IntegrationsdocbankMatch `json:"matches" validate:"required"`
+	MediaType           string                     `json:"media_type" validate:"required"`
+	MessageOrdinal      int64                      `json:"message_ordinal"`
+	NextReferenceOffset *int64                     `json:"next_reference_offset,omitempty"`
+	OccurrenceID        string                     `json:"occurrence_id" validate:"required"`
+	ProofMethod         string                     `json:"proof_method" validate:"required"`
+	ReferenceTotal      *int64                     `json:"reference_total,omitempty"`
+	ResultEventIndex    *int64                     `json:"result_event_index,omitempty"`
+	Sha256              string                     `json:"sha256" validate:"required"`
+	Size                *int64                     `json:"size,omitempty"`
+	State               string                     `json:"state" validate:"required"`
+	ToolCallIndex       *int64                     `json:"tool_call_index,omitempty"`
+}
+
+func (s ServiceFileReferenceOccurrence) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.AssetRef, "required"); err != nil {
+		errors = errors.Append("AssetRef", err)
+	}
+	if s.CheckedAt != nil {
+		if err := typesValidator.Var(s.CheckedAt, "required"); err != nil {
+			errors = errors.Append("CheckedAt", err)
+		}
+	}
+	if err := typesValidator.Var(s.DisplayName, "required"); err != nil {
+		errors = errors.Append("DisplayName", err)
+	}
+	if err := typesValidator.Var(s.DisplayPath, "required"); err != nil {
+		errors = errors.Append("DisplayPath", err)
+	}
+	if err := typesValidator.Var(s.IneligibleReason, "required"); err != nil {
+		errors = errors.Append("IneligibleReason", err)
+	}
+	if err := typesValidator.Var(s.Kind, "required"); err != nil {
+		errors = errors.Append("Kind", err)
+	}
+	for i, item := range s.Matches {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Matches[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(s.MediaType, "required"); err != nil {
+		errors = errors.Append("MediaType", err)
+	}
+	if err := typesValidator.Var(s.OccurrenceID, "required"); err != nil {
+		errors = errors.Append("OccurrenceID", err)
+	}
+	if err := typesValidator.Var(s.ProofMethod, "required"); err != nil {
+		errors = errors.Append("ProofMethod", err)
+	}
+	if err := typesValidator.Var(s.Sha256, "required"); err != nil {
+		errors = errors.Append("Sha256", err)
+	}
+	if err := typesValidator.Var(s.State, "required"); err != nil {
+		errors = errors.Append("State", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ServiceFileReferencesResult = service.FileReferencesResult
+
+type ServiceLocalFileEvidence struct {
+	AssetRef         string `json:"asset_ref" validate:"required"`
+	BlockIndex       int64  `json:"block_index"`
+	DisplayName      string `json:"display_name" validate:"required"`
+	DisplayPath      string `json:"display_path" validate:"required"`
+	IneligibleReason string `json:"ineligible_reason" validate:"required"`
+	Kind             string `json:"kind" validate:"required"`
+	MediaType        string `json:"media_type" validate:"required"`
+	MessageOrdinal   int64  `json:"message_ordinal"`
+	OccurrenceID     string `json:"occurrence_id" validate:"required"`
+	ProofMethod      string `json:"proof_method" validate:"required"`
+	ResultEventIndex *int64 `json:"result_event_index,omitempty"`
+	Sha256           string `json:"sha256" validate:"required"`
+	Size             *int64 `json:"size,omitempty"`
+	ToolCallIndex    *int64 `json:"tool_call_index,omitempty"`
+}
+
+func (s ServiceLocalFileEvidence) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
+}
+
 type ServiceMemoryArchiveStatus struct {
 	Backend  string  `json:"backend" validate:"required"`
 	Identity *string `json:"identity,omitempty"`
@@ -25055,6 +25533,26 @@ func (s ServiceMemoryVectorStatus) Validate() error {
 	if v, ok := any(s.Status).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("Status", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ServiceMessageFileEvidence struct {
+	Ordinal int64                      `json:"ordinal"`
+	Records []ServiceLocalFileEvidence `json:"records" validate:"required"`
+}
+
+func (s ServiceMessageFileEvidence) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range s.Records {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Records[%d]", i), err)
+			}
 		}
 	}
 	if len(errors) == 0 {

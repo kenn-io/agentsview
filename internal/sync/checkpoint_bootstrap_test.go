@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/fileevidence"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -130,6 +131,9 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 		}
 	}
 	for i := range expected {
+		// Coverage is private ingest metadata; ordinary transcript reads omit it.
+		require.Zero(t, stored[i].FileEvidenceCoverage)
+		expected[i].FileEvidenceCoverage = fileevidence.Coverage{}
 		for j := range expected[i].ToolCalls {
 			// Rendering is parser input to the write projection, not a stored field.
 			expected[i].ToolCalls[j].Rendering = ""

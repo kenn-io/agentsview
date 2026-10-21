@@ -323,6 +323,12 @@ agentsview stats --include-git-outcomes
 
 ## Session Browser
 
+Optional
+[Docbank lookup](https://agentsview.io/docs/configuration/#find-transcript-files-in-docbank)
+finds exact retained transcript files as current versions, prior versions or
+trash. Local attachments stay readable while lookup runs; SQLite archives and
+the full MCP profile share the same bounded operation.
+
 | Dashboard                                                                      | Session viewer                                                                           |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | ![Dashboard](https://agentsview.io/assets/generated/screenshots/dashboard.png) | ![Session viewer](https://agentsview.io/assets/generated/screenshots/message-viewer.png) |

@@ -1,5 +1,9 @@
 import { SessionsService } from "../api/generated/index";
-import type { DbMessage as Message } from "../api/generated/index.js";
+import type {
+  DbMessage as Message,
+  ServiceMessageFileEvidence,
+  ServiceLocalFileEvidence,
+} from "../api/generated/index.js";
 import { ApiError, isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
@@ -34,6 +38,8 @@ type WindowRefresh = "landed" | "empty" | "superseded";
 interface MessagePage {
   messages: Message[];
   revision: string;
+  binding: string | null;
+  evidence: ServiceMessageFileEvidence[];
 }
 
 // A bound read answers 409 once the transcript has moved past the revision it named.
@@ -56,6 +62,9 @@ export class MessagesStore {
    * message responses that delivered them. Null until the first page lands.
    */
   loadedRevision: string | null = $state(null);
+  loadedBinding: string | null = $state(null);
+  evidenceGeneration = $state(0);
+  fileEvidence = $state(new Map<number, ServiceLocalFileEvidence[]>());
   private reloading: boolean = $state(false);
   private _stableMainModelInfo: ModelEffort = $state({
     model: "",
@@ -252,13 +261,15 @@ export class MessagesStore {
     // A request that rejected just before the abort is not an
     // AbortError, so retire the load's generation as well.
     this.loadGeneration++;
+    this.invalidateEvidence();
+    // Returning to cached messages must restore the evidence retired above.
+    this.cancelledSessionId = this.sessionId;
     const hasInFlightRead =
       this.loading ||
       this.loadingOlder ||
       this.reloadPromise !== null ||
       this.loadOlderPromise !== null;
     if (hasInFlightRead && this.abortController && !this.abortController.signal.aborted) {
-      this.cancelledSessionId = this.sessionId;
       this.abortController.abort();
       this.abortController = null;
     }
@@ -277,20 +288,52 @@ export class MessagesStore {
     query: PageQuery,
     signal: AbortSignal,
     revision: string | null,
+    binding: string | null = null,
   ): Promise<MessagePage> {
     const res = await SessionsService.getApiV1SessionsByIdMessages(
       { id },
       revision ? { ...query, expected_revision: revision } : query,
       { signal },
-    );
-    return { messages: res.messages, revision: res.transcript_revision ?? "" };
+    ).catch((error: unknown) => {
+      if (isRevisionChange(error) && binding && this.loadedBinding === binding)
+        this.invalidateEvidence();
+      throw error;
+    });
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    return {
+      messages: res.messages,
+      revision: res.transcript_revision ?? "",
+      binding: res.binding ?? null,
+      evidence: res.file_evidence ?? [],
+    };
+  }
+
+  private invalidateEvidence(): void {
+    this.evidenceGeneration++;
+    this.loadedBinding = null;
+    this.fileEvidence = new Map();
+  }
+
+  private acceptEvidence(page: MessagePage, replace = false): void {
+    const evidence =
+      replace || page.binding !== this.loadedBinding || page.revision !== this.loadedRevision
+        ? new Map<number, ServiceLocalFileEvidence[]>()
+        : new Map(this.fileEvidence);
+    for (const message of page.messages) evidence.delete(message.ordinal);
+    for (const group of page.evidence) evidence.set(group.ordinal, group.records);
+    this.fileEvidence = evidence;
+    this.loadedBinding = page.binding;
   }
 
   /** Take a refreshed window that starts at the loaded window's oldest row; false when a later-started load already replaced it. */
   private acceptWindow(page: MessagePage, append: boolean, ticket: number): boolean {
-    if (page.revision !== this.loadedRevision && ticket < this.windowTicket) return false;
+    if (
+      (page.revision !== this.loadedRevision || page.binding !== this.loadedBinding) &&
+      ticket < this.windowTicket
+    )
+      return false;
     clearContentCaches();
-    if (page.revision !== this.loadedRevision) {
+    if (page.revision !== this.loadedRevision || page.binding !== this.loadedBinding) {
       // Rows from two transcript revisions never share the list, so a new revision replaces the window.
       this.windowTicket = ticket;
       this.messages = page.messages;
@@ -307,6 +350,7 @@ export class MessagesStore {
       const appended = append ? page.messages.filter((m) => !existingOrdinals.has(m.ordinal)) : [];
       this.messages = [...this.messages.map((m) => updates.get(m.ordinal) ?? m), ...appended];
     }
+    this.acceptEvidence(page);
     this.loadedRevision = page.revision;
     this.updateStableMainModelInfo();
     return true;
@@ -316,13 +360,20 @@ export class MessagesStore {
    * Whether a page fetched while the window held revision `held` can join it:
    * the window must not have moved on, and the page must share its revision.
    */
-  private pageJoinsWindow(held: string | null, page: MessagePage): boolean {
-    return this.loadedRevision === held && (held === null || page.revision === held);
+  private pageJoinsWindow(held: string | null, page: MessagePage, binding: string | null): boolean {
+    if (this.loadedRevision !== held || this.loadedBinding !== binding) return false;
+    if (page.binding !== binding) {
+      this.invalidateEvidence();
+      throw new ApiError(409, "Transcript changed");
+    }
+    return held === null || page.revision === held;
   }
 
   /** Fetch consecutive pages that all belong to the first page's revision. */
   private async fetchPages(id: string, opts: FetchPageOptions): Promise<MessagePage> {
     const loaded: Message[] = [];
+    const evidence: ServiceMessageFileEvidence[] = [];
+    let binding: string | null | undefined;
     let from = opts.from;
     let revision: string | null = null;
 
@@ -332,7 +383,12 @@ export class MessagesStore {
         { from, limit: opts.limit, direction: opts.direction },
         opts.signal,
         revision,
+        binding ?? null,
       );
+      if (binding !== undefined && (binding !== res.binding || revision !== res.revision))
+        throw new ApiError(409, "Transcript changed");
+      binding = res.binding;
+      evidence.push(...res.evidence);
       revision ??= res.revision;
       if (res.messages.length === 0) break;
 
@@ -349,7 +405,7 @@ export class MessagesStore {
       from = nextFrom;
     }
 
-    return { messages: loaded, revision: revision ?? "" };
+    return { messages: loaded, revision: revision ?? "", binding: binding ?? null, evidence };
   }
 
   /** Load from the first message; false when the session changed or a later load overtook this one. */
@@ -381,6 +437,7 @@ export class MessagesStore {
   ): Promise<boolean> {
     let from = 0;
     let loaded: Message[] = [];
+    let binding: string | null | undefined;
     let complete = false;
     let revision: string | null = null;
 
@@ -390,8 +447,12 @@ export class MessagesStore {
         { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
         signal,
         revision,
+        binding ?? null,
       );
       if (this.sessionId !== id) return false;
+      if (binding !== undefined && (binding !== res.binding || revision !== res.revision))
+        throw new ApiError(409, "Transcript changed");
+      binding = res.binding;
       revision ??= res.revision;
       if (loaded.length === 0) {
         // A load that started later already replaced the window.
@@ -404,6 +465,7 @@ export class MessagesStore {
         // A newer revision replaced the window while this page was in flight.
         return false;
       }
+      this.acceptEvidence(res, loaded.length === 0);
       if (res.messages.length === 0) {
         if (loaded.length === 0) {
           // The session has no rows now, so nothing from an earlier revision may stay on screen.
@@ -461,6 +523,7 @@ export class MessagesStore {
     // Rows parsed while this page was in flight may come back rewritten under the same IDs and lengths.
     clearContentCaches();
     this.messages = [...firstRes.messages].reverse();
+    this.acceptEvidence(firstRes, true);
     this.loadedRevision = firstRes.revision;
     this.historyComplete = false;
     const newest = this.messages[this.messages.length - 1];
@@ -516,16 +579,19 @@ export class MessagesStore {
 
     this.loadingOlder = true;
     const revision = this.loadedRevision;
+    const binding = this.loadedBinding;
     try {
       const res = await this.fetchMessagePage(
         id,
         { from: oldest - 1, limit: MESSAGE_PAGE_SIZE, direction: "desc" },
         signal,
         revision,
+        binding,
       );
       if (this.sessionId !== id) return;
       // A reload replaced the window while this page was in flight.
-      if (!this.pageJoinsWindow(revision, res)) return;
+      if (!this.pageJoinsWindow(revision, res, binding)) return;
+      this.acceptEvidence(res);
       this.loadedRevision = res.revision;
       if (res.messages.length === 0) {
         this.hasOlder = false;
@@ -642,17 +708,20 @@ export class MessagesStore {
     try {
       let from = (this.messages.at(-1)?.ordinal ?? -1) + 1;
       let revision = this.loadedRevision;
+      const binding = this.loadedBinding;
       for (;;) {
         const res = await this.fetchMessagePage(
           id,
           { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
           signal,
           revision,
+          binding,
         );
         if (!current()) return "done";
         // A reload replaced the window while this page was in flight.
-        if (!this.pageJoinsWindow(revision, res)) return "moved";
+        if (!this.pageJoinsWindow(revision, res, binding)) return "moved";
         revision = res.revision;
+        this.acceptEvidence(res);
         this.loadedRevision = revision;
         if (res.messages.length === 0) {
           this.historyComplete = !this.hasOlder;
@@ -710,6 +779,8 @@ export class MessagesStore {
       let from = this.messages[0]!.ordinal - 1;
       let lastOldest = this.messages[0]!.ordinal;
       const chunks: Message[][] = [];
+      const pages: MessagePage[] = [];
+      const binding = this.loadedBinding;
       const held = this.loadedRevision;
       let revision = held;
 
@@ -719,13 +790,18 @@ export class MessagesStore {
           { from, limit: MESSAGE_PAGE_SIZE, direction: "desc" },
           signal,
           revision,
+          binding,
         );
         if (this.sessionId !== id) return "done";
         // A reload replaced the window while this page was in flight.
-        if (this.loadedRevision !== held || (revision !== null && res.revision !== revision)) {
+        if (
+          !this.pageJoinsWindow(held, res, binding) ||
+          (revision !== null && res.revision !== revision)
+        ) {
           return "moved";
         }
         revision = res.revision;
+        pages.push(res);
         if (res.messages.length === 0) {
           this.hasOlder = false;
           this.historyComplete = true;
@@ -745,6 +821,7 @@ export class MessagesStore {
 
       if (this.sessionId !== id) return "done";
 
+      for (const page of pages) this.acceptEvidence(page);
       if (chunks.length > 0) {
         const oldest = this.messages[0]?.ordinal ?? Infinity;
         const merged = chunks

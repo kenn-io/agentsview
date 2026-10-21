@@ -19,7 +19,8 @@ const renderLint = renderLintPath ? (require(renderLintPath) as RenderLintModule
 // Test-fixture assumptions: project-alpha has 3 sessions (including the
 // tool-sequences fixture), project-beta has 3, project-duration has 1,
 // project-edits has 1, and project-reclassification has 2, totalling 13.
-const TOTAL_SESSIONS = 13;
+// SQLite adds the file-reference fixture.
+const TOTAL_SESSIONS = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb" ? 13 : 14;
 const ALPHA_SESSIONS = 3;
 const BETA_SESSIONS = 3;
 const SLOW_SESSION_RESPONSE_MS = 5_500;

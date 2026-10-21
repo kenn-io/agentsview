@@ -105,5 +105,31 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Release this reader before inspecting the optional table: read-only
+	// archives may have a single connection and may predate file evidence.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	has, err := hasFileEvidence(ctx, d.getReader())
+	if err != nil || !has {
+		return err
+	}
+	evidence, err := d.getReader().QueryContext(ctx, `SELECT DISTINCT asset_ref FROM message_file_evidence WHERE asset_ref <> ''`)
+	if err != nil {
+		return err
+	}
+	defer evidence.Close()
+	for evidence.Next() {
+		var ref string
+		if err := evidence.Scan(&ref); err != nil {
+			return err
+		}
+		if err := check(ref); err != nil {
+			return err
+		}
+	}
+	return evidence.Err()
 }

@@ -29,6 +29,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
   let { sessionId }: Props = $props();
   let expanded = $state(false);
   let messages = $state<Message[] | null>(null);
+  let fileEvidence = $state<MessagesResponse["file_evidence"]>([]);
   let sessionMeta = $state<Session | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -39,6 +40,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
     nestedRead.cancel();
     expanded = false;
     messages = null;
+    fileEvidence = [];
     sessionMeta = null;
     loading = false;
     error = null;
@@ -74,6 +76,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
         ]);
         if (!nestedRead.isCurrent(signal)) return;
         messages = resp.messages;
+        fileEvidence = resp.file_evidence ?? [];
         sessionMeta = meta;
       } catch (e) {
         if (isAbortError(e) || !nestedRead.isCurrent(signal)) return;
@@ -174,6 +177,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
         {#each messages as message}
           <MessageContent
             {message}
+            fileEvidence={fileEvidence?.find((group) => group.ordinal === message.ordinal)?.records ?? []}
             session={tokenSourceSession}
             isSubagentContext={true}
           />

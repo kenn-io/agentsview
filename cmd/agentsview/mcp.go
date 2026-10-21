@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -643,4 +644,12 @@ func normalizeMCPHTTPAddr(addr string, allowInsecure bool) (string, error) {
 				"an authenticating reverse proxy)", trimmed)
 	}
 	return trimmed, nil
+}
+
+func (s *mcpDaemonService) FileReferences(ctx context.Context, in service.FileReferencesInput) (*service.FileReferencesResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*service.FileReferencesResult, error) {
+		return svc.FileReferences(ctx, in)
+	})
 }

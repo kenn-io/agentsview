@@ -5,6 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
+import { localEvidence } from "../../test/file-evidence.js";
 
 function makeToolMessage(ordinal: number): Message {
   return {
@@ -40,6 +41,27 @@ afterEach(() => {
 });
 
 describe("ToolCallGroup", () => {
+  it.each([0, 1, 2])("keeps message-level files beside %i grouped calls", async (count) => {
+    const message = makeToolMessage(1);
+    message.tool_calls = Array.from({ length: count }, () => ({
+      tool_name: "Bash",
+      category: "Bash",
+    }));
+    message.content = count ? "" : "[Bash]\npwd";
+    message.content_length = message.content.length;
+    const component = mount(ToolCallGroup, {
+      target: document.body,
+      props: {
+        messages: [message],
+        timestamp: message.timestamp,
+        fileEvidence: new Map([[1, [localEvidence({ message_ordinal: 1 })]]]),
+      },
+    });
+    await tick();
+    expect(document.querySelector('[data-occurrence="o1"]')?.textContent).toContain("report.txt");
+    await unmount(component);
+  });
+
   it("omits duration for legacy calls without stored timing", async () => {
     const message = makeToolMessage(1);
     message.tool_calls = [];

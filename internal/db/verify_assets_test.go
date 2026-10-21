@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/assets"
+	"go.kenn.io/agentsview/internal/fileevidence"
 )
 
 func TestVerifyAssets(t *testing.T) {
@@ -63,4 +65,42 @@ func TestVerifyAssets(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyAssetsNativeMessageEvidence(t *testing.T) {
+	database := testDB(t)
+	database.rawReader().SetMaxOpenConns(1)
+	dir := t.TempDir()
+	database.SetAssetsDir(dir)
+	require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "evidence", Agent: "claude"}))
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{messageAttachmentEvidence("evidence")}))
+	snapshot, err := database.ReadFileEvidenceSnapshot(t.Context(), "evidence", fileevidence.Window{})
+	require.NoError(t, err)
+	require.Len(t, snapshot.Rows, 2)
+	ref := snapshot.Rows[0].Record.AssetRef
+	// This image has no message or tool-result placeholder: only its descriptor owns it.
+	require.NotEmpty(t, ref)
+	require.NoError(t, database.VerifyAssets(t.Context(), dir))
+	path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+	require.NoError(t, os.WriteFile(path, []byte("corrupt"), 0o600))
+	require.ErrorContains(t, database.VerifyAssets(t.Context(), dir), "asset")
+	require.NoError(t, os.Remove(path))
+	require.ErrorContains(t, database.VerifyAssets(t.Context(), dir), "asset")
+}
+
+func TestVerifyAssetsBeforeFileEvidenceSchema(t *testing.T) {
+	// Keep the archive columns this reader used before native evidence existed.
+	conn, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "legacy.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	conn.SetMaxOpenConns(1)
+	_, err = conn.ExecContext(t.Context(), `
+        CREATE TABLE messages(content TEXT NOT NULL);
+        CREATE TABLE tool_calls(result_content TEXT NOT NULL);
+        CREATE TABLE tool_result_events(content TEXT NOT NULL);
+        INSERT INTO messages VALUES ('archived answer');`)
+	require.NoError(t, err)
+	database := &DB{}
+	database.reader.Store(conn)
+	assert.NoError(t, database.VerifyAssets(t.Context(), t.TempDir()))
 }

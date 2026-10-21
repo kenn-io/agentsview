@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,8 +10,8 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/kit/atomicfile"
 )
 
@@ -168,78 +169,16 @@ func cleanupCommittedUpload(upload committedUpload) {
 // sessionBatchWriteFromParsed maps parsed session and messages
 // to DB types for an upload transaction.
 func sessionBatchWriteFromParsed(
-	sess parser.ParsedSession,
-	msgs []parser.ParsedMessage,
-) db.SessionBatchWrite {
-	hasTotal, hasPeak := sess.TokenCoverage(msgs)
-	dbSess := db.Session{
-		ID:                   sess.ID,
-		Project:              sess.Project,
-		Machine:              sess.Machine,
-		MessageCount:         sess.MessageCount,
-		UserMessageCount:     sess.UserMessageCount,
-		ParentSessionID:      strPtr(sess.ParentSessionID),
-		RelationshipType:     string(sess.RelationshipType),
-		TotalOutputTokens:    sess.TotalOutputTokens,
-		PeakContextTokens:    sess.PeakContextTokens,
-		HasTotalOutputTokens: hasTotal,
-		HasPeakContextTokens: hasPeak,
-		FilePath:             strPtr(sess.File.Path),
-		FileSize:             int64Ptr(sess.File.Size),
-		FileMtime:            int64Ptr(sess.File.Mtime),
-		FileHash:             strPtr(sess.File.Hash),
-	}
-	db.ApplyParsedSessionIdentity(&dbSess, sess)
-	if sess.FirstMessage != "" {
-		dbSess.FirstMessage = &sess.FirstMessage
-	}
-	dbSess.SessionName = db.ParsedSessionName(sess)
-	if !sess.StartedAt.IsZero() {
-		dbSess.StartedAt = timeutil.Ptr(sess.StartedAt)
-	}
-	if !sess.EndedAt.IsZero() {
-		dbSess.EndedAt = timeutil.Ptr(sess.EndedAt)
-	}
-
-	dbMsgs := make([]db.Message, len(msgs))
-	for i, m := range msgs {
-		hasCtx, hasOut := m.TokenPresence()
-		dbMsgs[i] = db.Message{
-			SessionID:         sess.ID,
-			Ordinal:           m.Ordinal,
-			Role:              string(m.Role),
-			Content:           m.Content,
-			Timestamp:         timeutil.Format(m.Timestamp),
-			HasThinking:       m.HasThinking,
-			HasToolUse:        m.HasToolUse,
-			ContentLength:     m.ContentLength,
-			IsSystem:          m.IsSystem,
-			IsCompactBoundary: m.IsCompactBoundary,
-			Model:             m.Model,
-			ReasoningEffort:   m.ReasoningEffort,
-			TokenUsage:        m.TokenUsage,
-			PromptSource:      m.PromptSource,
-			SourceType:        m.SourceType,
-			SourceSubtype:     m.SourceSubtype,
-			SourceUUID:        m.SourceUUID,
-			SourceParentUUID:  m.SourceParentUUID,
-			IsSidechain:       m.IsSidechain,
-			ContextTokens:     m.ContextTokens,
-			OutputTokens:      m.OutputTokens,
-			HasContextTokens:  hasCtx,
-			HasOutputTokens:   hasOut,
-		}
-	}
-
-	// Signals and Findings are intentionally not computed for uploads:
-	// the upload path does not run the sync engine's derived-data
-	// pipeline, so zero-valued signal columns and no findings rows are
-	// the expected state for freshly uploaded sessions.
+	ctx context.Context, sess parser.ParsedSession, msgs []parser.ParsedMessage,
+	blockedCategories map[string]bool,
+) (db.SessionBatchWrite, error) {
+	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{Session: sess, Messages: msgs}, ingest.ContentOptions{
+		BlockedResultCategories: blockedCategories,
+	})
+	// Uploads omit the sync engine's derived signals and findings.
 	return db.SessionBatchWrite{
-		Session:         dbSess,
-		Messages:        dbMsgs,
-		ReplaceMessages: true,
-	}
+		Session: candidate.Session, Messages: candidate.Messages, ReplaceMessages: true,
+	}, err
 }
 
 // isSafeName rejects names containing path separators, "..",
@@ -255,18 +194,4 @@ func isSafeName(name string) bool {
 		return false
 	}
 	return true
-}
-
-func strPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func int64Ptr(n int64) *int64 {
-	if n == 0 {
-		return nil
-	}
-	return &n
 }

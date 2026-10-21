@@ -9,6 +9,7 @@ FIXTURE="$TEST_TMP/testfixture"
 SERVER="$TEST_TMP/agentsview"
 ARGS_FILE="$TEST_TMP/server-args"
 FIXTURE_MARKER="$TEST_TMP/fixture-ran"
+STUB_PID_FILE="$TEST_TMP/stub-pid"
 
 # The quoted variables below belong to the generated fixture scripts and must
 # expand only when those scripts run.
@@ -16,6 +17,14 @@ FIXTURE_MARKER="$TEST_TMP/fixture-ran"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
+    'while (( $# > 0 )); do' \
+    '  if [[ "$1" == "-docbank-config" ]]; then' \
+    '    printf "%s\n" "$$" > "${E2E_TEST_STUB_PID:?}"' \
+    '    : > "$2"' \
+    '    exec sleep 60' \
+    '  fi' \
+    '  shift' \
+    'done' \
     ': > "${E2E_TEST_FIXTURE_MARKER:?}"' \
     > "$FIXTURE"
 # shellcheck disable=SC2016
@@ -31,6 +40,7 @@ common_env=(
     "E2E_PREBUILT_SERVER=$SERVER"
     "E2E_TEST_ARGS=$ARGS_FILE"
     "E2E_TEST_FIXTURE_MARKER=$FIXTURE_MARKER"
+    "E2E_TEST_STUB_PID=$STUB_PID_FILE"
 )
 
 assert_server_port() {
@@ -62,6 +72,11 @@ run_valid() {
             bash "$ROOT/scripts/e2e-server.sh" > "$TEST_TMP/stdout" 2> "$TEST_TMP/stderr"
     fi
     test -f "$FIXTURE_MARKER"
+    test -f "$STUB_PID_FILE"
+    if kill -0 "$(cat "$STUB_PID_FILE")" 2>/dev/null; then
+        echo 'owned Docbank fixture survived server exit' >&2
+        exit 1
+    fi
     assert_server_port "$want"
 }
 

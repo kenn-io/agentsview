@@ -472,9 +472,11 @@ func openCaptureEngine(
 		AgentDirs: map[parser.AgentType][]string{
 			agent: {state.capturedProviderRoot()},
 		},
-		DisabledAgents:                    disabled,
-		Machine:                           "capture",
-		Ephemeral:                         true,
+		DisabledAgents: disabled,
+		Machine:        "capture",
+		Ephemeral:      true,
+		// Usage reports retain provider copies; the scratch archive needs no images.
+		ToolResultImages:                  config.ToolResultImagesDrop,
 		DiscardPendingWritesOnCancel:      true,
 		DisableSignalRecomputation:        true,
 		DisableFilesystemProjectDiscovery: true,

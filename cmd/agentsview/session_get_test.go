@@ -104,6 +104,10 @@ func (s *stubGetService) List(context.Context, service.ListFilter) (*service.Ses
 	panic("List not expected")
 }
 
+func (s *stubGetService) FileReferences(context.Context, service.FileReferencesInput) (*service.FileReferencesResult, error) {
+	return nil, errors.New("unexpected file references call")
+}
+
 func (s *stubGetService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
 	panic("Messages not expected")
 }

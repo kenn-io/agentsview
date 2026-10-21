@@ -77,6 +77,11 @@ func (db *DB) applyArtifactImportedSession(
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(
 		write.Session, write.Messages,
 	)
+	messages, publicationErr := db.publishFileEvidence(write.Messages, db.ToolResultImages())
+	if publicationErr != nil {
+		return result, publicationErr
+	}
+	write.Messages = messages
 	switch {
 	case db.usageOnlyStorage():
 		write.Signals = usageOnlySignalUpdate()

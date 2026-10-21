@@ -6,6 +6,7 @@
     SessionsService,
     SettingsService,
     type DbSession,
+    type ServiceMessageList,
   } from "../../api/generated/index";
   import { isAbortError } from "../../api/runtime.js";
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FunnelIcon } from "../../icons.js";
@@ -35,6 +36,7 @@
   let loading = $state(true);
   let loadError = $state("");
   let messagesBySession = $state<Record<string, Message[]>>({});
+  let fileEvidenceBySession = $state<Record<string, ServiceMessageList["file_evidence"]>>({});
   let messagesLoadingId = $state("");
   let messagesError = $state("");
   let targetProject = $state("");
@@ -184,8 +186,7 @@
           roles: "user,assistant",
         }, { signal });
       if (!messagesRead.isCurrent(signal)) return;
-      // The generated message list has the same temporary `any[]` boundary
-      // as the session list above.
+      fileEvidenceBySession[sessionId] = response.file_evidence ?? [];
       messagesBySession = {
         ...messagesBySession,
         [sessionId]: (response.messages ?? []) as Message[],
@@ -278,6 +279,7 @@
             <div class="preview-message">
               <MessageContent
                 {message}
+                fileEvidence={fileEvidenceBySession[activeSession.id]?.find((group) => group.ordinal === message.ordinal)?.records ?? []}
                 session={activeSession}
                 compact
                 allowMutations={false}

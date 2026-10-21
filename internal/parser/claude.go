@@ -798,6 +798,7 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
+	ctx           context.Context
 	startOrdinal  int
 	lastEntryUUID string
 	stored        claudeStoredIdentity
@@ -1051,7 +1052,7 @@ func claudeParseSessionFrom(
 	)
 
 	msgs, _, endedAt := extractMessagesFrom(
-		entries, startOrdinal,
+		entries, startOrdinal, scan.ctx,
 	)
 	annotateSubagentSessions(msgs, subagentMap)
 	if len(queuedCommands) > 0 {
@@ -1319,8 +1320,12 @@ func hasDAGFork(entries []dagEntry, lastEntryUUID string) bool {
 // extractMessagesFrom is like extractMessages but uses a
 // custom starting ordinal for incremental parsing.
 func extractMessagesFrom(
-	entries []dagEntry, startOrdinal int,
+	entries []dagEntry, startOrdinal int, contexts ...context.Context,
 ) ([]ParsedMessage, time.Time, time.Time) {
+	ctx := context.Background()
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
 	var (
 		messages  []ParsedMessage
 		startedAt time.Time
@@ -1368,7 +1373,7 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -1382,7 +1387,7 @@ func extractMessagesFrom(
 			}
 		}
 
-		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+		if strings.TrimSpace(text) == "" && len(trs) == 0 && (!nativeFileEvidence(ctx) || (!content.Get(`#(type==image)`).Exists() && !content.Get(`#(type==document)`).Exists())) {
 			continue
 		}
 
@@ -1458,6 +1463,9 @@ func extractMessagesFrom(
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
+		if nativeFileEvidence(ctx) && e.uuid != "" {
+			captureFileEvidence(&msg, content.Raw, e.uuid)
+		}
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
 			msg.StopReason = gjson.Get(e.line, "message.stop_reason").Str
@@ -2696,7 +2704,7 @@ func extractMessagesContext(
 			}
 		}
 
-		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+		if strings.TrimSpace(text) == "" && len(trs) == 0 && (!nativeFileEvidence(ctx) || (!content.Get(`#(type==image)`).Exists() && !content.Get(`#(type==document)`).Exists())) {
 			continue
 		}
 
@@ -2771,6 +2779,9 @@ func extractMessagesContext(
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
+		if nativeFileEvidence(ctx) && e.uuid != "" {
+			captureFileEvidence(&msg, content.Raw, e.uuid)
+		}
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
 			msg.StopReason = gjson.Get(e.line, "message.stop_reason").Str

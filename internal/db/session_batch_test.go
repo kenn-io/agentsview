@@ -82,6 +82,29 @@ func TestWriteSessionBatchMessageCountCondition(t *testing.T) {
 	}
 }
 
+func TestWriteSessionBatchUpdatesMessageMetadataWithoutTranscriptRevision(t *testing.T) {
+	d := testDB(t)
+	initial := messageCountWrite("metadata", 1)
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{initial})
+	require.NoError(t, err)
+	revision := extendTestRevision(t, d, "metadata")
+
+	updated := messageCountWrite("metadata", 1)
+	updated.Messages[0].SourceType = "subagent"
+	updated.Messages[0].SourceParentUUID = "parent-entry"
+	updated.Messages[0].IsSidechain = true
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{updated})
+	require.NoError(t, err)
+
+	messages, err := d.GetAllMessages(t.Context(), "metadata")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "subagent", messages[0].SourceType)
+	assert.Equal(t, "parent-entry", messages[0].SourceParentUUID)
+	assert.True(t, messages[0].IsSidechain)
+	assert.Equal(t, revision, extendTestRevision(t, d, "metadata"))
+}
+
 func TestWriteSessionBatchAtomicShorterMemberRollsBack(t *testing.T) {
 	d := testDB(t)
 	root := messageCountWrite("root", 96)

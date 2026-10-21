@@ -59,6 +59,13 @@ func (e *Engine) compareStoredSession(
 		return nil, err
 	}
 	diffs := compareSessionFields(stored, prepared)
+	evidenceDiffers, err := e.db.FileEvidenceDiffers(ctx, stored.ID, msgs, prepared.FileEvidenceCoverage)
+	if err != nil {
+		return nil, fmt.Errorf("parse-diff: file evidence: %w", err)
+	}
+	if evidenceDiffers {
+		diffs = append(diffs, FieldDiff{Field: FieldMessageMetadata, Stored: "retained file evidence", Parsed: "file evidence or coverage differs"})
+	}
 
 	// Tier 1: three exact ordered fingerprints over the stored
 	// messages. The token fingerprint covers per-message model and
@@ -867,6 +874,9 @@ func renderContentChange(stored, parsed db.Message) string {
 // flags (is_system, has_thinking, has_tool_use, thinking_text). Returns
 // "" when they match.
 func messageMetadataDiff(stored, parsed db.Message) string {
+	if !db.FileEvidenceEqual(stored, parsed) {
+		return "file_evidence differs"
+	}
 	switch {
 	case db.SanitizeUTF8(stored.Role) != db.SanitizeUTF8(parsed.Role):
 		return fmt.Sprintf("role %q -> %q", stored.Role, parsed.Role)

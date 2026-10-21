@@ -9,7 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/fileevidence"
 )
 
 // StagedToolResults is the publish-side handle for tool-result rows staged
@@ -38,6 +42,100 @@ type StagedToolResults interface {
 	Path() string
 	// Close releases the staging storage.
 	Close() error
+}
+
+// StagedFileEvidence carries one native attachment array's transient bytes.
+type StagedFileEvidence struct {
+	MessageEntry    string
+	CallKey         string
+	ResultIndex     int
+	Candidates      []fileevidence.Candidate
+	Withheld        bool
+	RetainedContent string
+}
+
+type stagedFileEvidenceSource interface {
+	VisitFileEvidence(context.Context, func(StagedFileEvidence) error) error
+}
+
+func (db *DB) prepareStagedFileEvidence(ctx context.Context, msgs []Message, staged StagedToolResults) error {
+	source, ok := staged.(stagedFileEvidenceSource)
+	if !ok {
+		return nil
+	}
+	type owner struct{ message, call int }
+	owners := make(map[string]owner)
+	messageOwners := make(map[string]owner)
+	occurrences := make(map[string]int)
+	for i, m := range msgs {
+		if m.StagedFileEvidenceEntry != "" {
+			messageOwners[m.StagedFileEvidenceEntry] = owner{i, -1}
+		}
+		for j, call := range m.ToolCalls {
+			n := occurrences[call.ToolUseID]
+			occurrences[call.ToolUseID] = n + 1
+			owners[StagedToolCallKey(call.ToolUseID, n)] = owner{i, j}
+		}
+	}
+	return source.VisitFileEvidence(ctx, func(item StagedFileEvidence) error {
+		target, ok := owners[item.CallKey]
+		messageAttachment := item.MessageEntry != ""
+		if messageAttachment {
+			target, ok = messageOwners[item.MessageEntry]
+		}
+		if !ok {
+			return nil
+		}
+		m := &msgs[target.message]
+		if item.Withheld || db.ArchiveContent().UsageOnly() || !messageAttachment && db.ArchiveContent().OmitsToolContent() || db.ToolResultImages() == config.ToolResultImagesDrop {
+			m.FileEvidenceCoverage.State = "withheld"
+			return nil
+		}
+		used := int64(0)
+		for _, r := range m.FileEvidence {
+			if r.Size != nil && (r.Kind == "image" || r.Kind == "document") {
+				used += *r.Size
+			}
+		}
+		for _, c := range item.Candidates {
+			if len(m.FileEvidence)+len(m.FileEvidenceCandidates) >= fileevidence.MaxOccurrences {
+				break
+			}
+			if used+int64(len(c.Payload)) > fileevidence.MaxMessageBytes {
+				c.Payload, c.Record.Size, c.Record.SHA256 = nil, nil, ""
+				c.Record.IneligibleReason = "message_limit"
+			}
+			used += int64(len(c.Payload))
+			if messageAttachment {
+				c.SupportingText = m.Content
+			} else {
+				c.Call, c.Result, c.Support = target.call, item.ResultIndex, "event"
+				c.Record.Position.Call = target.call
+			}
+			m.FileEvidenceCandidates = append(m.FileEvidenceCandidates, c)
+		}
+		// The model contains staged:N placeholders. Validate source-backed
+		// descriptors against the real retained event, without keeping that
+		// potentially large content in the message model after normalization.
+		projection := *m
+		projection.ToolCalls = slices.Clone(m.ToolCalls)
+		if !messageAttachment {
+			call := &projection.ToolCalls[target.call]
+			call.ResultEvents = slices.Clone(call.ResultEvents)
+			if item.ResultIndex < 0 || item.ResultIndex >= len(call.ResultEvents) {
+				return errors.New("staged file evidence has no retained result event")
+			}
+			call.ResultEvents[item.ResultIndex].Content = item.RetainedContent
+		}
+		normalizedMessages, err := db.publishFileEvidence([]Message{projection}, db.ToolResultImages())
+		if err != nil {
+			return err
+		}
+		normalized := normalizedMessages[0]
+		normalized.ToolCalls = m.ToolCalls
+		*m = normalized
+		return nil
+	})
 }
 
 // StagedToolVerdict carries the two classifiers' facts while real content is available.
@@ -118,9 +216,10 @@ func (db *DB) ReplaceSessionContentStagedWithCheckpoint(
 	staged StagedToolResults, blocked map[string]bool,
 	signalsFn StagedSignalsFunc,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	coverage ...fileevidence.Coverage,
 ) error {
 	return db.replaceSessionContentStaged(
-		ctx, sessionID, msgs, staged, blocked, signalsFn, cp, blobs,
+		ctx, sessionID, msgs, staged, blocked, signalsFn, cp, blobs, coverage...,
 	)
 }
 
@@ -148,7 +247,7 @@ func stagedSessionHasStoredMessagesTx(ctx context.Context,
 ) (bool, error) {
 	var exists int
 	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM messages WHERE session_id = ? LIMIT 1`, sessionID,
+		`SELECT 1 FROM sessions WHERE id=? AND (file_evidence_version>0 OR EXISTS(SELECT 1 FROM messages WHERE session_id=sessions.id))`, sessionID,
 	).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -314,6 +413,9 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		return [sha256.Size]byte{}, err
 	}
 
+	if err := digestFileEvidenceTx(ctx, tx, sessionID, h); err != nil {
+		return [sha256.Size]byte{}, err
+	}
 	var digest [sha256.Size]byte
 	copy(digest[:], h.Sum(nil))
 	return digest, nil
@@ -379,7 +481,17 @@ func (db *DB) replaceSessionContentStaged(
 	staged StagedToolResults, blocked map[string]bool,
 	signalsFn StagedSignalsFunc,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	coverage ...fileevidence.Coverage,
 ) error {
+	msgs = append([]Message(nil), msgs...)
+	_ = ValidateAndSanitize(nil, msgs, nil)
+	msgs, err := db.publishFileEvidence(msgs, db.ToolResultImages())
+	if err != nil {
+		return err
+	}
+	if err := db.prepareStagedFileEvidence(ctx, msgs, staged); err != nil {
+		return err
+	}
 	if db.ArchiveContent().OmitsToolContent() {
 		// The in-memory rows contain all retained metadata. Staged output is
 		// excluded by this policy, so publish through the regular projection.
@@ -392,7 +504,7 @@ func (db *DB) replaceSessionContentStaged(
 				return err
 			}
 		}
-		return db.ReplaceSessionContent(ctx, sessionID, msgs, update, findings)
+		return db.replaceSessionContent(ctx, sessionID, msgs, update, findings, cp, blobs, db.ToolResultImages(), coverage...)
 	}
 
 	db.mu.Lock()
@@ -448,6 +560,9 @@ func (db *DB) replaceSessionContentStaged(
 	if err := replaceSessionMessagesTxStaged(
 		ctx, tx, sessionID, msgs, staged, blocked,
 	); err != nil {
+		return err
+	}
+	if _, err := setEvidenceCoverageTx(tx, sessionID, evidenceCoverage(msgs, coverage...), true); err != nil {
 		return err
 	}
 	contentUnchanged := false

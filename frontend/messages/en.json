@@ -2946,5 +2946,21 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: live tokens need attention",
   "status_bar_codex_cloud_oldest_failure": "Oldest failure: {time}",
   "status_bar_codex_cloud_last_success": "Last successful sync: {time}",
-  "status_bar_codex_cloud_homes": "Codex homes: {homes}"
+  "status_bar_codex_cloud_homes": "Codex homes: {homes}",
+  "docbank_current": "Current",
+  "docbank_prior": "Prior version",
+  "docbank_trash": "Trash",
+  "docbank_not_found": "Not found in Docbank",
+  "docbank_exact_unavailable": "Exact bytes unavailable",
+  "docbank_unavailable": "Docbank unavailable",
+  "docbank_check_remaining": "Check remaining",
+  "docbank_more_matches": "More matches",
+  "docbank_retry_matches": "Retry matches",
+  "docbank_matches": "Docbank matches",
+  "docbank_match": "Docbank · {state} · {name}",
+  "docbank_attachment": "Attachment",
+  "docbank_image_alt": "Transcript image: {name}",
+  "docbank_image_details": "Matches use the image bytes retained in this transcript; the original image may differ.",
+  "docbank_pi_details": "Exact text proof applies only to successful native Pi reads and writes with complete retained bytes.",
+  "docbank_unavailable_details": "File locations could not be checked. Local attachments remain available."
 }

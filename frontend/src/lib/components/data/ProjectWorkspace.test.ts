@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import type { DbProjectInventoryRow } from "../../api/generated/index";
+import { imageEvidence } from "../../test/file-evidence.js";
 import ProjectWorkspace from "./ProjectWorkspace.svelte";
 import { m } from "../../i18n/index.js";
 import { data } from "../../stores/data.svelte.js";
@@ -275,12 +276,13 @@ describe("ProjectWorkspace", () => {
     expect(screen.queryByTitle(m.message_content_pin_message())).toBeNull();
   });
 
-  it("keeps cached transcript content when a session left behind fails", async () => {
+  it("keeps cached image-only transcript content when a session left behind fails", async () => {
     const secondMessages = deferred<never>();
     api.listMessages.mockImplementation(({ id }: { id: string }) => {
       if (id === "session-2") return secondMessages.promise;
       return Promise.resolve({
         count: 1,
+        file_evidence: imageEvidence,
         messages: [
           {
             has_context_tokens: false,
@@ -289,12 +291,12 @@ describe("ProjectWorkspace", () => {
             session_id: "session-1",
             ordinal: 0,
             role: "user",
-            content: "Cached mapping context",
+            content: "",
             timestamp: "2026-03-09T18:30:00Z",
             has_thinking: false,
             thinking_text: "",
             has_tool_use: false,
-            content_length: 22,
+            content_length: 0,
             model: "",
             context_tokens: 0,
             output_tokens: 0,
@@ -315,7 +317,7 @@ describe("ProjectWorkspace", () => {
     secondMessages.reject(new Error("late failure"));
     await flush();
 
-    expect(screen.getByText("Cached mapping context")).toBeTruthy();
+    expect(screen.getByRole("img").getAttribute("src")).toBe("/__agentsview_asset__/proof.png");
     expect(screen.queryByText(m.data_reclassify_session_preview_failed())).toBeNull();
   });
 

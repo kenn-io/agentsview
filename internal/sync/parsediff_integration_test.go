@@ -2492,3 +2492,26 @@ func TestParseDiffClaudeMissingRowsRequireLegacyForkEvidence(t *testing.T) {
 			"a CWD-preserved fork must not trip --fail-on-change")
 	})
 }
+
+func TestParseDiffNativeAttachmentDoesNotWriteAssets(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().AddRaw(`{"type":"user","uuid":"native-user","message":{"role":"user","content":[{"type":"text","text":"see attached"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAEC"}}]},"timestamp":"2026-01-01T00:00:00Z"}`).String()
+	env.writeClaudeSession(t, "test-proj", "native-image.jsonl", content)
+	dir := t.TempDir()
+	cfg := sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local", AssetsDir: dir}
+	ingest := sync.NewEngine(t.Context(), env.db, cfg)
+	t.Cleanup(ingest.Close)
+	require.Equal(t, 1, ingest.SyncAll(t.Context(), nil).Synced)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.NoError(t, os.Remove(filepath.Join(dir, entries[0].Name())))
+	diff := sync.NewDiffEngine(t.Context(), env.db, cfg)
+	t.Cleanup(diff.Close)
+	report, err := diff.ParseDiff(t.Context(), sync.ParseDiffOptions{Agents: []parser.AgentType{parser.AgentClaude}})
+	require.NoError(t, err)
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Identical: 1}, report.Totals)
+	entries, err = os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}

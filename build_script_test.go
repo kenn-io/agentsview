@@ -191,6 +191,12 @@ if [ "${1:-}" = "build" ]; then
     cat > "$out" <<'EOS'
 #!/bin/sh
 printf 'built-binary %s\n' "$*" >> "$CALL_LOG"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-docbank-config" ]; then
+    shift; : > "$1"; exec sleep 60
+  fi
+  shift
+done
 exit 0
 EOS
     chmod +x "$out"
@@ -421,6 +427,11 @@ set -eu
 printf 'fixture %s\n' "$*" >> "$CALL_LOG"
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    -docbank-config)
+      shift
+      : > "$1"
+      exec sleep 60
+      ;;
     -out|-duckdb-out)
       shift
       mkdir -p "$(dirname "$1")"

@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -75,7 +76,7 @@ const (
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
 	defaultHTTPReadTimeout           = 10 * time.Second
 	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
-		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
+		service.SemanticSearchIntentHeader + ", " + service.FileReferencesIntentHeader + ", " + rawSyncDeviceIDHeader +
 		", " + rawSyncUploadOffsetHeader
 	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
 		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location, " + apiclient.ArchiveStaleHeader
@@ -102,6 +103,8 @@ type Server struct {
 	engine                *sync.Engine
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
+	fileResolver          docbank.Resolver
+	fileResolverErr       error
 	broadcaster           *Broadcaster
 	mux                   *http.ServeMux
 	api                   huma.API
@@ -260,13 +263,6 @@ func New(
 	// still need the local handle. Non-SQLite stores use the generic read-only
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
-	var sessions service.SessionService
-	if local, ok := database.(*db.DB); ok {
-		local.SetArchiveContent(cfg.ArchiveContent)
-		sessions = service.NewDirectBackend(local, engine, service.WithModelGroups(modelGroups))
-	} else {
-		sessions = service.NewReadOnlyBackend(database, service.WithModelGroups(modelGroups))
-	}
 
 	s := &Server{
 		cfg:                       cfg,
@@ -276,7 +272,6 @@ func New(
 		activityReports:           newActivityReportCache(),
 		activityReportFlights:     newActivityReportBuildGroup(),
 		engine:                    engine,
-		sessions:                  sessions,
 		mux:                       http.NewServeMux(),
 		httpRemoteCleanupRegistry: new(remotesync.CleanupRegistry),
 		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
@@ -290,6 +285,21 @@ func New(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.fileResolver == nil && cfg.Integrations.Docbank.Enabled {
+		resolverCtx := s.baseCtx
+		if resolverCtx == nil {
+			resolverCtx = context.Background()
+		}
+		s.fileResolver, s.fileResolverErr = docbank.NewResolver(resolverCtx, cfg.Integrations.Docbank)
+	}
+	options := []service.DirectBackendOption{service.WithModelGroups(modelGroups), service.WithFileReferencesResolver(s.fileResolver)}
+	if local, ok := database.(*db.DB); ok {
+		local.SetArchiveContent(cfg.ArchiveContent)
+		s.sessions = service.NewDirectBackend(local, engine, options...)
+	} else {
+		s.sessions = service.NewReadOnlyBackend(database, options...)
+	}
+
 	if s.version.APIVersion == 0 {
 		s.version.APIVersion = APIVersion
 	}
@@ -910,6 +920,7 @@ func (s *Server) Handler() http.Handler {
 				ServeHTTP(w, r)
 		})
 	}
+	h = fileReferencesNoStore(h)
 	h = s.idle.Wrap(h)
 	return h
 }
@@ -1455,6 +1466,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	for range shutdownCount {
 		err = errors.Join(err, <-shutdownErrors)
+	}
+	if s.fileResolver != nil {
+		err = errors.Join(err, s.fileResolver.Close())
 	}
 	s.chrome.shutdown()
 	s.mu.Lock()

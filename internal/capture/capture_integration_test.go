@@ -2504,7 +2504,10 @@ func claudeHelperLines(sessionID, cwd string, unfinished bool) []string {
 	user := mustMarshalJSON(map[string]any{
 		"type": "user", "uuid": "user-1", "sessionId": sessionID,
 		"timestamp": "2026-08-16T10:00:00Z", "cwd": cwd,
-		"message": map[string]any{"role": "user", "content": "PROMPT_SENTINEL"},
+		"message": map[string]any{"role": "user", "content": []map[string]any{
+			{"type": "text", "text": "PROMPT_SENTINEL"},
+			{"type": "image", "source": map[string]string{"type": "base64", "media_type": "image/png", "data": "YWxwaGEK"}},
+		}},
 	})
 	assistant := mustMarshalJSON(map[string]any{
 		"type": "assistant", "uuid": "assistant-1", "parentUuid": "user-1",

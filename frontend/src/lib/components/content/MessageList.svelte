@@ -4,6 +4,7 @@
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
+  import { SessionFileReferencesStore } from "../../stores/file-references.svelte.js";
   import { messages } from "../../stores/messages.svelte.js";
   import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -39,6 +40,7 @@
     projectSessionScope,
   } from "../../search/session-scope.js";
 
+  const fileStore = new SessionFileReferencesStore();
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;
@@ -114,6 +116,19 @@
         return `${sid}-m-${item.message.ordinal}`;
       },
     };
+  });
+
+  $effect(() => {
+    const identity = { id: sessions.activeSessionId === messages.sessionId ? messages.sessionId : null,
+      binding: messages.loadedBinding, revision: messages.loadedRevision, generation: messages.evidenceGeneration };
+    untrack(() => fileStore.setSession(identity.id, identity.binding));
+    return () => fileStore.dispose();
+  });
+  $effect(() => {
+    const binding = messages.loadedBinding;
+    const ordinals = (virtualizer.instance?.getVirtualItems() ?? [])
+      .flatMap((row) => itemAt(row.index)?.ordinals ?? []).filter((ordinal) => messages.fileEvidence.has(ordinal));
+    if (binding && ordinals.length) untrack(() => { void fileStore.loadWindow(Math.min(...ordinals), Math.max(...ordinals)); });
   });
 
   /** Svelte action: measure element for variable-height virtualizer */
@@ -911,6 +926,12 @@
     onscroll={handleScroll}
     use:manualScrollIntent
   >
+    {#if fileStore.unavailable || fileStore.canCheckRemaining}
+      <div class="file-lookup-status">
+        {#if fileStore.unavailable}<span title={m.docbank_unavailable_details()}>{m.docbank_unavailable()}</span>{/if}
+        {#if fileStore.canCheckRemaining}<Button size="sm" surface="soft" label={m.docbank_check_remaining()} disabled={fileStore.busy} onclick={() => fileStore.checkRemaining()} />{/if}
+      </div>
+    {/if}
     <div
       style="height: {virtualizer.instance?.getTotalSize() ?? 0}px; width: 100%; position: relative;"
     >
@@ -940,6 +961,7 @@
             {#if item.kind === "tool-group"}
               <ToolCallGroup
                 messages={item.messages}
+                fileEvidence={messages.fileEvidence} {fileStore}
                 timestamp={item.timestamp}
                 searchable={true}
                 sortNewestFirst={ui.sortNewestFirst}
@@ -958,6 +980,7 @@
             {:else}
               <MessageContent
                 message={item.message}
+                fileEvidence={messages.fileEvidence.get(item.message.ordinal) ?? []} {fileStore}
                 searchOrdinal={item.message.ordinal}
               />
             {/if}
@@ -970,6 +993,7 @@
 {/if}
 
 <style>
+  .file-lookup-status { position: sticky; top: 0; height: 0; z-index: 2; display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text-muted); }
   .missing-session {
     display: contents;
   }

@@ -1,4 +1,8 @@
 <script lang="ts">
+  import FileEvidence from "./FileEvidence.svelte";
+  import type { ServiceLocalFileEvidence } from "../../api/generated/index.js";
+  import type { SessionFileReferencesStore } from "../../stores/file-references.svelte.js";
+
   import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
@@ -34,6 +38,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
+    fileEvidence?: ServiceLocalFileEvidence[];
+    fileStore?: SessionFileReferencesStore;
     message: Message;
     session?: Session | null;
     isSubagentContext?: boolean;
@@ -41,7 +47,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     compact?: boolean;
     allowMutations?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let { fileEvidence = [], fileStore, message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let localEvidence = $derived(fileEvidence.filter((r) => r.message_ordinal === message.ordinal));
   let copied = $state(false);
   let segments = $derived(enrichSegments(
     parseContent(message.content, message.has_tool_use, message.id, message.content_length),
@@ -310,12 +317,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         {/if}
       {/if}
     {/each}
+    <FileEvidence records={localEvidence.filter((r) => r.tool_call_index === null)} store={fileStore} />
     {#if ui.isBlockVisible("tool")}
       {@const turn = turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
-        <ToolBlock toolCall={soloCall} content="" label={displayToolName(soloCall)}
+        <ToolBlock fileEvidence={localEvidence.filter((r) => r.tool_call_index === 0)} {fileStore} toolCall={soloCall} content="" label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
             callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,
@@ -324,7 +332,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
-        <ParallelGroup toolCalls={structuredCalls} callTimingByID={callByToolUseID}
+        <ParallelGroup fileEvidence={localEvidence} {fileStore} toolCalls={structuredCalls} callTimingByID={callByToolUseID}
           isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}

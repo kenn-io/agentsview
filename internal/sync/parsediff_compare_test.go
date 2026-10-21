@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/fileevidence"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -2012,11 +2013,14 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 		},
 	}
 	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	current.FileEvidenceCoverage = fileevidence.Coverage{Version: 1, State: "complete"}
+	_, err := engine.db.WriteSessionBatchContext(t.Context(), []db.SessionBatchWrite{{Session: *current}})
+	require.NoError(t, err)
 	report := &ParseDiffReport{FieldCounts: map[string]int{}}
 	visited := map[string]bool{}
 	var presencePaths []string
 
-	err := engine.parseDiffCollectFile(
+	err = engine.parseDiffCollectFile(
 		t.Context(),
 		report,
 		job,

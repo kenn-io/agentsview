@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/fileevidence"
 )
 
 // Codex JSONL entry types.
@@ -62,8 +64,12 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
-	agent       AgentType
-	incremental bool
+	skipFileEvidence bool // Cursor reconstruction discards attachments, but keeps prompt digests.
+	evidenceLine     int
+	evidenceEntries  map[ParsedToolCallPosition]string
+	evidenceResults  map[string][]fileevidence.Candidate
+	agent            AgentType
+	incremental      bool
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
@@ -488,6 +494,23 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	return false
 }
 
+// codexUserPromptDigest adds ordered native image identities without retaining
+// their URLs or decoded payloads in the continuation cursor.
+func codexUserPromptDigest(content string, payload gjson.Result) [sha256.Size]byte {
+	digest := sha256.Sum256([]byte(content))
+	payload.Get("content").ForEach(func(_, block gjson.Result) bool {
+		if block.Get("type").Str == "input_image" {
+			image := sha256.Sum256([]byte(block.Get("image_url").Str))
+			var pair [2 * sha256.Size]byte
+			copy(pair[:sha256.Size], digest[:])
+			copy(pair[sha256.Size:], image[:])
+			digest = sha256.Sum256(pair[:])
+		}
+		return true
+	})
+	return digest
+}
+
 func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	payload gjson.Result, ts time.Time,
 ) {
@@ -519,12 +542,12 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		}
 		content = preprocessCodexUserTextBlocks(extractCodexTextBlocks(payload), !b.firstUserSeen)
 	}
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(content) == "" && (b.agent != AgentCodex || !payload.Get("content.#(type==input_image)").Exists()) {
 		return
 	}
 
 	if role == "user" {
-		first, replay := b.observeUserPrompt(content)
+		first, replay := b.observeUserPromptDigest(codexUserPromptDigest(content, payload))
 		if first {
 			b.firstMessage = truncate(
 				strings.ReplaceAll(content, "\n", " "), 300,
@@ -548,6 +571,21 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		Timestamp:     ts,
 		ContentLength: len(content),
 		Model:         b.model,
+	}
+	if b.agent == AgentCodex && !b.skipFileEvidence {
+		entry := payload.Get("id").Str
+		if entry == "" {
+			entry = fmt.Sprintf("line:%d", b.evidenceLine)
+		}
+		if staged, ok := b.sink.(CodexFileEvidenceStager); ok && payload.Get("content.#(type==input_image)").Exists() {
+			msg.StagedFileEvidenceEntry = fmt.Sprintf("line:%d", b.evidenceLine)
+			// Small JSON substrings must not pin the raw image array.
+			msg.Role = RoleType(strings.Clone(role))
+			msg.Content = strings.Clone(content)
+			staged.StageMessageFileEvidence(ctx, msg.StagedFileEvidenceEntry, entry, payload.Get("content").Raw)
+		} else {
+			captureFileEvidence(&msg, payload.Get("content").Raw, entry)
+		}
 	}
 	if role == string(RoleAssistant) {
 		msg.ReasoningEffort = b.reasoningEffort
@@ -753,6 +791,9 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		Rendering: content,
 		SkillName: skillName,
 	}
+	if b.agent == AgentCodex && !b.skipFileEvidence {
+		call.FileEvidenceEntry = fmt.Sprintf("line:%d", b.evidenceLine)
+	}
 	toolCalls := []ParsedToolCall{call}
 	if name == "apply_patch" {
 		// The patch body is the only place the paths appear, and one
@@ -782,6 +823,12 @@ func (b *codexSessionBuilder) handleFunctionCall(
 			MessageOrdinal: messageOrdinal,
 			CallIndex:      0,
 		}
+		if b.agent == AgentCodex && !b.skipFileEvidence {
+			if b.evidenceEntries == nil {
+				b.evidenceEntries = map[ParsedToolCallPosition]string{}
+			}
+			b.evidenceEntries[*position] = call.FileEvidenceEntry
+		}
 		if !b.rememberToolCall(callID, name, position) {
 			b.checkpointUnsafe = true
 		}
@@ -805,6 +852,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	defer b.forgetToolCall(callID)
 
 	output, raw := parseCodexFunctionOutput(payload, b.agent)
+	b.captureToolFileEvidence(ctx, callID, raw)
 	if !output.Exists() {
 		if strings.TrimSpace(raw) == "" {
 			return
@@ -1993,6 +2041,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		if !ok {
 			break
 		}
+		b.evidenceLine++
 		if !gjson.Valid(line) {
 			// A writer may leave its final JSON record incomplete while the
 			// session is live. Count terminated malformed records, and count an
@@ -2023,6 +2072,15 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	b.sink.Finalize()
 	b.refreshPendingCallPositions()
 	msgs := b.sink.Messages()
+	for i := range msgs {
+		for j, call := range msgs[i].ToolCalls {
+			for _, candidate := range b.evidenceResults[call.FileEvidenceEntry] {
+				candidate.Call = j
+				candidate.Record.Position.Call = j
+				appendFileEvidence(&msgs[i], candidate)
+			}
+		}
+	}
 	seed := b.codexCursorState
 	inode, device := sourceFileIdentityForFile(f, info)
 	changeTime, _ := codexIndexChangeTimeForFile(f, info)
@@ -2408,6 +2466,7 @@ func seedCodexIncrementalStateFromReader(ctx context.Context, agent AgentType,
 	b := newCodexSessionBuilder(
 		ctx, agent, false, resolveParentTurns, sink,
 	)
+	b.skipFileEvidence = true
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
@@ -2985,6 +3044,9 @@ func codexIncrementalNeedsFullParse(line string) bool {
 func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 	line string,
 ) bool {
+	if b.agent == AgentCodex && strings.Contains(line, `"input_image"`) {
+		return true
+	}
 	switch gjson.Get(line, "type").Str {
 	case codexTypeEventMsg:
 		payload := gjson.Get(line, "payload")
@@ -3005,11 +3067,17 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 }
 
 func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Result) bool {
+	if b.agent == AgentCodex && hasFileEvidenceAttachment(payload.Get("content").Raw) {
+		return true
+	}
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
+		if b.agent == AgentCodex && hasFileEvidenceAttachment(raw) {
+			return true
+		}
 		if isCodexSubagentFunctionOutput(output) {
 			return true
 		}

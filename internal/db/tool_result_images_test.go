@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/fileevidence"
 )
 
 func testInlineImageContent() string {
@@ -104,6 +106,22 @@ func TestStripToolResultImagesAcceptsEscapedType(t *testing.T) {
 	got, stats := StripToolResultImages(content)
 	assert.Equal(t, int64(1), stats.Payloads)
 	assert.NotContains(t, got, "input_image")
+}
+
+func TestToolResultImagesLineWrappedBase64(t *testing.T) {
+	const content = `[{"type":"input_image","image_url":"data:image/png;base64,YWxw\r\naGEK"}]`
+	stripped, stats := StripToolResultImages(content)
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.Equal(t, int64(6), stats.DecodedBytes)
+	assert.NotContains(t, stripped, "base64")
+	migrated, err := migrateToolResultImages(content, func(mediaType string, body []byte) (string, bool, error) {
+		assert.Equal(t, "image/png", mediaType)
+		assert.Equal(t, []byte("alpha\n"), body)
+		return "asset://wrapped.png", true, nil
+	})
+	require.NoError(t, err)
+	assert.Contains(t, migrated, "asset://wrapped.png")
+	assert.NotContains(t, migrated, "base64")
 }
 
 func mustStripImage(t *testing.T, content string) string {
@@ -776,4 +794,28 @@ func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 	stripped, stats := DowngradeOffloadedToolResultImages(content)
 	assert.Equal(t, int64(1), stats.Payloads)
 	assert.NotContains(t, stripped, "asset://")
+}
+
+func TestToolResultImagesAcceptInlinePayloadsAboveEvidenceLimit(t *testing.T) {
+	decodedSize := fileevidence.MaxAttachmentBytes + 4
+	payload := strings.Repeat("A", base64.StdEncoding.EncodedLen(decodedSize))
+	uri := "data:image/png;base64," + payload
+	content := `[{"type":"input_image","image_url":"` + uri + `"}]`
+
+	stripped, stats := StripToolResultImages(content)
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.Equal(t, int64(decodedSize), stats.DecodedBytes)
+	assert.Equal(t, int64(len(uri)), stats.StoredBytes)
+	assert.NotContains(t, stripped, "input_image", "inline image was not stripped")
+
+	var putSize int
+	migrated, err := migrateToolResultImages(content, func(mediaType string, body []byte) (string, bool, error) {
+		assert.Equal(t, "image/png", mediaType)
+		putSize = len(body)
+		return "asset://large.png", true, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, decodedSize, putSize)
+	assert.Contains(t, migrated, "asset://large.png")
+	assert.NotContains(t, migrated, "base64", "inline image was not migrated")
 }

@@ -6461,6 +6461,13 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// Drop is_system via raw SQL to simulate legacy schema.
 	raw, err := sql.Open("sqlite3", srcPath)
 	requireNoError(t, err, "raw open")
+	// The simulated legacy schema predates file-evidence triggers too.
+	for _, source := range []string{"message", "input", "result", "event"} {
+		for _, operation := range []string{"UPDATE", "DELETE"} {
+			_, err := raw.ExecContext(t.Context(), "DROP TRIGGER file_evidence_"+source+"_"+operation)
+			require.NoError(t, err)
+		}
+	}
 	// SQLite doesn't support DROP COLUMN before 3.35;
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `

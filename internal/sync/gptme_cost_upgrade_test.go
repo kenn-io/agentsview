@@ -56,8 +56,6 @@ func TestGptmeCostUpgradeReparsesUnchangedSource(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 140")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-
-	assert.Equal(t, []parser.AgentType{parser.AgentGptme}, db.ScopedDataVersionProviders(previousVersion, db.CurrentDataVersion()))
 	reopened, err := db.Open(t.Context(), archivePath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()

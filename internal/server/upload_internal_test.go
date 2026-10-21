@@ -14,7 +14,8 @@ func TestSessionBatchWriteFromParsedPreservesSessionName(t *testing.T) {
 		ID:          "test-session",
 		SessionName: "My Renamed Session",
 	}
-	result := sessionBatchWriteFromParsed(sess, nil)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, nil, nil)
+	require.NoError(t, err)
 	require.NotNil(t, result.Session.SessionName,
 		"SessionName must be persisted on upload")
 	require.Equal(t, "My Renamed Session", *result.Session.SessionName)
@@ -27,7 +28,8 @@ func TestSessionBatchWriteFromParsedNoSessionName(t *testing.T) {
 	sess := parser.ParsedSession{
 		ID: "test-session-no-name",
 	}
-	result := sessionBatchWriteFromParsed(sess, nil)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, nil, nil)
+	require.NoError(t, err)
 	require.Nil(t, result.Session.SessionName,
 		"SessionName must be nil when not set")
 	assert.Nil(t, result.Session.DisplayName,
@@ -42,7 +44,8 @@ func TestSessionBatchWriteFromParsedPreservesSessionIdentity(t *testing.T) {
 		Entrypoint: "claude-sdk",
 	}
 
-	result := sessionBatchWriteFromParsed(sess, nil)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, nil, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, "claude", result.Session.Agent)
 	assert.Equal(t, "Claude Code", result.Session.AgentLabel)
@@ -62,7 +65,8 @@ func TestSessionBatchWriteFromParsedPreservesClaudeProvenance(t *testing.T) {
 		PromptSource: "queued",
 	}}
 
-	result := sessionBatchWriteFromParsed(sess, msgs)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, msgs, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, "bg", result.Session.SessionKind)
 	require.Len(t, result.Messages, 1)
@@ -83,7 +87,8 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 		IsSidechain:      true,
 	}}
 
-	result := sessionBatchWriteFromParsed(sess, msgs)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, msgs, nil)
+	require.NoError(t, err)
 
 	require.Len(t, result.Messages, 1)
 	assert.True(t, result.Messages[0].IsSystem)
@@ -104,7 +109,8 @@ func TestSessionBatchWriteFromParsedPreservesCompactBoundary(t *testing.T) {
 		IsCompactBoundary: true,
 	}}
 
-	result := sessionBatchWriteFromParsed(sess, msgs)
+	result, err := sessionBatchWriteFromParsed(t.Context(), sess, msgs, nil)
+	require.NoError(t, err)
 
 	require.Len(t, result.Messages, 1)
 	assert.True(t, result.Messages[0].IsCompactBoundary)

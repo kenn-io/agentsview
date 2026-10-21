@@ -2948,5 +2948,21 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: canlı tokenlər diqqət tələb edir",
   "status_bar_codex_cloud_oldest_failure": "Ən köhnə uğursuzluq: {time}",
   "status_bar_codex_cloud_last_success": "Son uğurlu sinxronizasiya: {time}",
-  "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}"
+  "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}",
+  "docbank_current": "Cari versiya",
+  "docbank_prior": "Əvvəlki versiya",
+  "docbank_trash": "Zibil qutusu",
+  "docbank_not_found": "Docbank-da tapılmadı",
+  "docbank_exact_unavailable": "Dəqiq baytlar məlum deyil",
+  "docbank_unavailable": "Docbank əlçatan deyil",
+  "docbank_check_remaining": "Qalanları yoxla",
+  "docbank_more_matches": "Daha çox uyğunluq",
+  "docbank_retry_matches": "Uyğunluqları yenidən sına",
+  "docbank_matches": "Docbank uyğunluqları",
+  "docbank_match": "Docbank · {state} · {name}",
+  "docbank_attachment": "Əlavə",
+  "docbank_image_alt": "Söhbət qeydindəki şəkil: {name}",
+  "docbank_image_details": "Uyğunluq bu söhbət qeydində saxlanmış şəkil baytlarına əsaslanır; orijinal şəkil fərqli ola bilər.",
+  "docbank_pi_details": "Mətnin tam uyğunluğunu yalnız uğurlu yerli Pi oxuma və yazma əməliyyatları üçün bütün baytlar saxlandıqda sübut etmək olar.",
+  "docbank_unavailable_details": "Faylların yerlərini yoxlamaq mümkün olmadı. Yerli əlavələr əlçatan olaraq qalır."
 }

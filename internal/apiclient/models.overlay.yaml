@@ -99,6 +99,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/service
         name: service
+  - target: $.components.schemas.ServiceFileReferencesResult
+    update:
+      x-go-type: service.FileReferencesResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
   - target: $.components.schemas.ServiceMemoryStatus
     update:
       x-go-type: service.MemoryStatus

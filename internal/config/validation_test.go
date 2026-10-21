@@ -17,6 +17,7 @@ func TestScopedLoadersValidateUsedSections(t *testing.T) {
 		scope      ValidationScope
 	}{
 		{"[vector]\nenabled=true", "model is required", ScopeVector},
+		{"[integrations.docbank]\nenabled=true\nurl='http://example.test'\napi_key_env='KEY'", "docbank", ScopeServer},
 		{"[recall.extract]\nenabled=true\nmodel='local'", "recall.extract", ScopeRecall},
 		{"[insights]\nendpoint='http://models.example/v1'\nmodel='remote'", "plaintext", ScopeInsights},
 	} {
@@ -234,4 +235,21 @@ func FuzzScopedInsightsEndpoint(f *testing.F) {
 			require.ErrorContains(t, err, "plaintext")
 		}
 	})
+}
+
+func TestScopedLoadersIgnoreUnusedDocbank(t *testing.T) {
+	unsetDeploymentEnv(t)
+	dir := setupTestEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[integrations.docbank]\nenabled=true\nurl='http://example.test'\napi_key_env='KEY'\n"), 0o600))
+	for _, load := range []func() (Config, error){
+		func() (Config, error) { return LoadMinimalFor(ScopeLocal) },
+		func() (Config, error) { return LoadReadOnlyFor(ScopeLocal) },
+		func() (Config, error) {
+			return LoadPFlagsFor(pflag.NewFlagSet("test", pflag.ContinueOnError), ScopeLocal)
+		},
+	} {
+		cfg, err := load()
+		require.NoError(t, err)
+		assert.Equal(t, "http://example.test", cfg.Integrations.Docbank.URL)
+	}
 }

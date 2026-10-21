@@ -306,7 +306,7 @@ func (p *claudeProvider) Parse(
 		}
 	}
 	opts := claudeParseOptions{
-		ctx:                         ctx,
+		ctx:                         nativeFileEvidenceContext(ctx),
 		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
 		persistedOutputPathResolver: persistedOutputPathResolver,
 		aiTitleFallback:             true,
@@ -371,6 +371,7 @@ func (p *claudeProvider) ParseUploadedTranscript(
 	machine = firstNonEmptyJSONLString(machine, p.Config.Machine)
 	results, _, err := claudeParseFile(path, project, machine, claudeParseOptions{
 		uploadIdentity: true,
+		ctx:            nativeFileEvidenceContext(context.Background()),
 	})
 	if err != nil {
 		return nil, err
@@ -416,6 +417,7 @@ func (p *claudeProvider) ParseIncremental(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
+			ctx:           nativeFileEvidenceContext(ctx),
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
@@ -440,6 +442,13 @@ func (p *claudeProvider) ParseIncremental(
 				IncrementalNeedsFullParse, nil
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+	}
+	for _, message := range newMsgs {
+		for _, candidate := range message.FileEvidence {
+			if candidate.ToolUseID != "" {
+				return IncrementalOutcome{ForceReplace: true}, IncrementalNeedsFullParse, nil
+			}
+		}
 	}
 	if len(newMsgs) == 0 {
 		if consumed > 0 {

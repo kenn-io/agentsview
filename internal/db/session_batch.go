@@ -48,28 +48,40 @@ type SessionBatchWrite struct {
 }
 
 func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
-	policy := db.ToolResultImages()
-	if write.ToolResultImages != nil {
-		policy = *write.ToolResultImages
-	}
+	policy := db.sessionBatchImagePolicy(write)
 	projected, _ := db.ProjectToolResultImagesWithPolicy(write.Messages, policy)
 	return projected
 }
 
+func (db *DB) sessionBatchImagePolicy(write SessionBatchWrite) config.ToolResultImages {
+	if write.ToolResultImages != nil {
+		return *write.ToolResultImages
+	}
+	return db.ToolResultImages()
+}
+
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
-func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
+func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) (SessionBatchWrite, error) {
+	imagePolicy := db.sessionBatchImagePolicy(write)
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.ArchiveContent().OmitsToolContent() {
 		write.Signals.ToolObservations = []ToolObservation{}
 		write.Checkpoint, write.CheckpointBlobs = nil, nil
 	}
-	write.Session, write.Messages = db.sessionAndMessagesForStorage(write.Session, write.Messages)
+	write.Session, write.Messages = db.sessionAndMessagesForStorageWithImagePolicy(
+		write.Session, write.Messages, imagePolicy,
+	)
+	var err error
+	write.Messages, err = db.publishFileEvidence(write.Messages, imagePolicy)
+	if err != nil {
+		return SessionBatchWrite{}, err
+	}
 	if db.usageOnlyStorage() {
 		write.Signals = usageOnlySignalUpdate()
 		write.Findings = nil
 		write.SkipSignalUpdates = false
 	}
-	return write
+	return write, nil
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -176,7 +188,17 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write = db.storageSessionBatchWrite(write)
+		sessionID := write.Session.ID
+		write, err = db.storageSessionBatchWrite(write)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			result.FailedSessions++
+			result.FailedIDs = append(result.FailedIDs, sessionID)
+			result.Errors = append(result.Errors, err)
+			continue
+		}
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -266,7 +288,10 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	var writtenUsageIDs []string
 
 	for i, write := range writes {
-		write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
+		write, err = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
+		if err != nil {
+			return result, err
+		}
 		messagesWritten, err := writeOneSessionBatchTx(
 			context.Background(), tx, tx,
 			write,
@@ -513,6 +538,7 @@ func writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	replacementMessagesChanged := false
 	if replaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
 			ctx, tx, write.Session.ID,
@@ -528,9 +554,11 @@ func writeOneSessionBatchTx(
 				IncomingMessages: len(write.Messages),
 			}
 		}
-		replacementTranscriptChanged = !transcriptMessagesEqual(
+		replacementMessagesChanged = !persistedMessagesEqual(
 			stored, write.Messages,
 		)
+		replacementTranscriptChanged = replacementMessagesChanged &&
+			!transcriptMessagesEqual(stored, write.Messages)
 	}
 
 	if write.IdentityObservation.Project != "" {
@@ -576,7 +604,9 @@ func writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	filled, extended := 0, 0
-	if replaceMessages && sessionExists {
+	if replaceMessages && sessionExists && !replacementMessagesChanged {
+		msgs = nil
+	} else if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
 		}
@@ -654,6 +684,11 @@ func writeOneSessionBatchTx(
 		write.ClaudeSubagentSources, replaceMessages || !sessionExists); err != nil {
 		return 0, err
 	}
+	coverageChanged, err := setEvidenceCoverageTx(queries, write.Session.ID, evidenceCoverage(write.Messages, write.Session.FileEvidenceCoverage), replaceMessages)
+	if err != nil {
+		return 0, err
+	}
+	transcriptChanged = transcriptChanged || coverageChanged
 	if transcriptChanged {
 		bump := bumpTranscriptRevisionTx
 		if !sessionExists {

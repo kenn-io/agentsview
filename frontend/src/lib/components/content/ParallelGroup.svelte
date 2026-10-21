@@ -1,4 +1,7 @@
 <script lang="ts">
+  import type { ServiceLocalFileEvidence } from "../../api/generated/index.js";
+  import type { SessionFileReferencesStore } from "../../stores/file-references.svelte.js";
+
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import ToolBlock from "./ToolBlock.svelte";
@@ -7,6 +10,8 @@
   import { m } from "../../i18n/index.js";
 
   interface Props {
+    fileEvidence?: ServiceLocalFileEvidence[];
+    fileStore?: SessionFileReferencesStore;
     toolCalls: ToolCall[];
     callTimingByID?: Map<string, CallTiming>;
     isRunning?: boolean;
@@ -14,6 +19,7 @@
   }
 
   let {
+    fileEvidence = [], fileStore,
     toolCalls,
     callTimingByID,
     isRunning = false,
@@ -32,10 +38,10 @@
     {/if}
   </div>
   <div class="pg-members">
-    {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
+    {#each toolCalls as toolCall, i (i)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
       {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
-      <ToolBlock
+      <ToolBlock fileEvidence={fileEvidence.filter((r) => r.tool_call_index === i)} {fileStore}
         {toolCall}
         content=""
         label={displayToolName(toolCall)}

@@ -48,6 +48,9 @@ var messageUpdateSetClause = func() string {
 // Both sides go through the same resolve helpers the insert path
 // uses, so equality is defined on exactly the persisted tuples.
 func messageRowEqual(a, b Message) bool {
+	if !fileEvidenceEqual(a, b) {
+		return false
+	}
 	if a.SessionID != b.SessionID || a.Ordinal != b.Ordinal ||
 		a.Role != b.Role || a.Content != b.Content ||
 		a.ThinkingText != b.ThinkingText || a.Timestamp != b.Timestamp ||
@@ -166,6 +169,31 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 		seen[msg.Ordinal] = true
 		old, exists := byOrdinal[msg.Ordinal]
 		if !exists || !transcriptMessageEqual(old, msg) {
+			return false
+		}
+	}
+	return true
+}
+
+func persistedMessagesEqual(stored, incoming []Message) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	byOrdinal := make(map[int]Message, len(stored))
+	for _, msg := range stored {
+		if _, exists := byOrdinal[msg.Ordinal]; exists {
+			return false
+		}
+		byOrdinal[msg.Ordinal] = msg
+	}
+	seen := make(map[int]bool, len(incoming))
+	for _, msg := range incoming {
+		if seen[msg.Ordinal] {
+			return false
+		}
+		seen[msg.Ordinal] = true
+		old, exists := byOrdinal[msg.Ordinal]
+		if !exists || !messageRowEqual(old, msg) {
 			return false
 		}
 	}
@@ -373,6 +401,9 @@ func applySessionMessageDiffTx(ctx context.Context,
 		if err := insertToolResultEventsTx(
 			tx, resolveToolResultEvents(msgs),
 		); err != nil {
+			return err
+		}
+		if err := storeFileEvidenceTx(tx, msgs, ids); err != nil {
 			return err
 		}
 	}

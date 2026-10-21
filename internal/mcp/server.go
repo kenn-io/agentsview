@@ -25,22 +25,23 @@ import (
 // Tool names. The same constant is used to register a tool and to refer
 // to it in tests.
 const (
-	ToolSearchSessions     = "search_sessions"
-	ToolQueryRecall        = "query_recall"
-	ToolListSessions       = "list_sessions"
-	ToolGetSessionOverview = "get_session_overview"
-	ToolGetMessages        = "get_messages"
-	ToolSearchContent      = "search_content"
-	ToolGetMemoryStatus    = "get_memory_status"
-	ToolGetUsageSummary    = "get_usage_summary"
-	ToolGetToolCalls       = "get_tool_calls"
-	ToolGetRecentEdits     = "get_recent_edits"
-	ToolGetChildSessions   = "get_child_sessions"
-	ToolCompareUsage       = "compare_usage"
-	ToolGetActivityReport  = "get_activity_report"
-	ToolGetToolUsage       = "get_tool_usage"
-	ToolGetQualitySignals  = "get_quality_signals"
-	ToolSearchDocs         = "search_docs"
+	ToolSearchSessions           = "search_sessions"
+	ToolQueryRecall              = "query_recall"
+	ToolListSessions             = "list_sessions"
+	ToolGetSessionOverview       = "get_session_overview"
+	ToolGetMessages              = "get_messages"
+	ToolGetSessionFileReferences = "get_session_file_references"
+	ToolSearchContent            = "search_content"
+	ToolGetMemoryStatus          = "get_memory_status"
+	ToolGetUsageSummary          = "get_usage_summary"
+	ToolGetToolCalls             = "get_tool_calls"
+	ToolGetRecentEdits           = "get_recent_edits"
+	ToolGetChildSessions         = "get_child_sessions"
+	ToolCompareUsage             = "compare_usage"
+	ToolGetActivityReport        = "get_activity_report"
+	ToolGetToolUsage             = "get_tool_usage"
+	ToolGetQualitySignals        = "get_quality_signals"
+	ToolSearchDocs               = "search_docs"
 )
 
 // Profile selects the tools advertised by an MCP server while keeping their
@@ -121,6 +122,11 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        ToolGetSessionFileReferences,
+			Description: "Explicitly find exact retained session bytes in configured Docbank. Returns generation-bound local occurrences, current/prior/trash matches and pagination. Initial discovery may omit binding; continuation and selected-occurrence requests require it. Retry deferred occurrences by repeating their bounded window. Recorded image bytes may differ from original uploads.",
+			Annotations: readOnly,
+		}, t.fileReferences)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +

@@ -4542,7 +4542,7 @@ func TestFilterEmptyMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := pairAndFilter(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, got)
+			diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairAndFilter() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4603,7 +4603,7 @@ func TestPostFilterCounts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			total, user := postFilterCounts(tt.msgs)
 			got := counts{Total: total, User: user}
-			diff := cmp.Diff(tt.want, got)
+			diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(db.Message{}))
 			assert.Empty(t, diff, "postFilterCounts() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4690,7 +4690,7 @@ func TestPairToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmp.AllowUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4817,7 +4817,7 @@ func TestPairToolResultsContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmp.AllowUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -5028,7 +5028,7 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResultEventSummaries(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmp.AllowUnexported(db.Message{}))
 			require.Empty(t, diff, "pairToolResultEventSummaries() mismatch (-want +got):\n%s", diff)
 		})
 	}

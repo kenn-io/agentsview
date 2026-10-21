@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { localEvidence } from "../../test/file-evidence.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { Session } from "../../api/types.js";
@@ -687,4 +688,52 @@ describe("MessageContent filtered code fences", () => {
 
     unmount(component);
   });
+});
+
+it("places file evidence by ordinal and parallel call index even when tool IDs repeat", async () => {
+  const evidence = (id: string, call: number, result: number | null, block: number) =>
+    localEvidence({
+      occurrence_id: id,
+      message_ordinal: 7,
+      tool_call_index: call,
+      result_event_index: result,
+      block_index: block,
+      display_name: `${id}.txt`,
+    });
+  await render(
+    message({
+      ordinal: 7,
+      has_tool_use: true,
+      tool_calls: [
+        {
+          category: "Write",
+          tool_name: "Write",
+          tool_use_id: "reused",
+          input_json: '{"path":"first.txt"}',
+          result_content: "first",
+        },
+        {
+          category: "Write",
+          tool_name: "Write",
+          tool_use_id: "reused",
+          input_json: '{"path":"second.txt"}',
+          result_content: "second",
+        },
+      ],
+    }),
+    {
+      fileEvidence: [
+        evidence("second", 1, 2, 3),
+        evidence("first", 0, null, 0),
+        { ...evidence("wrong-message", 0, null, 0), message_ordinal: 8 },
+      ],
+    },
+  );
+  const blocks = document.querySelectorAll(".pg-members > .tool-block");
+  expect(blocks).toHaveLength(2);
+  expect(blocks[0]?.querySelector('[data-occurrence="first"]')).not.toBeNull();
+  expect(blocks[1]?.querySelector('[data-occurrence="first"]')).toBeNull();
+  expect(blocks[0]?.textContent).not.toContain("second.txt");
+  expect(blocks[1]?.querySelector('[data-occurrence="second"]')).not.toBeNull();
+  expect(document.body.textContent).not.toContain("wrong-message.txt");
 });

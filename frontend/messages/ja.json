@@ -2927,5 +2927,21 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: ライブトークンの確認が必要です",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
-  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
+  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}",
+  "docbank_current": "現在のバージョン",
+  "docbank_prior": "以前のバージョン",
+  "docbank_trash": "ゴミ箱",
+  "docbank_not_found": "Docbank に見つかりません",
+  "docbank_exact_unavailable": "正確なバイト列を確認できません",
+  "docbank_unavailable": "Docbank を利用できません",
+  "docbank_check_remaining": "残りを確認",
+  "docbank_more_matches": "一致する項目をさらに表示",
+  "docbank_retry_matches": "一致項目を再試行",
+  "docbank_matches": "Docbank の一致項目",
+  "docbank_match": "Docbank · {state} · {name}",
+  "docbank_attachment": "添付ファイル",
+  "docbank_image_alt": "会話記録の画像: {name}",
+  "docbank_image_details": "照合には、この会話記録に保持された画像のバイト列を使用します。元の画像とは異なる場合があります。",
+  "docbank_pi_details": "テキストの完全一致を証明できるのは、ネイティブ Pi の読み取りと書き込みが成功し、すべてのバイトが保持されている場合のみです。",
+  "docbank_unavailable_details": "ファイルの場所を確認できませんでした。ローカルの添付ファイルは引き続き利用できます。"
 }

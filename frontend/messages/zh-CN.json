@@ -2852,5 +2852,21 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud：实时令牌需要处理",
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
-  "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
+  "status_bar_codex_cloud_homes": "Codex 主目录：{homes}",
+  "docbank_current": "当前版本",
+  "docbank_prior": "历史版本",
+  "docbank_trash": "回收站",
+  "docbank_not_found": "Docbank 中未找到",
+  "docbank_exact_unavailable": "无法确定确切字节",
+  "docbank_unavailable": "Docbank 不可用",
+  "docbank_check_remaining": "检查剩余项",
+  "docbank_more_matches": "更多匹配",
+  "docbank_retry_matches": "重新查询匹配项",
+  "docbank_matches": "Docbank 匹配",
+  "docbank_match": "Docbank · {state} · {name}",
+  "docbank_attachment": "附件",
+  "docbank_image_alt": "对话记录中的图片：{name}",
+  "docbank_image_details": "匹配基于此对话记录保留的图片字节；原始图片可能不同。",
+  "docbank_pi_details": "仅当原生 Pi 读取和写入成功且完整字节被保留时，才能证明文本完全一致。",
+  "docbank_unavailable_details": "无法检查文件位置。本地附件仍然可用。"
 }

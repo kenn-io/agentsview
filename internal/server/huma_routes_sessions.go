@@ -36,6 +36,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
 	s.get(group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
+	s.get(group, "/sessions/{id}/file-references", "Find exact session bytes in Docbank", s.humaFileReferences)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
 	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)
@@ -1397,9 +1398,20 @@ func (s *Server) humaUploadSession(
 	for i := range results {
 		results[i].Session.File.Path = upload.finalPath
 	}
+	blockedCategories := make(map[string]bool)
+	for _, category := range s.ingestionConfig().ResultContentBlockedCategories {
+		category = strings.TrimSpace(category)
+		if category != "" {
+			category = strings.ToUpper(category[:1]) + strings.ToLower(category[1:])
+			blockedCategories[category] = true
+		}
+	}
 	writes := make([]db.SessionBatchWrite, len(results))
 	for i, pr := range results {
-		writes[i] = sessionBatchWriteFromParsed(pr.Session, pr.Messages)
+		writes[i], err = sessionBatchWriteFromParsed(ctx, pr.Session, pr.Messages, blockedCategories)
+		if err != nil {
+			return nil, internalError("preparing upload", err)
+		}
 		writes[i].RejectMessageCountDecrease = !in.AllowShorter
 	}
 	var commitErr error
@@ -1449,7 +1461,7 @@ func (s *Server) humaUploadSession(
 			SessionID: main.Session.ID,
 			Project:   project,
 			Machine:   machine,
-			Messages:  len(main.Messages),
+			Messages:  len(writes[0].Messages),
 			Sessions:  len(results),
 		},
 	}, nil

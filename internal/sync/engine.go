@@ -18513,11 +18513,11 @@ func (e *Engine) writeBatchWithOutcomeContext(
 				}
 				werr = e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(ctx,
 					s.ID, msgs, update, findings, cp, blobs,
-					e.toolResultImages,
+					e.toolResultImages, s.FileEvidenceCoverage,
 				)
 			} else {
 				werr = e.db.ReplaceSessionContentWithToolResultImages(ctx,
-					s.ID, msgs, update, findings, e.toolResultImages,
+					s.ID, msgs, update, findings, e.toolResultImages, s.FileEvidenceCoverage,
 				)
 			}
 		} else if replaceMessages {
@@ -18525,7 +18525,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 				msgs = []db.Message{}
 			}
 			werr = e.db.ReplaceSessionMessagesWithToolResultImages(ctx,
-				s.ID, msgs, e.toolResultImages,
+				s.ID, msgs, e.toolResultImages, s.FileEvidenceCoverage,
 			)
 		} else {
 			if !e.disableSignalRecompute && ctx.Err() != nil {
@@ -18664,6 +18664,7 @@ func (e *Engine) projectToolResultImagesForPrepare(
 	messages []db.Message,
 ) ([]db.Message, db.ToolImageStats) {
 	if !e.forceParse && e.toolResultImages != config.ToolResultImagesDrop {
+		messages = e.db.ProjectFileEvidenceForComparison(messages)
 		return messages, db.ToolImageStats{}
 	}
 	return e.db.ProjectToolResultImagesForComparison(
@@ -19126,7 +19127,7 @@ func (e *Engine) writeStagedFullParse(
 	}
 	if err := e.db.ReplaceSessionContentStagedWithCheckpoint(
 		ctx, s.ID, msgs, pw.staged,
-		e.blockedResultCategories, closure, cp, blobs,
+		e.blockedResultCategories, closure, cp, blobs, s.FileEvidenceCoverage,
 	); err != nil {
 		return err
 	}
@@ -19856,6 +19857,8 @@ func shouldReplaceFullParseMessages(
 		// assistant tool-call message and attach result events to it. An
 		// append would leave the persisted tool call without those events.
 		pw.sess.Agent == parser.AgentCopilot ||
+		// Pi terminal results can add proofs to an already stored call.
+		pw.sess.Agent == parser.AgentPi ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
 		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||
@@ -20281,7 +20284,7 @@ func (e *Engine) writeSessionFullWithResolver(
 			msgs = []db.Message{}
 		}
 		if err := e.db.ReplaceSessionMessagesWithToolResultImages(ctx,
-			s.ID, msgs, e.toolResultImages,
+			s.ID, msgs, e.toolResultImages, s.FileEvidenceCoverage,
 		); err != nil {
 			log.Printf(
 				"replace messages for %s: %v",
@@ -20311,7 +20314,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		}
 		if err := e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(ctx,
 			s.ID, msgs, update, prepared.Findings, checkpoint, checkpointBlobs,
-			e.toolResultImages,
+			e.toolResultImages, s.FileEvidenceCoverage,
 		); err != nil {
 			log.Printf(
 				"replace messages for %s: %v",

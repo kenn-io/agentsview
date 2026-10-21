@@ -5062,6 +5062,35 @@ components:
       required:
         - insights
       type: object
+    IntegrationsdocbankMatch:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        node_id:
+          format: int64
+          type: integer
+        open_url:
+          type: string
+        path:
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        state:
+          type: string
+        version_id:
+          type: string
+      required:
+        - node_id
+        - version_id
+        - sha256
+        - size
+        - state
+        - name
+      type: object
     MachinesResponse:
       additionalProperties: false
       properties:
@@ -6276,6 +6305,183 @@ components:
         - revision_bound
         - coverage
       type: object
+    ServiceFileReferenceOccurrence:
+      additionalProperties: false
+      properties:
+        asset_ref:
+          type: string
+        block_index:
+          format: int64
+          type: integer
+        checked_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        display_name:
+          type: string
+        display_path:
+          type: string
+        ineligible_reason:
+          type: string
+        kind:
+          type: string
+        matches:
+          items:
+            $ref: "#/components/schemas/IntegrationsdocbankMatch"
+          type: array
+        media_type:
+          type: string
+        message_ordinal:
+          format: int64
+          type: integer
+        next_reference_offset:
+          format: int64
+          type:
+            - integer
+            - "null"
+        occurrence_id:
+          type: string
+        proof_method:
+          type: string
+        reference_total:
+          format: int64
+          type:
+            - integer
+            - "null"
+        result_event_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        sha256:
+          type: string
+        size:
+          format: int64
+          type:
+            - integer
+            - "null"
+        state:
+          type: string
+        tool_call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+      required:
+        - state
+        - checked_at
+        - matches
+        - reference_total
+        - next_reference_offset
+        - occurrence_id
+        - message_ordinal
+        - tool_call_index
+        - result_event_index
+        - block_index
+        - kind
+        - media_type
+        - display_name
+        - display_path
+        - proof_method
+        - size
+        - sha256
+        - asset_ref
+        - ineligible_reason
+      type: object
+    ServiceFileReferencesResult:
+      additionalProperties: false
+      properties:
+        binding:
+          type: string
+        capability:
+          type: string
+        coverage:
+          type: string
+        integration:
+          type: string
+        next_offset:
+          format: int64
+          type:
+            - integer
+            - "null"
+        occurrences:
+          items:
+            $ref: "#/components/schemas/ServiceFileReferenceOccurrence"
+          type: array
+        revision:
+          type: string
+        total:
+          format: int64
+          type: integer
+      required:
+        - binding
+        - revision
+        - coverage
+        - capability
+        - integration
+        - occurrences
+        - total
+        - next_offset
+      type: object
+    ServiceLocalFileEvidence:
+      additionalProperties: false
+      properties:
+        asset_ref:
+          type: string
+        block_index:
+          format: int64
+          type: integer
+        display_name:
+          type: string
+        display_path:
+          type: string
+        ineligible_reason:
+          type: string
+        kind:
+          type: string
+        media_type:
+          type: string
+        message_ordinal:
+          format: int64
+          type: integer
+        occurrence_id:
+          type: string
+        proof_method:
+          type: string
+        result_event_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        sha256:
+          type: string
+        size:
+          format: int64
+          type:
+            - integer
+            - "null"
+        tool_call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+      required:
+        - occurrence_id
+        - message_ordinal
+        - tool_call_index
+        - result_event_index
+        - block_index
+        - kind
+        - media_type
+        - display_name
+        - display_path
+        - proof_method
+        - size
+        - sha256
+        - asset_ref
+        - ineligible_reason
+      type: object
     ServiceMemoryArchiveStatus:
       additionalProperties: false
       properties:
@@ -6392,13 +6598,35 @@ components:
       required:
         - status
       type: object
+    ServiceMessageFileEvidence:
+      additionalProperties: false
+      properties:
+        ordinal:
+          format: int64
+          type: integer
+        records:
+          items:
+            $ref: "#/components/schemas/ServiceLocalFileEvidence"
+          type: array
+      required:
+        - ordinal
+        - records
+      type: object
     ServiceMessageList:
       additionalProperties: false
       properties:
+        binding:
+          type: string
         count:
           format: int64
           type: integer
         evidence_source:
+          type: string
+        file_evidence:
+          items:
+            $ref: "#/components/schemas/ServiceMessageFileEvidence"
+          type: array
+        file_evidence_coverage:
           type: string
         first_ordinal:
           format: int64
@@ -19524,6 +19752,160 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Export session as HTML
+      tags:
+        - Sessions
+  /api/v1/sessions/{id}/file-references:
+    get:
+      operationId: get-api-v1-sessions-id-file-references
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+        - description: "Explicit lookup intent: docbank"
+          in: header
+          name: X-AgentsView-Lookup-Intent
+          schema:
+            description: "Explicit lookup intent: docbank"
+            type: string
+        - description: Opaque archive generation and transcript binding
+          explode: false
+          in: query
+          name: binding
+          schema:
+            description: Opaque archive generation and transcript binding
+            type: string
+        - description: Local occurrence selector for reference pagination
+          explode: false
+          in: query
+          name: occurrence_id
+          schema:
+            description: Local occurrence selector for reference pagination
+            type: string
+        - description: Occurrence offset
+          explode: false
+          in: query
+          name: offset
+          schema:
+            description: Occurrence offset
+            format: int64
+            type: integer
+        - description: Occurrence page size, default 20, maximum 50
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: Occurrence page size, default 20, maximum 50
+            format: int64
+            type: integer
+        - description: Raw remote reference offset for the selected occurrence
+          explode: false
+          in: query
+          name: reference_offset
+          schema:
+            description: Raw remote reference offset for the selected occurrence
+            format: int64
+            type: integer
+        - description: First message ordinal, inclusive; requires last_ordinal
+          explode: false
+          in: query
+          name: first_ordinal
+          schema:
+            description: First message ordinal, inclusive; requires last_ordinal
+            format: int64
+            type: integer
+        - description: Last message ordinal, inclusive; requires first_ordinal
+          explode: false
+          in: query
+          name: last_ordinal
+          schema:
+            description: Last message ordinal, inclusive; requires first_ordinal
+            format: int64
+            type: integer
+        - description: Explicitly refresh the first reference page
+          explode: false
+          in: query
+          name: refresh
+          schema:
+            description: Explicitly refresh the first reference page
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceFileReferencesResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Find exact session bytes in Docbank
       tags:
         - Sessions
   /api/v1/sessions/{id}/labels:

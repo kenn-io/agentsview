@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// ToolResultImages controls whether supported inline image blocks remain in
-// stored tool results.
+// ToolResultImages controls supported inline tool-result image retention and
+// typed image/document evidence captured from supported transcript blocks.
 type ToolResultImages string
 
 const (

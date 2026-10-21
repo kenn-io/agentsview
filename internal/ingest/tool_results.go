@@ -21,13 +21,14 @@ func PairAndFilterContext(
 	); err != nil {
 		return nil, err
 	}
+	pairFileEvidence(messages, blocked)
 	filtered := messages[:0]
 	for _, message := range messages {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if message.Role == "user" && len(message.ToolResults) > 0 &&
-			strings.TrimSpace(message.Content) == "" {
+			strings.TrimSpace(message.Content) == "" && len(message.FileEvidenceCandidates) == 0 && len(message.FileEvidence) == 0 {
 			continue
 		}
 		filtered = append(filtered, message)

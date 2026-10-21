@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/fileevidence"
+
 	"go.kenn.io/agentsview/internal/lockctx"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -333,6 +335,8 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Session struct {
+	FileEvidenceCoverage fileevidence.Coverage `json:"-"`
+
 	// WebURL is a client-derived browser link, never persisted.
 	WebURL                string   `json:"web_url,omitempty"`
 	ID                    string   `json:"id"`

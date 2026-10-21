@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/fileevidence"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -1473,12 +1474,13 @@ type FileInfo struct {
 
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
-	ID         string
-	Project    string
-	Machine    string
-	Agent      AgentType
-	AgentLabel string
-	Entrypoint string
+	FileEvidenceCoverage fileevidence.Coverage `json:"-"`
+	ID                   string
+	Project              string
+	Machine              string
+	Agent                AgentType
+	AgentLabel           string
+	Entrypoint           string
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
 	// interactive sessions and for agents that do not emit one.
@@ -1582,6 +1584,7 @@ type ParsedSession struct {
 // ParsedToolCall holds a single tool invocation extracted from
 // a message.
 type ParsedToolCall struct {
+	FileEvidenceEntry string `json:"-"`
 	ToolUseID         string // tool_use block id from session data
 	ToolName          string // raw name from session data
 	Category          string // normalized: Read, Edit, Write, Bash, etc.
@@ -1660,17 +1663,19 @@ type ParsedToolResultEvent struct {
 
 // ParsedMessage holds a single extracted message.
 type ParsedMessage struct {
-	Ordinal       int
-	Role          RoleType
-	Content       string
-	ThinkingText  string // concatenated text of all thinking blocks; "" if none
-	Timestamp     time.Time
-	HasThinking   bool
-	HasToolUse    bool
-	IsSystem      bool
-	ContentLength int
-	ToolCalls     []ParsedToolCall
-	ToolResults   []ParsedToolResult
+	StagedFileEvidenceEntry string                   `json:"-"`
+	FileEvidence            []fileevidence.Candidate `json:"-"`
+	Ordinal                 int
+	Role                    RoleType
+	Content                 string
+	ThinkingText            string // concatenated text of all thinking blocks; "" if none
+	Timestamp               time.Time
+	HasThinking             bool
+	HasToolUse              bool
+	IsSystem                bool
+	ContentLength           int
+	ToolCalls               []ParsedToolCall
+	ToolResults             []ParsedToolResult
 
 	Model           string
 	ReasoningEffort string

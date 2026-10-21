@@ -18,7 +18,8 @@ const KNOWN_SVELTE_WARNINGS_RE =
 // the duration, tool-sequences, recent-edits, and project-reclassification fixtures).
 const TEST_PROJECT = "project-alpha";
 const FILTERED_SESSION_COUNT = 3;
-const TOTAL_SESSION_COUNT = 13;
+// SQLite also includes the file-reference fixture.
+const TOTAL_SESSION_COUNT = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb" ? 13 : 14;
 
 // Session deep in the list to exercise virtualizer scroll.
 const TARGET_SESSION_INDEX = 6;

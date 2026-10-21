@@ -138,6 +138,17 @@ restart notice appears after you save a changed policy.
 
 ![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
 
+### Retained attachment evidence
+
+The image policy also governs typed image and document evidence captured from
+supported transcript blocks. `drop` withholds that evidence; `db strip --images`
+removes it from stored sessions. Retained images use the local asset store.
+Documents retain only metadata and a digest, with no document download endpoint.
+Lossless image offload preserves this evidence when a result also contains a
+document.
+The default blocked result categories include `Read`, so native Pi read evidence
+requires retaining that result content before ingestion or a full resync.
+
 ## Installation Identity
 
 Local sessions use a random installation ID saved in `telemetry-install-id` in
@@ -305,6 +316,42 @@ one and saves it as `auth_token` in `config.toml`.
     Older configs may still contain `remote_access = true`. AgentsView still reads
     that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
+
+### Find transcript files in Docbank
+
+With a local SQLite archive, AgentsView can look up exact retained transcript
+bytes in Docbank. Add this optional section to `config.toml` and restart the
+daemon:
+
+```toml
+[integrations.docbank]
+enabled = true
+url = "https://docbank.example.com"
+web_url = "https://files.example.com"
+api_key_env = "DOCBANK_API_KEY"
+```
+
+Set the named environment variable in the daemon's environment. Alternatively,
+replace `api_key_env` with `api_key_file = "/run/secrets/docbank-api-key"` pointing
+to a readable UTF-8 file containing only the key. Choose one credential source;
+a missing or invalid configured source fails without fallback. Disabled
+integration reads no credential and sends no requests.
+
+`url` is the Docbank API origin, optionally with its deployment prefix.
+`web_url` is the optional root browser origin where you actually sign in; omit
+it to show matches without links. HTTPS is required except for verified
+loopback development endpoints. Redirects and proxy environment variables are
+not used. Browser links contain node/version IDs, never the API key. Exact
+version links require the Docbank change in
+[PR #1024](https://github.com/kenn-io/docbank/pull/1024).
+
+Lookup sends SHA-256 digests to Docbank, without uploading files or transcript
+text. Ordinary messages, search, exports and the memory MCP profile do not
+contact Docbank. Explicit lookup uses a three-second operation budget and small
+bounded in-memory caches. Unavailable lookup leaves the transcript readable.
+The evidence capability covers SQLite, including read-only SQLite; PostgreSQL,
+DuckDB and ClickHouse return unavailable. PostgreSQL transport is a follow-on.
+See [transcript attachments](/docs/usage/#files-and-attachments) for proof limits.
 
 ### Container deployment
 

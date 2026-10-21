@@ -2855,5 +2855,21 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud：即時權杖需要處理",
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
-  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"
+  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}",
+  "docbank_current": "目前版本",
+  "docbank_prior": "先前版本",
+  "docbank_trash": "垃圾桶",
+  "docbank_not_found": "Docbank 中找不到",
+  "docbank_exact_unavailable": "無法確定確切位元組",
+  "docbank_unavailable": "Docbank 無法使用",
+  "docbank_check_remaining": "檢查剩餘項目",
+  "docbank_more_matches": "更多相符項目",
+  "docbank_retry_matches": "重新查詢相符項目",
+  "docbank_matches": "Docbank 相符項目",
+  "docbank_match": "Docbank · {state} · {name}",
+  "docbank_attachment": "附件",
+  "docbank_image_alt": "對話記錄中的圖片：{name}",
+  "docbank_image_details": "比對使用此對話記錄保留的圖片位元組；原始圖片可能不同。",
+  "docbank_pi_details": "僅在原生 Pi 讀取和寫入成功且完整位元組被保留時，才能證明文字完全一致。",
+  "docbank_unavailable_details": "無法檢查檔案位置。本機附件仍可使用。"
 }

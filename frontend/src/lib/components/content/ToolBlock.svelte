@@ -1,6 +1,10 @@
 <!-- ABOUTME: Renders a collapsible tool call block with metadata tags and content. -->
 <!-- ABOUTME: Supports Task tool calls with inline subagent conversation expansion. -->
 <script lang="ts">
+  import FileEvidence from "./FileEvidence.svelte";
+  import type { ServiceLocalFileEvidence } from "../../api/generated/index.js";
+  import type { SessionFileReferencesStore } from "../../stores/file-references.svelte.js";
+
   import { onDestroy } from "svelte";
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
@@ -24,6 +28,8 @@
   import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
+    fileEvidence?: ServiceLocalFileEvidence[];
+    fileStore?: SessionFileReferencesStore;
     content: string;
     label?: string;
     toolCall?: ToolCall;
@@ -94,7 +100,7 @@
     return lines.length ? lines.join("\n") : null;
   }
 
-  let { content, label, toolCall, searchScope, durationLabel,
+  let { fileEvidence = [], fileStore, content, label, toolCall, searchScope, durationLabel,
     isSlow = false, isRunning = false, inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
@@ -355,6 +361,7 @@
       {/if}
     {/if}
   {/if}
+  <FileEvidence records={[...fileEvidence].sort((a, b) => (a.result_event_index ?? -1) - (b.result_event_index ?? -1) || a.block_index - b.block_index)} store={fileStore} />
   {#if subagentSessionId}<SubagentInline sessionId={subagentSessionId} />{/if}
 </div>
 

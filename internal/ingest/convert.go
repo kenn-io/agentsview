@@ -21,7 +21,8 @@ func ConvertSessionContext(
 	}
 	parent := stringPtr(parsed.ParentSessionID)
 	session := db.Session{
-		ID: parsed.ID, Project: parsed.Project, Machine: parsed.Machine,
+		FileEvidenceCoverage: nativeEvidenceCoverage(parsed.Agent),
+		ID:                   parsed.ID, Project: parsed.Project, Machine: parsed.Machine,
 		MessageCount: parsed.MessageCount, UserMessageCount: parsed.UserMessageCount,
 		ParentSessionID: parent, ParserParentSessionID: cloneStringPtr(parent),
 		RelationshipType:     string(parsed.RelationshipType),
@@ -108,6 +109,9 @@ func ConvertMessagesContext(
 			IsSidechain:       message.IsSidechain,
 			IsCompactBoundary: message.IsCompactBoundary,
 			ToolCalls:         toolCalls, ToolResults: toolResults,
+			StagedFileEvidenceEntry: message.StagedFileEvidenceEntry,
+			FileEvidenceCandidates:  nativeEvidenceCandidates(agent, message.FileEvidence),
+			FileEvidenceCoverage:    nativeEvidenceCoverage(agent),
 		}
 	}
 	return PairAndFilterContext(ctx, messages, blocked)

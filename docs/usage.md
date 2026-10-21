@@ -681,6 +681,31 @@ removing the temporary prompt after launch. In read-only local mode the action
 copies the command instead of launching it; remote sessions cannot be forked
 from the browser.
 
+### Files and attachments
+
+Retained images and documents from native Claude Code, Codex and Pi sessions
+appear beside their message or tool call. Images use AgentsView's asset endpoint;
+documents show a name and type. With the
+[Docbank integration](/docs/configuration/#find-transcript-files-in-docbank)
+enabled, visible attachments show current, prior-version, trash or not-found
+matches after a bounded lookup. More matches continues that occurrence's remote
+page; Check remaining retries the same visible window. An outage leaves local
+attachments visible and shows a quiet unavailable state.
+
+A match means Docbank holds the exact bytes established from the transcript.
+An inline image may be the provider's resized transcript image, rather than the
+original file. Native Pi text read/write evidence assumes its supported native
+tool contract, complete successful results and unchanged retained source text.
+Truncated or normalized reads, edits, generic tools and ambiguous pairing cannot
+establish exact bytes. Recognized read/write rows without proof say exact bytes
+are unavailable. Older archives
+may need a resync to acquire evidence; coverage reports gaps instead of inferring
+a miss. Lookup never reads a path from the local filesystem.
+
+Exact-byte evidence is limited to 32 MiB per attachment and 64 MiB per message.
+Inline payloads and existing image assets share the message budget. Over-limit
+occurrences cannot establish exact bytes.
+
 ### Thinking Blocks
 
 Assistant thinking blocks appear as collapsible sections with a purple left

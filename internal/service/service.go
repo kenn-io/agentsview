@@ -65,6 +65,7 @@ const (
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
 // (proxies to a running daemon).
 type SessionService interface {
+	FileReferencesService
 	Get(ctx context.Context, id string) (*SessionDetail, error)
 	// FindSessionIDsByPartial returns IDs containing partial as a literal,
 	// case-sensitive substring, ordered by most recent activity and capped by
@@ -496,12 +497,15 @@ type MessageFilter struct {
 // returned window's bounds (nil when Messages is empty) so callers can page
 // on with from = last_ordinal + 1.
 type MessageList struct {
-	Messages           []db.Message `json:"messages"`
-	Count              int          `json:"count"`
-	FirstOrdinal       *int         `json:"first_ordinal,omitempty"`
-	LastOrdinal        *int         `json:"last_ordinal,omitempty"`
-	TranscriptRevision string       `json:"transcript_revision,omitempty"`
-	EvidenceSource     string       `json:"evidence_source,omitempty"`
+	Binding              string                `json:"binding,omitempty"`
+	FileEvidenceCoverage string                `json:"file_evidence_coverage,omitempty"`
+	FileEvidence         []MessageFileEvidence `json:"file_evidence,omitempty"`
+	Messages             []db.Message          `json:"messages"`
+	Count                int                   `json:"count"`
+	FirstOrdinal         *int                  `json:"first_ordinal,omitempty"`
+	LastOrdinal          *int                  `json:"last_ordinal,omitempty"`
+	TranscriptRevision   string                `json:"transcript_revision,omitempty"`
+	EvidenceSource       string                `json:"evidence_source,omitempty"`
 }
 
 // ErrSourceChanged marks a revision-bound evidence read whose archive,

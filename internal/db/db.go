@@ -597,7 +597,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // session identities are unchanged.)
 // (141: import provider-reported gptme costs as exact usage events. Re-parse
 // unchanged gptme sources in place; source and session identities are unchanged.)
-const dataVersion = 141
+const dataVersion = 142
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2070,6 +2070,10 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			have[column] = true
 		}
 		for _, column := range columns {
+			// Evidence is an optional read capability on archives predating v142.
+			if table == "sessions" && (column == "file_evidence_version" || column == "file_evidence_coverage") {
+				continue
+			}
 			if !have[column] {
 				return &SchemaUpgradeRequiredError{
 					Table:  table,
@@ -2489,6 +2493,8 @@ func schemaColumnMigrations() []schemaColumnMigration {
 				" local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')" +
 				" WHERE deletion_cause = 'source_missing'",
 		},
+		{"sessions", "file_evidence_version", "ALTER TABLE sessions ADD COLUMN file_evidence_version INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "file_evidence_coverage", "ALTER TABLE sessions ADD COLUMN file_evidence_coverage TEXT NOT NULL DEFAULT 'unavailable'"},
 		{
 			"sessions", "transcript_revision",
 			"ALTER TABLE sessions ADD COLUMN transcript_revision TEXT NOT NULL DEFAULT '0'",
@@ -2850,6 +2856,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 		tx.Exec,
 		progress,
 	); err != nil {
+		return err
+	}
+	if err := installFileEvidenceTriggersTx(ctx, tx); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {

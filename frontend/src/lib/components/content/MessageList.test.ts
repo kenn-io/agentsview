@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { localEvidence, fileReferencesResult } from "../../test/file-evidence.js";
 import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
@@ -210,6 +211,54 @@ describe("MessageList follow cancellation", () => {
     ui.followLatest = false;
     readProgress.reset();
     document.body.innerHTML = "";
+  });
+
+  it("renders local files during one hung visible batch and cancels navigation", async () => {
+    ui.followLatest = false;
+    messages.loadedBinding = "b1";
+    messages.loadedRevision = "r1";
+    const evidence = localEvidence({ message_ordinal: 10, display_name: "written.txt" });
+    messages.fileEvidence = new Map([[10, [evidence]]]);
+    const pending = deferred<import("../../api/generated/index.js").ServiceFileReferencesResult>();
+    const lookup = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdFileReferences")
+      .mockReturnValue(pending.promise);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    const row = document.querySelector('[data-occurrence="o1"]');
+    expect(row?.textContent).toContain("written.txt");
+    expect(lookup).toHaveBeenCalledTimes(1);
+    pending.resolve(
+      fileReferencesResult({
+        occurrences: [
+          {
+            ...evidence,
+            state: "unavailable",
+            matches: [],
+            checked_at: null,
+            next_reference_offset: null,
+            reference_total: null,
+          },
+        ],
+      }),
+    );
+    await flushScrollUpdates();
+    expect(document.querySelector('[data-occurrence="o1"]')).toBe(row);
+    expect(document.body.textContent?.match(/Docbank unavailable/g)).toHaveLength(1);
+    const retry = [...document.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Check remaining"),
+    )!;
+    const held = deferred<import("../../api/generated/index.js").ServiceFileReferencesResult>();
+    lookup.mockReturnValue(held.promise);
+    retry.click();
+    await flushScrollUpdates();
+    const signal = lookup.mock.calls[1]![2]!.signal!;
+    messages.clear();
+    sessions.activeSessionId = "s2";
+    await flushScrollUpdates();
+    expect(signal.aborted).toBe(true);
+    expect(document.querySelector('[data-occurrence="o1"]')).toBeNull();
+    lookup.mockRestore();
   });
 
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {

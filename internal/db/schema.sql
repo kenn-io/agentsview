@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
+    file_evidence_version INTEGER NOT NULL DEFAULT 0,
+    file_evidence_coverage TEXT NOT NULL DEFAULT 'unavailable',
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     parser_relationship_type TEXT,
@@ -1611,4 +1613,15 @@ CREATE TABLE IF NOT EXISTS raw_archive_sessions (
     session_id TEXT NOT NULL UNIQUE,
     root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), source_key TEXT NOT NULL,
     PRIMARY KEY(device_id,provider,parser_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_file_evidence (
+ message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+ slot TEXT NOT NULL, kind TEXT NOT NULL, media_type TEXT NOT NULL,
+ display_name TEXT NOT NULL, display_path TEXT NOT NULL, size INTEGER,
+ sha256 TEXT NOT NULL, proof_method TEXT NOT NULL, retention TEXT NOT NULL,
+ asset_ref TEXT NOT NULL, ineligible_reason TEXT NOT NULL,
+ support_kind TEXT NOT NULL, support_digest TEXT NOT NULL,
+ call_index INTEGER NOT NULL, result_index INTEGER NOT NULL,
+ PRIMARY KEY(message_id,slot)
 );

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-07
+last_edited: 2026-10-21
 ---
 
 # Session Format Source Inventory
@@ -139,6 +139,21 @@ non-text results remain unknown. These classifications describe retained
 evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
+
+- **File evidence (checked 2026-10-20):** Native image/document base64 blocks
+  are decoded before display conversion. These identify the recorded payload,
+  which may differ from the uploaded original. Public producer source is
+  unavailable; the parser's neutral fixtures cover these persisted shapes.
+  Claude Read, Write and Edit text remains ineligible: normalized read output
+  cannot establish original file bytes. Shared parser callers do not opt in.
+  Rechecked 2026-10-21 against the native mixed-block fixture: a textless
+  result carrier keeps sibling message attachments through pairing and asset
+  publication (`TestFileEvidenceClaudeMixedResultCarrier`). Rechecked the same
+  image blocks through HTTP upload on 2026-10-21: shared ingestion retains
+  both message attachments and attachments paired with their tool calls. The
+  same fixture with Read and Bash results verifies that configured blocked
+  categories withhold result text and assets while allowed results and user
+  attachments remain (`TestUploadFileEvidenceBlockedResults`).
 
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
@@ -576,6 +591,32 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **File evidence (rechecked 2026-10-21):** The pinned
+  [content schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs)
+  records `input_image.image_url`. Only strict base64 image data URIs and
+  retained structured tool images establish payload bytes. URLs, local paths,
+  shell output, claimed digests and compaction replay establish no file proof.
+  Shared Codex-format providers are excluded. Absolute raw-line coordinates
+  remain stable across full and append parsing; image tails reparse fully,
+  including arrays inside string-form `function_call_output.output` and
+  `custom_tool_call_output.output`. The same schema serializes those outputs
+  as strings. Large staged parses keep message and tool-image evidence in
+  scratch and decode one retained array at publication. Dropped images never
+  enter scratch. Tool-content retention and blocked categories apply only to
+  tool results; transcript retention preserves native message attachments.
+  Existing image stripping and offload still accept CR/LF-wrapped base64,
+  while exact-byte evidence rejects it;
+  `TestToolResultImagesLineWrappedBase64` and `TestFileEvidenceBase64` cover
+  that distinction. Replay detection includes ordered native image URLs as
+  well as normalized text, so an abort cannot discard a different image-only
+  prompt. Continuation cursors retain only that digest;
+  `TestFileEvidenceCodexImagePromptAfterAbort` covers full parsing, prefix
+  reconstruction, and persisted cursor restoration. Reverified the pinned
+  schema on 2026-10-21: cursor reconstruction skips attachment capture and
+  bookkeeping while retaining prompt digests. Incremental fallback shares the
+  existing attachment capture allowlist, including string-form outputs;
+  `TestFileEvidenceCodexColdCursorMemory` bounds retained prefix memory.
 
 - **Repeated session metadata (checked 2026-10-17 at rust-v0.47.0,
   `c71297b9a9b3f7995445eff8d768837814ac06f8`):** The
@@ -2573,9 +2614,49 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
+- **File evidence (reverified 2026-10-20):** Pi v1.3.0 at
+  `71023aec1546d6d677a65669c5665c0927ce0dd0` supplies the checked
+  [read](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/core/tools/read.ts),
+  the
+  [write](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/core/tools/write.ts)
+  and the
+  [truncation](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/core/tools/truncate.ts)
+  contracts. Default read decodes the filesystem buffer as UTF-8 and
+  preserves complete untruncated text; default write persists the supplied
+  string as UTF-8. Only exact built-in arguments, valid Unicode without U+FFFD
+  and one successful terminal text result on persisted ancestry qualify.
+  Offset, limit, notices, details, unknown call fields and recorded overrides
+  reject proof. Present structured content must equal the text. The older
+  source pin below omits structured content, so absence alone does not reject
+  proof. Missing, duplicate or cyclic ancestry and selected context edits
+  reject native text proof. Legacy logs can still identify recorded inline
+  images. Read results are blocked by the default retention policy; retaining
+  them explicitly is required. Forks and wrappers are excluded. Custom
+  operations and extension replacements can be indistinguishable in the log:
+  this is a native producer assumption, not execution authentication. No
+  source path is opened to reconstruct bytes. Existing typed owned images are
+  verified only during bounded extraction; lookup reads persisted metadata.
+
+    Reverified 2026-10-21 against the same revision's
+    [message types](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/ai/src/types.ts):
+    user content accepts a string or block array, and tool results carry
+    `toolCallId` with text/image blocks. String user messages preserve native
+    proof eligibility; result attachments follow their owning call through
+    ingestion, including when the empty result carrier is filtered out.
+    Rechecked the
+    [pinned session manager](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/core/session-manager.ts)
+    schema on 2026-10-21. AgentsView stores compact ancestry metadata and file
+    offsets. Only matching native file operations are read again, with original
+    row hashes checked before proof extraction. `TestPiFileEvidenceMemory`
+    bounds unrelated-row retention. The same pinned `appendMessage` persists
+    tool results after calls. Full Pi writes replace earlier messages so a later
+    terminal result can publish its proof during ordinary sync.
+
 - **Format:** A tree-structured JSONL log with a session header and entries
   connected by `id` and `parentId`.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/earendil-works/pi.git` at
   `f1c587dde39025c75d7397bc14532d8fa5c001d9`; see the pinned
   [session format](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/docs/session-format.md)
@@ -2585,11 +2666,13 @@ schemas keep their existing ordering behavior.
   [skill documentation](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/docs/skills.md)
   and
   [skill loader](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/skills.ts).
+
 - **Usage and cost:** Assistant messages persist input and output tokens plus
   cache-read and cache-write/creation values in nested or historical flat
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
   `cacheWrite` spelling.
+
 - **Directory configuration:** Reverified 2026-09-09 against
   [config.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/config.ts)
   and
@@ -2615,6 +2698,7 @@ schemas keep their existing ordering behavior.
   parent transcript above the run stays unlinked. Checked 2026-09-23 against
   two local pi-subagents runs: the parent's `subagent` tool result records
   each child's path in `details.results[].sessionFile`, matching that layout.
+
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -4136,16 +4220,16 @@ schemas keep their existing ordering behavior.
   and cache-creation tokens with model data. Agentsview catalog-prices the
   normalized usage unless `metadata.cost_source` is `"provider"` and
   `metadata.cost` is a valid non-negative USD amount. In that case it imports
-  an exact-cost usage event, retaining message token display fields but not
-  a duplicate billable message token row. Reverified 2026-10-20 against
-  gptme commit `54c3a29fc3d5089f211528e206b50d7ee3f775c8`:
+  an exact-cost usage event, retaining message token display fields but not a
+  duplicate billable message token row. Reverified 2026-10-20 against gptme
+  commit `54c3a29fc3d5089f211528e206b50d7ee3f775c8`:
   [`_record_usage`](https://github.com/gptme/gptme/blob/54c3a29fc3d5089f211528e206b50d7ee3f775c8/gptme/llm/llm_openai.py#L317-L398)
   writes this marker only for reported direct OpenRouter costs, including
   zero; estimates, BYOK fees and proxied routes do not receive the marker.
   Parser data version 141 reparses unchanged gptme sources in place to import
-  these events without changing source or session identities.
-  Reverified 2026-10-20 at the pinned commit: assistant metadata stores the
-  requested model ID, including any `@host` provider pin
+  these events without changing source or session identities. Reverified
+  2026-10-20 at the pinned commit: assistant metadata stores the requested
+  model ID, including any `@host` provider pin
   ([metadata](https://github.com/gptme/gptme/blob/8f71713f3d1151b3141927aa014db62b9d756117/gptme/llm/llm_openai.py#L357)).
   The suffix is a comma-separated OpenRouter host allowlist
   ([routing](https://github.com/gptme/gptme/blob/8f71713f3d1151b3141927aa014db62b9d756117/gptme/llm/llm_openai.py#L1579-L1588))

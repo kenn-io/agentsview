@@ -175,7 +175,9 @@ func checkCodexStagingSpace(dir string, sourceBytes int64) error {
 	)
 	required := stagedScratchMinFree
 	if sourceBytes > 0 {
-		scaled := sourceBytes + sourceBytes/2 + stagedScratchOverhead
+		// Native image evidence keeps a second raw copy until publication,
+		// alongside sanitized events. Reserve for both plus SQLite overhead.
+		scaled := sourceBytes*2 + sourceBytes/2 + stagedScratchOverhead
 		if scaled > required {
 			required = scaled
 		}
@@ -261,7 +263,16 @@ CREATE TABLE stage_events (
 );
 CREATE INDEX idx_stage_events_call ON stage_events(call_key, seq);
 CREATE INDEX idx_stage_events_identity
-ON stage_events(call_key, agent_id, status, raw_content_digest);`
+ON stage_events(call_key, agent_id, status, raw_content_digest);
+CREATE TABLE stage_file_evidence (
+    seq INTEGER PRIMARY KEY,
+    call_key TEXT NOT NULL,
+    entry TEXT NOT NULL,
+    result_entry TEXT NOT NULL,
+    content TEXT NOT NULL,
+    raw_content_digest BLOB NOT NULL,
+    withheld INTEGER NOT NULL
+);`
 
 // newCodexStagingSink opens a scratch SQLite database for one streaming
 // parse. The caller must Close it once the staged write has published.
@@ -632,6 +643,84 @@ func (s *codexStagingSink) AppendToolResultEvent(ctx context.Context,
 	// collecting dedup treats every staged event as distinct.
 	ev.Content = fmt.Sprintf("staged:%d", seq)
 	s.AppendUniqueToolResultEvent(callID, target, ev)
+}
+
+// StageMessageFileEvidence never decodes message attachments during parsing.
+func (s *codexStagingSink) StageMessageFileEvidence(ctx context.Context, key, entry, raw string) {
+	if s.stageErr != nil {
+		return
+	}
+	withheld := s.toolResultImages == config.ToolResultImagesDrop || s.database != nil && s.database.ArchiveContent().UsageOnly()
+	if withheld {
+		raw = ""
+	}
+	_, err := s.scratch.ExecContext(ctx, `INSERT INTO stage_file_evidence(call_key,entry,result_entry,content,raw_content_digest,withheld) VALUES('',?,?,?,X'',?)`, entry, key, raw, withheld)
+	if err != nil {
+		s.fail(err)
+	}
+}
+
+// StageToolFileEvidence stores native bytes without decoding or publishing them.
+// Disallowed payloads never enter this scratch table.
+func (s *codexStagingSink) StageToolFileEvidence(ctx context.Context, callID string, target *parser.ParsedToolCallPosition, entry, resultEntry, raw string) {
+	if s.stageErr != nil || !strings.Contains(raw, `"input_image"`) && !strings.Contains(raw, `"agentsview_image"`) && !strings.Contains(raw, `"image"`) && !strings.Contains(raw, `"document"`) {
+		return
+	}
+	key, ok := s.currentCallKey[callID]
+	if target != nil {
+		key, ok = s.callKeyByPosition[*target]
+	}
+	if !ok {
+		return
+	}
+	withheld := s.blocked[s.categoryByCallKey[key]] || s.toolResultImages == config.ToolResultImagesDrop || s.database != nil && s.database.ArchiveContent().OmitsToolContent()
+	event := db.ToolResultEvent{Content: strings.TrimSpace(raw)}
+	db.PrepareToolResultEvent(&event)
+	if withheld {
+		raw = ""
+	}
+	_, err := s.scratch.ExecContext(ctx, `INSERT INTO stage_file_evidence(call_key,entry,result_entry,content,raw_content_digest,withheld) VALUES(?,?,?,?,?,?)`, key, entry, resultEntry, raw, event.RawContentDigest, withheld)
+	if err != nil {
+		s.fail(err)
+	}
+}
+
+// VisitFileEvidence decodes one native attachment array at a time, after acceptance.
+// The visitor retains compact descriptors; decoded payloads die each iteration.
+func (s *codexStagingSink) VisitFileEvidence(ctx context.Context, visit func(db.StagedFileEvidence) error) error {
+	rows, err := s.scratch.QueryContext(ctx, `
+        SELECT f.call_key,f.entry,f.result_entry,f.content,f.withheld,coalesce(e.content,''),
+               (SELECT count(*) FROM stage_events prior WHERE prior.call_key=f.call_key AND prior.seq<e.seq)
+        FROM stage_file_evidence f
+        LEFT JOIN stage_events e ON e.seq=(SELECT min(seq) FROM stage_events WHERE call_key=f.call_key AND raw_content_digest=f.raw_content_digest)
+        WHERE f.call_key='' OR e.seq IS NOT NULL
+        ORDER BY f.seq`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item db.StagedFileEvidence
+		var entry, resultEntry, raw string
+		if err := rows.Scan(&item.CallKey, &entry, &resultEntry, &raw, &item.Withheld, &item.RetainedContent, &item.ResultIndex); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if item.CallKey == "" {
+			item.MessageEntry = resultEntry
+			if !item.Withheld {
+				item.Candidates = parser.CaptureCodexMessageFileEvidence(raw, entry)
+			}
+		} else if !item.Withheld {
+			item.Candidates = parser.CaptureCodexToolFileEvidence(raw, entry, resultEntry)
+		}
+		if err := visit(item); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // PublishToolResultImages moves staged inline images after session acceptance.

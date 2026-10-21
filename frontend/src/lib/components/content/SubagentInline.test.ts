@@ -4,6 +4,7 @@ vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { imageEvidence } from "../../test/file-evidence.js";
 import type { Session } from "../../api/types.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
@@ -167,8 +168,28 @@ describe("SubagentInline", () => {
   it("prefers fetched session metadata for the token summary when available", async () => {
     childSessions.set("subagent-session-id", makeSession());
     getMessages.mockResolvedValue({
-      messages: [],
-      count: 0,
+      messages: [
+        {
+          id: 1,
+          session_id: "subagent-session-id",
+          ordinal: 0,
+          role: "user",
+          content: "",
+          content_length: 0,
+          timestamp: "2026-03-09T18:30:00Z",
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          has_context_tokens: false,
+          has_output_tokens: false,
+          model: "",
+          context_tokens: 0,
+          output_tokens: 0,
+          is_system: false,
+        },
+      ],
+      count: 1,
+      file_evidence: imageEvidence,
     });
     getSession.mockResolvedValue(
       makeSession({
@@ -188,6 +209,9 @@ describe("SubagentInline", () => {
     document.querySelector<HTMLButtonElement>(".subagent-toggle")?.click();
     await vi.waitFor(() => {
       expect(document.querySelector(".toggle-tokens")?.textContent).toContain("2.4k ctx / 180 out");
+      expect(document.querySelector(".subagent-messages img")?.getAttribute("src")).toBe(
+        "/__agentsview_asset__/proof.png",
+      );
     });
 
     unmount(component);

@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -39,6 +40,17 @@ func parsePiLikeSession(
 	}
 	defer f.Close()
 
+	return parsePiLikeReader(path, project, machine, agent, idPrefix, info, f)
+}
+
+func parsePiLikeReader(
+	path, project, machine string,
+	agent AgentType, idPrefix string, info os.FileInfo,
+	f interface {
+		io.Reader
+		io.ReaderAt
+	},
+) (*ParsedSession, []ParsedMessage, error) {
 	lr := newLineReader(f, maxLineSize)
 	defer releaseLineReader(lr)
 
@@ -49,8 +61,11 @@ func parsePiLikeSession(
 	// {"type":"title",...} slot line holding the current session title;
 	// skip it too (matching IsPiSessionFile) and keep its title.
 	var headerLine, slotTitle string
+	proofIndex := piProofIndex{entries: map[string]piProofLocation{}, valid: true}
+	rawLine := 0
 	for {
 		line, ok := lr.next()
+		rawLine++
 		if !ok {
 			return nil, nil, fmt.Errorf(
 				"not a pi session: missing session header in %s", path,
@@ -155,7 +170,9 @@ func parsePiLikeSession(
 	}
 
 	for {
+		proofOffset := lr.bytesRead
 		line, ok := lr.next()
+		rawLine++
 		if !ok {
 			break
 		}
@@ -164,12 +181,19 @@ func parsePiLikeSession(
 			continue
 		}
 
+		if agent == AgentPi {
+			proofIndex.add(line, proofOffset, lr.bytesRead-proofOffset)
+		}
 		entryType := gjson.Get(line, "type").Str
 		if entryType == "" {
 			continue
 		}
-		entryID := gjson.Get(line, "id").Str
-		parentID := gjson.Get(line, "parentId").Str
+		entryID := strings.Clone(gjson.Get(line, "id").Str)
+		evidenceEntry := entryID
+		if evidenceEntry == "" {
+			evidenceEntry = fmt.Sprintf("line:%d", rawLine)
+		}
+		parentID := strings.Clone(gjson.Get(line, "parentId").Str)
 
 		// If any message entry has an id field, this is a V2 session.
 		if isV1 && entryID != "" {
@@ -194,6 +218,9 @@ func parsePiLikeSession(
 						300,
 					)
 				}
+				if agent == AgentPi {
+					captureFileEvidence(msg, gjson.Get(line, "message.content").Raw, evidenceEntry)
+				}
 				messages = append(messages, *msg)
 				if entryID != "" {
 					visibleAncestorByID[entryID] = entryID
@@ -213,6 +240,9 @@ func parsePiLikeSession(
 				if msg.Model != "" {
 					currentModel = msg.Model
 				}
+				if agent == AgentPi {
+					captureFileEvidence(msg, gjson.Get(line, "message.content").Raw, evidenceEntry)
+				}
 				messages = append(messages, *msg)
 				if entryID != "" {
 					assistantByID[entryID] = len(messages) - 1
@@ -227,6 +257,21 @@ func parsePiLikeSession(
 				)
 				if msg == nil {
 					continue
+				}
+				if agent == AgentPi {
+					rawContent := gjson.Get(line, "message.content").Raw
+					first := len(msg.FileEvidence)
+					captureFileEvidence(msg, rawContent, evidenceEntry)
+					for j := first; j < len(msg.FileEvidence); j++ {
+						candidate := &msg.FileEvidence[j]
+						candidate.ToolUseID = gjson.Get(
+							line, "message.toolCallId",
+						).Str
+						candidate.Support = "result"
+						candidate.SupportingText = DecodeContent(rawContent)
+						candidate.Record.Position.ResultEntry = evidenceEntry
+						candidate.Record.Position.Result = 0
+					}
 				}
 				messages = append(messages, *msg)
 				if entryID != "" {
@@ -373,6 +418,10 @@ func parsePiLikeSession(
 		sess.RelationshipType = RelSubagent
 	}
 
+	if agent == AgentPi {
+		proofIndex.valid = proofIndex.valid && !lr.skippedOversized
+		piFileEvidence(f, proofIndex, messages)
+	}
 	accumulateMessageTokenUsage(sess, messages)
 
 	return sess, messages, nil

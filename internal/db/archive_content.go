@@ -85,8 +85,16 @@ func (db *DB) sessionForStorage(session Session) Session {
 func (db *DB) sessionAndMessagesForStorage(
 	session Session, messages []Message,
 ) (Session, []Message) {
-	return ProjectSessionForStoragePolicy(
-		session, messages, db.ArchiveContent(),
+	return db.sessionAndMessagesForStorageWithImagePolicy(
+		session, messages, db.ToolResultImages(),
+	)
+}
+
+func (db *DB) sessionAndMessagesForStorageWithImagePolicy(
+	session Session, messages []Message, images config.ToolResultImages,
+) (Session, []Message) {
+	return projectSessionForStoragePolicy(
+		session, messages, db.ArchiveContent(), images, db.AssetsDir(),
 	)
 }
 
@@ -95,6 +103,17 @@ func (db *DB) sessionAndMessagesForStorage(
 func ProjectSessionForStoragePolicy(
 	session Session, messages []Message, policy config.ArchiveContent,
 ) (Session, []Message) {
+	return projectSessionForStoragePolicy(
+		session, messages, policy, config.ToolResultImagesKeep, "",
+	)
+}
+
+func projectSessionForStoragePolicy(
+	session Session, messages []Message, policy config.ArchiveContent,
+	images config.ToolResultImages, dir string,
+) (Session, []Message) {
+	messages = normalizeFileEvidence(messages, policy, images, dir)
+	session.FileEvidenceCoverage = evidenceCoverage(messages, session.FileEvidenceCoverage)
 	switch policy {
 	case config.ArchiveContentUsage:
 		// Some importers do not precompute IsAutomated. Classify from the raw
@@ -144,6 +163,13 @@ func (db *DB) ProjectSessionForStorage(
 }
 
 func (db *DB) messagesForStorage(messages []Message) []Message {
+	return db.messagesForStorageWithImagePolicy(messages, db.ToolResultImages())
+}
+
+func (db *DB) messagesForStorageWithImagePolicy(
+	messages []Message, images config.ToolResultImages,
+) []Message {
+	messages = normalizeFileEvidence(messages, db.ArchiveContent(), images, db.AssetsDir())
 	switch db.ArchiveContent() {
 	case config.ArchiveContentUsage:
 		return usageOnlyMessages(messages)
@@ -491,8 +517,11 @@ func messagesForSession(messages []Message, sessionID string) []Message {
 // The SQL mirrors usageOnlyMessages and transcriptMessages column for column.
 func applyArchiveContentToCopiedSessionsTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
-	policy config.ArchiveContent, sourceVersion int,
+	policy config.ArchiveContent, sourceVersion int, images ...config.ToolResultImages,
 ) error {
+	if err := copiedFileEvidencePolicyTx(ctx, tx, tempIDsTable, policy, images...); err != nil {
+		return err
+	}
 	var err error
 	switch policy {
 	case config.ArchiveContentFull:

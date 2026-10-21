@@ -302,12 +302,19 @@ func decodeInlineImage(raw jsontext.Value) (mediaType string, decoded []byte, ok
 	if !ok {
 		return "", nil, false
 	}
-	var buf bytes.Buffer
+	var body bytes.Buffer
 	decoder := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
-	if _, err := io.Copy(&buf, decoder); err != nil {
+	if _, err := io.Copy(&body, decoder); err != nil {
 		return "", nil, false
 	}
-	return mediaType, buf.Bytes(), true
+	return mediaType, body.Bytes(), true
+}
+
+type countingWriter struct{ n int64 }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
 }
 
 // imagePutFunc writes decoded image bytes and returns their asset reference.
@@ -464,13 +471,6 @@ func migrateToolResultSummaryImages(content string, put imagePutFunc) (string, e
 	return result.String(), nil
 }
 
-type countingWriter struct{ n int64 }
-
-func (w *countingWriter) Write(p []byte) (int, error) {
-	w.n += int64(len(p))
-	return len(p), nil
-}
-
 func projectToolResultImages(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
@@ -486,6 +486,7 @@ func projectToolResultImages(
 func ProjectToolResultImagesWithoutWriting(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
+	messages = normalizeFileEvidence(messages, config.ArchiveContentFull, policy, assetsDir)
 	return projectToolResultImagesWithPut(
 		messages, policy, assetsDir,
 		func(mediaType string, body []byte) (string, bool, error) {
@@ -620,6 +621,7 @@ func (db *DB) ProjectToolResultImages(messages []Message) ([]Message, ToolImageS
 
 // ProjectToolResultImagesWithPolicy applies a run policy only to retained tool content.
 func (db *DB) ProjectToolResultImagesWithPolicy(messages []Message, policy config.ToolResultImages) ([]Message, ToolImageStats) {
+	messages = normalizeFileEvidence(messages, db.ArchiveContent(), policy, db.AssetsDir())
 	if db.ArchiveContent().OmitsToolContent() {
 		if messages == nil {
 			return []Message{}, ToolImageStats{}
@@ -635,6 +637,7 @@ func (db *DB) ProjectToolResultImagesWithPolicy(messages []Message, policy confi
 func (db *DB) ProjectToolResultImagesForComparison(
 	messages []Message, policy config.ToolResultImages,
 ) ([]Message, ToolImageStats) {
+	messages = normalizeFileEvidence(messages, db.ArchiveContent(), policy, db.AssetsDir())
 	if db.ArchiveContent().OmitsToolContent() {
 		if messages == nil {
 			return []Message{}, ToolImageStats{}

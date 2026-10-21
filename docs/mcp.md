@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-09
+last_edited: 2026-10-20
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -69,30 +69,49 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                                  |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                                |
-| `list_sessions`        | List recent or filtered sessions                                         |
-| `get_session_overview` | Fetch metadata and a compact message preview                             |
-| `get_messages`         | Read paginated message bodies from one session                           |
-| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`    | Aggregate token and cost usage                                           |
-| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
-| `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
-| `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
-| `get_child_sessions`   | List the sub-agent and fork sessions started from one session            |
-| `compare_usage`        | Compare token usage and cost between two models or two projects          |
-| `get_activity_report`  | Report agent time, sessions, and cost for a day, week, month, or range   |
-| `get_tool_usage`       | Count tool calls by category, agent, and tool name                       |
-| `get_quality_signals`  | Show health grades, outcomes, failures, and example sessions             |
-| `search_docs`          | Search the AgentsView guides bundled with this version                   |
+| Tool                          | Purpose                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `search_sessions`             | Full-text search across recorded sessions                                |
+| `list_sessions`               | List recent or filtered sessions                                         |
+| `get_session_overview`        | Fetch metadata and a compact message preview                             |
+| `get_messages`                | Read paginated message bodies from one session                           |
+| `get_session_file_references` | Explicitly look up exact retained session bytes in Docbank               |
+| `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
+| `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`           | Aggregate token and cost usage                                           |
+| `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
+| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
+| `get_recent_edits`            | Find which sessions edited a file, newest edit first                     |
+| `get_child_sessions`          | List the sub-agent and fork sessions started from one session            |
+| `compare_usage`               | Compare token usage and cost between two models or two projects          |
+| `get_activity_report`         | Report agent time, sessions, and cost for a day, week, month, or range   |
+| `get_tool_usage`              | Count tool calls by category, agent, and tool name                       |
+| `get_quality_signals`         | Show health grades, outcomes, failures, and example sessions             |
+| `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows
 include each session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
+
+### File references
+
+The full profile's `get_session_file_references` tool accepts `session_id`, an
+optional message ordinal window, and pagination selectors. It uses the daemon's
+archive, retention policy and Docbank configuration. A returned `binding` pins
+the archive generation and transcript revision: send it with continuation
+requests and restart from the current message page after `source_changed`.
+Unknown reference totals stay null; deferred occurrences can be retried in the
+same window.
+
+The HTTP operation is `GET /api/v1/sessions/{id}/file-references` with
+`X-AgentsView-Lookup-Intent: docbank`. It returns at most 50 local descriptors
+and a bounded response, with separate occurrence and remote-reference
+continuation. It requires ordinary session authorization and never accepts a
+remote URL or credential from the caller. `get_messages` and the memory profile
+remain local reads with no Docbank lookup. See
+[configuration](/docs/configuration/#find-transcript-files-in-docbank).
 
 ### Focused memory profile
 
@@ -315,9 +334,9 @@ read-only, could not write its runtime record, or runs as a process whose
 identity cannot be checked. This lets a writable daemon take over as soon as one
 is available.
 
-When no daemon is visible and another process holds the write lock, the MCP
-call fails with the lock error instead of starting a daemon that could not open
-the archive. The next call checks again.
+When no daemon is visible and another process holds the write lock, the MCP call
+fails with the lock error instead of starting a daemon that could not open the
+archive. The next call checks again.
 
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP

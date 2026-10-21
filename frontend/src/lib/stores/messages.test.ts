@@ -1,3 +1,4 @@
+import { localEvidence } from "../test/file-evidence.js";
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { messages } from "./messages.svelte.js";
 import { readProgress } from "./read-progress.svelte.js";
@@ -59,6 +60,7 @@ vi.mock("../api/generated/index", () => ({
           limit: params.limit,
           direction: params.direction,
           ...(params.expected_revision ? { expected_revision: params.expected_revision } : {}),
+          ...(params.evidence_source ? { evidence_source: params.evidence_source } : {}),
         },
         options,
       ),
@@ -1561,4 +1563,94 @@ describe("MessagesStore", () => {
       await expect(p).resolves.toBeUndefined();
     });
   });
+});
+
+describe("bound local file evidence", () => {
+  beforeEach(() => {
+    messages.clear();
+    vi.clearAllMocks();
+  });
+  it.each(["same", "replacement"])("combines only same-bound pages: %s", async (mode) => {
+    const row = localEvidence({ occurrence_id: "local", message_ordinal: 1000 });
+    api.getSession.mockResolvedValue(makeSession("s1", 2000));
+    api.getMessages
+      .mockResolvedValueOnce({
+        ...makeMessagesResponse(Array.from({ length: 1000 }, (_, i) => makeMessage(i))),
+        binding: "b1",
+        transcript_revision: "r1",
+        file_evidence: [{ ordinal: 0, records: [{ ...row, message_ordinal: 0 }] }],
+      })
+      .mockResolvedValueOnce({
+        ...makeMessagesResponse([makeMessage(1000)]),
+        binding: mode === "same" ? "b1" : "b2",
+        transcript_revision: "r1",
+        file_evidence: [{ ordinal: 1000, records: [row] }],
+      })
+      .mockResolvedValue({
+        ...makeMessagesResponse([makeMessage(0)]),
+        binding: "b2",
+        transcript_revision: "r1",
+        file_evidence: [],
+      });
+    await messages.loadSession("s1");
+    if (mode === "same") {
+      expect(messages.messages).toHaveLength(1001);
+      expect(messages.loadedBinding).toBe("b1");
+      expect([...messages.fileEvidence.keys()]).toEqual([0, 1000]);
+    } else {
+      expect(messages.messages).toHaveLength(1);
+      expect(messages.loadedBinding).toBe("b2");
+      expect(messages.fileEvidence.size).toBe(0);
+    }
+    messages.clear();
+    expect(messages.loadedBinding).toBeNull();
+    expect(messages.fileEvidence.size).toBe(0);
+  });
+  it("reloads rather than merging older rows from a replacement archive with the same numeric revision", async () => {
+    api.getSession.mockResolvedValue(makeSession("s1", 4000));
+    const page = (rows: Message[], binding: string) => ({
+      ...makeMessagesResponse(rows),
+      binding,
+      transcript_revision: "r1",
+      evidence_source: `source-${binding}`,
+      file_evidence: rows.map((row) => ({
+        ordinal: row.ordinal,
+        records: [localEvidence({ message_ordinal: row.ordinal })],
+      })),
+    });
+    api.getMessages
+      .mockResolvedValueOnce(page([makeMessage(1001), makeMessage(1000)], "b1"))
+      .mockResolvedValueOnce(page([makeMessage(999)], "b2"))
+      .mockResolvedValue(page([makeMessage(0)], "b2"));
+    await messages.loadSession("s1");
+    await messages.loadOlder();
+    expect(api.getMessages.mock.calls.every((call) => call[1]?.evidence_source === undefined)).toBe(
+      true,
+    );
+    await vi.waitFor(() => expect(messages.loadedBinding).toBe("b2"));
+    expect(messages.messages.map((row) => row.ordinal)).toEqual([0]);
+    expect([...messages.fileEvidence.keys()]).toEqual([0]);
+  });
+});
+
+it("reloads attachment evidence when returning after idle navigation", async () => {
+  messages.clear();
+  vi.clearAllMocks();
+  api.getSession.mockResolvedValue(makeSession("s1", 1));
+  api.getMessages.mockResolvedValue({
+    ...makeMessagesResponse([makeMessage(0)]),
+    binding: "b1",
+    transcript_revision: "r1",
+    file_evidence: [{ ordinal: 0, records: [localEvidence()] }],
+  });
+  await messages.loadSession("s1");
+  const generation = messages.evidenceGeneration;
+  messages.cancelInFlight();
+  expect(messages.loadedBinding).toBeNull();
+  expect(messages.fileEvidence.size).toBe(0);
+  expect(messages.evidenceGeneration).toBeGreaterThan(generation);
+  await messages.loadSession("s1");
+  expect(api.getMessages).toHaveBeenCalledTimes(2);
+  expect(messages.loadedBinding).toBe("b1");
+  expect(messages.fileEvidence.get(0)).toEqual([localEvidence()]);
 });

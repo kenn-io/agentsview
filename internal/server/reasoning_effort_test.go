@@ -8,7 +8,7 @@ import (
 )
 
 func TestReasoningEffortUploadConversion(t *testing.T) {
-	result := sessionBatchWriteFromParsed(
+	result, err := sessionBatchWriteFromParsed(t.Context(),
 		parser.ParsedSession{ID: "upload-session"},
 		[]parser.ParsedMessage{{
 			Ordinal:         0,
@@ -16,8 +16,9 @@ func TestReasoningEffortUploadConversion(t *testing.T) {
 			Content:         "answer",
 			Model:           "model-test",
 			ReasoningEffort: "high",
-		}},
+		}}, nil,
 	)
+	require.NoError(t, err)
 	require.Len(t, result.Messages, 1)
 	require.Equal(t, "high", result.Messages[0].ReasoningEffort)
 }

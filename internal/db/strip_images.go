@@ -94,6 +94,13 @@ func (db *DB) StripToolImagesForSessions(ctx context.Context, sessionIDs []strin
 // A returned error aborts the session transaction.
 type storedToolResultProjection func(string) (string, error)
 
+type toolImageRewrite int
+
+const (
+	toolImageStrip toolImageRewrite = iota
+	toolImageOffload
+)
+
 // stripStoredToolResultRows is a wrapper over rewriteStoredToolResultRows
 // that applies the strip projection: StripToolResultImages, discarding stats.
 func (db *DB) stripStoredToolResultRows(
@@ -102,7 +109,7 @@ func (db *DB) stripStoredToolResultRows(
 	return db.rewriteStoredToolResultRows(ctx, sessionID, func(content string) (string, error) {
 		projected, _ := StripToolResultImages(content)
 		return projected, nil
-	})
+	}, toolImageStrip)
 }
 
 func soleProjectedToolResultContent(contents []string) (string, bool) {
@@ -124,7 +131,7 @@ func soleProjectedToolResultContent(contents []string) (string, bool) {
 // coordinates and metadata. The projection is called once per stored content
 // string; a projection error closes the open Rows and aborts the transaction.
 func (db *DB) rewriteStoredToolResultRows(
-	ctx context.Context, sessionID string, project storedToolResultProjection,
+	ctx context.Context, sessionID string, project storedToolResultProjection, mode toolImageRewrite,
 ) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -134,6 +141,13 @@ func (db *DB) rewriteStoredToolResultRows(
 		return false, fmt.Errorf("beginning tool result strip: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var restoreFileEvidence func() error
+	if mode == toolImageOffload {
+		restoreFileEvidence, err = preserveLosslessAttachmentEvidenceTx(ctx, tx, sessionID)
+		if err != nil {
+			return false, err
+		}
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -263,7 +277,14 @@ func (db *DB) rewriteStoredToolResultRows(
 		}
 	}
 
-	if len(calls) == 0 && len(events) == 0 {
+	attachmentsChanged := false
+	if mode == toolImageStrip {
+		attachmentsChanged, err = stripFileAttachmentsTx(ctx, tx, sessionID)
+		if err != nil {
+			return false, err
+		}
+	}
+	if len(calls) == 0 && len(events) == 0 && !attachmentsChanged {
 		return false, nil
 	}
 	for _, update := range calls {
@@ -285,6 +306,11 @@ func (db *DB) rewriteStoredToolResultRows(
 	for _, update := range events {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_call_occurrence_agent_state WHERE session_id=? AND message_ordinal=? AND call_index=?`, sessionID, update.key.messageOrdinal, update.key.callIndex); err != nil {
 			return false, fmt.Errorf("invalidating tool result coordinates: %w", err)
+		}
+	}
+	if restoreFileEvidence != nil {
+		if err := restoreFileEvidence(); err != nil {
+			return false, err
 		}
 	}
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
@@ -408,7 +434,7 @@ func (db *DB) stripImageSessions(
 		OR EXISTS (SELECT 1 FROM tool_result_events ev
 		WHERE ev.session_id = s.id
 		  AND ev.content IS NOT NULL
-		  AND ev.content <> ''))`
+		  AND ev.content <> '') OR EXISTS (SELECT 1 FROM message_file_evidence e JOIN messages m ON m.id=e.message_id WHERE m.session_id=s.id AND e.kind IN ('image','document')))`
 	args := []any{}
 	if filter.Project != "" {
 		where += ` AND s.project LIKE ? ESCAPE '\'`
@@ -467,7 +493,7 @@ func (db *DB) toolImageStats(
 	if err := rows.Err(); err != nil {
 		return ToolImageStats{}, fmt.Errorf("iterating tool result bytes: %w", err)
 	}
-	return stats, nil
+	return db.addFileAttachmentStats(ctx, sessionID, stats)
 }
 
 func countStrippable(content string) ToolImageStats {
@@ -492,7 +518,7 @@ func (db *DB) ProjectToolImagesForSessions(ctx context.Context, sessionIDs []str
 		for _, id := range sessionIDs {
 			if _, err := db.rewriteStoredToolResultRows(ctx, id, func(content string) (string, error) {
 				return ProjectToolResultImageContent(content, db.ToolResultImages(), db.AssetsDir()), nil
-			}); err != nil {
+			}, toolImageOffload); err != nil {
 				return err
 			}
 		}

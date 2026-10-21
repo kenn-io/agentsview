@@ -45,7 +45,7 @@ func (db *DB) migrateStoredToolResultRows(
 ) (bool, error) {
 	return db.rewriteStoredToolResultRows(ctx, sessionID, func(content string) (string, error) {
 		return migrateToolResultImages(content, put)
-	})
+	}, toolImageOffload)
 }
 
 // countMigratable scans content for migratable inline image blocks and

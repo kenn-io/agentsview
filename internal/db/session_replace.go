@@ -21,7 +21,10 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 	write.ReplaceMessages = true
 	write.RejectMessageCountDecrease = false
-	write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
+	write, err := db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
+	if err != nil {
+		return "", err
+	}
 	id := write.Session.ID
 
 	// Writers hold db.mu, so the row read here matches the messages the transaction reads.
@@ -102,7 +105,10 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	copyID := ""
 	if keepCopy {
 		copyID = replacedSessionCopyID(id, time.Now())
-		copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
+		copyWrite, err := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
+		if err != nil {
+			return "", err
+		}
 		copyWrite.UsageEvents = make([]UsageEvent, len(events))
 		for i, ev := range events {
 			ev.ID, ev.SessionID = 0, copyID

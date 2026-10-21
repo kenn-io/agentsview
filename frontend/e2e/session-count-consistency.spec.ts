@@ -1,12 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-// The test fixture seeds 13 root sessions with messages, plus 3 subagent
-// sessions, 1 fork, and 1 empty session. Navigation surfaces show only the
-// 13 root sessions. Analytics also counts the 3 subagents, so it shows 16.
-// Forks and empty sessions are excluded everywhere.
-const EXPECTED_ROOT_SESSIONS = 13;
-const EXPECTED_ANALYTICS_SESSIONS = 16; // 13 root + 3 subagents
+// SQLite adds one file-reference session to the 13 base root sessions.
+// Analytics also counts 3 subagents; forks and empty sessions stay excluded.
+const EXPECTED_ROOT_SESSIONS = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb" ? 13 : 14;
+const EXPECTED_ANALYTICS_SESSIONS = EXPECTED_ROOT_SESSIONS + 3;
 
 test.describe("Session count consistency", () => {
   let sp: SessionsPage;

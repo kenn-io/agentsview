@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -36,6 +38,7 @@ import (
 // interface (GetSessionFilePath, Reader). Structural nil checks
 // on local+engine replace runtime type assertions.
 type directBackend struct {
+	fileResolver   docbank.Resolver
 	modelGroups    ModelGroups
 	db             db.Store
 	local          *db.DB
@@ -436,7 +439,27 @@ func (b *directBackend) Messages(
 
 	revision := ""
 	w.ObservedRevision = &revision
-	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
+	var page *db.FileEvidenceMessagePage
+	var msgs []db.Message
+	var err error
+	if reader, ok := b.db.(db.FileEvidenceReader); ok {
+		var p db.FileEvidenceMessagePage
+		p, err = reader.ReadMessagesWithFileEvidence(ctx, id, w)
+		if errors.Is(err, db.ErrDatabaseIDMissing) {
+			// Legacy archives remain readable without minting an unsafe evidence binding.
+			msgs, err = b.db.GetMessagesWindow(ctx, id, w)
+		} else if errors.Is(err, sql.ErrNoRows) {
+			// Preserve ordinary missing-session reads; bound reads below still reject them.
+			err = nil
+			msgs = []db.Message{}
+		} else if err == nil {
+			page = &p
+			msgs = p.Messages
+			revision = p.Revision
+		}
+	} else {
+		msgs, err = b.db.GetMessagesWindow(ctx, id, w)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -469,6 +492,19 @@ func (b *directBackend) Messages(
 	}
 	list := &MessageList{
 		Messages: msgs, Count: len(msgs), TranscriptRevision: revision,
+	}
+	if page != nil {
+		list.Binding = page.Binding
+		list.FileEvidenceCoverage = page.Coverage.State
+		for _, message := range msgs {
+			if records := page.Evidence[message.Ordinal]; len(records) > 0 {
+				group := MessageFileEvidence{Ordinal: message.Ordinal, Records: make([]LocalFileEvidence, 0, len(records))}
+				for _, record := range records {
+					group.Records = append(group.Records, localFileEvidence(message.Ordinal, record, page.Binding))
+				}
+				list.FileEvidence = append(list.FileEvidence, group)
+			}
+		}
 	}
 	if revision != "" {
 		list.EvidenceSource = b.evidenceSource

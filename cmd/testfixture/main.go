@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -69,13 +71,18 @@ func main() {
 }
 
 func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	out := flag.String("out", "", "output database path")
 	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
+	fileEvidence := flag.Bool("file-evidence", false, "include session file reference fixtures")
+	docbankConfig := flag.String("docbank-config", "", "serve a loopback Docbank fixture and write its config")
 	flag.Parse()
 	if *out == "" {
 		return errors.New("usage: testfixture -out <path>")
+	}
+	if *docbankConfig != "" {
+		return runDocbankFixture(ctx, *docbankConfig, *out)
 	}
 
 	if err := os.Remove(*out); err != nil &&
@@ -88,6 +95,7 @@ func run() error {
 		return fmt.Errorf("opening db: %w", err)
 	}
 	defer database.Close()
+	database.SetAssetsDir(filepath.Join(filepath.Dir(*out), "assets"))
 
 	// Seed model pricing for usage page e2e tests.
 	if err := database.UpsertModelPricing([]db.ModelPricing{
@@ -113,6 +121,11 @@ func run() error {
 	// default 1-year analytics window.
 	base := time.Now().UTC().AddDate(0, 0, -30).
 		Truncate(24 * time.Hour).Add(10 * time.Hour)
+	if *fileEvidence {
+		if err := createFileEvidenceFixture(ctx, database, base); err != nil {
+			return fmt.Errorf("creating file evidence fixture: %w", err)
+		}
+	}
 
 	for i, spec := range specs {
 		if err := createSessionFixture(ctx,

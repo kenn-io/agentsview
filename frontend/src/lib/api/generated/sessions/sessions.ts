@@ -17,6 +17,8 @@ import type {
   GetApiV1SessionsByIdChildrenPathParameters,
   GetApiV1SessionsByIdDirectoryPathParameters,
   GetApiV1SessionsByIdExportPathParameters,
+  GetApiV1SessionsByIdFileReferencesParams,
+  GetApiV1SessionsByIdFileReferencesPathParameters,
   GetApiV1SessionsByIdMdParams,
   GetApiV1SessionsByIdMdPathParameters,
   GetApiV1SessionsByIdMessagesParams,
@@ -50,6 +52,7 @@ import type {
   ResolveSessionIDsResponse,
   ResumeRequest,
   ResumeResponse,
+  ServiceFileReferencesResult,
   ServiceMessageList,
   ServiceSessionDetail,
   ServiceSessionList,
@@ -369,6 +372,42 @@ export const getApiV1SessionsByIdExport = async (
     ...options,
     method: "GET",
   });
+};
+
+export const getGetApiV1SessionsByIdFileReferencesUrl = (
+  { id }: GetApiV1SessionsByIdFileReferencesPathParameters,
+  params?: GetApiV1SessionsByIdFileReferencesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/file-references?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/file-references`;
+};
+
+/**
+ * @summary Find exact session bytes in Docbank
+ */
+export const getApiV1SessionsByIdFileReferences = async (
+  { id }: GetApiV1SessionsByIdFileReferencesPathParameters,
+  params?: GetApiV1SessionsByIdFileReferencesParams,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<ServiceFileReferencesResult> => {
+  return orvalFetch<ServiceFileReferencesResult>(
+    getGetApiV1SessionsByIdFileReferencesUrl({ id }, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
 };
 
 export const getPatchApiV1SessionsByIdLabelsUrl = ({

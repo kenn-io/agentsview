@@ -207,6 +207,11 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 				v.Field(i).Len() == 0 {
 				continue
 			}
+			// File evidence is derived from retained content and must not change raw pins.
+			if f.Name == "FileEvidenceCoverage" || (v.Type() == reflect.TypeFor[db.Message]() &&
+				(f.Name == "FileEvidence" || f.Name == "FileEvidenceCandidates" || f.Name == "StagedFileEvidenceEntry")) {
+				continue
+			}
 			// Friction is derived after content identity is assigned; including it
 			// would make finding subjects participate in their own session ID.
 			if f.Name == "Friction" || f.Name == "FrictionCount" ||
