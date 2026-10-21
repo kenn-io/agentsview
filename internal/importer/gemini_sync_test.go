@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -468,4 +469,61 @@ func TestSyncGeminiDraftSwitchKeepsHistory(t *testing.T) {
 	saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Question", "Answer"}, messageContents(saved))
+}
+
+// TestSyncGeminiSameTextDraftSwitchKeepsPins covers draft switches that
+// leave the stored rows equal: identical text, and any text under
+// usage-only storage. The draft IDs differ, so the pinned version is kept in
+// Trash instead of being overwritten.
+func TestSyncGeminiSameTextDraftSwitchKeepsPins(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		usageOnly  bool
+		secondText string
+	}{
+		{name: "identical text", secondText: "Answer"},
+		{name: "usage-only storage", usageOnly: true, secondText: "Another answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			if tc.usageOnly {
+				d.SetArchiveContent(config.ArchiveContentUsage)
+			}
+			id := "gemini-apps:" + geminiTestChat
+			const t0 = 1_790_000_000
+			turn := func(selected string) []any {
+				t.Helper()
+				turn := geminiSyncTurn("1", "Question", "Answer", t0)
+				turn[3] = []any{[]any{
+					[]any{"rc_a", []any{"Answer"}},
+					[]any{"rc_b", []any{tc.secondText}},
+				}, nil, nil, selected}
+				return turn
+			}
+			fake := &geminiFake{t: t, listAt: t0, turns: []any{turn("rc_a")}}
+			_, err := SyncGemini(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			stored, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.NotEmpty(t, stored) // usage-only storage keeps only the reply row
+			_, err = d.PinMessage(t.Context(), id, stored[len(stored)-1].ID, new("First draft"))
+			require.NoError(t, err)
+
+			fake.listAt, fake.turns = t0+60, []any{turn("rc_b")}
+			_, err = SyncGemini(t.Context(), d, fake.fetch, nil)
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, after, len(stored))
+			assert.Equal(t, "rc_b", after[len(after)-1].SourceUUID)
+			copies := replacedCopies(t, d, id)
+			require.Len(t, copies, 1, "the previous draft is kept in Trash")
+			pins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			if !tc.usageOnly { // usage-only storage keeps no pin notes
+				assert.Equal(t, new("First draft"), pins[0].Note)
+			}
+		})
+	}
 }
