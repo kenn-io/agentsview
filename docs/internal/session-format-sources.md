@@ -150,6 +150,8 @@ evidence; they do not establish whether a tool helped the task.
   Local parser fixtures establish the JSONL `uuid`, `message.content`, and
   `tool_use_id` placement. The lookup reads only an existing local source, skips
   oversized records, and reports missing or incomplete sources explicitly.
+  Reverified against retry, fork, and truncated-record parser fixtures on
+  2026-10-22. Source evidence uses the ingest parser's branch selection.
 
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`

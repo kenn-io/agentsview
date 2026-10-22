@@ -28,7 +28,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
-	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -43,6 +42,7 @@ import (
 
 // VersionInfo holds build-time version metadata.
 type VersionInfo struct {
+	DocbankEnabled             bool   `json:"docbank_enabled,omitempty"`
 	Version                    string `json:"version"`
 	Commit                     string `json:"commit"`
 	BuildDate                  string `json:"build_date"`
@@ -262,9 +262,7 @@ func New(
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
 	backendOptions := []service.DirectBackendOption{service.WithModelGroups(modelGroups)}
-	if cfg.Integrations.Docbank.Configured() {
-		backendOptions = append(backendOptions, service.WithDocbank(docbank.New(cfg.Integrations.Docbank)))
-	}
+	backendOptions = append(backendOptions, service.WithConfiguredDocbank(cfg))
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
 		local.SetArchiveContent(cfg.ArchiveContent)

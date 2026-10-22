@@ -90,7 +90,7 @@ func syncService(ctx context.Context,
 		engine.Close()
 		closeWriteDB(d, lock)
 	}
-	return service.NewDirectBackend(d, engine), cleanup, nil
+	return service.NewDirectBackend(d, engine, service.WithConfiguredDocbank(cfg)), cleanup, nil
 }
 
 // classifySyncArg returns {Path: arg} when arg is clearly a path:

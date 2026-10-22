@@ -4,6 +4,7 @@ import { ApiError, isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
+import { fileReferences } from "./file-references.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
@@ -114,6 +115,7 @@ export class MessagesStore {
   }
 
   private async doLoadSession(id: string, resumesCancelledLoad: boolean) {
+    fileReferences.reopen(id);
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();

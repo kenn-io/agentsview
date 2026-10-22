@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/parser"
@@ -47,21 +48,31 @@ func WithDocbank(client *docbank.Client) DirectBackendOption {
 	return func(b *directBackend) { b.docbank = client }
 }
 
+// WithConfiguredDocbank applies the same integration configuration to every local backend.
+func WithConfiguredDocbank(cfg config.Config) DirectBackendOption {
+	var client *docbank.Client
+	if cfg.Integrations.Docbank.Configured() {
+		client = docbank.New(cfg.Integrations.Docbank)
+	}
+	return WithDocbank(client)
+}
+
 func (b *directBackend) FileReferences(ctx context.Context, id string) (FileReferencesResult, error) {
 	out := FileReferencesResult{Integration: "disabled", Occurrences: []FileReferenceOccurrence{}}
 	if b.docbank == nil {
 		return out, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	session, err := b.db.GetSession(ctx, id)
+	readCtx, cancelRead := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelRead()
+	session, err := b.db.GetSession(readCtx, id)
 	if err != nil {
 		return out, err
 	}
 	if session == nil {
 		return out, ErrSessionNotFound
 	}
-	messages, err := b.db.GetAllMessages(ctx, id)
+	messages, err := b.db.GetAllMessages(readCtx, id)
+	cancelRead()
 	if err != nil {
 		return out, err
 	}
@@ -93,11 +104,13 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	if session.Agent == "claude" {
 		out.Source = "available"
 		path := ""
-		full, fullErr := b.db.GetSessionFull(ctx, id)
+		sourceCtx, cancelSource := context.WithTimeout(ctx, 5*time.Second)
+		full, fullErr := b.db.GetSessionFull(sourceCtx, id)
 		if fullErr == nil && full != nil && full.FilePath != nil {
 			path = *full.FilePath
 		}
-		images, sourceErr := parser.ClaudeSourceImages(ctx, path, byUUID)
+		images, sourceErr := parser.ClaudeSourceImages(sourceCtx, path, id, byUUID)
+		cancelSource()
 		if sourceErr != nil {
 			out.Source = "unavailable"
 		}
@@ -106,20 +119,23 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 			if !ok {
 				ordinal, ok = byUUID[image.NextSourceUUID]
 			}
-			if !ok {
-				ordinal = -1
-			}
 			var toolID, toolName *string
 			if image.ToolUseID != "" {
 				at, exists := tools[image.ToolUseID]
 				if exists {
-					ordinal = at.ordinal
+					ordinal, ok = at.ordinal, true
 					toolID, toolName = new(image.ToolUseID), new(at.name)
 				}
+			}
+			if !ok {
+				out.Source = "unavailable"
+				continue
 			}
 			add(ordinal, toolID, toolName, nil, []db.RetainedImage{{Index: image.Index, MediaType: image.MediaType, Size: new(image.Size), SHA256: image.SHA256}})
 		}
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	// Each worker owns a distinct result slot; occurrences are updated after joining.
 	digests := []string{}
 	seen := make(map[string]int)

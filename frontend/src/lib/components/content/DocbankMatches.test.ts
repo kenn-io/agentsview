@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { ServiceFileReferenceOccurrence } from "../../api/generated/index.js";
+import { messages } from "../../stores/messages.svelte.js";
 import { fileReferences } from "../../stores/file-references.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import DocbankMatches from "./DocbankMatches.svelte";
@@ -19,7 +20,7 @@ async function render(items: ServiceFileReferenceOccurrence[], integration: "ena
   await fileReferences.load("session-a");
   await tick();
 }
-beforeEach(() => { setLocale("en"); lookup.mockReset(); fileReferences.entries.clear(); });
+beforeEach(() => { setLocale("en"); lookup.mockReset(); fileReferences.entries.clear(); fileReferences.enabled = true; messages.clear(); });
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.innerHTML = "";
@@ -99,22 +100,44 @@ it("keeps source discovery quiet for blocks without known images", async () => {
   expect(document.body.textContent).toContain("Current · /images/a.png");
 });
 
-it("shows one session request failure and retries once", async () => {
+it("keeps failures and Retry beside later images while empty rows stay quiet", async () => {
   lookup.mockRejectedValueOnce(new Error("offline"));
-  for (let ordinal = 0; ordinal < 7; ordinal++) {
-    components.push(mount(DocbankMatches, { target: document.body, props: { sessionId: "session-a", ordinal, source: true, hasImage: false, sessionStatus: ordinal === 0 } }));
+  for (const [ordinal, hasImage] of [
+    [4, true],
+    [5, false],
+    [6, true],
+  ] as const) {
+    components.push(
+      mount(DocbankMatches, {
+        target: document.body,
+        props: { sessionId: "session-a", ordinal, source: true, hasImage },
+      }),
+    );
   }
   await tick();
   await fileReferences.load("session-a");
   await tick();
-  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
-  expect(document.querySelectorAll("button")).toHaveLength(1);
-  expect(document.body.textContent).toContain("Docbank unavailable");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(2);
+  expect(document.querySelectorAll("button")).toHaveLength(2);
   lookup.mockResolvedValueOnce({ integration: "enabled", source: "available", occurrences: [] });
   document.querySelector<HTMLButtonElement>("button")!.click();
   await fileReferences.load("session-a");
   await tick();
   expect(lookup).toHaveBeenCalledTimes(2);
+  expect(document.body.textContent?.trim()).toBe("");
+});
+
+it("makes no lookup request when metadata disables Docbank", async () => {
+  lookup.mockResolvedValueOnce({ integration: "disabled", occurrences: [] });
+  fileReferences.enabled = false;
+  components.push(
+    mount(DocbankMatches, {
+      target: document.body,
+      props: { sessionId: "session-a", ordinal: 4, source: true, hasImage: true },
+    }),
+  );
+  await tick();
+  expect(lookup).not.toHaveBeenCalled();
   expect(document.body.textContent?.trim()).toBe("");
 });
 
@@ -126,4 +149,61 @@ it("reports a missing source transcript without Retry", async () => {
   await tick();
   expect(document.body.textContent?.trim()).toBe("Source transcript unavailable");
   expect(document.querySelector("button")).toBeNull();
+});
+
+it.each(["revision", "metadata token"])("refetches when the transcript %s changes", async (signal) => {
+  messages.sessionId = "session-a";
+  messages.loadedRevision = signal === "revision" ? "revision-1" : "";
+  messages.activeSessionToken = "revision-1";
+  lookup.mockResolvedValueOnce({ integration: "enabled", source: "available", occurrences: [] });
+  components.push(
+    mount(DocbankMatches, {
+      target: document.body,
+      props: { sessionId: "session-a", ordinal: 2, source: true, hasImage: false },
+    }),
+  );
+  await tick();
+  await fileReferences.load("session-a", "revision-1");
+  lookup.mockResolvedValueOnce({
+    integration: "enabled",
+    source: "available",
+    occurrences: [{ ...occurrence, tool_use_id: null }],
+  });
+  if (signal === "revision") messages.loadedRevision = "revision-2";
+  else messages.activeSessionToken = "revision-2";
+  await tick();
+  await fileReferences.load("session-a", "revision-2");
+  await tick();
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(document.body.textContent).toContain("Current · /images/a.png");
+});
+
+it("shows Retry beside a retained image when its source is unavailable", async () => {
+  lookup.mockResolvedValueOnce({ integration: "enabled", source: "unavailable", occurrences: [] });
+  components.push(
+    mount(DocbankMatches, {
+      target: document.body,
+      props: { sessionId: "session-a", ordinal: 4, source: true, hasImage: true },
+    }),
+  );
+  await tick();
+  await fileReferences.load("session-a");
+  await tick();
+  expect(document.body.textContent).toContain("Docbank unavailable");
+  expect(document.querySelector("button")?.textContent).toContain("Retry");
+});
+
+it("keeps a discovered source image actionable after a failed refresh", async () => {
+ lookup.mockResolvedValueOnce({ integration: "enabled", source: "available", occurrences: [{ ...occurrence, tool_use_id: null }] });
+ components.push(mount(DocbankMatches, { target: document.body, props: { sessionId: "session-a", ordinal: 2, source: true, hasImage: false } }));
+ await tick();
+ await fileReferences.load("session-a");
+ await tick();
+ expect(document.body.textContent).toContain("Current · /images/a.png");
+ lookup.mockRejectedValueOnce(new Error("offline"));
+ await fileReferences.refresh("session-a");
+ await tick();
+ expect(document.body.textContent).toContain("Docbank unavailable");
+ expect(document.body.textContent).not.toContain("Current");
+ expect(document.querySelector("button")?.textContent).toContain("Retry");
 });

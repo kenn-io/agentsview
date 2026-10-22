@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { fileReferences } from "./file-references.svelte.js";
 import { messages } from "./messages.svelte.js";
 import { readProgress } from "./read-progress.svelte.js";
 import { parseContent } from "../utils/content-parser.js";
@@ -1561,4 +1562,17 @@ describe("MessagesStore", () => {
       await expect(p).resolves.toBeUndefined();
     });
   });
+});
+
+it("discards Docbank results when a session is reopened", async () => {
+  messages.clear();
+  await setupSession("s1", 1, [makeMessage(0)]);
+  fileReferences.entries.set("s1", {
+    loading: false,
+    result: { integration: "enabled", occurrences: [] },
+  });
+  await setupSession("s2", 1, [makeMessage(0)]);
+  await setupSession("s1", 1, [makeMessage(0)]);
+  expect(fileReferences.entries.has("s1")).toBe(false);
+  messages.clear();
 });

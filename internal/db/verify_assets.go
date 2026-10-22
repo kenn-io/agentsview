@@ -46,15 +46,14 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		name := strings.TrimPrefix(ref, "asset://")
-		want := strings.TrimSuffix(name, filepath.Ext(name))
-		decoded, err := hex.DecodeString(want)
-		if err != nil || len(decoded) != sha256.Size || filepath.Base(name) != name {
-			// Transcript examples can use this scheme without naming a stored
-			// object. Only content-addressed references create dependencies.
-			return nil //nolint:nilerr // Invalid transcript URLs do not name stored objects.
+		want, _, valid := assetReferenceDigest(ref)
+		if !valid {
+			return nil
 		}
+		name := strings.TrimPrefix(ref, "asset://")
+
 		if root == nil {
+			var err error
 			root, err = os.OpenRoot(directory)
 			if err != nil {
 				return fmt.Errorf("opening required assets: %w", err)
@@ -112,7 +111,7 @@ func walkMarkdownImages(content string, visit func(string) error) error {
 	})
 }
 
-func assetImageDigest(ref string) (string, string, bool) {
+func assetReferenceDigest(ref string) (string, string, bool) {
 	if !strings.HasPrefix(ref, "asset://") {
 		return "", "", false
 	}
@@ -120,8 +119,13 @@ func assetImageDigest(ref string) (string, string, bool) {
 	ext := filepath.Ext(name)
 	digest := strings.TrimSuffix(name, ext)
 	decoded, err := hex.DecodeString(digest)
+	return digest, ext, err == nil && len(decoded) == sha256.Size && filepath.Base(name) == name
+}
+
+func assetImageDigest(ref string) (string, string, bool) {
+	digest, ext, valid := assetReferenceDigest(ref)
 	_, image := assets.ExtForMediaType(mime.TypeByExtension(ext))
-	return digest, ext, err == nil && len(decoded) == sha256.Size && digest == strings.ToLower(digest) && filepath.Base(name) == name && image
+	return digest, ext, valid && digest == strings.ToLower(digest) && image
 }
 
 // MarkdownAssetImages excludes links and code examples by walking image nodes.

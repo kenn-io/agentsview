@@ -26226,6 +26226,7 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date" validate:"required"`
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
+	DocbankEnabled             *bool  `json:"docbank_enabled,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`

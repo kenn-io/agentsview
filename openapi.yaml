@@ -8257,6 +8257,8 @@ components:
         data_version:
           format: int64
           type: integer
+        docbank_enabled:
+          type: boolean
         insight_generation_available:
           type: boolean
         read_only:

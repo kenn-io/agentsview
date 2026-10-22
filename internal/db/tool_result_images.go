@@ -140,6 +140,7 @@ func stripToolResultImageArrayWithInline(
 }
 
 type offloadedImagePlaceholder struct {
+	Version   *int   `json:"version"`
 	Type      string `json:"type"`
 	ImageRef  string `json:"image_ref"`
 	MediaType string `json:"media_type"`
@@ -150,6 +151,7 @@ func parseOffloadedImagePlaceholder(raw jsontext.Value) (offloadedImagePlacehold
 	var placeholder offloadedImagePlaceholder
 	if err := json.Unmarshal(raw, &placeholder, json.MatchCaseInsensitiveNames(true)); err != nil ||
 		placeholder.Type != "agentsview_image" ||
+		(placeholder.Version != nil && *placeholder.Version != 1) ||
 		!strings.HasPrefix(placeholder.ImageRef, "asset://") ||
 		placeholder.MediaType == "" || placeholder.ByteSize < 0 {
 		return placeholder, false

@@ -3,6 +3,7 @@ import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../ap
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
+import { fileReferences } from "./file-references.svelte.js";
 import { events } from "./events.svelte.js";
 import type {
   SyncProgress,
@@ -206,6 +207,7 @@ class SyncStore {
     const updateBackendHealth = opts.updateBackendHealth ?? true;
     try {
       this.serverVersion = await MetadataService.getApiV1Version();
+      fileReferences.enabled = this.serverVersion.docbank_enabled === true;
       events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);

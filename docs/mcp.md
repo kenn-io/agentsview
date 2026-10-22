@@ -69,25 +69,25 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                                  |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                                |
-| `list_sessions`        | List recent or filtered sessions                                         |
-| `get_session_overview` | Fetch metadata and a compact message preview                             |
-| `get_messages`         | Read paginated message bodies from one session                           |
-| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`    | Aggregate token and cost usage                                           |
-| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+| Tool                          | Purpose                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `search_sessions`             | Full-text search across recorded sessions                                |
+| `list_sessions`               | List recent or filtered sessions                                         |
+| `get_session_overview`        | Fetch metadata and a compact message preview                             |
+| `get_messages`                | Read paginated message bodies from one session                           |
+| `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
+| `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`           | Aggregate token and cost usage                                           |
+| `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
-| `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
-| `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
-| `get_child_sessions`   | List the sub-agent and fork sessions started from one session            |
-| `compare_usage`        | Compare token usage and cost between two models or two projects          |
-| `get_activity_report`  | Report agent time, sessions, and cost for a day, week, month, or range   |
-| `get_tool_usage`       | Count tool calls by category, agent, and tool name                       |
-| `get_quality_signals`  | Show health grades, outcomes, failures, and example sessions             |
-| `search_docs`          | Search the AgentsView guides bundled with this version                   |
+| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
+| `get_recent_edits`            | Find which sessions edited a file, newest edit first                     |
+| `get_child_sessions`          | List the sub-agent and fork sessions started from one session            |
+| `compare_usage`               | Compare token usage and cost between two models or two projects          |
+| `get_activity_report`         | Report agent time, sessions, and cost for a day, week, month, or range   |
+| `get_tool_usage`              | Count tool calls by category, agent, and tool name                       |
+| `get_quality_signals`         | Show health grades, outcomes, failures, and example sessions             |
+| `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows

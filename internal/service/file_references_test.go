@@ -161,3 +161,47 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 		assert.Equal(t, "unavailable", occurrence.State)
 	}
 }
+
+func TestFileReferencesUnplacedSourceImage(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"tail","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}}`), 0600))
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Project: "example", FilePath: new(path)}))
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unplaced image must not be looked up")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer stub.Close()
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, "session")
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", out.Source)
+	assert.Empty(t, out.Occurrences)
+}
+
+// The source metadata lookup uses the same bounded source phase as the JSONL scan.
+type expiredSourceStore struct{ db.Store }
+
+func (s expiredSourceStore) GetSessionFull(ctx context.Context, _ string) (*db.Session, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestFileReferencesSourceBudgetDoesNotCancelLookups(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Project: "example"}))
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Ordinal: 4, Role: "user", Content: `![image](asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png)`}}))
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", r.URL.Query().Get("sha256"))
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer stub.Close()
+	svc := service.NewReadOnlyBackend(expiredSourceStore{env.db}, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, "session")
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", out.Source)
+	require.Len(t, out.Occurrences, 1)
+	assert.Equal(t, "not_found", out.Occurrences[0].State)
+}

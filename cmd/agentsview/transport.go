@@ -607,7 +607,7 @@ func newService(ctx context.Context,
 		// engine is nil — CLI reads don't need it, and Sync
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(
-			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), service.WithConfiguredDocbank(cfg),
 		), cleanup, nil
 	}
 }
@@ -657,6 +657,6 @@ func newPGReadService(
 	}
 	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(
-		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), service.WithConfiguredDocbank(cfg),
 	), cleanup, nil
 }
