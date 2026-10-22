@@ -305,26 +305,44 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      - name: Restore Windows linter cache
+        if: runner.os == 'Windows' && matrix.testSet == 'lint'
+        uses: ./.github/actions/go-cache-restore
+        with:
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml', 'go.mod', 'go.sum') }}
+          include-go-cache: "false"
+          extra-path: ${{ runner.temp }}/golangci-lint
+
       - name: Install Go linter (Windows)
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: bash
         run: |
-          version=$(sed -n 's/^version: *//p' .custom-gcl.yml)
-          bash scripts/retry.sh 3 5 go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$version"
+          if [ ! -f "$GOBIN/golangci-lint.exe" ]; then
+            version=$(sed -n 's/^version: *//p' .custom-gcl.yml)
+            bash scripts/retry.sh 3 5 go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$version"
+          fi
         env:
           CGO_ENABLED: "1"
+          GOBIN: ${{ runner.temp }}/golangci-lint
 
       - name: Run Go linters (Windows)
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: pwsh
         run: |
           # Windows-only files never reach the Linux lint job.
-          & "$(go env GOPATH)\bin\golangci-lint.exe" custom --name custom-gcl
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./custom-gcl run ./...
+          $customLinter = Join-Path $env:GOLANGCI_LINT_CACHE 'custom-gcl.exe'
+          if (-not (Test-Path $customLinter)) {
+            & "$env:GOLANGCI_LINT_CACHE/golangci-lint.exe" custom --name custom-gcl --destination $env:GOLANGCI_LINT_CACHE
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $customLinter run ./...
         env:
           CGO_ENABLED: "1"
           GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
+
+      - name: Save Windows linter cache
+        if: runner.os == 'Windows' && matrix.testSet == 'lint'
+        uses: ./.github/actions/go-cache-save
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
@@ -615,23 +633,23 @@ jobs:
         include:
           - name: Sync A-R
             runner: ubuntu-latest
-            testSet: sync
+            package: ./internal/sync
             run: *sync-test-prefix
           - name: Sync remaining
             runner: ubuntu-latest
-            testSet: sync
+            package: ./internal/sync
             skip: *sync-test-prefix
           - name: CLI A-P
             runner: ubuntu-latest
-            testSet: cli
+            package: ./cmd/agentsview
             run: *cli-test-prefix
           - name: CLI remaining
             runner: ubuntu-latest
-            testSet: cli
+            package: ./cmd/agentsview
             skip: *cli-test-prefix
           - name: Database and Server
             runner: ubuntu-latest
-            testSet: db-server
+            package: ./internal/db ./internal/server
           - name: Other packages
             runner: ubuntu-latest
             testSet: other
@@ -670,30 +688,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Run sync tests (race detector)
-        if: matrix.testSet == 'sync'
-        run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      - name: Run CLI tests (race detector)
-        if: matrix.testSet == 'cli'
-        run: go test -tags "fts5" -race ./cmd/agentsview -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      - name: Run database and server tests (race detector)
-        if: matrix.testSet == 'db-server'
-        run: go test -tags "fts5" -race ./internal/db ./internal/server -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      - name: Prebuild split race test packages for cache
-        if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          for package in ./cmd/agentsview ./internal/db ./internal/server; do
-            go test -c -o /dev/null -tags "fts5" -race "$package"
-          done
+      - name: Run ${{ matrix.name }} tests (race detector)
+        if: matrix.package != ''
+        run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -820,12 +817,12 @@ jobs:
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
-    name: e2e (${{ matrix.shard }}/2)
+    name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        browser: [chromium, webkit]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -886,11 +883,11 @@ jobs:
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
             -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
             -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          npx playwright install --with-deps chromium webkit
+          npx playwright install --with-deps ${{ matrix.browser }}
         working-directory: frontend
 
       - name: Run E2E tests
-        run: npx playwright test --reporter=list --shard=${{ matrix.shard }}/2
+        run: npx playwright test --reporter=list --project=${{ matrix.browser }}
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
@@ -898,7 +895,7 @@ jobs:
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
 
       - name: Run DuckDB E2E tests
-        if: matrix.shard == 1
+        if: matrix.browser == 'chromium'
         run: make e2e-duckdb
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
