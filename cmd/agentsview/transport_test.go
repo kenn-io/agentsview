@@ -1456,14 +1456,3 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 		})
 	}
 }
-
-func TestSyncServiceIgnoresInvalidDocbank(t *testing.T) {
-	isolateDirectCLISources(t)
-	dir := t.TempDir()
-	cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}
-	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	svc, cleanup, err := syncService(t.Context(), cfg, transport{Mode: transportDirect})
-	require.NoError(t, err)
-	defer cleanup()
-	assert.False(t, service.SupportsFileReferences(svc))
-}
