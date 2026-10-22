@@ -4,11 +4,13 @@ package postgres
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"maps"
 	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,9 +29,45 @@ func TestPushCompactComparisons(t *testing.T) {
 	cleanNamedPGSchema(t, url, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	local := testDB(t)
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
-	body := strings.Repeat("large-payload-λ", 10000)
-	messages := []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: body, ThinkingText: body, HasThinking: true, HasToolUse: true, Timestamp: "2026-10-01T10:00:00.123456789Z", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: "call", InputJSON: body, ResultContent: body, ResultContentLength: len(body), FilePath: body, ResultEvents: []db.ToolResultEvent{{Content: body + "event", ContentLength: len(body) + 5, Source: "tool_result", Status: "completed"}}}, {ToolName: "Empty"}}}}
+	messages := []db.Message{
+		{
+			SessionID: id, Ordinal: 0, Role: "assistant", Content: strings.Repeat("large-payload-λ", 10000) + "\x01 control\xff",
+			ThinkingText: "reasoning\x01text\xff", Timestamp: "2025-08-12T10:11:12.123456789+05:30",
+			HasThinking: true, HasToolUse: true, IsSystem: true,
+			Model: "sample-model", ReasoningEffort: "high", ProviderID: "provider-a",
+			TokenUsage:    jsontext.Value(`{"input_tokens":23,"output_tokens":7}`),
+			ContextTokens: 23, OutputTokens: 7, HasContextTokens: true, HasOutputTokens: true,
+			ClaudeMessageID: "message-a", ClaudeRequestID: "request-a",
+			SourceType: "assistant", SourceSubtype: "analysis", PromptSource: "conversation",
+			SourceUUID: "source-a", SourceParentUUID: "parent-a", IsSidechain: true, IsCompactBoundary: true,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolName: "Read", Category: "file", ToolUseID: "call-a", InputJSON: "input\xff",
+					SkillName: "reader", ResultContentLength: 10, ResultContent: "agent-a:\nfirst\n\nsecond",
+					SubagentSessionID: "subagent-a", FilePath: "file\xff.txt",
+					ObservedOutcome: new("completed"), ObservedRepeat: new("first"), SequenceEnding: new("continue"),
+					ResultEvents: []db.ToolResultEvent{
+						{EventIndex: 0, ToolUseID: "call-a", AgentID: "agent-a", SubagentSessionID: "subagent-a", Source: "tool_result", Status: "completed", Content: "first\xff", ContentLength: 5, Timestamp: "2025-08-12T10:11:13.987654321-04:00"},
+						{EventIndex: 1, ToolUseID: "call-a", AgentID: "agent-a", SubagentSessionID: "subagent-a", Source: "tool_result", Status: "completed", Content: "second", ContentLength: 6, Timestamp: "2025-08-12T10:11:14.000000001-04:00"},
+					},
+				},
+				{
+					ToolName: "Bash", Category: "shell", ResultEvents: []db.ToolResultEvent{
+						{EventIndex: 0, Source: "tool_result", Status: "empty", Content: "", ContentLength: 0},
+					},
+				},
+			},
+		},
+		{
+			SessionID: id, Ordinal: 1, Role: "assistant", Content: "tail response", HasToolUse: true,
+			Timestamp: "2025-08-12T10:12:00.000000001Z", Model: "sample-model",
+			SourceUUID: "source-b", ToolCalls: []db.ToolCall{{
+				ToolName: "Write", Category: "file", ToolUseID: "call-b", InputJSON: `{"path":"out.txt"}`,
+				FilePath: "/tmp/out.txt", ObservedOutcome: new("initial"),
+			}},
+		},
+	}
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: len(messages)}))
 	require.NoError(t, local.InsertMessages(ctx, messages))
 	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -44,28 +82,41 @@ func TestPushCompactComparisons(t *testing.T) {
 	defer tx.Rollback()
 	mismatchedCounts := maps.Clone(counts)
 	aggregate := mismatchedCounts[id]
-	aggregate.Count = 2
+	aggregate.Count++
 	mismatchedCounts[id] = aggregate
 	skipped, err := readPushSessionMessageComparisons(
 		ctx, tx, []string{id}, mismatchedCounts, true,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, skipped.MessageAggregates[id].Count)
+	assert.Equal(t, len(messages), skipped.MessageAggregates[id])
 	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
-	assert.Empty(t, skipped.ToolCallAggregates)
 	assert.Empty(t, skipped.UsageEventFingerprint)
 	compact, err := readPushSessionMessageComparisons(
 		ctx, tx, []string{id}, counts, true,
 	)
 	require.NoError(t, err)
-	localFP, err := localPushMessageFingerprint(
-		ctx, local, id, "", false, comparisonPushFingerprint,
-	)
+
+	snapshot, err := local.BeginMessageSnapshot(ctx)
 	require.NoError(t, err)
-	assert.True(t, shouldSkipSessionMessages(id, 1, localFP, false, compact),
-		"empty local tool fields must compare unchanged against PostgreSQL NULLs")
+	defer func() { require.NoError(t, snapshot.Close()) }()
+	persisted, err := snapshot.GetMessages(ctx, id, 0, db.MaxMessageLimit, true)
+	require.NoError(t, err)
+	var expected db.MessageComparisonFields
+	for _, message := range persisted {
+		row := db.MessageComparisonRow(message, pgPushTimestampFingerprintText)
+		expected.ContentHash += row.ContentHash
+		expected.RoleTime += row.RoleTime
+		expected.Flags += row.Flags
+		expected.Token += row.Token
+		expected.ToolCalls += row.ToolCalls
+		expected.ToolResults += row.ToolResults
+	}
+	assert.Equal(t, expected, compact.messageFields(id))
+	matches, err := pushTranscriptMatches(ctx, snapshot, id, compact)
+	require.NoError(t, err)
+	assert.True(t, matches, "empty fields and sanitized text must match the published rows")
 	for _, change := range []struct{ name, statement string }{
 		{"content", `UPDATE messages SET content = 'x' || substring(content from 2) WHERE session_id = $1`},
 		{"thinking", `UPDATE messages SET thinking_text = 'x' || substring(thinking_text from 2) WHERE session_id = $1`},
@@ -89,7 +140,9 @@ func TestPushCompactComparisons(t *testing.T) {
 				ctx, tx, []string{id}, counts, true,
 			)
 			require.NoError(t, err)
-			assert.False(t, shouldSkipSessionMessages(id, 1, localFP, false, changed))
+			matches, err := pushTranscriptMatches(ctx, snapshot, id, changed)
+			require.NoError(t, err)
+			assert.False(t, matches)
 		})
 	}
 }
@@ -199,14 +252,18 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
 		Version: "test", SourceRef: "test", Source: db.GenAIPricingSourceFetched, Data: []byte(`[]`),
 	}))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "edited", Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "growing", FileMtime: new(time.Now().Add(time.Hour).UnixNano()), FileHash: new("initial"), Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
 	body := strings.Repeat("c", size)
-	edited := []db.Message{{SessionID: "edited", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), HasThinking: true, HasToolUse: true,
+	edited := []db.Message{{SessionID: "growing", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), HasThinking: true, HasToolUse: true,
 		ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: "call", InputJSON: strings.Repeat("i", size), ResultContent: strings.Repeat("r", size), ResultContentLength: size, FilePath: "example.txt",
 			ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Status: "completed", Content: strings.Repeat("e", size), ContentLength: size}},
 		}},
 	}}
 	require.NoError(t, local.InsertMessages(ctx, edited))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "unchanged", Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1, FileMtime: new(time.Now().Add(time.Hour).UnixNano()), FileHash: new("initial")}))
+	unchanged := edited[0]
+	unchanged.SessionID = "unchanged"
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{unchanged}))
 	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -219,8 +276,19 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	var pricingRows int
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM model_pricing_bands) + (SELECT COUNT(*) FROM model_pricing) + (SELECT COUNT(*) FROM genai_pricing)`).Scan(&pricingRows))
 	require.Zero(t, pricingRows)
-	edited[0].Content = "x" + body[1:]
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "edited", edited))
+	before := pgMessageCTID(t, syncer.pg, "unchanged", 0)
+	edited = append(edited, db.Message{SessionID: "growing", Ordinal: 1, Role: "user", Content: "new message"})
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "growing", edited))
+	for _, id := range []string{"growing", "unchanged"} {
+		session, err := local.GetSessionFull(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		session.FileHash = new("updated")
+		if id == "growing" {
+			session.MessageCount = 2
+		}
+		require.NoError(t, local.UpsertSession(ctx, *session))
+	}
 	quoted, err := quoteIdentifier(schema)
 	require.NoError(t, err)
 	connStr, err := appendConnParams(url, map[string]string{"search_path": quoted, "TimeZone": "UTC"})
@@ -243,7 +311,9 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	assert.False(t, result.Full, "normal push history must select an incremental run")
-	assert.Equal(t, 1, result.SessionsPushed, "the edited session should be published")
+	assert.Equal(t, 2, result.SessionsPushed, "both changed file hashes should reach publication")
+	assert.Equal(t, 2, result.MessagesPushed, "only the growing transcript should be replaced")
+	assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
 	t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 	return bytes
 }

@@ -16,19 +16,6 @@ import (
 
 const pushComparisonBatchSize = 900
 
-type pushMessageAggregate struct {
-	Count int
-	Sum   int64
-	Max   int64
-	Min   int64
-	SysFP string
-}
-
-type pushToolCallAggregate struct {
-	Count int
-	Sum   int64
-}
-
 type pushFrictionComparison struct {
 	Count        int
 	RulesVersion string
@@ -36,13 +23,12 @@ type pushFrictionComparison struct {
 }
 
 type pushMessageComparison struct {
-	MessageAggregates       map[string]pushMessageAggregate
+	MessageAggregates       map[string]int
 	MessageContentHash      map[string]string
 	MessageRoleTime         map[string]string
 	MessageFlags            map[string]string
 	MessageDialogue         map[string]string
 	MessageTokenFingerprint map[string]string
-	ToolCallAggregates      map[string]pushToolCallAggregate
 	ToolCallFingerprint     map[string]string
 	ToolResultFingerprint   map[string]string
 	UsageEventFingerprint   map[string]string
@@ -78,7 +64,7 @@ func localSessionDependencyPushFingerprint(
 	usageKnown bool,
 ) (string, error) {
 	msgFP, err := localPushMessageFingerprint(ctx,
-		local, sessionID, usageEventFingerprint, usageKnown, persistedPushFingerprint,
+		local, sessionID, usageEventFingerprint, usageKnown,
 	)
 	if err != nil {
 		return "", err
@@ -250,19 +236,11 @@ func (st *localPushDependencyState) dependencyFingerprint(
 	)
 }
 
-type localPushFingerprintMode uint8
-
-const (
-	persistedPushFingerprint localPushFingerprintMode = iota
-	comparisonPushFingerprint
-)
-
 func localPushMessageFingerprint(ctx context.Context,
 	local *db.DB,
 	sessionID string,
 	usageEventFingerprint string,
 	usageKnown bool,
-	mode localPushFingerprintMode,
 ) (pushLocalMessageFingerprint, error) {
 	fp := pushLocalMessageFingerprint{}
 	var err error
@@ -294,15 +272,7 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call content fingerprint: %w", err)
 	}
-	if mode == comparisonPushFingerprint {
-		var calls map[string]string
-		calls, err = local.ToolCallComparisonFingerprints(ctx, []string{sessionID})
-		if err == nil {
-			fp.ToolCallFP = calls[sessionID]
-		}
-	} else {
-		fp.ToolCallFP, err = local.ToolCallFingerprint(ctx, sessionID)
-	}
+	fp.ToolCallFP, err = local.ToolCallFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call fingerprint: %w", err)
 	}
@@ -314,18 +284,16 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local token fingerprint: %w", err)
 	}
-	if mode == persistedPushFingerprint {
-		planUsageFP, err := local.PlanUsageFingerprints(ctx, []string{sessionID})
-		if err != nil {
-			return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
-		}
-		fp.PlanUsageFP = planUsageFP[sessionID]
+	planUsageFP, err := local.PlanUsageFingerprints(ctx, []string{sessionID})
+	if err != nil {
+		return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
 	}
 	dialogueFP, err := local.MessageDialogueFingerprints(ctx, []string{sessionID})
 	if err != nil {
 		return fp, fmt.Errorf("computing local dialogue fingerprint: %w", err)
 	}
 	fp.DialogueFP = dialogueFP[sessionID]
+	fp.PlanUsageFP = planUsageFP[sessionID]
 	if usageKnown {
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil
@@ -337,18 +305,6 @@ func localPushMessageFingerprint(ctx context.Context,
 	return fp, nil
 }
 
-func comparisonAggregates(
-	sessionID string,
-	comparisons *pushMessageComparison,
-) (pushMessageAggregate, pushToolCallAggregate, bool) {
-	if comparisons == nil {
-		return pushMessageAggregate{}, pushToolCallAggregate{}, false
-	}
-	return comparisons.MessageAggregates[sessionID],
-		comparisons.ToolCallAggregates[sessionID],
-		true
-}
-
 func readPushSessionMessageComparisons(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -357,13 +313,12 @@ func readPushSessionMessageComparisons(
 	includeFriction bool,
 ) (*pushMessageComparison, error) {
 	comparisons := &pushMessageComparison{
-		MessageAggregates:       make(map[string]pushMessageAggregate, len(sessionIDs)),
+		MessageAggregates:       make(map[string]int, len(sessionIDs)),
 		MessageContentHash:      make(map[string]string, len(sessionIDs)),
 		MessageRoleTime:         make(map[string]string, len(sessionIDs)),
 		MessageFlags:            make(map[string]string, len(sessionIDs)),
 		MessageDialogue:         make(map[string]string, len(sessionIDs)),
 		MessageTokenFingerprint: make(map[string]string, len(sessionIDs)),
-		ToolCallAggregates:      make(map[string]pushToolCallAggregate, len(sessionIDs)),
 		ToolCallFingerprint:     make(map[string]string, len(sessionIDs)),
 		ToolResultFingerprint:   make(map[string]string, len(sessionIDs)),
 		UsageEventFingerprint:   make(map[string]string, len(sessionIDs)),
@@ -384,7 +339,7 @@ func readPushSessionMessageComparisons(
 		}
 		eligible := make([]string, 0, len(chunk))
 		for _, id := range chunk {
-			if count := localCounts[id].Count; count > 0 && comparisons.MessageAggregates[id].Count == count {
+			if count := localCounts[id].Count; count > 0 && comparisons.MessageAggregates[id] == count {
 				eligible = append(eligible, id)
 			}
 		}
@@ -412,11 +367,6 @@ func readPushSessionMessageComparisons(
 		}
 		if err := loadPushMessageTokenFingerprints(
 			ctx, tx, chunk, comparisons.MessageTokenFingerprint,
-		); err != nil {
-			return nil, err
-		}
-		if err := loadPushToolCallAggregates(
-			ctx, tx, chunk, comparisons.ToolCallAggregates,
 		); err != nil {
 			return nil, err
 		}
@@ -486,13 +436,10 @@ func loadPushMessageAggregates(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionIDs []string,
-	out map[string]pushMessageAggregate,
+	out map[string]int,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, COUNT(*), COALESCE(SUM(content_length), 0),
-			COALESCE(MAX(content_length), 0), COALESCE(MIN(content_length), 0),
-			COALESCE(STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
-				FILTER (WHERE is_system), '')
+		SELECT session_id, COUNT(*)
 		FROM messages
 		WHERE session_id = ANY($1)
 		GROUP BY session_id
@@ -505,14 +452,12 @@ func loadPushMessageAggregates(
 	for rows.Next() {
 		var sessionID string
 		var count int64
-		var agg pushMessageAggregate
 		if err := rows.Scan(
-			&sessionID, &count, &agg.Sum, &agg.Max, &agg.Min, &agg.SysFP,
+			&sessionID, &count,
 		); err != nil {
 			return err
 		}
-		agg.Count = int(count)
-		out[sessionID] = agg
+		out[sessionID] = int(count)
 	}
 	return rows.Err()
 }
@@ -732,37 +677,6 @@ func loadPushMessageTokenFingerprints(
 		out[sessionID] = b.String()
 	}
 	return nil
-}
-
-func loadPushToolCallAggregates(
-	ctx context.Context,
-	tx *sql.Tx,
-	sessionIDs []string,
-	out map[string]pushToolCallAggregate,
-) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id,
-			COUNT(*), COALESCE(SUM(result_content_length), 0)
-		FROM tool_calls
-		WHERE session_id = ANY($1)
-		GROUP BY session_id
-	`, sessionIDs)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var sessionID string
-		var agg pushToolCallAggregate
-		var count int64
-		if err := rows.Scan(&sessionID, &count, &agg.Sum); err != nil {
-			return err
-		}
-		agg.Count = int(count)
-		out[sessionID] = agg
-	}
-	return rows.Err()
 }
 
 func loadPushToolCallFingerprints(
@@ -998,37 +912,6 @@ func localToolResultEventPGFingerprint(ctx context.Context,
 	)
 }
 
-func shouldSkipSessionMessages(
-	sessionID string,
-	localCount int,
-	localFP pushLocalMessageFingerprint,
-	full bool,
-	comparisons *pushMessageComparison,
-) bool {
-	if full || localCount == 0 || comparisons == nil {
-		return false
-	}
-	pgAgg := comparisons.MessageAggregates[sessionID]
-	if pgAgg.Count != localCount || pgAgg.Count == 0 {
-		return false
-	}
-
-	return localFP.Sum == pgAgg.Sum &&
-		localFP.Max == pgAgg.Max &&
-		localFP.Min == pgAgg.Min &&
-		localFP.ContentHashFP == comparisons.MessageContentHash[sessionID] &&
-		localFP.RoleTimeFP == comparisons.MessageRoleTime[sessionID] &&
-		localFP.FlagsFP == comparisons.MessageFlags[sessionID] &&
-		localFP.DialogueFP == comparisons.MessageDialogue[sessionID] &&
-		localFP.SystemFP == pgAgg.SysFP &&
-		localFP.ToolCallCount == comparisons.ToolCallAggregates[sessionID].Count &&
-		localFP.ToolCallSum == comparisons.ToolCallAggregates[sessionID].Sum &&
-		localFP.ToolCallFP == comparisons.ToolCallFingerprint[sessionID] &&
-		localFP.ToolResultFP == comparisons.ToolResultFingerprint[sessionID] &&
-		localFP.TokenFP == comparisons.MessageTokenFingerprint[sessionID] &&
-		localFP.UsageEventFP == comparisons.UsageEventFingerprint[sessionID]
-}
-
 func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
 	fingerprints, err := local.SortedUsageEventFingerprints(
 		ctx, []string{sessionID}, pgUsageEventTimestampFingerprintText,
@@ -1101,4 +984,39 @@ func (d *pushDigest) Scan(value any) error {
 		return fmt.Errorf("unexpected SHA-256 type %T", value)
 	}
 	return nil
+}
+
+func (c *pushMessageComparison) messageFields(id string) db.MessageComparisonFields {
+	return db.MessageComparisonFields{
+		ContentHash: c.MessageContentHash[id], RoleTime: c.MessageRoleTime[id], Flags: c.MessageFlags[id],
+		Token: c.MessageTokenFingerprint[id], ToolCalls: c.ToolCallFingerprint[id], ToolResults: c.ToolResultFingerprint[id],
+	}
+}
+
+// pushTranscriptMatches consumes the remote streams from one local read view.
+func pushTranscriptMatches(ctx context.Context, snapshot *db.MessageSnapshot, id string, remote *pushMessageComparison) (bool, error) {
+	fields := remote.messageFields(id)
+	streams := []*string{&fields.ContentHash, &fields.RoleTime, &fields.Flags, &fields.Token, &fields.ToolCalls, &fields.ToolResults}
+	for start := 0; ; {
+		messages, err := snapshot.GetMessages(ctx, id, start, db.MaxMessageLimit, true)
+		if err != nil {
+			return false, err
+		}
+		if len(messages) == 0 {
+			break
+		}
+		for _, message := range messages {
+			row := db.MessageComparisonRow(message, pgPushTimestampFingerprintText)
+			fragments := []string{row.ContentHash, row.RoleTime, row.Flags, row.Token, row.ToolCalls, row.ToolResults}
+			for i, fragment := range fragments {
+				rest, ok := strings.CutPrefix(*streams[i], fragment)
+				if !ok {
+					return false, nil
+				}
+				*streams[i] = rest
+			}
+		}
+		start = messages[len(messages)-1].Ordinal + 1
+	}
+	return fields == (db.MessageComparisonFields{}), nil
 }

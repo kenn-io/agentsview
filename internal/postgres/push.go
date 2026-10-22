@@ -3056,7 +3056,7 @@ func (s *Sync) pushMessages(
 	full bool,
 	sessionUsageFingerprints map[string]string,
 	comparisons *pushMessageComparison,
-) (int, error) {
+) (count int, err error) {
 	localCount, err := s.local.MessageCount(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -3111,6 +3111,12 @@ func (s *Sync) pushMessages(
 		return 0, nil
 	}
 
+	snapshot, err := s.local.BeginMessageSnapshot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { err = errors.Join(err, snapshot.Close()) }()
+
 	if !full && comparisons == nil {
 		comparisons, err = readPushSessionMessageComparisons(ctx, tx, []string{sessionID},
 			map[string]db.MessageContentAggregate{sessionID: {Count: localCount}}, false,
@@ -3119,21 +3125,23 @@ func (s *Sync) pushMessages(
 			return 0, fmt.Errorf("reading pg message comparison: %w", err)
 		}
 	}
-	pgAgg, _, _ := comparisonAggregates(sessionID, comparisons)
 
-	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
-		usageFP, usageKnown := sessionUsageFingerprints[sessionID]
-		localFP, err := localPushMessageFingerprint(
-			ctx, s.local, sessionID, usageFP, usageKnown, comparisonPushFingerprint,
-		)
+	if !full && comparisons.MessageAggregates[sessionID] == localCount && localCount > 0 {
+		matches, err := pushTranscriptMatches(ctx, snapshot, sessionID, comparisons)
 		if err != nil {
 			return 0, err
 		}
-
-		if shouldSkipSessionMessages(
-			sessionID, localCount, localFP, full, comparisons,
-		) {
-			return 0, nil
+		if matches {
+			usageFP, known := sessionUsageFingerprints[sessionID]
+			if !known {
+				usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
+				if err != nil {
+					return 0, err
+				}
+			}
+			if usageFP == comparisons.UsageEventFingerprint[sessionID] {
+				return 0, nil
+			}
 		}
 	}
 
@@ -3147,7 +3155,7 @@ func (s *Sync) pushMessages(
 	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
 		return 0, err
 	}
-	count, err := s.copySessionMessages(ctx, tx, sessionID)
+	count, err = s.copySessionMessages(ctx, tx, sessionID, snapshot)
 	if err != nil {
 		return count, err
 	}
@@ -3168,13 +3176,8 @@ func (s *Sync) pushMessages(
 // copied, so restoring the pins would drop that pin. Messages that arrive
 // after the snapshot go out with the next push.
 func (s *Sync) copySessionMessages(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx *sql.Tx, sessionID string, snapshot *db.MessageSnapshot,
 ) (count int, err error) {
-	snapshot, err := s.local.BeginMessageSnapshot(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_result_events
 		WHERE session_id = $1

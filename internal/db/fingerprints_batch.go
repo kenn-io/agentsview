@@ -452,16 +452,6 @@ func (db *DB) ToolCallContentFingerprints(ctx context.Context,
 func (db *DB) ToolCallFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
-	return db.toolCallFingerprints(ctx, sessionIDs, toolCallFingerprintRow.appendTo)
-}
-
-// ToolCallComparisonFingerprints hashes large fields for remote comparison.
-// ToolCallFingerprints keeps the persisted dependency fingerprint unchanged.
-func (db *DB) ToolCallComparisonFingerprints(ctx context.Context, sessionIDs []string) (map[string]string, error) {
-	return db.toolCallFingerprints(ctx, sessionIDs, toolCallFingerprintRow.appendComparisonTo)
-}
-
-func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, appendRow func(toolCallFingerprintRow, *strings.Builder)) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
@@ -497,7 +487,7 @@ func (db *DB) toolCallFingerprints(ctx context.Context, sessionIDs []string, app
 				return err
 			}
 			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
-			appendRow(r, builders.get(sessionID))
+			r.appendTo(builders.get(sessionID))
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -914,4 +904,60 @@ func (r toolResultEventFingerprintRow) appendTo(
 		contentSum,
 		len(timestamp), timestamp,
 	)
+}
+
+// MessageComparisonFields holds the six encoded streams for a published message.
+type MessageComparisonFields struct {
+	ContentHash string
+	RoleTime    string
+	Flags       string
+	Token       string
+	ToolCalls   string
+	ToolResults string
+}
+
+// MessageComparisonRow describes every published message field and its
+// dependent calls and events, using the same encodings as session comparisons.
+func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) MessageComparisonFields {
+	var contentHash, roleTime, flags, token, toolCalls, toolResults strings.Builder
+	appendContentHashFingerprintRow(&contentHash, m.Ordinal, m.ContentLength, m.Content)
+	appendRoleTimeFingerprintRow(&roleTime, m.Ordinal, m.Role, m.Timestamp, normalizeTimestamp)
+	flagsFingerprintRow{ordinal: m.Ordinal, isSystem: m.IsSystem, hasThinking: m.HasThinking, hasToolUse: m.HasToolUse, thinkingText: m.ThinkingText}.appendTo(&flags)
+	tokenFingerprintRow{
+		ordinal: m.Ordinal, model: m.Model, reasoningEffort: m.ReasoningEffort, providerID: m.ProviderID, tokenUsage: string(m.TokenUsage),
+		contextTokens: m.ContextTokens, outputTokens: m.OutputTokens, hasContextTokens: m.HasContextTokens, hasOutputTokens: m.HasOutputTokens,
+		claudeMessageID: m.ClaudeMessageID, claudeRequestID: m.ClaudeRequestID, sourceType: m.SourceType, sourceSubtype: m.SourceSubtype,
+		promptSource: m.PromptSource, sourceUUID: m.SourceUUID, sourceParentUUID: m.SourceParentUUID, isSidechain: m.IsSidechain, isCompactBoundary: m.IsCompactBoundary,
+	}.appendTo(&token)
+	for i, tc := range m.ToolCalls {
+		call := toolCallFingerprintRow{
+			messageOrdinal: m.Ordinal, callIndex: i, toolName: tc.ToolName, category: tc.Category, toolUseID: tc.ToolUseID, inputJSON: tc.InputJSON,
+			skillName: tc.SkillName, subagentSessionID: tc.SubagentSessionID, resultContentLength: tc.ResultContentLength,
+			resultContent: DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents), filePath: tc.FilePath,
+		}
+		if tc.ObservedOutcome != nil {
+			call.observedOutcome = *tc.ObservedOutcome
+		}
+		if tc.ObservedRepeat != nil {
+			call.observedRepeat = *tc.ObservedRepeat
+		}
+		if tc.SequenceEnding != nil {
+			call.sequenceEnding = *tc.SequenceEnding
+		}
+		call.appendComparisonTo(&toolCalls)
+		for _, ev := range tc.ResultEvents {
+			toolResultEventFingerprintRow{
+				messageOrdinal: m.Ordinal, callIndex: i, eventIndex: ev.EventIndex, toolUseID: ev.ToolUseID, agentID: ev.AgentID,
+				subagentSessionID: ev.SubagentSessionID, source: ev.Source, status: ev.Status, content: ev.Content, contentLength: ev.ContentLength, timestamp: ev.Timestamp,
+			}.appendTo(&toolResults, normalizeTimestamp)
+		}
+	}
+	return MessageComparisonFields{
+		ContentHash: contentHash.String(),
+		RoleTime:    roleTime.String(),
+		Flags:       flags.String(),
+		Token:       token.String(),
+		ToolCalls:   toolCalls.String(),
+		ToolResults: toolResults.String(),
+	}
 }

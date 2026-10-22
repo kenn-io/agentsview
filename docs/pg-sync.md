@@ -156,9 +156,8 @@ Only large text values are replaced by hashes; IDs, timestamps, token JSON, and
 other message, tool, and event metadata still cross the connection. Same-length
 text changes still trigger publication. Rows written before control-character
 cleanup may be rewritten once; unchanged text then compares normally.
-Use `--full` to bypass both layers and
-re-push everything, for example, after a schema reset or when message content
-was rewritten in place.
+Use `--full` to bypass both layers and re-push everything, for example, after a
+schema reset or when message content was rewritten in place.
 
 Every push sends the most recently active sessions first, so recent activity
 reaches PostgreSQL before older history. A full push that stops partway, for
