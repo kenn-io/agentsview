@@ -309,23 +309,22 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Resolve Windows linter version
-        id: windows_linter_version
+      - name: Check Windows linter version pins
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: bash
         run: |
-          linter_version="$(sed -n 's/^GOLANGCI_LINT_VERSION ?=[[:space:]]*//p' Makefile)"
-          if [ -z "$linter_version" ]; then
-            echo "GOLANGCI_LINT_VERSION is missing or empty in Makefile" >&2
+          make_version="$(sed -n 's/^GOLANGCI_LINT_VERSION ?=[[:space:]]*//; T; s/[[:space:]]*$//; p' Makefile)"
+          custom_version="$(sed -n 's/^version:[[:space:]]*//; T; s/[[:space:]]*$//; p' .custom-gcl.yml)"
+          if [ -z "$make_version" ] || [ -z "$custom_version" ] || [ "$make_version" != "$custom_version" ]; then
+            echo "Linter version pins must be nonempty and agree: Makefile GOLANGCI_LINT_VERSION='$make_version', .custom-gcl.yml version='$custom_version'" >&2
             exit 1
           fi
-          echo "version=$linter_version" >> "$GITHUB_OUTPUT"
 
       - name: Restore Windows linter cache
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: ./.github/actions/go-cache-restore
         with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.windows_linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
 
