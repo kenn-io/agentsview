@@ -3200,16 +3200,21 @@ schemas keep their existing ordering behavior.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible
   leaf, stored message count, transcript revision, title, and end time in
   `provider_freshness`, keyed by `claude-ai` and session ID. Resync and
-  `ResetAllMtimes` clear it. A zip re-import that changes stored text, count,
-  or title triggers a detail fetch. Title-only repairs count as updates and
-  send session refresh notifications. Reverified 2026-10-11 with reconstructed
-  fixtures in `TestSyncClaudeAIZipTitleFreshness` and
+  `ResetAllMtimes` clear it. The hash includes a selected-branch-counts marker
+  to refresh older cached counts once. A zip re-import that changes stored
+  text, count, or title triggers a detail fetch. Title-only repairs count as
+  updates and send session refresh notifications. Reverified 2026-10-11 with
+  reconstructed fixtures in `TestSyncClaudeAIZipTitleFreshness` and
   `TestClaudeAISyncMutationNotifications`. Sync stores messages in the same
   shape as zip import, without source UUIDs. Pins match by role, text, and
   occurrence rank. Reverified 2026-10-08 against the reconstructed list and
   detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
   `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and
-  `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See
+  `TestSyncClaudeAIBranchSwitch`. Usage-only message and user-turn counts
+  follow the selected branch, including shorter branches. Verified
+  2026-10-22 with the reconstructed fixture in
+  `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather than a live
+  observation of count behavior. Shorter zip exports remain refused. See
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
   for branch updates and Trash copies.
 - **Limits:** Browser reads and decoded relay responses are capped at 32 MiB.

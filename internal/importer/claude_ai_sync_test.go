@@ -2,10 +2,13 @@ package importer
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -594,29 +597,135 @@ func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
+// preBranchCountFreshness freezes the hash format used before shorter-branch
+// counts were repaired. It must stay independent of claudeAIFreshness.
+func preBranchCountFreshness(session *db.Session) uint64 {
+	hash := fnv.New64a()
+	fmt.Fprintf(hash, "2026-03-01T10:05:00.123456Z\x00reply\x00%d", session.MessageCount)
+	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
+		fmt.Fprint(hash, "\x00")
+		if field != nil {
+			fmt.Fprint(hash, *field)
+		}
+	}
+	return hash.Sum64()
+}
+
+func TestSyncClaudeAIFullArchiveKeepsPreBranchCountFreshness(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d := testDB(t)
+	detailCalls := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		detailCalls++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(session)))
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 1, detailCalls)
+}
+
+func TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+			d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
+			require.NoError(t, err)
+			t.Cleanup(func() { d.Close() })
+			selected := "q2"
+			detailCalls := 0
+			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
+				return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
+					detailCalls++
+					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+				})(ctx, path)
+			}
+			_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			messages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Equal(t, "assistant", messages[0].Role)
+			pinID, err := d.PinMessage(t.Context(), id, messages[0].ID, nil)
+			require.NoError(t, err)
+			require.NotZero(t, pinID)
+			// Clearing the mirror timestamp makes a metadata-only update observable
+			// without depending on the clock advancing between Sync calls.
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET local_modified_at = NULL WHERE id = ?", id)
+				return err
+			}))
+			initial, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, 3, initial.MessageCount)
+			assert.Equal(t, 2, initial.UserMessageCount)
+			if cached {
+				// Reproduce the pre-fix Sync: it cached the shorter selected leaf
+				// against the unchanged 3-turn archive. Keep this old hash format frozen.
+				require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(initial)))
+			}
+			selected = "reply"
+			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			assert.Zero(t, stats.Errors)
+			assert.Empty(t, stats.Refusals)
+			session, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, 2, session.MessageCount)
+			assert.Equal(t, 1, session.UserMessageCount)
+			assert.NotNil(t, session.LocalModifiedAt)
+			pins, err := d.ListPinnedMessages(t.Context(), id, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, pinID, pins[0].ID)
+			assert.Equal(t, messages[0].ID, pins[0].MessageID)
+			assert.Nil(t, pins[0].Note)
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, ImportStats{Skipped: 1}, stats)
+			assert.Equal(t, 2, detailCalls)
+		})
+	}
+}
+
+type excludedSyncStore struct{ *db.DB }
+
+func (s excludedSyncStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, beforeCommit ...func() error) (db.SessionBatchResult, error) {
+	if err := s.SoftDeleteSession(ctx, writes[0].Session.ID); err != nil {
+		return db.SessionBatchResult{}, err
+	}
+	if _, err := s.DeleteSessionIfTrashed(ctx, writes[0].Session.ID); err != nil {
+		return db.SessionBatchResult{}, err
+	}
+	return s.DB.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
+}
+
+func TestSyncClaudeAIUsageArchiveShorterBranchExcludedDuringWrite(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
-	selected := "q2"
-	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
-		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
-		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
-		})(ctx, path)
-	}
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	longer := strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`
+	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+longer+"]"), nil)
 	require.NoError(t, err)
-	selected = "reply"
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	stats, err := SyncClaudeAI(t.Context(), excludedSyncStore{d}, fetch, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Errors)
-	assert.Empty(t, stats.Refusals)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.True(t, d.IsSessionExcluded(t.Context(), id))
 	session, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
-	assert.Equal(t, 3, session.MessageCount)
+	assert.Nil(t, session)
 }
 
 type cancelNewSyncStore struct {
@@ -877,18 +986,6 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 			assert.Equal(t, []string{"Hello", "Chosen reply", "More", "Answer"}, messageContents(copied))
 		})
 	}
-}
-
-func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
-	d := testDB(t)
-	_, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	}), nil)
-	require.NoError(t, err)
-	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader(`[{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Hello"}]}]`), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Errors)
-	assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:22222222-2222-4222-8222-222222222222", Reason: RefusalShorterExport}}, stats.Refusals)
 }
 
 func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {

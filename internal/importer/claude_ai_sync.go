@@ -42,9 +42,18 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
-func claudeAIFreshness(updatedAt, leaf string, session *db.Session) uint64 {
+// claudeAICountsMarker refreshes usage-only fingerprints that cached a shorter
+// branch with older counts. Full archives already stored the selected branch.
+func claudeAICountsMarker(store db.Store) string {
+	if storeArchiveContent(store).UsageOnly() {
+		return "selected-branch-counts\x00"
+	}
+	return ""
+}
+
+func claudeAIFreshness(store db.Store, updatedAt, leaf string, session *db.Session) uint64 {
 	hash := fnv.New64a()
-	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, session.MessageCount)
+	fmt.Fprintf(hash, "%s%s\x00%s\x00%d", claudeAICountsMarker(store), updatedAt, leaf, session.MessageCount)
 	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
 		fmt.Fprint(hash, "\x00")
 		if field != nil {
@@ -168,7 +177,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing) {
+				if existing != nil && fresh && storedHash == claudeAIFreshness(store, marker.UpdatedAt, leaf, existing) {
 					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
@@ -228,7 +237,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						}
 						// The chat can change between list and detail; cache only what was imported.
 						if err == nil && stored != nil && json.Unmarshal(detail, &current) == nil && current.UpdatedAt == marker.UpdatedAt && current.Leaf == leaf {
-							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored))
+							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(store, marker.UpdatedAt, leaf, stored))
 						}
 						if err != nil {
 							stats.record(id, importSkipped, err)
@@ -286,9 +295,17 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	}
 	if sameMessages(archived, storedFormMessages(store, msgs)) {
 		status, err := upsertConversation(ctx, store, result, nil)
-		// A usage-only archive can't tell a shorter branch from a shorter export, so it keeps the longer copy.
 		if refusalReason(err) == RefusalShorterExport {
-			return importSkipped, nil
+			// Stored messages already match; update the selected branch's counts
+			// without replacing rows that may have pins.
+			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session: chatGPTSession(result.Session), Messages: msgs,
+				SkipSignalUpdates: true,
+			}})
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importUpdated, err
 		}
 		if err == nil && status == importSkipped {
 			// Message equality can still hide a title repair. Compare stored

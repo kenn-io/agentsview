@@ -155,11 +155,14 @@ changes count as updates and refresh open session lists. Resync clears
 freshness, so the next Sync fetches each chat once. Search stays available
 during Sync.
 
-Changed chats show Claude.ai's visible branch, even when it has fewer turns. If
-a replacement loses a pin or note, Sync keeps the previous version in Trash with
-its pins and notes. Replacements that preserve every pin and note make no copy.
-Switching back on Claude.ai restores those turns, but dropped pins and notes
-stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
+Changed chats show Claude.ai's visible branch, even when it has fewer turns.
+Usage-only archives also update their message and user-turn counts to follow
+that branch. The first Sync after upgrading refetches cached usage-only chat
+details once to repair their counts. If a replacement loses a pin or note, Sync
+keeps the previous version in Trash with its pins and notes. Replacements that
+preserve every pin and note make no copy. Switching back on Claude.ai restores
+those turns, but dropped pins and notes stay in the Trash copy. Trashed and
+permanently deleted chats stay deleted.
 
 Each chat has a 32 MiB response limit. Larger chats count as failed while Sync
 continues. An expired sign-in or two chat failures in a row ends Sync. Closing
