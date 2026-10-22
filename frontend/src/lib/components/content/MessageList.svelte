@@ -43,8 +43,8 @@
   $effect(() => {
     const id = messages.sessionId;
     const revision = messages.loadedRevision;
-    const enabled = fileReferences.enabled;
-    if (enabled) untrack(() => void fileReferences.track(id, revision));
+    const content = messages.messages;
+    if (fileReferences.enabled) untrack(() => void fileReferences.track(id, revision, content));
   });
 
   onDestroy(() => fileReferences.reset());

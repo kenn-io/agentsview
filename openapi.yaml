@@ -6369,7 +6369,10 @@ components:
           items:
             $ref: "#/components/schemas/ServiceFileReferenceOccurrence"
           type: array
+        transcript_revision:
+          type: string
       required:
+        - transcript_revision
         - integration
         - occurrences
       type: object

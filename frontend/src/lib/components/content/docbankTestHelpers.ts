@@ -20,9 +20,15 @@ export const imageOccurrence: ServiceFileReferenceOccurrence = {
   match_total: 0,
 };
 
-export async function trackDocbank(result: ServiceFileReferencesResult, id = "session-1") {
+export async function trackDocbank(
+  result: Omit<ServiceFileReferencesResult, "transcript_revision">,
+  id = "session-1",
+) {
   fileReferences.enabled = true;
   await fileReferences.track(null, null);
-  vi.mocked(getApiV1SessionsByIdFileReferences).mockResolvedValueOnce(result);
+  vi.mocked(getApiV1SessionsByIdFileReferences).mockResolvedValueOnce({
+    ...result,
+    transcript_revision: "revision-1",
+  });
   await fileReferences.track(id, "revision-1");
 }

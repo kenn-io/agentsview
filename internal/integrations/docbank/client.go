@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -60,7 +62,7 @@ func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
 	unavailable := errors.New("docbank unavailable")
 	key := c.cfg.APIKey()
 	if key == "" {
-		return Result{}, unavailable
+		return Result{}, lookupUnavailable("missing API key")
 	}
 	params := url.Values{"sha256": {digest}, "limit": {"10"}, "offset": {"0"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(strings.TrimSpace(c.cfg.URL), "/")+"/api/v1/content-references?"+params.Encode(), nil)
@@ -70,11 +72,11 @@ func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
 	req.Header.Set("X-Api-Key", key)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Result{}, unavailable
+		return Result{}, lookupUnavailable("server unreachable")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Result{}, unavailable
+		return Result{}, lookupStatusUnavailable(resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPageBytes+1))
 	if err != nil || len(data) > maxPageBytes {
@@ -100,4 +102,16 @@ func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
 		out.Matches = append(out.Matches, Match{State: state, Name: item.Node.Name, Path: path, OpenURL: open})
 	}
 	return out, nil
+}
+
+func lookupUnavailable(cause string) error {
+	log.Printf("Docbank lookup unavailable: %s", cause)
+	return errors.New("docbank unavailable")
+}
+
+func lookupStatusUnavailable(status int) error {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return lookupUnavailable("API key rejected")
+	}
+	return lookupUnavailable(fmt.Sprintf("server returned HTTP %d", status))
 }

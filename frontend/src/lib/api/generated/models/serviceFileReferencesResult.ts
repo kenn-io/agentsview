@@ -9,4 +9,5 @@ export interface ServiceFileReferencesResult {
   /** At least one Docbank lookup failed; retry may resolve unavailable occurrences. */
   lookup_failed?: boolean;
   occurrences: ServiceFileReferenceOccurrence[];
+  transcript_revision: string;
 }

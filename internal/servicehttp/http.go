@@ -85,6 +85,7 @@ type httpBackend struct {
 	readOnly          bool
 	signed            bool
 	recallQueries     bool
+	docbankEnabled    bool
 	// apiVersion is the probed server API version, or 0 when unknown.
 	apiVersion int
 	token      string
@@ -98,6 +99,7 @@ type HTTPServerCapabilities struct {
 	ReadOnly           bool `json:"read_only"`
 	APIVersion         int  `json:"api_version"`
 	NonRecordingRecall bool
+	DocbankEnabled     bool `json:"docbank_enabled"`
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -127,7 +129,7 @@ func NewHTTPBackendForServer(
 		(!capabilities.ReadOnly || capabilities.NonRecordingRecall) &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
-	b.apiVersion = capabilities.APIVersion
+	b.apiVersion, b.docbankEnabled = capabilities.APIVersion, capabilities.DocbankEnabled
 	return b
 }
 
@@ -150,7 +152,7 @@ func newHTTPBackend(
 	}
 }
 
-func (b *httpBackend) SupportsFileReferences() bool { return !b.signed }
+func (b *httpBackend) SupportsFileReferences() bool { return !b.signed && b.docbankEnabled }
 
 // ProbeHTTPServerCapabilities reads the metadata needed to expose tools safely
 // for an explicit daemon URL. Such callers do not have a local runtime record.
@@ -175,7 +177,7 @@ func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HT
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
+	return HTTPServerCapabilities{DocbankEnabled: response.JSON200.DocbankEnabled != nil && *response.JSON200.DocbankEnabled, ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }

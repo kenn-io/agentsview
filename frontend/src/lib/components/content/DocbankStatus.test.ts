@@ -30,7 +30,11 @@ it("retries rejected requests and failed Docbank lookups, then becomes quiet", a
   await pending;
   await tick();
   expect(document.body.textContent).toContain("Docbank unavailable");
-  lookup.mockResolvedValueOnce({ integration: "enabled", occurrences: [] });
+  lookup.mockResolvedValueOnce({
+    integration: "enabled",
+    transcript_revision: "new",
+    occurrences: [],
+  });
   document.querySelector<HTMLButtonElement>("button")!.click();
   await fileReferences.track("session-1", "new");
   await tick();
@@ -45,7 +49,11 @@ it("retries rejected requests and failed Docbank lookups, then becomes quiet", a
   expect(document.body.textContent).toContain("Docbank unavailable");
   const retry = document.querySelector<HTMLButtonElement>("button")!;
   expect(retry.textContent).toContain("Retry");
-  lookup.mockResolvedValueOnce({ integration: "enabled", occurrences: [imageOccurrence] });
+  lookup.mockResolvedValueOnce({
+    integration: "enabled",
+    transcript_revision: "revision-1",
+    occurrences: [imageOccurrence],
+  });
   retry.click();
   await fileReferences.track("session-1", "revision-1");
   await tick();

@@ -56,3 +56,26 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	_, err = service.FileReferences(t.Context(), svc, "missing")
 	assert.ErrorIs(t, err, service.ErrSessionNotFound)
 }
+
+func TestFileReferencesDiscoveredCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata string
+		enabled        bool
+	}{
+		{"enabled", `{"api_version":12,"docbank_enabled":true}`, true},
+		{"disabled", `{"api_version":12,"docbank_enabled":false}`, false},
+		{"older daemon", `{"api_version":12}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/version", r.URL.Path)
+				_, _ = w.Write([]byte(tc.metadata))
+			}))
+			defer daemon.Close()
+			caps, err := servicehttp.ProbeHTTPServerCapabilities(t.Context(), daemon.URL, "")
+			require.NoError(t, err)
+			svc := servicehttp.NewHTTPBackendForServer(daemon.URL, "", caps)
+			assert.Equal(t, tc.enabled, service.SupportsFileReferences(svc))
+		})
+	}
+}

@@ -1,11 +1,13 @@
 package service_test
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,7 +46,7 @@ func TestFileReferencesRetainedImages(t *testing.T) {
 		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
 	}))
 	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	_, err := svc.Messages(t.Context(), id, service.MessageFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, requests.Load())
@@ -88,7 +90,7 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
 	}))
 	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
 	assert.Equal(t, int32(50), requests.Load())
@@ -113,7 +115,7 @@ func TestFileReferencesLookupFailure(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
 	assert.True(t, out.LookupFailed)
@@ -133,7 +135,7 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	start := time.Now()
 	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
@@ -145,7 +147,55 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	}
 }
 
-func newTestDocbank(t *testing.T, cfg config.DocbankIntegration) *docbank.Client {
-	t.Helper()
-	return docbank.New(cfg)
+func TestFileReferencesCarriesRevisionAcrossReplacement(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	image := func(digest string) []db.Message {
+		return []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "![image](asset://" + digest + ".png)"}}
+	}
+	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("a", 64))))
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_ABSENT_KEY"})))
+	t.Setenv("DOCBANK_ABSENT_KEY", "")
+	first, err := svc.Messages(t.Context(), id, service.MessageFilter{})
+	require.NoError(t, err)
+	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("b", 64))))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	current, err := svc.Messages(t.Context(), id, service.MessageFilter{})
+	require.NoError(t, err)
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var wire map[string]any
+	require.NoError(t, json.Unmarshal(data, &wire))
+	assert.Equal(t, current.TranscriptRevision, wire["transcript_revision"])
+	assert.NotEqual(t, first.TranscriptRevision, wire["transcript_revision"])
+	require.Len(t, out.Occurrences, 1)
+	assert.Equal(t, strings.Repeat("b", 64), out.Occurrences[0].SHA256)
+}
+
+type replacingFileReferenceStore struct {
+	db.Store
+	replace func()
+}
+
+func (s *replacingFileReferenceStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	session, err := s.Store.GetSession(ctx, id)
+	if s.replace != nil {
+		replace := s.replace
+		s.replace = nil
+		replace()
+	}
+	return session, err
+}
+
+func TestFileReferencesRejectsReplacementBetweenReads(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "original"}}))
+	store := &replacingFileReferenceStore{Store: env.db, replace: func() {
+		require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "replacement"}}))
+	}}
+	svc := service.NewReadOnlyBackend(store, service.WithDocbank(docbank.New(config.DocbankIntegration{})))
+	_, err := service.FileReferences(t.Context(), svc, id)
+	assert.ErrorIs(t, err, service.ErrSourceChanged)
 }

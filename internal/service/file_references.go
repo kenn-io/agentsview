@@ -28,9 +28,10 @@ type FileReferenceOccurrence struct {
 }
 
 type FileReferencesResult struct {
-	Integration  string                    `json:"integration" enum:"disabled,enabled"`
-	LookupFailed bool                      `json:"lookup_failed,omitempty" doc:"At least one Docbank lookup failed; retry may resolve unavailable occurrences."`
-	Occurrences  []FileReferenceOccurrence `json:"occurrences"`
+	TranscriptRevision string                    `json:"transcript_revision"`
+	Integration        string                    `json:"integration" enum:"disabled,enabled"`
+	LookupFailed       bool                      `json:"lookup_failed,omitempty" doc:"At least one Docbank lookup failed; retry may resolve unavailable occurrences."`
+	Occurrences        []FileReferenceOccurrence `json:"occurrences"`
 }
 
 type FileReferencesProvider interface {
@@ -66,9 +67,7 @@ func WithConfiguredDocbank(cfg config.Config) (DirectBackendOption, error) {
 	if !cfg.Integrations.Docbank.Configured() {
 		client = nil
 	}
-	return func(b *directBackend) {
-		b.docbank = client
-	}, nil
+	return WithDocbank(client), nil
 }
 
 func (b *directBackend) FileReferences(ctx context.Context, id string) (FileReferencesResult, error) {
@@ -78,18 +77,12 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	}
 	readCtx, cancelRead := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelRead()
-	session, err := b.db.GetSession(readCtx, id)
-	if err != nil {
-		return out, err
-	}
-	if session == nil {
-		return out, ErrSessionNotFound
-	}
-	messages, err := b.db.GetAllMessages(readCtx, id)
+	messages, revision, err := b.fileReferenceMessages(readCtx, id)
 	cancelRead()
 	if err != nil {
 		return out, err
 	}
+	out.TranscriptRevision = revision
 	out.Integration = "enabled"
 	add := func(ordinal int, toolID, toolName *string, event *int, images []db.RetainedImage) {
 		for _, image := range images {
@@ -152,4 +145,32 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		occurrence.Matches, occurrence.MatchTotal = result.Matches, result.Total
 	}
 	return out, nil
+}
+
+// fileReferenceMessages uses the same observed and expected revisions as Messages,
+// including across pages, so a lookup never combines different transcripts.
+func (b *directBackend) fileReferenceMessages(ctx context.Context, id string) ([]db.Message, string, error) {
+	session, err := b.db.GetSession(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	if session == nil {
+		return nil, "", ErrSessionNotFound
+	}
+	if session.TranscriptRevision == nil || *session.TranscriptRevision == "" {
+		return nil, "", ErrRevisionBoundReadUnavailable
+	}
+	revision := *session.TranscriptRevision
+	var messages []db.Message
+	for from := 0; ; {
+		page, err := b.Messages(ctx, id, MessageFilter{From: new(from), Limit: db.MaxMessageLimit, ExpectedRevision: revision})
+		if err != nil {
+			return nil, "", err
+		}
+		messages = append(messages, page.Messages...)
+		if len(page.Messages) < db.MaxMessageLimit {
+			return messages, revision, nil
+		}
+		from = *page.LastOrdinal + 1
+	}
 }

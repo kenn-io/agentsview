@@ -7,7 +7,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -51,9 +51,7 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 			return nil
 		}
 		name := strings.TrimPrefix(ref, "asset://")
-
 		if root == nil {
-			var err error
 			root, err = os.OpenRoot(directory)
 			if err != nil {
 				return fmt.Errorf("opening required assets: %w", err)
@@ -65,6 +63,7 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		seen[ref] = true
 		return nil
 	}
+	markdown := goldmark.New().Parser()
 	for rows.Next() {
 		var content string
 		var toolResult bool
@@ -94,16 +93,16 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 			continue
 		}
 		// Parse actual image nodes; examples inside code are not dependencies.
-		if err := walkMarkdownImages(content, check); err != nil {
+		if err := walkMarkdownImages(markdown, content, check); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
 }
 
-func walkMarkdownImages(content string, visit func(string) error) error {
+func walkMarkdownImages(markdown parser.Parser, content string, visit func(string) error) error {
 	source := []byte(content)
-	return ast.Walk(goldmark.New().Parser().Parse(text.NewReader(source)), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+	return ast.Walk(markdown.Parse(text.NewReader(source)), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if image, ok := node.(*ast.Image); ok && entering {
 			return ast.WalkContinue, visit(string(image.Destination))
 		}
@@ -124,16 +123,16 @@ func assetReferenceDigest(ref string) (string, string, bool) {
 
 func assetImageDigest(ref string) (string, string, bool) {
 	digest, ext, valid := assetReferenceDigest(ref)
-	_, image := assets.ExtForMediaType(mime.TypeByExtension(ext))
+	_, image := assets.MediaTypeForExt(ext)
 	return digest, ext, valid && digest == strings.ToLower(digest) && image
 }
 
 // MarkdownAssetImages excludes links and code examples by walking image nodes.
 func MarkdownAssetImages(content string) []RetainedImage {
 	var images []RetainedImage
-	_ = walkMarkdownImages(content, func(ref string) error {
+	_ = walkMarkdownImages(goldmark.New().Parser(), content, func(ref string) error {
 		if digest, ext, ok := assetImageDigest(ref); ok {
-			mediaType := mime.TypeByExtension(ext)
+			mediaType, _ := assets.MediaTypeForExt(ext)
 			images = append(images, RetainedImage{Index: len(images), MediaType: mediaType, SHA256: digest})
 		}
 		return nil

@@ -398,7 +398,7 @@ func TestNewServer_HTTPFileReferencesCapability(t *testing.T) {
 		{"unsigned", "http://127.0.0.1:1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := servicehttp.NewHTTPBackendForServer(tc.url, "", servicehttp.HTTPServerCapabilities{ReadOnly: true, APIVersion: 4})
+			svc := servicehttp.NewHTTPBackendForServer(tc.url, "", servicehttp.HTTPServerCapabilities{ReadOnly: true, APIVersion: 4, DocbankEnabled: true})
 			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 			defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 			tools, err := ct.ListTools(t.Context(), nil)

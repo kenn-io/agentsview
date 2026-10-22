@@ -329,7 +329,7 @@
         {/if}
       {/if}
     {/if}
-    {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id} />{/if}
+    {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id ?? ""} />{/if}
     {#if resultEvents.length > 0}
       <button class="history-header" aria-expanded={!historyCollapsed} onclick={(e) => {
         e.stopPropagation();
@@ -353,7 +353,7 @@
                 {#if event.agent_id}<span class="meta-tag"><span class="meta-label">{m.tool_block_agent_label()}</span>{event.agent_id}</span>{/if}
               </div>
               <pre class="tool-content output-content history-content" {@attach searchBlock(historyKeys[eventIndex])}>{event.content}</pre>
-              {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id} eventIndex={event.event_index} />{/if}
+              {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id ?? ""} eventIndex={event.event_index} />{/if}
             </div>
           {/each}
         </div>

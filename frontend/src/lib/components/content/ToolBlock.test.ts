@@ -823,3 +823,40 @@ it.each([
     expected.map((mediaType) => [mediaType]),
   );
 });
+
+it("shows tool images without a tool ID without repeating message images", async () => {
+  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [
+      { ...imageOccurrence, media_type: "image/jpeg" },
+      { ...imageOccurrence, tool_use_id: "", media_type: "image/png" },
+      { ...imageOccurrence, tool_use_id: "", event_index: 0, media_type: "image/gif" },
+    ],
+  });
+  await render({
+    sessionId: "session-1",
+    ordinal: 0,
+    toolCall: call(
+      "Read",
+      {},
+      {
+        tool_use_id: undefined,
+        result_content: "image",
+        result_events: [
+          {
+            event_index: 0,
+            source: "tool_result",
+            status: "completed",
+            content: "image",
+            content_length: 5,
+          },
+        ],
+      },
+    ),
+  });
+  await click(".tool-header");
+  await click(".history-header");
+  const rows = Array.from(document.querySelectorAll(".docbank-matches"), (row) => row.textContent);
+  expect(rows.map((row) => row?.match(/image\/[a-z]+/g))).toEqual([["image/png"], ["image/gif"]]);
+});

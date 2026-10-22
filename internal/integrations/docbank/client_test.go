@@ -1,6 +1,8 @@
 package docbank
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +26,7 @@ func TestLookup(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := config.DocbankIntegration{URL: srv.URL, WebURL: "https://example.com/docbank/", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	result, err := newTestClient(t, cfg).Lookup(t.Context(), digest)
+	result, err := New(cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Equal(t, 15, result.Total)
 	require.Len(t, result.Matches, 3)
@@ -33,7 +35,7 @@ func TestLookup(t *testing.T) {
 	assert.Equal(t, "trash", result.Matches[2].State)
 	assert.Empty(t, result.Matches[2].Path)
 	cfg.WebURL = ""
-	result, err = newTestClient(t, cfg).Lookup(t.Context(), digest)
+	result, err = New(cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Empty(t, result.Matches[0].OpenURL)
 }
@@ -57,14 +59,39 @@ func TestLookupFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(tc.handler)
 			defer srv.Close()
-			_, err := newTestClient(t, config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
+			_, err := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
 			assert.EqualError(t, err, "docbank unavailable")
 		})
 	}
 	assert.Zero(t, hits.Load())
 }
 
-func newTestClient(t *testing.T, cfg config.DocbankIntegration) *Client {
-	t.Helper()
-	return New(cfg)
+func TestLookupWarningCauses(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	for _, tc := range []struct {
+		name, key, cause string
+		status           int
+	}{
+		{"missing key", "", "missing API key", 200},
+		{"rejected key", "secret-value", "API key rejected", 401},
+		{"forbidden key", "secret-value", "API key rejected", 403},
+		{"unreachable server", "secret-value", "server unreachable", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs.Reset()
+			t.Setenv("DOCBANK_TEST_KEY", tc.key)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status) }))
+			defer srv.Close()
+			if tc.status == 0 {
+				srv.Close()
+			}
+			_, err := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
+			require.EqualError(t, err, "docbank unavailable")
+			assert.Contains(t, logs.String(), tc.cause)
+			assert.NotContains(t, logs.String(), "secret-value")
+		})
+	}
 }

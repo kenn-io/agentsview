@@ -1,8 +1,14 @@
 import { getApiV1SessionsByIdFileReferences } from "../api/generated/sessions/sessions.js";
-import type { ServiceFileReferencesResult } from "../api/generated/index.js";
+import type { DbMessage, ServiceFileReferencesResult } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
+type Transcript = readonly (Pick<DbMessage, "ordinal" | "content" | "tool_calls"> & {
+  thinking_text?: string;
+})[];
+
 export class FileReferencesStore {
+  private content = $state.raw(new Map<number, string>());
+  private resultContent = new Map<number, string>();
   enabled = $state(false);
   result = $state<ServiceFileReferencesResult>();
   status = $state<"idle" | "loading" | "ok" | "failed">("idle");
@@ -11,11 +17,11 @@ export class FileReferencesStore {
   private read = new LatestRead();
   private pending: Promise<void> = Promise.resolve();
 
-  track(sessionId: string | null, revision: string | null): Promise<void> {
+  track(id: string | null, revision: string | null, content: Transcript = []): Promise<void> {
     if (!this.enabled) return Promise.resolve();
-    if (this.sessionId === sessionId && this.revision === revision) return this.pending;
-    this.result = undefined;
-    this.sessionId = sessionId;
+    this.updateTranscript(id, content);
+    if (this.sessionId === id && this.revision === revision) return this.pending;
+    this.sessionId = id;
     this.revision = revision;
     return this.refresh();
   }
@@ -37,22 +43,59 @@ export class FileReferencesStore {
       return Promise.resolve();
     }
     this.status = "loading";
+    const snapshot = this.content;
     this.pending = getApiV1SessionsByIdFileReferences({ id: this.sessionId }, { signal })
-      .then((result) => {
-        if (!this.read.isCurrent(signal)) return;
-        this.result = result;
-        this.status = "ok";
-      })
+      .then((result) => this.accept(result, signal, snapshot))
       .catch(() => {
         if (this.read.isCurrent(signal)) this.status = "failed";
       });
     return this.pending;
   }
 
+  private updateTranscript(sessionId: string | null, content: Transcript): void {
+    if (sessionId !== this.sessionId) this.result = undefined;
+    this.content = new Map(
+      content.map((message) => [
+        message.ordinal,
+        JSON.stringify([message.content, message.thinking_text, message.tool_calls]),
+      ]),
+    );
+  }
+
+  private accept(
+    result: ServiceFileReferencesResult,
+    signal: AbortSignal,
+    snapshot: Map<number, string>,
+  ): void {
+    if (!this.read.isCurrent(signal)) return;
+    if (!this.revision || result.transcript_revision !== this.revision) {
+      this.status = "failed";
+      return;
+    }
+    this.resultContent = snapshot;
+    this.result = result;
+    this.status = "ok";
+  }
+
+  private matchesContent(ordinal: number): boolean {
+    return (
+      this.result?.transcript_revision === this.revision ||
+      (this.content.has(ordinal) && this.content.get(ordinal) === this.resultContent.get(ordinal))
+    );
+  }
+
+  private visibleResult(sessionId: string, ordinal: number) {
+    return this.enabled &&
+      sessionId === this.sessionId &&
+      this.result?.integration === "enabled" &&
+      this.matchesContent(ordinal)
+      ? this.result
+      : undefined;
+  }
+
   private forOrdinal(sessionId: string, ordinal: number) {
-    return this.enabled && sessionId === this.sessionId && this.result?.integration === "enabled"
-      ? this.result.occurrences.filter((item) => item.message_ordinal === ordinal)
-      : [];
+    const result = this.visibleResult(sessionId, ordinal);
+    return result ? result.occurrences.filter((item) => item.message_ordinal === ordinal) : [];
   }
 
   forMessage(sessionId: string, ordinal: number) {

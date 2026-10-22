@@ -151,7 +151,6 @@ func parseOffloadedImagePlaceholder(raw jsontext.Value) (offloadedImagePlacehold
 	var placeholder offloadedImagePlaceholder
 	if err := json.Unmarshal(raw, &placeholder, json.MatchCaseInsensitiveNames(true)); err != nil ||
 		placeholder.Type != "agentsview_image" ||
-		(placeholder.Version != nil && *placeholder.Version != 1) ||
 		!strings.HasPrefix(placeholder.ImageRef, "asset://") ||
 		placeholder.MediaType == "" || placeholder.ByteSize < 0 {
 		return placeholder, false
@@ -664,7 +663,7 @@ func RetainedToolResultImages(content string) []RetainedImage {
 		}
 		for _, raw := range blocks {
 			if p, ok := parseOffloadedImagePlaceholder(raw); ok {
-				if digest, _, ok := assetImageDigest(p.ImageRef); ok {
+				if digest, _, ok := assetImageDigest(p.ImageRef); ok && (p.Version == nil || *p.Version == 1) {
 					images = append(images, RetainedImage{Index: len(images), MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest})
 				}
 				continue

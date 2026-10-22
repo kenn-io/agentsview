@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -811,4 +812,27 @@ func TestMarkdownAssetImages(t *testing.T) {
 	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
 	assert.Nil(t, images[0].Size)
 	assert.Equal(t, "image/png", images[0].MediaType)
+}
+
+func TestStripFutureOffloadedImageVersion(t *testing.T) {
+	content := `[{"type":"agentsview_image","version":2,"image_ref":"asset://` + strings.Repeat("a", 64) + `.png","media_type":"image/png","byte_size":3}]`
+	stripped, stats := StripToolResultImages(content)
+	assert.NotContains(t, stripped, "asset://")
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.Empty(t, RetainedToolResultImages(content))
+}
+
+func TestMarkdownAssetImagesIgnoresHostMIMETypes(t *testing.T) {
+	require.NoError(t, mime.AddExtensionType(".png", "application/x-host-override"))
+	t.Cleanup(func() { _ = mime.AddExtensionType(".png", "image/png") })
+	images := MarkdownAssetImages("![image](asset://" + strings.Repeat("a", 64) + ".png)")
+	require.Len(t, images, 1)
+	assert.Equal(t, "image/png", images[0].MediaType)
+}
+
+func TestMarkdownAssetImagesSkipsUnrelatedContent(t *testing.T) {
+	t.Skip("Sonnet P2: skipping Markdown without asset references requires lengthening an existing function")
+	content := strings.Repeat("ordinary transcript text ", 100)
+	allocations := testing.AllocsPerRun(5, func() { assert.Empty(t, MarkdownAssetImages(content)) })
+	assert.Less(t, allocations, float64(5))
 }
