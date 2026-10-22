@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"fmt"
-	"maps"
 	"math/rand/v2"
 	"net"
 	"strings"
@@ -79,25 +78,11 @@ func TestPushCompactComparisons(t *testing.T) {
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	counts, err := local.MessageContentFingerprints(ctx, []string{id})
-	require.NoError(t, err)
 	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
-	mismatchedCounts := maps.Clone(counts)
-	aggregate := mismatchedCounts[id]
-	aggregate.Count++
-	mismatchedCounts[id] = aggregate
-	skipped, err := readPushSessionMessageComparisons(
-		ctx, tx, []string{id}, mismatchedCounts, true,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, len(messages), skipped.MessageCounts[id])
-	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
-		assert.Contains(t, fingerprints, id)
-	}
 	compact, err := readPushSessionMessageComparisons(
-		ctx, tx, []string{id}, counts, true,
+		ctx, tx, []string{id}, true,
 	)
 	require.NoError(t, err)
 
@@ -129,7 +114,7 @@ func TestPushCompactComparisons(t *testing.T) {
 			_, err = tx.ExecContext(ctx, change.statement, id)
 			require.NoError(t, err)
 			changed, err := readPushSessionMessageComparisons(
-				ctx, tx, []string{id}, counts, true,
+				ctx, tx, []string{id}, true,
 			)
 			require.NoError(t, err)
 			_, differs, err := pushSuffixBoundary(ctx, snapshot, id, changed.messageFields(id))

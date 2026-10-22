@@ -160,7 +160,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					sess, err := rebuilt.GetSessionFull(ctx, id)
 					require.NoError(t, err)
 					require.NotNil(t, sess)
-					result, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, nil, &pushed)
+					result, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, &pushed)
 					require.NoError(t, err)
 					require.True(t, result.ok)
 				}

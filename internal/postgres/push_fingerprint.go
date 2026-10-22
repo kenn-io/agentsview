@@ -309,7 +309,6 @@ func readPushSessionMessageComparisons(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionIDs []string,
-	localCounts map[string]db.MessageContentAggregate,
 	includeFriction bool,
 ) (*pushMessageComparison, error) {
 	comparisons := &pushMessageComparison{
@@ -337,21 +336,14 @@ func readPushSessionMessageComparisons(
 		if err := loadPushMessageCounts(ctx, tx, chunk, comparisons.MessageCounts); err != nil {
 			return nil, err
 		}
-		usageIDs := make([]string, 0, len(chunk))
 		eligible := make([]string, 0, len(chunk))
 		for _, id := range chunk {
-			if count, prepared := localCounts[id]; prepared && count.Count == comparisons.MessageCounts[id] {
-				usageIDs = append(usageIDs, id)
-				comparisons.UsageEventFingerprint[id] = ""
-			}
 			if comparisons.MessageCounts[id] > 0 {
 				eligible = append(eligible, id)
 			}
 		}
-		if len(usageIDs) > 0 {
-			if err := loadPushUsageEventFingerprints(ctx, tx, usageIDs, comparisons.UsageEventFingerprint); err != nil {
-				return nil, err
-			}
+		if err := loadPushUsageEventFingerprints(ctx, tx, chunk, comparisons.UsageEventFingerprint); err != nil {
+			return nil, err
 		}
 		chunk = eligible
 		if len(chunk) == 0 {

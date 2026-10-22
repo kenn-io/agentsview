@@ -61,72 +61,104 @@ func suffixPrefixVersions(t *testing.T, syncer *Sync, boundary int) []string {
 
 func TestPushSuffixPublication(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		boundary int
-		pins     int
-		change   func([]db.Message) []db.Message
+		name      string
+		boundary  int
+		pins      int
+		calls     int
+		events    int
+		laterEdit int
+		change    func([]db.Message) []db.Message
 	}{
-		{"append", 5, 2, func(m []db.Message) []db.Message {
+		{"append", 5, 2, 6, 7, 0, func(m []db.Message) []db.Message {
 			return append(m, db.Message{SessionID: "suffix", Ordinal: 5, Role: "user", Content: "appended"})
 		}},
-		{"late result", 4, 2, func(m []db.Message) []db.Message {
+		{"late result", 4, 2, 6, 8, 0, func(m []db.Message) []db.Message {
 			m[4].ToolCalls[0].ResultContent = "initial\n\nlate result"
 			m[4].ToolCalls[0].ResultContentLength = 20
 			m[4].ToolCalls[0].ResultEvents = append(m[4].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-4", Source: "tool_result", Status: "completed", Content: "late result", ContentLength: 11})
 			return m
 		}},
-		{"truncate", 3, 1, func(m []db.Message) []db.Message { return m[:3] }},
-		{"edit", 2, 2, func(m []db.Message) []db.Message { m[2].Content = "changed"; return m }},
+		{"truncate", 3, 1, 4, 5, 0, func(m []db.Message) []db.Message { return m[:3] }},
+		{"edit", 2, 2, 6, 7, 0, func(m []db.Message) []db.Message { m[2].Content = "changed"; return m }},
+		{"dropped result at zero", 0, 2, 6, 6, 1, func(m []db.Message) []db.Message {
+			m[0].ToolCalls[1].ResultEvents = nil
+			return m
+		}},
+		{"dropped call at two", 2, 2, 5, 6, 3, func(m []db.Message) []db.Message {
+			m[2].ToolCalls = nil
+			return m
+		}},
+		{"ordinal gap", 2, 2, 5, 6, 0, func(m []db.Message) []db.Message {
+			return append(m[:2], m[3:]...)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			syncer, local, messages := suffixFixture(t, 5)
-			store := &Store{pg: syncer.pg}
-			for _, ordinal := range []int{0, 4} {
-				_, err := store.PinMessage(t.Context(), "suffix", int64(ordinal), new(fmt.Sprintf("note %d", ordinal)))
-				require.NoError(t, err)
+			variants := []string{"alone"}
+			if test.laterEdit > 0 {
+				variants = append(variants, "with later edit")
 			}
-			_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='suffix'`)
-			require.NoError(t, err)
-			_, beforeVersion, found := store.GetSessionVersion(t.Context(), "suffix")
-			require.True(t, found)
-			before := suffixPrefixVersions(t, syncer, test.boundary)
-			messages = test.change(messages)
-			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "suffix", messages))
-			result, err := syncer.Push(t.Context(), false, nil)
-			require.NoError(t, err)
-			require.Zero(t, result.Errors)
-			assert.False(t, result.Full)
-			_, afterVersion, found := store.GetSessionVersion(t.Context(), "suffix")
-			require.True(t, found)
-			assert.NotEqual(t, beforeVersion, afterVersion, "suffix changes must wake remote session viewers")
-			assert.Equal(t, len(messages)-test.boundary, result.MessagesPushed)
-			assert.Equal(t, before, suffixPrefixVersions(t, syncer, test.boundary), "unchanged messages, child IDs, and pins must retain their row versions")
-			got, err := store.GetMessages(t.Context(), "suffix", 0, 100, true)
-			require.NoError(t, err)
-			require.Len(t, got, len(messages))
-			for i, want := range messages {
-				assert.Equal(t, want.Content, got[i].Content)
-				assert.Equal(t, want.Model, got[i].Model)
-				require.Len(t, got[i].ToolCalls, len(want.ToolCalls))
-				for j, call := range want.ToolCalls {
-					assert.Equal(t, call.InputJSON, got[i].ToolCalls[j].InputJSON)
-					assert.Equal(t, call.ResultContent, got[i].ToolCalls[j].ResultContent)
-					require.Len(t, got[i].ToolCalls[j].ResultEvents, len(call.ResultEvents))
-					for k, event := range call.ResultEvents {
-						assert.Equal(t, event.Content, got[i].ToolCalls[j].ResultEvents[k].Content)
+			for _, variant := range variants {
+				t.Run(variant, func(t *testing.T) {
+					syncer, local, messages := suffixFixture(t, 5)
+					store := &Store{pg: syncer.pg}
+					for _, ordinal := range []int{0, 4} {
+						_, err := store.PinMessage(t.Context(), "suffix", int64(ordinal), new(fmt.Sprintf("note %d", ordinal)))
+						require.NoError(t, err)
 					}
-				}
+					_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='suffix'`)
+					require.NoError(t, err)
+					_, beforeVersion, found := store.GetSessionVersion(t.Context(), "suffix")
+					require.True(t, found)
+					before := suffixPrefixVersions(t, syncer, test.boundary)
+					messages = test.change(messages)
+					// A later edit must not hide children removed at an earlier ordinal.
+					if variant == "with later edit" {
+						messages[test.laterEdit].Content = "later edit"
+					}
+					require.NoError(t, local.ReplaceSessionMessages(t.Context(), "suffix", messages))
+					result, err := syncer.Push(t.Context(), false, nil)
+					require.NoError(t, err)
+					require.Zero(t, result.Errors)
+					assert.False(t, result.Full)
+					_, afterVersion, found := store.GetSessionVersion(t.Context(), "suffix")
+					require.True(t, found)
+					assert.NotEqual(t, beforeVersion, afterVersion, "suffix changes must wake remote session viewers")
+					assert.Equal(t, len(messages)-test.boundary, result.MessagesPushed)
+					assert.Equal(t, before, suffixPrefixVersions(t, syncer, test.boundary), "unchanged messages, child IDs, and pins must retain their row versions")
+					var calls, events int
+					require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tool_calls WHERE session_id='suffix'`).Scan(&calls))
+					require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tool_result_events WHERE session_id='suffix'`).Scan(&events))
+					assert.Equal(t, test.calls, calls)
+					assert.Equal(t, test.events, events)
+					got, err := store.GetMessages(t.Context(), "suffix", 0, 100, true)
+					require.NoError(t, err)
+					require.Len(t, got, len(messages))
+					for i, want := range messages {
+						assert.Equal(t, want.Ordinal, got[i].Ordinal)
+						assert.Equal(t, want.Content, got[i].Content)
+						assert.Equal(t, want.Model, got[i].Model)
+						require.Len(t, got[i].ToolCalls, len(want.ToolCalls))
+						for j, call := range want.ToolCalls {
+							assert.Equal(t, call.InputJSON, got[i].ToolCalls[j].InputJSON)
+							assert.Equal(t, call.ResultContent, got[i].ToolCalls[j].ResultContent)
+							require.Len(t, got[i].ToolCalls[j].ResultEvents, len(call.ResultEvents))
+							for k, event := range call.ResultEvents {
+								assert.Equal(t, event.Content, got[i].ToolCalls[j].ResultEvents[k].Content)
+							}
+						}
+					}
+					pins, err := store.ListPinnedMessages(t.Context(), "suffix", "")
+					require.NoError(t, err)
+					require.Len(t, pins, test.pins)
+					ordinals := make([]int, 0, len(pins))
+					for _, pin := range pins {
+						ordinals = append(ordinals, pin.Ordinal)
+						require.NotNil(t, pin.Note)
+						assert.Equal(t, fmt.Sprintf("note %d", pin.Ordinal), *pin.Note)
+					}
+					assert.ElementsMatch(t, []int{0, 4}[:test.pins], ordinals)
+				})
 			}
-			pins, err := store.ListPinnedMessages(t.Context(), "suffix", "")
-			require.NoError(t, err)
-			require.Len(t, pins, test.pins)
-			ordinals := make([]int, 0, len(pins))
-			for _, pin := range pins {
-				ordinals = append(ordinals, pin.Ordinal)
-				require.NotNil(t, pin.Note)
-				assert.Equal(t, fmt.Sprintf("note %d", pin.Ordinal), *pin.Note)
-			}
-			assert.ElementsMatch(t, []int{0, 4}[:test.pins], ordinals)
 		})
 	}
 }

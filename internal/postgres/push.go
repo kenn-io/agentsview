@@ -573,10 +573,6 @@ func (s *Sync) pushWithOptions(
 	}
 	reportPrepare(0)
 	prepared := 0
-	var localCounts map[string]db.MessageContentAggregate
-	if !full {
-		localCounts = make(map[string]db.MessageContentAggregate, len(sessionByID))
-	}
 	candidateIDs := mapKeys(sessionByID)
 	for start := 0; start < len(candidateIDs); start += pushComparisonBatchSize {
 		end := min(start+pushComparisonBatchSize, len(candidateIDs))
@@ -584,9 +580,6 @@ func (s *Sync) pushWithOptions(
 		depState, err := readLocalPushDependencyState(ctx, s.local, chunk)
 		if err != nil {
 			return result, err
-		}
-		if !full {
-			maps.Copy(localCounts, depState.contentAgg)
 		}
 		for _, id := range chunk {
 			usageFP, usageKnown := usageFingerprints[id]
@@ -726,7 +719,7 @@ func (s *Sync) pushWithOptions(
 
 		batchResult, err := s.pushBatch(
 			ctx, batch, full, markerID, legacyMarkerMachines,
-			usageFingerprints, localCounts, &pushed,
+			usageFingerprints, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -742,7 +735,7 @@ func (s *Sync) pushWithOptions(
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
 					full, markerID, legacyMarkerMachines,
-					usageFingerprints, localCounts, &pushed,
+					usageFingerprints, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -1332,13 +1325,12 @@ func (s *Sync) pushBatch(
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
-	localCounts map[string]db.MessageContentAggregate,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	preloadComparisons := len(batch) > 0 && !full
 	result, err := s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, localCounts, pushed, preloadComparisons,
+		sessionUsageFingerprints, pushed, preloadComparisons,
 	)
 	if err == nil || !errors.Is(err, errPushComparisonPreload) {
 		return result, err
@@ -1350,7 +1342,7 @@ func (s *Sync) pushBatch(
 	)
 	return s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, localCounts, pushed, false,
+		sessionUsageFingerprints, pushed, false,
 	)
 }
 
@@ -1361,7 +1353,6 @@ func (s *Sync) pushBatchAttempt(
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
-	localCounts map[string]db.MessageContentAggregate,
 	pushed *[]db.Session,
 	preloadComparisons bool,
 ) (batchResult, error) {
@@ -1386,7 +1377,7 @@ func (s *Sync) pushBatchAttempt(
 	comparisons := (*pushMessageComparison)(nil)
 	if preloadComparisons && len(sessionIDs) > 0 {
 		comparisonsBatch, err := readPushSessionMessageComparisons(
-			ctx, tx, sessionIDs, localCounts, true,
+			ctx, tx, sessionIDs, true,
 		)
 		if err != nil {
 			_ = tx.Rollback()
@@ -3066,43 +3057,36 @@ func (s *Sync) pushMessages(
 		return 0, false, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
-	if !full && comparisons == nil {
-		comparisons, err = readPushSessionMessageComparisons(ctx, tx, []string{sessionID}, nil, false)
-		if err != nil {
-			return 0, false, fmt.Errorf("reading pg message comparison: %w", err)
+	boundary := 0
+	if !full {
+		if comparisons == nil {
+			comparisons, err = readPushSessionMessageComparisons(ctx, tx, []string{sessionID}, false)
+			if err != nil {
+				return 0, false, fmt.Errorf("reading pg message comparison: %w", err)
+			}
 		}
-	}
-	if s.beforeMessageComparison != nil {
-		s.beforeMessageComparison()
-	}
-	boundary, transcriptChanged := 0, true
-	if !full && comparisons != nil {
+		if s.beforeMessageComparison != nil {
+			s.beforeMessageComparison()
+		}
+		var transcriptChanged bool
 		boundary, transcriptChanged, err = pushSuffixBoundary(ctx, snapshot, sessionID, comparisons.messageFields(sessionID))
 		if err != nil {
 			return 0, false, err
 		}
-	}
-	if !transcriptChanged && comparisons != nil {
-		usageFP, known := sessionUsageFingerprints[sessionID]
-		if !known {
-			usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
-			if err != nil {
-				return 0, false, err
+		if !transcriptChanged {
+			usageFP, known := sessionUsageFingerprints[sessionID]
+			if !known {
+				usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
+				if err != nil {
+					return 0, false, err
+				}
 			}
-		}
-		remoteUsage, loaded := comparisons.UsageEventFingerprint[sessionID]
-		if !loaded {
-			remoteUsageRows := make(map[string]string, 1)
-			if err := loadPushUsageEventFingerprints(ctx, tx, []string{sessionID}, remoteUsageRows); err != nil {
-				return 0, false, err
+			usageChanged := usageFP != comparisons.UsageEventFingerprint[sessionID]
+			if usageChanged {
+				err = s.replaceUsageEvents(ctx, tx, sessionID)
 			}
-			remoteUsage = remoteUsageRows[sessionID]
+			return 0, usageChanged, err
 		}
-		usageChanged := usageFP != remoteUsage
-		if usageChanged {
-			err = s.replaceUsageEvents(ctx, tx, sessionID)
-		}
-		return 0, usageChanged, err
 	}
 	if err := lockPinnedMessagesSession(ctx, tx, sessionID); err != nil {
 		return 0, false, err
