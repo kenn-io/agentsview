@@ -225,7 +225,7 @@ func TestServer_CompareUsageOnEmptyArchive(t *testing.T) {
 // newest session-based version over HTTP, and can list and call tools on both.
 func TestServer_NegotiatesProtocolPerTransport(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	opts := ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}
+	opts := ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank()), Now: func() time.Time { return fixedNow }}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, nil)
 
 	connect := func(t *testing.T, transport func() mcp.Transport) *mcp.ClientSession {

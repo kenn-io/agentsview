@@ -2011,9 +2011,9 @@ func TestListSessionsRejectsUnknownMachine(t *testing.T) {
 }
 
 func TestFileReferencesTool(t *testing.T) {
-	ts, _ := newTestToolset(t)
-	srv := newServer(ServeOptions{Service: ts.svc})
-	st, ct := newInMemoryPair(t, srv)
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "proj")
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank())}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	res, err := ct.CallTool(t.Context(), callParams(ToolGetSessionFileReferences, map[string]any{"session_id": "s1"}))
 	require.NoError(t, err)
@@ -2022,6 +2022,6 @@ func TestFileReferencesTool(t *testing.T) {
 	require.NoError(t, err)
 	var out service.FileReferencesResult
 	require.NoError(t, json.Unmarshal(raw, &out))
-	assert.Equal(t, "disabled", out.Integration)
+	assert.Equal(t, "enabled", out.Integration)
 	assert.Empty(t, out.Occurrences)
 }

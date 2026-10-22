@@ -123,7 +123,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
-		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact session image bytes in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
+		addFileReferencesTool(s, t, readOnly)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
@@ -273,6 +273,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 
 	return s
+}
+
+// addFileReferencesTool advertises the Docbank lookup only when the backend has Docbank configured.
+func addFileReferencesTool(s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
+	if service.SupportsFileReferences(t.svc) {
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact session image bytes in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
+	}
 }
 
 // newHTTPHandler builds the StreamableHTTP handler with its protections.

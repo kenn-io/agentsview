@@ -271,6 +271,12 @@ func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
 }
 
+func (s *mcpDaemonService) SupportsFileReferences() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Integrations.Docbank.Configured()
+}
+
 func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -18,8 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
@@ -42,6 +44,11 @@ func newInMemoryPair(
 	return ss, cs
 }
 
+// withTestDocbank configures Docbank at an address nothing listens on, enough to advertise the lookup tool.
+func withTestDocbank() service.DirectBackendOption {
+	return service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "http://127.0.0.1:1", APIKeyEnv: "DOCBANK_TEST_KEY"}))
+}
+
 func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
@@ -49,7 +56,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 func TestNewServer_RegistersSeventeenReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
-		Service: service.NewDirectBackend(d, nil),
+		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 		Now:     func() time.Time { return fixedNow },
 	})
 	require.NotNil(t, srv)
@@ -143,7 +150,7 @@ func TestParseProfile(t *testing.T) {
 func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
-		Service: service.NewReadOnlyBackend(d),
+		Service: service.NewReadOnlyBackend(d, withTestDocbank()),
 		Now:     func() time.Time { return fixedNow },
 	})
 
@@ -368,7 +375,6 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 }
 
 func TestNewServer_DocbankDisabled(t *testing.T) {
-	t.Skip("finding: get_session_file_references advertised with Docbank off; gating would lengthen newServer")
 	d := dbtest.OpenTestDB(t)
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
 	tools, err := ct.ListTools(t.Context(), nil)

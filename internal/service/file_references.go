@@ -43,6 +43,16 @@ func FileReferences(ctx context.Context, svc SessionService, id string) (FileRef
 	}
 	return FileReferencesResult{Integration: "disabled", Occurrences: []FileReferenceOccurrence{}}, nil
 }
+
+// SupportsFileReferences reports whether svc can look up session files, letting a backend that knows its Docbank configuration opt out.
+func SupportsFileReferences(svc SessionService) bool {
+	_, provider := svc.(FileReferencesProvider)
+	capability, ok := svc.(interface{ SupportsFileReferences() bool })
+	return provider && (!ok || capability.SupportsFileReferences())
+}
+
+func (b *directBackend) SupportsFileReferences() bool { return b.docbank != nil }
+
 func WithDocbank(client *docbank.Client) DirectBackendOption {
 	return func(b *directBackend) { b.docbank = client }
 }
