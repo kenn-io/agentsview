@@ -29,8 +29,7 @@ coverage.out
 # Air (live-reload dev server)
 /tmp/
 
-# Local scratch directories
-/tmo/
+# Frontend scratch directory
 frontend/tmp/
 
 # OS files
