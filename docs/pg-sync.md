@@ -149,7 +149,8 @@ across every configured target. `--all --watch` is rejected.
 Incremental pushes use a two-layer fingerprint to skip unchanged sessions:
 first, session metadata and local dependency fingerprints identify candidates.
 A changed session rewrites from its first changed message, preserving earlier
-rows. The pushed-message count reflects the rewritten suffix.
+rows, and usage events are replaced whole when they change. The pushed-message
+count reflects the rewritten suffix.
 For sessions with remote messages, PostgreSQL computes SHA-256
 hashes of message text, dialogue text, thinking text, tool inputs, results,
 file paths, and tool-result-event content.

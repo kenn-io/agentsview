@@ -3081,7 +3081,7 @@ func (s *Sync) pushMessages(
 		usageChanged = usageFP != comparisons.UsageEventFingerprint[sessionID]
 		if !transcriptChanged {
 			if usageChanged {
-				err = s.replaceUsageEvents(ctx, tx, sessionID)
+				usageChanged, err = s.replaceUsageEvents(ctx, tx, sessionID)
 			}
 			return 0, usageChanged, err
 		}
@@ -3094,7 +3094,8 @@ func (s *Sync) pushMessages(
 		return 0, false, err
 	}
 	if usageChanged {
-		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+		usageChanged, err = s.replaceUsageEvents(ctx, tx, sessionID)
+		if err != nil {
 			return 0, false, err
 		}
 	}
@@ -3199,23 +3200,29 @@ func (s *Sync) copySessionMessages(
 // current local set. Usage events are synced independently of transcript
 // messages because a session can have token/cost accounting with no
 // messages at all (e.g. a hermes state.db-only session).
+// It reports whether any rows were deleted or inserted.
 func (s *Sync) replaceUsageEvents(
 	ctx context.Context, tx *sql.Tx, sessionID string,
-) error {
-	if _, err := tx.ExecContext(ctx, `
+) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM usage_events
 		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return fmt.Errorf("deleting pg usage_events: %w", err)
+	`, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("deleting pg usage_events: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting deleted pg usage_events: %w", err)
 	}
 	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("reading local usage events: %w", err)
+		return false, fmt.Errorf("reading local usage events: %w", err)
 	}
 	if err := bulkInsertUsageEvents(ctx, tx, usageEvents); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return deleted > 0 || len(usageEvents) > 0, nil
 }
 
 type savedPostgresPin struct {
