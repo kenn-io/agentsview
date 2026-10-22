@@ -18,10 +18,10 @@ export class FileReferencesStore {
   track(id: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
     if (this.sessionId === id && this.revision === revision) return this.pending;
-    this.result = undefined;
+    this.reset();
     this.sessionId = id;
     this.revision = revision;
-    return this.refresh();
+    return revision ? this.refresh() : this.pending;
   }
 
   reset(): void {
@@ -50,7 +50,7 @@ export class FileReferencesStore {
   private reject(error: unknown, signal: AbortSignal, retryStale: boolean): void | Promise<void> {
     if (!this.read.isCurrent(signal)) return;
     if (error instanceof ApiError && error.code === "source_changed") {
-      return retryStale ? this.refresh(false) : undefined;
+      return this.stale(retryStale);
     }
     this.status = "failed";
   }
@@ -62,10 +62,15 @@ export class FileReferencesStore {
   ): void | Promise<void> {
     if (!this.read.isCurrent(signal)) return;
     if (!this.revision || result.transcript_revision !== this.revision) {
-      return retryStale ? this.refresh(false) : undefined;
+      return this.stale(retryStale);
     }
     this.result = result;
     this.status = "ok";
+  }
+
+  private stale(retryStale: boolean): void | Promise<void> {
+    this.status = "failed";
+    return retryStale ? this.refresh(false) : undefined;
   }
 
   private visibleResult(sessionId: string) {

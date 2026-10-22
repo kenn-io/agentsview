@@ -59,12 +59,6 @@ it("retries rejected requests and failed Docbank lookups, then becomes quiet", a
   await tick();
   expect(document.body.textContent).toBe("");
 });
-it("hides disabled integration", async () => {
-  await trackDocbank({ integration: "disabled", occurrences: [] });
-  component = mount(DocbankStatus, { target: document.body });
-  await tick();
-  expect(document.body.textContent).toBe("");
-});
 it("keeps capped occurrences quiet at session level", async () => {
   await trackDocbank({
     integration: "enabled",

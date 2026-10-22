@@ -37,7 +37,7 @@ describe("file references store", () => {
   });
   it.each([
     { name: "current refetch", refetchRevision: "1", status: "ok" },
-    { name: "stale refetch", refetchRevision: "2", status: "loading" },
+    { name: "stale refetch", refetchRevision: "2", status: "failed" },
   ] as const)(
     "rejects a different transcript revision with a $name",
     async ({ refetchRevision, status }) => {
@@ -50,7 +50,7 @@ describe("file references store", () => {
       await store.track("a", "1");
       expect(lookup).toHaveBeenCalledTimes(2);
       expect(store.status).toBe(status);
-      if (status === "loading") {
+      if (status === "failed") {
         expect(store.result).toBeUndefined();
         await store.track("a", "2");
         expect(store.status).toBe("ok");
@@ -97,6 +97,30 @@ describe("file references store", () => {
     await store.track("a", "1");
     expect(lookup).not.toHaveBeenCalled();
   });
+});
+
+it.each([null, ""])("keeps an empty transcript quiet with revision %s", async (revision) => {
+  lookup.mockReset().mockResolvedValue(result);
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  lookup.mockClear();
+  await store.track("empty", revision);
+  expect(store.status).toBe("idle");
+  expect(store.result).toBeUndefined();
+  expect(lookup).not.toHaveBeenCalled();
+});
+
+it("allows retry after repeated source changes", async () => {
+  lookup.mockReset().mockRejectedValue(new ApiError(409, "source changed", "source_changed"));
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(store.status).toBe("failed");
+  lookup.mockResolvedValueOnce(result);
+  await store.refresh();
+  expect(store.status).toBe("ok");
 });
 
 it("keeps id-less tool calls separate by archive index", async () => {

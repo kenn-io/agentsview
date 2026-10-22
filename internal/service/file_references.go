@@ -135,29 +135,39 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	return out, nil
 }
 
-// fileReferenceMessages uses the same observed and expected revisions as Messages,
-// including across pages, so a lookup never combines different transcripts.
+// fileReferenceMessages checks the revision after all pages and their tool results
+// have loaded, retrying once when a sync changes the transcript during hydration.
 func (b *directBackend) fileReferenceMessages(ctx context.Context, id string) ([]db.Message, string, error) {
-	session, err := b.db.GetSession(ctx, id)
+	var messages []db.Message
+	session, err := db.ReadSessionChecked(ctx, b.db, id, func(session *db.Session) error {
+		var err error
+		messages, err = b.fileReferencePages(ctx, id, *session.TranscriptRevision)
+		return err
+	})
+	if errors.Is(err, db.ErrSessionChanged) {
+		err = ErrSourceChanged
+	} else if errors.Is(err, db.ErrSessionRevisionUnavailable) {
+		err = ErrRevisionBoundReadUnavailable
+	}
 	if err != nil {
 		return nil, "", err
 	}
 	if session == nil {
 		return nil, "", ErrSessionNotFound
 	}
-	if session.TranscriptRevision == nil || *session.TranscriptRevision == "" {
-		return nil, "", ErrRevisionBoundReadUnavailable
-	}
-	revision := *session.TranscriptRevision
+	return messages, *session.TranscriptRevision, nil
+}
+
+func (b *directBackend) fileReferencePages(ctx context.Context, id, revision string) ([]db.Message, error) {
 	var messages []db.Message
 	for from := 0; ; {
 		page, err := b.Messages(ctx, id, MessageFilter{From: new(from), Limit: db.MaxMessageLimit, ExpectedRevision: revision})
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		messages = append(messages, page.Messages...)
 		if len(page.Messages) < db.MaxMessageLimit {
-			return messages, revision, nil
+			return messages, nil
 		}
 		from = *page.LastOrdinal + 1
 	}

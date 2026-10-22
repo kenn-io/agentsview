@@ -212,3 +212,49 @@ func TestFileReferencesRejectsReplacementBetweenReads(t *testing.T) {
 	_, err := service.FileReferences(t.Context(), svc, id)
 	assert.ErrorIs(t, err, service.ErrSourceChanged)
 }
+
+type hydratingFileReferenceStore struct {
+	db.Store
+	replace func()
+}
+
+func (s *hydratingFileReferenceStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	messages, err := s.Store.GetMessagesWindow(ctx, id, w)
+	if err != nil || s.replace == nil {
+		return messages, err
+	}
+	replace := s.replace
+	s.replace = nil
+	replace()
+	// Hydration can see new tool results after the message query captured its revision.
+	w.ObservedRevision = nil
+	current, err := s.Store.GetMessagesWindow(ctx, id, w)
+	if err != nil {
+		return nil, err
+	}
+	for i := range messages {
+		messages[i].ToolCalls = current[i].ToolCalls
+	}
+	return messages, nil
+}
+
+func TestFileReferencesChecksRevisionAfterToolHydration(t *testing.T) {
+	t.Setenv("DOCBANK_ABSENT_KEY", "")
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	image := func(digest string) []db.Message {
+		return []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "image", ToolCalls: []db.ToolCall{{ToolUseID: "read", ToolName: "Read", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, Source: "tool_result", Status: "completed", Content: `[{"type":"agentsview_image","image_ref":"asset://` + digest + `.png","media_type":"image/png"}]`}}}}}}
+	}
+	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("a", 64))))
+	store := &hydratingFileReferenceStore{Store: env.db, replace: func() {
+		require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("b", 64))))
+	}}
+	svc := service.NewReadOnlyBackend(store, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_ABSENT_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	current, err := env.db.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, *current.TranscriptRevision, out.TranscriptRevision)
+	require.Len(t, out.Occurrences, 1)
+	assert.Equal(t, strings.Repeat("b", 64), out.Occurrences[0].SHA256)
+}
