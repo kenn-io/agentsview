@@ -545,6 +545,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	msg := ParsedMessage{
 		Role:          RoleType(role),
 		Content:       content,
+		DialogueText:  new(content),
 		Timestamp:     ts,
 		ContentLength: len(content),
 		Model:         b.model,
@@ -576,6 +577,7 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.sink.AppendMessage(ParsedMessage{
 		Role:          RoleUser,
 		Content:       content,
+		DialogueText:  new(content),
 		Timestamp:     ts,
 		ContentLength: len(content),
 		Model:         b.model,
@@ -770,6 +772,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
 		Role:            RoleAssistant,
 		Content:         content,
+		DialogueText:    new(""),
 		Timestamp:       ts,
 		HasToolUse:      true,
 		ContentLength:   len(content),
@@ -997,6 +1000,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 					Ordinal:       ev.ordinal,
 					Role:          RoleUser,
 					Content:       ev.text,
+					DialogueText:  new(""),
 					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ev.timestamp,
 					Model:         b.model,

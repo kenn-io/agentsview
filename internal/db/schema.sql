@@ -1559,7 +1559,10 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     session_id TEXT NOT NULL, message_id TEXT NOT NULL,
     ordinal INTEGER NOT NULL, role TEXT NOT NULL, timestamp TEXT NOT NULL DEFAULT '',
     source_id TEXT NOT NULL DEFAULT '', body TEXT, digest TEXT NOT NULL DEFAULT '',
-    text_bytes INTEGER NOT NULL DEFAULT 0, gap TEXT NOT NULL DEFAULT '',
+    text_bytes INTEGER NOT NULL DEFAULT 0,
+    visible_digest TEXT NOT NULL DEFAULT '',
+    visible_text_bytes INTEGER NOT NULL DEFAULT 0,
+    visible_gap TEXT NOT NULL DEFAULT 'visible_text_unavailable', gap TEXT NOT NULL DEFAULT '',
     deleted INTEGER NOT NULL DEFAULT 0, removed INTEGER NOT NULL DEFAULT 0,
     revision INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(session_id, message_id)

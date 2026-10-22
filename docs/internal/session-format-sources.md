@@ -584,6 +584,17 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Dialogue classification (checked 2026-10-22):** The pinned
+  [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
+  distinguishes message text, reasoning and tool operations. The existing
+  parser extracts only text blocks from user and assistant messages. It now
+  records that result in the shared dialogue field, including intermediate
+  assistant updates; tool renderings carry an explicitly empty projection.
+  Literal tool and thinking markers in authored text remain unchanged. TraeX
+  and Augure Code share this parser. The scoped parser upgrade keeps session
+  identities and reparses available sources; retained messages whose source is
+  missing keep their prior classification, which may be unknown.
+
 - **Repeated session metadata (checked 2026-10-17 at rust-v0.47.0,
   `c71297b9a9b3f7995445eff8d768837814ac06f8`):** The
   [reader](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/core/src/rollout/recorder.rs#L223-L229)
@@ -3242,8 +3253,8 @@ schemas keep their existing ordering behavior.
   detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
   `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and
   `TestSyncClaudeAIBranchSwitch`. Usage-only message and user-turn counts
-  follow the selected branch, including shorter branches. Verified
-  2026-10-22 with the reconstructed fixture in
+  follow the selected branch, including shorter branches. Verified 2026-10-22
+  with the reconstructed fixture in
   `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather than a live
   observation of count behavior. Shorter zip exports remain refused. See
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)

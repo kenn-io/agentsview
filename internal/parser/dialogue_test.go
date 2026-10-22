@@ -11,6 +11,25 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestCodexDialogueExcludesStructuredPayloads(t *testing.T) {
+	const transcript = `{"type":"session_meta","payload":{"id":"dialogue","cwd":"/tmp/sample"},"timestamp":"2026-10-01T10:00:00Z"}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"EXCLUDED instructions"}]},"timestamp":"2026-10-01T10:00:01Z"}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Explain literal [Tool: Read] and <thinking> markers"}]},"timestamp":"2026-10-01T10:00:02Z"}
+{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"EXCLUDED reasoning"}]},"timestamp":"2026-10-01T10:00:03Z"}
+{"type":"response_item","payload":{"type":"message","role":"assistant","channel":"commentary","content":[{"type":"output_text","text":"I am checking the parser."}]},"timestamp":"2026-10-01T10:00:04Z"}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":"{\"cmd\":\"EXCLUDED command\"}"},"timestamp":"2026-10-01T10:00:05Z"}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"EXCLUDED result"},"timestamp":"2026-10-01T10:00:06Z"}
+{"type":"response_item","payload":{"type":"message","role":"assistant","channel":"final","content":[{"type":"output_text","text":"The markers are ordinary text."}]},"timestamp":"2026-10-01T10:00:07Z"}`
+	session, messages := runCodexParserTest(t, "dialogue.jsonl", transcript, false)
+	require.NotNil(t, session)
+	assert.Equal(t, "codex:dialogue", session.ID)
+	require.Len(t, messages, 4)
+	for i, want := range []string{"Explain literal [Tool: Read] and <thinking> markers", "I am checking the parser.", "", "The markers are ordinary text."} {
+		require.NotNil(t, messages[i].DialogueText, "message %d must carry its classification", i)
+		assert.Equal(t, want, *messages[i].DialogueText)
+	}
+}
+
 func TestStructuredParsersRetainDialogueProjection(t *testing.T) {
 	const blocks = `[{"type":"text","text":"Literal [Read: quokka.txt] [Thinking] quotation"},{"type":"thinking","thinking":"reasoningneedle"},{"type":"tool_use","id":"call_a","name":"Read","input":{"file_path":"quokka.txt"}}]`
 	for _, tc := range []struct {

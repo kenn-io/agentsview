@@ -597,8 +597,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // session identities are unchanged.)
 // (141: import provider-reported gptme costs as exact usage events. Re-parse
 // unchanged gptme sources in place; source and session identities are unchanged.)
-// (142: reparse classified dialogue in place.)
-const dataVersion = 142
+// (143: preserve dialogue classification and classify Codex messages.)
+const dataVersion = 143
 
 const archiveOnlyVersionBase = 1 << 20
 

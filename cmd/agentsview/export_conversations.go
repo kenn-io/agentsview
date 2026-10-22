@@ -42,6 +42,7 @@ func newConversationChangesCommand() *cobra.Command {
 			return json.MarshalEncode(jsontext.NewEncoder(command.OutOrStdout()), result)
 		},
 	}
+	command.Flags().StringVar(&options.TextMode, "text-mode", "stored", "Text selection: stored or visible prose")
 	command.Flags().StringVar(&options.Checkpoint, "checkpoint", "", "Resume after a completed changes walk")
 	command.Flags().StringVar(&options.Cursor, "cursor", "", "Continue an unfinished changes walk")
 	command.Flags().IntVar(&options.Limit, "limit", db.MaxSessionLimit, "Maximum changes in this page")
@@ -73,6 +74,7 @@ func newConversationMessageCommand() *cobra.Command {
 			return json.MarshalEncode(jsontext.NewEncoder(command.OutOrStdout()), result)
 		},
 	}
+	command.Flags().StringVar(&options.TextMode, "text-mode", "stored", "Text selection: stored or visible prose")
 	command.Flags().StringVar(&options.Revision, "revision", "", "Expected message revision from the changes listing")
 	command.Flags().StringVar(&options.DatabaseID, "database-id", "", "Expected archive generation from the changes listing")
 	command.Flags().Int64Var(&options.Offset, "offset", 0, "Starting UTF-8 byte offset from the previous chunk")
