@@ -34,31 +34,32 @@ func TestPushSuffixPublication(t *testing.T) {
 		calls     int
 		events    int
 		laterEdit int
+		legacyPin bool
 		change    func([]db.Message) []db.Message
 	}{
-		{"append", 5, 2, 6, 7, 0, func(m []db.Message) []db.Message {
+		{"append", 5, 2, 6, 7, 0, false, func(m []db.Message) []db.Message {
 			return append(m, db.Message{SessionID: "suffix", Ordinal: 5, Role: "user", Content: "appended"})
 		}},
-		{"duplicate UUID after legacy pin", 5, 2, 6, 7, 0, func(m []db.Message) []db.Message {
+		{"duplicate UUID after legacy pin", 5, 2, 6, 7, 0, true, func(m []db.Message) []db.Message {
 			return append(m, db.Message{SessionID: "suffix", Ordinal: 5, Role: m[0].Role, Content: m[0].Content, SourceUUID: m[0].SourceUUID})
 		}},
-		{"late result", 4, 2, 6, 8, 0, func(m []db.Message) []db.Message {
+		{"late result", 4, 2, 6, 8, 0, false, func(m []db.Message) []db.Message {
 			m[4].ToolCalls[0].ResultContent = "initial\n\nlate result"
 			m[4].ToolCalls[0].ResultContentLength = 20
 			m[4].ToolCalls[0].ResultEvents = append(m[4].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-4", Source: "tool_result", Status: "completed", Content: "late result", ContentLength: 11})
 			return m
 		}},
-		{"truncate", 3, 1, 4, 5, 0, func(m []db.Message) []db.Message { return m[:3] }},
-		{"edit", 2, 2, 6, 7, 0, func(m []db.Message) []db.Message { m[2].Content = "changed"; return m }},
-		{"dropped result at zero with later edit", 0, 2, 6, 6, 1, func(m []db.Message) []db.Message {
+		{"truncate", 3, 1, 4, 5, 0, false, func(m []db.Message) []db.Message { return m[:3] }},
+		{"edit", 2, 2, 6, 7, 0, false, func(m []db.Message) []db.Message { m[2].Content = "changed"; return m }},
+		{"dropped result at zero with later edit", 0, 2, 6, 6, 1, false, func(m []db.Message) []db.Message {
 			m[0].ToolCalls[1].ResultEvents = nil
 			return m
 		}},
-		{"dropped call at two with later edit", 2, 2, 5, 6, 3, func(m []db.Message) []db.Message {
+		{"dropped call at two with later edit", 2, 2, 5, 6, 3, false, func(m []db.Message) []db.Message {
 			m[2].ToolCalls = nil
 			return m
 		}},
-		{"ordinal gap", 2, 2, 5, 6, 0, func(m []db.Message) []db.Message {
+		{"ordinal gap", 2, 2, 5, 6, 0, false, func(m []db.Message) []db.Message {
 			return append(m[:2], m[3:]...)
 		}},
 	} {
@@ -69,7 +70,8 @@ func TestPushSuffixPublication(t *testing.T) {
 			cleanNamedPGSchema(t, url, schema)
 			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			local := testDB(t)
-			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}))
+			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}
+			require.NoError(t, local.UpsertSession(t.Context(), session))
 			messages := make([]db.Message, 5)
 			for i := range messages {
 				messages[i] = db.Message{SessionID: id, Ordinal: i, Role: "assistant", Content: fmt.Sprintf("message %d", i), SourceUUID: fmt.Sprintf("source-%d", i), HasToolUse: true,
@@ -95,7 +97,7 @@ func TestPushSuffixPublication(t *testing.T) {
 				_, err := store.PinMessage(t.Context(), "suffix", int64(ordinal), new(fmt.Sprintf("note %d", ordinal)))
 				require.NoError(t, err)
 			}
-			if test.name == "duplicate UUID after legacy pin" {
+			if test.legacyPin {
 				_, err = syncer.pg.ExecContext(t.Context(), `UPDATE pinned_messages SET source_uuid='' WHERE session_id='suffix' AND ordinal=0`)
 				require.NoError(t, err)
 			}
@@ -111,15 +113,17 @@ func TestPushSuffixPublication(t *testing.T) {
 			if test.laterEdit > 0 {
 				messages[test.laterEdit].Content = "later edit"
 			}
+			if len(messages) != session.MessageCount {
+				session.MessageCount = len(messages)
+				require.NoError(t, local.UpsertSession(t.Context(), session))
+			}
 			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "suffix", messages))
 			result, err = syncer.Push(t.Context(), false, nil)
 			require.NoError(t, err)
 			require.Zero(t, result.Errors)
-			if test.name == "append" {
-				var usageAfter string
-				require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT xmin::text FROM usage_events WHERE session_id='suffix'`).Scan(&usageAfter))
-				assert.Equal(t, usageBefore, usageAfter, "appending without usage must preserve usage row versions")
-			}
+			var usageAfter string
+			require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT xmin::text FROM usage_events WHERE session_id='suffix'`).Scan(&usageAfter))
+			assert.Equal(t, usageBefore, usageAfter, "unchanged usage must preserve usage row versions")
 			assert.False(t, result.Full)
 			_, afterVersion, found := store.GetSessionVersion(t.Context(), "suffix")
 			require.True(t, found)

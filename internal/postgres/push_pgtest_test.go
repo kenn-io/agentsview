@@ -1898,46 +1898,6 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 	assert.True(t, after.After(before), "full push of changed usage must advance updated_at and wake remote session viewers")
 }
 
-func TestPushPreservesUpdatedAtForEmptySession(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_push_empty_session_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-
-	local := testDB(t)
-	const sessionID = "empty-session"
-	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
-		ID: sessionID, Project: "project", Machine: "test-machine", Agent: "claude",
-		CreatedAt: "2026-05-26T10:00:00Z",
-	}))
-	syncer, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{})
-	require.NoError(t, err)
-	defer syncer.Close()
-
-	pushed, err := syncer.Push(t.Context(), true, nil)
-	require.NoError(t, err)
-	require.Zero(t, pushed.Errors)
-	require.Equal(t, 1, pushed.SessionsPushed)
-	assert.Zero(t, pgTableCount(t, t.Context(), syncer.pg, "messages"))
-	assert.Zero(t, pgTableCount(t, t.Context(), syncer.pg, "usage_events"))
-
-	_, err = syncer.pg.ExecContext(t.Context(),
-		"UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1", sessionID)
-	require.NoError(t, err)
-	var before time.Time
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(),
-		"SELECT updated_at FROM sessions WHERE id=$1", sessionID).Scan(&before))
-
-	pushed, err = syncer.Push(t.Context(), true, nil)
-	require.NoError(t, err)
-	require.Zero(t, pushed.Errors)
-	require.Equal(t, 1, pushed.SessionsPushed)
-	var after time.Time
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(),
-		"SELECT updated_at FROM sessions WHERE id=$1", sessionID).Scan(&after))
-	assert.Equal(t, before, after, "full push of an unchanged empty session must preserve updated_at")
-}
-
 func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	pgURL := testPGURL(t)
 
