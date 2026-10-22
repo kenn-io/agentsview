@@ -1,21 +1,11 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDocbankScopedValidation(t *testing.T) {
-	unsetDeploymentEnv(t)
-	dir := setupTestEnv(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[integrations.docbank]\nurl='https://example.com'\n"), 0o600))
-	_, err := LoadMinimalFor(0)
-	require.ErrorContains(t, err, "[integrations.docbank]")
-}
 
 func TestDocbankIntegrationValidation(t *testing.T) {
 	for _, tc := range []struct {

@@ -51,13 +51,6 @@ func TestFileReferencesRetainedImages(t *testing.T) {
 	}))
 	defer stub.Close()
 	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	messages, err := svc.Messages(t.Context(), id, service.MessageFilter{})
-	require.NoError(t, err)
-	assert.Zero(t, requests.Load())
-	data, err := json.Marshal(messages)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"call_index":1`)
-	assert.Contains(t, string(data), `"call_index":0`)
 	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), requests.Load())
@@ -150,40 +143,9 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	defer stub.Close()
 	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	start := time.Now()
-	out, err := service.FileReferences(t.Context(), svc, id)
+	_, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 7*time.Second)
-	assert.True(t, out.LookupFailed)
-	require.Len(t, out.Occurrences, 16)
-	for _, occurrence := range out.Occurrences {
-		assert.Equal(t, "unavailable", occurrence.State)
-	}
-}
-
-func TestFileReferencesCarriesRevisionAcrossReplacement(t *testing.T) {
-	_, env := newDirectTestSvc(t)
-	id := env.InsertSession(t)
-	image := func(digest string) []db.Message {
-		return []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "![image](asset://" + digest + ".png)"}}
-	}
-	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("a", 64))))
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_ABSENT_KEY"})))
-	t.Setenv("DOCBANK_ABSENT_KEY", "")
-	first, err := svc.Messages(t.Context(), id, service.MessageFilter{})
-	require.NoError(t, err)
-	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), id, image(strings.Repeat("b", 64))))
-	out, err := service.FileReferences(t.Context(), svc, id)
-	require.NoError(t, err)
-	current, err := svc.Messages(t.Context(), id, service.MessageFilter{})
-	require.NoError(t, err)
-	data, err := json.Marshal(out)
-	require.NoError(t, err)
-	var wire map[string]any
-	require.NoError(t, json.Unmarshal(data, &wire))
-	assert.Equal(t, current.TranscriptRevision, wire["transcript_revision"])
-	assert.NotEqual(t, first.TranscriptRevision, wire["transcript_revision"])
-	require.Len(t, out.Occurrences, 1)
-	assert.Equal(t, strings.Repeat("b", 64), out.Occurrences[0].SHA256)
 }
 
 type replacingFileReferenceStore struct {

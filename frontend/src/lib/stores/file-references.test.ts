@@ -36,15 +36,19 @@ describe("file references store", () => {
     expect(store.result?.transcript_revision).toBe("2");
   });
   it.each([
-    { name: "current refetch", refetchRevision: "1", status: "ok" },
-    { name: "stale refetch", refetchRevision: "2", status: "failed" },
+    { name: "current refetch", refetchRevision: "1", status: "ok", sourceChanged: false },
+    { name: "source_changed error", refetchRevision: "1", status: "ok", sourceChanged: true },
+    { name: "stale refetch", refetchRevision: "2", status: "failed", sourceChanged: false },
   ] as const)(
-    "rejects a different transcript revision with a $name",
-    async ({ refetchRevision, status }) => {
-      lookup
-        .mockReset()
-        .mockResolvedValueOnce({ ...result, transcript_revision: "2" })
-        .mockResolvedValue({ ...result, transcript_revision: refetchRevision });
+    "refetches stale file references with a $name",
+    async ({ refetchRevision, status, sourceChanged }) => {
+      lookup.mockReset();
+      if (sourceChanged) {
+        lookup.mockRejectedValueOnce(new ApiError(409, "source changed", "source_changed"));
+      } else {
+        lookup.mockResolvedValueOnce({ ...result, transcript_revision: "2" });
+      }
+      lookup.mockResolvedValue({ ...result, transcript_revision: refetchRevision });
       const store = new FileReferencesStore();
       store.enabled = true;
       await store.track("a", "1");
@@ -82,12 +86,20 @@ describe("file references store", () => {
     expect(store.forMessage("a", 0)).toEqual([]);
     expect(store.forMessage("b", 0)).toEqual([imageOccurrence]);
   });
-  it("retries failures", async () => {
-    lookup.mockReset().mockRejectedValueOnce(new Error("offline"));
+  it.each([
+    { name: "offline", error: new Error("offline"), requests: 1 },
+    {
+      name: "repeated source changes",
+      error: new ApiError(409, "source changed", "source_changed"),
+      requests: 2,
+    },
+  ])("retries failures after $name", async ({ error, requests }) => {
+    lookup.mockReset().mockRejectedValue(error);
     const store = new FileReferencesStore();
     store.enabled = true;
     await store.track("a", "1");
     expect(store.status).toBe("failed");
+    expect(lookup).toHaveBeenCalledTimes(requests);
     lookup.mockResolvedValueOnce(result);
     await store.refresh();
     expect(store.status).toBe("ok");
@@ -112,18 +124,6 @@ it.each([null, ""])("keeps an empty transcript quiet with revision %s", async (r
   expect(lookup).not.toHaveBeenCalled();
 });
 
-it("allows retry after repeated source changes", async () => {
-  lookup.mockReset().mockRejectedValue(new ApiError(409, "source changed", "source_changed"));
-  const store = new FileReferencesStore();
-  store.enabled = true;
-  await store.track("a", "1");
-  expect(lookup).toHaveBeenCalledTimes(2);
-  expect(store.status).toBe("failed");
-  lookup.mockResolvedValueOnce(result);
-  await store.refresh();
-  expect(store.status).toBe("ok");
-});
-
 it("keeps id-less tool calls separate by archive index", async () => {
   lookup.mockReset().mockResolvedValueOnce({
     ...result,
@@ -145,14 +145,79 @@ it("keeps id-less tool calls separate by archive index", async () => {
   expect(store.forTool("a", 0, "", null, 1).map((x) => x.media_type)).toEqual(["image/jpeg"]);
 });
 
-it("refetches when the archive changes during a read", async () => {
-  lookup
-    .mockReset()
-    .mockRejectedValueOnce(new ApiError(409, "source changed", "source_changed"))
-    .mockResolvedValueOnce(result);
+it.each([
+  [0, "image/png", "image/jpeg"],
+  [1, "image/webp", "image/gif"],
+] as const)("scopes reused tool IDs to message %s", async (ordinal, outputType, eventType) => {
+  lookup.mockReset().mockResolvedValueOnce({
+    ...result,
+    occurrences: [
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        tool_use_id: "reused",
+        media_type: "image/png",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        tool_use_id: "reused",
+        event_index: 0,
+        media_type: "image/jpeg",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        message_ordinal: 1,
+        tool_use_id: "reused",
+        media_type: "image/webp",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        message_ordinal: 1,
+        tool_use_id: "reused",
+        event_index: 0,
+        media_type: "image/gif",
+      },
+    ],
+  });
   const store = new FileReferencesStore();
   store.enabled = true;
   await store.track("a", "1");
-  expect(lookup).toHaveBeenCalledTimes(2);
-  expect(store.status).toBe("ok");
+  expect(store.forTool("a", ordinal, "reused", null).map((x) => x.media_type)).toEqual([
+    outputType,
+  ]);
+  expect(store.forTool("a", ordinal, "reused", 0).map((x) => x.media_type)).toEqual([eventType]);
+});
+
+it("keeps empty tool IDs separate from null message IDs", async () => {
+  lookup.mockReset().mockResolvedValueOnce({
+    ...result,
+    occurrences: [
+      { ...imageOccurrence, media_type: "image/jpeg" },
+      { ...imageOccurrence, tool_use_id: "", call_index: 0, media_type: "image/png" },
+      {
+        ...imageOccurrence,
+        tool_use_id: "",
+        call_index: 0,
+        event_index: 0,
+        media_type: "image/gif",
+      },
+    ],
+  });
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  expect(store.forMessage("a", 0).map((x) => x.media_type)).toEqual(["image/jpeg"]);
+  expect(store.forTool("a", 0, "", null).map((x) => x.media_type)).toEqual(["image/png"]);
+  expect(store.forTool("a", 0, "", 0).map((x) => x.media_type)).toEqual(["image/gif"]);
 });

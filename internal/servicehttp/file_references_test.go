@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -37,6 +38,13 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Occurrences, 1)
 	occurrence := out.Occurrences[0]
+	assert.Equal(t, "found", occurrence.State)
+	assert.Equal(t, 1, occurrence.MatchTotal)
+	require.Len(t, occurrence.Matches, 1)
+	assert.Equal(t, docbank.Match{
+		State: "current", Name: "image.png", Path: "/images/image.png",
+		OpenURL: "https://example.com/#node=7&version=12345678-1234-1234-1234-123456789abc",
+	}, occurrence.Matches[0])
 	assert.Nil(t, occurrence.ToolUseID)
 	assert.Nil(t, occurrence.EventIndex)
 	assert.Nil(t, occurrence.Size)

@@ -12,6 +12,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { fileReferences } from "../../stores/file-references.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import {
     ChevronRightIcon,
@@ -165,7 +166,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 
   {#if expanded}
     <div class="subagent-messages">
-      <div class="subagent-status">{m.docbank_subagent_open_session()}</div>
+      {#if fileReferences.enabled}
+        <div class="subagent-status">{m.docbank_subagent_open_session()}</div>
+      {/if}
       {#if loading}
         <div class="subagent-status">{m.subagent_inline_loading()}</div>
       {:else if error}

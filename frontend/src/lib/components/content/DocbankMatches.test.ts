@@ -50,11 +50,22 @@ describe("Docbank matches", () => {
     expect(link.rel).toBe("noreferrer");
     expect(document.body.textContent).toContain("+11 more in Docbank");
   });
-  it.each(["not_found", "unavailable", "limit_exceeded"] as const)("shows %s", async (state) => {
+  it.each([
+    ["not_found", "Not in Docbank"],
+    ["unavailable", "Docbank unavailable"],
+    ["limit_exceeded", "Docbank lookup limit reached"],
+    ["bytes_not_kept", "Image bytes not kept"],
+  ] as const)("shows %s", async (state, expected) => {
     await trackDocbank({
       integration: "enabled",
       lookup_failed: state === "unavailable",
-      occurrences: [{ ...imageOccurrence, state }],
+      occurrences: [
+        {
+          ...imageOccurrence,
+          sha256: state === "bytes_not_kept" ? "" : imageOccurrence.sha256,
+          state,
+        },
+      ],
     });
     components.push(
       mount(DocbankMatches, {
@@ -63,13 +74,7 @@ describe("Docbank matches", () => {
       }),
     );
     await tick();
-    expect(document.body.textContent).toContain(
-      state === "not_found"
-        ? "Not in Docbank"
-        : state === "limit_exceeded"
-          ? "Docbank lookup limit reached"
-          : "Docbank unavailable",
-    );
+    expect(document.body.textContent).toContain(expected);
   });
 
   it("shows prior and trash as text when web_url is absent", async () => {
@@ -98,16 +103,4 @@ describe("Docbank matches", () => {
     expect(document.body.textContent).toContain("Prior version · /prior/a.png");
     expect(document.body.textContent).toContain("Trash · deleted.png");
   });
-});
-
-it("says when a dropped image kept no bytes to look up", async () => {
-  await trackDocbank({
-    integration: "enabled",
-    occurrences: [{ ...imageOccurrence, sha256: "", state: "bytes_not_kept" }],
-  });
-  components.push(
-    mount(DocbankMatches, { target: document.body, props: { sessionId: "session-1", ordinal: 0 } }),
-  );
-  await tick();
-  expect(document.body.textContent).toContain("Image bytes not kept");
 });

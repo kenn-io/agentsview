@@ -2,7 +2,6 @@ package docbank
 
 import (
 	"bytes"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -19,15 +18,25 @@ func TestLookup(t *testing.T) {
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")
 	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	const version = "12345678-1234-1234-1234-123456789abc"
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/content-references", r.URL.Path)
 		assert.Equal(t, "test-key", r.Header.Get("X-Api-Key"))
 		assert.Equal(t, "limit=10&offset=0&sha256="+digest, r.URL.RawQuery)
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"items":[{"version":{"id":"` + version + `","node_id":1},"node":{"id":1,"name":"current.png"},"path":"/images/current.png","is_current":true},{"version":{"id":"` + version + `","node_id":2},"node":{"id":2,"name":"prior.png"},"path":"/images/prior.png","is_current":false},{"version":{"id":"` + version + `","node_id":3},"node":{"id":3,"name":"trash.png","trashed_at":"2026-01-01T00:00:00Z"},"path":"/old/path","is_current":true}],"total":15}`))
 	}))
 	defer srv.Close()
 	cfg := config.DocbankIntegration{URL: srv.URL, WebURL: "https://example.com/docbank/", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	result, err := New(cfg).Lookup(t.Context(), digest)
+	client := New(cfg)
+	result, err := client.Lookup(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Zero(t, result.Total)
+	assert.Empty(t, result.Matches)
+	result, err = client.Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Equal(t, 15, result.Total)
 	require.Len(t, result.Matches, 3)
@@ -82,29 +91,4 @@ func TestLookupFailures(t *testing.T) {
 		})
 	}
 	assert.Zero(t, hits.Load())
-}
-
-type lookupTransport func(*http.Request) (*http.Response, error)
-
-func (f lookupTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-func TestLookupRefreshesDigestResults(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "key")
-	hits := 0
-	client := New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
-	client.http.Transport = lookupTransport(func(r *http.Request) (*http.Response, error) {
-		hits++
-		body := `{"items":[],"total":0}`
-		if hits > 1 {
-			body = `{"items":[{"version":{"id":"12345678-1234-1234-1234-123456789abc"},"node":{"id":1,"name":"image.png"},"path":"/image.png","is_current":true}],"total":1}`
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
-	})
-	first, err := client.Lookup(t.Context(), "digest")
-	require.NoError(t, err)
-	assert.Zero(t, first.Total)
-	second, err := client.Lookup(t.Context(), "digest")
-	require.NoError(t, err)
-	assert.Equal(t, 1, second.Total)
-	assert.Equal(t, 2, hits)
 }

@@ -11,16 +11,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestVersionReportsDocbankConfiguration(t *testing.T) {
-	s := testServer(t, 30*time.Second)
 	for _, enabled := range []bool{false, true} {
-		s.cfg.Integrations.Docbank = config.DocbankIntegration{}
+		cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}
 		if enabled {
-			s.cfg.Integrations.Docbank = config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
+			cfg.Integrations.Docbank = config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
 		}
+		s := New(cfg, dbtest.OpenTestDB(t), nil)
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/version", nil))
 		require.Equal(t, http.StatusOK, rec.Code)

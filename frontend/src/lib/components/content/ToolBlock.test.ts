@@ -575,6 +575,7 @@ describe("ToolBlock input source and copy", () => {
     await render({
       content: "legacy",
       toolCall: {
+        call_index: 0,
         category: "",
         tool_name: "Read",
         input_json: "{",
@@ -588,6 +589,7 @@ describe("ToolBlock input source and copy", () => {
   it("handles a tool call without input_json", async () => {
     await render({
       toolCall: {
+        call_index: 0,
         category: "",
         tool_name: "Read",
       },
@@ -777,132 +779,4 @@ it("mounts tracked Docbank rows for tool output and history events", async () =>
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
   await click(".history-header");
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(2);
-});
-
-it.each([
-  ["session-1", 0, ["image/png", "image/jpeg"]],
-  ["session-1", 1, ["image/webp", "image/gif"]],
-] as const)("scopes reused tool IDs to %s message %s", async (sessionId, ordinal, expected) => {
-  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
-  await trackDocbank({
-    integration: "enabled",
-    occurrences: [
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        call_index: 0,
-        tool_use_id: "reused",
-        media_type: "image/png",
-      },
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        call_index: 0,
-        tool_use_id: "reused",
-        event_index: 0,
-        media_type: "image/jpeg",
-      },
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        call_index: 0,
-        message_ordinal: 1,
-        tool_use_id: "reused",
-        media_type: "image/webp",
-      },
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        call_index: 0,
-        message_ordinal: 1,
-        tool_use_id: "reused",
-        event_index: 0,
-        media_type: "image/gif",
-      },
-    ],
-  });
-  await render({
-    sessionId,
-    ordinal,
-    toolCall: call(
-      "Read",
-      {},
-      {
-        tool_use_id: "reused",
-        result_content: "image",
-        result_events: [
-          {
-            event_index: 0,
-            source: "tool_result",
-            status: "completed",
-            content: "image",
-            content_length: 5,
-          },
-        ],
-      },
-    ),
-  });
-  await click(".tool-header");
-  await click(".history-header");
-  const rows = Array.from(document.querySelectorAll(".docbank-matches"), (row) => row.textContent);
-  expect(rows).toHaveLength(expected.length);
-  expect(rows.map((row) => row?.match(/image\/[a-z]+/g))).toEqual(
-    expected.map((mediaType) => [mediaType]),
-  );
-});
-
-it("shows tool images without a tool ID without repeating message images", async () => {
-  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
-  await trackDocbank({
-    integration: "enabled",
-    occurrences: [
-      { ...imageOccurrence, media_type: "image/jpeg" },
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        tool_use_id: "",
-        call_index: 0,
-        media_type: "image/png",
-      },
-      {
-        ...imageOccurrence,
-        size: 3,
-        tool_name: "Read",
-        tool_use_id: "",
-        call_index: 0,
-        event_index: 0,
-        media_type: "image/gif",
-      },
-    ],
-  });
-  await render({
-    sessionId: "session-1",
-    ordinal: 0,
-    toolCall: call(
-      "Read",
-      {},
-      {
-        tool_use_id: undefined,
-        result_content: "image",
-        result_events: [
-          {
-            event_index: 0,
-            source: "tool_result",
-            status: "completed",
-            content: "image",
-            content_length: 5,
-          },
-        ],
-      },
-    ),
-  });
-  await click(".tool-header");
-  await click(".history-header");
-  const rows = Array.from(document.querySelectorAll(".docbank-matches"), (row) => row.textContent);
-  expect(rows.map((row) => row?.match(/image\/[a-z]+/g))).toEqual([["image/png"], ["image/gif"]]);
 });

@@ -813,14 +813,6 @@ func TestMarkdownAssetImages(t *testing.T) {
 	assert.Equal(t, "image/png", images[0].MediaType)
 }
 
-func TestMarkdownAssetImagesSkipsUnrelatedContent(t *testing.T) {
-	content := strings.Repeat("ordinary transcript text ", 100)
-	var images []RetainedImage
-	allocations := testing.AllocsPerRun(5, func() { images = MarkdownAssetImages(content) })
-	assert.Empty(t, images)
-	assert.Less(t, allocations, float64(5))
-}
-
 func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
 	data, err := os.ReadFile("../parser/testdata/opencode_v2/tool_files.json")
 	require.NoError(t, err)

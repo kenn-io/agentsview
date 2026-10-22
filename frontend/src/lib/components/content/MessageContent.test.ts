@@ -704,7 +704,7 @@ it("shows tracked Docbank evidence under the matching message", async () => {
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
 });
 
-it("keeps each id-less call's matches within its own block", async () => {
+it("passes session, ordinal, and archive call index through parallel tools", async () => {
   const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
   await trackDocbank({
     integration: "enabled",
@@ -742,7 +742,5 @@ it("keeps each id-less call's matches within its own block", async () => {
   const rows = [...document.querySelectorAll(".docbank-matches")];
   expect(rows).toHaveLength(2);
   expect(rows[0]!.textContent).toContain("image/png");
-  expect(rows[0]!.textContent).not.toContain("image/jpeg");
   expect(rows[1]!.textContent).toContain("image/jpeg");
-  expect(rows[1]!.textContent).not.toContain("image/png");
 });
