@@ -234,7 +234,7 @@ func resolveMCPService(
 		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
-	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector|config.ScopeDocbank)
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -246,7 +246,7 @@ func resolveMCPService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newDocbankPGReadService(cfg, pgCfg)
 	}
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)
