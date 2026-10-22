@@ -50,6 +50,7 @@ func TestPushSuffixPublication(t *testing.T) {
 			return m
 		}},
 		{"truncate", 3, 1, 4, 5, 0, false, func(m []db.Message) []db.Message { return m[:3] }},
+		{"emptied", 0, 0, 0, 0, 0, false, func([]db.Message) []db.Message { return nil }},
 		{"edit", 2, 2, 6, 7, 0, false, func(m []db.Message) []db.Message { m[2].Content = "changed"; return m }},
 		{"dropped result at zero with later edit", 0, 2, 6, 6, 1, false, func(m []db.Message) []db.Message {
 			m[0].ToolCalls[1].ResultEvents = nil
