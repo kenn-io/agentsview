@@ -45,22 +45,27 @@ describe("Docbank matches", () => {
     expect(link.rel).toBe("noreferrer");
     expect(document.body.textContent).toContain("+11 more in Docbank");
   });
-  it.each(["not_found", "unavailable", "limit_exceeded"] as const)(
-    "shows %s",
-    async (state) => {
-      await trackDocbank({ integration: "enabled", lookup_failed: state === "unavailable", occurrences: [{ ...imageOccurrence, state }] });
-      components.push(
-        mount(DocbankMatches, {
-          target: document.body,
-          props: { sessionId: "session-1", ordinal: 0 },
-        }),
-      );
-      await tick();
-      expect(document.body.textContent).toContain(
-        state === "not_found" ? "Not in Docbank" : state === "limit_exceeded" ? "Docbank lookup limit reached" : "Docbank unavailable",
-      );
-    },
-  );
+  it.each(["not_found", "unavailable", "limit_exceeded"] as const)("shows %s", async (state) => {
+    await trackDocbank({
+      integration: "enabled",
+      lookup_failed: state === "unavailable",
+      occurrences: [{ ...imageOccurrence, state }],
+    });
+    components.push(
+      mount(DocbankMatches, {
+        target: document.body,
+        props: { sessionId: "session-1", ordinal: 0 },
+      }),
+    );
+    await tick();
+    expect(document.body.textContent).toContain(
+      state === "not_found"
+        ? "Not in Docbank"
+        : state === "limit_exceeded"
+          ? "Docbank lookup limit reached"
+          : "Docbank unavailable",
+    );
+  });
   it("renders nothing for empty results or another session", async () => {
     await trackDocbank({ integration: "enabled", occurrences: [imageOccurrence] });
     components.push(

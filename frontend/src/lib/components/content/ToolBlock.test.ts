@@ -732,15 +732,39 @@ describe("ToolBlock collapsed previews", () => {
 });
 
 const docbankLookup = vi.hoisted(() => vi.fn());
-vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
+vi.mock("../../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));
 
 it("mounts tracked Docbank rows for tool output and history events", async () => {
   const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
-  await trackDocbank({ integration: "enabled", occurrences: [
-    { ...imageOccurrence, tool_use_id: "read-1", tool_name:"Read" },
-    { ...imageOccurrence, tool_use_id: "read-1", tool_name:"Read", event_index:0 },
-  ] });
-  await render({ toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: "Image removed from archive", result_events:[{event_index:0,source:"tool_result",status:"completed",content:"old result",content_length:10,timestamp:"2026-01-01T00:00:00Z"}] }) });
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [
+      { ...imageOccurrence, tool_use_id: "read-1", tool_name: "Read" },
+      { ...imageOccurrence, tool_use_id: "read-1", tool_name: "Read", event_index: 0 },
+    ],
+  });
+  await render({
+    toolCall: call(
+      "Read",
+      {},
+      {
+        tool_use_id: "read-1",
+        result_content: "Image removed from archive",
+        result_events: [
+          {
+            event_index: 0,
+            source: "tool_result",
+            status: "completed",
+            content: "old result",
+            content_length: 10,
+            timestamp: "2026-01-01T00:00:00Z",
+          },
+        ],
+      },
+    ),
+  });
   await click(".tool-header");
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
   await click(".history-header");

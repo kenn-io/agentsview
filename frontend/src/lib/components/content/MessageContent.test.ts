@@ -689,8 +689,12 @@ describe("MessageContent filtered code fences", () => {
   });
 });
 
-const docbankLookup = vi.hoisted(() => vi.fn().mockResolvedValue({ integration: "disabled", occurrences: [] }));
-vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
+const docbankLookup = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ integration: "disabled", occurrences: [] }),
+);
+vi.mock("../../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));
 
 it("shows tracked Docbank evidence under the matching message", async () => {
   const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
