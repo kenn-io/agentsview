@@ -99,14 +99,36 @@ func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	local := testDB(t)
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
-	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "clean\x01text"}}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: id, Ordinal: 0, Role: "user", Content: "cleantext",
+		ThinkingText: "thinkingtext", HasThinking: true, HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Read", Category: "file", ToolUseID: "call",
+			InputJSON: "inputtext", ResultContent: "resulttext",
+			FilePath: "pathtext", ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "call", Source: "tool_result", Status: "completed",
+				Content: "eventtext",
+			}},
+		}},
+	}}))
 	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	_, err = syncer.pg.ExecContext(ctx, `UPDATE messages SET content = $1 WHERE session_id = $2`, "clean\x01text", id)
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE messages SET content = $1, thinking_text = $2 WHERE session_id = $3
+	`, "clean\x01text", "thinking\x01text", id)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE tool_calls SET input_json = $1, result_content = $2, file_path = $3
+		WHERE session_id = $4 AND call_index = 0
+	`, "input\x01text", "result\x01text", "path\x01text", id)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE tool_result_events SET content = $1 WHERE session_id = $2
+	`, "event\x01text", id)
 	require.NoError(t, err)
 	// Call the publication path directly so the dependency marker doesn't
 	// suppress the legacy comparison before it reaches PostgreSQL.
@@ -122,9 +144,25 @@ func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 		}
 		require.NoError(t, tx.Commit())
 	}
-	var content string
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id=$1`, id).Scan(&content))
+	var content, thinkingText string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT content, thinking_text FROM messages WHERE session_id=$1
+	`, id).Scan(&content, &thinkingText))
 	assert.Equal(t, "cleantext", content)
+	assert.Equal(t, "thinkingtext", thinkingText)
+	var inputJSON, resultContent, filePath string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT input_json, result_content, file_path FROM tool_calls
+		WHERE session_id=$1 AND call_index=0
+	`, id).Scan(&inputJSON, &resultContent, &filePath))
+	assert.Equal(t, "inputtext", inputJSON)
+	assert.Equal(t, "resulttext", resultContent)
+	assert.Equal(t, "pathtext", filePath)
+	var eventContent string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT content FROM tool_result_events WHERE session_id=$1
+	`, id).Scan(&eventContent))
+	assert.Equal(t, "eventtext", eventContent)
 }
 
 // pushResponseConn counts the PostgreSQL protocol bytes after TLS decoding.

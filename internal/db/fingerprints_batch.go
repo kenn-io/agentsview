@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -774,10 +775,13 @@ func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 
 func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
 	r = r.sanitized()
+	inputHash := sha256.Sum256([]byte(r.inputJSON))
+	resultHash := sha256.Sum256([]byte(r.resultContent))
+	pathHash := sha256.Sum256([]byte(r.filePath))
 	r.appendFields(b,
-		len(r.inputJSON), fmt.Sprintf("%x", sha256.Sum256([]byte(r.inputJSON))),
-		len(r.resultContent), fmt.Sprintf("%x", sha256.Sum256([]byte(r.resultContent))),
-		len(r.filePath), fmt.Sprintf("%x", sha256.Sum256([]byte(r.filePath))),
+		len(r.inputJSON), hex.EncodeToString(inputHash[:]),
+		len(r.resultContent), hex.EncodeToString(resultHash[:]),
+		len(r.filePath), hex.EncodeToString(pathHash[:]),
 	)
 }
 
