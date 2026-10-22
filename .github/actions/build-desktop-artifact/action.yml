@@ -38,7 +38,7 @@ runs:
           desktop/package-lock.json
           frontend/package-lock.json
 
-    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
+    - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
       id: rust-toolchain
       continue-on-error: true
 
@@ -49,10 +49,10 @@ runs:
 
     - name: Retry Rust setup
       if: steps.rust-toolchain.outcome == 'failure'
-      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
+      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
 
     - name: Cache Rust dependencies
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2
       with:
         workspaces: desktop/src-tauri -> target
         # Pull requests restore main's build without saving their own copy.
