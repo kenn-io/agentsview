@@ -195,7 +195,7 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
-    name: Go Test (${{ matrix.name }})
+    name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -215,6 +215,9 @@ jobs:
             testSet: evalingest
           - os: windows-latest
             name: windows-latest
+          - os: windows-latest
+            name: windows-latest
+            testSet: lint
           - os: macos-latest
             name: macos-latest
     steps:
@@ -272,7 +275,6 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      # Keep exclusions aligned with the race job's Other packages shard.
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
@@ -281,7 +283,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Run Go tests (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.testSet != 'lint'
         shell: pwsh
         run: |
           # Isolated packages run in their own jobs below so they do not
@@ -304,7 +306,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Install Go linter (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: bash
         run: |
           version=$(sed -n 's/^version: *//p' .custom-gcl.yml)
@@ -313,7 +315,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Run Go linters (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: pwsh
         run: |
           # Windows-only files never reach the Linux lint job.
@@ -356,7 +358,7 @@ jobs:
         run: echo "::warning::Codecov upload failed"
 
       - name: Save Go caches
-        if: runner.os != 'Linux' || matrix.testSet == 'other'
+        if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
         uses: ./.github/actions/go-cache-save
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
@@ -619,6 +621,17 @@ jobs:
             runner: ubuntu-latest
             testSet: sync
             skip: *sync-test-prefix
+          - name: CLI A-P
+            runner: ubuntu-latest
+            testSet: cli
+            run: *cli-test-prefix
+          - name: CLI remaining
+            runner: ubuntu-latest
+            testSet: cli
+            skip: *cli-test-prefix
+          - name: Database and Server
+            runner: ubuntu-latest
+            testSet: db-server
           - name: Other packages
             runner: ubuntu-latest
             testSet: other
@@ -653,13 +666,34 @@ jobs:
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
-        run: go list ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        run: go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run sync tests (race detector)
         if: matrix.testSet == 'sync'
         run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run CLI tests (race detector)
+        if: matrix.testSet == 'cli'
+        run: go test -tags "fts5" -race ./cmd/agentsview -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run database and server tests (race detector)
+        if: matrix.testSet == 'db-server'
+        run: go test -tags "fts5" -race ./internal/db ./internal/server -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Prebuild split race test packages for cache
+        if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          for package in ./cmd/agentsview ./internal/db ./internal/server; do
+            go test -c -o /dev/null -tags "fts5" -race "$package"
+          done
         env:
           CGO_ENABLED: "1"
 
@@ -786,7 +820,12 @@ jobs:
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
+    name: e2e (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -851,7 +890,7 @@ jobs:
         working-directory: frontend
 
       - name: Run E2E tests
-        run: npx playwright test --reporter=list
+        run: npx playwright test --reporter=list --shard=${{ matrix.shard }}/2
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
@@ -859,6 +898,7 @@ jobs:
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
 
       - name: Run DuckDB E2E tests
+        if: matrix.shard == 1
         run: make e2e-duckdb
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
