@@ -256,20 +256,20 @@ func stripToolResultSummaryImagesWithInline(
 // parseInlineImageHeader parses a data URI header and returns the parsed
 // media type and base64 payload. It accepts only base64-encoded image/* URIs.
 func parseInlineImageHeader(uri string) (mediaType, payload string, ok bool) {
-	mediaType, payload, ok = parseInlineDataHeader(uri)
+	mediaType, payload, ok = parseInlineDataHeader(uri, true)
 	return mediaType, payload, ok && strings.HasPrefix(strings.ToLower(mediaType), "image/")
 }
 
-func parseInlineDataHeader(uri string) (mediaType, payload string, ok bool) {
+func parseInlineDataHeader(uri string, strict bool) (mediaType, payload string, ok bool) {
 	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
 		return "", "", false
 	}
 	header, payload, found := strings.Cut(uri, ",")
-	if !found {
+	if !found || (strict && payload == "") {
 		return "", "", false
 	}
 	marker := strings.LastIndexByte(header, ';')
-	if marker < 0 || !strings.EqualFold(header[marker+1:], "base64") {
+	if marker < 0 || !strings.EqualFold(header[marker+1:], "base64") || (strict && strings.IndexByte(header, ';') != marker) {
 		return "", "", false
 	}
 	parsedType, _, err := mime.ParseMediaType(header[len("data:"):marker])
@@ -296,7 +296,7 @@ func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string
 	if json.Unmarshal(raw, &uri) != nil {
 		return "", 0, 0, false
 	}
-	mediaType, payload, ok := parseInlineDataHeader(uri)
+	mediaType, payload, ok := parseInlineDataHeader(uri, imageOnly)
 	if !ok || (imageOnly && !strings.HasPrefix(strings.ToLower(mediaType), "image/")) {
 		return "", 0, 0, false
 	}
