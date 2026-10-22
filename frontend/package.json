@@ -52,13 +52,13 @@
     "svelte": "5.57.2",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.2.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
     "vite-plus": "1.3.0",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   },
   "overrides": {
     "mermaid": "$mermaid",
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.2.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
     "vitest": "$vitest"
   },
   "engines": {
