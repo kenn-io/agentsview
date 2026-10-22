@@ -78,7 +78,7 @@ func resolveService(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
-	scope := config.ScopeLocal | config.ScopeDocbank
+	scope := config.ScopeLocal
 	for _, name := range []string{"semantic", "hybrid"} {
 		if enabled, _ := cmd.Flags().GetBool(name); enabled {
 			scope |= config.ScopeVector
@@ -105,13 +105,9 @@ func resolveService(
 				return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 			}
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newDocbankPGReadService(cfg, pgCfg)
 	}
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
-	if err != nil {
-		return nil, nil, err
-	}
-	return newService(cmd.Context(), cfg, tr)
+	return newDocbankReadService(cmd.Context(), cfg)
 }
 
 // resolveSinceFlag validates the --since/--active-since pair shared by

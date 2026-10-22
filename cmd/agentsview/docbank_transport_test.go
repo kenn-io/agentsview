@@ -22,9 +22,6 @@ func TestReadCommandsDocbankValidationFollowsTransport(t *testing.T) {
 		t.Run(command.name, func(t *testing.T) {
 			for _, mode := range []string{"daemon", "direct"} {
 				t.Run(mode, func(t *testing.T) {
-					if mode == "daemon" {
-						t.Skip("finding: invalid local Docbank config blocks daemon reads; transport-specific validation would lengthen existing functions")
-					}
 					seedScopedConfigArchive(t)
 					dataDir := os.Getenv("AGENTSVIEW_DATA_DIR")
 					require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"),
