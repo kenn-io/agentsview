@@ -236,6 +236,53 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 		"changed and later identities must never be signalled")
 }
 
+func TestDaemonStopRequiresLocalIdentityDespiteMatchingPing(t *testing.T) {
+	requirePOSIXSignals(t, "uses disposable processes to observe SIGTERM")
+	for _, knownIdentity := range []bool{false, true} {
+		t.Run(fmt.Sprintf("known_identity_%t", knownIdentity), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			pid, reaped := startReapedSleepProcess(t)
+			rec := runtimeRecordForEndpoint(newPingDaemonWithPID(t, pid), withRuntimePID(pid))
+			identity, ok := daemon.ReadProcessIdentity(pid)
+			require.True(t, ok)
+			rec.ProcessIdentityV2 = identity
+			if !knownIdentity {
+				// A foreign PID namespace is likewise unjudged by Kit. The
+				// endpoint's PID here collides with an unrelated local child.
+				rec.ProcessIdentityV2 = "future-v1:unavailable"
+			}
+			path := writeRuntimeRecordFixture(t, dir, rec)
+			require.NotNil(t, FindDaemonRuntime(dir), "both identities remain discoverable")
+			deps := defaultDaemonCommandDeps()
+			deps.resolveDataDir = func() (string, error) { return dir, nil }
+			deps.loadConfig = func() (config.Config, error) {
+				return config.Config{DataDir: dir}, nil
+			}
+			var out bytes.Buffer
+			err := runDaemonStop(&out, deps)
+			if knownIdentity {
+				require.NoError(t, err)
+				<-reaped
+				assert.False(t, daemon.ProcessAlive(pid))
+				assert.NoFileExists(t, path)
+				return
+			}
+			require.ErrorContains(t, err, "cannot confirm")
+			assert.True(t, daemon.ProcessAlive(pid), "a ping must not authorize signaling this child")
+			assert.FileExists(t, path)
+			assert.True(t, hasLiveWritableDaemonRuntime(dir), "the record must still exclude another writer")
+			assert.True(t, daemonRecordPingConfirmed(rec, ""))
+
+			rt := FindDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			err = stopDaemonRuntimeForUpgradeImpl(t.Context(), config.Config{DataDir: dir}, rt)
+			require.ErrorContains(t, err, "cannot confirm")
+			assert.True(t, daemon.ProcessAlive(pid), "replacement must also refuse to signal")
+			assert.FileExists(t, path)
+		})
+	}
+}
+
 func TestDaemonStopRevalidationFailureBeforeFirstSignalSaysAborted(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	rec := testWritableRecord(204, "/runtime/204.json")

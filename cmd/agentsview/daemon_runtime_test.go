@@ -1168,6 +1168,13 @@ func TestDaemonRuntimeUnknownIdentityWithoutLocalPID(t *testing.T) {
 			}
 
 			if reachable {
+				waitDeps := defaultDaemonLaunchWaitDeps()
+				waitDeps.loadReadOnlyConfig = deps.loadReadOnlyConfig
+				observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+				require.NoError(t, observation.Err)
+				assert.Len(t, observation.Records, 1)
+				assert.Empty(t, observation.UnconfirmedRecords)
+
 				rec.Metadata[runtimeAPIVersion] = "0"
 				_, err := runtimeStore(dir).Write(rec)
 				require.NoError(t, err)

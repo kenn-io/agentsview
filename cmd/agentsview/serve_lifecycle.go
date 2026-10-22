@@ -338,10 +338,8 @@ func serveIncompatibleDaemonStatusLines(
 
 // runServeStop terminates every agentsview server owning this data dir whose
 // identity it can confirm. A record is signalled only once its PID is confirmed
-// to be the recorded daemon -- either it answers the ping probe, or its
-// process identity matches the record (proving the PID was not reused by an
-// unrelated process). This keeps a hung-but-alive daemon stoppable while never
-// signalling a stale record whose PID belongs to something else.
+// to identify the recorded daemon in the caller's PID namespace. A matching
+// process identity also keeps a hung-but-alive daemon stoppable.
 func runServeStop(cfg config.Config) {
 	records, _ := localWritableDaemonRecordsWithFallback(
 		cfg.DataDir, cfg.AuthToken,
@@ -454,14 +452,10 @@ func stopWritableDaemonsForUpdate(ctx context.Context,
 }
 
 // stopTargetConfirmed reports whether rec's live PID is safe to signal as the
-// recorded agentsview daemon. It accepts the target when the daemon answers the
-// ping probe, or, for a daemon that is alive but no longer answering, when its
-// recorded process identity matches the live process. Either check
-// rules out a PID that an unrelated process reused after the record was
-// written.
-func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {
-	return daemonRecordPingConfirmed(rec, authToken) ||
-		processIdentityConfirmed(rec)
+// recorded agentsview daemon. A ping identifies the HTTP endpoint, but its PID
+// may identify a different process in the caller's PID namespace.
+func stopTargetConfirmed(rec daemon.RuntimeRecord, _ string) bool {
+	return processIdentityConfirmed(rec)
 }
 
 // daemonRecordPingConfirmed reports whether rec's PID answers the kit ping
@@ -575,11 +569,9 @@ func caddyStopRecord(pid int, createTime string) daemon.RuntimeRecord {
 	}
 }
 
-// stopDaemonProcess signals the daemon to shut down, waits up to grace for it
-// to exit, then escalates to a forced kill. Before escalating it re-checks that
-// the live PID is still the recorded daemon, so a PID reused during the grace
-// wait is never killed. It cleans up the runtime record if the process leaves
-// one behind.
+// stopDaemonProcess confirms the local process identity before each signal,
+// asks the daemon to shut down, then escalates to a forced kill after grace.
+// It cleans up the runtime record if the process leaves one behind.
 func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 	return stopDaemonProcessWithIdentity(
 		rec, grace, runtimeRecordIdentityState,
@@ -591,6 +583,15 @@ func stopDaemonProcessWithIdentity(
 	grace time.Duration,
 	identityStateForRecord func(daemon.RuntimeRecord) processCreateTimeState,
 ) error {
+	switch identityStateForRecord(rec) {
+	case processCreateTimeMismatch:
+		removeRuntimeRecordFile(rec)
+		return nil
+	case processCreateTimeMatch:
+		// Only a matching local process identity authorizes the first signal.
+	default:
+		return processIdentityUnconfirmedError(rec, "before graceful shutdown")
+	}
 	proc, err := os.FindProcess(rec.PID)
 	if err != nil {
 		return fmt.Errorf("finding process: %w", err)
