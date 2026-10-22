@@ -160,6 +160,7 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - Pull requests must have a user-facing benefit or improve the developer
   experience, and the body must say which one.
+- Write issues and pull requests in English.
 - Do not poll or watch GitHub Actions checks unless the developer explicitly
   requests it.
 - Do not use `gh api` to watch CI jobs unless the user explicitly requests it.
