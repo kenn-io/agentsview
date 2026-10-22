@@ -148,16 +148,18 @@ across every configured target. `--all --watch` is rejected.
 
 Incremental pushes use a two-layer fingerprint to skip unchanged sessions:
 first, session metadata and local dependency fingerprints identify candidates.
-A changed session rewrites from its first changed message, preserving earlier
-rows, and usage events are replaced whole when they change. The pushed-message
-count reflects the rewritten suffix.
-For sessions with remote messages, PostgreSQL computes SHA-256
-hashes of message text, dialogue text, thinking text, tool inputs, results,
-file paths, and tool-result-event content.
+Then, for candidates that already have messages in PostgreSQL, PostgreSQL
+computes SHA-256 hashes of message text, dialogue text, thinking text, tool
+inputs, results, file paths, and tool-result-event content.
 Only large text values are replaced by hashes; IDs, timestamps, token JSON, and
 other message, tool, and event metadata still cross the connection. Same-length
-text changes still trigger publication. Rows written before control-character
-cleanup may be rewritten once; unchanged text then compares normally.
+text changes still trigger publication.
+A changed session is rewritten from its first changed message onward. Earlier
+messages, their tool calls and results, and their pins stay in place. Usage
+events are replaced whole when they change. The pushed-message count includes
+only the rewritten messages.
+Rows written before control-character cleanup may be rewritten once; unchanged
+text then compares normally.
 Use `--full` to bypass both layers and re-push everything, for example, after a
 schema reset or when message content was rewritten in place.
 
