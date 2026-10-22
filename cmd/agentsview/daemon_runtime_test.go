@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -1119,6 +1120,64 @@ func TestDaemonRuntimeStoreLegacyRecords(t *testing.T) {
 func TestFindDaemonRuntime_NoFiles(t *testing.T) {
 	dir := runtimeTestDir(t)
 	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestDaemonRuntimeUnknownIdentityWithoutLocalPID(t *testing.T) {
+	for _, reachable := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reachable_%t", reachable), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			pid := deadPID(t)
+			ts := httptest.NewServer(daemon.NewPingHandler(daemon.PingHandlerOptions{
+				Service: daemonService, Version: "test", PID: pid,
+			}))
+			t.Cleanup(ts.Close)
+			rec := runtimeRecordForEndpoint(serverEndpoint(t, ts), withRuntimePID(pid))
+			// The identity cannot be judged here, and its PID is not visible.
+			// Kit applies the same unknown state across Linux PID namespaces.
+			rec.ProcessIdentityV2 = "future-v1:unavailable"
+			path := writeRuntimeRecordFixture(t, dir, rec)
+			if !reachable {
+				ts.Close()
+			}
+
+			rt := FindDaemonRuntime(dir)
+			if reachable {
+				require.NotNil(t, rt)
+				assert.Equal(t, pid, rt.Record.PID)
+			} else {
+				assert.Nil(t, rt)
+			}
+			assert.FileExists(t, path, "a failed local PID check or ping cannot prove the owner exited")
+			assert.True(t, hasLiveDaemonRuntime(dir))
+			assert.True(t, hasLiveWritableDaemonRuntime(dir))
+			assert.Len(t, liveDaemonRecords(dir), 1)
+			writers, err := writableDaemonRecords(dir, "")
+			require.NoError(t, err)
+			assert.Len(t, writers, 1, "an unjudged owner must prevent a second writer")
+
+			deps := defaultDaemonCommandDeps()
+			deps.loadReadOnlyConfig = func() (config.Config, error) {
+				return config.Config{DataDir: dir}, nil
+			}
+			var out bytes.Buffer
+			require.NoError(t, runDaemonStatus(&out, deps))
+			if reachable {
+				assert.Contains(t, out.String(), "agentsview running at")
+			} else {
+				assert.Contains(t, out.String(), "not responding")
+			}
+
+			if reachable {
+				rec.Metadata[runtimeAPIVersion] = "0"
+				_, err := runtimeStore(dir).Write(rec)
+				require.NoError(t, err)
+				incompatible, err := FindIncompatibleDaemonRuntime(dir)
+				require.Error(t, err)
+				require.NotNil(t, incompatible)
+				assert.Equal(t, pid, incompatible.Record.PID)
+			}
+		})
+	}
 }
 
 func TestFindDaemonRuntime_StaleFile(t *testing.T) {

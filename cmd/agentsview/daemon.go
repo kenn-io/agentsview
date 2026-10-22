@@ -858,7 +858,7 @@ func daemonStatusRecords(
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		state := runtimeRecordIdentityState(rec)

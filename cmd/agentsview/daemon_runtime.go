@@ -310,7 +310,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		if runtimeRecordHasMismatchedIdentity(store, rec) {
@@ -499,7 +499,7 @@ func findIncompatibleDaemonRuntime(
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		if runtimeRecordHasMismatchedIdentity(store, rec) {
@@ -667,8 +667,9 @@ func daemonRuntimeCompatibilityError(rt *DaemonRuntime) error {
 }
 
 // liveDaemonRecords returns runtime records for agentsview daemons in dataDir
-// whose process is still alive. Unlike FindDaemonRuntime it does not require a
-// successful ping, so it can target a hung-but-alive server (e.g. for stop).
+// whose process may still be alive. Unlike FindDaemonRuntime it does not require
+// a successful ping, so it can target a hung server (e.g. for stop) and retain
+// records whose process identity cannot be checked from this PID namespace.
 func liveDaemonRecords(dataDir string) []daemon.RuntimeRecord {
 	migrateLegacyDaemonRuntimes(dataDir)
 
@@ -683,7 +684,7 @@ func liveDaemonRecords(dataDir string) []daemon.RuntimeRecord {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		alive = append(alive, rec)
@@ -696,8 +697,9 @@ type daemonRuntimeRecordStore interface {
 	List() ([]daemon.RuntimeRecord, error)
 }
 
-// writableDaemonRecords returns every live writable agentsview runtime record.
-// It does not probe the daemon, so callers can recover or stop a hung process.
+// writableDaemonRecords returns writable agentsview records whose processes may
+// still be alive. It does not probe the daemon, so callers can recover or stop a
+// hung process without overlooking an owner in another PID namespace.
 func writableDaemonRecords(
 	dataDir string, authToken string,
 ) ([]daemon.RuntimeRecord, error) {
@@ -721,7 +723,7 @@ func writableDaemonRecordsFromStore(
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		if runtimeRecordIdentityState(rec) == processCreateTimeMismatch {
@@ -757,7 +759,7 @@ func hasLiveDaemonRuntime(dataDir string, authToken ...string) bool {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		if runtimeRecordHasMismatchedIdentity(store, rec) {
@@ -873,7 +875,7 @@ func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
 		}
-		if !daemon.ProcessAlive(rec.PID) {
+		if !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		if runtimeRecordHasMismatchedIdentity(store, rec) {
