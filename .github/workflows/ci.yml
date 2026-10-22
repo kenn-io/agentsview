@@ -197,6 +197,8 @@ jobs:
   test:
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -255,7 +257,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
+          install: ${{ env.MSYS2_PACKAGES }}
           path-type: inherit
 
       - name: Setup MinGW (Windows, retry on transient failure)
@@ -264,7 +266,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
+          install: ${{ env.MSYS2_PACKAGES }}
           path-type: inherit
 
       - name: Restore pricing snapshot
@@ -311,7 +313,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: ./.github/actions/go-cache-restore
         with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml', 'Makefile') }}-${{ steps.setup_go.outputs.go-version }}
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
 
@@ -323,15 +325,19 @@ jobs:
           set -e
           linter_dir="$(cygpath -u "$GOBIN")"
           export PATH="$linter_dir:$PATH"
-          if [ ! -f "$linter_dir/custom-gcl.exe" ]; then
-            mkdir -p "$linter_dir"
-            bash scripts/retry.sh 3 5 make lint-tools
-            make nilaway-golangci-build
-            mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
+          linter_version="$(sed -n 's/^GOLANGCI_LINT_VERSION ?= //p' Makefile)"
+          if [ -x "$linter_dir/custom-gcl.exe" ]; then
+            case "$("$linter_dir/custom-gcl.exe" version --short 2>/dev/null)" in
+              "$linter_version"-custom-gcl-*) exit 0 ;;
+            esac
           fi
+          mkdir -p "$linter_dir"
+          bash scripts/retry.sh 3 5 make lint-tools
+          make nilaway-golangci-build
+          mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
         env:
           CGO_ENABLED: "1"
-          GOBIN: ${{ runner.temp }}/golangci-lint
+          GOBIN: ${{ runner.temp }}/golangci-lint/bin
           GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
 
       - name: Run Go linters (Windows)
@@ -339,11 +345,12 @@ jobs:
         shell: pwsh
         run: |
           # Windows-only files never reach the Linux lint job.
-          $customLinter = Join-Path $env:GOLANGCI_LINT_CACHE 'custom-gcl.exe'
+          $customLinter = Join-Path $env:GOBIN 'custom-gcl.exe'
           & $customLinter run ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           CGO_ENABLED: "1"
+          GOBIN: ${{ runner.temp }}/golangci-lint/bin
           GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
 
       - name: Save Windows linter cache
