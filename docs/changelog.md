@@ -213,6 +213,7 @@ The latest release is
 
 **Improvements**
 
+- Browser telemetry stays quiet after a disabled reply, and reloads and focus don't repeat the day's app-open check. Each request has a 10-second deadline. Disabled telemetry avoids hourly server wake-ups, and server screen claims retain the 35 most recently accepted UTC dates. See [telemetry configuration](https://agentsview.io/docs/configuration/#anonymous-daemon-telemetry) for limits.
 - Load Usage totals, top sessions and model comparison faster on large archives.
 - The Usage page starts its model comparison together with totals instead of
   waiting for them. On an archive of 24,000 sessions the page finished in 4.0
@@ -251,6 +252,10 @@ The latest release is
 
 **Bug fixes**
 
+- **Settings > Appearance > Chart colors** now works when AgentsView serves
+  a read-only store, such as `pg serve` or a ClickHouse or DuckDB mirror. The
+  server saves chart colors and the default zoom to `config.toml`; settings
+  that change ingestion, archive content, or access stay locked.
 - `agentsview mcp` and other auto-starting commands report that another process
   holds the archive write lock instead of launching a server that can't start,
   and the lock error no longer sends you to `agentsview daemon stop` when no
