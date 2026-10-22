@@ -35,7 +35,8 @@ func TestPushCompactComparisons(t *testing.T) {
 		{
 			SessionID: id, Ordinal: 0, Role: "assistant", Content: strings.Repeat("large-payload-λ", 10000) + "\x01 control\xff",
 			ThinkingText: "reasoning\x01text\xff", Timestamp: "2025-08-12T10:11:12.123456789+05:30",
-			HasThinking: true, HasToolUse: true, IsSystem: true,
+			DialogueText: new("dialogue\x00text\xff"),
+			HasThinking:  true, HasToolUse: true, IsSystem: true,
 			Model: "sample-model", ReasoningEffort: "high", ProviderID: "provider-a",
 			TokenUsage:    jsontext.Value(`{"input_tokens":23,"output_tokens":7}`),
 			ContextTokens: 23, OutputTokens: 7, HasContextTokens: true, HasOutputTokens: true,
@@ -62,7 +63,8 @@ func TestPushCompactComparisons(t *testing.T) {
 		},
 		{
 			SessionID: id, Ordinal: 1, Role: "assistant", Content: "tail response", HasToolUse: true,
-			Timestamp: "2025-08-12T10:12:00.000000001Z", Model: "sample-model",
+			DialogueText: new(""),
+			Timestamp:    "2025-08-12T10:12:00.000000001Z", Model: "sample-model",
 			SourceUUID: "source-b", ToolCalls: []db.ToolCall{{
 				ToolName: "Write", Category: "file", ToolUseID: "call-b", InputJSON: `{"path":"out.txt"}`,
 				FilePath: "/tmp/out.txt", ObservedOutcome: new("initial"),
@@ -109,6 +111,8 @@ func TestPushCompactComparisons(t *testing.T) {
 	for _, change := range []struct{ name, statement string }{
 		{"content", `UPDATE messages SET content = 'x' || substring(content from 2) WHERE session_id = $1`},
 		{"thinking", `UPDATE messages SET thinking_text = 'x' || substring(thinking_text from 2) WHERE session_id = $1`},
+		{"dialogue", `UPDATE messages SET dialogue_text = 'x' || substring(dialogue_text from 2) WHERE session_id = $1 AND ordinal = 0`},
+		{"dialogue-null", `UPDATE messages SET dialogue_text = NULL WHERE session_id = $1 AND ordinal = 1`},
 		{"input", `UPDATE tool_calls SET input_json = 'x' || substring(input_json from 2) WHERE session_id = $1 AND call_index = 0`},
 		{"result", `UPDATE tool_calls SET result_content = 'x' || substring(result_content from 2) WHERE session_id = $1 AND call_index = 0`},
 		{"path", `UPDATE tool_calls SET file_path = 'x' || substring(file_path from 2) WHERE session_id = $1 AND call_index = 0`},
@@ -243,7 +247,7 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	}))
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "growing", FileMtime: new(time.Now().Add(time.Hour).UnixNano()), FileHash: new("initial"), Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
 	body := strings.Repeat("c", size)
-	edited := []db.Message{{SessionID: "growing", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), HasThinking: true, HasToolUse: true,
+	edited := []db.Message{{SessionID: "growing", Ordinal: 0, Role: "assistant", Content: body, ThinkingText: strings.Repeat("t", size), DialogueText: new(strings.Repeat("d", size)), HasThinking: true, HasToolUse: true,
 		ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: "call", InputJSON: strings.Repeat("i", size), ResultContent: strings.Repeat("r", size), ResultContentLength: size, FilePath: "example.txt",
 			ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Status: "completed", Content: strings.Repeat("e", size), ContentLength: size}},
 		}},
@@ -262,9 +266,6 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	// Keep unrelated pricing downloads outside the measured comparison response.
 	_, err = syncer.pg.ExecContext(ctx, `TRUNCATE model_pricing_bands, model_pricing, genai_pricing`)
 	require.NoError(t, err)
-	var pricingRows int
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM model_pricing_bands) + (SELECT COUNT(*) FROM model_pricing) + (SELECT COUNT(*) FROM genai_pricing)`).Scan(&pricingRows))
-	require.Zero(t, pricingRows)
 	before := pgMessageCTID(t, syncer.pg, "unchanged", 0)
 	edited = append(edited, db.Message{SessionID: "growing", Ordinal: 1, Role: "user", Content: "new message"})
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "growing", edited))
