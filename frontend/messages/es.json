@@ -2979,6 +2979,7 @@
   "docbank_read_unavailable": "Archivos de sesión no disponibles",
   "docbank_unavailable": "Docbank no disponible",
   "docbank_limit_exceeded": "Se alcanzó el límite de búsquedas en Docbank",
+  "docbank_bytes_not_kept": "No se conservaron los bytes de la imagen",
   "docbank_file": "Archivo {n} · {mediaType} · {size}",
   "docbank_file_without_size": "Archivo {n} · {mediaType}",
   "docbank_more": "+{count} más en Docbank"

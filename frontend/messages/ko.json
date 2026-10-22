@@ -2867,6 +2867,7 @@
   "docbank_read_unavailable": "세션 파일을 읽을 수 없음",
   "docbank_unavailable": "Docbank에 연결할 수 없음",
   "docbank_limit_exceeded": "Docbank 조회 한도에 도달했습니다",
+  "docbank_bytes_not_kept": "이미지 바이트가 보관되지 않았습니다",
   "docbank_file": "파일 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "파일 {n} · {mediaType}",
   "docbank_more": "Docbank에 {count}개 더 있음"

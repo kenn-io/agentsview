@@ -99,3 +99,15 @@ describe("Docbank matches", () => {
     expect(document.body.textContent).toContain("Trash · deleted.png");
   });
 });
+
+it("says when a dropped image kept no bytes to look up", async () => {
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [{ ...imageOccurrence, sha256: "", state: "bytes_not_kept" }],
+  });
+  components.push(
+    mount(DocbankMatches, { target: document.body, props: { sessionId: "session-1", ordinal: 0 } }),
+  );
+  await tick();
+  expect(document.body.textContent).toContain("Image bytes not kept");
+});

@@ -234,7 +234,7 @@ func resolveMCPService(
 		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
-	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector)
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector|config.ScopeDocbank)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -274,7 +274,19 @@ func newMCPDaemonService(cfg config.Config) service.SessionService {
 func (s *mcpDaemonService) SupportsFileReferences() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.Integrations.Docbank.Configured()
+	return servingDocbankEnabled(s.cfg)
+}
+
+// servingDocbankEnabled answers from the daemon that serves MCP calls. Without
+// one, the daemon MCP will start reads the same config.
+func servingDocbankEnabled(cfg config.Config) bool {
+	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if runtime == nil {
+		return cfg.Integrations.Docbank.Configured()
+	}
+	base := urlFromDaemonRuntime(runtime)
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(context.Background(), base, cfg.AuthToken)
+	return err == nil && service.SupportsFileReferences(servicehttp.NewHTTPBackendForServer(base, cfg.AuthToken, capabilities))
 }
 
 func (s *mcpDaemonService) SupportsRecallQueries() bool {

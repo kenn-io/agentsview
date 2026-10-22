@@ -78,7 +78,7 @@ func resolveService(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
-	scope := config.ScopeLocal
+	scope := config.ScopeLocal | config.ScopeDocbank
 	for _, name := range []string{"semantic", "hybrid"} {
 		if enabled, _ := cmd.Flags().GetBool(name); enabled {
 			scope |= config.ScopeVector

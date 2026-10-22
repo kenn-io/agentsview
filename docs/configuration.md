@@ -2434,5 +2434,7 @@ budget. Each lookup resolves up to 50 distinct digests with four requests at a
 time and shows up to ten matches per digest. Docbank lookup failures report
 Docbank unavailable and can be retried. Archive read failures report session
 files unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
+Images dropped by the image policy have no bytes to hash, so they report
+`bytes_not_kept` without a lookup.
 Results refresh when the transcript changes or the session reopens. Successful
 digest lookups are reused for up to 60 seconds. No migration or resync is required.

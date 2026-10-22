@@ -39,7 +39,7 @@
           {:else if occurrence.state === "limit_exceeded"}
             {m.docbank_limit_exceeded()}
           {:else}
-            {m.docbank_unavailable()}
+            {occurrence.state === "bytes_not_kept" ? m.docbank_bytes_not_kept() : m.docbank_unavailable()}
           {/if}
         </div>
       </div>

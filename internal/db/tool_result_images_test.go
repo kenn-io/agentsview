@@ -794,7 +794,7 @@ func TestRetainedToolResultImages(t *testing.T) {
 	for _, content := range []string{
 		strings.Replace(offloaded, `"version":1`, `"version":2`, 1),
 		strings.Replace(offloaded, `"version":1`, `"version":0`, 1),
-		`[{"type":"agentsview_image","media_type":"image/png","byte_size":3}]`,
+		`[{"type":"agentsview_image","version":2,"media_type":"image/png","byte_size":3}]`,
 		`[{"type":"input_image","image_url":"data:text/plain;base64,YWJj"}]`,
 		`[{"type":"input_image","image_url":"data:image/png;base64,!!"}]`,
 		`[{"type":"agentsview_image","image_ref":"asset://bad.png","media_type":"image/png","byte_size":3}]`,

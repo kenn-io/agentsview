@@ -18447,6 +18447,7 @@ func (i IntegrationsdocbankMatchState) Validate() error {
 type ServiceFileReferenceOccurrenceState string
 
 const (
+	BytesNotKept  ServiceFileReferenceOccurrenceState = "bytes_not_kept"
 	Found         ServiceFileReferenceOccurrenceState = "found"
 	LimitExceeded ServiceFileReferenceOccurrenceState = "limit_exceeded"
 	NotFound      ServiceFileReferenceOccurrenceState = "not_found"
@@ -18456,7 +18457,7 @@ const (
 // Validate checks if the ServiceFileReferenceOccurrenceState value is valid
 func (s ServiceFileReferenceOccurrenceState) Validate() error {
 	switch s {
-	case Found, LimitExceeded, NotFound, Unavailable:
+	case BytesNotKept, Found, LimitExceeded, NotFound, Unavailable:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid ServiceFileReferenceOccurrenceState value, got: %v", s))

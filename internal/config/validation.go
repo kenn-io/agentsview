@@ -19,6 +19,7 @@ const (
 	ScopePG
 	ScopeClickHouse
 	ScopeDeployment
+	ScopeDocbank
 )
 
 func (s ValidationScope) uses(section ValidationScope) bool {
@@ -44,21 +45,24 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "proxy", func() error { return normalizeProxyConfig(&c.Proxy) }},
 		// The public URL joins the allowed origins, so one bad value is one warning.
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
-		{ScopeServer, "daemon_idle_timeout", func() error {
-			if c.DaemonIdleTimeout < 0 {
-				return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
-			}
-			return nil
-		}},
+		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
 		{ScopeVector, "[vector]", c.Vector.Validate},
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},
 		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
 		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
+		{ScopeDocbank, "[integrations.docbank]", c.Integrations.Docbank.Validate},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateDaemonIdleTimeout() error {
+	if c.DaemonIdleTimeout < 0 {
+		return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
 	}
 	return nil
 }

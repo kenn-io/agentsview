@@ -6341,6 +6341,7 @@ components:
             - not_found
             - unavailable
             - limit_exceeded
+            - bytes_not_kept
           type: string
         tool_name:
           type:

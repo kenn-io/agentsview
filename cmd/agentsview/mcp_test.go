@@ -593,7 +593,6 @@ func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
 }
 
 func TestMCPDaemonFileReferencesUsesServingCapability(t *testing.T) {
-	t.Skip("MCP daemon capability finding: probing daemon metadata would lengthen SupportsFileReferences")
 	for _, enabled := range []bool{true, false} {
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
 			dir := runtimeTestDir(t)

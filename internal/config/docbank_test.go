@@ -10,7 +10,6 @@ import (
 )
 
 func TestDocbankScopedValidation(t *testing.T) {
-	t.Skip("Invalid config finding: adding Docbank to validateSections would lengthen the function")
 	unsetDeploymentEnv(t)
 	dir := setupTestEnv(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[integrations.docbank]\nurl='https://example.com'\n"), 0o600))

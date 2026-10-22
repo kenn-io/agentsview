@@ -2861,6 +2861,7 @@
   "docbank_read_unavailable": "无法读取会话文件",
   "docbank_unavailable": "Docbank 不可用",
   "docbank_limit_exceeded": "已达到 Docbank 查询上限",
+  "docbank_bytes_not_kept": "未保留图片字节",
   "docbank_file": "文件 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "文件 {n} · {mediaType}",
   "docbank_more": "Docbank 中还有 {count} 项"

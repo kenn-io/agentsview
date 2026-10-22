@@ -5,6 +5,7 @@ import type {
 } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
+import { SvelteMap } from "svelte/reactivity";
 
 export class FileReferencesStore {
   enabled = $state(false);
@@ -14,23 +15,40 @@ export class FileReferencesStore {
   private revision: string | null = null;
   private read = new LatestRead();
   private pending: Promise<void> = Promise.resolve();
+  // An expanded subagent tracks its own session while the parent's rows stay visible.
+  private results = new SvelteMap<string, ServiceFileReferencesResult>();
 
   track(id: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
     if (this.sessionId === id && this.revision === revision) return this.pending;
-    this.reset();
-    this.sessionId = id;
-    this.revision = revision;
+    this.cancel();
+    this.select(id, revision);
     return revision ? this.refresh() : this.pending;
   }
 
   reset(): void {
+    this.cancel();
+    this.results.clear();
+  }
+
+  private cancel(): void {
     this.read.cancel();
     this.sessionId = null;
     this.revision = null;
     this.result = undefined;
     this.status = "idle";
     this.pending = Promise.resolve();
+  }
+
+  private select(id: string | null, revision: string | null): void {
+    this.sessionId = id;
+    this.revision = revision;
+    if (id && this.results.get(id)?.transcript_revision !== revision) this.results.delete(id);
+  }
+
+  private keep(result: ServiceFileReferencesResult): void {
+    this.result = result;
+    if (this.sessionId) this.results.set(this.sessionId, result);
   }
 
   refresh(retryStale = true): Promise<void> {
@@ -64,7 +82,7 @@ export class FileReferencesStore {
     if (!this.revision || result.transcript_revision !== this.revision) {
       return this.stale(retryStale);
     }
-    this.result = result;
+    this.keep(result);
     this.status = "ok";
   }
 
@@ -74,9 +92,8 @@ export class FileReferencesStore {
   }
 
   private visibleResult(sessionId: string) {
-    return this.enabled && sessionId === this.sessionId && this.result?.integration === "enabled"
-      ? this.result
-      : undefined;
+    const result = this.results.get(sessionId);
+    return this.enabled && result?.integration === "enabled" ? result : undefined;
   }
 
   private forOrdinal(sessionId: string, ordinal: number) {

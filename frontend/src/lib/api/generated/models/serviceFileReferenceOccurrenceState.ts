@@ -10,4 +10,5 @@ export const ServiceFileReferenceOccurrenceState = {
   not_found: "not_found",
   unavailable: "unavailable",
   limit_exceeded: "limit_exceeded",
+  bytes_not_kept: "bytes_not_kept",
 } as const;

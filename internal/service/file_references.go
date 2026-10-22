@@ -23,7 +23,7 @@ type FileReferenceOccurrence struct {
 	MediaType      string          `json:"media_type"`
 	Size           *int64          `json:"size"`
 	SHA256         string          `json:"sha256"`
-	State          string          `json:"state" enum:"found,not_found,unavailable,limit_exceeded"`
+	State          string          `json:"state" enum:"found,not_found,unavailable,limit_exceeded,bytes_not_kept"`
 	Matches        []docbank.Match `json:"matches"`
 	MatchTotal     int             `json:"match_total"`
 }
@@ -92,7 +92,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	digests := []string{}
 	seen := make(map[string]int)
 	for _, occurrence := range out.Occurrences {
-		if _, exists := seen[occurrence.SHA256]; !exists && len(digests) < 50 {
+		if _, exists := seen[occurrence.SHA256]; !exists && occurrence.SHA256 != "" && len(digests) < 50 {
 			seen[occurrence.SHA256] = len(digests)
 			digests = append(digests, occurrence.SHA256)
 		}
@@ -118,7 +118,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		occurrence := &out.Occurrences[i]
 		index, exists := seen[occurrence.SHA256]
 		if !exists {
-			occurrence.State = "limit_exceeded"
+			occurrence.State = unlookedState(occurrence.SHA256)
 			continue
 		}
 		if !resolved[index] {
@@ -133,6 +133,15 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		occurrence.Matches, occurrence.MatchTotal = result.Matches, result.Total
 	}
 	return out, nil
+}
+
+// unlookedState explains an occurrence that got no Docbank lookup: dropped images
+// kept no bytes to hash, and the rest exceeded the per-request lookup limit.
+func unlookedState(digest string) string {
+	if digest == "" {
+		return "bytes_not_kept"
+	}
+	return "limit_exceeded"
 }
 
 // fileReferenceMessages checks the revision after all messages and their tool results

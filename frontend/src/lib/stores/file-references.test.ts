@@ -13,7 +13,7 @@ const result = {
 };
 
 describe("file references store", () => {
-  it.skip("Subagent inline finding: keeps parent and expanded child results per session; fixing track would lengthen it", async () => {
+  it("keeps parent and expanded child results per session", async () => {
     lookup.mockReset().mockResolvedValue(result);
     const store = new FileReferencesStore();
     store.enabled = true;
@@ -88,7 +88,7 @@ describe("file references store", () => {
     const next = store.track("b", "1");
     expect(store.result).toBeUndefined();
     await next;
-    expect(store.forMessage("a", 0)).toEqual([]);
+    expect(store.forMessage("b", 0)).toEqual([imageOccurrence]);
   });
   it("retries failures", async () => {
     lookup.mockReset().mockRejectedValueOnce(new Error("offline"));

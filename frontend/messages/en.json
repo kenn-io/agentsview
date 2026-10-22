@@ -2955,6 +2955,7 @@
   "docbank_read_unavailable": "Session files unavailable",
   "docbank_unavailable": "Docbank unavailable",
   "docbank_limit_exceeded": "Docbank lookup limit reached",
+  "docbank_bytes_not_kept": "Image bytes not kept",
   "docbank_file": "File {n} · {mediaType} · {size}",
   "docbank_file_without_size": "File {n} · {mediaType}",
   "docbank_more": "+{count} more in Docbank"

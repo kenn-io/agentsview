@@ -2936,6 +2936,7 @@
   "docbank_read_unavailable": "セッションのファイルを読み込めません",
   "docbank_unavailable": "Docbank を利用できません",
   "docbank_limit_exceeded": "Docbank の検索上限に達しました",
+  "docbank_bytes_not_kept": "画像のバイトは保持されていません",
   "docbank_file": "ファイル {n} · {mediaType} · {size}",
   "docbank_file_without_size": "ファイル {n} · {mediaType}",
   "docbank_more": "Docbank にあと {count} 件"

@@ -2864,6 +2864,7 @@
   "docbank_read_unavailable": "無法讀取工作階段檔案",
   "docbank_unavailable": "Docbank 無法使用",
   "docbank_limit_exceeded": "已達到 Docbank 查詢上限",
+  "docbank_bytes_not_kept": "未保留圖片位元組",
   "docbank_file": "檔案 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "檔案 {n} · {mediaType}",
   "docbank_more": "Docbank 中還有 {count} 項"

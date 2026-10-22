@@ -475,7 +475,8 @@ CLI reference.
 `GET /api/v1/sessions/{id}/file-references`. It is available in the full
 profile. Each occurrence includes its message ordinal, optional tool and
 result-event coordinates, SHA-256 digest, and `found`, `not_found`,
-`unavailable`, or `limit_exceeded` state. Matches identify current files, prior
+`unavailable`, `limit_exceeded`, or `bytes_not_kept` state. Images dropped by
+the image policy report `bytes_not_kept` with an empty digest. Matches identify current files, prior
 versions, or trash and include an exact version link when configured. A disabled
 integration returns an empty list. See
 [Docbank configuration](/docs/configuration/#find-transcript-images-in-docbank)

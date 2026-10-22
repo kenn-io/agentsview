@@ -239,7 +239,6 @@ func (s *hydratingFileReferenceStore) GetAllMessages(ctx context.Context, id str
 }
 
 func TestFileReferencesDroppedImageBytesNotKept(t *testing.T) {
-	t.Skip("Dropped images finding: preserving unavailable occurrences would lengthen RetainedToolResultImages and FileReferences")
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)
 	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"agentsview_image","version":1,"media_type":"image/png","byte_size":3}]`}}}}))

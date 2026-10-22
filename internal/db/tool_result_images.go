@@ -656,18 +656,26 @@ func RetainedToolResultImages(content string) []RetainedImage {
 			return
 		}
 		for _, raw := range blocks {
-			if p, ok := parseOffloadedImagePlaceholder(raw); ok {
-				if digest, _, ok := assetImageDigest(p.ImageRef); ok && (p.Version == nil || *p.Version == 1) {
-					images = append(images, RetainedImage{Index: len(images), MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest})
-				}
-				continue
-			}
-			if image, ok := retainedInlineFile(raw, len(images)); ok {
+			if image, ok := retainedImageBlock(raw, len(images)); ok {
 				images = append(images, image)
 			}
 		}
 	})
 	return images
+}
+
+// retainedImageBlock reads one tool-result block as retained image evidence. A
+// placeholder left by the drop policy has no image_ref, so it has no digest.
+func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
+	if p, ok := parseOffloadedImagePlaceholder(raw); ok {
+		digest, _, ok := assetImageDigest(p.ImageRef)
+		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest}, ok && (p.Version == nil || *p.Version == 1)
+	}
+	var p offloadedImagePlaceholder
+	if json.Unmarshal(raw, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
+		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize)}, p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
+	}
+	return retainedInlineFile(raw, index)
 }
 
 func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {

@@ -152,7 +152,7 @@ func registerStatsFlags(
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal|config.ScopeDocbank)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
