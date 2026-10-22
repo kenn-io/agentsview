@@ -3105,7 +3105,7 @@ func (s *Sync) pushMessages(
 	if err := restorePinnedMessages(ctx, tx, sessionID, savedPins); err != nil {
 		return count, false, err
 	}
-	return count, changed, nil
+	return count, changed || usageChanged, nil
 }
 
 // copySessionMessages replaces a session's changed suffix of messages, tool calls,

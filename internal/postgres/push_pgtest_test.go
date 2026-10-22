@@ -1838,7 +1838,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	// gpt-5.5 usage event with NULL cost so it is priced from the catalog.
-	require.NoError(t, localDB.ReplaceSessionUsageEvents(t.Context(), sessID, []db.UsageEvent{{
+	usage := db.UsageEvent{
 		SessionID:    sessID,
 		Source:       "session",
 		Model:        "gpt-5.5",
@@ -1847,7 +1847,8 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		Cost:         nil,
 		OccurredAt:   started,
 		DedupKey:     "session:" + sessID,
-	}}), "ReplaceSessionUsageEvents")
+	}
+	require.NoError(t, localDB.ReplaceSessionUsageEvents(t.Context(), sessID, []db.UsageEvent{usage}), "ReplaceSessionUsageEvents")
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
@@ -1875,6 +1876,26 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 	require.NoError(t, err, "GetDailyUsage")
 	assert.Equal(t, money.MustParseDollars("20"), result.Totals.TotalCost,
 		"gpt-5.5 usage should be priced from the catalog")
+
+	_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1`, sessID)
+	require.NoError(t, err)
+	var before time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, "SELECT updated_at FROM sessions WHERE id=$1", sessID).Scan(&before))
+
+	// Change only accounting, leaving the zero-message session's metadata intact.
+	usage.OutputTokens = 600000
+	require.NoError(t, localDB.ReplaceSessionUsageEvents(t.Context(), sessID, []db.UsageEvent{usage}))
+	pushed, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, pushed.Errors)
+	var outputTokens int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		"SELECT output_tokens FROM usage_events WHERE session_id=$1", sessID,
+	).Scan(&outputTokens))
+	assert.Equal(t, 600000, outputTokens, "full push must replace changed usage without messages")
+	var after time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, "SELECT updated_at FROM sessions WHERE id=$1", sessID).Scan(&after))
+	assert.True(t, after.After(before), "full push of changed usage must advance updated_at and wake remote session viewers")
 }
 
 func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
