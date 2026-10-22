@@ -313,8 +313,8 @@ jobs:
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: bash
         run: |
-          make_version="$(sed -n 's/^GOLANGCI_LINT_VERSION ?=[[:space:]]*//; T; s/[[:space:]]*$//; p' Makefile)"
-          custom_version="$(sed -n 's/^version:[[:space:]]*//; T; s/[[:space:]]*$//; p' .custom-gcl.yml)"
+          make_version="$(sed -n 's/^GOLANGCI_LINT_VERSION[[:space:]]*[?:]\{0,1\}=[[:space:]]*//; T; s/#.*//; s/[[:space:]]*$//; p' Makefile)"
+          custom_version="$(sed -n 's/^version:[[:space:]]*//; T; s/#.*//; s/[[:space:]]*$//; p' .custom-gcl.yml)"
           if [ -z "$make_version" ] || [ -z "$custom_version" ] || [ "$make_version" != "$custom_version" ]; then
             echo "Linter version pins must be nonempty and agree: Makefile GOLANGCI_LINT_VERSION='$make_version', .custom-gcl.yml version='$custom_version'" >&2
             exit 1
