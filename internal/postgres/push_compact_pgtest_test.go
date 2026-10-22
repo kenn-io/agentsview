@@ -5,7 +5,9 @@ package postgres
 import (
 	"context"
 	"encoding/json/jsontext"
+	"fmt"
 	"maps"
+	"math/rand/v2"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -24,7 +26,7 @@ import (
 func TestPushCompactComparisons(t *testing.T) {
 	ctx := t.Context()
 	const id = "compact"
-	const schema = "agentsview_compact_test"
+	schema := fmt.Sprintf("agentsview_compact_%x", rand.Uint64())
 	url := testPGURL(t)
 	cleanNamedPGSchema(t, url, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
@@ -149,7 +151,7 @@ func TestPushCompactComparisons(t *testing.T) {
 
 func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 	ctx := t.Context()
-	const schema = "agentsview_compact_legacy_test"
+	schema := fmt.Sprintf("agentsview_compact_legacy_%x", rand.Uint64())
 	const id = "legacy"
 	url := testPGURL(t)
 	cleanNamedPGSchema(t, url, schema)
@@ -243,7 +245,7 @@ func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
 func compactPushResponseBytes(t *testing.T, size int) int64 {
 	t.Helper()
 	ctx := t.Context()
-	const schema = "agentsview_push_response_bytes_test"
+	schema := fmt.Sprintf("agentsview_push_response_bytes_%x", rand.Uint64())
 	url := testPGURL(t)
 	cleanNamedPGSchema(t, url, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })

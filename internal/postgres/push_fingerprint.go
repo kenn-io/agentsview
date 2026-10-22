@@ -687,11 +687,11 @@ func loadPushToolCallFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, message_ordinal, call_index, tool_name, category,
-			tool_use_id, octet_length(convert_to(COALESCE(input_json, ''), 'UTF8')), sha256(convert_to(COALESCE(input_json, ''), 'UTF8')),
+			tool_use_id, sha256(convert_to(COALESCE(input_json, ''), 'UTF8')),
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
-			octet_length(convert_to(COALESCE(result_content, ''), 'UTF8')), sha256(convert_to(COALESCE(result_content, ''), 'UTF8')),
-			octet_length(convert_to(COALESCE(file_path, ''), 'UTF8')), sha256(convert_to(COALESCE(file_path, ''), 'UTF8')), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
+			sha256(convert_to(COALESCE(result_content, ''), 'UTF8')),
+			sha256(convert_to(COALESCE(file_path, ''), 'UTF8')), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -707,14 +707,13 @@ func loadPushToolCallFingerprints(
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID string
 		var inputJSON, resultContent, filePath pushDigest
-		var inputLength, resultLength, pathLength int
 		var skillName, subagentSessionID string
 		var observedOutcome, observedRepeat, sequenceEnding string
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &toolName,
-			&category, &toolUseID, &inputLength, &inputJSON,
+			&category, &toolUseID, &inputJSON,
 			&skillName, &subagentSessionID, &resultContentLength,
-			&resultLength, &resultContent, &pathLength, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
+			&resultContent, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
 		); err != nil {
 			return err
 		}
@@ -729,14 +728,11 @@ func loadPushToolCallFingerprints(
 			ToolName:            toolName,
 			Category:            category,
 			ToolUseID:           toolUseID,
-			InputLength:         inputLength,
 			InputValue:          string(inputJSON),
 			SkillName:           skillName,
 			SubagentSessionID:   subagentSessionID,
 			ResultContentLength: resultContentLength,
-			ResultLength:        resultLength,
 			ResultValue:         string(resultContent),
-			FilePathLength:      pathLength,
 			FilePathValue:       string(filePath),
 			ObservedOutcome:     observedOutcome,
 			ObservedRepeat:      observedRepeat,

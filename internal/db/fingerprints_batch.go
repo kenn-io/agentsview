@@ -746,41 +746,39 @@ type toolCallFingerprintRow struct {
 	sequenceEnding      string
 }
 
-// ToolCallFingerprintFields holds the ordered values for one encoded tool call.
+// ToolCallFingerprintFields holds one compact tool-call comparison row.
+// InputValue, ResultValue, and FilePathValue are hexadecimal SHA-256 digests.
 type ToolCallFingerprintFields struct {
 	MessageOrdinal      int
 	CallIndex           int
 	ToolName            string
 	Category            string
 	ToolUseID           string
-	InputLength         int
 	InputValue          string
 	SkillName           string
 	SubagentSessionID   string
 	ResultContentLength int
-	ResultLength        int
 	ResultValue         string
-	FilePathLength      int
 	FilePathValue       string
 	ObservedOutcome     string
 	ObservedRepeat      string
 	SequenceEnding      string
 }
 
-// AppendToolCallFingerprintFields appends one tool-call row to a fingerprint.
+// AppendToolCallFingerprintFields appends one compact tool-call comparison row.
 func AppendToolCallFingerprintFields(b *strings.Builder, fields ToolCallFingerprintFields) {
 	fmt.Fprintf(b,
-		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+		"%d|%d|%d:%s|%d:%s|%d:%s|%s|%d:%s|%d:%s|%d|%s|%s;",
 		fields.MessageOrdinal, fields.CallIndex,
 		len(fields.ToolName), fields.ToolName,
 		len(fields.Category), fields.Category,
 		len(fields.ToolUseID), fields.ToolUseID,
-		fields.InputLength, fields.InputValue,
+		fields.InputValue,
 		len(fields.SkillName), fields.SkillName,
 		len(fields.SubagentSessionID), fields.SubagentSessionID,
 		fields.ResultContentLength,
-		fields.ResultLength, fields.ResultValue,
-		fields.FilePathLength, fields.FilePathValue,
+		fields.ResultValue,
+		fields.FilePathValue,
 	)
 	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;",
 		len(fields.ObservedOutcome), fields.ObservedOutcome,
@@ -803,7 +801,20 @@ func (r toolCallFingerprintRow) sanitized() toolCallFingerprintRow {
 
 func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 	r = r.sanitized()
-	r.appendFields(b, len(r.inputJSON), r.inputJSON, len(r.resultContent), r.resultContent, len(r.filePath), r.filePath)
+	fmt.Fprintf(b,
+		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+		r.messageOrdinal, r.callIndex,
+		len(r.toolName), r.toolName,
+		len(r.category), r.category,
+		len(r.toolUseID), r.toolUseID,
+		len(r.inputJSON), r.inputJSON,
+		len(r.skillName), r.skillName,
+		len(r.subagentSessionID), r.subagentSessionID,
+		r.resultContentLength,
+		len(r.resultContent), r.resultContent,
+		len(r.filePath), r.filePath,
+	)
+	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
 }
 
 func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
@@ -811,29 +822,18 @@ func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
 	inputHash := sha256.Sum256([]byte(r.inputJSON))
 	resultHash := sha256.Sum256([]byte(r.resultContent))
 	pathHash := sha256.Sum256([]byte(r.filePath))
-	r.appendFields(b,
-		len(r.inputJSON), hex.EncodeToString(inputHash[:]),
-		len(r.resultContent), hex.EncodeToString(resultHash[:]),
-		len(r.filePath), hex.EncodeToString(pathHash[:]),
-	)
-}
-
-func (r toolCallFingerprintRow) appendFields(b *strings.Builder, inputLength int, inputJSON string, resultLength int, resultContent string, pathLength int, filePath string) {
 	AppendToolCallFingerprintFields(b, ToolCallFingerprintFields{
 		MessageOrdinal:      r.messageOrdinal,
 		CallIndex:           r.callIndex,
 		ToolName:            r.toolName,
 		Category:            r.category,
 		ToolUseID:           r.toolUseID,
-		InputLength:         inputLength,
-		InputValue:          inputJSON,
+		InputValue:          hex.EncodeToString(inputHash[:]),
 		SkillName:           r.skillName,
 		SubagentSessionID:   r.subagentSessionID,
 		ResultContentLength: r.resultContentLength,
-		ResultLength:        resultLength,
-		ResultValue:         resultContent,
-		FilePathLength:      pathLength,
-		FilePathValue:       filePath,
+		ResultValue:         hex.EncodeToString(resultHash[:]),
+		FilePathValue:       hex.EncodeToString(pathHash[:]),
 		ObservedOutcome:     r.observedOutcome,
 		ObservedRepeat:      r.observedRepeat,
 		SequenceEnding:      r.sequenceEnding,
