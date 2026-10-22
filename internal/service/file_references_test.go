@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)
 	var blocks []map[string]any
-	for i := 0; i < 52; i++ {
+	for i := range 52 {
 		blocks = append(blocks, map[string]any{"type": "agentsview_image", "image_ref": fmt.Sprintf("asset://%064x.png", i), "media_type": "image/png", "byte_size": 3})
 	}
 	content, err := json.Marshal(blocks)
@@ -125,8 +126,8 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)
 	var calls []db.ToolCall
-	for i := 0; i < 12; i++ {
-		calls = append(calls, db.ToolCall{ToolUseID: fmt.Sprint(i), ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"agentsview_image","image_ref":"asset://%064x.png","media_type":"image/png","byte_size":3}]`, i)})
+	for i := range 12 {
+		calls = append(calls, db.ToolCall{ToolUseID: strconv.Itoa(i), ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"agentsview_image","image_ref":"asset://%064x.png","media_type":"image/png","byte_size":3}]`, i)})
 	}
 	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "images", ToolCalls: calls}}))
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")

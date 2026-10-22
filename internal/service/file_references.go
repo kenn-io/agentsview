@@ -119,7 +119,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	results := make([]docbank.Result, len(digests))
 	resolved := make([]bool, len(digests))
 	var workers sync.WaitGroup
-	for worker := 0; worker < min(4, len(digests)); worker++ {
+	for worker := range min(4, len(digests)) {
 		workers.Go(func() {
 			for i := worker; i < len(digests); i += 4 {
 				if ctx.Err() != nil {

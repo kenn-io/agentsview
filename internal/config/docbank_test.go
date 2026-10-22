@@ -1,9 +1,10 @@
 package config
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDocbankIntegrationValidation(t *testing.T) {
@@ -11,7 +12,8 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 		name, endpoint, key string
 		valid               bool
 	}{
-		{"disabled", "", "", true}, {"missing key", "https://example.com", "", false},
+		{"disabled", "", "", true},
+		{"missing key", "https://example.com", "", false},
 		{"remote plaintext", "http://example.com", "DOCBANK_TEST_KEY", false},
 		{"loopback", "http://127.0.0.1", "DOCBANK_TEST_KEY", true},
 		{"https", "https://example.com", "DOCBANK_TEST_KEY", true},

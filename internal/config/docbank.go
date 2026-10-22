@@ -1,7 +1,7 @@
 package config
 
 import (
-	"fmt"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -26,7 +26,7 @@ func (c DocbankIntegration) Validate() error {
 		return nil
 	}
 	if !c.Configured() {
-		return fmt.Errorf("[integrations.docbank] url and api_key_env are required together")
+		return errors.New("[integrations.docbank] url and api_key_env are required together")
 	}
 	for _, endpoint := range []string{c.URL, c.WebURL} {
 		if endpoint == "" {
@@ -34,10 +34,10 @@ func (c DocbankIntegration) Validate() error {
 		}
 		u, err := url.Parse(strings.TrimSpace(endpoint))
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return fmt.Errorf("[integrations.docbank] invalid URL")
+			return errors.New("[integrations.docbank] invalid URL")
 		}
 		if err := ValidateExtractTransport(u, false); err != nil {
-			return fmt.Errorf("[integrations.docbank] url must be https, or http to a loopback host")
+			return errors.New("[integrations.docbank] url must be https, or http to a loopback host")
 		}
 	}
 	return nil
