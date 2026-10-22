@@ -3485,12 +3485,22 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 	f := newUsagePushFixture(t, "agentsview_usage_change_test", []db.UsageEvent{usage})
 	usage.SessionID = f.session.ID
 
+	_, err := f.pusher.DB().ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1`, f.session.ID)
+	require.NoError(t, err)
+	store := &Store{pg: f.pusher.DB()}
+	_, before, found := store.GetSessionVersion(t.Context(), f.session.ID)
+	require.True(t, found)
+
 	usage.OutputTokens = 3
 	require.NoError(t, f.local.ReplaceSessionUsageEvents(
 		t.Context(), f.session.ID, []db.UsageEvent{usage},
 	))
-	_, err := f.pusher.Push(t.Context(), false, nil)
+	_, err = f.pusher.Push(t.Context(), false, nil)
 	require.NoError(t, err)
+	_, after, found := store.GetSessionVersion(t.Context(), f.session.ID)
+	require.True(t, found)
+	assert.Greater(t, after, before, "changed usage must wake remote session viewers")
+
 	var got mirroredUsage
 	require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(),
 		"SELECT output_tokens, occurred_at FROM usage_events WHERE session_id = $1",

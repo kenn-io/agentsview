@@ -12,39 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func suffixFixture(t *testing.T, total int) (*Sync, *db.DB, []db.Message) {
-	t.Helper()
-	const id = "suffix"
-	const schema = "agentsview_suffix_test"
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
-	local := testDB(t)
-	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: total}))
-	messages := make([]db.Message, total)
-	for i := range messages {
-		messages[i] = db.Message{SessionID: id, Ordinal: i, Role: "assistant", Content: fmt.Sprintf("message %d", i), SourceUUID: fmt.Sprintf("source-%d", i), HasToolUse: true,
-			ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: fmt.Sprintf("call-%d", i), InputJSON: `{"path":"file"}`, ResultContent: "initial", ResultContentLength: 7,
-				ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: fmt.Sprintf("call-%d", i), Source: "tool_result", Status: "completed", Content: "initial", ContentLength: 7}},
-			}},
-		}
-	}
-	if len(messages) > 0 {
-		messages[0].ToolCalls[0].ResultContent = "initial\n\nsecond"
-		messages[0].ToolCalls[0].ResultContentLength = 15
-		messages[0].ToolCalls[0].ResultEvents = append(messages[0].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-0", Source: "tool_result", Status: "completed", Content: "second", ContentLength: 6})
-		messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
-	}
-	require.NoError(t, local.InsertMessages(t.Context(), messages))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-	result, err := syncer.Push(t.Context(), true, nil)
-	require.NoError(t, err)
-	require.Zero(t, result.Errors)
-	return syncer, local, messages
-}
-
 func suffixPrefixVersions(t *testing.T, syncer *Sync, boundary int) []string {
 	t.Helper()
 	versions := make([]string, 4)
@@ -71,6 +38,9 @@ func TestPushSuffixPublication(t *testing.T) {
 	}{
 		{"append", 5, 2, 6, 7, 0, func(m []db.Message) []db.Message {
 			return append(m, db.Message{SessionID: "suffix", Ordinal: 5, Role: "user", Content: "appended"})
+		}},
+		{"duplicate UUID after legacy pin", 5, 2, 6, 7, 0, func(m []db.Message) []db.Message {
+			return append(m, db.Message{SessionID: "suffix", Ordinal: 5, Role: m[0].Role, Content: m[0].Content, SourceUUID: m[0].SourceUUID})
 		}},
 		{"late result", 4, 2, 6, 8, 0, func(m []db.Message) []db.Message {
 			m[4].ToolCalls[0].ResultContent = "initial\n\nlate result"
@@ -99,26 +69,65 @@ func TestPushSuffixPublication(t *testing.T) {
 			}
 			for _, variant := range variants {
 				t.Run(variant, func(t *testing.T) {
-					syncer, local, messages := suffixFixture(t, 5)
+					const id = "suffix"
+					const schema = "agentsview_suffix_test"
+					url := testPGURL(t)
+					cleanNamedPGSchema(t, url, schema)
+					t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+					local := testDB(t)
+					require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}))
+					messages := make([]db.Message, 5)
+					for i := range messages {
+						messages[i] = db.Message{SessionID: id, Ordinal: i, Role: "assistant", Content: fmt.Sprintf("message %d", i), SourceUUID: fmt.Sprintf("source-%d", i), HasToolUse: true,
+							ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "file", ToolUseID: fmt.Sprintf("call-%d", i), InputJSON: `{"path":"file"}`, ResultContent: "initial", ResultContentLength: 7,
+								ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: fmt.Sprintf("call-%d", i), Source: "tool_result", Status: "completed", Content: "initial", ContentLength: 7}},
+							}},
+						}
+					}
+					if len(messages) > 0 {
+						messages[0].ToolCalls[0].ResultContent = "initial\n\nsecond"
+						messages[0].ToolCalls[0].ResultContentLength = 15
+						messages[0].ToolCalls[0].ResultEvents = append(messages[0].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-0", Source: "tool_result", Status: "completed", Content: "second", ContentLength: 6})
+						messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
+					}
+					require.NoError(t, local.InsertMessages(t.Context(), messages))
+					require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: "sample", InputTokens: 22, DedupKey: "usage"}}))
+					syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+					result, err := syncer.Push(t.Context(), true, nil)
+					require.NoError(t, err)
+					require.Zero(t, result.Errors)
 					store := &Store{pg: syncer.pg}
 					for _, ordinal := range []int{0, 4} {
 						_, err := store.PinMessage(t.Context(), "suffix", int64(ordinal), new(fmt.Sprintf("note %d", ordinal)))
 						require.NoError(t, err)
 					}
-					_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='suffix'`)
+					if test.name == "duplicate UUID after legacy pin" {
+						_, err = syncer.pg.ExecContext(t.Context(), `UPDATE pinned_messages SET source_uuid='' WHERE session_id='suffix' AND ordinal=0`)
+						require.NoError(t, err)
+					}
+					_, err = syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='suffix'`)
 					require.NoError(t, err)
 					_, beforeVersion, found := store.GetSessionVersion(t.Context(), "suffix")
 					require.True(t, found)
 					before := suffixPrefixVersions(t, syncer, test.boundary)
+					var usageBefore string
+					require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT xmin::text FROM usage_events WHERE session_id='suffix'`).Scan(&usageBefore))
 					messages = test.change(messages)
 					// A later edit must not hide children removed at an earlier ordinal.
 					if variant == "with later edit" {
 						messages[test.laterEdit].Content = "later edit"
 					}
 					require.NoError(t, local.ReplaceSessionMessages(t.Context(), "suffix", messages))
-					result, err := syncer.Push(t.Context(), false, nil)
+					result, err = syncer.Push(t.Context(), false, nil)
 					require.NoError(t, err)
 					require.Zero(t, result.Errors)
+					if test.name == "append" {
+						var usageAfter string
+						require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT xmin::text FROM usage_events WHERE session_id='suffix'`).Scan(&usageAfter))
+						assert.Equal(t, usageBefore, usageAfter, "appending without usage must preserve usage row versions")
+					}
 					assert.False(t, result.Full)
 					_, afterVersion, found := store.GetSessionVersion(t.Context(), "suffix")
 					require.True(t, found)

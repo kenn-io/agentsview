@@ -3058,6 +3058,7 @@ func (s *Sync) pushMessages(
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	boundary := 0
+	usageChanged := true
 	if !full {
 		if comparisons == nil {
 			comparisons, err = readPushSessionMessageComparisons(ctx, tx, []string{sessionID}, false)
@@ -3065,23 +3066,20 @@ func (s *Sync) pushMessages(
 				return 0, false, fmt.Errorf("reading pg message comparison: %w", err)
 			}
 		}
-		if s.beforeMessageComparison != nil {
-			s.beforeMessageComparison()
-		}
 		var transcriptChanged bool
 		boundary, transcriptChanged, err = pushSuffixBoundary(ctx, snapshot, sessionID, comparisons.messageFields(sessionID))
 		if err != nil {
 			return 0, false, err
 		}
-		if !transcriptChanged {
-			usageFP, known := sessionUsageFingerprints[sessionID]
-			if !known {
-				usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
-				if err != nil {
-					return 0, false, err
-				}
+		usageFP, known := sessionUsageFingerprints[sessionID]
+		if !known {
+			usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
+			if err != nil {
+				return 0, false, err
 			}
-			usageChanged := usageFP != comparisons.UsageEventFingerprint[sessionID]
+		}
+		usageChanged = usageFP != comparisons.UsageEventFingerprint[sessionID]
+		if !transcriptChanged {
 			if usageChanged {
 				err = s.replaceUsageEvents(ctx, tx, sessionID)
 			}
@@ -3095,8 +3093,10 @@ func (s *Sync) pushMessages(
 	if err != nil {
 		return 0, false, err
 	}
-	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
-		return 0, false, err
+	if usageChanged {
+		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+			return 0, false, err
+		}
 	}
 	count, changed, err = s.copySessionMessages(ctx, tx, sessionID, snapshot, boundary)
 	if err != nil {
