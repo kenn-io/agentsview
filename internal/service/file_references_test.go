@@ -28,6 +28,39 @@ func TestFileReferencesDisabled(t *testing.T) {
 	assert.Empty(t, out.Occurrences)
 }
 
+func TestFileReferencesEmptyAndParameterizedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, uri, digest string
+		size              int64
+	}{
+		{"empty", "data:text/plain;base64,", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0},
+		{"parameters", "data:text/plain;charset=utf-8;base64,YWJj", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, env := newDirectTestSvc(t)
+			id := env.InsertSession(t)
+			require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"file","uri":"` + tc.uri + `"}]`}}}}))
+			t.Setenv("DOCBANK_TEST_KEY", "test-key")
+			var requests atomic.Int32
+			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				assert.Equal(t, tc.digest, r.URL.Query().Get("sha256"))
+				_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			}))
+			defer stub.Close()
+			svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+			out, err := service.FileReferences(t.Context(), svc, id)
+			require.NoError(t, err)
+			assert.Equal(t, int32(1), requests.Load())
+			require.Len(t, out.Occurrences, 1)
+			assert.Equal(t, tc.digest, out.Occurrences[0].SHA256)
+			assert.Equal(t, new(tc.size), out.Occurrences[0].Size)
+			assert.Equal(t, "text/plain", out.Occurrences[0].MediaType)
+			assert.Equal(t, "not_found", out.Occurrences[0].State)
+		})
+	}
+}
+
 func TestFileReferencesRetainedImages(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)

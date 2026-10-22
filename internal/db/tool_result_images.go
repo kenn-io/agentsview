@@ -265,15 +265,14 @@ func parseInlineDataHeader(uri string) (mediaType, payload string, ok bool) {
 		return "", "", false
 	}
 	header, payload, found := strings.Cut(uri, ",")
-	if !found || payload == "" {
+	if !found {
 		return "", "", false
 	}
-	parts := strings.Split(header, ";")
-	if len(parts) != 2 || !strings.EqualFold(parts[1], "base64") {
+	marker := strings.LastIndexByte(header, ';')
+	if marker < 0 || !strings.EqualFold(header[marker+1:], "base64") {
 		return "", "", false
 	}
-	rawType := parts[0][len("data:"):]
-	parsedType, _, err := mime.ParseMediaType(rawType)
+	parsedType, _, err := mime.ParseMediaType(header[len("data:"):marker])
 	if err != nil {
 		return "", "", false
 	}

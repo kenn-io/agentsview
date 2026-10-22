@@ -2417,6 +2417,9 @@ Set `DOCBANK_API_KEY` in the environment of each consumer, including the daemon,
 are required to enable lookup. Omit the section to disable it. Invalid configuration stops consumers that build a local backend. CLI commands
 that connect to a daemon use the daemon's integration configuration.
 
+MCP offers `get_session_file_references` when its backend enables Docbank
+lookup. Connections through a signed reader listener omit this tool.
+
 | Setting                            | Purpose                                           |
 | ---------------------------------- | ------------------------------------------------- |
 | `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
