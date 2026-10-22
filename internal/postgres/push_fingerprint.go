@@ -41,7 +41,6 @@ type pushMessageComparison struct {
 	MessageRoleTime         map[string]string
 	MessageFlags            map[string]string
 	MessageDialogue         map[string]string
-	MessageSystemOrdinals   map[string]string
 	MessageTokenFingerprint map[string]string
 	ToolCallAggregates      map[string]pushToolCallAggregate
 	ToolCallFingerprint     map[string]string
@@ -363,7 +362,6 @@ func readPushSessionMessageComparisons(
 		MessageRoleTime:         make(map[string]string, len(sessionIDs)),
 		MessageFlags:            make(map[string]string, len(sessionIDs)),
 		MessageDialogue:         make(map[string]string, len(sessionIDs)),
-		MessageSystemOrdinals:   make(map[string]string, len(sessionIDs)),
 		MessageTokenFingerprint: make(map[string]string, len(sessionIDs)),
 		ToolCallAggregates:      make(map[string]pushToolCallAggregate, len(sessionIDs)),
 		ToolCallFingerprint:     make(map[string]string, len(sessionIDs)),
@@ -410,11 +408,6 @@ func readPushSessionMessageComparisons(
 			return nil, err
 		}
 		if err := loadPushMessageDialogueFingerprints(ctx, tx, chunk, comparisons.MessageDialogue); err != nil {
-			return nil, err
-		}
-		if err := loadPushMessageSystemOrdinals(
-			ctx, tx, chunk, comparisons.MessageSystemOrdinals,
-		); err != nil {
 			return nil, err
 		}
 		if err := loadPushMessageTokenFingerprints(
@@ -668,39 +661,6 @@ func loadPushMessageFlagFingerprints(
 	return nil
 }
 
-func loadPushMessageSystemOrdinals(
-	ctx context.Context,
-	tx *sql.Tx,
-	sessionIDs []string,
-	out map[string]string,
-) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id,
-			COALESCE(
-				STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
-					FILTER (WHERE is_system),
-				''
-			)
-		FROM messages
-		WHERE session_id = ANY($1)
-		GROUP BY session_id
-	`, sessionIDs)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var sessionID string
-		var systemOrdinals string
-		if err := rows.Scan(&sessionID, &systemOrdinals); err != nil {
-			return err
-		}
-		out[sessionID] = systemOrdinals
-	}
-	return rows.Err()
-}
-
 func loadPushMessageTokenFingerprints(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -849,21 +809,25 @@ func loadPushToolCallFingerprints(
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
-		fmt.Fprintf(
-			b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-			messageOrdinal, callIndex,
-			len(toolName), toolName,
-			len(category), category,
-			len(toolUseID), toolUseID,
-			inputLength, inputJSON,
-			len(skillName), skillName,
-			len(subagentSessionID), subagentSessionID,
-			resultContentLength,
-			resultLength, resultContent,
-			pathLength, filePath,
-		)
-		fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(observedOutcome), observedOutcome, len(observedRepeat), observedRepeat, len(sequenceEnding), sequenceEnding)
+		db.AppendToolCallFingerprintFields(b, db.ToolCallFingerprintFields{
+			MessageOrdinal:      messageOrdinal,
+			CallIndex:           callIndex,
+			ToolName:            toolName,
+			Category:            category,
+			ToolUseID:           toolUseID,
+			InputLength:         inputLength,
+			InputValue:          string(inputJSON),
+			SkillName:           skillName,
+			SubagentSessionID:   subagentSessionID,
+			ResultContentLength: resultContentLength,
+			ResultLength:        resultLength,
+			ResultValue:         string(resultContent),
+			FilePathLength:      pathLength,
+			FilePathValue:       string(filePath),
+			ObservedOutcome:     observedOutcome,
+			ObservedRepeat:      observedRepeat,
+			SequenceEnding:      sequenceEnding,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -1056,7 +1020,7 @@ func shouldSkipSessionMessages(
 		localFP.RoleTimeFP == comparisons.MessageRoleTime[sessionID] &&
 		localFP.FlagsFP == comparisons.MessageFlags[sessionID] &&
 		localFP.DialogueFP == comparisons.MessageDialogue[sessionID] &&
-		localFP.SystemFP == comparisons.MessageSystemOrdinals[sessionID] &&
+		localFP.SystemFP == pgAgg.SysFP &&
 		localFP.ToolCallCount == comparisons.ToolCallAggregates[sessionID].Count &&
 		localFP.ToolCallSum == comparisons.ToolCallAggregates[sessionID].Sum &&
 		localFP.ToolCallFP == comparisons.ToolCallFingerprint[sessionID] &&

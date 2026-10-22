@@ -1852,7 +1852,7 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 	const sessionID = "sess-batched"
 	baseComparisons := &pushMessageComparison{
 		MessageAggregates: map[string]pushMessageAggregate{
-			sessionID: {Count: 2, Sum: 12, Max: 6, Min: 1},
+			sessionID: {Count: 2, Sum: 12, Max: 6, Min: 1, SysFP: "0,1"},
 		},
 		MessageContentHash: map[string]string{
 			sessionID: "abc",
@@ -1862,9 +1862,6 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 		},
 		MessageFlags: map[string]string{
 			sessionID: "flags",
-		},
-		MessageSystemOrdinals: map[string]string{
-			sessionID: "0,1",
 		},
 		MessageTokenFingerprint: map[string]string{
 			sessionID: "tokens",
@@ -1901,6 +1898,12 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 	assert.True(t, shouldSkipSessionMessages(
 		sessionID, 2, unchangedFP, false, baseComparisons,
 	), "unchanged sessions should be skipped as unchanged")
+	assert.False(t, shouldSkipSessionMessages(
+		sessionID, 2, unchangedFP, false, nil,
+	), "missing comparisons should force push")
+	assert.False(t, shouldSkipSessionMessages(
+		sessionID, 3, unchangedFP, false, baseComparisons,
+	), "message count mismatch should force push")
 
 	changedFP := unchangedFP
 	changedFP.ToolCallSum = 100

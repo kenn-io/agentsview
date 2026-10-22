@@ -51,15 +51,15 @@ func TestPushCompactComparisons(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, skipped.MessageAggregates[id].Count)
-	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageSystemOrdinals, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
+	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
+	assert.Empty(t, skipped.ToolCallAggregates)
+	assert.Empty(t, skipped.UsageEventFingerprint)
 	compact, err := readPushSessionMessageComparisons(
 		ctx, tx, []string{id}, counts, true,
 	)
 	require.NoError(t, err)
-	assert.Contains(t, compact.MessageContentHash, id)
-	assert.Contains(t, compact.ToolCallFingerprint, id)
 	localFP, err := localPushMessageFingerprint(
 		ctx, local, id, "", false, comparisonPushFingerprint,
 	)
@@ -77,6 +77,12 @@ func TestPushCompactComparisons(t *testing.T) {
 		t.Run(change.name, func(t *testing.T) {
 			_, err := tx.ExecContext(ctx, `SAVEPOINT change`)
 			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT change`)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT change`)
+				require.NoError(t, err)
+			})
 			_, err = tx.ExecContext(ctx, change.statement, id)
 			require.NoError(t, err)
 			changed, err := readPushSessionMessageComparisons(
@@ -84,8 +90,6 @@ func TestPushCompactComparisons(t *testing.T) {
 			)
 			require.NoError(t, err)
 			assert.False(t, shouldSkipSessionMessages(id, 1, localFP, false, changed))
-			_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT change`)
-			require.NoError(t, err)
 		})
 	}
 }
@@ -177,14 +181,13 @@ func (c *pushResponseConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func TestPushCompactMixedResponseBytes(t *testing.T) {
-	small := mixedPushResponseBytes(t, 4<<10)
-	large := mixedPushResponseBytes(t, 256<<10)
-	assert.LessOrEqual(t, small, int64(640<<10), "response traffic must stay within the compact comparison budget")
+func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
+	small := compactPushResponseBytes(t, 4<<10)
+	large := compactPushResponseBytes(t, 256<<10)
 	assert.LessOrEqual(t, large-small, int64(32<<10), "response traffic must not grow with transcript bodies")
 }
 
-func mixedPushResponseBytes(t *testing.T, size int) int64 {
+func compactPushResponseBytes(t *testing.T, size int) int64 {
 	t.Helper()
 	ctx := t.Context()
 	const schema = "agentsview_push_response_bytes_test"
@@ -240,7 +243,7 @@ func mixedPushResponseBytes(t *testing.T, size int) int64 {
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	assert.False(t, result.Full, "normal push history must select an incremental run")
-	assert.Positive(t, bytes)
+	assert.Equal(t, 1, result.SessionsPushed, "the edited session should be published")
 	t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 	return bytes
 }

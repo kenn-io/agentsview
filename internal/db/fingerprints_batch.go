@@ -756,6 +756,49 @@ type toolCallFingerprintRow struct {
 	sequenceEnding      string
 }
 
+// ToolCallFingerprintFields holds the ordered values for one encoded tool call.
+type ToolCallFingerprintFields struct {
+	MessageOrdinal      int
+	CallIndex           int
+	ToolName            string
+	Category            string
+	ToolUseID           string
+	InputLength         int
+	InputValue          string
+	SkillName           string
+	SubagentSessionID   string
+	ResultContentLength int
+	ResultLength        int
+	ResultValue         string
+	FilePathLength      int
+	FilePathValue       string
+	ObservedOutcome     string
+	ObservedRepeat      string
+	SequenceEnding      string
+}
+
+// AppendToolCallFingerprintFields appends one tool-call row to a fingerprint.
+func AppendToolCallFingerprintFields(b *strings.Builder, fields ToolCallFingerprintFields) {
+	fmt.Fprintf(b,
+		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+		fields.MessageOrdinal, fields.CallIndex,
+		len(fields.ToolName), fields.ToolName,
+		len(fields.Category), fields.Category,
+		len(fields.ToolUseID), fields.ToolUseID,
+		fields.InputLength, fields.InputValue,
+		len(fields.SkillName), fields.SkillName,
+		len(fields.SubagentSessionID), fields.SubagentSessionID,
+		fields.ResultContentLength,
+		fields.ResultLength, fields.ResultValue,
+		fields.FilePathLength, fields.FilePathValue,
+	)
+	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;",
+		len(fields.ObservedOutcome), fields.ObservedOutcome,
+		len(fields.ObservedRepeat), fields.ObservedRepeat,
+		len(fields.SequenceEnding), fields.SequenceEnding,
+	)
+}
+
 func (r toolCallFingerprintRow) sanitized() toolCallFingerprintRow {
 	r.toolName = SanitizeUTF8(r.toolName)
 	r.category = SanitizeUTF8(r.category)
@@ -786,20 +829,25 @@ func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
 }
 
 func (r toolCallFingerprintRow) appendFields(b *strings.Builder, inputLength int, inputJSON string, resultLength int, resultContent string, pathLength int, filePath string) {
-	fmt.Fprintf(b,
-		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-		r.messageOrdinal, r.callIndex,
-		len(r.toolName), r.toolName,
-		len(r.category), r.category,
-		len(r.toolUseID), r.toolUseID,
-		inputLength, inputJSON,
-		len(r.skillName), r.skillName,
-		len(r.subagentSessionID), r.subagentSessionID,
-		r.resultContentLength,
-		resultLength, resultContent,
-		pathLength, filePath,
-	)
-	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
+	AppendToolCallFingerprintFields(b, ToolCallFingerprintFields{
+		MessageOrdinal:      r.messageOrdinal,
+		CallIndex:           r.callIndex,
+		ToolName:            r.toolName,
+		Category:            r.category,
+		ToolUseID:           r.toolUseID,
+		InputLength:         inputLength,
+		InputValue:          inputJSON,
+		SkillName:           r.skillName,
+		SubagentSessionID:   r.subagentSessionID,
+		ResultContentLength: r.resultContentLength,
+		ResultLength:        resultLength,
+		ResultValue:         resultContent,
+		FilePathLength:      pathLength,
+		FilePathValue:       filePath,
+		ObservedOutcome:     r.observedOutcome,
+		ObservedRepeat:      r.observedRepeat,
+		SequenceEnding:      r.sequenceEnding,
+	})
 }
 
 // toolCallIndexer derives the per-message call index from rows ordered by
