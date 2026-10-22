@@ -3076,13 +3076,13 @@ func (s *Sync) pushMessages(
 		s.beforeMessageComparison()
 	}
 	boundary, transcriptChanged := 0, true
-	if !full {
+	if !full && comparisons != nil {
 		boundary, transcriptChanged, err = pushSuffixBoundary(ctx, snapshot, sessionID, comparisons.messageFields(sessionID))
 		if err != nil {
 			return 0, false, err
 		}
 	}
-	if !transcriptChanged {
+	if !transcriptChanged && comparisons != nil {
 		usageFP, known := sessionUsageFingerprints[sessionID]
 		if !known {
 			usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
