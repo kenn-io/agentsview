@@ -245,6 +245,7 @@ describe("MessageContent", () => {
           has_tool_use: true,
           tool_calls: [
             {
+              call_index: 0,
               tool_use_id: "call-1",
               tool_name: "Bash",
               category: "Bash",

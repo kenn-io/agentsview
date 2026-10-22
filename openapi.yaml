@@ -4034,6 +4034,7 @@ components:
       required:
         - tool_name
         - category
+        - call_index
       type: object
     DbToolCategoryCount:
       additionalProperties: false

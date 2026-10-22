@@ -23,6 +23,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          call_index: 0,
           tool_name: "Edit",
           category: "Edit",
           input_json: JSON.stringify({
@@ -61,6 +62,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          call_index: 0,
           tool_name: "Write",
           category: "Write",
           input_json: JSON.stringify({
@@ -131,7 +133,7 @@ describe("formatMessageForCopy", () => {
       context_tokens: 0,
       output_tokens: 0,
       is_system: false,
-      tool_calls: [{ tool_name: "exec", category: "Bash", input_json: script }],
+      tool_calls: [{ call_index: 0, tool_name: "exec", category: "Bash", input_json: script }],
     });
     expect(result).toBe(`[exec]\n\n${script}`);
   });
@@ -158,6 +160,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          call_index: 0,
           tool_name: "Read",
           category: "Read",
           input_json: JSON.stringify({ file_path: path }),

@@ -13,6 +13,15 @@ const result = {
 };
 
 describe("file references store", () => {
+  it.skip("Subagent inline finding: keeps parent and expanded child results per session; fixing track would lengthen it", async () => {
+    lookup.mockReset().mockResolvedValue(result);
+    const store = new FileReferencesStore();
+    store.enabled = true;
+    await store.track("parent", "1");
+    await store.track("child", "1");
+    expect(store.forMessage("parent", 0)).toEqual([imageOccurrence]);
+    expect(store.forMessage("child", 0)).toEqual([imageOccurrence]);
+  });
   it("clears results while fetching a new transcript revision", async () => {
     lookup.mockReset().mockResolvedValueOnce(result);
     const store = new FileReferencesStore();

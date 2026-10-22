@@ -24485,7 +24485,7 @@ func (d DBToolAgentBreakdown) Validate() error {
 }
 
 type DBToolCall struct {
-	CallIndex           *int64              `json:"call_index,omitempty"`
+	CallIndex           int64               `json:"call_index"`
 	Category            string              `json:"category" validate:"required"`
 	InputJSON           *string             `json:"input_json,omitempty"`
 	ResultContent       *string             `json:"result_content,omitempty"`

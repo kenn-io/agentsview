@@ -791,13 +791,6 @@ func TestRetainedToolResultImages(t *testing.T) {
 		assert.Equal(t, int64(3), *image.Size)
 		assert.Equal(t, "image/png", image.MediaType)
 	}
-	files := RetainedToolResultImages(`[{"type":"text","text":"PDF read successfully"},{"type":"file","uri":"data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA3MiA3Ml0gPj4KZW5kb2JqCnhyZWYKMCA0CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA0IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgoxODQKJSVFT0YK","mime":"application/pdf","name":"report.pdf"},{"type":"file","uri":"data:text/plain;base64,YWxwaGEK","mime":"text/plain"},{"type":"file","uri":"https://example.com/archive.zip","mime":"application/zip","name":"archive.zip"}]`)
-	require.Len(t, files, 2)
-	assert.Equal(t, "application/pdf", files[0].MediaType)
-	assert.Equal(t, new(int64(327)), files[0].Size)
-	assert.Equal(t, "text/plain", files[1].MediaType)
-	assert.Equal(t, new(int64(6)), files[1].Size)
-	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
 	for _, content := range []string{
 		strings.Replace(offloaded, `"version":1`, `"version":2`, 1),
 		strings.Replace(offloaded, `"version":1`, `"version":0`, 1),
@@ -826,4 +819,32 @@ func TestMarkdownAssetImagesSkipsUnrelatedContent(t *testing.T) {
 	allocations := testing.AllocsPerRun(5, func() { images = MarkdownAssetImages(content) })
 	assert.Empty(t, images)
 	assert.Less(t, allocations, float64(5))
+}
+
+func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
+	data, err := os.ReadFile("../parser/testdata/opencode_v2/tool_files.json")
+	require.NoError(t, err)
+	var fixture struct {
+		Content []struct {
+			ID    string `json:"id"`
+			State struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"state"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	var content json.RawMessage
+	for _, tool := range fixture.Content {
+		if tool.ID == "call_files" {
+			content = tool.State.Content
+		}
+	}
+	require.NotEmpty(t, content)
+	files := RetainedToolResultImages(string(content))
+	require.Len(t, files, 2)
+	assert.Equal(t, "application/pdf", files[0].MediaType)
+	assert.Equal(t, new(int64(327)), files[0].Size)
+	assert.Equal(t, "text/plain", files[1].MediaType)
+	assert.Equal(t, new(int64(6)), files[1].Size)
+	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
 }

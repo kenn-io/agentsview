@@ -1457,10 +1457,21 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 	}
 }
 
+func TestSyncServiceIgnoresInvalidDocbank(t *testing.T) {
+	isolateDirectCLISources(t)
+	dir := t.TempDir()
+	cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}
+	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
+	svc, cleanup, err := syncService(t.Context(), cfg, transport{Mode: transportDirect})
+	require.NoError(t, err)
+	defer cleanup()
+	assert.False(t, service.SupportsFileReferences(svc))
+}
+
 func TestNewServiceRejectsInvalidDocbank(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	for _, mode := range []string{"direct", "pg", "sync"} {
+	for _, mode := range []string{"direct", "pg"} {
 		t.Run(mode, func(t *testing.T) {
 			var svc service.SessionService
 			var cleanup func()
@@ -1468,8 +1479,6 @@ func TestNewServiceRejectsInvalidDocbank(t *testing.T) {
 			switch mode {
 			case "pg":
 				svc, cleanup, err = newPGReadService(cfg, config.PGConfig{})
-			case "sync":
-				svc, cleanup, err = syncService(t.Context(), cfg, transport{Mode: transportDirect})
 			default:
 				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
 			}

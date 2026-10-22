@@ -131,6 +131,7 @@ describe("search block integration", () => {
       index === 29 ? "needle" : `echo ${index}`,
     ).join("\n");
     const call: ToolCall = {
+      call_index: 0,
       tool_name: "Bash",
       category: "Bash",
       input_json: JSON.stringify({ command }),
@@ -180,6 +181,7 @@ describe("search block integration", () => {
 
   it("temporarily displays canonical raw output and restores the formatted preference", async () => {
     const call: ToolCall = {
+      call_index: 0,
       category: "",
       tool_name: "Read",
       result_content: "# needle\n\n**bold**",
@@ -225,6 +227,7 @@ describe("search block integration", () => {
 
   it("keeps literal diff newlines equal to the index", async () => {
     const call: ToolCall = {
+      call_index: 0,
       tool_name: "Edit",
       category: "Edit",
       input_json: JSON.stringify({ old_string: "before", new_string: "needle\nnext" }),

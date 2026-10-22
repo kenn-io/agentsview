@@ -70,10 +70,6 @@ func syncService(ctx context.Context,
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	}
-	docbankOption, err := service.WithConfiguredDocbank(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
 	d, lock, err := openWriteDB(ctx, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening db: %w", err)
@@ -94,7 +90,7 @@ func syncService(ctx context.Context,
 		engine.Close()
 		closeWriteDB(d, lock)
 	}
-	return service.NewDirectBackend(d, engine, docbankOption), cleanup, nil
+	return service.NewDirectBackend(d, engine), cleanup, nil
 }
 
 // classifySyncArg returns {Path: arg} when arg is clearly a path:

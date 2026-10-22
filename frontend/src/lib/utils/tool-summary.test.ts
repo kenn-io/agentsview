@@ -8,11 +8,7 @@ import {
 } from "./tool-summary.js";
 
 function call(partial: Partial<ToolCall>): ToolCall {
-  return {
-    category: "",
-    tool_name: "Tool",
-    ...partial,
-  };
+  return { call_index: 0, category: "", tool_name: "Tool", ...partial };
 }
 
 describe("summarizeToolCall", () => {

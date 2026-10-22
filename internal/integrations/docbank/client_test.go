@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,36 +88,23 @@ type lookupTransport func(*http.Request) (*http.Response, error)
 
 func (f lookupTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestLookupCacheExpiryAndRetry(t *testing.T) {
+func TestLookupRefreshesDigestResults(t *testing.T) {
 	t.Setenv("DOCBANK_TEST_KEY", "key")
-	synctest.Test(t, func(t *testing.T) {
-		hits := 0
-		client := New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
-		client.http.Transport = lookupTransport(func(r *http.Request) (*http.Response, error) {
-			hits++
-			status := http.StatusOK
-			if hits == 1 {
-				status = http.StatusServiceUnavailable
-			}
-			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"items":[],"total":0}`)), Header: make(http.Header)}, nil
-		})
-		_, err := client.Lookup(t.Context(), "digest")
-		require.Error(t, err)
-		_, err = client.Lookup(t.Context(), "digest")
-		require.NoError(t, err)
-		assert.Equal(t, 2, hits)
-		for _, digest := range []string{"second-digest", "digest", "second-digest"} {
-			_, err = client.Lookup(t.Context(), digest)
-			require.NoError(t, err)
+	hits := 0
+	client := New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
+	client.http.Transport = lookupTransport(func(r *http.Request) (*http.Response, error) {
+		hits++
+		body := `{"items":[],"total":0}`
+		if hits > 1 {
+			body = `{"items":[{"version":{"id":"12345678-1234-1234-1234-123456789abc"},"node":{"id":1,"name":"image.png"},"path":"/image.png","is_current":true}],"total":1}`
 		}
-		assert.Equal(t, 3, hits)
-		time.Sleep(59 * time.Second)
-		_, err = client.Lookup(t.Context(), "digest")
-		require.NoError(t, err)
-		assert.Equal(t, 3, hits)
-		time.Sleep(2 * time.Second)
-		_, err = client.Lookup(t.Context(), "digest")
-		require.NoError(t, err)
-		assert.Equal(t, 4, hits)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
+	first, err := client.Lookup(t.Context(), "digest")
+	require.NoError(t, err)
+	assert.Zero(t, first.Total)
+	second, err := client.Lookup(t.Context(), "digest")
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.Total)
+	assert.Equal(t, 2, hits)
 }

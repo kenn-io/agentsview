@@ -76,13 +76,7 @@ beforeEach(() => {
     message(1, "[Thinking]\nneedle\n[/Thinking]", { has_thinking: true }),
     message(2, "", {
       has_tool_use: true,
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "needle",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "needle" }],
     }),
   ];
   messages.messageCount = 3;
