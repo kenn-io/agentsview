@@ -1461,3 +1461,28 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 		})
 	}
 }
+
+func TestNewServiceRejectsInvalidDocbank(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
+	for _, mode := range []string{"direct", "http", "pg", "sync"} {
+		t.Run(mode, func(t *testing.T) {
+			var svc service.SessionService
+			var cleanup func()
+			var err error
+			switch mode {
+			case "pg":
+				svc, cleanup, err = newPGReadService(cfg, config.PGConfig{})
+			case "sync":
+				svc, cleanup, err = syncService(t.Context(), cfg, transport{Mode: transportDirect})
+			case "http":
+				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportHTTP})
+			default:
+				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
+			}
+			require.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
+			assert.Nil(t, svc)
+			assert.Nil(t, cleanup)
+		})
+	}
+}

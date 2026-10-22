@@ -734,31 +734,15 @@ describe("ToolBlock collapsed previews", () => {
 const docbankLookup = vi.hoisted(() => vi.fn());
 vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
 
-it("looks up retained images in Docbank only after output expansion", async () => {
-  const { fileReferences } = await import("../../stores/file-references.svelte.js");
-  fileReferences.entries.clear();
-  docbankLookup.mockReset().mockResolvedValue({ integration: "disabled", occurrences: [] });
-  await render({ docbankAt: { sessionId: "images", ordinal: 0 }, toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]` }) });
-  expect(docbankLookup).not.toHaveBeenCalled();
+it("mounts tracked Docbank rows for tool output and history events", async () => {
+  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
+  await trackDocbank({ integration: "enabled", occurrences: [
+    { ...imageOccurrence, tool_use_id: "read-1", tool_name:"Read" },
+    { ...imageOccurrence, tool_use_id: "read-1", tool_name:"Read", event_index:0 },
+  ] });
+  await render({ toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: "Image removed from archive", result_events:[{event_index:0,source:"tool_result",status:"completed",content:"old result",content_length:10,timestamp:"2026-01-01T00:00:00Z"}] }) });
   await click(".tool-header");
-  expect(docbankLookup).not.toHaveBeenCalled();
-  await click(".output-header");
-  await fileReferences.load("images");
-  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "images" });
-  expect(document.querySelector(".docbank-matches")).toBeNull();
-  await click(".output-header");
-  await click(".output-header");
-  expect(docbankLookup).toHaveBeenCalledTimes(1);
-});
-
-it("shows Docbank rows only for discovered Claude tool images", async () => {
-  const { fileReferences } = await import("../../stores/file-references.svelte.js");
-  fileReferences.entries.clear();
-  fileReferences.entries.set("source-images", { loading: true });
-  await render({ docbankAt: { sessionId: "source-images", ordinal: 0, source: true }, toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: "Image removed from archive" }) });
-  await click(".tool-header");
-  expect(document.querySelector(".docbank-matches")).toBeNull();
-  fileReferences.entries.set("source-images", { loading: false, result: { integration: "enabled", source: "available", occurrences: [{ message_ordinal: 0, tool_use_id: "read-1", tool_name: "Read", event_index: null, image_index: 0, media_type: "image/png", size: 3, sha256: "a".repeat(64), state: "not_found", matches: [], match_total: 0 }] } });
-  await tick();
   expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
+  await click(".history-header");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(2);
 });

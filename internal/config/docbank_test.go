@@ -22,6 +22,9 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
+				if tc.name == "remote plaintext" {
+					assert.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
+				}
 			}
 		})
 	}

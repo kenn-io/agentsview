@@ -1,15 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
-
-const docbankLookup = vi.hoisted(() => vi.fn());
-const sessionState = vi.hoisted(() => ({ sessions: [] as { id: string; agent: string }[] }));
-vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
-vi.mock("../../stores/sessions.svelte.js", () => ({ sessions: sessionState }));
 
 function makeToolMessage(ordinal: number): Message {
   return {
@@ -41,31 +36,7 @@ function makeToolMessage(ordinal: number): Message {
 
 afterEach(() => {
   sessionTiming.reset();
-  sessionState.sessions = [];
   document.body.innerHTML = "";
-});
-
-it("keeps Docbank discovery quiet in Claude tool groups and shows one request failure", async () => {
-  const { fileReferences } = await import("../../stores/file-references.svelte.js");
-  fileReferences.entries.clear();
-  sessionState.sessions = [{ id: "s1", agent: "claude" }];
-  let reject!: (reason: Error) => void;
-  docbankLookup.mockReset().mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
-  const component = mount(ToolCallGroup, { target: document.body, props: { messages: [makeToolMessage(0), makeToolMessage(1), makeToolMessage(2)], timestamp: "2026-01-01T00:00:00Z" } });
-  await tick();
-  const loadingRows = document.querySelectorAll(".docbank-matches").length;
-  reject(new Error("offline"));
-  await fileReferences.load("s1");
-  await tick();
-  try {
-    expect(loadingRows).toBe(0);
-    expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "s1" });
-    expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
-    expect(document.querySelector(".docbank-matches")?.textContent).toContain("Docbank unavailable");
-    expect(document.querySelector(".docbank-matches button")?.textContent?.trim()).toBe("Retry");
-  } finally {
-    await unmount(component);
-  }
 });
 
 describe("ToolCallGroup", () => {

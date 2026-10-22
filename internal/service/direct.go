@@ -38,6 +38,7 @@ import (
 // on local+engine replace runtime type assertions.
 type directBackend struct {
 	docbank        *docbank.Client
+	docbankMachine string
 	modelGroups    ModelGroups
 	db             db.Store
 	local          *db.DB

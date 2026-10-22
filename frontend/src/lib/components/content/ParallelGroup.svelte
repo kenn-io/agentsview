@@ -7,7 +7,6 @@
   import { m } from "../../i18n/index.js";
 
   interface Props {
-    docbankAt?: { sessionId: string; ordinal: number; source?: boolean };
     toolCalls: ToolCall[];
     callTimingByID?: Map<string, CallTiming>;
     isRunning?: boolean;
@@ -15,7 +14,6 @@
   }
 
   let {
-    docbankAt,
     toolCalls,
     callTimingByID,
     isRunning = false,
@@ -38,7 +36,6 @@
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
       {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
       <ToolBlock
-        {docbankAt}
         {toolCall}
         content=""
         label={displayToolName(toolCall)}

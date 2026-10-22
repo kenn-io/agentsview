@@ -1,39 +1,20 @@
 <script lang="ts">
-  import { messages } from "../../stores/messages.svelte.js";
-  import { Button } from "@kenn-io/kit-ui";
   import { fileReferences } from "../../stores/file-references.svelte.js";
   import { m, getLocale } from "../../i18n/index.js";
 
-  let { sessionId, ordinal, toolUseId = null, eventIndex = null, source = false, hasImage = true, sessionStatus = false }: {
-    sessionId: string;
-    ordinal: number;
+  let { sessionId = "", ordinal = 0, toolUseId = null, eventIndex = null }: {
+    sessionId?: string;
+    ordinal?: number;
     toolUseId?: string | null;
     eventIndex?: number | null;
-    source?: boolean;
-    hasImage?: boolean;
-    sessionStatus?: boolean;
   } = $props();
-  $effect(() => { if (hasImage || source) void fileReferences.load(sessionId, messages.sessionId === sessionId ? messages.loadedRevision?.trim() || messages.activeSessionToken : null); });
-  const entry = $derived(fileReferences.entries.get(sessionId));
-  const occurrences = $derived(entry?.result?.occurrences.filter((item) =>
-    item.message_ordinal === ordinal && item.tool_use_id === toolUseId && item.event_index === eventIndex,
-  ).map((item) => entry?.failed ? { ...item, state: "unavailable" as const, matches: [], match_total: 0 } : item) ?? []);
-  const loading = $derived(entry?.loading && (hasImage || occurrences.length > 0));
-  const unavailable = $derived(hasImage && (entry?.failed || (entry?.result?.source === "unavailable" && occurrences.length === 0)));
-  const disabled = $derived(!fileReferences.enabled || entry?.result?.integration === "disabled");
+  const occurrences = $derived(toolUseId === null
+    ? fileReferences.forMessage(sessionId, ordinal)
+    : fileReferences.forTool(toolUseId, eventIndex));
 </script>
 
-{#if !disabled && (occurrences.length || loading || unavailable || (sessionStatus && entry?.result?.source === "unavailable"))}
+{#if occurrences.length}
   <div class="docbank-matches">
-    {#if loading}
-      <span class="muted">{m.docbank_checking()}</span>
-    {:else if unavailable && occurrences.length === 0}
-      <div>{m.docbank_unavailable()} <Button size="sm" surface="soft" label={m.shared_retry()} onclick={() => fileReferences.refresh(sessionId)} /></div>
-    {/if}
-    {#if sessionStatus && entry?.result?.source === "unavailable"}
-      <span class="muted">{m.docbank_source_unavailable()}</span>
-    {/if}
-    {#if !entry?.loading}
     {#each occurrences as occurrence}
       <div>
         <div class="muted">{occurrence.size === null ? m.docbank_image_without_size({ n: occurrence.image_index + 1, mediaType: occurrence.media_type }) : m.docbank_image({ n: occurrence.image_index + 1, mediaType: occurrence.media_type, size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "byte", unitDisplay: "short" }).format(occurrence.size) })}</div>
@@ -55,12 +36,11 @@
           {:else if occurrence.state === "not_found"}
             {m.docbank_not_found()}
           {:else}
-            {m.docbank_unavailable()} <Button size="sm" surface="soft" label={m.shared_retry()} disabled={entry?.loading} onclick={() => fileReferences.refresh(sessionId)} />
+            {m.docbank_unavailable()}
           {/if}
         </div>
       </div>
     {/each}
-    {/if}
   </div>
 {/if}
 

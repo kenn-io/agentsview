@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,19 +11,17 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 // ClaudeSourceImage is lookup evidence, separate from the ingest projection.
 type ClaudeSourceImage struct {
-	SourceUUID     string
-	NextSourceUUID string
-	ToolUseID      string
-	Index          int
-	MediaType      string
-	Size           int64
-	SHA256         string
+	SourceUUID string
+	ToolUseID  string
+	Index      int
+	MediaType  string
+	Size       int64
+	SHA256     string
 }
 
 type claudeImageBlock struct {
@@ -38,7 +37,7 @@ type claudeImageBlock struct {
 
 // ClaudeSourceImages reads bounded JSONL records without changing archived messages.
 // The caller supplies the request deadline. Missing or incomplete evidence is explicit.
-func ClaudeSourceImages(ctx context.Context, path string, sessionID string, messageUUIDs map[string]int) ([]ClaudeSourceImage, error) {
+func ClaudeSourceImages(ctx context.Context, path string, archivedUUIDs map[string]int, archivedToolUseIDs map[string]int) ([]ClaudeSourceImage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -54,7 +53,7 @@ func ClaudeSourceImages(ctx context.Context, path string, sessionID string, mess
 	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	var images []ClaudeSourceImage
-	var entries []dagEntry
+	seen := make(map[string]bool, len(archivedUUIDs))
 	var sourceErr error
 	for {
 		if err := ctx.Err(); err != nil {
@@ -65,85 +64,36 @@ func ClaudeSourceImages(ctx context.Context, path string, sessionID string, mess
 			break
 		}
 		var entry struct {
-			UUID       string `json:"uuid"`
-			ParentUUID string `json:"parentUuid"`
-			Type       string `json:"type"`
-		}
-		if err := json.Unmarshal(line, &entry); err != nil {
-			sourceErr = errors.Join(sourceErr, err)
-			continue
-		}
-		if entry.Type != "user" && entry.Type != "assistant" {
-			continue
-		}
-		entries = append(entries, dagEntry{uuid: entry.UUID, parentUuid: entry.ParentUUID, entryType: entry.Type, line: string(line), lineIndex: len(entries)})
-	}
-	sourceErr = errors.Join(sourceErr, lr.Err())
-	if lr.skippedOversized {
-		sourceErr = errors.Join(sourceErr, os.ErrInvalid)
-	}
-	baseID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	entries, err = mergeClaudeAssistantMessageChunksContext(ctx, entries)
-	if err != nil {
-		return nil, err
-	}
-	branches, err := selectClaudeBranches(ctx, entries, baseID, "")
-	if err != nil {
-		return nil, err
-	}
-	if branches != nil {
-		var selected []dagEntry
-		for i, branch := range branches {
-			id := baseID
-			if i > 0 {
-				id += "-" + entries[branch.indices[0]].uuid
-			}
-			if id == sessionID {
-				for _, index := range branch.indices {
-					selected = append(selected, entries[index])
-				}
-				break
-			}
-		}
-		if selected == nil {
-			return nil, errors.Join(sourceErr, os.ErrNotExist)
-		}
-		entries = selected
-	}
-	pending := 0
-	for _, record := range entries {
-		if err := ctx.Err(); err != nil {
-			return images, errors.Join(sourceErr, err)
-		}
-		line := []byte(record.line)
-		var entry struct {
 			UUID    string `json:"uuid"`
 			Type    string `json:"type"`
 			Message struct {
-				Role    string         `json:"role"`
 				Content jsontext.Value `json:"content"`
 			} `json:"message"`
+		}
+		// Every archived UUID must survive in the source. Decode just its identity
+		// on lines without base64; image payloads are decoded only when present.
+		if !bytes.Contains(line, []byte("base64")) {
+			var identity struct {
+				UUID string `json:"uuid"`
+			}
+			if json.Unmarshal(line, &identity) == nil {
+				if _, ok := archivedUUIDs[identity.UUID]; ok {
+					seen[identity.UUID] = true
+				}
+			}
+			continue
 		}
 		if err := json.Unmarshal(line, &entry); err != nil {
 			sourceErr = errors.Join(sourceErr, err)
 			continue
 		}
-		if entry.Type != "user" && entry.Type != "assistant" {
-			continue
+		if _, ok := archivedUUIDs[entry.UUID]; ok {
+			seen[entry.UUID] = true
 		}
-		if _, stored := messageUUIDs[entry.UUID]; stored {
-			for i := pending; i < len(images); i++ {
-				images[i].NextSourceUUID = entry.UUID
-			}
-			pending = len(images)
-		}
-		if entry.Type != "user" || (entry.Message.Role != "" && entry.Message.Role != "user") {
+		if entry.Type != "user" || len(entry.Message.Content) == 0 || entry.Message.Content[0] != '[' {
 			continue
 		}
 		var blocks []claudeImageBlock
-		if len(entry.Message.Content) == 0 || entry.Message.Content[0] != '[' {
-			continue
-		}
 		if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil {
 			sourceErr = errors.Join(sourceErr, err)
 			continue
@@ -164,6 +114,9 @@ func ClaudeSourceImages(ctx context.Context, path string, sessionID string, mess
 		index := 0
 		for _, block := range blocks {
 			if block.Type == "tool_result" {
+				if _, ok := archivedToolUseIDs[block.ToolUseID]; !ok {
+					continue
+				}
 				var nested []claudeImageBlock
 				if len(block.Content) == 0 || block.Content[0] != '[' {
 					continue
@@ -180,10 +133,21 @@ func ClaudeSourceImages(ctx context.Context, path string, sessionID string, mess
 					}
 				}
 			} else if block.Type == "image" || block.Type == "document" {
-				add(block, "", index)
+				if _, ok := archivedUUIDs[entry.UUID]; ok {
+					add(block, "", index)
+				}
 				index++
 			}
 		}
 	}
-	return images, errors.Join(sourceErr, ctx.Err())
+	for uuid := range archivedUUIDs {
+		if !seen[uuid] {
+			sourceErr = errors.Join(sourceErr, os.ErrInvalid)
+			break
+		}
+	}
+	if lr.skippedOversized {
+		sourceErr = errors.Join(sourceErr, os.ErrInvalid)
+	}
+	return images, errors.Join(sourceErr, lr.Err(), ctx.Err())
 }

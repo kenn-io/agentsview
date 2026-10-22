@@ -1,48 +1,58 @@
-import { SvelteMap } from "svelte/reactivity";
 import { getApiV1SessionsByIdFileReferences } from "../api/generated/sessions/sessions.js";
 import type { ServiceFileReferencesResult } from "../api/generated/index.js";
 
-type Lookup = { loading: boolean; result?: ServiceFileReferencesResult; failed?: boolean };
-
 export class FileReferencesStore {
   enabled = $state(false);
-  entries = new SvelteMap<string, Lookup>();
-  private pending = new Map<string, Promise<void>>();
-  private revisions = new Map<string, string | null>();
+  result = $state<ServiceFileReferencesResult>();
+  status = $state<"idle" | "loading" | "ok" | "failed">("idle");
+  private sessionId = $state<string | null>(null);
+  private revision: string | null = null;
+  private request = 0;
+  private pending: Promise<void> = Promise.resolve();
 
-  reopen(id: string) {
-    this.entries.delete(id);
-    this.pending.delete(id);
-    this.revisions.delete(id);
+  track(sessionId: string | null, revision: string | null): Promise<void> {
+    if (!this.enabled) return Promise.resolve();
+    if (this.sessionId === sessionId && this.revision === revision) return this.pending;
+    if (this.sessionId !== sessionId) this.result = undefined;
+    this.sessionId = sessionId;
+    this.revision = revision;
+    return this.refresh();
   }
 
-  load(id: string, revision: string | null = null): Promise<void> {
-    if (!this.enabled) return Promise.resolve();
-    if (this.revisions.has(id) && this.revisions.get(id) !== revision) this.reopen(id);
-    this.revisions.set(id, revision);
-    if (this.entries.has(id)) return this.pending.get(id) ?? Promise.resolve();
-    return this.refresh(id);
-  }
-
-  refresh(id: string): Promise<void> {
-    if (!this.enabled) return Promise.resolve();
-    const existing = this.pending.get(id);
-    if (existing) return existing;
-    const previous = this.entries.get(id)?.result;
-    this.entries.set(id, { loading: true, result: previous });
-    const request = getApiV1SessionsByIdFileReferences({ id })
+  refresh(): Promise<void> {
+    const request = ++this.request;
+    if (!this.enabled || !this.sessionId) {
+      this.status = "idle";
+      this.result = undefined;
+      return Promise.resolve();
+    }
+    this.status = "loading";
+    this.pending = getApiV1SessionsByIdFileReferences({ id: this.sessionId })
       .then((result) => {
-        if (this.pending.get(id) === request) this.entries.set(id, { loading: false, result });
+        if (request !== this.request) return;
+        this.result = result;
+        this.status = "ok";
       })
       .catch(() => {
-        if (this.pending.get(id) === request)
-          this.entries.set(id, { loading: false, failed: true, result: previous });
-      })
-      .finally(() => {
-        if (this.pending.get(id) === request) this.pending.delete(id);
+        if (request === this.request) this.status = "failed";
       });
-    this.pending.set(id, request);
-    return request;
+    return this.pending;
+  }
+
+  forMessage(sessionId: string, ordinal: number) {
+    return this.enabled && sessionId === this.sessionId && this.result?.integration === "enabled"
+      ? this.result.occurrences.filter(
+          (item) => item.message_ordinal === ordinal && item.tool_use_id === null,
+        )
+      : [];
+  }
+
+  forTool(toolUseId: string, eventIndex: number | null) {
+    return this.enabled && this.result?.integration === "enabled"
+      ? this.result.occurrences.filter(
+          (item) => item.tool_use_id === toolUseId && item.event_index === eventIndex,
+        )
+      : [];
   }
 }
 

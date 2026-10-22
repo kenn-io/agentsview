@@ -24,7 +24,7 @@ func TestLookup(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := config.DocbankIntegration{URL: srv.URL, WebURL: "https://example.com/docbank/", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	result, err := New(cfg).Lookup(t.Context(), digest)
+	result, err := newTestClient(t, cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Equal(t, 15, result.Total)
 	require.Len(t, result.Matches, 3)
@@ -33,7 +33,7 @@ func TestLookup(t *testing.T) {
 	assert.Equal(t, "trash", result.Matches[2].State)
 	assert.Empty(t, result.Matches[2].Path)
 	cfg.WebURL = ""
-	result, err = New(cfg).Lookup(t.Context(), digest)
+	result, err = newTestClient(t, cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Empty(t, result.Matches[0].OpenURL)
 }
@@ -47,6 +47,7 @@ func TestLookupFailures(t *testing.T) {
 		name    string
 		handler http.HandlerFunc
 	}{
+		{"empty page", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }},
 		{"status", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }},
 		{"oversized", func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(strings.Repeat(" ", maxPageBytes+1)))
@@ -56,9 +57,21 @@ func TestLookupFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(tc.handler)
 			defer srv.Close()
-			_, err := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
+			_, err := newTestClient(t, config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
 			assert.EqualError(t, err, "docbank unavailable")
 		})
 	}
 	assert.Zero(t, hits.Load())
+}
+
+func newTestClient(t *testing.T, cfg config.DocbankIntegration) *Client {
+	t.Helper()
+	client, err := New(cfg)
+	require.NoError(t, err)
+	return client
+}
+func TestNewRejectsRemoteHTTP(t *testing.T) {
+	client, err := New(config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
+	require.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
+	assert.Nil(t, client)
 }

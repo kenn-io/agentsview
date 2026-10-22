@@ -19,7 +19,7 @@ import (
 func TestFileReferencesRoute(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	dbtest.SeedSession(t, s.db.(*db.DB), "image-session", "p1")
-	s.sessions = service.NewReadOnlyBackend(s.db, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "http://127.0.0.1:1", APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	s.sessions = service.NewReadOnlyBackend(s.db, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: "http://127.0.0.1:1", APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	for _, tc := range []struct {
 		id     string
 		status int
@@ -50,4 +50,11 @@ func TestVersionReportsDocbankConfiguration(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &version))
 		assert.Equal(t, enabled, version.DocbankEnabled)
 	}
+}
+
+func newTestDocbank(t *testing.T, cfg config.DocbankIntegration) *docbank.Client {
+	t.Helper()
+	client, err := docbank.New(cfg)
+	require.NoError(t, err)
+	return client
 }

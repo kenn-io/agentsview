@@ -1557,20 +1557,17 @@ func parseLinear(
 	return []ParseResult{{Session: sess, Messages: messages}}, nil
 }
 
-type claudeBranch struct {
-	indices  []int
-	parentID string
-}
-
-// selectClaudeBranches owns retry and fork selection for ingest and source evidence.
-// A nil selection uses linear order, as ingest does for incomplete DAGs.
-func selectClaudeBranches(ctx context.Context, entries []dagEntry, sessionID, parentSessionID string) ([]claudeBranch, error) {
-	for _, entry := range entries {
-		if entry.uuid == "" {
-			return nil, nil
-		}
-	}
-
+// parseDAG builds a parent->children adjacency map and walks the
+// tree to detect fork points. Large-gap forks produce separate
+// ParseResults; small-gap retries follow the latest branch.
+func parseDAG(
+	ctx context.Context, entries []dagEntry,
+	sessionID, project, machine, parentSessionID string,
+	fileInfo FileInfo,
+	subagentMap map[string]string,
+	globalStart, globalEnd time.Time,
+	meta claudeSessionMeta,
+) ([]ParseResult, error) {
 	// Build parent -> children ordered by line position and
 	// collect the set of all uuids for connectivity checks.
 	children := make(map[string][]int, len(entries))
@@ -1594,7 +1591,11 @@ func selectClaudeBranches(ctx context.Context, entries []dagEntry, sessionID, pa
 	// references resolve to an existing entry's uuid. If not,
 	// fall back to linear parsing to avoid dropping messages.
 	if len(roots) != 1 {
-		return nil, nil
+		return parseLinear(
+			ctx, entries, sessionID, project, machine,
+			parentSessionID, fileInfo, subagentMap,
+			globalStart, globalEnd, meta,
+		)
 	}
 	for i, e := range entries {
 		if err := contextErrEvery(ctx, i); err != nil {
@@ -1602,22 +1603,30 @@ func selectClaudeBranches(ctx context.Context, entries []dagEntry, sessionID, pa
 		}
 		if e.parentUuid != "" {
 			if _, ok := uuidSet[e.parentUuid]; !ok {
-				return nil, nil
+				return parseLinear(
+					ctx, entries, sessionID, project, machine,
+					parentSessionID, fileInfo, subagentMap,
+					globalStart, globalEnd, meta,
+				)
 			}
 		}
 	}
 
 	// Walk from the root, collecting branches.
 	// branches[0] is the main branch; subsequent entries are forks.
+	type branch struct {
+		indices  []int
+		parentID string // immediate parent session ID
+	}
 
-	var branches []claudeBranch
+	var branches []branch
 
 	// walkBranch follows the DAG from a starting index, collecting
 	// all entries on the chosen path. At fork points, it either
 	// follows the latest child (small gap) or splits (large gap).
 	// ownerID is the session ID of the branch that owns this walk.
 	var walkBranch func(startIdx int, ownerID string) ([]int, error)
-	var forkBranches []claudeBranch
+	var forkBranches []branch
 
 	walkBranch = func(startIdx int, ownerID string) ([]int, error) {
 		var path []int
@@ -1660,7 +1669,7 @@ func selectClaudeBranches(ctx context.Context, entries []dagEntry, sessionID, pa
 					}
 					forkBranches = append(
 						forkBranches,
-						claudeBranch{
+						branch{
 							indices:  forkPath,
 							parentID: ownerID,
 						},
@@ -1679,31 +1688,9 @@ func selectClaudeBranches(ctx context.Context, entries []dagEntry, sessionID, pa
 	}
 	branches = append(
 		branches,
-		claudeBranch{indices: mainPath, parentID: parentSessionID},
+		branch{indices: mainPath, parentID: parentSessionID},
 	)
 	branches = append(branches, forkBranches...)
-
-	return branches, nil
-}
-
-// parseDAG builds a parent->children adjacency map and walks the
-// tree to detect fork points. Large-gap forks produce separate
-// ParseResults; small-gap retries follow the latest branch.
-func parseDAG(
-	ctx context.Context, entries []dagEntry,
-	sessionID, project, machine, parentSessionID string,
-	fileInfo FileInfo,
-	subagentMap map[string]string,
-	globalStart, globalEnd time.Time,
-	meta claudeSessionMeta,
-) ([]ParseResult, error) {
-	branches, err := selectClaudeBranches(ctx, entries, sessionID, parentSessionID)
-	if err != nil {
-		return nil, err
-	}
-	if branches == nil {
-		return parseLinear(ctx, entries, sessionID, project, machine, parentSessionID, fileInfo, subagentMap, globalStart, globalEnd, meta)
-	}
 
 	// Build results for each branch.
 	var results []ParseResult

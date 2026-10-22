@@ -22,8 +22,11 @@ type Client struct {
 	cfg  config.DocbankIntegration
 }
 
-func New(cfg config.DocbankIntegration) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+func New(cfg config.DocbankIntegration) (*Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 type Match struct {
@@ -39,7 +42,7 @@ type Result struct {
 }
 
 type remotePage struct {
-	Items []struct {
+	Items *[]struct {
 		Version struct {
 			ID     uuid.UUID `json:"id"`
 			NodeID int64     `json:"node_id"`
@@ -52,7 +55,7 @@ type remotePage struct {
 		Path    string `json:"path"`
 		Current bool   `json:"is_current"`
 	} `json:"items"`
-	Total int `json:"total"`
+	Total *int `json:"total"`
 }
 
 func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
@@ -80,11 +83,11 @@ func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
 		return Result{}, unavailable
 	}
 	var raw remotePage
-	if json.Unmarshal(data, &raw) != nil || raw.Total < len(raw.Items) || len(raw.Items) > 10 {
+	if json.Unmarshal(data, &raw) != nil || raw.Items == nil || raw.Total == nil || *raw.Total < len(*raw.Items) || len(*raw.Items) > 10 {
 		return Result{}, unavailable
 	}
-	out := Result{Total: raw.Total, Matches: []Match{}}
-	for _, item := range raw.Items {
+	out := Result{Total: *raw.Total, Matches: []Match{}}
+	for _, item := range *raw.Items {
 		state, path := "prior", item.Path
 		if item.Current {
 			state = "current"

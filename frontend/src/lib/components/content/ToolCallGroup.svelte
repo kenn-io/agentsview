@@ -8,8 +8,6 @@
   import { parseContent, enrichSegments } from "../../utils/content-parser.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
-  import DocbankMatches from "./DocbankMatches.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import { collectSearchBlocks } from "../../search/block-text.js";
@@ -109,12 +107,8 @@
         <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>{divider.label}</div>
       {/if}
       {@const calls = message.tool_calls ?? []}
-      {@const docbankAt = { sessionId: message.session_id, ordinal: message.ordinal, source: sessions.sessions.find((s) => s.id === message.session_id)?.agent === "claude" }}
       {@const turn = turnByMessage.get(message.id)}
       <div data-message-ordinal={message.ordinal}>
-        {#if docbankAt.source || message.ordinal === 0}
-          <DocbankMatches {...docbankAt} hasImage={false} sessionStatus={message.ordinal === 0} />
-        {/if}
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
             <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
@@ -123,7 +117,6 @@
         {#if calls.length === 1}
           {@const soloCall = calls[0]!}
           <ToolBlock
-            {docbankAt}
             toolCall={soloCall}
             content=""
             label={displayToolName(soloCall)}
@@ -137,7 +130,6 @@
           />
         {:else if calls.length >= 2}
           <ParallelGroup
-            {docbankAt}
             toolCalls={calls}
             callTimingByID={callByToolUseID}
             isRunning={isRunningTurn(message)}
@@ -146,7 +138,6 @@
         {:else}
           {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
             <ToolBlock
-              {docbankAt}
               content={seg.content}
               label={seg.label}
               toolCall={seg.toolCall}

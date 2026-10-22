@@ -581,6 +581,10 @@ func daemonOriginURL(rawURL string) string {
 func newService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
+	docbankOption, err := service.WithConfiguredDocbank(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	switch tr.Mode {
 	case transportHTTP:
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
@@ -607,7 +611,7 @@ func newService(ctx context.Context,
 		// engine is nil — CLI reads don't need it, and Sync
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(
-			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), service.WithConfiguredDocbank(cfg),
+			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), docbankOption,
 		), cleanup, nil
 	}
 }
@@ -643,6 +647,10 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
+	docbankOption, err := service.WithConfiguredDocbank(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {
@@ -657,6 +665,6 @@ func newPGReadService(
 	}
 	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(
-		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), service.WithConfiguredDocbank(cfg),
+		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), docbankOption,
 	), cleanup, nil
 }

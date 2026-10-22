@@ -37,7 +37,7 @@ func (c DocbankIntegration) Validate() error {
 			return fmt.Errorf("[integrations.docbank] invalid URL")
 		}
 		if err := ValidateExtractTransport(u, false); err != nil {
-			return fmt.Errorf("[integrations.docbank] %w", err)
+			return fmt.Errorf("[integrations.docbank] url must be https, or http to a loopback host")
 		}
 	}
 	return nil

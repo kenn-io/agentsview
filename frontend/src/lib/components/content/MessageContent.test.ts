@@ -692,31 +692,9 @@ describe("MessageContent filtered code fences", () => {
 const docbankLookup = vi.hoisted(() => vi.fn().mockResolvedValue({ integration: "disabled", occurrences: [] }));
 vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
 
-it("shows Docbank evidence for a Claude image-only prompt beside the next stored message", async () => {
-  const { fileReferences } = await import("../../stores/file-references.svelte.js");
-  fileReferences.entries.clear();
-  docbankLookup.mockReset().mockResolvedValue({ integration: "enabled", source: "available", occurrences: [{ message_ordinal: 0, tool_use_id: null, event_index: null, image_index: 0, media_type: "image/png", size: 3, sha256: "a".repeat(64), state: "not_found", matches: [], match_total: 0 }] });
+it("shows tracked Docbank evidence under the matching message", async () => {
+  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
+  await trackDocbank({ integration: "enabled", occurrences: [imageOccurrence] });
   await render(message({ content: "What does this image show?" }), { session: session() });
-  await fileReferences.load("session-1");
-  await tick();
-  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "session-1" });
   expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
-});
-
-it("keeps Docbank source discovery quiet across text-only Claude messages", async () => {
-  const { fileReferences } = await import("../../stores/file-references.svelte.js");
-  fileReferences.entries.clear();
-  let resolve!: (value: unknown) => void;
-  docbankLookup.mockReset().mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
-  for (let ordinal = 0; ordinal < 3; ordinal++) {
-    await render(message({ id: ordinal + 1, ordinal, content: "Text only" }), { session: session() });
-  }
-  const loadingRows = document.querySelectorAll(".docbank-matches").length;
-  resolve({ integration: "enabled", source: "unavailable", occurrences: [] });
-  await fileReferences.load("session-1");
-  await tick();
-  expect(loadingRows).toBe(0);
-  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "session-1" });
-  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
-  expect(document.querySelector(".docbank-matches")?.textContent?.trim()).toBe("Source transcript unavailable");
 });

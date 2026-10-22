@@ -151,7 +151,9 @@ evidence; they do not establish whether a tool helped the task.
   `tool_use_id` placement. The lookup reads only an existing local source, skips
   oversized records, and reports missing or incomplete sources explicitly.
   Reverified against retry, fork, and truncated-record parser fixtures on
-  2026-10-22. Source evidence uses the ingest parser's branch selection.
+  2026-10-22. Source evidence uses archived `source_uuid` and `tool_use_id` values to
+  select entries. Every archived message UUID must exist in the decoded source;
+  missing entries report the source unavailable.
 
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`

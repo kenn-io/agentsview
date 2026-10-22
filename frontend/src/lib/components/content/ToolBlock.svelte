@@ -21,12 +21,10 @@
   import {
     displayFormattedToolResult,
     displayToolResult,
-    hasRetainedToolImage,
   } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
-    docbankAt?: { sessionId: string; ordinal: number; source?: boolean };
     content: string;
     label?: string;
     toolCall?: ToolCall;
@@ -97,7 +95,7 @@
     return lines.length ? lines.join("\n") : null;
   }
 
-  let { docbankAt, content, label, toolCall, searchScope, durationLabel,
+  let { content, label, toolCall, searchScope, durationLabel,
     isSlow = false, isRunning = false, inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
@@ -327,14 +325,9 @@
         {:else}
           <pre class="tool-content output-content" {@attach searchBlock(outputKey)}>{outputContent}</pre>
         {/if}
-        {#if docbankAt && hasRetainedToolImage(toolCall?.result_content ?? "")}
-          <DocbankMatches {...docbankAt} source={false} toolUseId={toolCall?.tool_use_id} />
-        {/if}
       {/if}
     {/if}
-    {#if docbankAt?.source && !hasRetainedToolImage(toolCall?.result_content ?? "")}
-      <DocbankMatches {...docbankAt} source={false} hasImage={false} toolUseId={toolCall?.tool_use_id} />
-    {/if}
+    {#if toolCall}<DocbankMatches toolUseId={toolCall.tool_use_id} />{/if}
     {#if resultEvents.length > 0}
       <button class="history-header" aria-expanded={!historyCollapsed} onclick={(e) => {
         e.stopPropagation();
@@ -358,9 +351,7 @@
                 {#if event.agent_id}<span class="meta-tag"><span class="meta-label">{m.tool_block_agent_label()}</span>{event.agent_id}</span>{/if}
               </div>
               <pre class="tool-content output-content history-content" {@attach searchBlock(historyKeys[eventIndex])}>{event.content}</pre>
-              {#if docbankAt && hasRetainedToolImage(event.content)}
-                <DocbankMatches {...docbankAt} source={false} toolUseId={toolCall?.tool_use_id} eventIndex={event.event_index} />
-              {/if}
+              {#if toolCall}<DocbankMatches toolUseId={toolCall.tool_use_id} eventIndex={event.event_index} />{/if}
             </div>
           {/each}
         </div>

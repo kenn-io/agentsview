@@ -49,12 +49,18 @@ func WithDocbank(client *docbank.Client) DirectBackendOption {
 }
 
 // WithConfiguredDocbank applies the same integration configuration to every local backend.
-func WithConfiguredDocbank(cfg config.Config) DirectBackendOption {
-	var client *docbank.Client
-	if cfg.Integrations.Docbank.Configured() {
-		client = docbank.New(cfg.Integrations.Docbank)
+func WithConfiguredDocbank(cfg config.Config) (DirectBackendOption, error) {
+	client, err := docbank.New(cfg.Integrations.Docbank)
+	if err != nil {
+		return nil, err
 	}
-	return WithDocbank(client)
+	if !cfg.Integrations.Docbank.Configured() {
+		client = nil
+	}
+	return func(b *directBackend) {
+		b.docbank = client
+		b.docbankMachine = cfg.InstallationID
+	}, nil
 }
 
 func (b *directBackend) FileReferences(ctx context.Context, id string) (FileReferencesResult, error) {
@@ -88,6 +94,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		name    string
 	}
 	tools := make(map[string]toolAt)
+	byTool := make(map[string]int)
 	for _, message := range messages {
 		if message.SourceUUID != "" {
 			byUUID[message.SourceUUID] = message.Ordinal
@@ -95,6 +102,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		add(message.Ordinal, nil, nil, nil, db.MarkdownAssetImages(message.Content))
 		for _, call := range message.ToolCalls {
 			tools[call.ToolUseID] = toolAt{message.Ordinal, call.ToolName}
+			byTool[call.ToolUseID] = message.Ordinal
 			add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), nil, db.RetainedToolResultImages(call.ResultContent))
 			for _, event := range call.ResultEvents {
 				add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), new(event.EventIndex), db.RetainedToolResultImages(event.Content))
@@ -106,19 +114,16 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 		path := ""
 		sourceCtx, cancelSource := context.WithTimeout(ctx, 5*time.Second)
 		full, fullErr := b.db.GetSessionFull(sourceCtx, id)
-		if fullErr == nil && full != nil && full.FilePath != nil {
+		if fullErr == nil && full != nil && full.FilePath != nil && (full.Machine == "" || full.Machine == "local" || full.Machine == b.docbankMachine) {
 			path = *full.FilePath
 		}
-		images, sourceErr := parser.ClaudeSourceImages(sourceCtx, path, id, byUUID)
+		images, sourceErr := parser.ClaudeSourceImages(sourceCtx, path, byUUID, byTool)
 		cancelSource()
 		if sourceErr != nil {
 			out.Source = "unavailable"
 		}
 		for _, image := range images {
 			ordinal, ok := byUUID[image.SourceUUID]
-			if !ok {
-				ordinal, ok = byUUID[image.NextSourceUUID]
-			}
 			var toolID, toolName *string
 			if image.ToolUseID != "" {
 				at, exists := tools[image.ToolUseID]

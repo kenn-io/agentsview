@@ -66,6 +66,10 @@ func classifySyncArgForCommand(
 func syncService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
+	docbankOption, err := service.WithConfiguredDocbank(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	if tr.Mode == transportHTTP {
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
@@ -90,7 +94,7 @@ func syncService(ctx context.Context,
 		engine.Close()
 		closeWriteDB(d, lock)
 	}
-	return service.NewDirectBackend(d, engine, service.WithConfiguredDocbank(cfg)), cleanup, nil
+	return service.NewDirectBackend(d, engine, docbankOption), cleanup, nil
 }
 
 // classifySyncArg returns {Path: arg} when arg is clearly a path:
