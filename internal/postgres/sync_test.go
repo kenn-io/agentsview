@@ -663,8 +663,8 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 
 	result, err := ps.Push(ctx, true, nil)
 	require.NoError(t, err, "full push")
-	require.NotZero(t, result.MessagesPushed,
-		"expected messages to be pushed on full push")
+	assert.Equal(t, 1, result.SessionsPushed)
+	assert.Equal(t, 1, result.MessagesPushed)
 
 	var updatedAt2 time.Time
 	require.NoError(t, ps.pg.QueryRowContext(ctx,
@@ -674,55 +674,6 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 
 	assert.True(t, updatedAt2.After(updatedAt1),
 		"updated_at not bumped: before=%v, after=%v", updatedAt1, updatedAt2)
-}
-
-func TestPushFullBypassesHeuristic(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-
-	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"test-machine", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
-	defer ps.Close()
-
-	ctx := context.Background()
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
-
-	started := "2026-03-11T12:00:00Z"
-	sess := db.Session{
-		ID:           "sess-full-001",
-		Project:      "test-project",
-		Machine:      "local",
-		Agent:        "claude",
-		StartedAt:    &started,
-		MessageCount: 1,
-	}
-	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
-	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
-		{
-			SessionID: "sess-full-001",
-			Ordinal:   0,
-			Role:      "user",
-			Content:   "test",
-		},
-	}), "insert messages")
-
-	_, err = ps.Push(ctx, false, nil)
-	require.NoError(t, err, "first push")
-
-	require.NoError(t, local.SetSyncState(t.Context(),
-		"last_push_at", "",
-	), "resetting watermark")
-
-	result, err := ps.Push(ctx, true, nil)
-	require.NoError(t, err, "full push")
-	assert.Equal(t, 1, result.SessionsPushed)
-	assert.Equal(t, 1, result.MessagesPushed)
 }
 
 func TestPushDetectsSchemaReset(t *testing.T) {

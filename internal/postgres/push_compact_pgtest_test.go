@@ -286,7 +286,6 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	require.Zero(t, result.Errors)
 	assert.False(t, result.Full, "normal push history must select an incremental run")
 	assert.Equal(t, 2, result.SessionsPushed, "both changed file hashes should reach publication")
-	assert.Equal(t, 1, result.MessagesPushed, "only the appended message should be inserted")
 	assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
 	t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 	return bytes

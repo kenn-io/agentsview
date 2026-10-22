@@ -3487,9 +3487,8 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 
 	_, err := f.pusher.DB().ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1`, f.session.ID)
 	require.NoError(t, err)
-	store := &Store{pg: f.pusher.DB()}
-	_, before, found := store.GetSessionVersion(t.Context(), f.session.ID)
-	require.True(t, found)
+	var before time.Time
+	require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(), "SELECT updated_at FROM sessions WHERE id=$1", f.session.ID).Scan(&before))
 
 	usage.OutputTokens = 3
 	require.NoError(t, f.local.ReplaceSessionUsageEvents(
@@ -3497,9 +3496,9 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 	))
 	_, err = f.pusher.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	_, after, found := store.GetSessionVersion(t.Context(), f.session.ID)
-	require.True(t, found)
-	assert.Greater(t, after, before, "changed usage must wake remote session viewers")
+	var after time.Time
+	require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(), "SELECT updated_at FROM sessions WHERE id=$1", f.session.ID).Scan(&after))
+	assert.True(t, after.After(before), "changed usage must advance updated_at and wake remote session viewers")
 
 	var got mirroredUsage
 	require.NoError(t, f.pusher.DB().QueryRowContext(t.Context(),
