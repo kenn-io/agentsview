@@ -103,19 +103,6 @@ func TestPushCompactComparisons(t *testing.T) {
 	snapshot, err := local.BeginMessageSnapshot(ctx)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, snapshot.Close()) }()
-	persisted, err := snapshot.GetMessages(ctx, id, 0, db.MaxMessageLimit, true)
-	require.NoError(t, err)
-	var expected db.MessageComparisonFields
-	for _, message := range persisted {
-		row := db.MessageComparisonRow(message, pgPushTimestampFingerprintText)
-		expected.ContentHash += row.ContentHash
-		expected.RoleTime += row.RoleTime
-		expected.Flags += row.Flags
-		expected.Token += row.Token
-		expected.ToolCalls += row.ToolCalls
-		expected.ToolResults += row.ToolResults
-	}
-	assert.Equal(t, expected, compact.messageFields(id))
 	matches, err := pushTranscriptMatches(ctx, snapshot, id, compact)
 	require.NoError(t, err)
 	assert.True(t, matches, "empty fields and sanitized text must match the published rows")

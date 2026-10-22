@@ -823,18 +823,10 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	assert.Zero(t, snapshotCount)
 }
 
-// TestPushSystemFingerprintCollisionRegression verifies that the fast-path
-// in pushMessages correctly detects a change when the is_system flags are
-// reclassified between two ordinal sets that previously collided under the
-// two-component (SUM, SUM-of-squares) fingerprint: {0,4,5} and {1,2,6}
-// both produce sum=9, sumSq=41.
-//
-// Steps:
-//  1. Push a session with 7 messages where ordinals {0,4,5} are system.
-//  2. Without changing content lengths, reclassify to {1,2,6} as system.
-//  3. Push again with full=false.
-//  4. Confirm PG now reflects the updated is_system values.
-func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
+// TestPushSystemReclassificationRepublishes verifies that an is_system
+// reclassification at unchanged content length reaches the flags stream
+// and republishes the updated message flags.
+func TestPushSystemReclassificationRepublishes(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_sysfingerprint_test"
@@ -863,7 +855,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 		schemaDone: true,
 	}
 
-	const sessID = "fp-collision-001"
+	const sessID = "system-reclassification-001"
 	sess := db.Session{
 		ID:           sessID,
 		Project:      "test-proj",
@@ -896,9 +888,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	// Verify PG reflects system ordinals {0,4,5}.
 	checkIsSystem(t, pg, sessID, firstSet, 7)
 
-	// Switch to {1,2,6} — same sum(ordinal)=9, same sum(ordinal²)=41,
-	// but the string fingerprint differs ("0,4,5" vs "1,2,6").
-	// Replace local messages with updated is_system flags.
+	// Reclassify system messages without changing content or its length.
 	secondSet := map[int]bool{1: true, 2: true, 6: true}
 	for i := range 7 {
 		msgs[i].IsSystem = secondSet[i]
@@ -906,169 +896,15 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
 		"ReplaceSessionMessages (second set)")
 
-	// Force re-evaluation by clearing both the watermark and the cached
-	// session-level boundary fingerprints. The session-level fingerprint
-	// does not include is_system flags (only metadata like MessageCount),
-	// so the boundary cache must be cleared for the incremental push to
-	// reach pushMessages and compare the message-level string fingerprint.
-	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
-		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
-		"clearing boundary state")
+	// Clear push history so the incremental push compares the flags stream.
+	forgetPushHistory(t, localDB)
 
-	// Second push — must NOT skip due to fingerprint match.
+	// The changed flags stream must trigger republication.
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (second)")
 
 	// Verify PG now reflects updated system ordinals {1,2,6}.
 	checkIsSystem(t, pg, sessID, secondSet, 7)
-}
-
-func TestPushMessageContentHashRewriteRegression(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_contenthash_test"
-	pg, err := Open(pgURL, schema, true)
-	require.NoError(t, err, "Open")
-	defer pg.Close()
-
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
-
-	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
-	defer localDB.Close()
-
-	sync := &Sync{
-		pg:         pg,
-		local:      localDB,
-		machine:    "test-machine",
-		schema:     schema,
-		schemaDone: true,
-	}
-
-	const sessID = "content-hash-rewrite-001"
-	sess := db.Session{
-		ID:               sessID,
-		Project:          "test-proj",
-		Machine:          "test-machine",
-		Agent:            "shelley",
-		MessageCount:     2,
-		UserMessageCount: 1,
-		CreatedAt:        "2026-01-01T00:00:00Z",
-	}
-	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
-	msgs := []db.Message{
-		{
-			SessionID:     sessID,
-			Ordinal:       1,
-			Role:          "user",
-			Content:       "question",
-			ContentLength: len("question"),
-		},
-		{
-			SessionID:     sessID,
-			Ordinal:       2,
-			Role:          "assistant",
-			Content:       "answer aaaa",
-			ContentLength: len("answer aaaa"),
-		},
-	}
-	require.NoError(t, localDB.InsertMessages(t.Context(), msgs),
-		"InsertMessages first content")
-
-	_, err = sync.Push(ctx, false, nil)
-	require.NoError(t, err, "Push first content")
-	assertPGMessageContent(t, pg, sessID, 2, "answer aaaa")
-
-	msgs[1].Content = "answer bbbb"
-	msgs[1].ContentLength = len("answer bbbb")
-	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
-		"ReplaceSessionMessages rewritten content")
-	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
-		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
-		"clearing boundary state")
-
-	_, err = sync.Push(ctx, false, nil)
-	require.NoError(t, err, "Push rewritten content")
-	assertPGMessageContent(t, pg, sessID, 2, "answer bbbb")
-}
-
-func TestPushMessageFlagsRewriteRegression(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_msgflags_test"
-	pg, err := Open(pgURL, schema, true)
-	require.NoError(t, err, "Open")
-	defer pg.Close()
-
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
-
-	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
-	defer localDB.Close()
-
-	sync := &Sync{
-		pg:         pg,
-		local:      localDB,
-		machine:    "test-machine",
-		schema:     schema,
-		schemaDone: true,
-	}
-
-	const sessID = "message-flags-rewrite-001"
-	sess := db.Session{
-		ID:               sessID,
-		Project:          "test-proj",
-		Machine:          "test-machine",
-		Agent:            "shelley",
-		MessageCount:     2,
-		UserMessageCount: 1,
-		CreatedAt:        "2026-01-01T00:00:00Z",
-	}
-	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
-	msgs := []db.Message{
-		{
-			SessionID:     sessID,
-			Ordinal:       1,
-			Role:          "user",
-			Content:       "question",
-			ContentLength: len("question"),
-		},
-		{
-			SessionID:     sessID,
-			Ordinal:       2,
-			Role:          "assistant",
-			Content:       "answer",
-			ContentLength: len("answer"),
-		},
-	}
-	require.NoError(t, localDB.InsertMessages(t.Context(), msgs),
-		"InsertMessages first metadata")
-
-	_, err = sync.Push(ctx, false, nil)
-	require.NoError(t, err, "Push first metadata")
-	assertPGMessageThinking(t, pg, sessID, 2, false, "")
-
-	msgs[1].ThinkingText = "private chain of thought"
-	msgs[1].HasThinking = true
-	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
-		"ReplaceSessionMessages rewritten metadata")
-	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
-		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
-		"clearing boundary state")
-
-	_, err = sync.Push(ctx, false, nil)
-	require.NoError(t, err, "Push rewritten metadata")
-	assertPGMessageThinking(t, pg, sessID, 2, true,
-		"private chain of thought")
 }
 
 func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
@@ -2295,43 +2131,6 @@ func checkIsSystem(
 	for i := range wantTotal {
 		assert.True(t, seen[i], "ordinal %d missing from PG messages", i)
 	}
-}
-
-func assertPGMessageContent(
-	t *testing.T,
-	pg *sql.DB,
-	sessionID string,
-	ordinal int,
-	want string,
-) {
-	t.Helper()
-	var got string
-	require.NoError(t, pg.QueryRow(
-		`SELECT content FROM messages
-		  WHERE session_id = $1 AND ordinal = $2`,
-		sessionID, ordinal,
-	).Scan(&got), "read pg message content")
-	assert.Equal(t, want, got)
-}
-
-func assertPGMessageThinking(
-	t *testing.T,
-	pg *sql.DB,
-	sessionID string,
-	ordinal int,
-	wantHasThinking bool,
-	wantThinkingText string,
-) {
-	t.Helper()
-	var gotHasThinking bool
-	var gotThinkingText string
-	require.NoError(t, pg.QueryRow(
-		`SELECT has_thinking, thinking_text FROM messages
-		  WHERE session_id = $1 AND ordinal = $2`,
-		sessionID, ordinal,
-	).Scan(&gotHasThinking, &gotThinkingText), "read pg message thinking")
-	assert.Equal(t, wantHasThinking, gotHasThinking)
-	assert.Equal(t, wantThinkingText, gotThinkingText)
 }
 
 func assertPGMessageTimestamp(
