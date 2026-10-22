@@ -311,7 +311,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: ./.github/actions/go-cache-restore
         with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.custom-gcl.yml', 'Makefile') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
 
@@ -325,9 +325,7 @@ jobs:
           export PATH="$linter_dir:$PATH"
           if [ ! -f "$linter_dir/custom-gcl.exe" ]; then
             mkdir -p "$linter_dir"
-            if [ ! -f "$linter_dir/golangci-lint.exe" ]; then
-              bash scripts/retry.sh 3 5 make lint-tools
-            fi
+            bash scripts/retry.sh 3 5 make lint-tools
             make nilaway-golangci-build
             mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
           fi
