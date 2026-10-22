@@ -78,12 +78,10 @@ func TestPushSuffixPublication(t *testing.T) {
 					}},
 				}
 			}
-			if len(messages) > 0 {
-				messages[0].ToolCalls[0].ResultContent = "initial\n\nsecond"
-				messages[0].ToolCalls[0].ResultContentLength = 15
-				messages[0].ToolCalls[0].ResultEvents = append(messages[0].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-0", Source: "tool_result", Status: "completed", Content: "second", ContentLength: 6})
-				messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
-			}
+			messages[0].ToolCalls[0].ResultContent = "initial\n\nsecond"
+			messages[0].ToolCalls[0].ResultContentLength = 15
+			messages[0].ToolCalls[0].ResultEvents = append(messages[0].ToolCalls[0].ResultEvents, db.ToolResultEvent{EventIndex: 1, ToolUseID: "call-0", Source: "tool_result", Status: "completed", Content: "second", ContentLength: 6})
+			messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
 			require.NoError(t, local.InsertMessages(t.Context(), messages))
 			require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: "sample", InputTokens: 22, DedupKey: "usage"}}))
 			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
