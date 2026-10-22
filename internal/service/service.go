@@ -435,6 +435,7 @@ type ListFilter struct {
 	AutomatedFilterSet bool   `json:"-"`
 	IncludeAutomated   bool   `json:"include_automated,omitempty"`
 	IncludeChildren    bool   `json:"include_children,omitempty"`
+	EachRow            bool   `json:"each_row,omitempty"`
 	IncludeSource      bool   `json:"include_source,omitempty"`
 	Outcome            string `json:"outcome,omitempty"`      // comma-separated
 	HealthGrade        string `json:"health_grade,omitempty"` // comma-separated

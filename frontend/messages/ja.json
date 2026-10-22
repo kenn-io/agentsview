@@ -2927,5 +2927,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: ライブトークンの確認が必要です",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
-  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
+  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}",
+  "settings_notifications_title": "デスクトップ通知",
+  "settings_notifications_description": "エージェントがターンを終えたときに通知を受け取る",
+  "settings_notifications_keywords": "通知 デスクトップ ターン 終了 notifications",
+  "settings_notifications_unavailable": "このアプリではデスクトップ通知を利用できません。",
+  "settings_notifications_enable": "デスクトップ通知を有効にする",
+  "settings_notifications_turn_end_hint": "通知はシステムの AgentsView の通知設定に従います。",
+  "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
+  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"
 }

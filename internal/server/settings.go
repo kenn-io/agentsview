@@ -9,20 +9,21 @@ import (
 
 // settingsResponse is the JSON shape returned by GET /api/v1/settings.
 type settingsResponse struct {
-	AgentDirs           map[string][]string       `json:"agent_dirs"`
-	SessionProviders    []sessionProviderResponse `json:"session_providers"`
-	DisabledAgents      []parser.AgentType        `json:"disabled_agents"`
-	Terminal            terminalResponse          `json:"terminal"`
-	GithubConfigured    bool                      `json:"github_configured"`
-	Host                string                    `json:"host"`
-	Port                int                       `json:"port"`
-	ChartPalette        config.ChartPalette       `json:"chart_palette"`
-	ZoomLevel           *config.ZoomLevel         `json:"zoom_level,omitempty"`
-	ToolResultImages    string                    `json:"tool_result_images" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
-	InsightDefaultAgent string                    `json:"insight_default_agent" doc:"Agent CLI used when an insight generation request does not choose one"`
-	AuthToken           string                    `json:"auth_token,omitempty"`
-	RequireAuth         bool                      `json:"require_auth"`
-	ReadOnly            bool                      `json:"read_only"`
+	Notifications       config.NotificationsConfig `json:"notifications"`
+	AgentDirs           map[string][]string        `json:"agent_dirs"`
+	SessionProviders    []sessionProviderResponse  `json:"session_providers"`
+	DisabledAgents      []parser.AgentType         `json:"disabled_agents"`
+	Terminal            terminalResponse           `json:"terminal"`
+	GithubConfigured    bool                       `json:"github_configured"`
+	Host                string                     `json:"host"`
+	Port                int                        `json:"port"`
+	ChartPalette        config.ChartPalette        `json:"chart_palette"`
+	ZoomLevel           *config.ZoomLevel          `json:"zoom_level,omitempty"`
+	ToolResultImages    string                     `json:"tool_result_images" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	InsightDefaultAgent string                     `json:"insight_default_agent" doc:"Agent CLI used when an insight generation request does not choose one"`
+	AuthToken           string                     `json:"auth_token,omitempty"`
+	RequireAuth         bool                       `json:"require_auth"`
+	ReadOnly            bool                       `json:"read_only"`
 }
 
 type sessionProviderResponse struct {
@@ -46,13 +47,14 @@ type terminalResponse struct {
 // settingsUpdateRequest is the JSON body for PUT /api/v1/settings.
 // All fields are optional; only non-nil fields are applied.
 type settingsUpdateRequest struct {
-	Terminal         *terminalResponse `json:"terminal,omitempty"`
-	AuthToken        *string           `json:"auth_token,omitempty"`
-	RequireAuth      *bool             `json:"require_auth,omitempty"`
-	ChartPalette     *string           `json:"chart_palette,omitempty"`
-	ZoomLevel        *config.ZoomLevel `json:"zoom_level,omitempty"`
-	ToolResultImages *string           `json:"tool_result_images,omitempty" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
-	DisabledAgents   *[]string         `json:"disabled_agents,omitempty"`
+	Notifications    *config.NotificationsConfig `json:"notifications,omitempty"`
+	Terminal         *terminalResponse           `json:"terminal,omitempty"`
+	AuthToken        *string                     `json:"auth_token,omitempty"`
+	RequireAuth      *bool                       `json:"require_auth,omitempty"`
+	ChartPalette     *string                     `json:"chart_palette,omitempty"`
+	ZoomLevel        *config.ZoomLevel           `json:"zoom_level,omitempty"`
+	ToolResultImages *string                     `json:"tool_result_images,omitempty" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	DisabledAgents   *[]string                   `json:"disabled_agents,omitempty"`
 	// AgentHomes replaces the alternate home list for each listed provider.
 	// An empty list clears that provider's homes.
 	AgentHomes *map[string][]string `json:"agent_homes,omitempty"`

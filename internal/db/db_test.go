@@ -6368,7 +6368,7 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
+	insertSession(t, srcDB, "s1", "proj", func(s *Session) { s.TurnOpen = false })
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "keep this pinned"),
 		asstMsg("s1", 1, "reply"),
@@ -6389,6 +6389,10 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 	count, err := dstDB.CopyTrashedDataFrom(srcPath)
 	requireNoError(t, err, "CopyTrashedDataFrom")
 	require.Len(t, count, 1, "copied trashed sessions")
+
+	var turnOpen bool
+	require.NoError(t, dstDB.getReader().QueryRow(ctx, "SELECT turn_open FROM sessions WHERE id = ?", "s1").Scan(&turnOpen))
+	assert.False(t, turnOpen)
 
 	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
 	requireNoError(t, err, "ListPinnedMessages")
@@ -8689,15 +8693,19 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		terminationStatus *string
 		wantStatus        string
 		wantNull          bool
+		turnOpen          *bool
+		wantOpen          bool
 	}{
 		{
 			name:              "stores authoritative status",
 			terminationStatus: new("awaiting_user"),
 			wantStatus:        "awaiting_user",
+			turnOpen:          new(false),
 		},
 		{
 			name:     "nil clears status",
 			wantNull: true,
+			wantOpen: true,
 		},
 	}
 
@@ -8708,10 +8716,12 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 				ID:                "incremental-status",
 				Agent:             "claude",
 				TerminationStatus: new("tool_call_pending"),
+				TurnOpen:          true,
 			}), "seed session")
 
 			update := IncrementalSessionUpdate{
 				TerminationStatus: tt.terminationStatus,
+				TurnOpen:          tt.turnOpen,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,
@@ -8720,6 +8730,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			got, err := d.GetSessionFull(t.Context(), "incremental-status")
 			require.NoError(t, err, "read updated session")
 			require.NotNil(t, got, "updated session")
+			assert.Equal(t, tt.wantOpen, got.TurnOpen)
 			if tt.wantNull {
 				assert.Nil(t, got.TerminationStatus, "termination_status")
 				return
@@ -10062,4 +10073,46 @@ func TestSessionGroupColumnsMigrateWithoutLosingRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "job-a", session.GroupKey)
+}
+
+func TestMigration_TurnOpenColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d := testDBAtPath(t, path, "initial migration db")
+	insertSession(t, d, "s1", "proj")
+	insertSession(t, d, "s2", "proj", func(s *Session) { s.Agent = "codex" })
+	require.NoError(t, d.Close())
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN turn_open`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version = 127`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	reopened, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	var open *bool
+	require.NoError(t, reopened.Reader().QueryRowContext(t.Context(), `SELECT turn_open FROM sessions WHERE id = 's1'`).Scan(&open))
+	assert.Nil(t, open)
+	session, err := reopened.GetSession(t.Context(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.True(t, session.TurnOpen)
+	full, err := reopened.GetSessionFull(t.Context(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	assert.True(t, full.TurnOpen)
+	other, err := reopened.GetSession(t.Context(), "s2")
+	require.NoError(t, err)
+	require.NotNil(t, other)
+	assert.False(t, other.TurnOpen)
+	page, err := reopened.ListSessions(t.Context(), SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 2)
+	for _, row := range page.Sessions {
+		assert.Equal(t, row.Agent == "claude", row.TurnOpen)
+	}
+	var version int
+	require.NoError(t, reopened.Reader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Equal(t, 127, version)
 }

@@ -2852,5 +2852,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud：实时令牌需要处理",
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
-  "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
+  "status_bar_codex_cloud_homes": "Codex 主目录：{homes}",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 结束回合时获得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回合 结束 notifications",
+  "settings_notifications_unavailable": "此应用无法使用桌面通知。",
+  "settings_notifications_enable": "启用桌面通知",
+  "settings_notifications_turn_end_hint": "通知遵循系统中 AgentsView 的通知设置。",
+  "notification_turn_end_body": "Agent 已完成本回合，正在等待你的输入。",
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

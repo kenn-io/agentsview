@@ -2855,5 +2855,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud：即時權杖需要處理",
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
-  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"
+  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 結束回合時取得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回合 結束 notifications",
+  "settings_notifications_unavailable": "此應用程式無法使用桌面通知。",
+  "settings_notifications_enable": "啟用桌面通知",
+  "settings_notifications_turn_end_hint": "通知遵循系統中 AgentsView 的通知設定。",
+  "notification_turn_end_body": "Agent 已完成本回合，正在等待你的輸入。",
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

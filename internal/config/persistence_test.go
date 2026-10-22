@@ -182,3 +182,20 @@ func TestCursorSecret_PreservesOtherFields(t *testing.T) {
 	assert.NotEmpty(t, fileCfg.CursorSecret, "cursor_secret missing in file")
 	assert.Equal(t, "my-token", fileCfg.GithubToken, "github_token lost/changed in file")
 }
+
+func TestSaveSettingsPersistsNotifications(t *testing.T) {
+	dir := setupTestEnv(t)
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+	for _, enabled := range []bool{true, false} {
+		want := NotificationsConfig{Enabled: enabled}
+		require.NoError(t, cfg.SaveSettings(map[string]any{"notifications": want}))
+		assert.Equal(t, want, cfg.Notifications)
+		data, err := os.ReadFile(filepath.Join(dir, configFileName))
+		require.NoError(t, err)
+		var reloaded Config
+		require.NoError(t, reloaded.applyConfigTOML(string(data)))
+		assert.Equal(t, want, reloaded.Notifications)
+	}
+}

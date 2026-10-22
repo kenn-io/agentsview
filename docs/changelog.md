@@ -29,6 +29,15 @@ The latest release is
 
 **New features**
 
+- Get a native desktop toast when the turn really ends and the agent waits
+  for you, for providers that store a waiting state, including Claude Code.
+  Enable notifications in Settings. New sessions can toast on their first
+  finished turn. Previously completed replies, subagents, and automated sessions
+  stay silent, as does the focused session. The watcher keeps open turns
+  through long background work. Leaving and re-entering the recent-session list
+  doesn't repeat alerts. Missed updates arrive within five minutes while the app
+  runs.
+
 - Anonymous telemetry now counts empty searches, visible errors in supported
   workflows, and failed sync attempts. Query and error details stay local. The
   existing [telemetry opt-out](https://agentsview.io/docs/configuration/#privacy-and-telemetry)
@@ -222,6 +231,7 @@ The latest release is
 
 **Bug fixes**
 
+- Claude Code's waiting indicator now updates during incremental sync.
 - **Settings > Appearance > Chart colors** now works when AgentsView serves
   a read-only store, such as `pg serve` or a ClickHouse or DuckDB mirror. The
   server saves chart colors and the default zoom to `config.toml`; settings
