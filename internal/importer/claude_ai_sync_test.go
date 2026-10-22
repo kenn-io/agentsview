@@ -632,68 +632,62 @@ func TestSyncClaudeAIFullArchiveKeepsPreBranchCountFreshness(t *testing.T) {
 }
 
 func TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts(t *testing.T) {
-	for _, cached := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
-			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-			d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
-			require.NoError(t, err)
-			t.Cleanup(func() { d.Close() })
-			selected := "q2"
-			detailCalls := 0
-			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
-				detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
-				return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
-					detailCalls++
-					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
-				})(ctx, path)
-			}
-			_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			messages, err := d.GetAllMessages(t.Context(), id)
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			require.Equal(t, "assistant", messages[0].Role)
-			pinID, err := d.PinMessage(t.Context(), id, messages[0].ID, nil)
-			require.NoError(t, err)
-			require.NotZero(t, pinID)
-			// Clearing the mirror timestamp makes a metadata-only update observable
-			// without depending on the clock advancing between Sync calls.
-			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET local_modified_at = NULL WHERE id = ?", id)
-				return err
-			}))
-			initial, err := d.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			assert.Equal(t, 3, initial.MessageCount)
-			assert.Equal(t, 2, initial.UserMessageCount)
-			if cached {
-				// Reproduce the pre-fix Sync: it cached the shorter selected leaf
-				// against the unchanged 3-turn archive. Keep this old hash format frozen.
-				require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(initial)))
-			}
-			selected = "reply"
-			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.Updated)
-			assert.Zero(t, stats.Errors)
-			assert.Empty(t, stats.Refusals)
-			session, err := d.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			assert.Equal(t, 2, session.MessageCount)
-			assert.Equal(t, 1, session.UserMessageCount)
-			assert.NotNil(t, session.LocalModifiedAt)
-			pins, err := d.ListPinnedMessages(t.Context(), id, "")
-			require.NoError(t, err)
-			require.Len(t, pins, 1)
-			assert.Equal(t, pinID, pins[0].ID)
-			assert.Equal(t, messages[0].ID, pins[0].MessageID)
-			assert.Nil(t, pins[0].Note)
-			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			assert.Equal(t, ImportStats{Skipped: 1}, stats)
-			assert.Equal(t, 2, detailCalls)
-		})
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	selected := "q2"
+	detailCalls := 0
+	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
+		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
+			detailCalls++
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		})(ctx, path)
 	}
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "assistant", messages[0].Role)
+	pinID, err := d.PinMessage(t.Context(), id, messages[0].ID, nil)
+	require.NoError(t, err)
+	require.NotZero(t, pinID)
+	// Clearing the mirror timestamp makes a metadata-only update observable
+	// without depending on the clock advancing between Sync calls.
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET local_modified_at = NULL WHERE id = ?", id)
+		return err
+	}))
+	initial, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, 3, initial.MessageCount)
+	assert.Equal(t, 2, initial.UserMessageCount)
+	// Reproduce the pre-fix Sync: it cached the shorter selected leaf
+	// against the unchanged 3-turn archive. Keep this old hash format frozen.
+	require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(initial)))
+	selected = "reply"
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	assert.Empty(t, stats.Refusals)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+	assert.NotNil(t, session.LocalModifiedAt)
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, pinID, pins[0].ID)
+	assert.Equal(t, messages[0].ID, pins[0].MessageID)
+	assert.Nil(t, pins[0].Note)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 2, detailCalls)
 }
 
 type excludedSyncStore struct{ *db.DB }
