@@ -274,7 +274,7 @@ jobs:
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
-        run: go test -tags "fts5" -coverprofile=coverage.out ${{ matrix.package }} -v -count=1 -timeout=20m
+        run: go test -tags "fts5" ${{ matrix.package }} -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -282,7 +282,7 @@ jobs:
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
-        run: go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -tags "fts5" -coverprofile=coverage.out -v -count=1 -timeout=20m
+        run: go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -tags "fts5" -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -383,18 +383,6 @@ jobs:
       - name: Run eval-ingest build-tag tests
         if: matrix.testSet == 'evalingest'
         run: make test-evalingest
-
-      - name: Upload coverage
-        if: runner.os == 'Linux' && matrix.testSet != 'evalingest'
-        id: codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-        with:
-          files: coverage.out
-        continue-on-error: true
-
-      - name: Warn on coverage upload failure
-        if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
-        run: echo "::warning::Codecov upload failed"
 
       - name: Save Go caches
         if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
