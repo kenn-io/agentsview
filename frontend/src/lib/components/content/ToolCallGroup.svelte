@@ -112,8 +112,8 @@
       {@const docbankAt = { sessionId: message.session_id, ordinal: message.ordinal, source: sessions.sessions.find((s) => s.id === message.session_id)?.agent === "claude" }}
       {@const turn = turnByMessage.get(message.id)}
       <div data-message-ordinal={message.ordinal}>
-        {#if docbankAt.source}
-          <DocbankMatches {...docbankAt} source={message.ordinal === 0} />
+        {#if docbankAt.source || message.ordinal === 0}
+          <DocbankMatches {...docbankAt} hasImage={false} sessionStatus={message.ordinal === 0} />
         {/if}
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}

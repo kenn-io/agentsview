@@ -2956,5 +2956,7 @@
   "docbank_not_found": "Docbank-da yoxdur",
   "docbank_unavailable": "Docbank əlçatan deyil",
   "docbank_image": "Şəkil {n} · {mediaType} · {size}",
+  "docbank_image_without_size": "Şəkil {n} · {mediaType}",
+  "docbank_source_unavailable": "Mənbə söhbət qeydi əlçatan deyil",
   "docbank_more": "Docbank-da daha {count} nəticə"
 }

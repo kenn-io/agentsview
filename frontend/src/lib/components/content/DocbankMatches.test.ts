@@ -71,3 +71,59 @@ describe("Docbank matches", () => {
     expect(document.body.textContent?.trim()).toBe("");
   });
 });
+
+it("omits unknown image size without a trailing separator", async () => {
+  await render([{ ...occurrence, size: null }]);
+  expect(document.querySelector(".docbank-matches .muted")?.textContent).toBe("Image 1 · image/png");
+});
+
+it.each(["found", "not_found", "unavailable"] as const)("places the %s state below its image lead", async (state) => {
+  await render([{ ...occurrence, state }]);
+  const lead = document.querySelector(".docbank-matches .muted")!;
+  expect(lead.nextElementSibling?.textContent).toContain(state === "found" ? "Current" : state === "not_found" ? "Not in Docbank" : "Docbank unavailable");
+});
+
+it("keeps source discovery quiet for blocks without known images", async () => {
+  let resolve!: (value: unknown) => void;
+  lookup.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  for (let ordinal = 0; ordinal < 3; ordinal++) {
+    components.push(mount(DocbankMatches, { target: document.body, props: { sessionId: "session-a", ordinal, source: true, hasImage: false, sessionStatus: ordinal === 0 } }));
+  }
+  await tick();
+  const loadingText = document.body.textContent?.trim();
+  resolve({ integration: "enabled", source: "available", occurrences: [{ ...occurrence, tool_use_id: null }] });
+  await fileReferences.load("session-a");
+  await tick();
+  expect(loadingText).toBe("");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
+  expect(document.body.textContent).toContain("Current · /images/a.png");
+});
+
+it("shows one session request failure and retries once", async () => {
+  lookup.mockRejectedValueOnce(new Error("offline"));
+  for (let ordinal = 0; ordinal < 7; ordinal++) {
+    components.push(mount(DocbankMatches, { target: document.body, props: { sessionId: "session-a", ordinal, source: true, hasImage: false, sessionStatus: ordinal === 0 } }));
+  }
+  await tick();
+  await fileReferences.load("session-a");
+  await tick();
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
+  expect(document.querySelectorAll("button")).toHaveLength(1);
+  expect(document.body.textContent).toContain("Docbank unavailable");
+  lookup.mockResolvedValueOnce({ integration: "enabled", source: "available", occurrences: [] });
+  document.querySelector<HTMLButtonElement>("button")!.click();
+  await fileReferences.load("session-a");
+  await tick();
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(document.body.textContent?.trim()).toBe("");
+});
+
+it("reports a missing source transcript without Retry", async () => {
+  lookup.mockResolvedValueOnce({ integration: "enabled", source: "unavailable", occurrences: [] });
+  components.push(mount(DocbankMatches, { target: document.body, props: { sessionId: "session-a", ordinal: 0, source: true, hasImage: false, sessionStatus: true } }));
+  await tick();
+  await fileReferences.load("session-a");
+  await tick();
+  expect(document.body.textContent?.trim()).toBe("Source transcript unavailable");
+  expect(document.querySelector("button")).toBeNull();
+});

@@ -2866,5 +2866,7 @@
   "docbank_not_found": "Docbank에 없음",
   "docbank_unavailable": "Docbank에 연결할 수 없음",
   "docbank_image": "이미지 {n} · {mediaType} · {size}",
+  "docbank_image_without_size": "이미지 {n} · {mediaType}",
+  "docbank_source_unavailable": "원본 대화 기록을 사용할 수 없음",
   "docbank_more": "Docbank에 {count}개 더 있음"
 }

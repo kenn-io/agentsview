@@ -702,3 +702,21 @@ it("shows Docbank evidence for a Claude image-only prompt beside the next stored
   expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "session-1" });
   expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
 });
+
+it("keeps Docbank source discovery quiet across text-only Claude messages", async () => {
+  const { fileReferences } = await import("../../stores/file-references.svelte.js");
+  fileReferences.entries.clear();
+  let resolve!: (value: unknown) => void;
+  docbankLookup.mockReset().mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  for (let ordinal = 0; ordinal < 3; ordinal++) {
+    await render(message({ id: ordinal + 1, ordinal, content: "Text only" }), { session: session() });
+  }
+  const loadingRows = document.querySelectorAll(".docbank-matches").length;
+  resolve({ integration: "enabled", source: "unavailable", occurrences: [] });
+  await fileReferences.load("session-1");
+  await tick();
+  expect(loadingRows).toBe(0);
+  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "session-1" });
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
+  expect(document.querySelector(".docbank-matches")?.textContent?.trim()).toBe("Source transcript unavailable");
+});

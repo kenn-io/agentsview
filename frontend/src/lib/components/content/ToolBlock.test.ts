@@ -750,3 +750,15 @@ it("looks up retained images in Docbank only after output expansion", async () =
   await click(".output-header");
   expect(docbankLookup).toHaveBeenCalledTimes(1);
 });
+
+it("shows Docbank rows only for discovered Claude tool images", async () => {
+  const { fileReferences } = await import("../../stores/file-references.svelte.js");
+  fileReferences.entries.clear();
+  fileReferences.entries.set("source-images", { loading: true });
+  await render({ docbankAt: { sessionId: "source-images", ordinal: 0, source: true }, toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: "Image removed from archive" }) });
+  await click(".tool-header");
+  expect(document.querySelector(".docbank-matches")).toBeNull();
+  fileReferences.entries.set("source-images", { loading: false, result: { integration: "enabled", source: "available", occurrences: [{ message_ordinal: 0, tool_use_id: "read-1", tool_name: "Read", event_index: null, image_index: 0, media_type: "image/png", size: 3, sha256: "a".repeat(64), state: "not_found", matches: [], match_total: 0 }] } });
+  await tick();
+  expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
+});

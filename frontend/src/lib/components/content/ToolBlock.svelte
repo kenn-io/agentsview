@@ -333,7 +333,7 @@
       {/if}
     {/if}
     {#if docbankAt?.source && !hasRetainedToolImage(toolCall?.result_content ?? "")}
-      <DocbankMatches {...docbankAt} source={false} toolUseId={toolCall?.tool_use_id} />
+      <DocbankMatches {...docbankAt} source={false} hasImage={false} toolUseId={toolCall?.tool_use_id} />
     {/if}
     {#if resultEvents.length > 0}
       <button class="history-header" aria-expanded={!historyCollapsed} onclick={(e) => {

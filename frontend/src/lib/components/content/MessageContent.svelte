@@ -312,8 +312,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         {/if}
       {/if}
     {/each}
-    {#if message.content.includes("asset://") || docbankAt.source}
-      <DocbankMatches {...docbankAt} source={docbankAt.source && message.ordinal === 0} />
+    {#if message.content.includes("asset://") || docbankAt.source || message.ordinal === 0}
+      <DocbankMatches {...docbankAt} hasImage={message.content.includes("asset://")} sessionStatus={message.ordinal === 0} />
     {/if}
     {#if ui.isBlockVisible("tool")}
       {@const turn = turnByMessage.get(message.id)}
