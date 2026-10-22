@@ -730,3 +730,23 @@ describe("ToolBlock collapsed previews", () => {
     expect(text(".tool-preview")).not.toContain("legacy todo");
   });
 });
+
+const docbankLookup = vi.hoisted(() => vi.fn());
+vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
+
+it("looks up retained images in Docbank only after output expansion", async () => {
+  const { fileReferences } = await import("../../stores/file-references.svelte.js");
+  fileReferences.entries.clear();
+  docbankLookup.mockReset().mockResolvedValue({ integration: "disabled", occurrences: [] });
+  await render({ docbankAt: { sessionId: "images", ordinal: 0 }, toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]` }) });
+  expect(docbankLookup).not.toHaveBeenCalled();
+  await click(".tool-header");
+  expect(docbankLookup).not.toHaveBeenCalled();
+  await click(".output-header");
+  await fileReferences.load("images");
+  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "images" });
+  expect(document.querySelector(".docbank-matches")).toBeNull();
+  await click(".output-header");
+  await click(".output-header");
+  expect(docbankLookup).toHaveBeenCalledTimes(1);
+});

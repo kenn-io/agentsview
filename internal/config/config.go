@@ -946,6 +946,7 @@ type Config struct {
 	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
+	Integrations         IntegrationsConfig          `json:"integrations,omitempty" toml:"integrations"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
@@ -1771,6 +1772,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
+		Integrations                   IntegrationsConfig     `toml:"integrations"`
 		Insights                       InsightsConfig         `toml:"insights"`
 		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
@@ -2063,6 +2065,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	c.mergeRecallExtractTOML(file.Recall, meta)
+	if meta.IsDefined("integrations") {
+		c.Integrations = file.Integrations
+	}
 	if meta.IsDefined("insights") {
 		c.Insights = file.Insights
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)

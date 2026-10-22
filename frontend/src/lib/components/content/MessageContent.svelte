@@ -14,6 +14,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
+  import DocbankMatches from "./DocbankMatches.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
   import CodeBlock from "./CodeBlock.svelte";
@@ -76,6 +77,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
+  const docbankAt = $derived({ sessionId: message.session_id, ordinal: message.ordinal, source: owningSession?.agent === "claude" });
   let roleLabel = $derived.by(() => {
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext || sessionKind === "subagent") return m.message_content_role_agent();
@@ -310,12 +312,15 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         {/if}
       {/if}
     {/each}
+    {#if message.content.includes("asset://") || docbankAt.source}
+      <DocbankMatches {...docbankAt} source={docbankAt.source && message.ordinal === 0} />
+    {/if}
     {#if ui.isBlockVisible("tool")}
       {@const turn = turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
-        <ToolBlock toolCall={soloCall} content="" label={displayToolName(soloCall)}
+        <ToolBlock {docbankAt} toolCall={soloCall} content="" label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
             callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,
@@ -324,11 +329,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
-        <ParallelGroup toolCalls={structuredCalls} callTimingByID={callByToolUseID}
+        <ParallelGroup {docbankAt} toolCalls={structuredCalls} callTimingByID={callByToolUseID}
           isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
-          <ToolBlock content={seg.content} label={seg.label} toolCall={seg.toolCall}
+          <ToolBlock {docbankAt} content={seg.content} label={seg.label} toolCall={seg.toolCall}
             searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: `seg${segIdx}` }} />
         {/each}
       {/if}

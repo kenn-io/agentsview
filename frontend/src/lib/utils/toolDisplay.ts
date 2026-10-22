@@ -98,3 +98,7 @@ function displayToolResultArray(content: string, mode: ToolResultDisplayMode): s
   }
   return hasImage ? text.join("\n\n") : content;
 }
+
+export function hasRetainedToolImage(content: string): boolean {
+  return content.includes('"input_image"') || (content.includes('"agentsview_image"') && content.includes('"image_ref"'));
+}

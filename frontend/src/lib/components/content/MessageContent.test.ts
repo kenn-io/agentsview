@@ -688,3 +688,17 @@ describe("MessageContent filtered code fences", () => {
     unmount(component);
   });
 });
+
+const docbankLookup = vi.hoisted(() => vi.fn().mockResolvedValue({ integration: "disabled", occurrences: [] }));
+vi.mock("../../api/generated/sessions/sessions.js", () => ({ getApiV1SessionsByIdFileReferences: docbankLookup }));
+
+it("shows Docbank evidence for a Claude image-only prompt beside the next stored message", async () => {
+  const { fileReferences } = await import("../../stores/file-references.svelte.js");
+  fileReferences.entries.clear();
+  docbankLookup.mockReset().mockResolvedValue({ integration: "enabled", source: "available", occurrences: [{ message_ordinal: 0, tool_use_id: null, event_index: null, image_index: 0, media_type: "image/png", size: 3, sha256: "a".repeat(64), state: "not_found", matches: [], match_total: 0 }] });
+  await render(message({ content: "What does this image show?" }), { session: session() });
+  await fileReferences.load("session-1");
+  await tick();
+  expect(docbankLookup).toHaveBeenCalledExactlyOnceWith({ id: "session-1" });
+  expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
+});

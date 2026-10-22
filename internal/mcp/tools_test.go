@@ -1282,7 +1282,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary,
-		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
+		ToolGetToolCalls, ToolGetSessionFileReferences, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
 	}, names)
 
@@ -2008,4 +2008,20 @@ func TestListSessionsRejectsUnknownMachine(t *testing.T) {
 	_, _, err := ts.listSessions(t.Context(), nil, listSessionsIn{Machine: "missing.example"})
 	var filterError *db.MachineFilterError
 	require.ErrorAs(t, err, &filterError)
+}
+
+func TestFileReferencesTool(t *testing.T) {
+	ts, _ := newTestToolset(t)
+	srv := newServer(ServeOptions{Service: ts.svc})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	res, err := ct.CallTool(t.Context(), callParams(ToolGetSessionFileReferences, map[string]any{"session_id": "s1"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out service.FileReferencesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	assert.Equal(t, "disabled", out.Integration)
+	assert.Empty(t, out.Occurrences)
 }

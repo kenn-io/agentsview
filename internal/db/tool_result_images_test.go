@@ -777,3 +777,36 @@ func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 	assert.Equal(t, int64(1), stats.Payloads)
 	assert.NotContains(t, stripped, "asset://")
 }
+
+func TestRetainedToolResultImages(t *testing.T) {
+	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	inline := `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]`
+	offloaded := `[{"type":"agentsview_image","version":1,"image_ref":"asset://` + digest + `.png","media_type":"image/png","byte_size":3}]`
+	images := RetainedToolResultImages("agent-a:\n" + inline + "\n\nagent-b:\n" + offloaded)
+	require.Len(t, images, 2)
+	for i, image := range images {
+		assert.Equal(t, i, image.Index)
+		assert.Equal(t, digest, image.SHA256)
+		require.NotNil(t, image.Size)
+		assert.Equal(t, int64(3), *image.Size)
+		assert.Equal(t, "image/png", image.MediaType)
+	}
+	for _, content := range []string{
+		`[{"type":"agentsview_image","media_type":"image/png","byte_size":3}]`,
+		`[{"type":"input_image","image_url":"data:text/plain;base64,YWJj"}]`,
+		`[{"type":"input_image","image_url":"data:image/png;base64,!!"}]`,
+		`[{"type":"agentsview_image","image_ref":"asset://bad.png","media_type":"image/png","byte_size":3}]`,
+		`[{`,
+	} {
+		assert.Empty(t, RetainedToolResultImages(content))
+	}
+}
+
+func TestMarkdownAssetImages(t *testing.T) {
+	const ref = "asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png"
+	images := MarkdownAssetImages("![pasted](" + ref + ") [link](" + ref + ") ![remote](https://example.com/image.png) `![code](" + ref + ")`")
+	require.Len(t, images, 1)
+	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
+	assert.Nil(t, images[0].Size)
+	assert.Equal(t, "image/png", images[0].MediaType)
+}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -36,6 +37,7 @@ import (
 // interface (GetSessionFilePath, Reader). Structural nil checks
 // on local+engine replace runtime type assertions.
 type directBackend struct {
+	docbank        *docbank.Client
 	modelGroups    ModelGroups
 	db             db.Store
 	local          *db.DB

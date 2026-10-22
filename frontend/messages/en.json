@@ -2946,5 +2946,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: live tokens need attention",
   "status_bar_codex_cloud_oldest_failure": "Oldest failure: {time}",
   "status_bar_codex_cloud_last_success": "Last successful sync: {time}",
-  "status_bar_codex_cloud_homes": "Codex homes: {homes}"
+  "status_bar_codex_cloud_homes": "Codex homes: {homes}",
+  "docbank_checking": "Checking Docbank…",
+  "docbank_current": "Current",
+  "docbank_prior": "Prior version",
+  "docbank_trash": "Trash",
+  "docbank_not_found": "Not in Docbank",
+  "docbank_unavailable": "Docbank unavailable",
+  "docbank_image": "Image {n} · {mediaType} · {size}",
+  "docbank_more": "+{count} more in Docbank"
 }

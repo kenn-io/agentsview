@@ -43,6 +43,8 @@ const (
 	ToolSearchDocs         = "search_docs"
 )
 
+const ToolGetSessionFileReferences = "get_session_file_references"
+
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
 type Profile string
@@ -121,6 +123,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact session image bytes in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +

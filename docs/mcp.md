@@ -79,6 +79,7 @@ client will see these tools:
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+| `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
 | `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
 | `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
 | `get_child_sessions`   | List the sub-agent and fork sessions started from one session            |
@@ -467,3 +468,15 @@ project names, and usage totals. Treat it like access to your session archive.
 
 For every flag, see [`agentsview mcp`](/docs/commands/#agentsview-mcp) in the
 CLI reference.
+
+## Find images in Docbank
+
+`get_session_file_references` takes `session_id` and returns the same result as
+`GET /api/v1/sessions/{id}/file-references`. It is available in the full
+profile. Each occurrence includes its message ordinal, optional tool and
+result-event coordinates, SHA-256 digest, and `found`, `not_found`, or
+`unavailable` state. Matches identify current files, prior versions, or trash
+and include an exact version link when configured. A disabled integration
+returns an empty list. See
+[Docbank configuration](https://agentsview.io/docs/configuration/#find-transcript-images-in-docbank)
+for coverage and limits.

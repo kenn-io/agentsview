@@ -644,3 +644,9 @@ func normalizeMCPHTTPAddr(addr string, allowInsecure bool) (string, error) {
 	}
 	return trimmed, nil
 }
+
+func (s *mcpDaemonService) FileReferences(ctx context.Context, id string) (service.FileReferencesResult, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (service.FileReferencesResult, error) {
+		return service.FileReferences(ctx, svc, id)
+	})
+}

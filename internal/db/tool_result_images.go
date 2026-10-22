@@ -643,3 +643,48 @@ func (db *DB) ProjectToolResultImagesForComparison(
 	}
 	return ProjectToolResultImagesWithoutWriting(messages, policy, db.AssetsDir())
 }
+
+// RetainedImage identifies exact bytes still available in the archive or asset store.
+type RetainedImage struct {
+	Index     int    `json:"image_index"`
+	MediaType string `json:"media_type"`
+	Size      *int64 `json:"size"`
+	SHA256    string `json:"sha256"`
+}
+
+// RetainedToolResultImages walks the same sections used by image retention.
+func RetainedToolResultImages(content string) []RetainedImage {
+	var images []RetainedImage
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		var blocks []jsontext.Value
+		if json.Unmarshal(raw, &blocks) != nil {
+			return
+		}
+		for _, raw := range blocks {
+			if p, ok := parseOffloadedImagePlaceholder(raw); ok {
+				if digest, _, ok := assetImageDigest(p.ImageRef); ok {
+					images = append(images, RetainedImage{Index: len(images), MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest})
+				}
+				continue
+			}
+			var block toolImageBlock
+			if json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)) != nil || block.Type != "input_image" {
+				continue
+			}
+			var uri string
+			if json.Unmarshal(block.ImageURL, &uri) != nil {
+				continue
+			}
+			mediaType, payload, ok := parseInlineImageHeader(uri)
+			if !ok {
+				continue
+			}
+			hash := sha256.New()
+			size, err := io.Copy(hash, base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload)))
+			if err == nil {
+				images = append(images, RetainedImage{Index: len(images), MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))})
+			}
+		}
+	})
+	return images
+}

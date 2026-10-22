@@ -2970,5 +2970,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud\u202f: les jetons en direct demandent votre attention",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec\u202f: {time}",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie\u202f: {time}",
-  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}"
+  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}",
+  "docbank_checking": "Recherche dans Docbank…",
+  "docbank_current": "Version actuelle",
+  "docbank_prior": "Version antérieure",
+  "docbank_trash": "Corbeille",
+  "docbank_not_found": "Absent de Docbank",
+  "docbank_unavailable": "Docbank indisponible",
+  "docbank_image": "Image {n} · {mediaType} · {size}",
+  "docbank_more": "+{count} dans Docbank"
 }

@@ -2858,5 +2858,13 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: 실시간 토큰 확인 필요",
   "status_bar_codex_cloud_oldest_failure": "가장 오래된 실패: {time}",
   "status_bar_codex_cloud_last_success": "마지막 동기화 성공: {time}",
-  "status_bar_codex_cloud_homes": "Codex 홈: {homes}"
+  "status_bar_codex_cloud_homes": "Codex 홈: {homes}",
+  "docbank_checking": "Docbank 확인 중…",
+  "docbank_current": "현재 버전",
+  "docbank_prior": "이전 버전",
+  "docbank_trash": "휴지통",
+  "docbank_not_found": "Docbank에 없음",
+  "docbank_unavailable": "Docbank에 연결할 수 없음",
+  "docbank_image": "이미지 {n} · {mediaType} · {size}",
+  "docbank_more": "Docbank에 {count}개 더 있음"
 }
