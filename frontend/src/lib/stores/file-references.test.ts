@@ -20,11 +20,15 @@ describe("file references store", () => {
         }),
     );
     const old = store.track("a", "2");
+    const oldSignal = lookup.mock.calls[1]![1]!.signal;
+    expect(oldSignal).toBeInstanceOf(AbortSignal);
     expect(store.result).toEqual(result);
     expect(store.status).toBe("loading");
     const latest = { ...result, lookup_failed: true };
     lookup.mockResolvedValueOnce(latest);
     await store.track("a", "3");
+    expect(oldSignal.aborted).toBe(true);
+    expect(lookup.mock.calls[2]![1]!.signal.aborted).toBe(false);
     resolve(result);
     await old;
     expect(store.result).toEqual(latest);
@@ -54,20 +58,4 @@ describe("file references store", () => {
     await store.track("a", "1");
     expect(lookup).not.toHaveBeenCalled();
   });
-});
-
-it("cancels superseded requests", async () => {
-  lookup.mockReset().mockImplementationOnce((_params, { signal }) =>
-    new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")))),
-  ).mockResolvedValue(result);
-  const store = new FileReferencesStore();
-  store.enabled = true;
-  const pending = store.track("a", "1");
-  const options = lookup.mock.calls[0]![1]!;
-  expect(options?.signal).toBeInstanceOf(AbortSignal);
-  await store.track("a", "2");
-  await pending;
-  expect(store.status).toBe("ok");
-  expect(options.signal.aborted).toBe(true);
-  expect(lookup.mock.calls[1]![1]!.signal.aborted).toBe(false);
 });

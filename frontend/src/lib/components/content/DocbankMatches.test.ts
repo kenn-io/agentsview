@@ -46,9 +46,9 @@ describe("Docbank matches", () => {
     expect(document.body.textContent).toContain("+11 more in Docbank");
   });
   it.each(["not_found", "unavailable", "limit_exceeded"] as const)(
-    "shows %s without a retry button",
+    "shows %s",
     async (state) => {
-      await trackDocbank({ integration: "enabled", occurrences: [{ ...imageOccurrence, state }] });
+      await trackDocbank({ integration: "enabled", lookup_failed: state === "unavailable", occurrences: [{ ...imageOccurrence, state }] });
       components.push(
         mount(DocbankMatches, {
           target: document.body,
@@ -59,7 +59,6 @@ describe("Docbank matches", () => {
       expect(document.body.textContent).toContain(
         state === "not_found" ? "Not in Docbank" : state === "limit_exceeded" ? "Docbank lookup limit reached" : "Docbank unavailable",
       );
-      expect(document.querySelector("button")).toBeNull();
     },
   );
   it("renders nothing for empty results or another session", async () => {

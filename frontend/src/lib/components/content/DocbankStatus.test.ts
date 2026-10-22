@@ -12,7 +12,7 @@ afterEach(async () => {
   if (component) await unmount(component);
   document.body.innerHTML = "";
 });
-it("shows initial loading, failure with Retry, and a quiet ready state", async () => {
+it("retries rejected requests and failed Docbank lookups, then becomes quiet", async () => {
   await trackDocbank({ integration: "enabled", occurrences: [] });
   await fileReferences.track(null, null);
   let reject!: (reason: Error) => void;
@@ -35,20 +35,12 @@ it("shows initial loading, failure with Retry, and a quiet ready state", async (
   await fileReferences.track("session-1", "new");
   await tick();
   expect(document.body.textContent).toBe("");
-});
-it("hides disabled integration", async () => {
-  await trackDocbank({ integration: "disabled", occurrences: [] });
-  component = mount(DocbankStatus, { target: document.body });
-  await tick();
-  expect(document.body.textContent).toBe("");
-});
-it("retries a successful response with a failed Docbank lookup", async () => {
+
   await trackDocbank({
     integration: "enabled",
     lookup_failed: true,
     occurrences: [{ ...imageOccurrence, state: "unavailable" }],
   });
-  component = mount(DocbankStatus, { target: document.body });
   await tick();
   expect(document.body.textContent).toContain("Docbank unavailable");
   const retry = document.querySelector<HTMLButtonElement>("button")!;
@@ -56,6 +48,12 @@ it("retries a successful response with a failed Docbank lookup", async () => {
   lookup.mockResolvedValueOnce({ integration: "enabled", occurrences: [imageOccurrence] });
   retry.click();
   await fileReferences.track("session-1", "revision-1");
+  await tick();
+  expect(document.body.textContent).toBe("");
+});
+it("hides disabled integration", async () => {
+  await trackDocbank({ integration: "disabled", occurrences: [] });
+  component = mount(DocbankStatus, { target: document.body });
   await tick();
   expect(document.body.textContent).toBe("");
 });

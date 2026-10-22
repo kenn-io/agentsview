@@ -1,6 +1,7 @@
 package servicehttp_test
 
 import (
+	"encoding/json/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	defer stub.Close()
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "images", "p1")
+	dbtest.SeedSession(t, d, "empty", "p1")
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "images", Ordinal: 0, Role: "user", Content: "![pasted](asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png)"}}))
 	daemon := httptest.NewUnstartedServer(nil)
 	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), Integrations: config.IntegrationsConfig{Docbank: config.DocbankIntegration{URL: stub.URL, WebURL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}}}, d, nil)
@@ -42,6 +44,13 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	assert.Equal(t, "found", occurrence.State)
 	require.Len(t, occurrence.Matches, 1)
 	assert.Equal(t, "https://example.com/#node=7&version=12345678-1234-1234-1234-123456789abc", occurrence.Matches[0].OpenURL)
+	response, err := daemon.Client().Get(daemon.URL + "/api/v1/sessions/empty/file-references")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.UnmarshalRead(response.Body, &body))
+	assert.Equal(t, []any{}, body["occurrences"])
 	_, err = service.FileReferences(t.Context(), svc, "missing")
 	assert.ErrorIs(t, err, service.ErrSessionNotFound)
 }

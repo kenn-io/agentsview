@@ -1282,7 +1282,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary,
-		ToolGetToolCalls, ToolGetSessionFileReferences, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
+		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
 	}, names)
 

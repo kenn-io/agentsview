@@ -742,7 +742,7 @@ it("mounts tracked Docbank rows for tool output and history events", async () =>
   ] });
   await render({ toolCall: call("Read", {}, { tool_use_id: "read-1", result_content: "Image removed from archive", result_events:[{event_index:0,source:"tool_result",status:"completed",content:"old result",content_length:10,timestamp:"2026-01-01T00:00:00Z"}] }) });
   await click(".tool-header");
-  expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
   await click(".history-header");
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(2);
 });

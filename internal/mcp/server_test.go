@@ -150,14 +150,14 @@ func TestParseProfile(t *testing.T) {
 func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
-		Service: service.NewReadOnlyBackend(d, withTestDocbank()),
+		Service: service.NewReadOnlyBackend(d),
 		Now:     func() time.Time { return fixedNow },
 	})
 
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 16)
+	require.Len(t, tools.Tools, 15)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}

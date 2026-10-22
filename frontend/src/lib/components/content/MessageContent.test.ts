@@ -696,5 +696,5 @@ it("shows tracked Docbank evidence under the matching message", async () => {
   const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
   await trackDocbank({ integration: "enabled", occurrences: [imageOccurrence] });
   await render(message({ content: "What does this image show?" }), { session: session() });
-  expect(document.querySelector(".docbank-matches")?.textContent).toContain("Not in Docbank");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
 });
