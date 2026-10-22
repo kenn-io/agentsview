@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**Improvements**
+
+- `pg push` saves download traffic when a session grows by comparing short
+  hashes with PostgreSQL instead of downloading the session's old text.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message
