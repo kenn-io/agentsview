@@ -304,6 +304,8 @@ type Sync struct {
 	afterPushBatch func()
 	// afterMessagePage is a test hook called after each copied message page.
 	afterMessagePage func()
+	// beforeMessageComparison runs before the snapshot's first message read.
+	beforeMessageComparison func()
 
 	closeOnce sync.Once
 	closeErr  error

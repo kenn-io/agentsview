@@ -129,7 +129,7 @@ func (s *Sync) migrateCodexPages(
 		if !migratePage {
 			continue
 		}
-		pins, err := snapshotPinnedMessages(ctx, tx, old.id)
+		pins, err := snapshotPinnedMessages(ctx, tx, old.id, 0)
 		if err != nil {
 			return err
 		}
@@ -172,7 +172,7 @@ func (s *Sync) migrateCodexPages(
 		if err := s.pushSession(ctx, tx, *page, markerID, legacyMarkerMachines); err != nil {
 			return fmt.Errorf("publishing retained Codex page: %w", err)
 		}
-		if _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
+		if _, _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
 			return err
 		}
 		if _, err := s.pushSecretFindings(ctx, tx, pageID); err != nil {

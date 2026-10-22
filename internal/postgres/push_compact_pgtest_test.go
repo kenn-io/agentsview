@@ -93,8 +93,8 @@ func TestPushCompactComparisons(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, len(messages), skipped.MessageCounts[id])
-	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageDialogue, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
-		assert.NotContains(t, fingerprints, id)
+	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
+		assert.Contains(t, fingerprints, id)
 	}
 	compact, err := readPushSessionMessageComparisons(
 		ctx, tx, []string{id}, counts, true,
@@ -104,9 +104,9 @@ func TestPushCompactComparisons(t *testing.T) {
 	snapshot, err := local.BeginMessageSnapshot(ctx)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, snapshot.Close()) }()
-	matches, err := pushTranscriptMatches(ctx, snapshot, id, compact)
+	_, changed, err := pushSuffixBoundary(ctx, snapshot, id, compact.messageFields(id))
 	require.NoError(t, err)
-	assert.True(t, matches, "empty fields and sanitized text must match the published rows")
+	assert.False(t, changed, "empty fields and sanitized text must match the published rows")
 	for _, change := range []struct{ name, statement string }{
 		{"content", `UPDATE messages SET content = 'x' || substring(content from 2) WHERE session_id = $1`},
 		{"thinking", `UPDATE messages SET thinking_text = 'x' || substring(thinking_text from 2) WHERE session_id = $1`},
@@ -132,9 +132,9 @@ func TestPushCompactComparisons(t *testing.T) {
 				ctx, tx, []string{id}, counts, true,
 			)
 			require.NoError(t, err)
-			matches, err := pushTranscriptMatches(ctx, snapshot, id, changed)
+			_, differs, err := pushSuffixBoundary(ctx, snapshot, id, changed.messageFields(id))
 			require.NoError(t, err)
-			assert.False(t, matches)
+			assert.True(t, differs)
 		})
 	}
 }
@@ -184,7 +184,7 @@ func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		tx, err := syncer.pg.BeginTx(ctx, nil)
 		require.NoError(t, err)
-		count, err := syncer.pushMessages(ctx, tx, id, false, nil, nil)
+		count, _, err := syncer.pushMessages(ctx, tx, id, false, nil, nil)
 		require.NoError(t, err)
 		if i == 0 {
 			assert.Equal(t, 1, count)
@@ -301,7 +301,7 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	require.Zero(t, result.Errors)
 	assert.False(t, result.Full, "normal push history must select an incremental run")
 	assert.Equal(t, 2, result.SessionsPushed, "both changed file hashes should reach publication")
-	assert.Equal(t, 2, result.MessagesPushed, "only the growing transcript should be replaced")
+	assert.Equal(t, 1, result.MessagesPushed, "only the appended message should be inserted")
 	assert.Equal(t, before, pgMessageCTID(t, syncer.pg, "unchanged", 0))
 	t.Logf("PostgreSQL received bytes with %d-byte fields: %d", size, bytes)
 	return bytes
