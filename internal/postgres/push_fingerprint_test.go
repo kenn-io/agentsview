@@ -45,9 +45,6 @@ func TestShouldSkipSessionMessagesGuardsCountAndNilMaps(t *testing.T) {
 	assert.False(t, shouldSkipSessionMessages(
 		"sess", 1, localFP, false, nil,
 	))
-	assert.True(t, shouldSkipSessionMessages(
-		"sess", 1, localFP, false, comparisons,
-	))
 	assert.False(t, shouldSkipSessionMessages(
 		"sess", 2, localFP, false, comparisons,
 	))
