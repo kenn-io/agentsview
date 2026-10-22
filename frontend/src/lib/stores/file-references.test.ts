@@ -7,7 +7,7 @@ vi.mock("../api/generated/sessions/sessions.js", () => ({
 const result = { integration: "enabled" as const, occurrences: [] };
 
 describe("file references store", () => {
-  it("refetches revisions while retaining the last result and ignores older requests", async () => {
+  it("clears revised results and ignores older requests", async () => {
     lookup.mockReset().mockResolvedValueOnce(result);
     const store = new FileReferencesStore();
     store.enabled = true;
@@ -22,7 +22,7 @@ describe("file references store", () => {
     const old = store.track("a", "2");
     const oldSignal = lookup.mock.calls[1]![1]!.signal;
     expect(oldSignal).toBeInstanceOf(AbortSignal);
-    expect(store.result).toEqual(result);
+    expect(store.result).toBeUndefined();
     expect(store.status).toBe("loading");
     const latest = { ...result, lookup_failed: true };
     lookup.mockResolvedValueOnce(latest);
@@ -51,6 +51,15 @@ describe("file references store", () => {
     await next;
     expect(store.forMessage("a", 0)).toEqual([]);
     expect(lookup).toHaveBeenLastCalledWith({ id: "b" }, { signal: expect.any(AbortSignal) });
+  });
+  it("keeps revised results empty when the lookup fails", async () => {
+    lookup.mockReset().mockResolvedValueOnce(result).mockRejectedValueOnce(new Error("offline"));
+    const store = new FileReferencesStore();
+    store.enabled = true;
+    await store.track("a", "1");
+    await store.track("a", "2");
+    expect(store.status).toBe("failed");
+    expect(store.result).toBeUndefined();
   });
   it("makes no request when disabled", async () => {
     lookup.mockReset();

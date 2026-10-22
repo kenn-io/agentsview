@@ -25,6 +25,8 @@
   import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
+    sessionId?: string;
+    ordinal?: number;
     content: string;
     label?: string;
     toolCall?: ToolCall;
@@ -95,7 +97,7 @@
     return lines.length ? lines.join("\n") : null;
   }
 
-  let { content, label, toolCall, searchScope, durationLabel,
+  let { sessionId = "", ordinal = 0, content, label, toolCall, searchScope, durationLabel,
     isSlow = false, isRunning = false, inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
@@ -327,7 +329,7 @@
         {/if}
       {/if}
     {/if}
-    {#if toolCall}<DocbankMatches toolUseId={toolCall.tool_use_id} />{/if}
+    {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id} />{/if}
     {#if resultEvents.length > 0}
       <button class="history-header" aria-expanded={!historyCollapsed} onclick={(e) => {
         e.stopPropagation();
@@ -351,7 +353,7 @@
                 {#if event.agent_id}<span class="meta-tag"><span class="meta-label">{m.tool_block_agent_label()}</span>{event.agent_id}</span>{/if}
               </div>
               <pre class="tool-content output-content history-content" {@attach searchBlock(historyKeys[eventIndex])}>{event.content}</pre>
-              {#if toolCall}<DocbankMatches toolUseId={toolCall.tool_use_id} eventIndex={event.event_index} />{/if}
+              {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id} eventIndex={event.event_index} />{/if}
             </div>
           {/each}
         </div>

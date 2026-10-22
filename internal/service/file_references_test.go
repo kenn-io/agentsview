@@ -126,7 +126,7 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)
 	var calls []db.ToolCall
-	for i := range 12 {
+	for i := range 16 {
 		calls = append(calls, db.ToolCall{ToolUseID: strconv.Itoa(i), ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"agentsview_image","image_ref":"asset://%064x.png","media_type":"image/png","byte_size":3}]`, i)})
 	}
 	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "images", ToolCalls: calls}}))
@@ -139,7 +139,7 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 7*time.Second)
 	assert.True(t, out.LookupFailed)
-	require.Len(t, out.Occurrences, 12)
+	require.Len(t, out.Occurrences, 16)
 	for _, occurrence := range out.Occurrences {
 		assert.Equal(t, "unavailable", occurrence.State)
 	}

@@ -10,7 +10,7 @@
   } = $props();
   const occurrences = $derived(toolUseId === null
     ? fileReferences.forMessage(sessionId, ordinal)
-    : fileReferences.forTool(toolUseId, eventIndex));
+    : fileReferences.forTool(sessionId, ordinal, toolUseId, eventIndex));
 </script>
 
 {#if occurrences.length}

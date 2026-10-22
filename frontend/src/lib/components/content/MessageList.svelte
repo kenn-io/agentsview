@@ -47,6 +47,8 @@
     if (enabled) untrack(() => void fileReferences.track(id, revision));
   });
 
+  onDestroy(() => fileReferences.reset());
+
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;

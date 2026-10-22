@@ -66,14 +66,26 @@ describe("Docbank matches", () => {
           : "Docbank unavailable",
     );
   });
-  it("renders nothing for empty results or another session", async () => {
+  it("renders nothing for another session", async () => {
     await trackDocbank({ integration: "enabled", occurrences: [imageOccurrence] });
     components.push(
       mount(DocbankMatches, { target: document.body, props: { sessionId: "other", ordinal: 0 } }),
     );
     await tick();
     expect(document.querySelector(".docbank-matches")).toBeNull();
+  });
+  it("clears displayed matches when the matching session has empty results", async () => {
+    await trackDocbank({ integration: "enabled", occurrences: [imageOccurrence] });
+    components.push(
+      mount(DocbankMatches, {
+        target: document.body,
+        props: { sessionId: "session-1", ordinal: 0 },
+      }),
+    );
+    await tick();
+    expect(document.querySelector(".docbank-matches")).not.toBeNull();
     await trackDocbank({ integration: "enabled", occurrences: [] });
+    await tick();
     expect(document.querySelector(".docbank-matches")).toBeNull();
   });
   it("shows prior and trash as text when web_url is absent", async () => {

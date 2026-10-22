@@ -385,3 +385,34 @@ func TestNewServer_DocbankDisabled(t *testing.T) {
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
 }
+
+func TestNewServer_HTTPFileReferencesCapability(t *testing.T) {
+	t.Setenv("AGENTSVIEW_SIGNING_URL", "https://reader.example.com")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", "unused-key")
+	for _, tc := range []struct {
+		name, url string
+		available bool
+	}{
+		{"signed", "https://reader.example.com", false},
+		{"unsigned", "http://127.0.0.1:1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := servicehttp.NewHTTPBackendForServer(tc.url, "", servicehttp.HTTPServerCapabilities{ReadOnly: true, APIVersion: 4})
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
+			defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+			tools, err := ct.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+			names := make([]string, 0, len(tools.Tools))
+			for _, tool := range tools.Tools {
+				names = append(names, tool.Name)
+			}
+			assert.Contains(t, names, ToolGetSessionOverview)
+			if tc.available {
+				assert.Contains(t, names, ToolGetSessionFileReferences)
+			} else {
+				assert.NotContains(t, names, ToolGetSessionFileReferences)
+			}
+		})
+	}
+}

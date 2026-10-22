@@ -83,6 +83,7 @@ type httpBackend struct {
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
+	signed            bool
 	recallQueries     bool
 	// apiVersion is the probed server API version, or 0 when unknown.
 	apiVersion int
@@ -133,9 +134,8 @@ func NewHTTPBackendForServer(
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
-	browserURL := baseURL
-	if requestsign.SignsFromEnvironment(baseURL) {
-		// Signed machine listeners serve no browser UI, so omit session links.
+	signed, browserURL := requestsign.SignsFromEnvironment(baseURL), baseURL
+	if signed {
 		browserURL = ""
 	}
 	return &httpBackend{
@@ -144,10 +144,13 @@ func newHTTPBackend(
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
+		signed:            signed,
 		recallQueries:     recallQueries,
 		token:             token,
 	}
 }
+
+func (b *httpBackend) SupportsFileReferences() bool { return !b.signed }
 
 // ProbeHTTPServerCapabilities reads the metadata needed to expose tools safely
 // for an explicit daemon URL. Such callers do not have a local runtime record.

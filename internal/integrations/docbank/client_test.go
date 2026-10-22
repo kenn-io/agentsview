@@ -50,7 +50,7 @@ func TestLookupFailures(t *testing.T) {
 		{"empty page", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }},
 		{"status", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }},
 		{"oversized", func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(strings.Repeat(" ", maxPageBytes+1)))
+			_, _ = w.Write([]byte(`{"items":[],"total":0}` + strings.Repeat(" ", maxPageBytes+1)))
 		}},
 		{"redirect", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }},
 	} {

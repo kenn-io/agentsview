@@ -317,7 +317,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
-        <ToolBlock toolCall={soloCall} content="" label={displayToolName(soloCall)}
+        <ToolBlock sessionId={message.session_id} ordinal={message.ordinal} toolCall={soloCall} content="" label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
             callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,
@@ -326,11 +326,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
-        <ParallelGroup toolCalls={structuredCalls} callTimingByID={callByToolUseID}
+        <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal} toolCalls={structuredCalls} callTimingByID={callByToolUseID}
           isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
-          <ToolBlock content={seg.content} label={seg.label} toolCall={seg.toolCall}
+          <ToolBlock sessionId={message.session_id} ordinal={message.ordinal} content={seg.content} label={seg.label} toolCall={seg.toolCall}
             searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: `seg${segIdx}` }} />
         {/each}
       {/if}

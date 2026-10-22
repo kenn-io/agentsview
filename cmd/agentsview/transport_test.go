@@ -1475,7 +1475,7 @@ func TestNewServiceRejectsInvalidDocbank(t *testing.T) {
 			default:
 				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
 			}
-			require.Error(t, err)
+			require.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
 			assert.Nil(t, svc)
 			assert.Nil(t, cleanup)
 		})

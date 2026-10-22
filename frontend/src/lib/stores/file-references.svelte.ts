@@ -14,10 +14,19 @@ export class FileReferencesStore {
   track(sessionId: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
     if (this.sessionId === sessionId && this.revision === revision) return this.pending;
-    if (this.sessionId !== sessionId) this.result = undefined;
+    this.result = undefined;
     this.sessionId = sessionId;
     this.revision = revision;
     return this.refresh();
+  }
+
+  reset(): void {
+    this.read.cancel();
+    this.sessionId = null;
+    this.revision = null;
+    this.result = undefined;
+    this.status = "idle";
+    this.pending = Promise.resolve();
   }
 
   refresh(): Promise<void> {
@@ -40,20 +49,20 @@ export class FileReferencesStore {
     return this.pending;
   }
 
-  forMessage(sessionId: string, ordinal: number) {
+  private forOrdinal(sessionId: string, ordinal: number) {
     return this.enabled && sessionId === this.sessionId && this.result?.integration === "enabled"
-      ? this.result.occurrences.filter(
-          (item) => item.message_ordinal === ordinal && item.tool_use_id === null,
-        )
+      ? this.result.occurrences.filter((item) => item.message_ordinal === ordinal)
       : [];
   }
 
-  forTool(toolUseId: string, eventIndex: number | null) {
-    return this.enabled && this.result?.integration === "enabled"
-      ? this.result.occurrences.filter(
-          (item) => item.tool_use_id === toolUseId && item.event_index === eventIndex,
-        )
-      : [];
+  forMessage(sessionId: string, ordinal: number) {
+    return this.forOrdinal(sessionId, ordinal).filter((item) => item.tool_use_id === null);
+  }
+
+  forTool(sessionId: string, ordinal: number, toolUseId: string, eventIndex: number | null) {
+    return this.forOrdinal(sessionId, ordinal).filter(
+      (item) => item.tool_use_id === toolUseId && item.event_index === eventIndex,
+    );
   }
 }
 
