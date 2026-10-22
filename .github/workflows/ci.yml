@@ -255,7 +255,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc
+          install: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
           path-type: inherit
 
       - name: Setup MinGW (Windows, retry on transient failure)
@@ -264,7 +264,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc
+          install: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
           path-type: inherit
 
       - name: Restore pricing snapshot
@@ -318,20 +318,19 @@ jobs:
       - name: Prepare Go linters (Windows)
         id: prepare_windows_linter
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          $linter = Join-Path $env:GOBIN 'golangci-lint.exe'
-          if (-not (Test-Path $linter)) {
-            New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
-            $version = (Select-String -Path .custom-gcl.yml -Pattern '^version:').Line -replace '^version:\s*', ''
-            & 'C:\Program Files\Git\bin\bash.exe' scripts/retry.sh 3 5 go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$version"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          $customLinter = Join-Path $env:GOLANGCI_LINT_CACHE 'custom-gcl.exe'
-          if (-not (Test-Path $customLinter)) {
-            & $linter custom --name custom-gcl --destination $env:GOLANGCI_LINT_CACHE
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          set -e
+          linter_dir="$(cygpath -u "$GOBIN")"
+          export PATH="$linter_dir:$PATH"
+          if [ ! -f "$linter_dir/custom-gcl.exe" ]; then
+            mkdir -p "$linter_dir"
+            if [ ! -f "$linter_dir/golangci-lint.exe" ]; then
+              bash scripts/retry.sh 3 5 make lint-tools
+            fi
+            make nilaway-golangci-build
+            mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
+          fi
         env:
           CGO_ENABLED: "1"
           GOBIN: ${{ runner.temp }}/golangci-lint
@@ -700,6 +699,15 @@ jobs:
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
         run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      # This job owns the shared cache, including tests run by the other shards.
+      - name: Warm moved race test builds for the next run
+        if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GO_CACHE_HIT != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/race-test-binaries"
+          go test -p 4 -tags "fts5" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
         env:
           CGO_ENABLED: "1"
 
