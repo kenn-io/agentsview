@@ -2947,6 +2947,7 @@
   "status_bar_codex_cloud_oldest_failure": "Oldest failure: {time}",
   "status_bar_codex_cloud_last_success": "Last successful sync: {time}",
   "status_bar_codex_cloud_homes": "Codex homes: {homes}",
+  "docbank_subagent_open_session": "File matches appear when opened as a session.",
   "docbank_checking": "Checking Docbank…",
   "docbank_current": "Current",
   "docbank_prior": "Prior version",

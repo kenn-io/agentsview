@@ -2971,6 +2971,7 @@
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec\u202f: {time}",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie\u202f: {time}",
   "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}",
+  "docbank_subagent_open_session": "Les fichiers correspondants apparaissent à l’ouverture en tant que session.",
   "docbank_checking": "Recherche dans Docbank…",
   "docbank_current": "Version actuelle",
   "docbank_prior": "Version antérieure",

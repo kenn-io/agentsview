@@ -2403,7 +2403,8 @@ The desktop app's auto-updater is controlled separately via
 
 Configure your Docbank server to find where it holds the exact bytes of a
 transcript image. Results show current files, prior versions, and trash. Set
-`web_url` to make each match link to its exact version in the browser.
+`web_url` to make each match link to its exact version in the browser. Exact-version
+links require [docbank#1024](https://github.com/kenn-io/docbank/pull/1024).
 
 ```toml
 [integrations.docbank]
@@ -2436,5 +2437,5 @@ Docbank unavailable and can be retried. Archive read failures report session
 files unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
 Images dropped by the image policy have no bytes to hash, so they report
 `bytes_not_kept` without a lookup.
-Results refresh when the transcript changes or the session reopens. Successful
-digest lookups are reused for up to 60 seconds. No migration or resync is required.
+Results refresh when the transcript changes or the session reopens. No migration
+or resync is required.

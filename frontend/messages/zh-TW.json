@@ -2856,6 +2856,7 @@
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}",
+  "docbank_subagent_open_session": "作為工作階段開啟後會顯示檔案比對結果。",
   "docbank_checking": "正在查詢 Docbank…",
   "docbank_current": "目前版本",
   "docbank_prior": "先前版本",

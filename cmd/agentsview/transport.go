@@ -586,10 +586,7 @@ func newService(ctx context.Context,
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
-		docbankOption, err := service.WithConfiguredDocbank(cfg)
-		if err != nil {
-			return nil, nil, err
-		}
+		docbankOption := service.WithConfiguredDocbank(cfg)
 		if err := directIncompatibleDaemonError(tr); err != nil {
 			return nil, nil, err
 		}
@@ -647,10 +644,7 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
-	docbankOption, err := service.WithConfiguredDocbank(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
+	docbankOption := service.WithConfiguredDocbank(cfg)
 	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {

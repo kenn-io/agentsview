@@ -974,7 +974,7 @@ func (t *toolset) usageSummary(
 }
 
 type fileReferencesIn struct {
-	SessionID string `json:"session_id" jsonschema:"The session whose images to find in Docbank."`
+	SessionID string `json:"session_id" jsonschema:"The session whose files and images to find in Docbank."`
 }
 
 func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {

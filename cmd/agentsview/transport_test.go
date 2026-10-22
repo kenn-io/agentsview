@@ -1467,37 +1467,3 @@ func TestSyncServiceIgnoresInvalidDocbank(t *testing.T) {
 	defer cleanup()
 	assert.False(t, service.SupportsFileReferences(svc))
 }
-
-func TestNewServiceRejectsInvalidDocbank(t *testing.T) {
-	cfg := config.Config{}
-	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	for _, mode := range []string{"direct", "pg"} {
-		t.Run(mode, func(t *testing.T) {
-			var svc service.SessionService
-			var cleanup func()
-			var err error
-			switch mode {
-			case "pg":
-				svc, cleanup, err = newPGReadService(cfg, config.PGConfig{})
-			default:
-				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
-			}
-			require.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
-			assert.Nil(t, svc)
-			assert.Nil(t, cleanup)
-		})
-	}
-}
-
-func TestHTTPServicesIgnoreInvalidDocbank(t *testing.T) {
-	cfg := config.Config{}
-	cfg.Integrations.Docbank = config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	for name, build := range map[string]func(context.Context, config.Config, transport) (service.SessionService, func(), error){"read": newService, "sync": syncService} {
-		t.Run(name, func(t *testing.T) {
-			svc, cleanup, err := build(t.Context(), cfg, transport{Mode: transportHTTP, URL: "http://127.0.0.1:1"})
-			require.NoError(t, err)
-			require.NotNil(t, svc)
-			cleanup()
-		})
-	}
-}

@@ -57,7 +57,8 @@ type remotePage struct {
 	Total *int `json:"total"`
 }
 
-func (c *Client) lookup(ctx context.Context, digest string) (Result, error) {
+// Lookup reads current references for a digest from Docbank.
+func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
 	unavailable := errors.New("docbank unavailable")
 	key := c.cfg.APIKey()
 	if key == "" {
@@ -113,9 +114,4 @@ func lookupStatusUnavailable(status int) error {
 		return lookupUnavailable("API key rejected")
 	}
 	return lookupUnavailable(fmt.Sprintf("server returned HTTP %d", status))
-}
-
-// Lookup reads current references for a digest from Docbank.
-func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
-	return c.lookup(ctx, digest)
 }

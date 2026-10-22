@@ -2971,6 +2971,7 @@
   "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
   "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
   "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}",
+  "docbank_subagent_open_session": "Las coincidencias de archivos aparecen al abrir como sesión.",
   "docbank_checking": "Buscando en Docbank…",
   "docbank_current": "Versión actual",
   "docbank_prior": "Versión anterior",

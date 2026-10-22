@@ -2853,6 +2853,7 @@
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目录：{homes}",
+  "docbank_subagent_open_session": "作为会话打开后会显示文件匹配。",
   "docbank_checking": "正在查询 Docbank…",
   "docbank_current": "当前版本",
   "docbank_prior": "历史版本",

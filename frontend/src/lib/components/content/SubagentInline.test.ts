@@ -88,6 +88,24 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("explains where file matches appear when expanded", async () => {
+    getMessages.mockResolvedValueOnce({ messages: [], count: 0 });
+    getSession.mockResolvedValueOnce(makeSession());
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
+    await tick();
+    expect(document.body.textContent).not.toContain(
+      "File matches appear when opened as a session.",
+    );
+    document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("File matches appear when opened as a session."),
+    );
+    unmount(component);
+  });
+
   it("reports the session kind when expanded messages fail", async () => {
     getMessages.mockRejectedValueOnce(new Error("Messages failed"));
     getSession.mockResolvedValueOnce(makeSession());

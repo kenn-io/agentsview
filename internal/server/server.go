@@ -262,10 +262,7 @@ func New(
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
 	backendOptions := []service.DirectBackendOption{service.WithModelGroups(modelGroups)}
-	docbankOption, err := service.WithConfiguredDocbank(cfg)
-	if err != nil {
-		log.Fatalf("invalid Docbank configuration: %v", err)
-	}
+	docbankOption := service.WithConfiguredDocbank(cfg)
 	backendOptions = append(backendOptions, docbankOption)
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {

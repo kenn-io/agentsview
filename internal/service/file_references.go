@@ -60,15 +60,12 @@ func WithDocbank(client *docbank.Client) DirectBackendOption {
 }
 
 // WithConfiguredDocbank applies the same integration configuration to every local backend.
-func WithConfiguredDocbank(cfg config.Config) (DirectBackendOption, error) {
-	if err := cfg.Integrations.Docbank.Validate(); err != nil {
-		return nil, err
-	}
+func WithConfiguredDocbank(cfg config.Config) DirectBackendOption {
 	client := docbank.New(cfg.Integrations.Docbank)
 	if !cfg.Integrations.Docbank.Configured() {
 		client = nil
 	}
-	return WithDocbank(client), nil
+	return WithDocbank(client)
 }
 
 func (b *directBackend) FileReferences(ctx context.Context, id string) (FileReferencesResult, error) {

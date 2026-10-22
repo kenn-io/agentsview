@@ -278,7 +278,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 // addFileReferencesTool advertises the Docbank lookup only when the backend has Docbank configured.
 func addFileReferencesTool(s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
 	if service.SupportsFileReferences(t.svc) {
-		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact session image bytes in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact bytes of session files and images in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
 	}
 }
 

@@ -2859,6 +2859,7 @@
   "status_bar_codex_cloud_oldest_failure": "가장 오래된 실패: {time}",
   "status_bar_codex_cloud_last_success": "마지막 동기화 성공: {time}",
   "status_bar_codex_cloud_homes": "Codex 홈: {homes}",
+  "docbank_subagent_open_session": "세션으로 열면 일치하는 파일이 표시됩니다.",
   "docbank_checking": "Docbank 확인 중…",
   "docbank_current": "현재 버전",
   "docbank_prior": "이전 버전",

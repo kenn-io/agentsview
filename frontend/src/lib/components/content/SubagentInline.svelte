@@ -4,7 +4,6 @@
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
-import type { ServiceMessageList as MessagesResponse } from "../../api/generated/index.js";
   import { SessionsService } from "../../api/generated/index";
   import {
     isAbortError,
@@ -12,7 +11,6 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
   import { formatTokenUsage } from "../../utils/format.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { fileReferences } from "../../stores/file-references.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import {
@@ -74,7 +72,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
           }),
         ]);
         if (!nestedRead.isCurrent(signal)) return;
-        messages = trackFileReferences(resp);
+        messages = resp.messages;
         sessionMeta = meta;
       } catch (e) {
         if (isAbortError(e) || !nestedRead.isCurrent(signal)) return;
@@ -85,12 +83,6 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
         if (nestedRead.finish(signal)) loading = false;
       }
     }
-  }
-
-  // The child's own rows resolve against its transcript, beside the parent's.
-  function trackFileReferences(resp: MessagesResponse) {
-    void fileReferences.track(sessionId, resp.transcript_revision ?? null);
-    return resp.messages;
   }
 
   async function openAsSession(e: MouseEvent) {
@@ -173,6 +165,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
 
   {#if expanded}
     <div class="subagent-messages">
+      <div class="subagent-status">{m.docbank_subagent_open_session()}</div>
       {#if loading}
         <div class="subagent-status">{m.subagent_inline_loading()}</div>
       {:else if error}
