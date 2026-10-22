@@ -984,7 +984,7 @@ func (d *pushDigest) Scan(value any) error {
 
 func (c *pushMessageComparison) messageFields(id string) db.MessageComparisonFields {
 	return db.MessageComparisonFields{
-		ContentHash: c.MessageContentHash[id], RoleTime: c.MessageRoleTime[id], Flags: c.MessageFlags[id],
+		ContentHash: c.MessageContentHash[id], RoleTime: c.MessageRoleTime[id], Flags: c.MessageFlags[id], Dialogue: c.MessageDialogue[id],
 		Token: c.MessageTokenFingerprint[id], ToolCalls: c.ToolCallFingerprint[id], ToolResults: c.ToolResultFingerprint[id],
 	}
 }
@@ -992,7 +992,7 @@ func (c *pushMessageComparison) messageFields(id string) db.MessageComparisonFie
 // pushTranscriptMatches consumes the remote streams from one local read view.
 func pushTranscriptMatches(ctx context.Context, snapshot *db.MessageSnapshot, id string, remote *pushMessageComparison) (bool, error) {
 	fields := remote.messageFields(id)
-	streams := []*string{&fields.ContentHash, &fields.RoleTime, &fields.Flags, &fields.Token, &fields.ToolCalls, &fields.ToolResults}
+	streams := []*string{&fields.ContentHash, &fields.RoleTime, &fields.Flags, &fields.Dialogue, &fields.Token, &fields.ToolCalls, &fields.ToolResults}
 	for start := 0; ; {
 		messages, err := snapshot.GetMessages(ctx, id, start, db.MaxMessageLimit, true)
 		if err != nil {
@@ -1003,7 +1003,7 @@ func pushTranscriptMatches(ctx context.Context, snapshot *db.MessageSnapshot, id
 		}
 		for _, message := range messages {
 			row := db.MessageComparisonRow(message, pgPushTimestampFingerprintText)
-			fragments := []string{row.ContentHash, row.RoleTime, row.Flags, row.Token, row.ToolCalls, row.ToolResults}
+			fragments := []string{row.ContentHash, row.RoleTime, row.Flags, row.Dialogue, row.Token, row.ToolCalls, row.ToolResults}
 			for i, fragment := range fragments {
 				rest, ok := strings.CutPrefix(*streams[i], fragment)
 				if !ok {

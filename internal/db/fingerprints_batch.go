@@ -860,11 +860,12 @@ func (r toolResultEventFingerprintRow) appendTo(
 	)
 }
 
-// MessageComparisonFields holds the six encoded streams for a published message.
+// MessageComparisonFields holds the encoded streams for a published message.
 type MessageComparisonFields struct {
 	ContentHash string
 	RoleTime    string
 	Flags       string
+	Dialogue    string
 	Token       string
 	ToolCalls   string
 	ToolResults string
@@ -873,10 +874,13 @@ type MessageComparisonFields struct {
 // MessageComparisonRow describes every published message field and its
 // dependent calls and events, using the same encodings as session comparisons.
 func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) MessageComparisonFields {
-	var contentHash, roleTime, flags, token, toolCalls, toolResults strings.Builder
+	var contentHash, roleTime, flags, dialogue, token, toolCalls, toolResults strings.Builder
 	appendContentHashFingerprintRow(&contentHash, m.Ordinal, m.ContentLength, m.Content)
 	appendRoleTimeFingerprintRow(&roleTime, m.Ordinal, m.Role, m.Timestamp, normalizeTimestamp)
 	flagsFingerprintRow{ordinal: m.Ordinal, isSystem: m.IsSystem, hasThinking: m.HasThinking, hasToolUse: m.HasToolUse, thinkingText: m.ThinkingText}.appendTo(&flags)
+	if m.DialogueText != nil {
+		EncodeMessageDialogueFingerprint(&dialogue, m.Ordinal, *m.DialogueText)
+	}
 	tokenFingerprintRow{
 		ordinal: m.Ordinal, model: m.Model, reasoningEffort: m.ReasoningEffort, providerID: m.ProviderID, tokenUsage: string(m.TokenUsage),
 		contextTokens: m.ContextTokens, outputTokens: m.OutputTokens, hasContextTokens: m.HasContextTokens, hasOutputTokens: m.HasOutputTokens,
@@ -910,6 +914,7 @@ func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) Mes
 		ContentHash: contentHash.String(),
 		RoleTime:    roleTime.String(),
 		Flags:       flags.String(),
+		Dialogue:    dialogue.String(),
 		Token:       token.String(),
 		ToolCalls:   toolCalls.String(),
 		ToolResults: toolResults.String(),
