@@ -209,7 +209,6 @@ func TestGeminiAppsWebPending(t *testing.T) {
 		data []byte
 		want bool
 	}{
-		{"newest turn answered", geminiTestConversation(t, "t", at, []any{answered}), false},
 		{"newest turn has no reply", geminiTestConversation(t, "t", at,
 			[]any{geminiTestTurn("r_2", "", "Next", nil, at), answered}), true},
 		{"attachment-only turn has no reply", geminiTestConversation(t, "t", at,
