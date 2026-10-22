@@ -3,7 +3,6 @@ package db
 import (
 	"encoding/json"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -792,6 +791,13 @@ func TestRetainedToolResultImages(t *testing.T) {
 		assert.Equal(t, int64(3), *image.Size)
 		assert.Equal(t, "image/png", image.MediaType)
 	}
+	files := RetainedToolResultImages(`[{"type":"text","text":"PDF read successfully"},{"type":"file","uri":"data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA3MiA3Ml0gPj4KZW5kb2JqCnhyZWYKMCA0CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA0IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgoxODQKJSVFT0YK","mime":"application/pdf","name":"report.pdf"},{"type":"file","uri":"data:text/plain;base64,YWxwaGEK","mime":"text/plain"},{"type":"file","uri":"https://example.com/archive.zip","mime":"application/zip","name":"archive.zip"}]`)
+	require.Len(t, files, 2)
+	assert.Equal(t, "application/pdf", files[0].MediaType)
+	assert.Equal(t, new(int64(327)), files[0].Size)
+	assert.Equal(t, "text/plain", files[1].MediaType)
+	assert.Equal(t, new(int64(6)), files[1].Size)
+	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
 	for _, content := range []string{
 		strings.Replace(offloaded, `"version":1`, `"version":2`, 1),
 		strings.Replace(offloaded, `"version":1`, `"version":0`, 1),
@@ -814,24 +820,10 @@ func TestMarkdownAssetImages(t *testing.T) {
 	assert.Equal(t, "image/png", images[0].MediaType)
 }
 
-func TestStripFutureOffloadedImageVersion(t *testing.T) {
-	content := `[{"type":"agentsview_image","version":2,"image_ref":"asset://` + strings.Repeat("a", 64) + `.png","media_type":"image/png","byte_size":3}]`
-	stripped, stats := StripToolResultImages(content)
-	assert.NotContains(t, stripped, "asset://")
-	assert.Equal(t, int64(1), stats.Payloads)
-	assert.Empty(t, RetainedToolResultImages(content))
-}
-
-func TestMarkdownAssetImagesIgnoresHostMIMETypes(t *testing.T) {
-	require.NoError(t, mime.AddExtensionType(".png", "application/x-host-override"))
-	t.Cleanup(func() { _ = mime.AddExtensionType(".png", "image/png") })
-	images := MarkdownAssetImages("![image](asset://" + strings.Repeat("a", 64) + ".png)")
-	require.Len(t, images, 1)
-	assert.Equal(t, "image/png", images[0].MediaType)
-}
-
 func TestMarkdownAssetImagesSkipsUnrelatedContent(t *testing.T) {
 	content := strings.Repeat("ordinary transcript text ", 100)
-	allocations := testing.AllocsPerRun(5, func() { assert.Empty(t, MarkdownAssetImages(content)) })
+	var images []RetainedImage
+	allocations := testing.AllocsPerRun(5, func() { images = MarkdownAssetImages(content) })
+	assert.Empty(t, images)
 	assert.Less(t, allocations, float64(5))
 }

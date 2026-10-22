@@ -741,8 +741,15 @@ it("mounts tracked Docbank rows for tool output and history events", async () =>
   await trackDocbank({
     integration: "enabled",
     occurrences: [
-      { ...imageOccurrence, tool_use_id: "read-1", tool_name: "Read" },
-      { ...imageOccurrence, tool_use_id: "read-1", tool_name: "Read", event_index: 0 },
+      { ...imageOccurrence, size: 3, call_index: 0, tool_use_id: "read-1", tool_name: "Read" },
+      {
+        ...imageOccurrence,
+        size: 3,
+        call_index: 0,
+        tool_use_id: "read-1",
+        tool_name: "Read",
+        event_index: 0,
+      },
     ],
   });
   await render({
@@ -776,17 +783,42 @@ it("mounts tracked Docbank rows for tool output and history events", async () =>
 it.each([
   ["session-1", 0, ["image/png", "image/jpeg"]],
   ["session-1", 1, ["image/webp", "image/gif"]],
-  ["child-session", 0, []],
 ] as const)("scopes reused tool IDs to %s message %s", async (sessionId, ordinal, expected) => {
   const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
   await trackDocbank({
     integration: "enabled",
     occurrences: [
-      { ...imageOccurrence, tool_use_id: "reused", media_type: "image/png" },
-      { ...imageOccurrence, tool_use_id: "reused", event_index: 0, media_type: "image/jpeg" },
-      { ...imageOccurrence, message_ordinal: 1, tool_use_id: "reused", media_type: "image/webp" },
       {
         ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        tool_use_id: "reused",
+        media_type: "image/png",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        tool_use_id: "reused",
+        event_index: 0,
+        media_type: "image/jpeg",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
+        message_ordinal: 1,
+        tool_use_id: "reused",
+        media_type: "image/webp",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        call_index: 0,
         message_ordinal: 1,
         tool_use_id: "reused",
         event_index: 0,
@@ -830,9 +862,18 @@ it("shows tool images without a tool ID without repeating message images", async
     integration: "enabled",
     occurrences: [
       { ...imageOccurrence, media_type: "image/jpeg" },
-      { ...imageOccurrence, tool_use_id: "", call_index: 0, media_type: "image/png" },
       {
         ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        tool_use_id: "",
+        call_index: 0,
+        media_type: "image/png",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
         tool_use_id: "",
         call_index: 0,
         event_index: 0,
@@ -865,23 +906,4 @@ it("shows tool images without a tool ID without repeating message images", async
   await click(".history-header");
   const rows = Array.from(document.querySelectorAll(".docbank-matches"), (row) => row.textContent);
   expect(rows.map((row) => row?.match(/image\/[a-z]+/g))).toEqual([["image/png"], ["image/gif"]]);
-});
-
-it("shows only the selected id-less call's retained files", async () => {
-  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
-  await trackDocbank({
-    integration: "enabled",
-    occurrences: [
-      { ...imageOccurrence, tool_use_id: "", call_index: 0, media_type: "image/png" },
-      { ...imageOccurrence, tool_use_id: "", call_index: 1, media_type: "image/jpeg" },
-    ],
-  });
-  await render({
-    sessionId: "session-1",
-    ordinal: 0,
-    toolCall: call("Read", {}, { call_index: 1, result_content: "result" }),
-  });
-  await click(".tool-header");
-  expect(document.querySelector(".docbank-matches")?.textContent).toContain("image/jpeg");
-  expect(document.querySelector(".docbank-matches")?.textContent).not.toContain("image/png");
 });

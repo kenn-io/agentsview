@@ -14,7 +14,7 @@ export const imageOccurrence: ServiceFileReferenceOccurrence = {
   event_index: null,
   image_index: 0,
   media_type: "image/png",
-  size: 3,
+  size: null,
   sha256: "a".repeat(64),
   state: "not_found",
   matches: [],

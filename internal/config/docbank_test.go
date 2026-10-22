@@ -10,23 +10,20 @@ import (
 func TestDocbankIntegrationValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, endpoint, key string
-		valid               bool
+		wantErr             string
 	}{
-		{"disabled", "", "", true},
-		{"missing key", "https://example.com", "", false},
-		{"remote plaintext", "http://example.com", "DOCBANK_TEST_KEY", false},
-		{"loopback", "http://127.0.0.1", "DOCBANK_TEST_KEY", true},
-		{"https", "https://example.com", "DOCBANK_TEST_KEY", true},
+		{"disabled", "", "", ""},
+		{"missing key", "https://example.com", "", "[integrations.docbank] url and api_key_env are required together"},
+		{"remote plaintext", "http://example.com", "DOCBANK_TEST_KEY", "[integrations.docbank] url must be https, or http to a loopback host"},
+		{"loopback", "http://127.0.0.1", "DOCBANK_TEST_KEY", ""},
+		{"https", "https://example.com", "DOCBANK_TEST_KEY", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := (DocbankIntegration{URL: tc.endpoint, APIKeyEnv: tc.key}).Validate()
-			if tc.valid {
+			if tc.wantErr == "" {
 				assert.NoError(t, err)
 			} else {
-				assert.Error(t, err)
-				if tc.name == "remote plaintext" {
-					assert.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
-				}
+				assert.EqualError(t, err, tc.wantErr)
 			}
 		})
 	}

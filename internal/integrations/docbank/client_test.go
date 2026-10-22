@@ -44,75 +44,46 @@ func TestLookup(t *testing.T) {
 }
 
 func TestLookupFailures(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	var hits atomic.Int32
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
-	defer target.Close()
-	for _, tc := range []struct {
-		name    string
-		handler http.HandlerFunc
-	}{
-		{"empty page", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }},
-		{"status", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }},
-		{"oversized", func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`{"items":[],"total":0}` + strings.Repeat(" ", maxPageBytes+1)))
-		}},
-		{"redirect", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(tc.handler)
-			defer srv.Close()
-			_, err := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
-			assert.EqualError(t, err, "docbank unavailable")
-		})
-	}
-	assert.Zero(t, hits.Load())
-}
-
-func TestLookupWarningCauses(t *testing.T) {
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previous) })
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer target.Close()
 	for _, tc := range []struct {
 		name, key, cause string
-		status           int
+		handler          http.HandlerFunc
+		unreachable      bool
 	}{
-		{"missing key", "", "missing API key", 200},
-		{"rejected key", "secret-value", "API key rejected", 401},
-		{"forbidden key", "secret-value", "API key rejected", 403},
-		{"unreachable server", "secret-value", "server unreachable", 0},
+		{"empty page", "secret-value", "", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }, false},
+		{"status", "secret-value", "server returned HTTP 503", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, false},
+		{"oversized", "secret-value", "", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"items":[],"total":0}` + strings.Repeat(" ", maxPageBytes+1)))
+		}, false},
+		{"redirect", "secret-value", "server returned HTTP 302", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }, false},
+		{"missing key", "", "missing API key", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }, false},
+		{"rejected key", "secret-value", "API key rejected", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }, false},
+		{"forbidden key", "secret-value", "API key rejected", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }, false},
+		{"unreachable server", "secret-value", "server unreachable", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs.Reset()
 			t.Setenv("DOCBANK_TEST_KEY", tc.key)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status) }))
+			srv := httptest.NewServer(tc.handler)
 			defer srv.Close()
-			if tc.status == 0 {
+			if tc.unreachable {
 				srv.Close()
 			}
 			_, err := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}).Lookup(t.Context(), strings.Repeat("a", 64))
 			require.EqualError(t, err, "docbank unavailable")
-			assert.Contains(t, logs.String(), tc.cause)
+			if tc.cause != "" {
+				assert.Contains(t, logs.String(), tc.cause)
+			}
 			assert.NotContains(t, logs.String(), "secret-value")
 		})
 	}
-}
-
-func TestLookupCachesDigests(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "key")
-	var hits atomic.Int32
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
-	}))
-	defer remote.Close()
-	client := New(config.DocbankIntegration{URL: remote.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})
-	for _, digest := range []string{"a", "a", "b", "a"} {
-		_, err := client.Lookup(t.Context(), digest)
-		require.NoError(t, err)
-	}
-	assert.Equal(t, int32(2), hits.Load())
+	assert.Zero(t, hits.Load())
 }
 
 type lookupTransport func(*http.Request) (*http.Response, error)
@@ -137,13 +108,18 @@ func TestLookupCacheExpiryAndRetry(t *testing.T) {
 		_, err = client.Lookup(t.Context(), "digest")
 		require.NoError(t, err)
 		assert.Equal(t, 2, hits)
+		for _, digest := range []string{"second-digest", "digest", "second-digest"} {
+			_, err = client.Lookup(t.Context(), digest)
+			require.NoError(t, err)
+		}
+		assert.Equal(t, 3, hits)
 		time.Sleep(59 * time.Second)
 		_, err = client.Lookup(t.Context(), "digest")
 		require.NoError(t, err)
-		assert.Equal(t, 2, hits)
+		assert.Equal(t, 3, hits)
 		time.Sleep(2 * time.Second)
 		_, err = client.Lookup(t.Context(), "digest")
 		require.NoError(t, err)
-		assert.Equal(t, 3, hits)
+		assert.Equal(t, 4, hits)
 	})
 }

@@ -35,17 +35,28 @@ describe("file references store", () => {
     expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
     expect(store.result?.transcript_revision).toBe("2");
   });
-  it("rejects lookup results from a different transcript revision", async () => {
-    lookup
-      .mockReset()
-      .mockResolvedValueOnce({ ...result, transcript_revision: "2" })
-      .mockResolvedValueOnce(result);
-    const store = new FileReferencesStore();
-    store.enabled = true;
-    await store.track("a", "1");
-    expect(lookup).toHaveBeenCalledTimes(2);
-    expect(store.status).toBe("ok");
-  });
+  it.each([
+    { name: "current refetch", refetchRevision: "1", status: "ok" },
+    { name: "stale refetch", refetchRevision: "2", status: "loading" },
+  ] as const)(
+    "rejects a different transcript revision with a $name",
+    async ({ refetchRevision, status }) => {
+      lookup
+        .mockReset()
+        .mockResolvedValueOnce({ ...result, transcript_revision: "2" })
+        .mockResolvedValue({ ...result, transcript_revision: refetchRevision });
+      const store = new FileReferencesStore();
+      store.enabled = true;
+      await store.track("a", "1");
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(store.status).toBe(status);
+      if (status === "loading") {
+        expect(store.result).toBeUndefined();
+        await store.track("a", "2");
+        expect(store.status).toBe("ok");
+      }
+    },
+  );
   it("ignores superseded requests and resets on session changes", async () => {
     let resolve!: (value: unknown) => void;
     lookup.mockReset().mockImplementationOnce(
@@ -92,8 +103,15 @@ it("keeps id-less tool calls separate by archive index", async () => {
   lookup.mockReset().mockResolvedValueOnce({
     ...result,
     occurrences: [
-      { ...imageOccurrence, tool_use_id: "", call_index: 0 },
-      { ...imageOccurrence, tool_use_id: "", call_index: 1, media_type: "image/jpeg" },
+      { ...imageOccurrence, size: 3, tool_name: "Read", tool_use_id: "", call_index: 0 },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        tool_use_id: "",
+        call_index: 1,
+        media_type: "image/jpeg",
+      },
     ],
   });
   const store = new FileReferencesStore();
@@ -111,17 +129,5 @@ it("refetches when the archive changes during a read", async () => {
   store.enabled = true;
   await store.track("a", "1");
   expect(lookup).toHaveBeenCalledTimes(2);
-  expect(store.status).toBe("ok");
-});
-
-it("waits for the transcript when the refetch is also stale", async () => {
-  lookup.mockReset().mockResolvedValue({ ...result, transcript_revision: "2" });
-  const store = new FileReferencesStore();
-  store.enabled = true;
-  await store.track("a", "1");
-  expect(lookup).toHaveBeenCalledTimes(2);
-  expect(store.result).toBeUndefined();
-  expect(store.status).toBe("loading");
-  await store.track("a", "2");
   expect(store.status).toBe("ok");
 });

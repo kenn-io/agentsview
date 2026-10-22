@@ -708,8 +708,22 @@ it("keeps each id-less call's matches within its own block", async () => {
   await trackDocbank({
     integration: "enabled",
     occurrences: [
-      { ...imageOccurrence, tool_use_id: "", call_index: 0, media_type: "image/png" },
-      { ...imageOccurrence, tool_use_id: "", call_index: 1, media_type: "image/jpeg" },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        tool_use_id: "",
+        call_index: 0,
+        media_type: "image/png",
+      },
+      {
+        ...imageOccurrence,
+        size: 3,
+        tool_name: "Read",
+        tool_use_id: "",
+        call_index: 1,
+        media_type: "image/jpeg",
+      },
     ],
   });
   await render(

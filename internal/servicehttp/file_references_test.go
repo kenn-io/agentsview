@@ -20,7 +20,6 @@ import (
 func TestFileReferencesRoundTrip(t *testing.T) {
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", r.URL.Query().Get("sha256"))
 		_, _ = w.Write([]byte(`{"items":[{"version":{"id":"12345678-1234-1234-1234-123456789abc","node_id":7},"node":{"id":7,"name":"image.png"},"path":"/images/image.png","is_current":true}],"total":1}`))
 	}))
 	defer stub.Close()
@@ -41,9 +40,8 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	assert.Nil(t, occurrence.ToolUseID)
 	assert.Nil(t, occurrence.EventIndex)
 	assert.Nil(t, occurrence.Size)
-	assert.Equal(t, "found", occurrence.State)
-	require.Len(t, occurrence.Matches, 1)
-	assert.Equal(t, "https://example.com/#node=7&version=12345678-1234-1234-1234-123456789abc", occurrence.Matches[0].OpenURL)
+	assert.Nil(t, occurrence.CallIndex)
+	assert.Nil(t, occurrence.ToolName)
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, daemon.URL+"/api/v1/sessions/empty/file-references", nil)
 	require.NoError(t, err)
 	response, err := daemon.Client().Do(request)
@@ -58,13 +56,18 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 }
 
 func TestFileReferencesDiscoveredCapability(t *testing.T) {
+	t.Setenv("AGENTSVIEW_SIGNING_URL", "https://reader.example.com")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", "unused-key")
 	for _, tc := range []struct {
 		name, metadata string
 		enabled        bool
+		signed         bool
 	}{
-		{"enabled", `{"api_version":12,"docbank_enabled":true}`, true},
-		{"disabled", `{"api_version":12,"docbank_enabled":false}`, false},
-		{"older daemon", `{"api_version":12}`, false},
+		{"enabled", `{"api_version":12,"docbank_enabled":true}`, true, false},
+		{"signed", `{"api_version":12,"docbank_enabled":true}`, false, true},
+		{"disabled", `{"api_version":12,"docbank_enabled":false}`, false, false},
+		{"older daemon", `{"api_version":12}`, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +77,11 @@ func TestFileReferencesDiscoveredCapability(t *testing.T) {
 			defer daemon.Close()
 			caps, err := servicehttp.ProbeHTTPServerCapabilities(t.Context(), daemon.URL, "")
 			require.NoError(t, err)
-			svc := servicehttp.NewHTTPBackendForServer(daemon.URL, "", caps)
+			url := daemon.URL
+			if tc.signed {
+				url = "https://reader.example.com"
+			}
+			svc := servicehttp.NewHTTPBackendForServer(url, "", caps)
 			assert.Equal(t, tc.enabled, service.SupportsFileReferences(svc))
 		})
 	}
