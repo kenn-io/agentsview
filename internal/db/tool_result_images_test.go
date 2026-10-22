@@ -831,7 +831,6 @@ func TestMarkdownAssetImagesIgnoresHostMIMETypes(t *testing.T) {
 }
 
 func TestMarkdownAssetImagesSkipsUnrelatedContent(t *testing.T) {
-	t.Skip("Sonnet P2: skipping Markdown without asset references requires lengthening an existing function")
 	content := strings.Repeat("ordinary transcript text ", 100)
 	allocations := testing.AllocsPerRun(5, func() { assert.Empty(t, MarkdownAssetImages(content)) })
 	assert.Less(t, allocations, float64(5))

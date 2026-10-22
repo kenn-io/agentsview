@@ -101,13 +101,24 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 }
 
 func walkMarkdownImages(markdown parser.Parser, content string, visit func(string) error) error {
-	source := []byte(content)
-	return ast.Walk(markdown.Parse(text.NewReader(source)), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+	return ast.Walk(parseAssetMarkdown(markdown, content), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if image, ok := node.(*ast.Image); ok && entering {
 			return ast.WalkContinue, visit(string(image.Destination))
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// parseAssetMarkdown skips parsing content with no asset reference. A nil
+// parser is built only when the content needs one.
+func parseAssetMarkdown(markdown parser.Parser, content string) ast.Node {
+	if !strings.Contains(content, "asset://") {
+		return ast.NewDocument()
+	}
+	if markdown == nil {
+		markdown = goldmark.New().Parser()
+	}
+	return markdown.Parse(text.NewReader([]byte(content)))
 }
 
 func assetReferenceDigest(ref string) (string, string, bool) {
@@ -130,7 +141,7 @@ func assetImageDigest(ref string) (string, string, bool) {
 // MarkdownAssetImages excludes links and code examples by walking image nodes.
 func MarkdownAssetImages(content string) []RetainedImage {
 	var images []RetainedImage
-	_ = walkMarkdownImages(goldmark.New().Parser(), content, func(ref string) error {
+	_ = walkMarkdownImages(nil, content, func(ref string) error {
 		if digest, ext, ok := assetImageDigest(ref); ok {
 			mediaType, _ := assets.MediaTypeForExt(ext)
 			images = append(images, RetainedImage{Index: len(images), MediaType: mediaType, SHA256: digest})
