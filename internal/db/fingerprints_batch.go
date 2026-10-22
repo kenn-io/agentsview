@@ -477,16 +477,16 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 		var indexer toolCallIndexer
 		for rows.Next() {
 			var sessionID string
-			var r toolCallFingerprintRow
+			var r ToolCallFingerprintFields
 			if err := rows.Scan(
-				&sessionID, &r.messageOrdinal, &r.toolName, &r.category,
-				&r.toolUseID, &r.inputJSON, &r.skillName,
-				&r.subagentSessionID, &r.resultContentLength,
-				&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
+				&sessionID, &r.MessageOrdinal, &r.ToolName, &r.Category,
+				&r.ToolUseID, &r.InputValue, &r.SkillName,
+				&r.SubagentSessionID, &r.ResultContentLength,
+				&r.ResultValue, &r.FilePathValue, &r.ObservedOutcome, &r.ObservedRepeat, &r.SequenceEnding,
 			); err != nil {
 				return err
 			}
-			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
+			r.CallIndex = indexer.next(sessionID, r.MessageOrdinal)
 			r.appendTo(builders.get(sessionID))
 		}
 		if err := rows.Err(); err != nil {
@@ -729,25 +729,9 @@ func (r flagsFingerprintRow) appendTo(b *strings.Builder) {
 		r.ordinal, r.isSystem, r.hasThinking, r.hasToolUse, sum)
 }
 
-type toolCallFingerprintRow struct {
-	messageOrdinal      int
-	callIndex           int
-	toolName            string
-	category            string
-	toolUseID           string
-	inputJSON           string
-	skillName           string
-	subagentSessionID   string
-	resultContentLength int
-	resultContent       string
-	filePath            string
-	observedOutcome     string
-	observedRepeat      string
-	sequenceEnding      string
-}
-
-// ToolCallFingerprintFields holds one compact tool-call comparison row.
-// InputValue, ResultValue, and FilePathValue are hexadecimal SHA-256 digests.
+// ToolCallFingerprintFields holds one tool-call fingerprint row.
+// InputValue, ResultValue, and FilePathValue hold text for persisted fingerprints
+// or hexadecimal SHA-256 digests for compact comparisons.
 type ToolCallFingerprintFields struct {
 	MessageOrdinal      int
 	CallIndex           int
@@ -765,79 +749,49 @@ type ToolCallFingerprintFields struct {
 	SequenceEnding      string
 }
 
-// AppendToolCallFingerprintFields appends one compact tool-call comparison row.
-func AppendToolCallFingerprintFields(b *strings.Builder, fields ToolCallFingerprintFields) {
-	fmt.Fprintf(b,
-		"%d|%d|%d:%s|%d:%s|%d:%s|%s|%d:%s|%d:%s|%d|%s|%s;",
-		fields.MessageOrdinal, fields.CallIndex,
-		len(fields.ToolName), fields.ToolName,
-		len(fields.Category), fields.Category,
-		len(fields.ToolUseID), fields.ToolUseID,
-		fields.InputValue,
-		len(fields.SkillName), fields.SkillName,
-		len(fields.SubagentSessionID), fields.SubagentSessionID,
-		fields.ResultContentLength,
-		fields.ResultValue,
-		fields.FilePathValue,
-	)
-	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;",
-		len(fields.ObservedOutcome), fields.ObservedOutcome,
-		len(fields.ObservedRepeat), fields.ObservedRepeat,
-		len(fields.SequenceEnding), fields.SequenceEnding,
-	)
-}
-
-func (r toolCallFingerprintRow) sanitized() toolCallFingerprintRow {
-	r.toolName = SanitizeUTF8(r.toolName)
-	r.category = SanitizeUTF8(r.category)
-	r.toolUseID = SanitizeUTF8(r.toolUseID)
-	r.inputJSON = SanitizeUTF8(r.inputJSON)
-	r.skillName = SanitizeUTF8(r.skillName)
-	r.subagentSessionID = SanitizeUTF8(r.subagentSessionID)
-	r.resultContent = SanitizeUTF8(r.resultContent)
-	r.filePath = SanitizeUTF8(r.filePath)
+func (r ToolCallFingerprintFields) sanitized() ToolCallFingerprintFields {
+	r.ToolName = SanitizeUTF8(r.ToolName)
+	r.Category = SanitizeUTF8(r.Category)
+	r.ToolUseID = SanitizeUTF8(r.ToolUseID)
+	r.InputValue = SanitizeUTF8(r.InputValue)
+	r.SkillName = SanitizeUTF8(r.SkillName)
+	r.SubagentSessionID = SanitizeUTF8(r.SubagentSessionID)
+	r.ResultValue = SanitizeUTF8(r.ResultValue)
+	r.FilePathValue = SanitizeUTF8(r.FilePathValue)
 	return r
 }
 
-func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
-	r = r.sanitized()
-	fmt.Fprintf(b,
-		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-		r.messageOrdinal, r.callIndex,
-		len(r.toolName), r.toolName,
-		len(r.category), r.category,
-		len(r.toolUseID), r.toolUseID,
-		len(r.inputJSON), r.inputJSON,
-		len(r.skillName), r.skillName,
-		len(r.subagentSessionID), r.subagentSessionID,
-		r.resultContentLength,
-		len(r.resultContent), r.resultContent,
-		len(r.filePath), r.filePath,
-	)
-	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
+func (r ToolCallFingerprintFields) appendTo(b *strings.Builder) {
+	AppendToolCallFingerprintFields(b, r.sanitized())
 }
 
-func (r toolCallFingerprintRow) appendComparisonTo(b *strings.Builder) {
+// AppendToolCallFingerprintFields appends one length-prefixed tool-call row.
+func AppendToolCallFingerprintFields(b *strings.Builder, r ToolCallFingerprintFields) {
+	fmt.Fprintf(b,
+		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+		r.MessageOrdinal, r.CallIndex,
+		len(r.ToolName), r.ToolName,
+		len(r.Category), r.Category,
+		len(r.ToolUseID), r.ToolUseID,
+		len(r.InputValue), r.InputValue,
+		len(r.SkillName), r.SkillName,
+		len(r.SubagentSessionID), r.SubagentSessionID,
+		r.ResultContentLength,
+		len(r.ResultValue), r.ResultValue,
+		len(r.FilePathValue), r.FilePathValue,
+	)
+	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.ObservedOutcome), r.ObservedOutcome, len(r.ObservedRepeat), r.ObservedRepeat, len(r.SequenceEnding), r.SequenceEnding)
+}
+
+func (r ToolCallFingerprintFields) appendComparisonTo(b *strings.Builder) {
 	r = r.sanitized()
-	inputHash := sha256.Sum256([]byte(r.inputJSON))
-	resultHash := sha256.Sum256([]byte(r.resultContent))
-	pathHash := sha256.Sum256([]byte(r.filePath))
-	AppendToolCallFingerprintFields(b, ToolCallFingerprintFields{
-		MessageOrdinal:      r.messageOrdinal,
-		CallIndex:           r.callIndex,
-		ToolName:            r.toolName,
-		Category:            r.category,
-		ToolUseID:           r.toolUseID,
-		InputValue:          hex.EncodeToString(inputHash[:]),
-		SkillName:           r.skillName,
-		SubagentSessionID:   r.subagentSessionID,
-		ResultContentLength: r.resultContentLength,
-		ResultValue:         hex.EncodeToString(resultHash[:]),
-		FilePathValue:       hex.EncodeToString(pathHash[:]),
-		ObservedOutcome:     r.observedOutcome,
-		ObservedRepeat:      r.observedRepeat,
-		SequenceEnding:      r.sequenceEnding,
-	})
+	inputHash := sha256.Sum256([]byte(r.InputValue))
+	resultHash := sha256.Sum256([]byte(r.ResultValue))
+	pathHash := sha256.Sum256([]byte(r.FilePathValue))
+	r.InputValue = hex.EncodeToString(inputHash[:])
+	r.ResultValue = hex.EncodeToString(resultHash[:])
+	r.FilePathValue = hex.EncodeToString(pathHash[:])
+	AppendToolCallFingerprintFields(b, r)
 }
 
 // toolCallIndexer derives the per-message call index from rows ordered by
@@ -930,19 +884,19 @@ func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) Mes
 		promptSource: m.PromptSource, sourceUUID: m.SourceUUID, sourceParentUUID: m.SourceParentUUID, isSidechain: m.IsSidechain, isCompactBoundary: m.IsCompactBoundary,
 	}.appendTo(&token)
 	for i, tc := range m.ToolCalls {
-		call := toolCallFingerprintRow{
-			messageOrdinal: m.Ordinal, callIndex: i, toolName: tc.ToolName, category: tc.Category, toolUseID: tc.ToolUseID, inputJSON: tc.InputJSON,
-			skillName: tc.SkillName, subagentSessionID: tc.SubagentSessionID, resultContentLength: tc.ResultContentLength,
-			resultContent: DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents), filePath: tc.FilePath,
+		call := ToolCallFingerprintFields{
+			MessageOrdinal: m.Ordinal, CallIndex: i, ToolName: tc.ToolName, Category: tc.Category, ToolUseID: tc.ToolUseID, InputValue: tc.InputJSON,
+			SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID, ResultContentLength: tc.ResultContentLength,
+			ResultValue: DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents), FilePathValue: tc.FilePath,
 		}
 		if tc.ObservedOutcome != nil {
-			call.observedOutcome = *tc.ObservedOutcome
+			call.ObservedOutcome = *tc.ObservedOutcome
 		}
 		if tc.ObservedRepeat != nil {
-			call.observedRepeat = *tc.ObservedRepeat
+			call.ObservedRepeat = *tc.ObservedRepeat
 		}
 		if tc.SequenceEnding != nil {
-			call.sequenceEnding = *tc.SequenceEnding
+			call.SequenceEnding = *tc.SequenceEnding
 		}
 		call.appendComparisonTo(&toolCalls)
 		for _, ev := range tc.ResultEvents {

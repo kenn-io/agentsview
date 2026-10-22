@@ -4046,16 +4046,16 @@ func toolCallFingerprintWithQuerier(ctx context.Context, q messageRowsQuerier, s
 	var b strings.Builder
 	var indexer toolCallIndexer
 	for rows.Next() {
-		var r toolCallFingerprintRow
+		var r ToolCallFingerprintFields
 		if err := rows.Scan(
-			&r.messageOrdinal, &r.toolName, &r.category,
-			&r.toolUseID, &r.inputJSON, &r.skillName,
-			&r.subagentSessionID, &r.resultContentLength,
-			&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
+			&r.MessageOrdinal, &r.ToolName, &r.Category,
+			&r.ToolUseID, &r.InputValue, &r.SkillName,
+			&r.SubagentSessionID, &r.ResultContentLength,
+			&r.ResultValue, &r.FilePathValue, &r.ObservedOutcome, &r.ObservedRepeat, &r.SequenceEnding,
 		); err != nil {
 			return "", err
 		}
-		r.callIndex = indexer.next(sessionID, r.messageOrdinal)
+		r.CallIndex = indexer.next(sessionID, r.MessageOrdinal)
 		r.appendTo(&b)
 	}
 	return b.String(), rows.Err()
