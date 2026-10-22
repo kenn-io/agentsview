@@ -62,7 +62,7 @@
     "vitest": "$vitest"
   },
   "engines": {
-    "node": "^24.11.0 || >=26.0.0"
+    "node": "^24.22.1 || >=26.12.1"
   },
   "packageManager": "npm@12.2.0"
 }

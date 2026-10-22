@@ -29,7 +29,7 @@ RUN VITE_PROJECT_MAPPING_WORKSPACE=true make build VERSION="$AV_VERSION" COMMIT=
 RUN cp agentsview /bin/agentsview
 
 # Stage 2: Run Playwright screenshots
-FROM node:24-bookworm
+FROM node:24.22.1-bookworm
 
 WORKDIR /work
 
