@@ -1645,7 +1645,7 @@ Agentsview's v2 parser preserves these lowercase tool names and text replies.
 The sequence extractor treats these specific replies as empty results; category
 aliases alone do not establish that a provider uses the same reply text.
 
-**Projection detail check (2026-09-12):** Rechecked the pinned
+**Projection detail check (2026-10-22):** Rechecked the pinned
 [beta read tool](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/read.ts#L169),
 [tool content schema](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/schema/src/tool.ts#L73),
 and
@@ -1666,6 +1666,8 @@ Normal sync tests use the captured beta database schema and check archived
 payloads, image keep/drop behavior, unchanged PDF/text files and references, and
 an unchanged second sync. Data version 108 makes existing imports eligible to
 recover omitted file payloads. This adds retention, not a PDF previewer.
+Digest lookup also covers retained inline PDF and text files; the shared `tool_files.json` fixture covers their
+service results and file labels.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the

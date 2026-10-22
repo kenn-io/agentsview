@@ -9,8 +9,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"uuid"
 
@@ -20,8 +22,10 @@ import (
 const maxPageBytes = 1 << 20
 
 type Client struct {
-	http *http.Client
-	cfg  config.DocbankIntegration
+	http  *http.Client
+	cfg   config.DocbankIntegration
+	mu    sync.Mutex
+	cache map[string]cachedResult
 }
 
 // New builds a client from configuration validated by the local backend.
@@ -44,8 +48,7 @@ type Result struct {
 type remotePage struct {
 	Items *[]struct {
 		Version struct {
-			ID     uuid.UUID `json:"id"`
-			NodeID int64     `json:"node_id"`
+			ID uuid.UUID `json:"id"`
 		} `json:"version"`
 		Node struct {
 			ID      int64  `json:"id"`
@@ -58,7 +61,7 @@ type remotePage struct {
 	Total *int `json:"total"`
 }
 
-func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
+func (c *Client) lookup(ctx context.Context, digest string) (Result, error) {
 	unavailable := errors.New("docbank unavailable")
 	key := c.cfg.APIKey()
 	if key == "" {
@@ -114,4 +117,40 @@ func lookupStatusUnavailable(status int) error {
 		return lookupUnavailable("API key rejected")
 	}
 	return lookupUnavailable(fmt.Sprintf("server returned HTTP %d", status))
+}
+
+type cachedResult struct {
+	result  Result
+	expires time.Time
+}
+
+// Lookup reuses successful digest results for one minute across transcript appends.
+func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
+	c.mu.Lock()
+	cached, ok := c.cache[digest]
+	c.mu.Unlock()
+	if ok && time.Now().Before(cached.expires) {
+		cached.result.Matches = slices.Clone(cached.result.Matches)
+		return cached.result, nil
+	}
+	result, err := c.lookup(ctx, digest)
+	if err == nil {
+		c.remember(digest, result)
+	}
+	return result, err
+}
+
+func (c *Client) remember(digest string, result Result) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cache == nil {
+		c.cache = make(map[string]cachedResult)
+	}
+	for key, entry := range c.cache {
+		if !time.Now().Before(entry.expires) {
+			delete(c.cache, key)
+		}
+	}
+	result.Matches = slices.Clone(result.Matches)
+	c.cache[digest] = cachedResult{result: result, expires: time.Now().Add(time.Minute)}
 }

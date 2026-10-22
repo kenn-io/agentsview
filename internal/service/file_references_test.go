@@ -2,10 +2,12 @@ package service_test
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -198,4 +200,63 @@ func TestFileReferencesRejectsReplacementBetweenReads(t *testing.T) {
 	svc := service.NewReadOnlyBackend(store, service.WithDocbank(docbank.New(config.DocbankIntegration{})))
 	_, err := service.FileReferences(t.Context(), svc, id)
 	assert.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+func TestFileReferencesIdlessCalls(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "tools", ToolCalls: []db.ToolCall{
+		{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]`},
+		{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,YWJk"}]`},
+	}}}))
+	t.Setenv("DOCBANK_TEST_KEY", "key")
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":0}`)) }))
+	defer remote.Close()
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: remote.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var body struct {
+		Occurrences []struct {
+			CallIndex *int `json:"call_index"`
+		} `json:"occurrences"`
+	}
+	require.NoError(t, json.Unmarshal(data, &body))
+	require.Len(t, body.Occurrences, 2)
+	assert.Equal(t, new(0), body.Occurrences[0].CallIndex)
+	assert.Equal(t, new(1), body.Occurrences[1].CallIndex)
+	messages, err := svc.Messages(t.Context(), id, service.MessageFilter{})
+	require.NoError(t, err)
+	data, err = json.Marshal(messages)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"call_index":1`)
+}
+
+func TestFileReferencesOpenCodeFiles(t *testing.T) {
+	raw, err := os.ReadFile("../parser/testdata/opencode_v2/tool_files.json")
+	require.NoError(t, err)
+	var source struct {
+		Content []struct {
+			State struct {
+				Content jsontext.Value `json:"content"`
+			} `json:"state"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &source))
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "files", ToolCalls: []db.ToolCall{{ToolName: "read", ResultContent: string(source.Content[1].State.Content)}}}}))
+	t.Setenv("DOCBANK_TEST_KEY", "key")
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":0}`)) }))
+	defer remote.Close()
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: remote.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	require.Len(t, out.Occurrences, 2)
+	assert.Equal(t, "application/pdf", out.Occurrences[0].MediaType)
+	assert.Equal(t, new(int64(327)), out.Occurrences[0].Size)
+	assert.Equal(t, "text/plain", out.Occurrences[1].MediaType)
+	assert.Equal(t, new(int64(6)), out.Occurrences[1].Size)
+	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", out.Occurrences[1].SHA256)
 }

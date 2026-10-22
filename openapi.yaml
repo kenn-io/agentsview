@@ -4007,6 +4007,9 @@ components:
     DbToolCall:
       additionalProperties: false
       properties:
+        call_index:
+          format: int64
+          type: integer
         category:
           type: string
         input_json:
@@ -6299,6 +6302,11 @@ components:
     ServiceFileReferenceOccurrence:
       additionalProperties: false
       properties:
+        call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
         event_index:
           format: int64
           type:
@@ -6343,6 +6351,7 @@ components:
             - "null"
       required:
         - message_ordinal
+        - call_index
         - tool_use_id
         - tool_name
         - event_index

@@ -1824,11 +1824,21 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 
 func (s *Server) humaFileReferences(ctx context.Context, in *idPathInput) (*jsonOutput[service.FileReferencesResult], error) {
 	result, err := service.FileReferences(ctx, s.sessions, in.ID)
-	if errors.Is(err, service.ErrSessionNotFound) {
-		return nil, apiError(http.StatusNotFound, "session not found")
-	}
 	if err != nil {
-		return nil, serverError(err)
+		return nil, fileReferencesError(err)
 	}
 	return &jsonOutput[service.FileReferencesResult]{Body: result}, nil
+}
+
+func fileReferencesError(err error) error {
+	switch {
+	case errors.Is(err, service.ErrSessionNotFound):
+		return apiError(http.StatusNotFound, "session not found")
+	case errors.Is(err, service.ErrRevisionBoundReadUnavailable):
+		return apiError(http.StatusNotImplemented, err.Error())
+	case errors.Is(err, service.ErrSourceChanged):
+		return apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
+	default:
+		return serverError(err)
+	}
 }

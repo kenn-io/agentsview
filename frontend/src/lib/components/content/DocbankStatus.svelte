@@ -6,7 +6,7 @@
 
 {#if fileReferences.enabled && fileReferences.result?.integration !== "disabled"}
   {#if fileReferences.status === "failed" || fileReferences.result?.lookup_failed}
-    <div class="docbank-status">{m.docbank_unavailable()} <Button size="sm" surface="soft" label={m.shared_retry()} onclick={() => fileReferences.refresh()} /></div>
+    <div class="docbank-status">{fileReferences.status === "failed" ? m.docbank_read_unavailable() : m.docbank_unavailable()} <Button size="sm" surface="soft" label={m.shared_retry()} onclick={() => fileReferences.refresh()} /></div>
   {:else if fileReferences.status === "loading" && !fileReferences.result}
     <div class="docbank-status">{m.docbank_checking()}</div>
   {/if}

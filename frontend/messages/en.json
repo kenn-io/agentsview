@@ -2952,9 +2952,10 @@
   "docbank_prior": "Prior version",
   "docbank_trash": "Trash",
   "docbank_not_found": "Not in Docbank",
+  "docbank_read_unavailable": "Session files unavailable",
   "docbank_unavailable": "Docbank unavailable",
   "docbank_limit_exceeded": "Docbank lookup limit reached",
-  "docbank_image": "Image {n} · {mediaType} · {size}",
-  "docbank_image_without_size": "Image {n} · {mediaType}",
+  "docbank_file": "File {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "File {n} · {mediaType}",
   "docbank_more": "+{count} more in Docbank"
 }

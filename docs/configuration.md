@@ -2422,16 +2422,17 @@ that connect to a daemon use the daemon's integration configuration.
 | `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
 | `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
 
-Lookup covers retained tool-result images, including offloaded assets, and
-Markdown `asset://` images in message text. Claude pasted images aren't
-covered yet.
-Native Codex attachments and files handled by Read or Write tools require exact
-bytes that the archive doesn't retain and aren't covered.
+Lookup covers retained tool-result images, including offloaded assets, inline
+OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`
+images in message text. Claude pasted images aren't covered yet. Native Codex
+attachments and files handled by tools require exact bytes in the archive;
+paths and references alone aren't covered.
 
 Only SHA-256 digests leave the machine. Transcript reads run independently of
 Docbank. Database reads and Docbank requests each have their own five-second
 budget. Each lookup resolves up to 50 distinct digests with four requests at a
-time and shows up to ten matches per digest. Lookup failures report unavailable
-and can be retried. Digests beyond the cap report `limit_exceeded` without Retry.
-Results refresh when the transcript changes or the session reopens. No migration
-or resync is required.
+time and shows up to ten matches per digest. Docbank lookup failures report
+Docbank unavailable and can be retried. Archive read failures report session
+files unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
+Results refresh when the transcript changes or the session reopens. Successful
+digest lookups are reused for up to 60 seconds. No migration or resync is required.

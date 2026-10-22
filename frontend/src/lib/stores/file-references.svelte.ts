@@ -1,5 +1,10 @@
 import { getApiV1SessionsByIdFileReferences } from "../api/generated/sessions/sessions.js";
-import type { DbMessage, ServiceFileReferencesResult } from "../api/generated/index.js";
+import type {
+  DbMessage,
+  ServiceFileReferenceOccurrence,
+  ServiceFileReferencesResult,
+} from "../api/generated/index.js";
+import { ApiError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 type Transcript = readonly (Pick<DbMessage, "ordinal" | "content" | "tool_calls"> & {
@@ -35,7 +40,7 @@ export class FileReferencesStore {
     this.pending = Promise.resolve();
   }
 
-  refresh(): Promise<void> {
+  refresh(retryStale = true): Promise<void> {
     const signal = this.read.begin();
     if (!this.enabled || !this.sessionId) {
       this.status = "idle";
@@ -45,11 +50,17 @@ export class FileReferencesStore {
     this.status = "loading";
     const snapshot = this.content;
     this.pending = getApiV1SessionsByIdFileReferences({ id: this.sessionId }, { signal })
-      .then((result) => this.accept(result, signal, snapshot))
-      .catch(() => {
-        if (this.read.isCurrent(signal)) this.status = "failed";
-      });
+      .then((result) => this.accept(result, signal, snapshot, retryStale))
+      .catch((error) => this.reject(error, signal, retryStale));
     return this.pending;
+  }
+
+  private reject(error: unknown, signal: AbortSignal, retryStale: boolean): void | Promise<void> {
+    if (!this.read.isCurrent(signal)) return;
+    if (error instanceof ApiError && error.code === "source_changed") {
+      return retryStale ? this.refresh(false) : undefined;
+    }
+    this.status = "failed";
   }
 
   private updateTranscript(sessionId: string | null, content: Transcript): void {
@@ -66,11 +77,11 @@ export class FileReferencesStore {
     result: ServiceFileReferencesResult,
     signal: AbortSignal,
     snapshot: Map<number, string>,
-  ): void {
+    retryStale: boolean,
+  ): void | Promise<void> {
     if (!this.read.isCurrent(signal)) return;
     if (!this.revision || result.transcript_revision !== this.revision) {
-      this.status = "failed";
-      return;
+      return retryStale ? this.refresh(false) : undefined;
     }
     this.resultContent = snapshot;
     this.result = result;
@@ -102,11 +113,22 @@ export class FileReferencesStore {
     return this.forOrdinal(sessionId, ordinal).filter((item) => item.tool_use_id === null);
   }
 
-  forTool(sessionId: string, ordinal: number, toolUseId: string, eventIndex: number | null) {
-    return this.forOrdinal(sessionId, ordinal).filter(
-      (item) => item.tool_use_id === toolUseId && item.event_index === eventIndex,
-    );
+  forTool(id: string, ordinal: number, toolID: string, event: number | null, index = 0) {
+    return this.forOrdinal(id, ordinal).filter((item) => matchesTool(item, toolID, event, index));
   }
+}
+
+function matchesTool(
+  item: ServiceFileReferenceOccurrence,
+  id: string,
+  event: number | null,
+  index: number,
+) {
+  return (
+    item.tool_use_id === id &&
+    item.event_index === event &&
+    (id !== "" || item.call_index === index)
+  );
 }
 
 export const fileReferences = new FileReferencesStore();

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { ApiError } from "../api/runtime.js";
 import { FileReferencesStore } from "./file-references.svelte.js";
 import { imageOccurrence } from "../components/content/docbankTestHelpers.js";
 const lookup = vi.hoisted(() => vi.fn());
@@ -73,12 +74,15 @@ describe("file references store", () => {
     store.reset();
   });
   it("rejects lookup results from a different transcript revision", async () => {
-    lookup.mockReset().mockResolvedValueOnce({ ...result, transcript_revision: "2" });
+    lookup
+      .mockReset()
+      .mockResolvedValueOnce({ ...result, transcript_revision: "2" })
+      .mockResolvedValueOnce(result);
     const store = new FileReferencesStore();
     store.enabled = true;
     await store.track("a", "1", [message("old")]);
-    expect(store.forMessage("a", 0)).toEqual([]);
-    expect(store.status).toBe("failed");
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(store.status).toBe("ok");
   });
   it("ignores superseded requests and resets on session changes", async () => {
     let resolve!: (value: unknown) => void;
@@ -120,4 +124,42 @@ describe("file references store", () => {
     await store.track("a", "1");
     expect(lookup).not.toHaveBeenCalled();
   });
+});
+
+it("keeps id-less tool calls separate by archive index", async () => {
+  lookup.mockReset().mockResolvedValueOnce({
+    ...result,
+    occurrences: [
+      { ...imageOccurrence, tool_use_id: "", call_index: 0 },
+      { ...imageOccurrence, tool_use_id: "", call_index: 1, media_type: "image/jpeg" },
+    ],
+  });
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  expect(store.forTool("a", 0, "", null, 1).map((x) => x.media_type)).toEqual(["image/jpeg"]);
+});
+
+it("refetches when the archive changes during a read", async () => {
+  lookup
+    .mockReset()
+    .mockRejectedValueOnce(new ApiError(409, "source changed", "source_changed"))
+    .mockResolvedValueOnce(result);
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(store.status).toBe("ok");
+});
+
+it("waits for the transcript when the refetch is also stale", async () => {
+  lookup.mockReset().mockResolvedValue({ ...result, transcript_revision: "2" });
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  await store.track("a", "1");
+  expect(lookup).toHaveBeenCalledTimes(2);
+  expect(store.result).toBeUndefined();
+  expect(store.status).toBe("loading");
+  await store.track("a", "2");
+  expect(store.status).toBe("ok");
 });

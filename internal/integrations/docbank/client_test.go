@@ -2,12 +2,15 @@ package docbank
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,4 +97,53 @@ func TestLookupWarningCauses(t *testing.T) {
 			assert.NotContains(t, logs.String(), "secret-value")
 		})
 	}
+}
+
+func TestLookupCachesDigests(t *testing.T) {
+	t.Setenv("DOCBANK_TEST_KEY", "key")
+	var hits atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer remote.Close()
+	client := New(config.DocbankIntegration{URL: remote.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})
+	for _, digest := range []string{"a", "a", "b", "a"} {
+		_, err := client.Lookup(t.Context(), digest)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(2), hits.Load())
+}
+
+type lookupTransport func(*http.Request) (*http.Response, error)
+
+func (f lookupTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestLookupCacheExpiryAndRetry(t *testing.T) {
+	t.Setenv("DOCBANK_TEST_KEY", "key")
+	synctest.Test(t, func(t *testing.T) {
+		hits := 0
+		client := New(config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
+		client.http.Transport = lookupTransport(func(r *http.Request) (*http.Response, error) {
+			hits++
+			status := http.StatusOK
+			if hits == 1 {
+				status = http.StatusServiceUnavailable
+			}
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"items":[],"total":0}`)), Header: make(http.Header)}, nil
+		})
+		_, err := client.Lookup(t.Context(), "digest")
+		require.Error(t, err)
+		_, err = client.Lookup(t.Context(), "digest")
+		require.NoError(t, err)
+		assert.Equal(t, 2, hits)
+		time.Sleep(59 * time.Second)
+		_, err = client.Lookup(t.Context(), "digest")
+		require.NoError(t, err)
+		assert.Equal(t, 2, hits)
+		time.Sleep(2 * time.Second)
+		_, err = client.Lookup(t.Context(), "digest")
+		require.NoError(t, err)
+		assert.Equal(t, 3, hits)
+	})
 }

@@ -6,6 +6,8 @@ import type { ServiceFileReferenceOccurrenceState } from "./serviceFileReference
 
 export interface ServiceFileReferenceOccurrence {
   /** @nullable */
+  call_index: number | null;
+  /** @nullable */
   event_index: number | null;
   image_index: number;
   match_total: number;

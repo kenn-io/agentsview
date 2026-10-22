@@ -9,6 +9,7 @@ import { fileReferences } from "../../stores/file-references.svelte.js";
 export const imageOccurrence: ServiceFileReferenceOccurrence = {
   message_ordinal: 0,
   tool_use_id: null,
+  call_index: null,
   tool_name: null,
   event_index: null,
   image_index: 0,

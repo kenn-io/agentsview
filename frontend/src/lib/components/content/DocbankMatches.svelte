@@ -2,22 +2,23 @@
   import { fileReferences } from "../../stores/file-references.svelte.js";
   import { m, getLocale } from "../../i18n/index.js";
 
-  let { sessionId = "", ordinal = 0, toolUseId = null, eventIndex = null }: {
+  let { sessionId = "", ordinal = 0, toolUseId = null, eventIndex = null, callIndex = 0 }: {
     sessionId?: string;
     ordinal?: number;
     toolUseId?: string | null;
+    callIndex?: number;
     eventIndex?: number | null;
   } = $props();
   const occurrences = $derived(toolUseId === null
     ? fileReferences.forMessage(sessionId, ordinal)
-    : fileReferences.forTool(sessionId, ordinal, toolUseId, eventIndex));
+    : fileReferences.forTool(sessionId, ordinal, toolUseId, eventIndex, callIndex));
 </script>
 
 {#if occurrences.length}
   <div class="docbank-matches">
     {#each occurrences as occurrence}
       <div>
-        <div class="muted">{occurrence.size === null ? m.docbank_image_without_size({ n: occurrence.image_index + 1, mediaType: occurrence.media_type }) : m.docbank_image({ n: occurrence.image_index + 1, mediaType: occurrence.media_type, size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "byte", unitDisplay: "short" }).format(occurrence.size) })}</div>
+        <div class="muted">{occurrence.size === null ? m.docbank_file_without_size({ n: occurrence.image_index + 1, mediaType: occurrence.media_type }) : m.docbank_file({ n: occurrence.image_index + 1, mediaType: occurrence.media_type, size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "byte", unitDisplay: "short" }).format(occurrence.size) })}</div>
         <div>
           {#if occurrence.state === "found"}
             {#each occurrence.matches as match}

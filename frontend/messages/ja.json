@@ -2933,9 +2933,10 @@
   "docbank_prior": "以前のバージョン",
   "docbank_trash": "ゴミ箱",
   "docbank_not_found": "Docbank にありません",
+  "docbank_read_unavailable": "セッションのファイルを読み込めません",
   "docbank_unavailable": "Docbank を利用できません",
   "docbank_limit_exceeded": "Docbank の検索上限に達しました",
-  "docbank_image": "画像 {n} · {mediaType} · {size}",
-  "docbank_image_without_size": "画像 {n} · {mediaType}",
+  "docbank_file": "ファイル {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "ファイル {n} · {mediaType}",
   "docbank_more": "Docbank にあと {count} 件"
 }

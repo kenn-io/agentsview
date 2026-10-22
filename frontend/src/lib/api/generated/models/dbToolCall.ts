@@ -4,6 +4,7 @@
 import type { DbToolResultEvent } from "./dbToolResultEvent.ts";
 
 export interface DbToolCall {
+  call_index?: number;
   category: string;
   input_json?: string;
   result_content?: string;

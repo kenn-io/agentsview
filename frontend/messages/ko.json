@@ -2864,9 +2864,10 @@
   "docbank_prior": "이전 버전",
   "docbank_trash": "휴지통",
   "docbank_not_found": "Docbank에 없음",
+  "docbank_read_unavailable": "세션 파일을 읽을 수 없음",
   "docbank_unavailable": "Docbank에 연결할 수 없음",
   "docbank_limit_exceeded": "Docbank 조회 한도에 도달했습니다",
-  "docbank_image": "이미지 {n} · {mediaType} · {size}",
-  "docbank_image_without_size": "이미지 {n} · {mediaType}",
+  "docbank_file": "파일 {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "파일 {n} · {mediaType}",
   "docbank_more": "Docbank에 {count}개 더 있음"
 }

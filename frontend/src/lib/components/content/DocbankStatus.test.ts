@@ -29,7 +29,7 @@ it("retries rejected requests and failed Docbank lookups, then becomes quiet", a
   reject(new Error("offline"));
   await pending;
   await tick();
-  expect(document.body.textContent).toContain("Docbank unavailable");
+  expect(document.body.textContent).toContain("Session files unavailable");
   lookup.mockResolvedValueOnce({
     integration: "enabled",
     transcript_revision: "new",

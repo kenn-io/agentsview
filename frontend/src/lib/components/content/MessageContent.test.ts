@@ -702,3 +702,32 @@ it("shows tracked Docbank evidence under the matching message", async () => {
   await render(message({ content: "What does this image show?" }), { session: session() });
   expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
 });
+
+it("keeps each id-less call's matches within its own block", async () => {
+  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [
+      { ...imageOccurrence, tool_use_id: "", call_index: 0, media_type: "image/png" },
+      { ...imageOccurrence, tool_use_id: "", call_index: 1, media_type: "image/jpeg" },
+    ],
+  });
+  await render(
+    message({
+      has_tool_use: true,
+      tool_calls: [
+        { tool_name: "Read", category: "read", result_content: "first", call_index: 0 },
+        { tool_name: "Read", category: "read", result_content: "second", call_index: 1 },
+      ],
+    }),
+    { session: session() },
+  );
+  for (const header of document.querySelectorAll<HTMLButtonElement>(".tool-header")) header.click();
+  await tick();
+  const rows = [...document.querySelectorAll(".docbank-matches")];
+  expect(rows).toHaveLength(2);
+  expect(rows[0]!.textContent).toContain("image/png");
+  expect(rows[0]!.textContent).not.toContain("image/jpeg");
+  expect(rows[1]!.textContent).toContain("image/jpeg");
+  expect(rows[1]!.textContent).not.toContain("image/png");
+});

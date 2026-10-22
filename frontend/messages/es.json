@@ -2976,9 +2976,10 @@
   "docbank_prior": "Versión anterior",
   "docbank_trash": "Papelera",
   "docbank_not_found": "No está en Docbank",
+  "docbank_read_unavailable": "Archivos de sesión no disponibles",
   "docbank_unavailable": "Docbank no disponible",
   "docbank_limit_exceeded": "Se alcanzó el límite de búsquedas en Docbank",
-  "docbank_image": "Imagen {n} · {mediaType} · {size}",
-  "docbank_image_without_size": "Imagen {n} · {mediaType}",
+  "docbank_file": "Archivo {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "Archivo {n} · {mediaType}",
   "docbank_more": "+{count} más en Docbank"
 }

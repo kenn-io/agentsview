@@ -24485,6 +24485,7 @@ func (d DBToolAgentBreakdown) Validate() error {
 }
 
 type DBToolCall struct {
+	CallIndex           *int64              `json:"call_index,omitempty"`
 	Category            string              `json:"category" validate:"required"`
 	InputJSON           *string             `json:"input_json,omitempty"`
 	ResultContent       *string             `json:"result_content,omitempty"`
@@ -25348,6 +25349,7 @@ func (s SearchResponse) Validate() error {
 type ServiceContentSearchResult = service.ContentSearchResult
 
 type ServiceFileReferenceOccurrence struct {
+	CallIndex      *int64                              `json:"call_index,omitempty"`
 	EventIndex     *int64                              `json:"event_index,omitempty"`
 	ImageIndex     int64                               `json:"image_index"`
 	MatchTotal     int64                               `json:"match_total"`

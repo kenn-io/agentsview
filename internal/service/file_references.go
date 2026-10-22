@@ -15,6 +15,7 @@ var ErrSessionNotFound = errors.New("session not found")
 
 type FileReferenceOccurrence struct {
 	MessageOrdinal int             `json:"message_ordinal"`
+	CallIndex      *int            `json:"call_index"`
 	ToolUseID      *string         `json:"tool_use_id"`
 	ToolName       *string         `json:"tool_name"`
 	EventIndex     *int            `json:"event_index"`
@@ -84,20 +85,7 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	}
 	out.TranscriptRevision = revision
 	out.Integration = "enabled"
-	add := func(ordinal int, toolID, toolName *string, event *int, images []db.RetainedImage) {
-		for _, image := range images {
-			out.Occurrences = append(out.Occurrences, FileReferenceOccurrence{MessageOrdinal: ordinal, ToolUseID: toolID, ToolName: toolName, EventIndex: event, ImageIndex: image.Index, MediaType: image.MediaType, Size: image.Size, SHA256: image.SHA256, State: "unavailable", Matches: []docbank.Match{}})
-		}
-	}
-	for _, message := range messages {
-		add(message.Ordinal, nil, nil, nil, db.MarkdownAssetImages(message.Content))
-		for _, call := range message.ToolCalls {
-			add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), nil, db.RetainedToolResultImages(call.ResultContent))
-			for _, event := range call.ResultEvents {
-				add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), new(event.EventIndex), db.RetainedToolResultImages(event.Content))
-			}
-		}
-	}
+	out.Occurrences = retainedFileOccurrences(messages)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// Each worker owns a distinct result slot; occurrences are updated after joining.
@@ -173,4 +161,23 @@ func (b *directBackend) fileReferenceMessages(ctx context.Context, id string) ([
 		}
 		from = *page.LastOrdinal + 1
 	}
+}
+
+func retainedFileOccurrences(messages []db.Message) []FileReferenceOccurrence {
+	occurrences := []FileReferenceOccurrence{}
+	add := func(ordinal int, toolID, toolName *string, event, callIndex *int, images []db.RetainedImage) {
+		for _, image := range images {
+			occurrences = append(occurrences, FileReferenceOccurrence{MessageOrdinal: ordinal, ToolUseID: toolID, ToolName: toolName, EventIndex: event, CallIndex: callIndex, ImageIndex: image.Index, MediaType: image.MediaType, Size: image.Size, SHA256: image.SHA256, State: "unavailable", Matches: []docbank.Match{}})
+		}
+	}
+	for _, message := range messages {
+		add(message.Ordinal, nil, nil, nil, nil, db.MarkdownAssetImages(message.Content))
+		for _, call := range message.ToolCalls {
+			add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), nil, new(call.CallIndex), db.RetainedToolResultImages(call.ResultContent))
+			for _, event := range call.ResultEvents {
+				add(message.Ordinal, new(call.ToolUseID), new(call.ToolName), new(event.EventIndex), new(call.CallIndex), db.RetainedToolResultImages(event.Content))
+			}
+		}
+	}
+	return occurrences
 }
