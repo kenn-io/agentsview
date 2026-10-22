@@ -13,10 +13,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/assets"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 // VerifyAssets checks content-addressed image references in retained messages and tool results.
@@ -63,7 +61,7 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		seen[ref] = true
 		return nil
 	}
-	markdown := goldmark.New().Parser()
+	markdown := parser.New()
 	for rows.Next() {
 		var content string
 		var toolResult bool
@@ -103,7 +101,7 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 func walkMarkdownImages(markdown parser.Parser, content string, visit func(string) error) error {
 	return ast.Walk(parseAssetMarkdown(markdown, content), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if image, ok := node.(*ast.Image); ok && entering {
-			return ast.WalkContinue, visit(string(image.Destination))
+			return ast.WalkContinue, visit(image.Destination.Value([]byte(content)))
 		}
 		return ast.WalkContinue, nil
 	})
@@ -116,9 +114,9 @@ func parseAssetMarkdown(markdown parser.Parser, content string) ast.Node {
 		return ast.NewDocument()
 	}
 	if markdown == nil {
-		markdown = goldmark.New().Parser()
+		markdown = parser.New()
 	}
-	return markdown.Parse(text.NewReader([]byte(content)))
+	return markdown.Parse([]byte(content))
 }
 
 func assetReferenceDigest(ref string) (string, string, bool) {
