@@ -581,15 +581,15 @@ func daemonOriginURL(rawURL string) string {
 func newService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
-	docbankOption, err := service.WithConfiguredDocbank(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
 	switch tr.Mode {
 	case transportHTTP:
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
+		docbankOption, err := service.WithConfiguredDocbank(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
 		if err := directIncompatibleDaemonError(tr); err != nil {
 			return nil, nil, err
 		}

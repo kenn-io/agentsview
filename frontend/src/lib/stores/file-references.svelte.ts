@@ -1,5 +1,6 @@
 import { getApiV1SessionsByIdFileReferences } from "../api/generated/sessions/sessions.js";
 import type { ServiceFileReferencesResult } from "../api/generated/index.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 export class FileReferencesStore {
   enabled = $state(false);
@@ -7,7 +8,7 @@ export class FileReferencesStore {
   status = $state<"idle" | "loading" | "ok" | "failed">("idle");
   private sessionId = $state<string | null>(null);
   private revision: string | null = null;
-  private request = 0;
+  private read = new LatestRead();
   private pending: Promise<void> = Promise.resolve();
 
   track(sessionId: string | null, revision: string | null): Promise<void> {
@@ -20,21 +21,21 @@ export class FileReferencesStore {
   }
 
   refresh(): Promise<void> {
-    const request = ++this.request;
+    const signal = this.read.begin();
     if (!this.enabled || !this.sessionId) {
       this.status = "idle";
       this.result = undefined;
       return Promise.resolve();
     }
     this.status = "loading";
-    this.pending = getApiV1SessionsByIdFileReferences({ id: this.sessionId })
+    this.pending = getApiV1SessionsByIdFileReferences({ id: this.sessionId }, { signal })
       .then((result) => {
-        if (request !== this.request) return;
+        if (!this.read.isCurrent(signal)) return;
         this.result = result;
         this.status = "ok";
       })
       .catch(() => {
-        if (request === this.request) this.status = "failed";
+        if (this.read.isCurrent(signal)) this.status = "failed";
       });
     return this.pending;
   }

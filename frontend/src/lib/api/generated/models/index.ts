@@ -434,7 +434,6 @@ export * from "./serviceFileReferenceOccurrence.ts";
 export * from "./serviceFileReferenceOccurrenceState.ts";
 export * from "./serviceFileReferencesResult.ts";
 export * from "./serviceFileReferencesResultIntegration.ts";
-export * from "./serviceFileReferencesResultSource.ts";
 export * from "./serviceMemoryArchiveStatus.ts";
 export * from "./serviceMemoryCapabilityStatus.ts";
 export * from "./serviceMemoryCapabilityStatusStatus.ts";

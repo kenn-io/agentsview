@@ -66,12 +66,5 @@ func TestLookupFailures(t *testing.T) {
 
 func newTestClient(t *testing.T, cfg config.DocbankIntegration) *Client {
 	t.Helper()
-	client, err := New(cfg)
-	require.NoError(t, err)
-	return client
-}
-func TestNewRejectsRemoteHTTP(t *testing.T) {
-	client, err := New(config.DocbankIntegration{URL: "http://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"})
-	require.EqualError(t, err, "[integrations.docbank] url must be https, or http to a loopback host")
-	assert.Nil(t, client)
+	return New(cfg)
 }

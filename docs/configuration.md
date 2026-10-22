@@ -2413,7 +2413,8 @@ api_key_env = "DOCBANK_API_KEY"
 ```
 
 Set `DOCBANK_API_KEY` in the environment of each consumer, including the daemon, CLI, and MCP server. Both `url` and `api_key_env`
-are required to enable lookup. Omit the section to disable it. Invalid configuration stops startup for every consumer.
+are required to enable lookup. Omit the section to disable it. Invalid configuration stops consumers that build a local backend. CLI commands
+that connect to a daemon use the daemon's integration configuration.
 
 | Setting                            | Purpose                                           |
 | ---------------------------------- | ------------------------------------------------- |
@@ -2422,20 +2423,15 @@ are required to enable lookup. Omit the section to disable it. Invalid configura
 | `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
 
 Lookup covers retained tool-result images, including offloaded assets, and
-Markdown `asset://` images in imported messages. For Claude sessions, it also
-reads base64 images and documents whose message UUID or tool-use ID belongs
-in the archived session. Image-only entries with no archived message are omitted.
-A missing, unreadable, nonregular, or other-machine source reports
-`source: "unavailable"`. The same applies when any archived message UUID is
-absent from the decoded source, including truncated or corrupt entries.
+Markdown `asset://` images in message text. Claude pasted images aren't
+covered yet.
 Native Codex attachments and files handled by Read or Write tools require exact
 bytes that the archive doesn't retain and aren't covered.
 
 Only SHA-256 digests leave the machine. Transcript reads run independently of
-Docbank. Database reads, source scans, and Docbank requests each have their own
-five-second budget.
-Each lookup resolves up to 50 distinct digests with four requests at a time
-and shows up to ten matches per digest.
-Failures and digests beyond the cap report unavailable. Retry repeats the
-session lookup. Results refresh when the transcript changes or the session
-reopens. No migration or resync is required.
+Docbank. Database reads and Docbank requests each have their own five-second
+budget. Each lookup resolves up to 50 distinct digests with four requests at a
+time and shows up to ten matches per digest. Lookup failures report unavailable
+and can be retried. Digests beyond the cap report `limit_exceeded` without Retry.
+Results refresh when the transcript changes or the session reopens. No migration
+or resync is required.

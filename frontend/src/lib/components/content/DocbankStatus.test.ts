@@ -12,7 +12,7 @@ afterEach(async () => {
   if (component) await unmount(component);
   document.body.innerHTML = "";
 });
-it("shows initial loading, failure with Retry, source failure, and a quiet ready state", async () => {
+it("shows initial loading, failure with Retry, and a quiet ready state", async () => {
   await trackDocbank({ integration: "enabled", occurrences: [] });
   await fileReferences.track(null, null);
   let reject!: (reason: Error) => void;
@@ -30,13 +30,9 @@ it("shows initial loading, failure with Retry, source failure, and a quiet ready
   await pending;
   await tick();
   expect(document.body.textContent).toContain("Docbank unavailable");
-  lookup.mockResolvedValueOnce({ integration: "enabled", source: "unavailable", occurrences: [] });
+  lookup.mockResolvedValueOnce({ integration: "enabled", occurrences: [] });
   document.querySelector<HTMLButtonElement>("button")!.click();
   await fileReferences.track("session-1", "new");
-  await tick();
-  expect(document.body.textContent).toContain("Source transcript unavailable");
-  expect(document.querySelector("button")).toBeNull();
-  await trackDocbank({ integration: "enabled", source: "available", occurrences: [] });
   await tick();
   expect(document.body.textContent).toBe("");
 });
@@ -66,7 +62,7 @@ it("retries a successful response with a failed Docbank lookup", async () => {
 it("keeps capped occurrences quiet at session level", async () => {
   await trackDocbank({
     integration: "enabled",
-    occurrences: [{ ...imageOccurrence, state: "unavailable" }],
+    occurrences: [{ ...imageOccurrence, state: "limit_exceeded" }],
   });
   component = mount(DocbankStatus, { target: document.body });
   await tick();

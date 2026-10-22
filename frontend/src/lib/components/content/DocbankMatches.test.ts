@@ -45,7 +45,7 @@ describe("Docbank matches", () => {
     expect(link.rel).toBe("noreferrer");
     expect(document.body.textContent).toContain("+11 more in Docbank");
   });
-  it.each(["not_found", "unavailable"] as const)(
+  it.each(["not_found", "unavailable", "limit_exceeded"] as const)(
     "shows %s without a retry button",
     async (state) => {
       await trackDocbank({ integration: "enabled", occurrences: [{ ...imageOccurrence, state }] });
@@ -57,7 +57,7 @@ describe("Docbank matches", () => {
       );
       await tick();
       expect(document.body.textContent).toContain(
-        state === "not_found" ? "Not in Docbank" : "Docbank unavailable",
+        state === "not_found" ? "Not in Docbank" : state === "limit_exceeded" ? "Docbank lookup limit reached" : "Docbank unavailable",
       );
       expect(document.querySelector("button")).toBeNull();
     },

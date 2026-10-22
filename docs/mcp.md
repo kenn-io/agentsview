@@ -474,11 +474,10 @@ CLI reference.
 `get_session_file_references` takes `session_id` and returns the same result as
 `GET /api/v1/sessions/{id}/file-references`. It is available in the full
 profile. Each occurrence includes its message ordinal, optional tool and
-result-event coordinates, SHA-256 digest, and `found`, `not_found`, or
-`unavailable` state. Matches identify current files, prior versions, or trash
-and include an exact version link when configured. A disabled integration
-returns an empty list. See
+result-event coordinates, SHA-256 digest, and `found`, `not_found`,
+`unavailable`, or `limit_exceeded` state. Matches identify current files, prior
+versions, or trash and include an exact version link when configured. A disabled
+integration returns an empty list. See
 [Docbank configuration](/docs/configuration/#find-transcript-images-in-docbank)
-for coverage and limits. Database reads, source scans, and Docbank requests each
-have a separate five-second budget. A missing archived message UUID in the
-source makes `source` unavailable.
+for coverage and limits. Database reads and Docbank requests each
+have a separate five-second budget. Claude pasted images aren't covered yet.

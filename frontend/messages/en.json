@@ -2953,8 +2953,8 @@
   "docbank_trash": "Trash",
   "docbank_not_found": "Not in Docbank",
   "docbank_unavailable": "Docbank unavailable",
+  "docbank_limit_exceeded": "Docbank lookup limit reached",
   "docbank_image": "Image {n} · {mediaType} · {size}",
   "docbank_image_without_size": "Image {n} · {mediaType}",
-  "docbank_source_unavailable": "Source transcript unavailable",
   "docbank_more": "+{count} more in Docbank"
 }

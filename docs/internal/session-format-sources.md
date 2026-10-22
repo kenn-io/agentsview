@@ -140,21 +140,6 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **On-demand image evidence (2026-10-22):** The lookup reader recognizes base64
-  `image` and `document` blocks in user content and nested `tool_result`
-  content. Anthropic documents the source fields in its
-  [vision guide](https://platform.claude.com/docs/en/build-with-claude/vision)
-  and
-  [PDF guide](https://platform.claude.com/docs/en/build-with-claude/pdf-support).
-  These establish the API block format, not Claude Code's persistence contract.
-  Local parser fixtures establish the JSONL `uuid`, `message.content`, and
-  `tool_use_id` placement. The lookup reads only an existing local source, skips
-  oversized records, and reports missing or incomplete sources explicitly.
-  Reverified against retry, fork, and truncated-record parser fixtures on
-  2026-10-22. Source evidence uses archived `source_uuid` and `tool_use_id` values to
-  select entries. Every archived message UUID must exist in the decoded source;
-  missing entries report the source unavailable.
-
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.

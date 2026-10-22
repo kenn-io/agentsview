@@ -2859,8 +2859,8 @@
   "docbank_trash": "回收站",
   "docbank_not_found": "Docbank 中未找到",
   "docbank_unavailable": "Docbank 不可用",
+  "docbank_limit_exceeded": "已达到 Docbank 查询上限",
   "docbank_image": "图片 {n} · {mediaType} · {size}",
   "docbank_image_without_size": "图片 {n} · {mediaType}",
-  "docbank_source_unavailable": "源会话记录不可用",
   "docbank_more": "Docbank 中还有 {count} 项"
 }

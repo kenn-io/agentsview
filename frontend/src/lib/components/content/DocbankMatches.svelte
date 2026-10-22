@@ -35,6 +35,8 @@
             {/if}
           {:else if occurrence.state === "not_found"}
             {m.docbank_not_found()}
+          {:else if occurrence.state === "limit_exceeded"}
+            {m.docbank_limit_exceeded()}
           {:else}
             {m.docbank_unavailable()}
           {/if}

@@ -150,7 +150,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 15)
+	require.Len(t, tools.Tools, 16)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}
@@ -365,4 +365,17 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 		}
 		assert.Equal(t, value, warning)
 	}
+}
+
+func TestNewServer_DocbankDisabled(t *testing.T) {
+	t.Skip("finding: get_session_file_references advertised with Docbank off; gating would lengthen newServer")
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	for _, tool := range tools.Tools {
+		assert.NotEqual(t, ToolGetSessionFileReferences, tool.Name)
+	}
+	require.NoError(t, ct.Close())
+	require.NoError(t, st.Wait())
 }

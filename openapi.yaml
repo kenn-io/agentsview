@@ -6331,6 +6331,7 @@ components:
             - found
             - not_found
             - unavailable
+            - limit_exceeded
           type: string
         tool_name:
           type:
@@ -6368,11 +6369,6 @@ components:
           items:
             $ref: "#/components/schemas/ServiceFileReferenceOccurrence"
           type: array
-        source:
-          enum:
-            - available
-            - unavailable
-          type: string
       required:
         - integration
         - occurrences

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,35 +64,6 @@ func TestFileReferencesRetainedImages(t *testing.T) {
 	assert.ErrorIs(t, err, service.ErrSessionNotFound)
 }
 
-func TestFileReferencesClaudeSource(t *testing.T) {
-	_, env := newDirectTestSvc(t)
-	path := filepath.Join(t.TempDir(), "source.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"pasted","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}}
-{"type":"user","uuid":"no-row","message":{"content":[]}}
-{"type":"assistant","uuid":"call","message":{"content":[]}}
-{"type":"user","uuid":"result","message":{"content":[{"type":"tool_result","tool_use_id":"read-1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}]}}
-`), 0600))
-	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "claude-images", Project: "p1", Agent: "claude", FilePath: new(path)}))
-	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: "claude-images", Ordinal: 3, Role: "user", Content: "pasted", SourceUUID: "pasted"}, {SessionID: "claude-images", Ordinal: 0, Role: "assistant", Content: "read", SourceUUID: "call", ToolCalls: []db.ToolCall{{ToolUseID: "read-1", ToolName: "Read"}}}}))
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":0}`)) }))
-	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	out, err := service.FileReferences(t.Context(), svc, "claude-images")
-	require.NoError(t, err)
-	assert.Equal(t, "available", out.Source)
-	require.Len(t, out.Occurrences, 2)
-	assert.Nil(t, out.Occurrences[0].ToolUseID)
-	assert.Equal(t, 3, out.Occurrences[0].MessageOrdinal)
-	assert.Equal(t, "read-1", *out.Occurrences[1].ToolUseID)
-	assert.Equal(t, 0, out.Occurrences[1].MessageOrdinal)
-	require.NoError(t, os.Remove(path))
-	out, err = service.FileReferences(t.Context(), svc, "claude-images")
-	require.NoError(t, err)
-	assert.Equal(t, "unavailable", out.Source)
-	assert.Empty(t, out.Occurrences)
-}
-
 func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)
@@ -126,8 +95,8 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	assert.LessOrEqual(t, peak.Load(), int32(4))
 	require.Len(t, out.Occurrences, 52)
 	assert.False(t, out.LookupFailed)
-	assert.Equal(t, "unavailable", out.Occurrences[50].State)
-	assert.Equal(t, "unavailable", out.Occurrences[51].State)
+	assert.Equal(t, "limit_exceeded", out.Occurrences[50].State)
+	assert.Equal(t, "limit_exceeded", out.Occurrences[51].State)
 	// A caller's canceled budget stops further network work and preserves unknown evidence.
 	ctx, cancel := context.WithCancel(t.Context())
 	hanging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { cancel(); <-r.Context().Done() }))
@@ -137,7 +106,7 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, out.LookupFailed)
 	require.Len(t, out.Occurrences, 52)
-	for _, occurrence := range out.Occurrences {
+	for _, occurrence := range out.Occurrences[:50] {
 		assert.Equal(t, "unavailable", occurrence.State)
 	}
 }
@@ -196,101 +165,7 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	}
 }
 
-func TestFileReferencesUnarchivedSourceImage(t *testing.T) {
-	_, env := newDirectTestSvc(t)
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"tail","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}}`), 0600))
-	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Project: "example", FilePath: new(path)}))
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("unplaced image must not be looked up")
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	out, err := service.FileReferences(t.Context(), svc, "session")
-	require.NoError(t, err)
-	assert.Equal(t, "available", out.Source)
-	assert.Empty(t, out.Occurrences)
-}
-
-// The source metadata lookup uses the same bounded source phase as the JSONL scan.
-type expiredSourceStore struct{ db.Store }
-
-func (s expiredSourceStore) GetSessionFull(ctx context.Context, _ string) (*db.Session, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func TestFileReferencesSourceBudgetDoesNotCancelLookups(t *testing.T) {
-	_, env := newDirectTestSvc(t)
-	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Project: "example"}))
-	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Ordinal: 4, Role: "user", Content: `![image](asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png)`}}))
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", r.URL.Query().Get("sha256"))
-		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
-	}))
-	defer stub.Close()
-	svc := service.NewReadOnlyBackend(expiredSourceStore{env.db}, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	out, err := service.FileReferences(t.Context(), svc, "session")
-	require.NoError(t, err)
-	assert.Equal(t, "unavailable", out.Source)
-	require.Len(t, out.Occurrences, 1)
-	assert.Equal(t, "not_found", out.Occurrences[0].State)
-}
-
-func TestFileReferencesSourceAvailability(t *testing.T) {
-	for _, tc := range []struct{ name, source, machine, state string }{
-		{"present text", `{"type":"user","uuid":"original","message":{"content":"text"}}`, "", "available"},
-		{"rewritten source", `{"type":"user","uuid":"replacement","message":{"content":"same size or longer replacement"}}`, "", "unavailable"},
-		{"truncated tail", `{"type":"user","uuid":"original","message":{"content":[{"type":"image","source":{"type":"base64"`, "", "unavailable"},
-		{"other machine", `{"type":"user","uuid":"original","message":{"content":"text"}}`, "remote-machine", "unavailable"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, env := newDirectTestSvc(t)
-			path := filepath.Join(t.TempDir(), "session.jsonl")
-			require.NoError(t, os.WriteFile(path, []byte(tc.source), 0600))
-			require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Machine: tc.machine, Project: "example", FilePath: new(path)}))
-			require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "original", SourceUUID: "original"}}))
-			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("no retained images") }))
-			defer stub.Close()
-			svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-			out, err := service.FileReferences(t.Context(), svc, "session")
-			require.NoError(t, err)
-			assert.Equal(t, tc.state, out.Source)
-		})
-	}
-}
-
-func TestFileReferencesContinuationPrompt(t *testing.T) {
-	_, env := newDirectTestSvc(t)
-	path := filepath.Join(t.TempDir(), "uploaded.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"parent","message":{"content":[{"type":"image","source":{"type":"base64","data":"b2xk"}}]}}
-{"type":"user","uuid":"own","message":{"content":[{"type":"text","text":"new prompt"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}}
-`), 0600))
-	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{ID: "continuation", Agent: "claude", Project: "example", FilePath: new(path)}))
-	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: "continuation", Ordinal: 7, Role: "user", Content: "new prompt", SourceUUID: "own"}}))
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	var requests atomic.Int32
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", r.URL.Query().Get("sha256"))
-		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
-	}))
-	defer stub.Close()
-	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	out, err := service.FileReferences(t.Context(), svc, "continuation")
-	require.NoError(t, err)
-	assert.Equal(t, "available", out.Source)
-	require.Len(t, out.Occurrences, 1)
-	assert.Equal(t, 7, out.Occurrences[0].MessageOrdinal)
-	assert.Equal(t, int32(1), requests.Load())
-}
-
 func newTestDocbank(t *testing.T, cfg config.DocbankIntegration) *docbank.Client {
 	t.Helper()
-	client, err := docbank.New(cfg)
-	require.NoError(t, err)
-	return client
+	return docbank.New(cfg)
 }

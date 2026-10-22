@@ -2977,8 +2977,8 @@
   "docbank_trash": "Corbeille",
   "docbank_not_found": "Absent de Docbank",
   "docbank_unavailable": "Docbank indisponible",
+  "docbank_limit_exceeded": "Limite de recherche Docbank atteinte",
   "docbank_image": "Image {n} · {mediaType} · {size}",
   "docbank_image_without_size": "Image {n} · {mediaType}",
-  "docbank_source_unavailable": "Transcription source indisponible",
   "docbank_more": "+{count} dans Docbank"
 }

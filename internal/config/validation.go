@@ -41,7 +41,6 @@ func (c *Config) validateSections() error {
 		name     string
 		validate func() error
 	}{
-		{ScopeServer, "[integrations.docbank]", c.Integrations.Docbank.Validate},
 		{ScopeServer, "proxy", func() error { return normalizeProxyConfig(&c.Proxy) }},
 		// The public URL joins the allowed origins, so one bad value is one warning.
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},

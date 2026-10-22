@@ -3,12 +3,10 @@
  */
 import type { ServiceFileReferenceOccurrence } from "./serviceFileReferenceOccurrence.ts";
 import type { ServiceFileReferencesResultIntegration } from "./serviceFileReferencesResultIntegration.ts";
-import type { ServiceFileReferencesResultSource } from "./serviceFileReferencesResultSource.ts";
 
 export interface ServiceFileReferencesResult {
   integration: ServiceFileReferencesResultIntegration;
   /** At least one Docbank lookup failed; retry may resolve unavailable occurrences. */
   lookup_failed?: boolean;
   occurrences: ServiceFileReferenceOccurrence[];
-  source?: ServiceFileReferencesResultSource;
 }

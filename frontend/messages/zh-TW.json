@@ -2862,8 +2862,8 @@
   "docbank_trash": "垃圾桶",
   "docbank_not_found": "Docbank 中找不到",
   "docbank_unavailable": "Docbank 無法使用",
+  "docbank_limit_exceeded": "已達到 Docbank 查詢上限",
   "docbank_image": "圖片 {n} · {mediaType} · {size}",
   "docbank_image_without_size": "圖片 {n} · {mediaType}",
-  "docbank_source_unavailable": "來源對話記錄無法使用",
   "docbank_more": "Docbank 中還有 {count} 項"
 }

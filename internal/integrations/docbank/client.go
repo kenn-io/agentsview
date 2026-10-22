@@ -22,11 +22,9 @@ type Client struct {
 	cfg  config.DocbankIntegration
 }
 
-func New(cfg config.DocbankIntegration) (*Client, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+// New builds a client from configuration validated by the local backend.
+func New(cfg config.DocbankIntegration) *Client {
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 type Match struct {

@@ -54,7 +54,5 @@ func TestVersionReportsDocbankConfiguration(t *testing.T) {
 
 func newTestDocbank(t *testing.T, cfg config.DocbankIntegration) *docbank.Client {
 	t.Helper()
-	client, err := docbank.New(cfg)
-	require.NoError(t, err)
-	return client
+	return docbank.New(cfg)
 }

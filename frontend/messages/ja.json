@@ -2934,8 +2934,8 @@
   "docbank_trash": "ゴミ箱",
   "docbank_not_found": "Docbank にありません",
   "docbank_unavailable": "Docbank を利用できません",
+  "docbank_limit_exceeded": "Docbank の検索上限に達しました",
   "docbank_image": "画像 {n} · {mediaType} · {size}",
   "docbank_image_without_size": "画像 {n} · {mediaType}",
-  "docbank_source_unavailable": "元の会話記録を利用できません",
   "docbank_more": "Docbank にあと {count} 件"
 }

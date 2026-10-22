@@ -66,13 +66,13 @@ func classifySyncArgForCommand(
 func syncService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
-	docbankOption, err := service.WithConfiguredDocbank(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
 	if tr.Mode == transportHTTP {
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
+	}
+	docbankOption, err := service.WithConfiguredDocbank(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
 	d, lock, err := openWriteDB(ctx, cfg)
 	if err != nil {

@@ -9,8 +9,6 @@
     <div class="docbank-status">{m.docbank_unavailable()} <Button size="sm" surface="soft" label={m.shared_retry()} onclick={() => fileReferences.refresh()} /></div>
   {:else if fileReferences.status === "loading" && !fileReferences.result}
     <div class="docbank-status">{m.docbank_checking()}</div>
-  {:else if fileReferences.result?.source === "unavailable"}
-    <div class="docbank-status">{m.docbank_source_unavailable()}</div>
   {/if}
 {/if}
 

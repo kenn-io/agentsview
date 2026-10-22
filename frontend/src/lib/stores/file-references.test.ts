@@ -22,14 +22,15 @@ describe("file references store", () => {
     const old = store.track("a", "2");
     expect(store.result).toEqual(result);
     expect(store.status).toBe("loading");
-    lookup.mockResolvedValueOnce({ ...result, source: "unavailable" });
+    const latest = { ...result, lookup_failed: true };
+    lookup.mockResolvedValueOnce(latest);
     await store.track("a", "3");
     resolve(result);
     await old;
-    expect(store.result?.source).toBe("unavailable");
+    expect(store.result).toEqual(latest);
     await store.track("a", "3");
     expect(lookup).toHaveBeenCalledTimes(3);
-    expect(lookup).toHaveBeenLastCalledWith({ id: "a" });
+    expect(lookup).toHaveBeenLastCalledWith({ id: "a" }, { signal: expect.any(AbortSignal) });
   });
   it("retries failures and clears results when switching sessions", async () => {
     lookup.mockReset().mockRejectedValueOnce(new Error("offline"));
@@ -45,7 +46,7 @@ describe("file references store", () => {
     expect(store.result).toBeUndefined();
     await next;
     expect(store.forMessage("a", 0)).toEqual([]);
-    expect(lookup).toHaveBeenLastCalledWith({ id: "b" });
+    expect(lookup).toHaveBeenLastCalledWith({ id: "b" }, { signal: expect.any(AbortSignal) });
   });
   it("makes no request when disabled", async () => {
     lookup.mockReset();
@@ -53,4 +54,20 @@ describe("file references store", () => {
     await store.track("a", "1");
     expect(lookup).not.toHaveBeenCalled();
   });
+});
+
+it("cancels superseded requests", async () => {
+  lookup.mockReset().mockImplementationOnce((_params, { signal }) =>
+    new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")))),
+  ).mockResolvedValue(result);
+  const store = new FileReferencesStore();
+  store.enabled = true;
+  const pending = store.track("a", "1");
+  const options = lookup.mock.calls[0]![1]!;
+  expect(options?.signal).toBeInstanceOf(AbortSignal);
+  await store.track("a", "2");
+  await pending;
+  expect(store.status).toBe("ok");
+  expect(options.signal.aborted).toBe(true);
+  expect(lookup.mock.calls[1]![1]!.signal.aborted).toBe(false);
 });
