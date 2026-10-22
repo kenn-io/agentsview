@@ -11,17 +11,14 @@ const result = {
   transcript_revision: "1",
   occurrences: [imageOccurrence],
 };
-const message = (content: string, ordinal = 0) => ({ ordinal, content, tool_calls: [] });
 
 describe("file references store", () => {
-  it("keeps unchanged messages while hiding changed messages during revalidation", async () => {
-    lookup.mockReset().mockResolvedValueOnce({
-      ...result,
-      occurrences: [imageOccurrence, { ...imageOccurrence, message_ordinal: 1 }],
-    });
+  it("clears results while fetching a new transcript revision", async () => {
+    lookup.mockReset().mockResolvedValueOnce(result);
     const store = new FileReferencesStore();
     store.enabled = true;
-    await store.track("a", "1", [message("image"), message("old", 1)]);
+    await store.track("a", "1");
+    expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
     let resolve!: (value: unknown) => void;
     lookup.mockImplementationOnce(
       () =>
@@ -29,49 +26,14 @@ describe("file references store", () => {
           resolve = done;
         }),
     );
-    const pending = store.track("a", "2", [
-      message("image"),
-      message("changed", 1),
-      message("appended", 2),
-    ]);
-    expect(store.forMessage("a", 0)).toHaveLength(1);
-    expect(store.forMessage("a", 1)).toEqual([]);
-    expect(store.forMessage("a", 2)).toEqual([]);
-    resolve({
-      ...result,
-      transcript_revision: "2",
-      occurrences: [{ ...imageOccurrence, message_ordinal: 1 }],
-    });
-    await pending;
+    const pending = store.track("a", "2");
+    expect(store.result).toBeUndefined();
     expect(store.forMessage("a", 0)).toEqual([]);
-    expect(store.forMessage("a", 1)).toHaveLength(1);
-  });
-  it("hides rows when tool result content changes", async () => {
-    lookup.mockReset().mockResolvedValueOnce({
-      ...result,
-      occurrences: [{ ...imageOccurrence, tool_use_id: "read" }],
-    });
-    const store = new FileReferencesStore();
-    store.enabled = true;
-    await store.track("a", "1", [
-      {
-        ...message("image"),
-        tool_calls: [
-          { tool_name: "Read", category: "read", tool_use_id: "read", result_content: "old" },
-        ],
-      },
-    ]);
-    lookup.mockImplementationOnce(() => new Promise(() => {}));
-    void store.track("a", "2", [
-      {
-        ...message("image"),
-        tool_calls: [
-          { tool_name: "Read", category: "read", tool_use_id: "read", result_content: "new" },
-        ],
-      },
-    ]);
-    expect(store.forTool("a", 0, "read", null)).toEqual([]);
-    store.reset();
+    expect(store.status).toBe("loading");
+    resolve({ ...result, transcript_revision: "2" });
+    await pending;
+    expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+    expect(store.result?.transcript_revision).toBe("2");
   });
   it("rejects lookup results from a different transcript revision", async () => {
     lookup
@@ -80,7 +42,7 @@ describe("file references store", () => {
       .mockResolvedValueOnce(result);
     const store = new FileReferencesStore();
     store.enabled = true;
-    await store.track("a", "1", [message("old")]);
+    await store.track("a", "1");
     expect(lookup).toHaveBeenCalledTimes(2);
     expect(store.status).toBe("ok");
   });

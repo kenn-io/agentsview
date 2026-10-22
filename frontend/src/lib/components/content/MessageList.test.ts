@@ -216,7 +216,12 @@ describe("MessageList follow cancellation", () => {
     const { fileReferences } = await import("../../stores/file-references.svelte.js");
     fileReferences.enabled = true;
     await fileReferences.track(null, null);
-    docbankLookup.mockResolvedValue({ integration: "enabled", occurrences: [] });
+    messages.loadedRevision = "revision-1";
+    docbankLookup.mockResolvedValue({
+      integration: "enabled",
+      transcript_revision: "revision-1",
+      occurrences: [],
+    });
     onTestFinished(() => {
       fileReferences.enabled = false;
     });
