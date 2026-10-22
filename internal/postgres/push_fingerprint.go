@@ -23,7 +23,7 @@ type pushFrictionComparison struct {
 }
 
 type pushMessageComparison struct {
-	MessageAggregates       map[string]int
+	MessageCounts           map[string]int
 	MessageContentHash      map[string]string
 	MessageRoleTime         map[string]string
 	MessageFlags            map[string]string
@@ -313,7 +313,7 @@ func readPushSessionMessageComparisons(
 	includeFriction bool,
 ) (*pushMessageComparison, error) {
 	comparisons := &pushMessageComparison{
-		MessageAggregates:       make(map[string]int, len(sessionIDs)),
+		MessageCounts:           make(map[string]int, len(sessionIDs)),
 		MessageContentHash:      make(map[string]string, len(sessionIDs)),
 		MessageRoleTime:         make(map[string]string, len(sessionIDs)),
 		MessageFlags:            make(map[string]string, len(sessionIDs)),
@@ -334,12 +334,12 @@ func readPushSessionMessageComparisons(
 				return nil, err
 			}
 		}
-		if err := loadPushMessageAggregates(ctx, tx, chunk, comparisons.MessageAggregates); err != nil {
+		if err := loadPushMessageCounts(ctx, tx, chunk, comparisons.MessageCounts); err != nil {
 			return nil, err
 		}
 		eligible := make([]string, 0, len(chunk))
 		for _, id := range chunk {
-			if count := localCounts[id].Count; count > 0 && comparisons.MessageAggregates[id] == count {
+			if count := localCounts[id].Count; count > 0 && comparisons.MessageCounts[id] == count {
 				eligible = append(eligible, id)
 			}
 		}
@@ -432,7 +432,7 @@ func sessionFrictionUnchanged(
 	}), nil
 }
 
-func loadPushMessageAggregates(
+func loadPushMessageCounts(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionIDs []string,

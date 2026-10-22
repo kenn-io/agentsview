@@ -92,7 +92,7 @@ func TestPushCompactComparisons(t *testing.T) {
 		ctx, tx, []string{id}, mismatchedCounts, true,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, len(messages), skipped.MessageAggregates[id])
+	assert.Equal(t, len(messages), skipped.MessageCounts[id])
 	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageDialogue, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
