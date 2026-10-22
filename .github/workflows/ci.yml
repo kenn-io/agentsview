@@ -314,7 +314,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         shell: bash
         run: |
-          version="$(sed -nE "s/^[[:space:]]*GOLANGCI_LINT_VERSION[[:space:]]*[?:]?[[:space:]]*=[[:space:]]*//; T; s/#.*//; s/^[[:space:]\"']+//; s/[[:space:]\"']+$//; p" Makefile)"
+          version="$(sed -nE "s/^[[:space:]]*GOLANGCI_LINT_VERSION[[:space:]]*[?:]?[[:space:]]*=[[:space:]]*//; T; s/#.*//; s/^[[:space:]\"']+//; s/[[:space:]\"']+$//; p; q" Makefile)"
           if [ -z "$version" ]; then
             echo "Makefile GOLANGCI_LINT_VERSION must be nonempty" >&2
             exit 1
@@ -338,7 +338,7 @@ jobs:
           export GOBIN="$GOLANGCI_LINT_CACHE/bin"
           linter_dir="$(cygpath -u "$GOBIN")"
           export PATH="$linter_dir:$PATH"
-          if [ -x "$linter_dir/custom-gcl.exe" ]; then exit 0; fi
+          if [ -f "$linter_dir/custom-gcl.exe" ]; then exit 0; fi
           mkdir -p "$linter_dir"
           bash scripts/retry.sh 3 5 make lint-tools
           make nilaway-golangci-build
