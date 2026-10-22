@@ -805,21 +805,20 @@ Troubleshooting:
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
 at most once per UTC day while the server runs. The browser checks with
-`app_opened` once a day; reloads and focus don't repeat it that day, and a disabled
-reply stops reports and visit tracking. See the
+`app_opened` once a day; reloads and focus don't repeat it that day, and a
+disabled reply stops reports and visit tracking. See the
 [telemetry configuration](docs/configuration.md#anonymous-daemon-telemetry) for
-scope and delivery limits.
-The server also sends `setup_finished` once per installation when the archive
-first has a session in the default session list, including orphaned sessions and
-excluding automated sessions and trash. Existing installs with such a session
-send it on their first start after upgrading. The web UI sends `visit_ended`
-with `surface: web` and visible visit duration in fixed buckets: `under_1m`,
-`1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also reports searches (search
-mode), session views (the session's agent type), screen views (screen name, once
-per installation per UTC day on the server), exports (format), generated
-insights (insight kind), and analytics page views (page name), each with one
-value from a fixed list in the server that drops anything else. All events use
-a stable random install ID as the event `DistinctId`.
+scope and delivery limits. The server also sends `setup_finished` once per
+installation when the archive first has a session in the default session list,
+including orphaned sessions and excluding automated sessions and trash. Existing
+installs with such a session send it on their first start after upgrading. The
+web UI sends `visit_ended` with `surface: web` and visible visit duration in
+fixed buckets: `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also
+reports searches (search mode), session views (the session's agent type), screen
+views (screen name, once per installation per UTC day on the server), exports
+(format), generated insights (insight kind), and analytics page views (page
+name), each with one value from a fixed list in the server that drops anything
+else. All events use a stable random install ID as the event `DistinctId`.
 [Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
 empty searches, visible errors, and failed sync attempts. The events include
 `application=agentsview`, app version, commit, OS, and CPU architecture, with
@@ -847,7 +846,7 @@ ______________________________________________________________________
 
 ## Development
 
-Requires Go 1.27.2+ (CGO), Node.js 24.11+.
+Requires Go 1.27.3+ (CGO), Node.js 24.11+.
 
 ```bash
 make dev            # Go server (dev mode)
