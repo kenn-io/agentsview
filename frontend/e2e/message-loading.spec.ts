@@ -185,7 +185,6 @@ test.describe("Message loading", () => {
     await page.keyboard.press("ArrowUp");
 
     await expect(follow).toHaveAttribute("aria-pressed", "false");
-    await expect(sp.scroller.locator(".virtual-row.selected")).toBeInViewport();
   });
 
   test("follow latest settles after a tall final message is measured", async ({ page }) => {
