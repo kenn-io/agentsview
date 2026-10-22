@@ -93,7 +93,7 @@ func TestPushCompactComparisons(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, len(messages), skipped.MessageAggregates[id])
-	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
+	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageDialogue, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
 	compact, err := readPushSessionMessageComparisons(

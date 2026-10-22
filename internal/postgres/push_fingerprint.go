@@ -488,13 +488,12 @@ func loadPushMessageContentHashFingerprints(
 		if err := rows.Scan(&sessionID, &ordinal, &content, &contentLength); err != nil {
 			return err
 		}
-		sum := content
 		b := builders[sessionID]
 		if b == nil {
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
-		fmt.Fprintf(b, "%d|%d|%s;", ordinal, contentLength, sum)
+		fmt.Fprintf(b, "%d|%d|%s;", ordinal, contentLength, content)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -586,7 +585,6 @@ func loadPushMessageFlagFingerprints(
 		); err != nil {
 			return err
 		}
-		sum := thinkingText
 		b := builders[sessionID]
 		if b == nil {
 			b = &strings.Builder{}
@@ -594,7 +592,7 @@ func loadPushMessageFlagFingerprints(
 		}
 		fmt.Fprintf(
 			b, "%d|%t|%t|%t|%s;", ordinal, isSystem, hasThinking,
-			hasToolUse, sum,
+			hasToolUse, thinkingText,
 		)
 	}
 	if err := rows.Err(); err != nil {
@@ -875,7 +873,6 @@ func loadPushToolResultEventFingerprints(
 		subagentSessionID = db.SanitizeUTF8(subagentSessionID)
 		source = db.SanitizeUTF8(source)
 		status = db.SanitizeUTF8(status)
-		contentSum := content
 		fmt.Fprintf(
 			b,
 			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%s|%d:%s;",
@@ -886,7 +883,7 @@ func loadPushToolResultEventFingerprints(
 			len(source), source,
 			len(status), status,
 			contentLength,
-			contentSum,
+			content,
 			len(timestampText), timestampText,
 		)
 	}
