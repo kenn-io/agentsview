@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { fileReferences } from "../../stores/file-references.svelte.js";
-import { trackDocbank } from "./docbankTestHelpers.js";
+import { imageOccurrence, trackDocbank } from "./docbankTestHelpers.js";
 import DocbankStatus from "./DocbankStatus.svelte";
 const lookup = vi.hoisted(() => vi.fn());
 vi.mock("../../api/generated/sessions/sessions.js", () => ({
@@ -45,4 +45,31 @@ it("hides disabled integration", async () => {
   component = mount(DocbankStatus, { target: document.body });
   await tick();
   expect(document.body.textContent).toBe("");
+});
+it("retries a successful response with a failed Docbank lookup", async () => {
+  await trackDocbank({
+    integration: "enabled",
+    lookup_failed: true,
+    occurrences: [{ ...imageOccurrence, state: "unavailable" }],
+  });
+  component = mount(DocbankStatus, { target: document.body });
+  await tick();
+  expect(document.body.textContent).toContain("Docbank unavailable");
+  const retry = document.querySelector<HTMLButtonElement>("button")!;
+  expect(retry.textContent).toContain("Retry");
+  lookup.mockResolvedValueOnce({ integration: "enabled", occurrences: [imageOccurrence] });
+  retry.click();
+  await fileReferences.track("session-1", "revision-1");
+  await tick();
+  expect(document.body.textContent).toBe("");
+});
+it("keeps capped occurrences quiet at session level", async () => {
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [{ ...imageOccurrence, state: "unavailable" }],
+  });
+  component = mount(DocbankStatus, { target: document.body });
+  await tick();
+  expect(document.body.textContent).toBe("");
+  expect(document.querySelector("button")).toBeNull();
 });

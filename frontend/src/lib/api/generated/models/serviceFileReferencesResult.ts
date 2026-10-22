@@ -7,6 +7,8 @@ import type { ServiceFileReferencesResultSource } from "./serviceFileReferencesR
 
 export interface ServiceFileReferencesResult {
   integration: ServiceFileReferencesResultIntegration;
+  /** At least one Docbank lookup failed; retry may resolve unavailable occurrences. */
+  lookup_failed?: boolean;
   occurrences: ServiceFileReferenceOccurrence[];
   source?: ServiceFileReferencesResultSource;
 }

@@ -6361,6 +6361,9 @@ components:
             - disabled
             - enabled
           type: string
+        lookup_failed:
+          description: At least one Docbank lookup failed; retry may resolve unavailable occurrences.
+          type: boolean
         occurrences:
           items:
             $ref: "#/components/schemas/ServiceFileReferenceOccurrence"

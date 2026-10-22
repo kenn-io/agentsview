@@ -125,6 +125,7 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	assert.Equal(t, int32(50), requests.Load())
 	assert.LessOrEqual(t, peak.Load(), int32(4))
 	require.Len(t, out.Occurrences, 52)
+	assert.False(t, out.LookupFailed)
 	assert.Equal(t, "unavailable", out.Occurrences[50].State)
 	assert.Equal(t, "unavailable", out.Occurrences[51].State)
 	// A caller's canceled budget stops further network work and preserves unknown evidence.
@@ -134,9 +135,41 @@ func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	svc = service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: hanging.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
 	out, err = service.FileReferences(ctx, svc, id)
 	require.NoError(t, err)
+	assert.True(t, out.LookupFailed)
 	require.Len(t, out.Occurrences, 52)
 	for _, occurrence := range out.Occurrences {
 		assert.Equal(t, "unavailable", occurrence.State)
+	}
+}
+
+func TestFileReferencesLookupFailure(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
+			_, env := newDirectTestSvc(t)
+			id := env.InsertSession(t)
+			const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+			require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "![a](asset://" + digest + ".png) ![b](asset://" + fmt.Sprintf("%064x", 1) + ".png)"}}))
+			t.Setenv("DOCBANK_TEST_KEY", "test-key")
+			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if partial && r.URL.Query().Get("sha256") == digest {
+					_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+					return
+				}
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer stub.Close()
+			svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(newTestDocbank(t, config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+			out, err := service.FileReferences(t.Context(), svc, id)
+			require.NoError(t, err)
+			assert.True(t, out.LookupFailed)
+			require.Len(t, out.Occurrences, 2)
+			if partial {
+				assert.Equal(t, "not_found", out.Occurrences[0].State)
+			} else {
+				assert.Equal(t, "unavailable", out.Occurrences[0].State)
+			}
+			assert.Equal(t, "unavailable", out.Occurrences[1].State)
+		})
 	}
 }
 
@@ -156,6 +189,7 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 7*time.Second)
+	assert.True(t, out.LookupFailed)
 	require.Len(t, out.Occurrences, 12)
 	for _, occurrence := range out.Occurrences {
 		assert.Equal(t, "unavailable", occurrence.State)

@@ -29,9 +29,10 @@ type FileReferenceOccurrence struct {
 }
 
 type FileReferencesResult struct {
-	Integration string                    `json:"integration" enum:"disabled,enabled"`
-	Source      string                    `json:"source,omitempty" enum:"available,unavailable"`
-	Occurrences []FileReferenceOccurrence `json:"occurrences"`
+	Integration  string                    `json:"integration" enum:"disabled,enabled"`
+	LookupFailed bool                      `json:"lookup_failed,omitempty" doc:"At least one Docbank lookup failed; retry may resolve unavailable occurrences."`
+	Source       string                    `json:"source,omitempty" enum:"available,unavailable"`
+	Occurrences  []FileReferenceOccurrence `json:"occurrences"`
 }
 
 type FileReferencesProvider interface {
@@ -170,7 +171,11 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	for i := range out.Occurrences {
 		occurrence := &out.Occurrences[i]
 		index, exists := seen[occurrence.SHA256]
-		if !exists || !resolved[index] {
+		if !exists {
+			continue
+		}
+		if !resolved[index] {
+			out.LookupFailed = true
 			continue
 		}
 		result := results[index]
