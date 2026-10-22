@@ -168,31 +168,16 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 	}
 }
 
+// TestGrokWebPending covers the rule Sync tests cannot isolate: a partial
+// reply on a branch the web app no longer shows does not keep the chat stale.
 func TestGrokWebPending(t *testing.T) {
 	const at = "2026-10-21T08:00:00Z"
-	partial := func(r map[string]any) map[string]any {
-		r["partial"] = true
-		return r
-	}
-	question := grokTestResponse("r1", "", "human", "Q", at)
-	tests := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"answered", grokTestConversation(t, "t", at, []any{}, question, grokTestResponse("r2", "r1", "assistant", "A", at)), false},
-		{"in-flight response", grokTestConversation(t, "t", at, []any{map[string]any{"responseId": "r2"}}, question), true},
-		{"partial reply shown", grokTestConversation(t, "t", at, nil, question,
-			partial(grokTestResponse("r2", "r1", "assistant", "A", at))), true},
-		{"partial reply on an older branch", grokTestConversation(t, "t", "", nil, question,
-			partial(grokTestResponse("r2", "r1", "assistant", "Old", at)),
-			grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:01:00Z")), false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, GrokWebPending(tc.data))
-		})
-	}
+	old := grokTestResponse("r2", "r1", "assistant", "Old", at)
+	old["partial"] = true
+	data := grokTestConversation(t, "t", "", nil,
+		grokTestResponse("r1", "", "human", "Q", at), old,
+		grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:01:00Z"))
+	assert.False(t, GrokWebPending(data))
 }
 
 func TestValidGrokWebID(t *testing.T) {
