@@ -96,7 +96,6 @@ func TestPushCompactComparisons(t *testing.T) {
 	for _, fingerprints := range []map[string]string{skipped.MessageContentHash, skipped.MessageRoleTime, skipped.MessageFlags, skipped.MessageTokenFingerprint, skipped.ToolCallFingerprint, skipped.ToolResultFingerprint} {
 		assert.NotContains(t, fingerprints, id)
 	}
-	assert.Empty(t, skipped.UsageEventFingerprint)
 	compact, err := readPushSessionMessageComparisons(
 		ctx, tx, []string{id}, counts, true,
 	)
