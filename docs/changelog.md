@@ -13,6 +13,7 @@ The latest release is
 
 - `pg push` saves download traffic when a session grows by comparing short
   hashes with PostgreSQL instead of downloading the session's old text.
+  Sessions with rows written before control-character cleanup are rewritten once.
 
 **Bug fixes**
 
