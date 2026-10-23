@@ -967,6 +967,13 @@ func (db *DB) scanEmbeddableUnits(
 	ctx context.Context, since, sessionID string, includeAutomated bool, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
+	return scanEmbeddableUnits(ctx, db.getReader(), since, sessionID, includeAutomated, maxRunRunes, fn)
+}
+
+func scanEmbeddableUnits(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, since, sessionID string, includeAutomated bool, maxRunRunes int, fn func(EmbeddableUnit) error,
+) (string, error) {
 	args := make([]any, 0, 2)
 	if sessionID != "" {
 		args = append(args, sessionID)
@@ -975,7 +982,7 @@ func (db *DB) scanEmbeddableUnits(
 		args = append(args, since)
 	}
 
-	rows, err := db.getReader().QueryContext(
+	rows, err := q.QueryContext(
 		ctx, embeddableUnitsQuery(since, sessionID, includeAutomated), args...)
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
@@ -983,7 +990,7 @@ func (db *DB) scanEmbeddableUnits(
 	defer rows.Close()
 
 	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
-	maxEnded, err = reduceUnitRows(rows, red)
+	maxEnded, err := reduceUnitRows(rows, red)
 	if err != nil {
 		return "", err
 	}

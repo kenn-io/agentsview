@@ -131,6 +131,13 @@ func (ix *Index) PrepareSearch(
 		return nil, ix.noActiveGenerationError(ctx)
 	}
 
+	split, err := ix.generationSplit(ctx, active)
+	if err != nil {
+		return nil, err
+	}
+	searchIndex := *ix
+	searchIndex.split = split
+
 	queryVector, err := kitvec.EncodeOne(ctx, enc, query)
 	if err != nil {
 		return nil, &QueryEncodeError{Err: err}
@@ -150,7 +157,7 @@ func (ix *Index) PrepareSearch(
 			hits = hits[:limit]
 		}
 
-		hydrated, err := ix.hydrateHits(ctx, hits)
+		hydrated, err := searchIndex.hydrateHits(ctx, hits)
 		return hydrated, exhausted, err
 	}, nil
 }

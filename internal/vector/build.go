@@ -127,6 +127,8 @@ func (ix *Index) Build(
 	if o.RepairInvalid && o.Backstop {
 		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
+	// Keep this operation's recipe separate from concurrent searches.
+	ix = ix.forGeneration(gen)
 	if o.RepairInvalid {
 		return ix.buildInvalidRepair(ctx, enc, gen, o)
 	}
@@ -216,6 +218,9 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
+	if err := ix.recordGenerationSplit(ctx, target); err != nil {
+		return BuildResult{}, err
+	}
 	result := BuildResult{Fingerprint: target, Refresh: refreshStats}
 
 	total, err := ix.countPending(ctx, target)
@@ -250,13 +255,13 @@ func (ix *Index) Build(
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
+	result.Activated = activated
 	if err != nil {
 		return result, err
 	}
 	if err := ix.clearActiveFullRebuildPending(ctx, target); err != nil {
 		return result, err
 	}
-	result.Activated = activated
 	if o.CorpusRevision != "" {
 		if err := ix.metaSet(
 			ctx, completedCorpusRevisionMetaKey+target, o.CorpusRevision,
@@ -685,7 +690,7 @@ func (ix *Index) maybeActivate(ctx context.Context, target string, wasBuilding b
 		return false, err
 	}
 	if err := ix.metaDeleteUnless(ctx, activeFullRebuildKey, target); err != nil {
-		return false, err
+		return true, err
 	}
 	return true, nil
 }
