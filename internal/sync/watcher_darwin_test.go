@@ -1175,6 +1175,7 @@ func TestDarwinWatcherRetiredStreamLossDoesNotRetireReplacement(t *testing.T) {
 		backend.processLifecycleSignals()
 	}
 
+	backend.processLifecycleSignals()
 	state := backend.logical[root]
 	assert.Equal(t, 1, closed, "a callback drained during closure belongs to the retired stream")
 	assert.True(t, state.active)
