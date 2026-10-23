@@ -574,3 +574,10 @@ func (store mirrorJournalStore) syncDirectory(path string) (retErr error) {
 	}
 	return nil
 }
+
+// PendingFullImport reports a durable full import that must
+// resume with the full-import deadline rather than the incremental deadline.
+func PendingFullImport(dataDir, host string) (bool, error) {
+	journal, err := loadMirrorChangeJournal(mirrorJournalPath(MirrorDir(dataDir, host)))
+	return journal.RequiredDataVersion != 0 || journal.FullImport, err
+}

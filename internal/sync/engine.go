@@ -622,7 +622,8 @@ type Engine struct {
 	goos                string
 	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
 	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
-	syncMu              gosync.Mutex         // serializes all sync operations
+	syncWaiter          lockctx.Waiter
+	syncMu              gosync.Mutex // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
 	lastSyncStats       SyncStats
@@ -5241,7 +5242,7 @@ func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) error {
 			"RunExclusiveCtx refused on report-only parse-diff engine",
 		)
 	}
-	if err := lockctx.Lock(ctx, &e.syncMu); err != nil {
+	if err := lockctx.LockQueued(ctx, &e.syncMu, &e.syncWaiter); err != nil {
 		return err
 	}
 	defer e.syncMu.Unlock()
