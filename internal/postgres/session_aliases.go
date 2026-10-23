@@ -98,7 +98,7 @@ func insertPGExcludedSessionIDs(
 	}
 	if _, err := execer.ExecContext(ctx,
 		`INSERT INTO excluded_sessions (id)
-		 SELECT unnest($1::text[])
+		 SELECT requested.id FROM unnest($1::text[]) requested(id) WHERE NOT EXISTS(SELECT 1 FROM sessions s WHERE s.id=requested.id AND s.rollout_hidden)
 		 ON CONFLICT (id) DO NOTHING`,
 		ids,
 	); err != nil {
@@ -128,7 +128,7 @@ func uniqueNonEmptyStrings(values []string) []string {
 func insertPGTrashedSessionExclusions(ctx context.Context, tx *sql.Tx, ids, scopedIDs []string) error {
 	if len(scopedIDs) > 0 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO excluded_sessions (id, include_codex_pages, owner_marker, machine, agent)
-			SELECT id, TRUE, owner_marker, machine, agent FROM sessions WHERE id = ANY($1)
+			SELECT id, TRUE, owner_marker, machine, agent FROM sessions WHERE id = ANY($1) AND NOT rollout_hidden
 			ON CONFLICT (id) DO UPDATE SET
 				owner_marker = CASE WHEN excluded_sessions.include_codex_pages
 					THEN excluded_sessions.owner_marker ELSE EXCLUDED.owner_marker END,
@@ -141,4 +141,41 @@ func insertPGTrashedSessionExclusions(ctx context.Context, tx *sql.Tx, ids, scop
 		}
 	}
 	return insertPGExcludedSessionIDs(ctx, tx, ids)
+}
+
+func checkPGProtectedSessionExclusions(ctx context.Context, tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	candidates := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		candidates[id] = true
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.agent,s.file_path,a.alias_id
+  FROM sessions s LEFT JOIN session_aliases a ON a.session_id=s.id
+  WHERE s.rollout_hidden`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sess db.Session
+		var source, alias sql.NullString
+		if err := rows.Scan(&sess.ID, &sess.Agent, &source, &alias); err != nil {
+			return err
+		}
+		if source.Valid {
+			sess.FilePath = &source.String
+		}
+		protected := pgSessionTombstoneIDs(sess)
+		if alias.Valid {
+			protected = append(protected, alias.String)
+		}
+		for _, id := range protected {
+			if candidates[id] {
+				return db.ErrProtectedSessionPurge
+			}
+		}
+	}
+	return rows.Err()
 }

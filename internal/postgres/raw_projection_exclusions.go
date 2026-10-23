@@ -70,7 +70,7 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 	if err = lockRawRolloutShared(ctx, tx); err != nil {
 		return 0, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL) ORDER BY g.group_id FOR UPDATE OF g`)
+	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL AND NOT s.rollout_hidden) ORDER BY g.group_id FOR UPDATE OF g`)
 	if err != nil {
 		return 0, err
 	}
@@ -93,7 +93,7 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 	var excluded [][]rawEmbeddingChange
 	for _, group := range groups {
 		ids, err := func() ([]string, error) {
-			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL ORDER BY id`, group)
+			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL AND NOT rollout_hidden ORDER BY id`, group)
 			if err != nil {
 				return nil, err
 			}
