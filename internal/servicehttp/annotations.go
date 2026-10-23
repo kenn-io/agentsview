@@ -31,7 +31,7 @@ func (b *httpBackend) UpdateSessionLabels(
 	if response == nil {
 		return nil, err
 	}
-	return annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
+	return b.annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
 }
 
 func (b *httpBackend) SetSessionParent(
@@ -50,7 +50,7 @@ func (b *httpBackend) SetSessionParent(
 	if response == nil {
 		return nil, err
 	}
-	return annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
+	return b.annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
 }
 
 // annotationClient refuses read-only daemons and servers that predate the
@@ -60,7 +60,7 @@ func (b *httpBackend) annotationClient(
 ) (*apiclient.Client, error) {
 	if b.readOnly {
 		return nil, fmt.Errorf("%s: daemon at %s is read-only: %w",
-			op, b.baseURL, db.ErrReadOnly)
+			op, b.diagnosticURL(), db.ErrReadOnly)
 	}
 	if err := b.requireSessionAnnotations(ctx); err != nil {
 		return nil, err
@@ -68,13 +68,17 @@ func (b *httpBackend) annotationClient(
 	return b.apiClient(b.client)
 }
 
-func annotationResult[T any](
+func (b *httpBackend) annotationResult[T any](
 	response *http.Response, body []byte, err error, out *T,
 ) (*T, error) {
 	if response != nil && response.StatusCode == http.StatusNotImplemented {
-		return nil, fmt.Errorf("%s: %w; stop the read-only serve process and use the local DB, or start a local daemon", response.Request.URL.Path, db.ErrReadOnly)
+		target := response.Request.URL.Path
+		if b.remotePolicy {
+			target = b.diagnosticURL()
+		}
+		return nil, fmt.Errorf("%s: %w; stop the read-only serve process and use the local DB, or start a local daemon", target, db.ErrReadOnly)
 	}
-	if err := serviceResponseError(response, body, err); err != nil {
+	if err := b.responseError(response, body, err); err != nil {
 		return nil, err
 	}
 	if out == nil {
