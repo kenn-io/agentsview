@@ -244,15 +244,33 @@ func (c *zstdChecked) Read(p []byte) (int, error) {
 
 func (c *zstdChecked) Close() error { return c.closer.Close() }
 
+// maxResponseBytes bounds a decompressed targets or manifest reply, so a
+// small, highly compressible reply cannot exhaust memory. Manifests are the
+// largest replies, at about 190 bytes per file for real agent data, so the
+// cap fits about 700,000 files. A manifest is about 1.5 times its full delta
+// list, so at those path lengths every manifest whose delta request fits in
+// maxServeRequestBytes fits here too.
+const maxResponseBytes = 128 << 20
+
+var errResponseTooLarge = fmt.Errorf("response is larger than the %d MiB limit", maxResponseBytes>>20)
+
 // decodeZstdJSON decodes one zstd-compressed JSON value and reads r to EOF,
-// so the ssh stream behind it ends normally.
+// so the ssh stream behind it ends normally. A reply over maxResponseBytes
+// fails without draining r.
 func decodeZstdJSON(r io.Reader, out any) error {
 	zr, err := remotesync.NewZstdReader(r)
 	if err != nil {
 		return err
 	}
 	defer zr.Close()
-	if err := json.UnmarshalRead(zr, out); err != nil {
+	// One byte past the cap tells an oversized reply apart from one that
+	// ends exactly at it; a value cut at the cap must not decode.
+	limited := &io.LimitedReader{R: zr, N: maxResponseBytes + 1}
+	err = json.UnmarshalRead(limited, out)
+	if limited.N == 0 {
+		return errResponseTooLarge
+	}
+	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(io.Discard, r); err != nil {
