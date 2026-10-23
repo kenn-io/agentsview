@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- Hosted cutover comparisons resolve parent and subagent targets from each
+  source's physical evidence. Missing, excluded or ambiguous targets no longer
+  appear equal solely because stored aliases match. Hidden and trashed
+  targets remain part of the comparison.
+
 - Hosted cutover tooling can read complete session content and source readiness
   in one read-only PostgreSQL snapshot, including trashed sessions. This adds
   the comparison inputs and matches sessions by recorded provider identity,

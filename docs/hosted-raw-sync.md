@@ -330,6 +330,16 @@ pair is eligible for content comparison. Identity matching alone does not
 establish content parity or permit activation. The operator comparison command
 is not available yet.
 
+Relationship comparison resolves parent, tool-call subagent and result-event
+subagent links from physical source-owned evidence in the same snapshot.
+Hidden and trashed targets remain evidence; excluded or missing targets do
+not. Historical exact-source authority prevents fallback to a different source
+after removal or exclusion. Without exact authority, only one physical target
+in the same tenant, device, provider and configured root is admissible. Each
+source's asserted edge is checked before shared owners are combined. Equal
+literal aliases cannot hide a missing or ambiguous target. Legacy targets are
+compared through globally unique identity matches.
+
 The stored-content comparison uses this field matrix:
 
 | Class | Fields |
