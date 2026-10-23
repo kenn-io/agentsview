@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"testing"
 	"time"
 
@@ -178,6 +179,40 @@ func TestGrokWebPending(t *testing.T) {
 		grokTestResponse("r1", "", "human", "Q", at), old,
 		grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:01:00Z"))
 	assert.False(t, GrokWebPending(data))
+}
+
+// TestGrokWebPathLongChat guards the linear branch walk: a quadratic walk
+// over 20,000 responses visits about 200 million ancestors.
+func TestGrokWebPathLongChat(t *testing.T) {
+	const n = 20_000
+	responses := make([]grokWebResponse, n)
+	for i := range responses {
+		responses[i] = grokWebResponse{ResponseID: fmt.Sprint("r", i), Sender: "human", Message: "m", CreateTime: "2026-10-21T08:00:00Z"}
+		if i > 0 {
+			responses[i].ParentResponseID = responses[i-1].ResponseID
+		}
+	}
+	start := time.Now()
+	path := grokWebPath(responses)
+	require.Len(t, path, n)
+	assert.Equal(t, "r0", path[0].ResponseID)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+// TestGrokWebPathCycleOffStart covers a parent loop that does not return to
+// the response the walk started from.
+func TestGrokWebPathCycleOffStart(t *testing.T) {
+	const at = "2026-10-21T08:00:00Z"
+	path := grokWebPath([]grokWebResponse{
+		{ResponseID: "a", ParentResponseID: "b", Sender: "human", Message: "A", CreateTime: at},
+		{ResponseID: "b", ParentResponseID: "a", Sender: "assistant", Message: "B", CreateTime: at},
+		{ResponseID: "c", ParentResponseID: "a", Sender: "human", Message: "C", CreateTime: at},
+	})
+	var ids []string
+	for _, r := range path {
+		ids = append(ids, r.ResponseID)
+	}
+	assert.Equal(t, []string{"b", "a", "c"}, ids)
 }
 
 func TestValidGrokWebID(t *testing.T) {

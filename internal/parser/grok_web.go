@@ -87,16 +87,20 @@ func grokWebPath(responses []grokWebResponse) []grokWebResponse {
 	for i, r := range responses {
 		byID[r.ResponseID] = i
 	}
-	// textBelow marks every response that has a descendant with text.
+	// textBelow marks every response that has a descendant with text. Every
+	// ancestor of a marked response is marked too, so each walk stops at the
+	// first marked one and the whole pass is linear. A walk that loops back
+	// to its start marks the start, which is then its own descendant.
 	textBelow := make(map[string]bool, len(responses))
 	for _, r := range responses {
 		if strings.TrimSpace(r.Message) == "" {
 			continue
 		}
-		seen := map[string]bool{r.ResponseID: true}
-		for i, ok := byID[r.ParentResponseID]; ok && !seen[responses[i].ResponseID]; i, ok = byID[responses[i].ParentResponseID] {
-			seen[responses[i].ResponseID] = true
+		for i, ok := byID[r.ParentResponseID]; ok && !textBelow[responses[i].ResponseID]; i, ok = byID[responses[i].ParentResponseID] {
 			textBelow[responses[i].ResponseID] = true
+			if responses[i].ResponseID == r.ResponseID {
+				break
+			}
 		}
 	}
 	leaf, leafAt := -1, time.Time{}
