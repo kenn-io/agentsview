@@ -312,20 +312,23 @@ the previous visibility policy. Precedence is device plus provider, device,
 provider, then tenant. A group shared by several sources is eligible when any
 source is active, even if another device is in shadow.
 
-Shadow sessions stay out of session lists, details, search, pins and trash.
-Shared analytics and usage queries also exclude their contributions. Rollout
-visibility is independent of user trash: restoring or emptying trash cannot
-expose or purge a hidden session. A purge whose global alias exclusion also
-covers a protected session returns HTTP 409 before any deletion. EmptyTrash
-also keeps raw trash when a legacy alias conflicts. Other visible purges remain
-permanent. Purging a thread keeps hidden pages and their durable exclusions
-untouched; the returned count includes only deleted rows.
+Shadow sessions stay out of public session reads, identity resolution, search,
+reports, usage totals and trash. Session-specific pins and curation also reject
+hidden sessions. Rollout visibility is independent of user trash: restoring or
+emptying trash cannot expose or purge a hidden session. A purge whose global
+alias exclusion also covers a protected session returns HTTP 409 before any
+deletion. EmptyTrash also keeps raw trash when a legacy alias conflicts. Other
+visible purges remain permanent. Purging a thread keeps hidden pages and their
+durable exclusions untouched; the returned count includes only deleted rows.
+Stored insights remain visible as historical summaries. Persistent archive
+project-identity observations and maps remain visible, as does configuration.
+Archive metadata has no exact per-session provenance. Rollout hiding does not
+conceal historical project names or roots. Session-derived project counts and
+candidate examples exclude hidden sessions.
 
 Scope changes invalidate existing session cursors when the served set or public
-aliases change. Physical projection reads still include shadow rows. Forwarded
-report snapshot protection and source-probe filtering arrive in the next
-cutover stage; **shadow is not yet a complete public-read isolation boundary**.
-Activation with a parity gate and legacy supersession arrive in later stages.
+aliases change. Physical projection reads still include shadow rows.
+Activation with a parity gate and legacy supersession arrive in a later stage.
 `list` counts physical raw rows as served or shadow according to that column,
 including user trash, and prints the scope's stored parity report. Superseded
 counts remain zero until legacy supersession is implemented.
