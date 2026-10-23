@@ -25,6 +25,7 @@ const (
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentGeminiApps     AgentType = "gemini-apps"
+	AgentGrokWeb        AgentType = "grok-web"
 	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
 	AgentOpenCodeReview AgentType = "opencodereview"
@@ -751,6 +752,12 @@ var Registry = []AgentDef{
 		Type:        AgentGeminiApps,
 		DisplayName: "Gemini Apps",
 		IDPrefix:    "gemini-apps:",
+		FileBased:   false,
+	},
+	{
+		Type:        AgentGrokWeb,
+		DisplayName: "Grok Web",
+		IDPrefix:    "grok-web:",
 		FileBased:   false,
 	},
 	{
