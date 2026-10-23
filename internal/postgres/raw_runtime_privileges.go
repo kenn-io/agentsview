@@ -42,6 +42,9 @@ var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"raw_embedding_outbox", "SELECT,INSERT"},
 	{"raw_session_links", "SELECT,INSERT,DELETE"},
 	{"raw_projection_rollouts", "SELECT,INSERT,UPDATE"},
+	{"hosted_vector_documents", "SELECT,INSERT,UPDATE,DELETE"},
+	{"hosted_vector_generations", "SELECT,UPDATE"},
+	{"vector_generations", "SELECT"},
 }
 
 // CheckHostedRuntimeWritable is a read-only preflight, never provisioning.
@@ -64,6 +67,15 @@ func CheckHostedRuntimeWritable(ctx context.Context, database *sql.DB, schema st
 	}
 	for _, grant := range hostedProjectionPrivileges {
 		if err = checkHostedTablePrivileges(ctx, database, schema, grant.table, grant.privileges); err != nil {
+			return err
+		}
+	}
+	tables, err := hostedCatalogTables(ctx, database, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range tables[len(hostedTables):] {
+		if err := checkHostedTablePrivileges(ctx, database, schema, table.Name, "SELECT,INSERT,UPDATE,DELETE"); err != nil {
 			return err
 		}
 	}

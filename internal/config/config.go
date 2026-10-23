@@ -71,6 +71,7 @@ type ProxyConfig struct {
 type PGConfig struct {
 	RawTenant         string `toml:"raw_tenant" json:"raw_tenant,omitempty"`
 	RawDerivation     bool   `toml:"raw_derivation" json:"raw_derivation,omitempty"`
+	RawEmbeddings     bool   `toml:"raw_embeddings" json:"raw_embeddings,omitempty"`
 	RawPollSeconds    int    `toml:"raw_poll_seconds" json:"raw_poll_seconds,omitempty"`
 	RawAttemptSeconds int    `toml:"raw_attempt_seconds" json:"raw_attempt_seconds,omitempty"`
 	RawMaxAttempts    int    `toml:"raw_max_attempts" json:"raw_max_attempts,omitempty"`
@@ -107,7 +108,7 @@ type ResolvedPGTarget struct {
 }
 
 var pgConfigKeys = map[string]struct{}{
-	"raw_tenant": {}, "raw_derivation": {}, "raw_poll_seconds": {}, "raw_attempt_seconds": {}, "raw_max_attempts": {},
+	"raw_tenant": {}, "raw_derivation": {}, "raw_embeddings": {}, "raw_poll_seconds": {}, "raw_attempt_seconds": {}, "raw_max_attempts": {},
 
 	"url":              {},
 	"schema":           {},
@@ -548,6 +549,10 @@ func (c VectorEmbeddingsServerConfig) APIKey() string {
 // validateServers checks the named-servers section: at least one server, an
 // unambiguous default, and per-server transport settings that parse.
 func (c VectorEmbeddingsConfig) validateServers() error {
+	return c.validateServersWithRecipe(true)
+}
+
+func (c VectorEmbeddingsConfig) validateServersWithRecipe(recipe bool) error {
 	if len(c.Servers) == 0 {
 		return errors.New("[vector.embeddings] at least one server is required when [vector] is enabled; " +
 			"define one under [vector.embeddings.servers.<name>]")
@@ -565,7 +570,14 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 		}
 	}
 	for _, name := range sortedServerNames(c.Servers) {
-		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
+		server := c.Servers[name]
+		var err error
+		if recipe {
+			err = server.validate(name, c.ModelContextTokens)
+		} else {
+			err = server.validateTransport(name)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -574,6 +586,23 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 
 // validate checks one named server's transport settings.
 func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens int) error {
+	if err := c.validateTransport(name); err != nil {
+		return err
+	}
+	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
+	if c.MaxBatchTokens > 0 && modelContextTokens <= 0 {
+		return fmt.Errorf(
+			"%s max_batch_tokens requires [vector.embeddings] model_context_tokens", section)
+	}
+	if c.MaxBatchTokens > 0 && c.MaxBatchTokens < modelContextTokens {
+		return fmt.Errorf(
+			"%s max_batch_tokens (%d) must be at least model_context_tokens (%d)",
+			section, c.MaxBatchTokens, modelContextTokens)
+	}
+	return nil
+}
+
+func (c VectorEmbeddingsServerConfig) validateTransport(name string) error {
 	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
 	if c.Endpoint == "" {
 		return fmt.Errorf("%s endpoint is required", section)
@@ -598,15 +627,7 @@ func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens i
 		return fmt.Errorf(
 			"%s max_batch_tokens must not be negative, got %d", section, c.MaxBatchTokens)
 	}
-	if c.MaxBatchTokens > 0 && modelContextTokens <= 0 {
-		return fmt.Errorf(
-			"%s max_batch_tokens requires [vector.embeddings] model_context_tokens", section)
-	}
-	if c.MaxBatchTokens > 0 && c.MaxBatchTokens < modelContextTokens {
-		return fmt.Errorf(
-			"%s max_batch_tokens (%d) must be at least model_context_tokens (%d)",
-			section, c.MaxBatchTokens, modelContextTokens)
-	}
+
 	if c.Concurrency <= 0 {
 		return fmt.Errorf("%s concurrency must be greater than 0, got %d", section, c.Concurrency)
 	}
@@ -1958,6 +1979,12 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.PGTargets = namedPG
 	} else {
 		c.PGTargets = nil
+		c.PG.RawTenant = legacyPG.RawTenant
+		c.PG.RawDerivation = legacyPG.RawDerivation
+		c.PG.RawEmbeddings = legacyPG.RawEmbeddings
+		c.PG.RawPollSeconds = legacyPG.RawPollSeconds
+		c.PG.RawAttemptSeconds = legacyPG.RawAttemptSeconds
+		c.PG.RawMaxAttempts = legacyPG.RawMaxAttempts
 		if legacyPG.URL != "" {
 			c.PG.URL = legacyPG.URL
 		}
