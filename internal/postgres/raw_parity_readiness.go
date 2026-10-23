@@ -37,6 +37,13 @@ func LoadRawParityReadiness(ctx context.Context, tx *sql.Tx, scope RawParityScop
 	if err := checkRawParityTransaction(ctx, tx); err != nil {
 		return nil, err
 	}
+	return loadRawParityReadiness(ctx, tx, scope, version)
+}
+
+func loadRawParityReadiness(ctx context.Context, tx *sql.Tx, scope RawParityScope, version string) ([]RawParityReadiness, error) {
+	if err := validateRawIngestProcessingVersion(version); err != nil {
+		return nil, err
+	}
 	var supported []string
 	for _, factory := range parser.ProviderFactories() {
 		if factory.Capabilities().RawCapture.Support == parser.CapabilitySupported {

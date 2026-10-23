@@ -25,9 +25,15 @@ func (r RawParityReader) Candidates(ctx context.Context) ([]rawparity.Candidate,
 // loadRawParityCandidates shares the physical identity query with caller-owned
 // write transactions. The public report retains its read-only snapshot guard.
 func loadRawParityCandidates(ctx context.Context, tx *sql.Tx) ([]rawparity.Candidate, error) {
+	return loadRawParityCandidatesWithin(ctx, tx, nil, nil)
+}
+
+// Nil groups is reserved for owner-wide parity/activation. Ordinary writers
+// supply the complete locked closure, including every competing physical cohort.
+func loadRawParityCandidatesWithin(ctx context.Context, tx *sql.Tx, groups, legacy []string) ([]rawparity.Candidate, error) {
 	out := []rawparity.Candidate{}
 
-	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.agent,s.machine,s.raw_group_id,
+	query := `SELECT s.id,s.agent,s.machine,s.raw_group_id,
  CASE WHEN s.provenance_kind='legacy' THEN hosted_legacy_alias(s.id)
  ELSE g.base_alias||COALESCE('~'||b.branch,'') END,
  s.agent='piebald' OR s.source_session_id='',COALESCE(b.aliases,'{}'::text[]),COALESCE(b.devices,'{}'::text[])
@@ -35,11 +41,14 @@ func loadRawParityCandidates(ctx context.Context, tx *sql.Tx) ([]rawparity.Candi
  LEFT JOIN LATERAL (
   SELECT min(b.branch_id) AS branch,array_agg(DISTINCT b.member_id) AS aliases,array_agg(DISTINCT p.device_id) AS devices
   FROM raw_session_branches b JOIN raw_source_projections p ON p.source_id=b.source_id
-  WHERE b.session_id=s.id AND b.active AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c
-   WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id)
-   ORDER BY c.branch_id DESC LIMIT 1),false)
- ) b ON s.provenance_kind='raw'
- ORDER BY s.id`)
+  WHERE b.session_id=s.id AND ` + rawBranchEligibleSQL + `
+ ) b ON s.provenance_kind='raw'`
+	var args []any
+	if groups != nil {
+		query += ` WHERE (s.raw_group_id<>'' AND s.raw_group_id=ANY($1)) OR (s.provenance_kind='legacy' AND s.id=ANY($2))`
+		args = append(args, groups, legacy)
+	}
+	rows, err := tx.QueryContext(ctx, query+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, err
 	}

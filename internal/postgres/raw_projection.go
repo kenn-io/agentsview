@@ -23,7 +23,11 @@ type rawBranch struct {
 }
 
 func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg string) ([]rawBranch, error) {
-	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches WHERE `+where+`=$1 ORDER BY branch_id`, arg)
+	return loadRawBranchRows(ctx, q, where+`=$1`, arg)
+}
+
+func loadRawBranchRows(ctx context.Context, q hostedQuerier, predicate, arg string) ([]rawBranch, error) {
+	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches b WHERE `+predicate+` ORDER BY branch_id`, arg)
 	if err != nil {
 		return nil, err
 	}

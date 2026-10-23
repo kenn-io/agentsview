@@ -74,13 +74,23 @@ type rawSupersessionPlan struct {
 
 //nolint:unused // called by the later production activation slice
 func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]bool) (rawSupersessionPlan, error) {
+	return prepareRawSupersessionsWithin(ctx, tx, served, nil, nil)
+}
+
+func prepareRawSupersessionsWithin(ctx context.Context, tx *sql.Tx, served map[string]bool, groups, legacyIDs []string) (rawSupersessionPlan, error) {
 	var plan rawSupersessionPlan
-	candidates, err := loadRawParityCandidates(ctx, tx)
+	candidates, err := loadRawParityCandidatesWithin(ctx, tx, groups, legacyIDs)
 	if err != nil {
 		return plan, err
 	}
 	previous := map[string]string{}
-	rows, err := tx.QueryContext(ctx, `SELECT legacy_session_id,group_id FROM raw_legacy_supersessions ORDER BY legacy_session_id`)
+	query := `SELECT legacy_session_id,group_id FROM raw_legacy_supersessions`
+	var args []any
+	if groups != nil {
+		query += ` WHERE group_id=ANY($1) OR legacy_session_id=ANY($2)`
+		args = append(args, groups, legacyIDs)
+	}
+	rows, err := tx.QueryContext(ctx, query+` ORDER BY legacy_session_id`, args...)
 	if err != nil {
 		return plan, err
 	}
