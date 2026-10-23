@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"testing"
 	"time"
 
@@ -30,6 +31,47 @@ func assertActivationGuardFree(t *testing.T, f projectionFixture) {
 		err := f.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted AND classid=((hashtextextended($1,0)>>32)&4294967295)::oid AND objid=(hashtextextended($1,0)&4294967295)::oid`, "agentsview-rollout:"+f.schema).Scan(&held)
 		return err == nil && held == 0
 	}, 20*time.Second, 10*time.Millisecond, "no pooled connection may retain the session guard")
+}
+
+// This exercises the production entry point, including a deliberately different
+// transcript. Deleting carry/map/publication or storing a modified pass fails it.
+func TestRawActivationAuditCarryAndRollback(t *testing.T) {
+	f, _ := supersessionFixture(t)
+	require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
+	before := activationContentSnapshot(t, f.runtime)
+	audit := activateFixture(t, t.Context(), f, "device-a", "")
+	assert.False(t, audit.Parity.Pass)
+	assert.Equal(t, 1, audit.Parity.Counts["differs"])
+	assert.True(t, audit.AcceptDifferences)
+	assert.Equal(t, "not_configured", audit.Embeddings)
+	assert.Greater(t, audit.ActivatedCorpusRevision, audit.CheckedCorpusRevision)
+	assert.Equal(t, before, activationContentSnapshot(t, f.runtime), "gate's accepted content and proofs remain unchanged")
+	var encoded []byte
+	var revision int64
+	require.NoError(t, f.admin.QueryRow(`SELECT parity,activated_corpus_revision FROM raw_rollout_scopes WHERE device_id='device-a'`).Scan(&encoded, &revision))
+	var stored RawActivationAudit
+	require.NoError(t, json.Unmarshal(encoded, &stored))
+	assert.Equal(t, audit, stored)
+	assert.Equal(t, audit.ActivatedCorpusRevision, revision)
+	var name string
+	var hidden, trashed bool
+	require.NoError(t, f.runtime.QueryRow(`SELECT rollout_hidden FROM sessions WHERE id='codex:portable'`).Scan(&hidden))
+	assert.True(t, hidden)
+	require.NoError(t, f.runtime.QueryRow(`SELECT display_name,deleted_at IS NOT NULL FROM sessions WHERE provenance_kind='raw'`).Scan(&name, &trashed))
+	assert.Equal(t, "legacy title", name)
+	assert.True(t, trashed)
+	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "display_name", "raw edit"))
+	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "trashed", false))
+	require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "device-a", "", "shadow"))
+	require.NoError(t, f.runtime.QueryRow(`SELECT display_name,deleted_at IS NOT NULL,rollout_hidden FROM sessions WHERE id='codex:portable'`).Scan(&name, &trashed, &hidden))
+	assert.Equal(t, "legacy title", name)
+	assert.True(t, trashed)
+	assert.False(t, hidden)
+	activateFixture(t, t.Context(), f, "device-a", "")
+	require.NoError(t, f.runtime.QueryRow(`SELECT display_name,deleted_at IS NOT NULL FROM sessions WHERE provenance_kind='raw'`).Scan(&name, &trashed))
+	assert.Equal(t, "raw edit", name)
+	assert.False(t, trashed)
+	assertActivationGuardFree(t, f)
 }
 
 func TestRawActivationRefusalIsAtomic(t *testing.T) {

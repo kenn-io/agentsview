@@ -36,7 +36,7 @@ func (s *RawProjectionStore) setPinReturningIDOnce(ctx context.Context, alias st
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	target, err := s.lockRawCurationTarget(ctx, tx, alias)
+	target, derivedLocks, err := s.lockRawCurationTarget(ctx, tx, alias)
 	if err != nil {
 		return 0, err
 	}
@@ -60,7 +60,7 @@ func (s *RawProjectionStore) setPinReturningIDOnce(ctx context.Context, alias st
 	if err = writeRawPin(ctx, tx, target, key, ordinal, target.ContentRevision, pinned, note); err != nil {
 		return 0, err
 	}
-	if err = s.publishRawCuration(ctx, tx, target.GroupID); err != nil {
+	if err = s.publishRawCuration(ctx, tx, target.GroupID, derivedLocks); err != nil {
 		return 0, err
 	}
 	var id int64
@@ -91,7 +91,7 @@ func (s *RawProjectionStore) removePinOnce(ctx context.Context, alias, messageKe
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	target, err := s.lockRawCurationTarget(ctx, tx, alias)
+	target, derivedLocks, err := s.lockRawCurationTarget(ctx, tx, alias)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s *RawProjectionStore) removePinOnce(ctx context.Context, alias, messageKe
 	if err = writeRawPin(ctx, tx, target, messageKey, ordinal, revision, false, ""); err != nil {
 		return err
 	}
-	if err = s.publishRawCuration(ctx, tx, target.GroupID); err != nil {
+	if err = s.publishRawCuration(ctx, tx, target.GroupID, derivedLocks); err != nil {
 		return err
 	}
 	return tx.Commit()

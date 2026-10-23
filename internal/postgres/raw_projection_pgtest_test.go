@@ -29,7 +29,7 @@ type projectionFixture struct {
 	objects rawsync.ObjectStore
 }
 
-func newProjectionFixture(t *testing.T, beforeAdoption ...func(*sql.DB)) projectionFixture {
+func newProjectionFixture(t testing.TB, beforeAdoption ...func(*sql.DB)) projectionFixture {
 	t.Helper()
 	f := newHostedFixture(t, "tenant-projection", beforeAdoption...)
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
@@ -45,7 +45,7 @@ func newProjectionFixture(t *testing.T, beforeAdoption ...func(*sql.DB)) project
 	require.NoError(t, err)
 	return projectionFixture{f, sink, custody, jobs, objects}
 }
-func (f projectionFixture) accept(t *testing.T, device, capture, parent string, providers ...parser.AgentType) (rawsync.CanonicalManifest, rawsync.CommitResult) {
+func (f projectionFixture) accept(t testing.TB, device, capture, parent string, providers ...parser.AgentType) (rawsync.CanonicalManifest, rawsync.CommitResult) {
 	t.Helper()
 	provider := parser.AgentCodex
 	if len(providers) > 0 {
@@ -54,7 +54,7 @@ func (f projectionFixture) accept(t *testing.T, device, capture, parent string, 
 	return f.acceptScoped(t, device, capture, parent, provider, "", "")
 }
 
-func (f projectionFixture) acceptScoped(t *testing.T, device, capture, parent string, provider parser.AgentType, root, source string) (rawsync.CanonicalManifest, rawsync.CommitResult) {
+func (f projectionFixture) acceptScoped(t testing.TB, device, capture, parent string, provider parser.AgentType, root, source string) (rawsync.CanonicalManifest, rawsync.CommitResult) {
 	t.Helper()
 	digest := sha256.Sum256([]byte("synthetic-" + device))
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_devices(device_id,display_name,credential_sha256,created_at) VALUES($1,$1,$2,clock_timestamp()) ON CONFLICT(device_id) DO NOTHING`, device, digest[:])
@@ -108,7 +108,7 @@ func deferralReply() parser.ParsedMessage {
 	return parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, Content: "Continue next session."}
 }
 
-func (f projectionFixture) lease(t *testing.T, m rawsync.CanonicalManifest) rawderive.JobLease {
+func (f projectionFixture) lease(t testing.TB, m rawsync.CanonicalManifest) rawderive.JobLease {
 	t.Helper()
 	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
 	require.NoError(t, err)

@@ -106,8 +106,9 @@ func validateRawRolloutTransaction(ctx context.Context, tx *sql.Tx, schema, tena
 	return nil
 }
 
-// ChangeRawRollout records shadow policy or clears exactly one scope. Activation
-// is deliberately unavailable until its parity gate is implemented.
+// ChangeRawRollout records shadow policy or clears exactly one scope. Its
+// complete cache/carry/visibility recomputation shares activation's prepared
+// write set, but never bypasses the active gate.
 func ChangeRawRollout(ctx context.Context, database *sql.DB, schema, tenant, device, provider, action string) error {
 	if action != "shadow" && action != "clear" {
 		return errors.New("raw-rollout action must be shadow or clear")
@@ -118,56 +119,21 @@ func ChangeRawRollout(ctx context.Context, database *sql.DB, schema, tenant, dev
 			return struct{}{}, err
 		}
 		defer func() { _ = tx.Rollback() }()
-		scopes, err := loadRawRolloutScopes(ctx, tx)
+		prepared, err := prepareRawScopeChange(ctx, tx, device, provider, action)
 		if err != nil {
 			return struct{}{}, err
 		}
-		tenantExists := false
-		for _, scope := range scopes {
-			tenantExists = tenantExists || scope.DeviceID == "" && scope.Provider == ""
-		}
 		if action == "shadow" {
-			if (device != "" || provider != "") && !tenantExists {
-				return struct{}{}, errors.New("create the tenant rollout scope before narrower scopes")
-			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO raw_rollout_scopes(tenant_id,device_id,provider,state) VALUES($1,$2,$3,'shadow') ON CONFLICT(tenant_id,device_id,provider) DO UPDATE SET state='shadow',updated_at=clock_timestamp(),updated_by=current_user`, tenant, device, provider)
 		} else {
-			if device == "" && provider == "" && len(scopes) > 1 {
-				return struct{}{}, errors.New("clear narrower rollout scopes before the tenant scope")
-			}
 			_, err = tx.ExecContext(ctx, `DELETE FROM raw_rollout_scopes WHERE tenant_id=$1 AND device_id=$2 AND provider=$3`, tenant, device, provider)
 		}
 		if err != nil {
 			return struct{}{}, err
 		}
-		// First and last tenant transitions affect the whole tenant. Narrow writes
-		// touch only groups with a source matching the selector.
-		rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE ($1='' AND $2='') OR EXISTS(SELECT 1 FROM raw_session_branches b JOIN raw_source_projections p ON p.source_id=b.source_id WHERE b.group_id=g.group_id AND ($1='' OR p.device_id=$1) AND ($2='' OR p.provider=$2)) ORDER BY g.group_id FOR UPDATE OF g`, device, provider)
-		if err != nil {
+		if err = prepared.apply(ctx, tx); err != nil {
 			return struct{}{}, err
 		}
-		defer rows.Close()
-		var groups []string
-		for rows.Next() {
-			var group string
-			if err = rows.Scan(&group); err != nil {
-				break
-			}
-			groups = append(groups, group)
-		}
-		if err == nil {
-			err = rows.Err()
-		}
-		rows.Close()
-		if err != nil {
-			return struct{}{}, err
-		}
-		for _, group := range groups {
-			if err = recomputeRawRollout(ctx, tx, group); err != nil {
-				return struct{}{}, err
-			}
-		}
-		// Publication is last: no later statement can wait on another row lock.
 		if err = publishRawRevision(ctx, tx, true, nil); err != nil {
 			return struct{}{}, err
 		}

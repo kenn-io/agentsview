@@ -155,8 +155,8 @@ Run `agentsview pg hosted-provision provision`, then reapply
 owner, along with the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants
 above. The SELECT grant includes `raw_rollout_scopes` and
 `raw_legacy_supersessions`. The latter also needs the projection write grants
-above; it stores derived legacy-to-raw group mappings. Public activation is
-still unavailable.
+above; it stores derived legacy-to-raw group mappings. Activation also requires
+a build that can verify the selected target's embedding configuration.
 `ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
 fails startup until provisioning and these grants are complete.
 
@@ -331,17 +331,69 @@ conceal historical project names or roots. Session-derived project counts and
 candidate examples exclude hidden sessions.
 
 Scope changes invalidate existing session cursors when the served set or public
-aliases change. Physical projection reads still include shadow rows.
-Activation with a parity gate and legacy supersession arrive in a later stage.
-`list` counts physical raw rows as served or shadow according to that column,
-including user trash, and prints the scope's stored parity report. Superseded
-counts remain zero until legacy supersession is implemented.
+aliases change. Physical projection reads still include shadow rows. `list`
+counts physical raw rows, including user trash, as served or shadow, and prints
+the last stored parity audit.
 
 Follow [the existing-deployment upgrade recipe](#upgrade-an-existing-deployment)
 after upgrading. The runtime needs `SELECT` on `raw_rollout_scopes`, and must
 have no insert, update or delete privileges on it. Scope changes use the schema
 owner connection. Scope writes, projection and curation serialize through a
-tenant advisory lock; changes never delete sessions or change their trash state.
+tenant advisory lock. Rollout preserves every legacy session and its original
+curation.
+
+### Activate and return to shadow (unreleased)
+
+This build refuses operator activation because it cannot yet verify the selected
+target's hosted embedding configuration. An absent setting or vector table is
+unknown, not disabled. Use a build with embedding-aware target configuration
+before following the activation step below. Configured embeddings additionally
+require the coverage gate; this build refuses that case too, even when the
+embedding recipe or transport is invalid. There is no override for these gates.
+
+Once those prerequisites are available, use this order:
+
+1. Drop pushed vectors with `pg vectors drop`, then adopt the vector-free schema
+   with `pg hosted-provision`. Adoption ends `pg push` into that schema;
+   returning to shadow does not re-enable it.
+2. Record the tenant `shadow` scope before enrolling devices. Enroll devices,
+   then run `raw-sync backfill` and `raw-sync watch`. Keep the shadow window
+   short: new shadow sessions are captured and parsed but are not served.
+3. Run `pg raw-parity --json` until sources are projected. Investigate content
+   differences and unresolved identities. Pending, failed, unsupported, empty,
+   ambiguous and unmatchable scopes cannot activate.
+4. Activate a device, provider, their intersection, or the tenant with the owner
+   target. For example: `pg raw-rollout activate provision --device device-a`.
+   `--accept-differences` waives only content differences. The audit retains the
+   original counts, pass result and explicit waiver; it never stores transcripts.
+5. Inspect `pg raw-rollout list provision`. Confirm
+   reads use the server before retiring local ingestion and embedding work on
+   each device. Confirm raw capture continues uploading after any restart.
+6. To return a scope to legacy service, run
+   `pg raw-rollout shadow provision --device device-a`. Restore that device's
+   intended local services and restart them. Clearing a narrower row inherits
+   its remaining scope rules; clearing the last tenant row serves both raw and
+   legacy history without supersession.
+
+Activation acquires rollout before its stable snapshot and holds the corpus
+publication fence through final parity and commit. Contention retries the entire
+attempt with a fresh snapshot. A refusal changes no policy, curation or served
+view. The stored checked and activated corpus revisions come from that same
+transaction; legacy visibility triggers may publish additional revisions.
+
+While an explicitly active group is served, its matched legacy row is hidden and
+the raw row takes the plain public ID. Future projection creates valid matches
+in its own transaction. Physical replacements and source tombstones retain the
+logical match; authoritative withdrawal of the final membership releases it.
+Legacy-only history stays visible. Existing legacy links follow the map, keeping
+plural targets ambiguous when raw cohorts diverge.
+
+The first supersession carries stars, names and trash only into missing raw
+group values. Explicit false, null, unpins and branch overrides win. Pins match
+source UUID and normalized content; ordinal alone never matches. Unresolved
+pins, labels and all original legacy content and curation stay on the legacy
+row. Returning to shadow reveals those originals. Raw edits remain on raw
+curation for later reactivation and are never copied back to legacy rows.
 
 ## Reparse and rollback
 

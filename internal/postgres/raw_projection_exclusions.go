@@ -18,7 +18,7 @@ func (s *RawProjectionStore) excludeTrashedSessionOnce(ctx context.Context, alia
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	target, err := s.lockRawCurationTarget(ctx, tx, alias)
+	target, derivedLocks, err := s.lockRawCurationTarget(ctx, tx, alias)
 	if err != nil {
 		if identityErr, ok := errors.AsType[*RawIdentityError](err); ok && identityErr.Identity.State == RawIdentityGone {
 			return false, nil
@@ -49,6 +49,13 @@ func (s *RawProjectionStore) excludeTrashedSessionOnce(ctx context.Context, alia
 	if err != nil {
 		return false, err
 	}
+	staged, err := s.prepareRawDerivedWrites(ctx, tx, derivedLocks)
+	if err != nil {
+		return false, err
+	}
+	if err = applyRawLegacyVisibility(ctx, tx, staged); err != nil {
+		return false, err
+	}
 	if err = publishRawRevision(ctx, tx, true, changes); err != nil {
 		return false, err
 	}
@@ -70,7 +77,7 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 	if err = lockRawRolloutShared(ctx, tx); err != nil {
 		return 0, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL AND NOT s.rollout_hidden) ORDER BY g.group_id FOR UPDATE OF g`)
+	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL AND NOT s.rollout_hidden) ORDER BY g.group_id`)
 	if err != nil {
 		return 0, err
 	}
@@ -89,8 +96,18 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	derivedLocks, err := lockRawDerivedAliases(ctx, tx, groups, nil)
+	if err != nil {
+		return 0, err
+	}
+	if err = derivedLocks.lockGroups(ctx, tx); err != nil {
+		return 0, err
+	}
+	if err = derivedLocks.lockSessions(ctx, tx); err != nil {
+		return 0, err
+	}
 	count := 0
-	var excluded [][]rawEmbeddingChange
+	var excluded []rawEmbeddingChange
 	for _, group := range groups {
 		ids, err := func() ([]string, error) {
 			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL AND NOT rollout_hidden ORDER BY id`, group)
@@ -122,11 +139,18 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			excluded = append(excluded, changes)
+			excluded = append(excluded, changes...)
 		}
 	}
-	for _, changes := range excluded {
-		if err = publishRawRevision(ctx, tx, true, changes); err != nil {
+	staged, err := s.prepareRawDerivedWrites(ctx, tx, derivedLocks)
+	if err != nil {
+		return 0, err
+	}
+	if err = applyRawLegacyVisibility(ctx, tx, staged); err != nil {
+		return 0, err
+	}
+	if len(excluded) > 0 || staged.IdentityChanged {
+		if err = publishRawRevision(ctx, tx, true, excluded); err != nil {
 			return 0, err
 		}
 	}

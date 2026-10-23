@@ -16,40 +16,34 @@ func (e *RawIdentityError) Error() string {
 	return "raw session identity is " + string(e.Identity.State)
 }
 
-func (s *RawProjectionStore) lockRawCurationTarget(ctx context.Context, tx *sql.Tx, alias string) (RawIdentity, error) {
+func (s *RawProjectionStore) lockRawCurationTarget(ctx context.Context, tx *sql.Tx, alias string) (RawIdentity, rawDerivedLocks, error) {
+	var locks rawDerivedLocks
 	if err := lockRawRolloutShared(ctx, tx); err != nil {
-		return RawIdentity{}, err
+		return RawIdentity{}, locks, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g JOIN raw_session_public_aliases a ON a.group_id=g.group_id WHERE a.alias_id=$1 ORDER BY g.group_id FOR UPDATE OF g`, alias)
+	locks, err := lockRawDerivedAliases(ctx, tx, nil, []string{alias})
 	if err != nil {
-		return RawIdentity{}, err
+		return RawIdentity{}, locks, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var group string
-		if err = rows.Scan(&group); err != nil {
-			rows.Close()
-			return RawIdentity{}, err
-		}
+	if err = locks.lockGroups(ctx, tx); err != nil {
+		return RawIdentity{}, locks, err
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return RawIdentity{}, err
+	if err = locks.lockSessions(ctx, tx); err != nil {
+		return RawIdentity{}, locks, err
 	}
 	resolved, err := resolveRawIdentity(ctx, tx, alias)
 	if err != nil {
-		return resolved, err
+		return resolved, locks, err
 	}
 	if resolved.State != RawIdentityUnique {
-		return resolved, &RawIdentityError{resolved}
+		return resolved, locks, &RawIdentityError{resolved}
 	}
 	if s.curationGuard != nil {
-		if err := s.curationGuard(ctx, tx, alias, resolved); err != nil {
-			return resolved, err
+		if err = s.curationGuard(ctx, tx, alias, resolved); err != nil {
+			return resolved, locks, err
 		}
 	}
-	return resolved, nil
+	return resolved, locks, nil
 }
 
 // SetCuration changes exactly one field on the current target. A base alias
@@ -84,7 +78,7 @@ func (s *RawProjectionStore) setCurationOnce(ctx context.Context, alias, field s
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	target, err := s.lockRawCurationTarget(ctx, tx, alias)
+	target, derivedLocks, err := s.lockRawCurationTarget(ctx, tx, alias)
 	if err != nil {
 		return err
 	}
@@ -104,18 +98,25 @@ func (s *RawProjectionStore) setCurationOnce(ctx context.Context, alias, field s
 	if err != nil {
 		return err
 	}
-	if err = s.publishRawCuration(ctx, tx, target.GroupID); err != nil {
+	if err = s.publishRawCuration(ctx, tx, target.GroupID, derivedLocks); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *RawProjectionStore) publishRawCuration(ctx context.Context, tx *sql.Tx, group string) error {
+func (s *RawProjectionStore) publishRawCuration(ctx context.Context, tx *sql.Tx, group string, derivedLocks rawDerivedLocks) error {
 	changes, err := s.materializeGroup(ctx, tx, group)
 	if err != nil {
 		return err
 	}
-	return publishRawRevision(ctx, tx, false, changes)
+	staged, err := s.prepareRawDerivedWrites(ctx, tx, derivedLocks)
+	if err != nil {
+		return err
+	}
+	if err = applyRawLegacyVisibility(ctx, tx, staged); err != nil {
+		return err
+	}
+	return publishRawRevision(ctx, tx, staged.IdentityChanged, changes)
 }
 
 type rawOverlays map[string]map[string]jsontext.Value

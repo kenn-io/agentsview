@@ -18,7 +18,10 @@ The latest release is
 - Hosted operators can record tenant, device and provider rollout scopes and
   inspect their physical session counts. Shadow sessions stay out of public
   reads, search, reports and trash, while their stored data remains available
-  for comparison and rollback. Parity-gated activation is not available yet.
+  for comparison and rollback. Activation keeps an audit and supports
+  returning to shadow with original legacy curation intact. The operator command
+  remains blocked until embedding-aware target configuration is integrated;
+  configured embeddings also require the coverage gate.
 
 - Hosted cutover comparisons resolve parent and subagent targets from each
   source's physical evidence. Missing, excluded or ambiguous targets no longer

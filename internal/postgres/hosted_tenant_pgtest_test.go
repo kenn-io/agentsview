@@ -25,7 +25,7 @@ type hostedFixture struct {
 	schema, role, tenant, dsn string
 }
 
-func newHostedFixture(t *testing.T, tenant string, beforeAdoption ...func(*sql.DB)) hostedFixture {
+func newHostedFixture(t testing.TB, tenant string, beforeAdoption ...func(*sql.DB)) hostedFixture {
 	t.Helper()
 	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
 	role := schema + "_runtime"
@@ -609,7 +609,7 @@ func TestHostedTenantTemporaryTableCannotShadowSessions(t *testing.T) {
 // setHostedFixturePassword supplies a fresh credential for SCRAM test servers.
 // Suppress statement/parameter logging only in this provisioning transaction;
 // the secret is bound as a parameter and never appears in a SQL literal here.
-func setHostedFixturePassword(t *testing.T, admin *sql.DB, role string) string {
+func setHostedFixturePassword(t testing.TB, admin *sql.DB, role string) string {
 	t.Helper()
 	var random [32]byte
 	_, err := cryptorand.Read(random[:])
