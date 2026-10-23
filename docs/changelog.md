@@ -31,6 +31,8 @@ The latest release is
   Use `--local` for local data and `doctor remote` to check the selected target.
   Remote credentials use bounded file reads and redirects stay on the same
   origin. Memory lifecycle hooks use this default only in hosted-reader mode.
+- PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
+  with bounded, resumable responses and optional zstd compression.
 
 - PostgreSQL vector pushes now record parser and automated-session scope
   compatibility. Changed document keys or content invalidate stale coverage from

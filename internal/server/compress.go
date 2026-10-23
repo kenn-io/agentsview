@@ -3,6 +3,7 @@ package server
 import (
 	"compress/gzip"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +11,15 @@ const gzipMinLength = 512
 
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/vectors/lookup" && acceptsHubZstd(strings.Join(r.Header.Values("Accept-Encoding"), ",")) {
+			w.Header().Add("Vary", "Accept-Encoding")
+			zw := &hubZstdWriter{ResponseWriter: w}
+			next.ServeHTTP(zw, r)
+			if zw.encoder != nil {
+				_ = zw.encoder.Close()
+			}
+			return
+		}
 		if !shouldGzip(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -221,4 +231,27 @@ func isStreamingPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+// A zero quality explicitly forbids an encoding, even when its name is present.
+func acceptsHubZstd(value string) bool {
+	for part := range strings.SplitSeq(value, ",") {
+		fields := strings.Split(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(fields[0]), "zstd") {
+			continue
+		}
+		q := 1.0
+		for _, param := range fields[1:] {
+			key, raw, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if ok && strings.EqualFold(key, "q") {
+				n, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+				if err != nil || !(n >= 0 && n <= 1) {
+					return false
+				}
+				q = n
+			}
+		}
+		return q > 0
+	}
+	return false
 }

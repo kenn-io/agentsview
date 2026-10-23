@@ -959,7 +959,7 @@ func archiveWriteRequest(r *http.Request) bool {
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"
-	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+	case "/api/v1/vectors/lookup", "/api/v1/settings", "/api/v1/recall/query", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
 		return false
 	}
 	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {

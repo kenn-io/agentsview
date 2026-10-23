@@ -832,8 +832,9 @@ SELECT COUNT(*) FROM vector_generation_machines
 	require.Len(t, src.hashScopes, 1)
 	assert.Nil(t, src.hashScopes[0],
 		"the promoted retry must read the whole generation, not only A")
-	assert.Equal(t, 1, vres.SessionsPushed,
-		"the promoted retry repairs B's deferred vector state")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the uncertified retry rewrites A and repairs B before trusting either aggregate hash")
+	assert.Zero(t, vres.SessionsUnchanged)
 	assert.Equal(t, 1, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_generation_machines
  WHERE generation_id = $1 AND machine = $2`, genID, witnessKey),
@@ -1485,14 +1486,9 @@ func TestVectorPushOrdinalShift(t *testing.T) {
 		countRows(t, pg, `SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`, "A"))
 }
 
-// TestVectorPushDocRemovedAndShared pins that a doc removed from a re-pushed
-// session disappears from vector_documents in the same push, cascading its
-// chunks out of every generation — including one that still embedded it.
-// Regression: preserving the shared row parked at a negative ordinal left the
-// older generation with chunks the read path could never hydrate (the
-// ordinal >= 0 tombstone guard), silently shrinking its results. Local kit
-// removal deletes a vanished doc's vectors from all generations, and PG must
-// match.
+// TestVectorPushDocRemovedAndShared checks that removing documents deletes their
+// shared rows and current-generation chunks without leaving parked tombstones.
+// Changing the document set first invalidates the other generation's coverage.
 func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
@@ -1519,6 +1515,7 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	genA, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-ga")
 	require.NoError(t, err)
 	require.True(t, ok)
+	assert.Equal(t, 2, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genA)))
 
 	// Gen B embeds all three docs for A.
 	fake.gen.Fingerprint = "fp-gb"
@@ -1530,6 +1527,8 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	}
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "push gen B")
+	assert.Zero(t, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genA)),
+		"the changed document set invalidates generation A before the shrink")
 	genB, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-gb")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1552,28 +1551,13 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_documents WHERE doc_key = $1`, "kDropShared"))
 	assert.Equal(t, 0, countRows(t, pg,
-		`SELECT COUNT(*) FROM `+vectorChunkTable(genA)+` WHERE doc_key = $1`,
-		"kDropShared"), "gen A chunks for kDropShared cascade-deleted")
-	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM `+vectorChunkTable(genB)+` WHERE doc_key = $1`,
 		"kDropShared"), "gen B chunks for kDropShared cleared")
-	// No parked tombstones survive the push, and every remaining gen A chunk
-	// hydrates: the older generation must not retain chunks pointing at rows
-	// the read path's ordinal >= 0 guard hides.
+	// No parked tombstones survive the push.
 	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_documents WHERE ordinal < 0`))
-	assert.Equal(t, 0, countRows(t, pg, `
-		SELECT COUNT(*) FROM `+vectorChunkTable(genA)+` c
-		LEFT JOIN vector_documents d
-		  ON d.doc_key = c.doc_key AND d.ordinal >= 0
-		WHERE d.doc_key IS NULL`),
-		"gen A has no chunks that cannot hydrate")
-	// The shared row remains live for gen B. Gen A lost session coverage when
-	// the corpus changed, so it must re-push before serving any of its chunks.
+	// The still-present shared row remains live for the current generation.
 	assert.Equal(t, 0, docOrdinal(t, pg, "kShared"))
-	assert.Equal(t, 0, countRows(t, pg,
-		`SELECT COUNT(*) FROM `+vectorChunkTable(genA)+` WHERE doc_key = $1`,
-		"kShared"), "gen A's invalidated chunks are removed")
 	assert.Equal(t, 1, countRows(t, pg,
 		`SELECT COUNT(*) FROM `+vectorChunkTable(genB)+` WHERE doc_key = $1`,
 		"kShared"), "gen B retains current chunks for the still-present doc")

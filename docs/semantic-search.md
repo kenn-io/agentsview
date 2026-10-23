@@ -884,7 +884,7 @@ but hub discovery remains unavailable until a full refresh establishes both.
 Run `agentsview embeddings build --backstop` to reconcile the full mirror without
 forcing unchanged documents to be embedded again.
 New or changed publishers stay unverified until a complete push
-succeeds. Interrupted scope changes also remain unknown, and a completed push
+succeeds. First certification rewrites coverage even when old aggregate hashes or interrupted full-push checkpoints match. Interrupted scope changes also remain unknown, and a completed push
 retires the same publisher's old machine names. Updating a session invalidates
 coverage in other generations when document keys or content differ and removes
 those generations' session chunks in the same transaction. Those generations must
@@ -902,6 +902,42 @@ creation time when the serving process starts. If that generation is removed or
 recreated, or its chunk table disappears, discovery reports unavailable and
 lookup reports `generation_changed`. Restart the serving process to select the
 replacement generation.
+
+### Reading vectors from a hub
+
+On newer `main`, `pg serve` exposes its selected generation at
+`GET /api/v1/vectors/generation`. It includes the model, dimension, recipe,
+parser data version and automated-session scope. Older pushes or publishers
+with conflicting compatibility metadata report `unavailable`; run
+`agentsview pg push --full` to publish current metadata. Legacy plain-machine
+metadata covers all projects. A filtered push keeps that metadata unavailable
+until an unfiltered full push reconciles the publisher's entire corpus. Recorded
+machine aliases let that full push retire metadata from earlier machine names.
+That reconciliation also replaces the same archive's older filtered witnesses
+in this PostgreSQL schema, preserving other archives' compatibility records.
+SQLite servers do not serve these endpoints.
+
+`POST /api/v1/vectors/lookup` accepts that fingerprint and up to 256 structured
+document identities with content hashes. Matches require the selected
+generation's chunks and a completed session push. Each stored chunk must also
+carry its original source hash, matching the request and the shared document.
+Chunk tables that predate this proof report the generation unavailable until a
+writer adds the column. Legacy chunks without proof are then returned as absent
+until their owner republishes them; another publisher cannot certify that
+coverage. A document with any unproven chunk is absent as a whole.
+
+Every lookup page rechecks publisher compatibility in the same read snapshot
+as its chunks. Unavailable
+compatibility returns `generation_changed`, even without prior discovery.
+Responses use `vectors.v1`:
+request indices, chunk indices and counts, and base64 little-endian float32
+vectors rounded to PostgreSQL's half precision. Non-finite values are rejected.
+
+Clients can request zstd with `Accept-Encoding: zstd`. Each decoded response
+stays below 32 MiB. Continue with `next_cursor` and the same fingerprint and
+identities, assembling complete chunk sets before installation. A different
+selected fingerprint returns `409 generation_changed`. Existing bearer and
+machine-signing authentication apply; lookups remain reads during a rebuild.
 
 ### Serving semantic search
 
