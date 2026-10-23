@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-09
+last_edited: 2026-10-22
 ---
 
 # agentsview
@@ -8,13 +8,20 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.45.0**. Check the
+The latest release is **v0.46.0**. Check the
 [changelog](https://agentsview.io/docs/changelog/) for what it includes.
 
-Version 0.45.0 adds Spanish, Junie/OMO/StepCode sessions, message-frequency
-charts, and conversation-memory plugins for Claude Code and Codex. Review tool
-errors and recovery in the transcript, approve extracted Recall entries, and
-compare prompt volume including cache reads and writes.
+Version 0.46.0 adds
+[Claude.ai Sync through Chrome](https://agentsview.io/docs/chat-import/#sync-claudeai-chats),
+opt-in
+[Codex cloud chats](https://agentsview.io/docs/configuration/#codex-cloud), and
+Muse Code and fx sessions. Preserve a retired machine's history with
+[local archives](https://agentsview.io/docs/commands/#agentsview-archive), or
+sync a remote machine over
+[SSH](https://agentsview.io/docs/remote-access/#ssh-remote-sync) without
+installing a daemon. Find work by label or linked pull request, narrow cost
+charts by project, and inspect tool effectiveness with transcript evidence.
+Connected assistants gain eight read-only MCP tools for the same archive.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">

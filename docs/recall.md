@@ -48,18 +48,6 @@ The top-level **Recall** page has two tabs:
 Open Recall from the header or navigate directly to `/recall`. Generated-report
 links use `/recall?tab=generated&insight=<id>`.
 
-From a session's actions menu, **Analyze tool effectiveness** generates a report
-on that one session: which tool calls helped and which wasted turns. Each
-conclusion names the calls it cites, and clicking one shows those calls with a
-link to their message. The session's observed tool sequences and a note on
-anything cut from the model's input follow the conclusions.
-
-The report sends each tool call's input and result to the insight agent, up to
-256 KiB of that text per run, so it costs more tokens than Agent Analysis and
-sends whatever the commands printed, secrets included. When a reply cites a
-message or call the model was never shown, the server asks once more and saves
-nothing if that reply fails too.
-
 ![Recall corpus browser](/docs/assets/generated/screenshots/recall-corpus.png)
 
 ![Generated insights](/docs/assets/generated/screenshots/recall-generated-insights.png)
@@ -98,6 +86,30 @@ report under the same endpoint and model.
 
 Generated insights can also be listed, fetched, and generated from the CLI with
 `agentsview insight`; see the [CLI reference](/docs/commands/).
+
+### Tool effectiveness reports
+
+From a session's actions menu, **Analyze tool effectiveness** generates a report
+on that one session: which tool calls helped and which wasted turns. Conclusions
+are marked **Helped**, **Did not help**, or **Unclear**. Each conclusion names
+the calls it cites, and clicking one shows those calls with a link to their
+message. The session's observed tool sequences and a note on anything cut from
+the model's input follow the conclusions.
+
+The report sends each tool call's input and result to the insight agent, up to
+256 KiB of that text per run, so it costs more tokens than Agent Analysis and
+sends whatever the commands printed, secrets included. When a reply cites a
+message or call the model was never shown, the server asks once more and saves
+nothing if that reply fails too.
+
+![Analyze tool effectiveness in the session actions menu](/docs/assets/generated/screenshots/tool-effectiveness-action.png)
+
+![Tool effectiveness assessment with cited calls](/docs/assets/generated/screenshots/tool-effectiveness-report.png)
+
+Saved reports live under **Recall > Generated insights** and have shareable
+local links. If the transcript changes after generation, the report warns that
+its observed facts may differ from what the model assessed. For rates across
+projects and dates, use [Tool Usage](/docs/usage/#tool-usage).
 
 ### Configuring agent binaries
 

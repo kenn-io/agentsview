@@ -239,6 +239,11 @@ the results through their normal pushes.
 
 ![Tool usage](/docs/assets/generated/screenshots/tool-usage.png)
 
+![Sessions and calls behind a selected tool rate](/docs/assets/generated/screenshots/tool-rate-evidence.png)
+
+For a model's assessment of one session, use
+[Analyze tool effectiveness](/docs/recall/#tool-effectiveness-reports).
+
 ### Top Skills
 
 The Top Skills panel ranks skill-backed tool calls by call count, session count,
@@ -518,6 +523,13 @@ filter categories that can be combined:
 
 ![Session filter dropdown](/docs/assets/generated/screenshots/session-filters.png)
 
+![Label and pull request filters](/docs/assets/generated/screenshots/session-label-filters.png)
+
+Label and pull-request filters can find child and automated sessions. The
+sidebar shows the containing tree; an explicit single-turn exclusion still
+applies. Use [launcher links](/docs/session-api/#agentsview-session-parent) to
+attach independently launched workers to their manager and roll up their costs.
+
 - **Starred** — toggle to show only starred sessions
 - **Recently Active** — toggle to show only sessions updated within the last 24
   hours
@@ -532,6 +544,11 @@ filter categories that can be combined:
   **Unclean**), tinted to match the indicator colors. The underlying
   `?termination=` URL parameter and API also accept the parser-side values
   `clean` and `awaiting_user`, but those aren't exposed as sidebar pills.
+- **Labels** — enter an exact label such as `ticket=example` and press Enter.
+  Add several labels to require all of them. Create labels through the
+  [CLI or API](/docs/session-api/#agentsview-session-label).
+- **Pull request** — enter `owner/repo#123` and press Enter to find sessions
+  linked to that pull request by Claude Code.
 - **Min Prompts** — filter to sessions with at least 2, 3, 5, or 10 user
   messages
 - **Include single-turn** — toggle to include sessions with one or fewer user

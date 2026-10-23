@@ -339,6 +339,20 @@ test.describe('Dashboard', () => {
     await snapEl(panel, 'top-skills');
   });
 
+  test('tool rate evidence', async ({ page }) => {
+    await page.setViewportSize({ width: FULL.width, height: 1800 });
+    const panel = page.locator('.chart-panel:has(.tool-container)');
+    const rate = panel.getByRole('button', { name: /(?:Empty|Repeat|Recovery) rate:/ }).first();
+    await rate.scrollIntoViewIfNeeded();
+    await rate.click();
+    const evidence = panel.locator('.evidence-row');
+    await expect(evidence.first()).toBeVisible();
+    const lastExample = evidence.nth(Math.min(2, await evidence.count() - 1));
+    await panel.scrollIntoViewIfNeeded();
+    await page.mouse.move(0, 0);
+    await snapRange(page, panel, lastExample, 'tool-rate-evidence');
+  });
+
   test('skill usage over time', async ({ page }) => {
     const panel = page.locator('.chart-panel:has(.trend-container)');
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -859,6 +873,17 @@ test.describe('Session browser', () => {
     }
   });
 
+  test('label and pull request filters', async ({ page }) => {
+    await page.locator('button.filter-btn').click();
+    const label = page.getByRole('textbox', { name: 'Filter by label', exact: true });
+    const pullRequest = page.getByRole('textbox', { name: 'Filter by pull request', exact: true });
+    await label.fill('ticket=example');
+    await pullRequest.fill('kenn-io/agentsview#2124');
+    await pullRequest.scrollIntoViewIfNeeded();
+    await expect(label).toBeVisible();
+    await snap(page, 'session-label-filters');
+  });
+
   test('starred session', async ({ page }) => {
     // Star the first session using 's' key
     await selectFirstSession(page);
@@ -1155,6 +1180,7 @@ test.describe('Message viewer', () => {
   });
 
   test('tool call groups', async ({ page }) => {
+    await page.setViewportSize({ width: FULL.width, height: 1800 });
     await selectRichSession(page);
 
     const group = page.locator('.tool-group').first();
@@ -1357,7 +1383,7 @@ test.describe('Command palette', () => {
     );
     await expect(setup).toContainText('[vector]');
     await expect(setup).toContainText('agentsview embeddings build');
-    await snapEl(setup, 'semantic-search-setup');
+    await snapEl(palette.locator('.palette'), 'semantic-search-setup');
   });
 
   test('project and date search filters', async ({ page }) => {
@@ -1492,6 +1518,83 @@ test.describe('Recall and Quality', () => {
     await page.waitForTimeout(300);
 
     await snapEl(breadcrumb, 'session-insight-action');
+  });
+
+  test('tool effectiveness action and report', async ({ page }) => {
+    const response = await page.request.get('/api/v1/sessions?limit=100');
+    expect(response.ok()).toBeTruthy();
+    const sessions: { id: string; project: string; agent: string }[] =
+      (await response.json()).sessions;
+    for (const session of sessions.filter((entry) => entry.project === 'agentsview')) {
+      const response = await page.request.get(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/tool-sequences`
+      );
+      if (!response.ok()) continue;
+      const facts = await response.json();
+      const sequence = facts.sequences.find(
+        (entry: { ending: string; calls: unknown[] }) =>
+          entry.ending === 'recovered' && entry.calls.length >= 2
+      );
+      if (!sequence) continue;
+      const first = sequence.calls[0];
+      const last = sequence.calls[sequence.calls.length - 1];
+      // Illustrative saved assessment over real, privacy-filtered calls.
+      // Capturing documentation must never invoke an insight model.
+      const report = {
+        id: 460,
+        type: 'tool_effectiveness',
+        date_from: '2026-10-22', date_to: '2026-10-22',
+        project: session.project, agent: session.agent,
+        model: 'claude-sonnet-4-6', prompt: null,
+        content: 'Tool effectiveness assessment',
+        schema_version: 'tool_effectiveness.v1',
+        created_at: '2026-10-22T12:00:00Z',
+        structured_json: JSON.stringify({
+          session_id: session.id,
+          transcript_revision: facts.transcript_revision,
+          call_count: facts.total_tool_calls,
+          conclusions: [
+            {
+              assessment: 'did_not_help',
+              text: 'The first call did not return useful content. Its result explains why another attempt was needed.',
+              ordinals: [first.ordinal],
+              calls: [{ ordinal: first.ordinal, call_index: first.call_index }],
+            },
+            {
+              assessment: 'helped',
+              text: 'A later call returned content and ended this recovery sequence. Follow the citation to inspect the result.',
+              ordinals: [last.ordinal],
+              calls: [{ ordinal: last.ordinal, call_index: last.call_index }],
+            },
+          ],
+          omissions: [],
+          cited_calls: [first, last].map((call) => ({
+            ...call,
+            result_bytes: call.result_bytes ?? undefined,
+            message_calls: sequence.calls.filter(
+              (other: { ordinal: number }) => other.ordinal === call.ordinal
+            ).length,
+          })),
+        }),
+      };
+      await page.goto(`/sessions/${encodeURIComponent(session.id)}`);
+      await expect(page.locator('.message').first()).toBeVisible();
+      await page.getByRole('button', { name: 'Session actions', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Analyze tool effectiveness', exact: true })).toBeVisible();
+      await snap(page, 'tool-effectiveness-action');
+      await page.route('**/api/v1/insights', (route) =>
+        route.fulfill({ json: { insights: [report] } })
+      );
+      await page.goto('/recall?tab=generated&insight=460');
+      const detail = page.locator('.generated-detail');
+      await expect(detail.getByRole('heading', { name: 'Model assessment' })).toBeVisible();
+      await expect(detail.locator('.tool-sequences-panel')).toBeVisible();
+      await detail.locator('.conclusion').last().locator('.citation').click();
+      await expect(detail.locator('.conclusion.open .call')).toBeVisible();
+      await snap(page, 'tool-effectiveness-report');
+      return;
+    }
+    throw new Error('fixture needs a recovered tool sequence for the report');
   });
 });
 
@@ -2168,6 +2271,17 @@ test.describe('Import conversations', () => {
 
     await page.keyboard.press('Escape');
   });
+
+  test('claude chrome sync connected', async ({ page }) => {
+    await page.route('**/api/v1/import/claude-ai/chrome', (route) =>
+      route.fulfill({ json: { connected: true } })
+    );
+    await page.getByTitle('Import conversations', { exact: true }).click();
+    const modal = page.getByRole('dialog');
+    await expect(modal.getByText('Connected', { exact: true })).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Sync', exact: true })).toBeEnabled();
+    await snapEl(modal, 'import-claude-sync');
+  });
 });
 
 // ── Session Vital Signs ─────────────────────────────────
@@ -2399,7 +2513,9 @@ test.describe('Dashboard session health', () => {
 
 test.describe('Usage dashboard', () => {
   async function navigateToUsage(page: Page) {
-    await page.goto('/usage');
+    // The newest session can be a prompt without usage. Include the corpus's
+    // earlier sessions so the cost charts have recorded tokens to show.
+    await page.goto('/usage?window_days=90');
     await page.waitForSelector('.usage-page', { timeout: 10_000 });
     // Wait for summary + charts to finish loading
     await expect(
@@ -2458,6 +2574,17 @@ test.describe('Usage dashboard', () => {
     await page.waitForTimeout(500);
     // Treemap is the default view
     await snapEl(panel, 'usage-attribution');
+  });
+
+  test('selected cost attribution', async ({ page }) => {
+    const panel = page.locator('.attribution-panel');
+    const tile = panel.locator('.tile').first();
+    await expect(tile).toBeVisible();
+    await tile.click();
+    await expect(tile).toHaveAttribute('aria-pressed', 'true');
+    await expect(panel.getByRole('button', { name: 'Clear selection', exact: true })).toBeVisible();
+    await expect(page.locator('.usage-content')).toHaveAttribute('aria-busy', 'false');
+    await snapEl(panel, 'usage-attribution-selected');
   });
 
   test('top sessions by cost', async ({ page }) => {

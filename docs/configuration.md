@@ -383,8 +383,7 @@ interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
 An SSH entry needs no daemon and no install on the remote host. It runs your
-`ssh` client. The SSH transport is newer than the latest release and is
-available on `main`:
+`ssh` client. SSH transport is available in 0.46.0 and later:
 
 ```toml
 [[remote_hosts]]

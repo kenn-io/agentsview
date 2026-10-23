@@ -12,6 +12,12 @@ generate=true
 
 expected_assets=(
   "screenshots/about-dialog.png"
+  "screenshots/import-claude-sync.png"
+  "screenshots/session-label-filters.png"
+  "screenshots/tool-rate-evidence.png"
+  "screenshots/tool-effectiveness-action.png"
+  "screenshots/tool-effectiveness-report.png"
+  "screenshots/usage-attribution-selected.png"
   "screenshots/activity-message-frequency.png"
   "screenshots/analytics-message-roles.png"
   "screenshots/cost-chart-bars.png"

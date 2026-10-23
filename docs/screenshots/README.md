@@ -89,20 +89,26 @@ bash docs/screenshots/update-generated-assets-branch.sh --skip-generate
 1. Build the current frontend and Go binary, then assemble a runner image with
    Chromium, Playwright, PostgreSQL, and the filtered database.
 1. Start isolated SQLite and PostgreSQL servers inside the container. The
-   PostgreSQL fixture shows sessions from two example machines.
+   PostgreSQL fixture shows sessions from two example machines. The runner
+   disables Claude and Codex discovery so upgrades preserve their archived
+   sessions without the original files. It rejects a pending archive rebuild
+   before taking screenshots.
 1. Capture the UI and write PNG files to `docs/assets/generated/screenshots/`.
 
-The capture uses a 1440×900 viewport at scale 1, dark mode, English, and the
-`America/Chicago` timezone. One worker runs the captures in order. The browser's
-date is fixed to noon UTC on the day after the corpus's newest session, so
-relative dates and default report windows stay stable when the corpus is reused.
-Transcript timestamps remain unchanged. Its frontend build enables
-`VITE_PROJECT_MAPPING_WORKSPACE=true` to show the opt-in project mapping
+Most captures use a 1440×900 viewport at scale 1, dark mode, English, and the
+`America/Chicago` timezone. Tall tool details use a larger viewport to avoid
+clipping inside the scroll area. One worker runs the captures in order. The
+browser's date is fixed to noon UTC on the day after the corpus's newest
+session, so relative dates and default report windows stay stable when the
+corpus is reused. Transcript timestamps remain unchanged. Its frontend build
+enables `VITE_PROJECT_MAPPING_WORKSPACE=true` to show the opt-in project mapping
 workspace. Some captures use fixed response fixtures to illustrate states such
 as image-cleanup totals, token usage, Recall review, and Git/pull-request
-totals. The Outcomes capture intercepts GitHub requests; it does not call GitHub
-or require credentials. Captures hide session IDs because imported IDs can
-contain original machine names. See `playwright.config.ts` and
+totals, the Chrome connection state, and a saved tool-effectiveness assessment
+with citations to real corpus calls. No capture starts cloud sync or invokes an
+insight model. The Outcomes capture intercepts GitHub requests; it does not call
+GitHub or require credentials. Captures hide session IDs because imported IDs
+can contain original machine names. See `playwright.config.ts` and
 `tests/screenshots.spec.ts` for the exact setup.
 
 ## How can colleagues repeat a capture?

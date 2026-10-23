@@ -49,6 +49,10 @@ cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
 
+gptme messages use provider-reported billed costs when available, including a
+reported zero. Messages with estimated costs still use catalog pricing.
+Provider-routing suffixes in model names do not prevent a catalog match.
+
 fx stopped writing `usage-v2.json` in
 [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226).
 AgentsView reads it when an older session has one, as cumulative totals per
@@ -205,6 +209,8 @@ The **Projects** picker excludes a project. Usage-only and discarded-evidence
 archives omit titles and show job IDs, as do archives without `state.db` titles.
 Archived Hermes and Augure Desktop cron runs whose sources were gone before
 upgrading stay individual sessions unless they already have a stored job ID.
+
+![A selected project in the cost breakdown](/docs/assets/generated/screenshots/usage-attribution-selected.png)
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,

@@ -49,6 +49,10 @@ echo "PostgreSQL ready."
 echo "Pushing test data to PostgreSQL..."
 
 cat > "$DATA_DIR/config.toml" <<TOML
+# The curated corpus contains archived Claude and Codex sessions, without
+# their original source files. Preserve those providers during upgrades.
+disabled_agents = ["claude", "codex"]
+
 [pg]
 url = "$PG_URL"
 machine_name = "dev-laptop"
@@ -133,9 +137,17 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# A pending rebuild changes the visible UI and may reject capture actions.
+# Do not publish screenshots from an archive whose upgrade did not finish.
+if curl -sf -D - "http://127.0.0.1:$PORT/api/v1/stats" -o /dev/null \
+  | grep -qi '^X-Agentsview-Archive-Stale: true'; then
+  echo "Error: the screenshot archive still needs a rebuild"
+  kill "$SERVER_PID" "$PG_SERVER_PID" 2>/dev/null || true
+  exit 1
+fi
+
 # ── Warm usage through the fixture server ────────────────
-# The filtered archive has no source files to reparse. Offline direct reads
-# reject its pending parser resync; use the running server as the UI does.
+# Read through the fixture server after its archive upgrade finishes.
 echo "Warming usage reports..."
 # Read the fixture without starting another background daemon.
 AGENTSVIEW_NO_DAEMON=1 \
