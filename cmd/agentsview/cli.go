@@ -714,7 +714,7 @@ func newActivityReportCommand() *cobra.Command {
 func newPGCommand() *cobra.Command {
 	return newReplicaCommand(
 		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
-		newPGHostedProvisionCommand(), newPGRawReparseCommand(),
+		newPGHostedProvisionCommand(), newPGRawReparseCommand(), newPGRawParityCommand(),
 	)
 }
 

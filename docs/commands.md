@@ -1471,6 +1471,24 @@ agentsview replica pg status [target] [flags]
 
 ______________________________________________________________________
 
+### `agentsview replica pg raw-parity` (unreleased)
+
+Compare hosted raw projections with retained pushed sessions in one read-only
+snapshot, including trashed rows. Requires the selected target's restricted
+runtime connection and `raw_tenant`; owner connections are refused.
+
+```bash
+agentsview replica pg raw-parity [target] [--device ID] [--provider P] [--json]
+```
+
+Without `--json`, prints one summary line. With `--json`, stdout contains the
+complete report and stderr contains the summary. Exit status is 0 even when
+`pass` is false. Use `pass` in scripts. See
+[Compare before cutover](/docs/hosted-raw-sync/#compare-before-cutover-unreleased)
+for matching, classes, scope counts and the readiness gate.
+
+______________________________________________________________________
+
 <a id="agentsview-pg-serve"></a>
 
 ### `agentsview replica pg serve`
