@@ -165,6 +165,30 @@ func TestMessagesMapsSourceChangedConflict(t *testing.T) {
 	assert.NotContains(t, err.Error(), "secret")
 }
 
+func TestRemotePolicyWatchPreservesHTTPFailures(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusNotImplemented, http.StatusConflict, http.StatusServiceUnavailable} {
+		for _, body := range []string{"", "private token=secret", `{"detail":"private token=secret"}`} {
+			t.Run(fmt.Sprintf("%d/%q", status, body), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(body))
+				}))
+				t.Cleanup(srv.Close)
+				backend := NewHTTPBackendWithClient(srv.URL+"/private/path", "url-secret", false, "", srv.Client())
+				events, err := backend.Watch(t.Context(), "session-a")
+				require.Nil(t, events)
+				want := fmt.Sprintf("watch: HTTP %d", status)
+				if status == http.StatusNotFound {
+					want = "watch: session not found: session-a"
+				}
+				require.EqualError(t, err, want)
+				assert.NotContains(t, err.Error(), "private")
+				assert.NotContains(t, err.Error(), "secret")
+			})
+		}
+	}
+}
+
 func TestRemotePolicy503RecallPreservesSemanticTransient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

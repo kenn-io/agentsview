@@ -810,8 +810,8 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	assert.Equal(t, 1, vres.SessionsPushed)
 	assert.Equal(t, 0, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_generation_machines
- WHERE generation_id = $1 AND machine = $2`, genID, witnessKey),
-		"deferred generation-wide work must not witness the generation")
+ WHERE generation_id = $1 AND machine = $2 AND data_version IS NOT NULL`, genID, witnessKey),
+		"deferred generation-wide work must not certify the generation")
 
 	src.genScopes = nil
 	src.hashScopes = nil
@@ -1560,11 +1560,15 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 		  ON d.doc_key = c.doc_key AND d.ordinal >= 0
 		WHERE d.doc_key IS NULL`),
 		"gen A has no chunks that cannot hydrate")
-	// kShared stays live at its positive ordinal in both generations.
+	// The shared row remains live for gen B. Gen A lost session coverage when
+	// the corpus changed, so it must re-push before serving any of its chunks.
 	assert.Equal(t, 0, docOrdinal(t, pg, "kShared"))
-	assert.Equal(t, 1, countRows(t, pg,
+	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM `+vectorChunkTable(genA)+` WHERE doc_key = $1`,
-		"kShared"), "gen A keeps its chunks for the still-present doc")
+		"kShared"), "gen A's invalidated chunks are removed")
+	assert.Equal(t, 1, countRows(t, pg,
+		`SELECT COUNT(*) FROM `+vectorChunkTable(genB)+` WHERE doc_key = $1`,
+		"kShared"), "gen B retains current chunks for the still-present doc")
 }
 
 // TestVectorPushConflictSkipped pins finding 3: a session whose PG owner marker

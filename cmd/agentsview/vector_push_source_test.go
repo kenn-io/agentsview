@@ -378,3 +378,17 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		assert.Nil(t, got.Params)
 	})
 }
+
+func TestVectorPushMetadataUsesStoredScope(t *testing.T) {
+	cfg := enabledVectorConfig(t)
+	buildTestVectorsDB(t, cfg)
+	cfg.Vector.IncludeAutomated = true
+	source := newVectorPushSource(cfg)
+	closePushSource(t, source)
+	export, ok, err := source.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer export.Close()
+	require.NotNil(t, export.Generation().IncludeAutomated)
+	assert.False(t, *export.Generation().IncludeAutomated, "configured next-build scope must not describe the stored vectors")
+}

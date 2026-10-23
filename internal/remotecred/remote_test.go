@@ -74,7 +74,20 @@ func TestURLPolicy(t *testing.T) {
 		url          string
 		insecure, ok bool
 	}{
-		{"https://hub.example/path?secret=value", false, true}, {"http://hub.example", false, false}, {"http://hub.example", true, true}, {"http://127.0.0.1", false, true}, {"http://[::1]", false, true}, {"http://localhost", false, true}, {"https://user:password@hub.example", false, false}, {"ftp://hub.example", true, false}, {"https:///path", false, false},
+		{"https://hub.example/path", false, true},
+		{"http://hub.example", false, false},
+		{"http://hub.example", true, true},
+		{"http://127.0.0.1", false, true},
+		{"http://[::1]", false, true},
+		{"http://localhost", false, true},
+		{"https://user:password@hub.example", false, false},
+		{"ftp://hub.example", true, false},
+		{"https:///path", false, false},
+		{"https://hub.example/path?secret=value", false, false},
+		{"https://hub.example/path?", false, false},
+		{"https://hub.example/path#fragment", false, false},
+		{"https://hub.example/path#", false, false},
+		{"https://hub.example/path%23part", false, true},
 	} {
 		_, err := Client(tc.url, tc.insecure)
 		require.Equal(t, tc.ok, err == nil, tc.url)
@@ -99,7 +112,7 @@ func TestURLPolicy(t *testing.T) {
 }
 
 func TestRedirectPolicy(t *testing.T) {
-	client, err := Client("https://HUB.example/private?secret=value", false)
+	client, err := Client("https://HUB.example/private", false)
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name, url string
@@ -138,14 +151,14 @@ func TestResponsePolicyPreservesTypedFailures(t *testing.T) {
 		{400, `{"error":"private secret"}`, "", false},
 		{401, `{"error":"private secret"}`, "", false},
 		{403, `{"error":"private secret"}`, "", false},
-		{404, `{"error":"private secret"}`, "remote https://hub.example endpoint unavailable; try --local", true},
+		{404, `{"error":"private secret"}`, `{"error":"remote endpoint unavailable; try --local"}`, true},
 		{409, `{"code":"source_changed","detail":"private secret"}`, `{"code":"source_changed"}`, true},
 		{409, `{"detail":"source_changed: private secret"}`, `{"code":"source_changed"}`, true},
-		{409, `{"code":"untrusted","detail":"private secret"}`, "remote request failed", true},
+		{409, `{"code":"untrusted","detail":"private secret"}`, `{"error":"remote request failed"}`, true},
 		{500, `{"error":"private secret"}`, "", false},
-		{501, `{"error":"private secret"}`, "remote request failed", true},
+		{501, `{"error":"private secret"}`, `{"error":"remote request failed"}`, true},
 		{501, `{"error":"not available in remote mode","detail":"private secret"}`, `{"error":"not available in remote mode"}`, true},
-		{503, `{"detail":"private secret"}`, "remote request failed", true},
+		{503, `{"detail":"private secret"}`, `{"error":"remote request failed"}`, true},
 		{599, `{"detail":"private secret"}`, "", false},
 	} {
 		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.body), func(t *testing.T) {

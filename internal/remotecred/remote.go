@@ -43,8 +43,8 @@ func Redact(raw string) string {
 // Client permits only secure URLs and same-origin redirects.
 func Client(raw string, insecure bool) (*http.Client, error) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return nil, errors.New("remote URL requires http(s), a host, and no userinfo; try --local")
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, errors.New("remote URL requires http(s), a host, and no userinfo, query, or fragment; try --local")
 	}
 	ip := net.ParseIP(u.Hostname())
 	if u.Scheme == "http" && !insecure && !strings.EqualFold(u.Hostname(), "localhost") && (ip == nil || !ip.IsLoopback()) {
@@ -86,7 +86,7 @@ func ResponsePolicy(raw string) func(*http.Response, error) (*http.Response, err
 			switch resp.StatusCode {
 			case http.StatusNotFound:
 				closeBody(resp.Body)
-				resp.Body = io.NopCloser(strings.NewReader("remote " + safe + " endpoint unavailable; try --local"))
+				resp.Body = io.NopCloser(strings.NewReader(`{"error":"remote endpoint unavailable; try --local"}`))
 			case http.StatusNotImplemented, http.StatusConflict, http.StatusServiceUnavailable:
 				resp.Body = io.NopCloser(strings.NewReader(sanitizedFailureBody(resp.StatusCode, resp.Body)))
 			default:
@@ -121,7 +121,7 @@ func sanitizedFailureBody(status int, body io.ReadCloser) string {
 			}
 		}
 	}
-	return "remote request failed"
+	return `{"error":"remote request failed"}`
 }
 
 func closeBody(body io.ReadCloser) {

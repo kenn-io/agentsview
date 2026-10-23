@@ -873,6 +873,23 @@ push_vectors = false
 embeddings automatically. A machine without `[vector]` enabled has no generation
 to push and skips the phase regardless.
 
+On newer `main`, vector pushes also publish the parser data version and the
+stored automated-session scope per generation and pushing machine. A legacy
+mirror without a stored scope publishes it as unknown until embeddings are
+rebuilt. New or changed publishers stay unverified until a complete push
+succeeds. Interrupted scope changes also remain unknown, and a completed push
+retires the same publisher's old machine names. Updating a session invalidates
+coverage in other generations when their document set differs and removes those
+generations' session chunks in the same transaction. Those generations must
+re-push the session before serving it again. An unchanged set remains covered in
+both.
+
+The hub backend pins the selected generation's fingerprint, dimension and
+creation time when the serving process starts. If that generation is removed or
+recreated, or its chunk table disappears, discovery reports unavailable and
+lookup reports `generation_changed`. Restart the serving process to select the
+replacement generation.
+
 ### Serving semantic search
 
 `pg serve` — and every `--pg` direct-read command — wires PG-backed semantic
