@@ -5,6 +5,7 @@ package postgres
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"slices"
 	"testing"
@@ -28,9 +29,9 @@ type projectionFixture struct {
 	objects rawsync.ObjectStore
 }
 
-func newProjectionFixture(t *testing.T) projectionFixture {
+func newProjectionFixture(t *testing.T, beforeAdoption ...func(*sql.DB)) projectionFixture {
 	t.Helper()
-	f := newHostedFixture(t, "tenant-projection")
+	f := newHostedFixture(t, "tenant-projection", beforeAdoption...)
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repo.Close()) })
