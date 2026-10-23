@@ -28,6 +28,7 @@ var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"starred_sessions", "SELECT,INSERT,DELETE"},
 	{"pinned_messages", "SELECT,INSERT,UPDATE,DELETE"},
 	{"raw_source_projections", "SELECT,INSERT,UPDATE"},
+	{"raw_job_outcome_buckets", "SELECT,INSERT,UPDATE,DELETE"},
 	{"raw_projection_generations", "SELECT,INSERT"},
 	{"raw_session_groups", "SELECT,INSERT,UPDATE"},
 	{"raw_content_revisions", "SELECT,INSERT,UPDATE"},

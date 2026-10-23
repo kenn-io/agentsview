@@ -327,7 +327,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if parsed.Tombstone {
 		diagnostics = "tombstone"
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE raw_source_projections SET last_attempt_manifest_id=$2,successful_manifest_id=CASE WHEN $5 THEN $2 ELSE successful_manifest_id END,membership_complete=$3,diagnostics=$4 WHERE source_id=$1`, source, m.ManifestID, complete, diagnostics, complete || len(candidates) > 0)
+	_, err = tx.ExecContext(ctx, `UPDATE raw_source_projections SET last_attempt_manifest_id=$2,successful_manifest_id=CASE WHEN $5 THEN $2 ELSE successful_manifest_id END,successful_processing_version=CASE WHEN $5 THEN $6 ELSE successful_processing_version END,successful_projection_generation=CASE WHEN $5 THEN $7 ELSE successful_projection_generation END,membership_complete=$3,diagnostics=$4 WHERE source_id=$1`, source, m.ManifestID, complete, diagnostics, complete || len(candidates) > 0, lease.ProcessingVersion, lease.ProjectionGeneration)
 	if err != nil {
 		return err
 	}

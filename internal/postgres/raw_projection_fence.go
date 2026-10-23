@@ -55,7 +55,7 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if err := CheckSchemaCompat(ctx, database); err != nil {
 		return nil, fmt.Errorf("hosted schema requires owner provisioning: %w", err)
 	}
-	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,j.lease_epoch,j.failed_at,c.recency_state FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c LIMIT 0`)
+	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,j.lease_epoch,j.failed_at,c.recency_state,p.selected_at,p.successful_processing_version,p.successful_projection_generation,b.count FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c CROSS JOIN raw_source_projections p CROSS JOIN raw_job_outcome_buckets b LIMIT 0`)
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
 	}
@@ -129,8 +129,8 @@ func selectRawSourceGenerationTx(ctx context.Context, tx *sql.Tx, m rawsync.Cano
 			return 0, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
- ON CONFLICT(source_id) DO UPDATE SET selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, jobID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id,selected_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp())
+ ON CONFLICT(source_id) DO UPDATE SET selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id,selected_at=EXCLUDED.selected_at`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, jobID)
 	if err != nil {
 		return 0, err
 	}

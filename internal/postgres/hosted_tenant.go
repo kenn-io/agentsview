@@ -68,7 +68,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installHostedFrictionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
+		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL+rawJobOutcomeDDL); err != nil {
 			return err
 		}
 		if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
@@ -137,7 +137,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
  CREATE TRIGGER hosted_binding_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON hosted_tenant_binding FOR EACH STATEMENT EXECUTE FUNCTION hosted_reject_binding_mutation()`); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
+	if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL+rawJobOutcomeDDL); err != nil {
 		return err
 	}
 	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
@@ -237,6 +237,9 @@ func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) e
 }
 
 func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant string) error {
+	if err := checkRawJobOutcomeTrigger(ctx, q, schema); err != nil {
+		return err
+	}
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
