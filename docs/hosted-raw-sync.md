@@ -89,6 +89,29 @@ unmanaged vector layouts and conflicting ownership can block adoption. Plan
 imports and schema upgrades during an operator-controlled maintenance window.
 Runtime startup never migrates or provisions the hosted schema.
 
+For hosted vector storage, set `raw_embeddings = true` together with
+`raw_derivation = true` on the owner and runtime targets. The owner must supply
+a full `[vector.embeddings]` recipe (`model`, `dimension`, and
+`max_input_chars`). The dimension must be at most 4,000, the
+[pgvector halfvec HNSW limit](https://github.com/pgvector/pgvector#hnsw).
+Provisioning creates a `building` generation, its own
+documents, and a protected pgvector chunk table. Repeating the command keeps
+existing states and recipes; changing the recipe adds another generation.
+Provisioning keeps pgvector in `public`, moving an existing installation out of
+a tenant or mirror schema. If the owner cannot move it, provisioning reports
+the required `ALTER EXTENSION vector SET SCHEMA public` command and stops.
+Embedding and semantic serving are not yet enabled by this storage setup.
+Runtime configuration requires either a named embeddings server or the
+deployment embeddings transport. `pg vectors drop` refuses hosted schemas;
+retired-generation cleanup is reserved for the hosted-recovery GC work.
+
+After provisioning, grant the runtime `SELECT, UPDATE` on
+`hosted_vector_generations`, `SELECT, INSERT, UPDATE, DELETE` on
+`hosted_vector_documents` and each provisioned `vector_chunks_g<id>` table,
+and `SELECT` on `vector_generations`. Apply the same chunk grants whenever
+provisioning adds a generation. Startup checks these privileges even when the
+embedding worker is disabled.
+
 Create a separate login role with
 `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
 provision its credential through your normal PostgreSQL administration process,

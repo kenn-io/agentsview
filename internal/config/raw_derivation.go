@@ -8,6 +8,9 @@ import (
 // ValidateRawDerivation validates opt-in and bounded controls. Tenant binding
 // remains enabled with the worker off so rollback preserves public identities.
 func (p PGConfig) ValidateRawDerivation(requireAuth bool) error {
+	if p.RawEmbeddings && !p.RawDerivation {
+		return errors.New("raw_embeddings requires raw_derivation = true")
+	}
 	if !p.RawDerivation && p.RawTenant == "" {
 		return nil
 	}
@@ -29,6 +32,35 @@ func (p PGConfig) ValidateRawDerivation(requireAuth bool) error {
 		return errors.New("hosted raw worker bounds: poll 1-60 seconds, attempt 1-300 seconds, attempts 1-10; zero selects defaults")
 	}
 	return nil
+}
+
+// ValidatePGRawEmbeddings separates owner recipe validation from runtime
+// transport validation. Runtime recipes come from provisioned generations.
+func (c Config) ValidatePGRawEmbeddings(p PGConfig, provisioning bool) error {
+	if !p.RawEmbeddings {
+		return nil
+	}
+	e := c.Vector.Embeddings
+	if provisioning {
+		if e.Model == "" || e.Dimension <= 0 || e.MaxInputChars <= 0 {
+			return errors.New("raw_embeddings provisioning requires a full [vector.embeddings] recipe: model, dimension and max_input_chars")
+		}
+		// https://github.com/pgvector/pgvector#hnsw
+		if e.Dimension > 4000 {
+			return errors.New("raw_embeddings dimension exceeds pgvector's halfvec HNSW limit of 4000")
+		}
+		if e.ModelContextTokens < 0 {
+			return errors.New("raw_embeddings model_context_tokens must not be negative")
+		}
+		return nil
+	}
+	if c.DeploymentEmbeddings != nil {
+		if len(e.Servers) != 0 {
+			return errors.New("hosted embeddings transport must be configured in one place")
+		}
+		return c.DeploymentEmbeddings.validateTransport("deployment")
+	}
+	return e.validateServersWithRecipe(false)
 }
 
 // ValidatePGRawDerivation reads only the deployment authentication policy used

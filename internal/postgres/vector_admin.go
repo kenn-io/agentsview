@@ -156,6 +156,13 @@ func vectorGenerationMachineDisplayName(raw string) string {
 // generation intact. Dropping an id that does not exist, or dropping against a
 // database without the vector tables (SQLSTATE 42P01), returns a clear error.
 func DropVectorGeneration(ctx context.Context, pg *sql.DB, id int64) error {
+	var hosted bool
+	if err := pg.QueryRowContext(ctx, `SELECT to_regclass('hosted_tenant_binding') IS NOT NULL`).Scan(&hosted); err != nil {
+		return err
+	}
+	if hosted {
+		return errors.New("pg vectors drop is unavailable for hosted schemas; retired-generation cleanup belongs to the hosted-recovery GC follow-up")
+	}
 	var one int
 	err := pg.QueryRowContext(ctx,
 		`SELECT 1 FROM vector_generations WHERE id = $1`, id).Scan(&one)
