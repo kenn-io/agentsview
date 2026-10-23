@@ -131,7 +131,7 @@ Copies preserve both projections and apply content policy to both.
 
 Keep a known dialogue projection even when it equals display content; NULL also
 represents unclassified messages and cannot carry both meanings. Data version
-143 reparses providers with dialogue classification in place, including the
+144 reparses providers with dialogue classification in place, including the
 shared Codex parser. Retained sources that cannot be reparsed keep their content
 and classification gaps; export itself never reads the original source.
 

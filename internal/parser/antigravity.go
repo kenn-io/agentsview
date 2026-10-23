@@ -106,22 +106,10 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 	}
 	root := filepath.Dir(filepath.Dir(path))
 
-	// Open read-only; SQLite session files have WAL/SHM
-	// sidecars that the driver expects in the same dir.
-	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf(
-			"open antigravity db %s: %w", path, err,
-		)
-	}
-	defer db.Close()
-
-	// Schema-fingerprint label for the producing agy build. Computed from
-	// the open DB so IDE and CLI classify identically; empty when the
-	// schema cannot be read.
-	sourceVersion := antigravitySourceVersion(ctx, db)
-
-	dbResult, err := loadAntigravityStepsWithRawCount(ctx, db)
+	// Open read-only (falling back to immutable=1 when a checkpointed WAL DB
+	// lives on a read-only mount without a .db-shm file).
+	dbResult, err := loadAntigravityCLIDBSteps(ctx, path)
+	sourceVersion := dbResult.sourceVersion
 	if err != nil {
 		// Fail closed on an unreadable steps table, deliberately: a
 		// covering sidecar cannot rescue an unreadable DB because
@@ -283,8 +271,14 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 }
 
 type antigravityStepLoadResult struct {
-	messages    []ParsedMessage
-	usageEvents []ParsedUsageEvent
+	messages []ParsedMessage
+	steps    []antigravityLoadedStep
+	// metadataSteps carry gen_metadata usage for output steps the steps
+	// table has not written yet, so a brain transcript entry at that index
+	// can still claim the generation's model and tokens.
+	metadataSteps         []antigravityLoadedStep
+	usageEvents           []ParsedUsageEvent
+	usageEventStepIndices []int
 	// executors is retained for preferred trajectory sidecars so their
 	// generatorMetadata uses the same range-qualified model attribution as
 	// SQLite gen_metadata.
@@ -422,7 +416,7 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 		}
 		stepPositions[idx] = len(steps)
 		steps = append(steps, antigravityLoadedStep{
-			kind: kind, msg: msg, decoded: decoded,
+			idx: idx, kind: kind, msg: msg, decoded: decoded,
 		})
 		result.rawStepCount++
 	}
@@ -435,18 +429,32 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 			generation, steps, stepPositions,
 		)
 		executorModel := ""
-		if stepIndex, known := generation.maxStepIndex(); known {
-			executorModel = executorModelForStep(executors, stepIndex)
+		maxStepIdx, known := generation.maxStepIndex()
+		if known {
+			executorModel = executorModelForStep(executors, maxStepIdx)
 		}
 		if !found {
-			result.appendGenMetadataUsage(
-				generation.data, ParsedMessage{}, false, executorModel,
+			// The usage is recorded as an event only. When the
+			// generation's last step has no row yet, it is most likely the
+			// missing output, so a carrier at that index keeps the model
+			// and tokens for the brain transcript. A last step that exists
+			// but is not the planner gets nothing.
+			stepIdx := -1
+			if _, exists := stepPositions[maxStepIdx]; known && !exists {
+				stepIdx = maxStepIdx
+			}
+			genMsg := result.appendGenMetadataUsage(
+				stepIdx, generation.data, ParsedMessage{}, false, executorModel,
 			)
+			if stepIdx >= 0 {
+				result.metadataSteps = append(result.metadataSteps,
+					antigravityLoadedStep{idx: stepIdx, msg: genMsg})
+			}
 			continue
 		}
 		step := &steps[position]
 		step.msg = result.appendGenMetadataUsage(
-			generation.data, step.msg, step.decoded, executorModel,
+			step.idx, generation.data, step.msg, step.decoded, executorModel,
 		)
 	}
 	for _, step := range steps {
@@ -454,10 +462,12 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 			result.messages = append(result.messages, step.msg)
 		}
 	}
+	result.steps = steps
 	return result, nil
 }
 
 type antigravityLoadedStep struct {
+	idx     int
 	kind    antigravityStepKind
 	msg     ParsedMessage
 	decoded bool
@@ -632,18 +642,29 @@ func generationPlannerStep(
 	steps []antigravityLoadedStep,
 	positions map[int]int,
 ) (int, bool) {
+	// An undecoded planner row still carries the usage so a brain
+	// transcript can claim it by step index. An undecoded row of any other
+	// kind is not chosen: its step_type column cannot show it is the output.
+	plannerPos := -1
 	for _, idx := range generation.stepIndices {
 		position, ok := positions[idx]
 		if !ok {
 			continue
 		}
 		step := steps[position]
-		if step.kind == antigravityStepKindPlannerResponse &&
-			step.decoded {
-			return position, true
+		if step.kind == antigravityStepKindPlannerResponse {
+			if step.decoded {
+				return position, true
+			}
+			if plannerPos < 0 {
+				plannerPos = position
+			}
 		}
 	}
 	if generation.hasStepIndices {
+		if plannerPos >= 0 {
+			return plannerPos, true
+		}
 		return 0, false
 	}
 	position, ok := positions[generation.idx]
@@ -662,12 +683,13 @@ func executorModelForStep(
 }
 
 // appendGenMetadataUsage records a usage event from one gen_metadata
-// payload and, when the step decoded into a message, attaches token
-// counts and the model name to the returned copy. Usage extraction is
-// deliberately independent of message decoding: a step the heuristic
-// cannot render can still be rescued by the CLI trajectory sidecar
-// transcript, and its usage must not be dropped.
+// payload and attaches token counts and the model name to the returned
+// message copy. Usage extraction is deliberately independent of message
+// decoding: a step the heuristic cannot render can still be rescued by
+// the CLI trajectory sidecar or brain transcript, and its usage must not
+// be dropped.
 func (r *antigravityStepLoadResult) appendGenMetadataUsage(
+	stepIdx int,
 	data []byte,
 	msg ParsedMessage,
 	decoded bool,
@@ -690,12 +712,11 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 			if !msg.Timestamp.IsZero() {
 				occurredAt = msg.Timestamp.Format(time.RFC3339Nano)
 			}
-			msg.ContextTokens = context
-			msg.OutputTokens = block.TotalOutput
-			msg.HasContextTokens = context > 0
-			msg.HasOutputTokens = block.TotalOutput > 0
-
 		}
+		msg.ContextTokens = context
+		msg.OutputTokens = block.TotalOutput
+		msg.HasContextTokens = context > 0
+		msg.HasOutputTokens = block.TotalOutput > 0
 		r.usageEvents = append(r.usageEvents, ParsedUsageEvent{
 			Source:               "generation",
 			Model:                eventModel,
@@ -705,8 +726,9 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 			ReasoningTokens:      0, // not available in gen_metadata
 			OccurredAt:           occurredAt,
 		})
+		r.usageEventStepIndices = append(r.usageEventStepIndices, stepIdx)
 	}
-	if decoded && genModel != "" {
+	if genModel != "" {
 		msg.Model = genModel
 	}
 	return msg

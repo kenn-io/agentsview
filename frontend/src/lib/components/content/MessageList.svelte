@@ -581,7 +581,10 @@
       return;
     }
     if (!instance) return;
-    // getOffsetForIndex initializes scrollOffset through TanStack's private getter.
+    // getOffsetForIndex reads a measurement cache that stays stale after a count change until
+    // TanStack's private getMeasurements() rebuilds it; getTotalSize() runs that rebuild publicly.
+    // getOffsetForIndex also initializes scrollOffset through TanStack's private getter.
+    instance.getTotalSize();
     const offset = instance.getOffsetForIndex(index, "start")?.[0];
     if (offset === undefined) return;
     const previousOffset = untrack(() => jump.offset);

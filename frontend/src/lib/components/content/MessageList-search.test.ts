@@ -15,6 +15,7 @@ const virtualizerMock = vi.hoisted(() => ({
   getTotalSize: vi.fn(() => 1000),
   measureElement: vi.fn(),
   scrollToIndex: vi.fn(),
+  cancelScroll: vi.fn(),
   scrollToOffset: vi.fn(),
   getOffsetForIndex: vi.fn((index: number) => [index * 120, "start"]),
 }));

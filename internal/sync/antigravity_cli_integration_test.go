@@ -503,56 +503,40 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 	filteredDBPath := filepath.Join(convDir, filteredUUID+".db")
 	createAntigravityCLIUndisplayableStepDB(t, filteredDBPath)
 
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
+	// An unreadable DB fails instead of storing history prompts as its
+	// transcript. A readable DB whose steps do not display still stores
+	// the history fallback and stays stale.
+	wantStats := sync.SyncStats{
 		TotalSessions: 2,
-		Synced:        2,
+		Synced:        1,
 		Skipped:       0,
 		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
-	})
+	}
+	runSyncAndAssert(t, env.engine, wantStats)
 
-	assertSessionMessageCount(t, env.db, malformedSessionID, 1)
-	msgs := fetchMessages(t, env.db, malformedSessionID)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
-		"degraded DB fallback should stay stale so unchanged syncs retry")
+	sess, err := env.db.GetSession(t.Context(), malformedSessionID)
+	require.NoError(t, err)
+	assert.Nil(t, sess, "an unreadable DB must not create a history-only session")
 	assertSessionMessageCount(t, env.db, filteredSessionID, 1)
-	msgs = fetchMessages(t, env.db, filteredSessionID)
+	msgs := fetchMessages(t, env.db, filteredSessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "Filtered History Prompt", msgs[0].Content)
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"DB fallback after dropping all raw steps should stay stale so unchanged syncs retry")
 
-	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), malformedSessionID, db.CurrentDataVersion()))
 	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), filteredSessionID, db.CurrentDataVersion()))
 	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "force fallback rewrite")
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 2,
-		Synced:        2,
-		Skipped:       0,
-		Failed:        2,
-		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
-	})
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
-		"DB decode fallback should demote previously current rows")
+	runSyncAndAssert(t, env.engine, wantStats)
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"DB fallback after dropping all raw steps should demote previously current rows")
 
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 2,
-		Synced:        2,
-		Skipped:       0,
-		Failed:        2,
-		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
-	})
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
-		"unchanged DB decode fallback should keep retrying")
+	runSyncAndAssert(t, env.engine, wantStats)
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"unchanged DB fallback after dropping all raw steps should keep retrying")
 }
 
-func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T) {
+func TestSyncEngineAntigravityCLI_UnreadableDBKeepsArchivedMessages(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	sessionID := "antigravity-cli:" + uuid
@@ -576,26 +560,23 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assertSessionMessageCount(t, env.db, sessionID, 2)
-	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), sessionID))
+	archived := antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID))
+	require.Contains(t, archived, "Initial assistant response text")
 
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1,
-		Synced:        1,
+		Synced:        0,
 		Skipped:       0,
 		Failed:        1,
 	})
 
-	assertSessionMessageCount(t, env.db, sessionID, 1)
-	msgs := fetchMessages(t, env.db, sessionID)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
-		"retry fallback should be written before the row is demoted")
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)),
+		"an unreadable DB must not replace the archived reply with history prompts")
 }
 
-func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
+func TestSyncSingleSessionAntigravityCLI_UnreadableDBKeepsArchivedMessages(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	sessionID := "antigravity-cli:" + uuid
@@ -607,28 +588,29 @@ func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
 
 	dbPath := filepath.Join(convDir, uuid+".db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+	createAntigravityCLIDisplayStepDB(t, dbPath, "Initial database prompt text")
+	conn := openAntigravityCLITestDB(t, dbPath)
+	insertAntigravityCLIStep(t, conn, 1, 17, "Initial assistant response text")
+	require.NoError(t, conn.Close())
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+	archived := antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID))
+	require.Contains(t, archived, "Initial assistant response text")
 
 	// An explicit single-session sync (the file-watcher path) of a .db
-	// whose decode fails must store the fallback at a stale data_version
-	// so a later sync retries the high-resolution source.
-	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+	// that can no longer be read reports the error and keeps the
+	// archived transcript rather than storing history prompts over it.
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+	require.Error(t, env.engine.SyncSingleSession(sessionID))
 
-	assertSessionMessageCount(t, env.db, sessionID, 1)
-	msgs := fetchMessages(t, env.db, sessionID)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
-		"single-session DB fallback should stay stale so later syncs retry")
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+}
 
-	// A previously current row must be demoted when an explicit re-sync
-	// hits the same decode failure, otherwise the high-resolution DB is
-	// never retried once it has been stamped current.
-	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
-	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "force fallback rewrite")
-	require.NoError(t, env.engine.SyncSingleSession(sessionID))
-	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
-		"single-session DB decode fallback should demote previously current rows")
+func antigravityCLIMessageContents(msgs []db.Message) []string {
+	contents := make([]string, len(msgs))
+	for i, m := range msgs {
+		contents[i] = m.Content
+	}
+	return contents
 }
 
 // writeAntigravityCLIInferredProjectFixture writes a .db session whose

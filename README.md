@@ -872,8 +872,8 @@ When the Docker CLI uses a non-default socket, export `DOCKER_HOST` for that
 socket before running the benchmark.
 
 Pre-commit and pre-push hooks via [prek](https://github.com/j178/prek): run
-`make lint-tools` and `make install-hooks` after cloning (requires `prek` and
-`uv`).
+`make lint-tools` and `make install-hooks` after cloning (requires `prek` 0.5.7
+or newer and `uv`).
 
 ### Project Layout
 

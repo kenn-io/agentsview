@@ -3993,8 +3993,19 @@ schemas keep their existing ordering behavior.
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
-  `internal/parser/antigravity_crypto.go`, and
-  `internal/parser/antigravity_cli_provider.go`. The CLI `history.jsonl`
+  `internal/parser/antigravity_crypto.go`,
+  `internal/parser/antigravity_brain_transcript.go`, and
+  `internal/parser/antigravity_cli_provider.go`. Plaintext brain transcripts
+  at `brain/<uuid>/.system_generated/logs/transcript.jsonl` are folded into
+  CLI sessions alongside `.db` `gen_metadata` token usage. A brain transcript
+  replaces the SQLite decode only when every SQLite step has a transcript line
+  at the same `step_index`, and every decoded, user, or planner step's line
+  has content; otherwise it is a fallback, and `history.jsonl` prompts it
+  lacks are added back. Generation metadata moves only onto the model's own
+  transcript entries. Checkpointed WAL databases on read-only mounts without
+  `.db-shm` or framed `-wal` sidecars fall back to `immutable=1`. An
+  unreadable database fails the parse and keeps the archived session unless a
+  trajectory sidecar supplies the transcript. The CLI `history.jsonl`
   `workspace` value and the current CLI's `cache/last_conversations.json`
   workspace-to-conversation mapping are authoritative session CWD sources when
   the workspace is an absolute path. Agentsview prefers the first valid

@@ -30,7 +30,8 @@ func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 }
 
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
-	completedVersion := CurrentDataVersion() - 1
+	// The version before preserving classification, even after later upgrades.
+	const completedVersion = 143
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
 	for _, agent := range []string{"codex", "pi", "hermes"} {

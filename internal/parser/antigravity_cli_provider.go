@@ -363,14 +363,21 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots)*5)
 	for _, root := range s.roots {
 		roots = append(roots,
-			// Only brain/<id>/*.md artifacts are parsed; see the IDE
-			// provider's brain root for why deeper subtrees stay unwatched.
+			// brain/<id>/*.md and the plaintext transcript at
+			// brain/<id>/.system_generated/logs/transcript.jsonl are parsed.
 			WatchRoot{
-				Path:         filepath.Join(root, "brain"),
-				Recursive:    true,
-				MaxDepth:     1,
-				IncludeGlobs: []string{"*.md", "*.md.metadata.json"},
-				DebounceKey:  string(AgentAntigravityCLI) + ":brain:" + root,
+				Path:      filepath.Join(root, "brain"),
+				Recursive: true,
+				MaxDepth:  1,
+				ExtraDirectories: []string{
+					"*/" + antigravityBrainGeneratedDir + "/" + antigravityBrainLogsDir,
+				},
+				IncludeGlobs: []string{
+					"*.md",
+					"*.md.metadata.json",
+					antigravityBrainTranscriptName,
+				},
+				DebounceKey: string(AgentAntigravityCLI) + ":brain:" + root,
 			},
 			WatchRoot{
 				Path:         filepath.Join(root, "conversations"),
@@ -535,7 +542,15 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 			return []SourceRef{source}
 		}
 	}
-	if id, ok := antigravityBrainID(root, path); ok {
+	id, ok := antigravityBrainID(root, path)
+	if !ok {
+		if transcriptRoot, transcriptID, okTranscript := antigravityBrainTranscriptConversation(path); okTranscript &&
+			samePath(transcriptRoot, root) {
+			id = transcriptID
+			ok = true
+		}
+	}
+	if ok {
 		var sources []SourceRef
 		for _, sourcePath := range []string{
 			antigravityCLIConversationSource(root, id),

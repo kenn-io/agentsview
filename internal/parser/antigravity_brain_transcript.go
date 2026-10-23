@@ -236,15 +236,24 @@ func roleForAntigravityBrainSource(source string) (RoleType, bool) {
 	}
 }
 
-// collectAntigravityBrainTranscriptMessages renders one message per logged
-// step, in step order. Ordinals are assigned by the caller's own ordering
-// pass when the messages join a database session.
-func collectAntigravityBrainTranscriptMessages(path string) ([]ParsedMessage, error) {
+// antigravityBrainTranscriptStep pairs a rendered transcript message with its
+// raw step_index from transcript.jsonl so callers can transfer per-step
+// generation metadata from SQLite gen_metadata.
+type antigravityBrainTranscriptStep struct {
+	stepIndex int
+	msg       ParsedMessage
+}
+
+// collectAntigravityBrainTranscriptSteps renders one step-indexed message per
+// logged step, in step order.
+func collectAntigravityBrainTranscriptSteps(
+	path string,
+) ([]antigravityBrainTranscriptStep, error) {
 	entries, err := readAntigravityBrainTranscript(path)
 	if err != nil {
 		return nil, err
 	}
-	messages := make([]ParsedMessage, 0, len(entries))
+	steps := make([]antigravityBrainTranscriptStep, 0, len(entries))
 	for _, entry := range entries {
 		role, isSystem := roleForAntigravityBrainSource(entry.source)
 		content := entry.content
@@ -266,19 +275,37 @@ func collectAntigravityBrainTranscriptMessages(path string) ([]ParsedMessage, er
 			}
 			content = strings.Join(headers, "\n")
 		}
-		messages = append(messages, ParsedMessage{
-			Role:          role,
-			IsSystem:      isSystem,
-			Content:       content,
-			ContentLength: len(content),
-			ThinkingText:  entry.thinking,
-			HasThinking:   entry.thinking != "",
-			ToolCalls:     toolCalls,
-			HasToolUse:    len(toolCalls) > 0,
-			Timestamp:     entry.createdAt,
-			SourceType:    entry.stepType,
-			SourceSubtype: entry.status,
+		steps = append(steps, antigravityBrainTranscriptStep{
+			stepIndex: int(entry.stepIndex),
+			msg: ParsedMessage{
+				Role:          role,
+				IsSystem:      isSystem,
+				Content:       content,
+				ContentLength: len(content),
+				ThinkingText:  entry.thinking,
+				HasThinking:   entry.thinking != "",
+				ToolCalls:     toolCalls,
+				HasToolUse:    len(toolCalls) > 0,
+				Timestamp:     entry.createdAt,
+				SourceType:    entry.stepType,
+				SourceSubtype: entry.status,
+			},
 		})
+	}
+	return steps, nil
+}
+
+// collectAntigravityBrainTranscriptMessages renders one message per logged
+// step, in step order. Ordinals are assigned by the caller's own ordering
+// pass when the messages join a database session.
+func collectAntigravityBrainTranscriptMessages(path string) ([]ParsedMessage, error) {
+	steps, err := collectAntigravityBrainTranscriptSteps(path)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]ParsedMessage, len(steps))
+	for i, s := range steps {
+		messages[i] = s.msg
 	}
 	return messages, nil
 }
