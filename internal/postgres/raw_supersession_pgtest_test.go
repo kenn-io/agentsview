@@ -69,7 +69,7 @@ func TestRawSupersessionSchemaFreshUpgradeAndPrivileges(t *testing.T) {
 	assert.Equal(t, "retained", project)
 }
 
-func supersessionFixture(t *testing.T) (projectionFixture, string) {
+func supersessionFixture(t testing.TB) (projectionFixture, string) {
 	t.Helper()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "carry", "")

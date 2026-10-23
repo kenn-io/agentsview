@@ -1384,19 +1384,26 @@ ______________________________________________________________________
 
 ### `agentsview pg raw-rollout`
 
-Inspect or record hosted session rollout scopes through an owner target:
+Inspect or change hosted session rollout scopes through an owner target:
 
 ```bash
 agentsview pg raw-rollout list [target] [--device ID] [--provider P]
 agentsview pg raw-rollout shadow [target] [--device ID] [--provider P]
 agentsview pg raw-rollout clear [target] [--device ID] [--provider P]
+agentsview pg raw-rollout activate [target] [--device ID] [--provider P] [--accept-differences]
 ```
 
 The tenant scope must exist before narrower scopes and can be cleared only
-when no narrower scopes remain. List output includes physical served, shadow
-and superseded counts, plus the last stored parity report. Public-read
-filtering and activation are pending later cutover stages; see
-[rollout scopes](/docs/hosted-raw-sync/#rollout-scopes) for current limits.
+when no narrower scopes remain. List output includes physical served and shadow
+counts, plus the last stored parity audit.
+`activate` is an owner-only, transactional parity gate. Its optional waiver
+accepts only content differences and preserves their counts in the audit.
+
+This build refuses activation until it can verify the selected target's embedding
+configuration. Configured embeddings also require the coverage gate. Missing
+configuration or tables never count as disabled. See
+[rollout scopes](/docs/hosted-raw-sync/#rollout-scopes) for prerequisites, the
+activation sequence and returning to shadow.
 
 ### `agentsview pg service`
 
