@@ -19,9 +19,15 @@ func (r RawParityReader) Candidates(ctx context.Context) ([]rawparity.Candidate,
 	if err := checkRawParityTransaction(ctx, r.Tx); err != nil {
 		return nil, err
 	}
+	return loadRawParityCandidates(ctx, r.Tx)
+}
+
+// loadRawParityCandidates shares the physical identity query with caller-owned
+// write transactions. The public report retains its read-only snapshot guard.
+func loadRawParityCandidates(ctx context.Context, tx *sql.Tx) ([]rawparity.Candidate, error) {
 	out := []rawparity.Candidate{}
 
-	rows, err := r.Tx.QueryContext(ctx, `SELECT s.id,s.agent,s.machine,s.raw_group_id,
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.agent,s.machine,s.raw_group_id,
  CASE WHEN s.provenance_kind='legacy' THEN hosted_legacy_alias(s.id)
  ELSE g.base_alias||COALESCE('~'||b.branch,'') END,
  s.agent='piebald' OR s.source_session_id='',COALESCE(b.aliases,'{}'::text[]),COALESCE(b.devices,'{}'::text[])

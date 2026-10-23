@@ -16,6 +16,7 @@ import (
 // though its immutable group identity is never rewritten.
 var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"raw_rollout_scopes", "SELECT"},
+	{"raw_legacy_supersessions", "SELECT,INSERT,UPDATE,DELETE"},
 	{"sessions", "SELECT,INSERT,UPDATE,DELETE"},
 	{"messages", "SELECT,INSERT"},
 	{"tool_calls", "SELECT,INSERT"},

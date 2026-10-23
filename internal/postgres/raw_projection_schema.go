@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS raw_pins (
  ordinal INTEGER NOT NULL, content_revision TEXT NOT NULL, pinned BOOLEAN NOT NULL,
  note TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(group_id,branch_id,message_key)
 );
+CREATE TABLE IF NOT EXISTS raw_legacy_supersessions (
+ legacy_session_id TEXT PRIMARY KEY, group_id TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS raw_corpus_state (
  singleton SMALLINT PRIMARY KEY, corpus_revision BIGINT NOT NULL DEFAULT 0,
  identity_revision BIGINT NOT NULL DEFAULT 0, selection_revision BIGINT NOT NULL DEFAULT 0
@@ -133,6 +136,7 @@ var rawProjectionTables = []HostedTable{
 	{Name: "raw_session_public_aliases", Key: []string{"alias_id", "group_id"}, ForeignKeys: rawGroupFK()},
 	{Name: "raw_curation", Key: []string{"group_id", "branch_id", "field"}, ForeignKeys: rawGroupFK()},
 	{Name: "raw_pins", Key: []string{"group_id", "branch_id", "message_key"}, ForeignKeys: rawGroupFK()},
+	{Name: "raw_legacy_supersessions", Key: []string{"legacy_session_id"}, ForeignKeys: append(rawGroupFK(), HostedForeignKey{Columns: []string{"legacy_session_id"}, Table: "sessions", References: []string{"id"}, Delete: "RESTRICT"})},
 	{Name: "raw_corpus_state", Key: []string{"singleton"}},
 	{Name: "raw_embedding_outbox", Key: []string{"session_id", "selection_revision", "corpus_revision"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"session_id"}, Table: "raw_content_revisions", References: []string{"session_id"}, Delete: "RESTRICT"}}},
 }
