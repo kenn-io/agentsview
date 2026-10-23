@@ -58,6 +58,9 @@ func (h *HostedStore) legacyWriteOnce(ctx context.Context, alias, id string, wri
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return 0, err
+	}
 	aliases := []string{id, legacyPublicVariant(id), alias}
 	if err = lockHostedAliases(ctx, tx, aliases); err != nil {
 		return 0, err
@@ -80,7 +83,7 @@ func (h *HostedStore) legacyWriteOnce(ctx context.Context, alias, id string, wri
 		return 0, err
 	}
 	var current string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE provenance_kind='legacy' AND id=$1 AND (id=$2 OR hosted_legacy_alias(id)=$2) FOR UPDATE`, id, alias).Scan(&current)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE provenance_kind='legacy' AND NOT rollout_hidden AND id=$1 AND (id=$2 OR hosted_legacy_alias(id)=$2) FOR UPDATE`, id, alias).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, &db.SessionIdentityError{State: "gone"}
 	}
@@ -156,6 +159,6 @@ func deleteLegacyTrashedTx(ctx context.Context, tx *sql.Tx, id string) (int64, e
 // Legacy alias cleanup must never reach a raw row, even if an adopted archive
 // has an alias spelling that later collides with a physical projection identity.
 func deleteLegacyExcludedSessionRows(ctx context.Context, tx *sql.Tx, ids []string) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE provenance_kind='legacy' AND id=ANY($1)`, ids)
+	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE provenance_kind='legacy' AND NOT rollout_hidden AND id=ANY($1)`, ids)
 	return err
 }

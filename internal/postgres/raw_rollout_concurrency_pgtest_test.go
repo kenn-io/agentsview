@@ -52,6 +52,9 @@ func TestRawRolloutVisibilityAfterWait(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	_, err = gate.ExecContext(ctx, `DELETE FROM raw_rollout_scopes`)
 	require.NoError(t, err)
+	var group string
+	require.NoError(t, gate.QueryRowContext(ctx, `SELECT group_id FROM raw_session_groups FOR UPDATE`).Scan(&group))
+	require.NoError(t, recomputeRawRollout(ctx, gate, group))
 	require.NoError(t, gate.Commit())
 	require.NoError(t, <-curated)
 	require.NoError(t, f.runtime.QueryRow(`SELECT rollout_hidden FROM sessions WHERE provenance_kind='raw'`).Scan(&hidden))
@@ -59,16 +62,15 @@ func TestRawRolloutVisibilityAfterWait(t *testing.T) {
 }
 
 func TestRawRolloutWriterWaitsForPublication(t *testing.T) {
-	for _, action := range []string{"shadow", "clear"} {
-		t.Run(action, func(t *testing.T) {
+	for _, writer := range []string{"projection", "curation"} {
+		t.Run(writer, func(t *testing.T) {
 			f := newProjectionFixture(t)
 			m, _ := f.accept(t, "device-a", "capture", "")
 			lease := f.lease(t, m)
 			write := func(ctx context.Context) error { return f.sink.Project(ctx, lease, m, projectionOutcome("hello")) }
 			table := "messages"
-			if action == "clear" {
+			if writer == "curation" {
 				require.NoError(t, write(t.Context()))
-				require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
 				write = func(ctx context.Context) error { return f.sink.SetCuration(ctx, "codex:portable", "starred", true) }
 				table = "starred_sessions"
 			}
@@ -76,7 +78,7 @@ func TestRawRolloutWriterWaitsForPublication(t *testing.T) {
 			f.parkOn(t, "INSERT", table, "true")
 			scoped := make(chan error, 1)
 			f.whileParked(t, write, func(ctx context.Context) error {
-				go func() { scoped <- ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", action) }()
+				go func() { scoped <- ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow") }()
 				require.Eventually(t, func() bool {
 					var waiting int
 					err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted AND classid=((hashtextextended($1,0)>>32)&4294967295)::oid AND objid=(hashtextextended($1,0)&4294967295)::oid`, "agentsview-rollout:"+f.schema).Scan(&waiting)
@@ -89,13 +91,13 @@ func TestRawRolloutWriterWaitsForPublication(t *testing.T) {
 			after := f.revisions(t)
 			require.Equal(t, before.corpus+2, after.corpus)
 			identityDelta := int64(2)
-			if action == "clear" {
+			if writer == "curation" {
 				identityDelta = 1
 			}
 			require.Equal(t, before.identity+identityDelta, after.identity)
 			var hidden bool
 			require.NoError(t, f.runtime.QueryRow(`SELECT rollout_hidden FROM sessions WHERE provenance_kind='raw'`).Scan(&hidden))
-			require.Equal(t, action == "shadow", hidden)
+			require.True(t, hidden)
 		})
 	}
 }
