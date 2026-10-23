@@ -1678,7 +1678,7 @@ func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) 
 
 func (b *httpBackend) diagnosticURL() string {
 	if b.remotePolicy {
-		return remotecred.Redact(b.baseURL)
+		return remotecred.Redact(b.baseURL) + " (try --local)"
 	}
 	return b.baseURL
 }

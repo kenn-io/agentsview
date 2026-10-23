@@ -437,6 +437,43 @@ actually sees before relying on `from=`.
 The image build checks `ssh -V`. To check a built image yourself, run
 `docker run --rm --entrypoint ssh IMAGE -V`.
 
+## Default Remote Reads
+
+On unreleased `main`, supported CLI reads can use a hub by default:
+
+```toml
+[remote]
+url = "https://hub.example:61400"
+token_file = "hub.token"
+# allow_insecure_http = false
+```
+
+A relative `token_file` uses the config file's directory. Paths support `~`.
+Non-empty `AGENTSVIEW_REMOTE_URL` and `AGENTSVIEW_REMOTE_TOKEN_FILE` values
+independently override TOML; a relative environment token path uses the working
+directory. Empty environment values leave TOML unchanged. A token file without
+a URL is an error only when a remote read selects it.
+
+The token file must be a regular file containing a non-empty token of at most
+64 KiB. On Unix it must belong to the effective user, have mode `0600` or
+stricter, and not be a symlink. Windows rejects symlinks but skips ownership
+and mode checks. If no token file is configured, `AGENTSVIEW_SERVER_TOKEN` is
+the fallback. A selected invalid file fails instead of using that fallback.
+
+Remote URLs require HTTPS. HTTP is allowed for loopback hosts, or with
+`allow_insecure_http = true`. Userinfo and redirects to another origin are
+rejected. Errors show only the URL's scheme, host and port, and suggest
+`--local`; a remote failure never falls back to local data.
+
+Explicit `--server` or `--pg` selects its existing target. The root `--local`
+flag bypasses the configured remote and memory-profile target variables.
+Combining `--local` with `--server` or `--pg` is an error. Unselected remote
+credentials are not opened. Local-only commands accept and ignore `--local`.
+
+See [Query a hub from the CLI](/docs/remote-access/#query-a-hub-from-the-cli)
+for supported commands and a diagnostic probe. This client configuration is
+separate from `[[remote_hosts]]`, which collects transcripts into an archive.
+
 ## Remote Hosts
 
 Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw

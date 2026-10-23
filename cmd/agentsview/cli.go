@@ -89,6 +89,7 @@ func newRootCommand() *cobra.Command {
 			_ = cmd.Help()
 		},
 	}
+	root.PersistentFlags().Bool("local", false, "Use the local read target, ignoring configured remote and memory targets")
 	root.AddGroup(
 		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
 		&cobra.Group{ID: groupData, Title: "Data Commands:"},

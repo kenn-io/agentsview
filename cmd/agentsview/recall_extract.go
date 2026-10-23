@@ -590,7 +590,7 @@ func runRecallExtractPreview(
 	if strings.TrimSpace(sessionID) == "" {
 		return errors.New("recall extract preview requires --session")
 	}
-	svc, cleanup, err := resolveRecallEntryService(cmd)
+	svc, cleanup, err := resolveServiceWithIntent(cmd, readTargetExplicitOnly)
 	if err != nil {
 		return err
 	}
