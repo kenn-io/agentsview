@@ -146,7 +146,7 @@ func (s *Store) GetSessionVersion(ctx context.Context,
 	var updatedAt time.Time
 	err := s.pg.QueryRowContext(ctx,
 		`SELECT message_count, COALESCE(updated_at, created_at)
-		 FROM sessions WHERE id = $1`,
+		 FROM sessions WHERE id = $1 AND NOT rollout_hidden`,
 		id,
 	).Scan(&count, &updatedAt)
 	if err != nil {
