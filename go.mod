@@ -38,7 +38,7 @@ require (
 	github.com/tidwall/gjson v1.20.0
 	github.com/yuin/goldmark/v2 v2.1.6
 	go.kenn.io/docbank v0.15.2
-	go.kenn.io/kit v0.42.2-0.20261023201845-93ed56f990d9
+	go.kenn.io/kit v0.43.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
