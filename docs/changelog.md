@@ -9,6 +9,9 @@ The latest release is
 
 ## Unreleased
 
+- PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
+  with bounded, resumable responses and optional zstd compression.
+
 - PostgreSQL vector pushes now record parser and automated-session scope
   compatibility. A changed session invalidates stale coverage from other
   generations before clients can reuse its embeddings.

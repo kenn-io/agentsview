@@ -879,6 +879,27 @@ mirror without a stored scope publishes it as unknown until embeddings are
 rebuilt. Updating a session invalidates coverage in other generations when
 their document set differs; an unchanged set remains covered in both.
 
+### Reading vectors from a hub
+
+On newer `main`, `pg serve` exposes its selected generation at
+`GET /api/v1/vectors/generation`. It includes the model, dimension, recipe,
+parser data version and automated-session scope. Older pushes or publishers
+with conflicting compatibility metadata report `unavailable`; run
+`agentsview pg push --full` to publish current metadata. SQLite servers do not
+serve these endpoints.
+
+`POST /api/v1/vectors/lookup` accepts that fingerprint and up to 256 structured
+document identities with content hashes. Matches require the selected
+generation's chunks and a completed session push. Responses use `vectors.v1`:
+request indices, chunk indices and counts, and base64 little-endian float32
+vectors rounded to PostgreSQL's half precision. Non-finite values are rejected.
+
+Clients can request zstd with `Accept-Encoding: zstd`. Each decoded response
+stays below 32 MiB. Continue with `next_cursor` and the same fingerprint and
+identities, assembling complete chunk sets before installation. A different
+selected fingerprint returns `409 generation_changed`. Existing bearer and
+machine-signing authentication apply; lookups remain reads during a rebuild.
+
 ### Serving semantic search
 
 `pg serve` — and every `--pg` direct-read command — wires PG-backed semantic
