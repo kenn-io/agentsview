@@ -18,6 +18,10 @@ func LoadRawParityLinks(ctx context.Context, tx *sql.Tx, id string) ([]rawparity
 	if err := checkRawParityTransaction(ctx, tx); err != nil {
 		return nil, err
 	}
+	return loadRawParityLinks(ctx, tx, id)
+}
+
+func loadRawParityLinks(ctx context.Context, tx *sql.Tx, id string) ([]rawparity.Link, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT e.kind,e.ordinal,e.call_index,e.event_index,
  COALESCE(array_agg(DISTINCT target.session_id ORDER BY target.session_id)
   FILTER(WHERE target.session_id IS NOT NULL),'{}'::text[]),bool_or(target.session_id IS NULL)

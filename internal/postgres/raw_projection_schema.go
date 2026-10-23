@@ -93,6 +93,7 @@ CREATE INDEX IF NOT EXISTS raw_hosted_jobs_expired ON raw_ingest_jobs(tenant_id,
 
 CREATE INDEX IF NOT EXISTS raw_branches_session ON raw_session_branches(tenant_id,session_id,active);
 CREATE INDEX IF NOT EXISTS raw_links_target ON raw_session_links(tenant_id,target_alias);
+CREATE INDEX IF NOT EXISTS raw_supersessions_group ON raw_legacy_supersessions(tenant_id,group_id,legacy_session_id);
 CREATE INDEX IF NOT EXISTS raw_alias_group ON raw_session_public_aliases(tenant_id,group_id);
 CREATE INDEX IF NOT EXISTS raw_session_sources_source ON session_sources(tenant_id,source_id);
 CREATE INDEX IF NOT EXISTS raw_session_sources_content ON session_sources(tenant_id,session_id);

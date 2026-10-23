@@ -169,6 +169,11 @@ func ChangeRawRollout(ctx context.Context, database *sql.DB, schema, tenant, dev
 	return err
 }
 
+// rawBranchEligibleSQL is shared by content rematerialization, rollout
+// visibility and supersession matching. Branch overrides beat group defaults;
+// trash never withdraws a branch. Queries use the branch table alias b.
+const rawBranchEligibleSQL = `b.active AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)`
+
 // recomputeRawRollout requires the group's row lock and the rollout lock.
 // Eligibility belongs to the logical group, including all its physical cohorts.
 func recomputeRawRollout(ctx context.Context, tx *sql.Tx, group string) error {
@@ -176,26 +181,11 @@ func recomputeRawRollout(ctx context.Context, tx *sql.Tx, group string) error {
 	if err != nil {
 		return err
 	}
-	active := len(scopes) == 0
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT p.device_id,p.provider FROM raw_session_branches b JOIN raw_source_projections p ON p.source_id=b.source_id WHERE b.group_id=$1 AND b.active`, group)
+	served, err := rawServedGroupsWithin(ctx, tx, scopes, []string{group})
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var device, provider string
-		if err = rows.Scan(&device, &provider); err != nil {
-			break
-		}
-		active = active || effectiveRawRollout(scopes, device, provider) == "active"
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
-		return err
-	}
+	active := len(scopes) == 0 || served[group]
 	_, err = tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE provenance_kind='raw' AND raw_group_id=$1 AND rollout_hidden IS DISTINCT FROM $2`, group, !active)
 	return err
 }

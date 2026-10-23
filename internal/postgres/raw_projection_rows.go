@@ -66,19 +66,13 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err
 	}
-	branches, err := loadRawBranches(ctx, tx, "group_id", group)
-	if err != nil {
-		return nil, err
-	}
-	overlays, err := loadRawOverlays(ctx, tx, group)
+	branches, err := loadRawBranchRows(ctx, tx, `b.group_id=$1 AND `+rawBranchEligibleSQL, group)
 	if err != nil {
 		return nil, err
 	}
 	cohorts := map[string][]rawBranch{}
 	for _, b := range branches {
-		if b.Active && !overlays.boolean(b.ID, "excluded") {
-			cohorts[b.Session] = append(cohorts[b.Session], b)
-		}
+		cohorts[b.Session] = append(cohorts[b.Session], b)
 	}
 	rows, err := tx.QueryContext(ctx, rawGroupContentsSQL, group)
 	if err != nil {
