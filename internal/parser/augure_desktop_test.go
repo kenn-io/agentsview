@@ -162,15 +162,22 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	// (SQL 0, not NULL) decodes as a present-zero cost: the nullable-float
 	// decode keeps 0 and NULL distinct, so a real recorded $0 survives. An
 	// estimated 0 deliberately does not masquerade as $0, matching stock
-	// Hermes.
-	require.NotEmpty(t, result.UsageEvents)
+	// Hermes. The main ledger row and uncovered cache/reasoning summary
+	// share the known zero main cost without changing session totals.
+	require.Len(t, result.UsageEvents, 2)
 	event := result.UsageEvents[0]
 	assert.Equal(t, "augure-desktop:"+id, event.SessionID)
 	assert.Equal(t, "ossington-5", event.Model)
 	require.NotNil(t, event.Cost)
 	assert.Equal(t, "estimated", event.CostStatus)
 	assert.Zero(t, event.Cost.Microdollars,
-		"actual_cost_usd = 0 must decode as present-zero, not absent")
+		"a known summary cost suppresses catalog pricing on the main ledger")
+	summary := result.UsageEvents[1]
+	assert.Zero(t, summary.InputTokens)
+	assert.Zero(t, summary.OutputTokens)
+	assert.Equal(t, 4100, summary.CacheReadInputTokens)
+	require.NotNil(t, summary.Cost)
+	assert.Zero(t, summary.Cost.Microdollars)
 
 	require.NotEmpty(t, result.Messages)
 	assert.Equal(t, RoleUser, result.Messages[0].Role)

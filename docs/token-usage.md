@@ -195,6 +195,16 @@ to see its groups and
 individual sessions for the selected date range. On touch screens, use **Open**.
 Usage outside the opened project's top 100 tiles appears under **Other**.
 Enter and Space select any item.
+
+Hermes and Augure Desktop Usage includes model calls recorded in
+`session_model_usage`, including background review and title generation.
+Main-loop and voice-chat calls count once, alongside any main usage recorded
+only in the session summary. Each ledger row keeps its recorded model and
+billing provider. Known main cost stays on the session model; auxiliary calls
+use their own recorded cost. Older databases without the ledger use session
+summaries.
+Session-list token totals continue to show the session summary.
+
 Hermes cron jobs from different homes stay separate. They show their latest
 recorded name in that range and their home-scoped ID on hover.
 **All projects**, Escape, and Backspace

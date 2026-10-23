@@ -2242,3 +2242,111 @@ func TestHermesStoredPathIsAggregateArchive(t *testing.T) {
 		})
 	}
 }
+
+func createHermesUsageLedger(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), `CREATE TABLE session_model_usage (
+		session_id TEXT, model TEXT, billing_provider TEXT DEFAULT '', billing_base_url TEXT DEFAULT '', billing_mode TEXT DEFAULT '', task TEXT DEFAULT '',
+		api_call_count INTEGER DEFAULT 1, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+		cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
+		estimated_cost_usd REAL DEFAULT 0, actual_cost_usd REAL DEFAULT 0, cost_status TEXT, cost_source TEXT,
+		first_seen REAL DEFAULT 1778767200, last_seen REAL DEFAULT 1778767800)`)
+	require.NoError(t, err)
+}
+
+func TestHermesLedgerCountsCoveredAndAuxiliaryUsageOnce(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+	require.NoError(t, err)
+	defer conn.Close()
+	createHermesUsageLedger(t, conn)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET input_tokens = 105, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0, reasoning_tokens = 0, estimated_cost_usd = NULL;
+		INSERT INTO session_model_usage (session_id, model, task, input_tokens) VALUES
+		('child', 'main-a', '', 60), ('child', 'main-b', '', 40), ('child', 'voice', 'voice_chat', 5),
+		('child', 'review', 'background_review', 20), ('child', 'approval', 'approval', 3)`)
+	require.NoError(t, err)
+	results, err := (&hermesProvider{}).parseArchive(t.Context(), root, "", "test")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	got := map[string]int{}
+	for _, event := range results[0].UsageEvents {
+		got[event.Model] += event.InputTokens
+		assert.Nil(t, event.Cost)
+	}
+	assert.Equal(t, map[string]int{"main-a": 60, "main-b": 40, "voice": 5, "review": 20, "approval": 3}, got)
+}
+
+func TestHermesLedgerSummaryRemainder(t *testing.T) {
+	for _, tc := range []struct {
+		name, rows string
+		want       map[string][5]int
+		costs      map[string]int64
+	}{
+		{
+			"main and auxiliary", `('child', 'main', '', 60, 30, 10, 2, 4, 0.04), ('child', 'review', 'background_review', 20, 5, 2, 1, 1, 0.02)`,
+			map[string][5]int{"main": {60, 30, 10, 2, 4}, "review": {20, 5, 2, 1, 1}, "gpt-5.4": {240, 40, 10, 3, 5}},
+			map[string]int64{"main": 0, "review": 20000, "gpt-5.4": 123000},
+		},
+		{
+			"gateway summary and auxiliary", `('child', 'review', 'title_generation', 20, 5, 2, 1, 1, 0.02)`,
+			map[string][5]int{"review": {20, 5, 2, 1, 1}, "gpt-5.4": {300, 70, 20, 5, 9}},
+			map[string]int64{"review": 20000, "gpt-5.4": 123000},
+		},
+		{
+			"clamp covered buckets", `('child', 'main', '', 400, 80, 30, 6, 10, 0.2)`,
+			map[string][5]int{"main": {400, 80, 30, 6, 10}, "gpt-5.4": {}},
+			map[string]int64{"main": 0, "gpt-5.4": 123000},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+			require.NoError(t, err)
+			defer conn.Close()
+			createHermesUsageLedger(t, conn)
+			_, err = conn.ExecContext(t.Context(), `INSERT INTO session_model_usage (session_id, model, task, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd) VALUES `+tc.rows+`; UPDATE session_model_usage SET billing_provider = 'openrouter', cost_status = 'estimated', cost_source = 'catalog'`)
+			require.NoError(t, err)
+			results, err := parseHermesTestArchive(t, root, "", "test")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			got := map[string][5]int{}
+			costs := map[string]int64{}
+			for _, event := range results[0].UsageEvents {
+				got[event.Model] = [5]int{event.InputTokens, event.OutputTokens, event.CacheReadInputTokens, event.CacheCreationInputTokens, event.ReasoningTokens}
+				require.NotNil(t, event.Cost)
+				costs[event.Model] = event.Cost.Microdollars
+				if event.Model != "gpt-5.4" {
+					assert.Equal(t, "openrouter", event.ProviderID)
+				}
+			}
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.costs, costs)
+			assert.Equal(t, 70, results[0].Session.TotalOutputTokens)
+		})
+	}
+}
+
+func TestHermesLedgerKnownZeroAndAuxiliaryCosts(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+	require.NoError(t, err)
+	defer conn.Close()
+	createHermesUsageLedger(t, conn)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET input_tokens = 100, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0, reasoning_tokens = 0, actual_cost_usd = 0;
+		INSERT INTO session_model_usage (session_id, model, task, input_tokens, actual_cost_usd, cost_status, cost_source) VALUES
+		('child', 'a', '', 60, 0.5, 'estimated', 'catalog'), ('child', 'b', '', 40, 0.3, 'estimated', 'catalog'),
+		('child', 'included', 'vision', 10, 0, 'included', 'subscription'), ('child', 'unknown', 'approval', 3, 0, 'included', 'none'),
+		('child', 'actual', 'background_review', 20, 0.2, 'actual', 'provider')`)
+	require.NoError(t, err)
+	results, err := parseHermesTestArchive(t, root, "", "test")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	costs := map[string]*money.Money{}
+	for _, event := range results[0].UsageEvents {
+		costs[event.Model] = event.Cost
+	}
+	assert.Equal(t, map[string]*money.Money{"a": {}, "b": {}, "gpt-5.4": {}, "included": {}, "unknown": nil, "actual": {Microdollars: 200000}}, costs)
+}
