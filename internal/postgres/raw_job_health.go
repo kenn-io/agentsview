@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -274,6 +275,12 @@ func rawJobHealth(
 		return rawsync.JobHealthReport{}, err
 	}
 
+	expression, err := rawRecoveryExpression(ctx, queryer)
+	if err != nil {
+		return rawsync.JobHealthReport{}, err
+	}
+	statement := strings.TrimSuffix(rawJobHealthSQL, "FROM snapshot") + ", " + expression + " FROM snapshot"
+	var recoveryJSON *string
 	var (
 		deadLetters            rawsync.DeadLetterHealth
 		observedAt             time.Time
@@ -289,7 +296,7 @@ func rawJobHealth(
 		staleSourceHeadsJSON   string
 	)
 	if err := queryer.QueryRowContext(
-		ctx, rawJobHealthSQL, tenant,
+		ctx, statement, tenant,
 		query.MaxAttempts, query.StaleAfterSeconds,
 		rawJobHealthMaxRows, rawJobHealthMaxErrorClasses,
 	).Scan(
@@ -300,6 +307,7 @@ func rawJobHealth(
 		&retryingNearLimitCount, &retryingNearLimitJSON,
 		&staleSourceHeadCount, &staleSourceHeadsJSON,
 		&deadLetters.Count, &deadLetters.OldestFailedAt,
+		&recoveryJSON,
 	); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("reading raw job health: %w", err)
 	}
@@ -337,6 +345,10 @@ func rawJobHealth(
 	}
 	if err := json.Unmarshal([]byte(staleSourceHeadsJSON), &report.StaleSourceHeads); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("decoding stale raw heads: %w", err)
+	}
+	report.Recovery, err = decodeRawRecovery(recoveryJSON)
+	if err != nil {
+		return rawsync.JobHealthReport{}, fmt.Errorf("decoding raw recovery metrics: %w", err)
 	}
 	for i := range report.OrphanedManifests {
 		report.OrphanedManifests[i].AcceptedAt = report.OrphanedManifests[i].AcceptedAt.UTC()

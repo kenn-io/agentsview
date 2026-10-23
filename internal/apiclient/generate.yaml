@@ -66,6 +66,7 @@ filter:
       - post-api-v1-export-conversations-initialize
       - post-api-v1-raw-sync-tokens
       - get-api-v1-raw-sync-status
+      - get-api-v1-raw-sync-health
       - get-api-v1-codex-cloud-status
       - post-api-v1-raw-sync-objects-missing
       - post-api-v1-raw-sync-uploads

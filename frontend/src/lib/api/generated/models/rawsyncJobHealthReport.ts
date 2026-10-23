@@ -6,6 +6,7 @@ import type { RawsyncExpiredLease } from "./rawsyncExpiredLease.ts";
 import type { RawsyncJobAttemptWarning } from "./rawsyncJobAttemptWarning.ts";
 import type { RawsyncJobFailureClass } from "./rawsyncJobFailureClass.ts";
 import type { RawsyncOrphanedManifest } from "./rawsyncOrphanedManifest.ts";
+import type { RawsyncRecoveryMetrics } from "./rawsyncRecoveryMetrics.ts";
 import type { RawsyncStaleSourceHead } from "./rawsyncStaleSourceHead.ts";
 
 export interface RawsyncJobHealthReport {
@@ -18,6 +19,7 @@ export interface RawsyncJobHealthReport {
   observed_at: string;
   orphaned_manifest_count: number;
   orphaned_manifests: RawsyncOrphanedManifest[];
+  recovery?: RawsyncRecoveryMetrics;
   retrying_near_limit: RawsyncJobAttemptWarning[];
   retrying_near_limit_count: number;
   stale_after_seconds: number;

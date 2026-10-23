@@ -27,9 +27,10 @@ func (q JobHealthQuery) Validate() error {
 
 // JobHealthReport contains tenant-scoped raw parse-job observations.
 type JobHealthReport struct {
-	ObservedAt        time.Time `json:"observed_at"`
-	MaxAttempts       int32     `json:"max_attempts"`
-	StaleAfterSeconds int32     `json:"stale_after_seconds"`
+	Recovery          *RecoveryMetrics `json:"recovery,omitempty"`
+	ObservedAt        time.Time        `json:"observed_at"`
+	MaxAttempts       int32            `json:"max_attempts"`
+	StaleAfterSeconds int32            `json:"stale_after_seconds"`
 
 	OrphanedManifests      []OrphanedManifest  `json:"orphaned_manifests"`
 	OrphanedManifestCount  int64               `json:"orphaned_manifest_count"`

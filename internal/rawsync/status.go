@@ -8,6 +8,7 @@ import (
 
 // Status summarizes the raw-sync metadata owned by one tenant.
 type Status struct {
+	Recovery          *RecoveryMetrics    `json:"recovery,omitempty"`
 	SourceHeads       []SourceHeadStatus  `json:"source_heads"`
 	ParseJobs         ParseJobCounts      `json:"parse_jobs"`
 	ActiveDeviceCount int64               `json:"active_device_count"`
