@@ -1227,6 +1227,7 @@ func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
 	require.Equal(t, RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
+	rootOpen := backend.logical[root].open.Load
 	watcher.Start()
 
 	require.NoError(t, os.Mkdir(intermediate, 0o700))
@@ -1237,6 +1238,7 @@ func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
+	require.Eventually(t, rootOpen, 5*time.Second, time.Millisecond)
 	first := filepath.Join(root, "first.jsonl")
 	require.NoError(t, os.WriteFile(first, []byte("first"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
@@ -1251,6 +1253,7 @@ func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
+	require.Eventually(t, rootOpen, 5*time.Second, time.Millisecond)
 	second := filepath.Join(root, "second.jsonl")
 	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
