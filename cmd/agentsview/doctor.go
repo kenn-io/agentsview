@@ -74,6 +74,7 @@ func newDoctorCommand() *cobra.Command {
 	cmd.AddCommand(newDoctorRemoteCommand())
 	cmd.AddCommand(newDoctorSyncCommand())
 	cmd.AddCommand(newDoctorMemoryCommand())
+	cmd.AddCommand(newDoctorEmbeddingsCommand())
 	return cmd
 }
 

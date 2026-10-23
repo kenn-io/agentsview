@@ -76,6 +76,7 @@ type EmbeddingsBuildOptions struct {
 	FullRebuild   bool
 	Backstop      bool
 	RepairInvalid bool
+	LocalProducer bool
 	Yes           bool
 	// IncludeAutomated is the --include-automated flag's parsed value; only
 	// meaningful when IncludeAutomatedSet is true (see that field).
@@ -110,6 +111,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		"Force a full mirror reconciliation scan without forcing a re-embed")
 	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
 		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
+	cmd.Flags().BoolVar(&opts.LocalProducer, "local-producer", false,
+		"Encode unmatched hub documents locally using the pinned hub recipe")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
@@ -125,6 +128,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 			"a full mirror reconciliation each time.")
 	cmd.Flags().StringVar(&opts.Store, "store", "",
 		"Embedding store to build (default: messages)")
+	cmd.MarkFlagsMutuallyExclusive("local-producer", "full-rebuild")
+	cmd.MarkFlagsMutuallyExclusive("local-producer", "backstop")
 	cmd.MarkFlagsMutuallyExclusive("full-rebuild", "repair-invalid")
 	cmd.MarkFlagsMutuallyExclusive("backstop", "repair-invalid")
 	return cmd
@@ -438,6 +443,7 @@ func runEmbeddingsBuild(
 		FullRebuild:      opts.FullRebuild,
 		Backstop:         opts.Backstop,
 		RepairInvalid:    opts.RepairInvalid,
+		LocalProducer:    opts.LocalProducer,
 		IncludeAutomated: includeAutomated,
 		Using:            opts.Using,
 	}
@@ -855,16 +861,25 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 		gens[i].Store = spec.Name
 	}
 
+	var hubStatus *vector.HubPullStatus
+	if spec.Name == vector.MessageIndexSpec().Name {
+		hubStatus, err = readHubPullStatus(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
 	if jsonOutput {
 		if gens == nil {
 			gens = []vector.GenerationInfo{}
 		}
 		return json.MarshalEncode(jsontext.NewEncoder(out), struct {
 			Generations []vector.GenerationInfo `json:"generations"`
-		}{gens})
+			HubPull     *vector.HubPullStatus   `json:"hub_pull,omitempty"`
+		}{gens, hubStatus})
 
 	}
 	printGenerationsTable(out, gens)
+	printHubPullStatus(out, hubStatus)
 	return nil
 }
 
@@ -1029,7 +1044,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
 		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
 		// Always send the resolved scope, including an explicit false override.
-		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using), LocalProducer: new(req.LocalProducer),
 	}})
 	if response == nil {
 		return err

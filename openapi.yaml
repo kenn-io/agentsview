@@ -4725,6 +4725,8 @@ components:
           type: boolean
         include_automated:
           type: boolean
+        local_producer:
+          type: boolean
         repair_invalid:
           type: boolean
         store:

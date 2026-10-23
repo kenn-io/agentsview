@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -16,7 +17,36 @@ import (
 )
 
 func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func(context.Context, vector.BuildRequest, func(vector.BuildProgress)) (vector.BuildResult, error) {
-	return func(ctx context.Context, req vector.BuildRequest, progress func(vector.BuildProgress)) (vector.BuildResult, error) {
+	return func(ctx context.Context, req vector.BuildRequest, progress func(vector.BuildProgress)) (result vector.BuildResult, buildErr error) {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			status := vector.HubPullStatus{Unmatched: -1}
+			previous, err := ix.HubPullStatus(ctx)
+			buildErr = errors.Join(buildErr, err)
+			if previous != nil {
+				status = *previous
+			}
+			if result.Fingerprint != "" {
+				missing, err := ix.MissingEmbeddedDocs(ctx, result.Fingerprint, nil)
+				buildErr = errors.Join(buildErr, err)
+				if err == nil {
+					status.Fingerprint, status.Unmatched = result.Fingerprint, missing
+				}
+			}
+			if buildErr != nil {
+				status.Reason = "hub pull unavailable"
+				for _, reason := range []string{"data version mismatch", "automated scope mismatch", "recipe mismatch"} {
+					if strings.HasPrefix(buildErr.Error(), reason) {
+						status.Reason = reason
+						break
+					}
+				}
+			} else if status.Unmatched > 0 {
+				status.Reason = "hash mismatch or hub coverage missing"
+			}
+			buildErr = errors.Join(buildErr, ix.SetHubPullStatus(ctx, status))
+		}()
 		hub, err := newProducerHub(cfg)
 		if err != nil {
 			return vector.BuildResult{}, err
@@ -40,7 +70,24 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 				Progress:   progress,
 			})
 			if !errors.Is(err, vector.ErrHubGenerationChanged) {
-				return result, err
+				if err != nil || !req.LocalProducer {
+					return result, err
+				}
+				enc, err := newVectorDocumentEncoder(recipe, req.Using)
+				if err != nil {
+					return result, err
+				}
+				_, server, err := recipe.Server(req.Using)
+				if err != nil {
+					return result, err
+				}
+				built, err := ix.Build(ctx, database.LocalEmbeddableSource(), enc, vectorGeneration(recipe), vector.BuildOptions{
+					IncludeAutomated: req.IncludeAutomated, BatchSize: server.BatchSize,
+					ModelContextTokens: recipe.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens,
+					Concurrency: server.Concurrency, Progress: progress,
+				})
+				built.Repair = result.Repair
+				return built, err
 			}
 		}
 		return vector.BuildResult{}, vector.ErrHubGenerationChanged

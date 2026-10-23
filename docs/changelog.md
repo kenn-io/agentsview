@@ -31,6 +31,10 @@ The latest release is
   Use `--local` for local data and `doctor remote` to check the selected target.
   Remote credentials use bounded file reads and redirects stay on the same
   origin. Memory lifecycle hooks use this default only in hosted-reader mode.
+- Spokes can reuse their hub's message embeddings and search them locally with
+  the saved recipe. Pull diagnostics name compatibility failures and unmatched
+  documents; `--local-producer` can fill missing coverage.
+
 - PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
   with bounded, resumable responses and optional zstd compression.
 
