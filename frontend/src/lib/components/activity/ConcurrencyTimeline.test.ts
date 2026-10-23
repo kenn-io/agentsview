@@ -279,6 +279,25 @@ function fullDayMinuteReport(): Report {
   });
 }
 
+// Lets a test resize the chart after it mounts.
+function controllableResizeObserver() {
+  const callbacks: Array<(width: number) => void> = [];
+  class Observer {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      callbacks.push((width) =>
+        this.callback(
+          [{ target, contentRect: { width } } as unknown as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        ),
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  return { Observer, resize: (width: number) => callbacks.forEach((cb) => cb(width)) };
+}
+
 // Reports one content width to every observer, as a resized panel would.
 function resizeObserverWithWidth(width: number) {
   return class {
@@ -1136,5 +1155,43 @@ describe("ConcurrencyTimeline", () => {
     });
     await fireEvent.click(getByRole("radio", { name: "User messages" }));
     expect(container.querySelector(".legend")?.textContent).toContain("15 min");
+  });
+  it("animates bars only while a resize changes the bar size", async () => {
+    vi.useFakeTimers();
+    const observer = controllableResizeObserver();
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: observer.Observer,
+    });
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: fullDayMinuteReport() },
+    });
+    await tick();
+    observer.resize(1500);
+    await tick();
+    // The first measurement replaces the placeholder width without animating.
+    expect(target.querySelector("[data-step-transition]")).toBeNull();
+    expect(target.querySelectorAll(".slot-hit").length).toBe(288);
+
+    observer.resize(1490);
+    await tick();
+    expect(target.querySelector("[data-step-transition]")).toBeNull();
+
+    observer.resize(600);
+    await tick();
+    expect(target.querySelectorAll(".slot-hit").length).toBe(96);
+    const fading = target.querySelector("[data-step-transition]");
+    expect(fading?.querySelectorAll(".concurrency-seg").length).toBeGreaterThan(0);
+
+    vi.advanceTimersByTime(300);
+    await tick();
+    expect(target.querySelector("[data-step-transition]")).toBeNull();
+    unmount(c);
+    target.remove();
+    vi.useRealTimers();
   });
 });

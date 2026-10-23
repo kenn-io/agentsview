@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Chart, Layer, Line, Rect, Spline, Text } from "layerchart";
   import { scaleLinear } from "d3-scale";
+  import { cubicOut } from "svelte/easing";
+  import { prefersReducedMotion } from "svelte/motion";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { Button, SegmentedControl, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
@@ -323,6 +325,7 @@
 
   let containerEl: HTMLDivElement | undefined = $state();
   let containerWidth = $state(600);
+  let containerMeasured = $state(false);
 
   $effect(() => {
     if (!containerEl) return;
@@ -330,6 +333,7 @@
       const entry = entries[0];
       if (entry) {
         containerWidth = Math.floor(entry.contentRect.width);
+        containerMeasured = true;
       }
     });
     ro.observe(containerEl);
@@ -526,6 +530,43 @@
       segments,
     };
   }));
+
+  // When a resize changes the bar size, each new bar grows out of the old bar
+  // that held its first bucket while the old bars fade out. Only this
+  // short-lived layer carries LayerChart motion: steady-state bars and
+  // ordinary resizes stay on the static path, so no tween runs per pixel.
+  const STEP_TRANSITION_MS = 280;
+  const BAR_TWEEN = { type: "tween", duration: STEP_TRANSITION_MS, easing: cubicOut } as const;
+  type TimelineBar = (typeof bars)[number];
+  let lastBars: TimelineBar[] = [];
+  let lastLayout: { report: Report; metric: TimelineMetric; step: number } | null = null;
+  let stepTransition = $state<{ from: TimelineBar[]; originByRaw: TimelineBar[] } | null>(null);
+  let stepTransitionTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // The first measurement replaces a placeholder width, so it never animates.
+  $effect.pre(() => {
+    if (!containerMeasured) return;
+    const layout = { report, metric, step: displayStepSeconds };
+    const prev = lastLayout;
+    lastLayout = layout;
+    if (!prev || prev.step === layout.step) return;
+    clearTimeout(stepTransitionTimer);
+    stepTransition = null;
+    if (prev.report !== layout.report || prev.metric !== layout.metric) return;
+    if (prefersReducedMotion.current || lastBars.length === 0) return;
+    const originByRaw: TimelineBar[] = [];
+    for (const bar of lastBars) {
+      for (let i = bar.rawStart; i < bar.rawEnd; i++) originByRaw[i] = bar;
+    }
+    stepTransition = { from: lastBars, originByRaw };
+    stepTransitionTimer = setTimeout(() => (stepTransition = null), STEP_TRANSITION_MS);
+  });
+
+  $effect(() => {
+    lastBars = bars;
+  });
+
+  $effect(() => () => clearTimeout(stepTransitionTimer));
 
   const selectionBounds = $derived.by(() => {
     if (!activeRange) return null;
@@ -769,20 +810,46 @@
             textAnchor="end"
           />
         {/each}
-        {#each bars as bar (bar.idx)}
-          {@const selected = isBarSelected(bar)}
-          <g class="concurrency-bar" data-concurrency-bar={bar.idx}>
-            {#each bar.segments as seg (seg.kind)}
-              <Rect
-                class={`concurrency-seg ${seg.kind}${selected ? " selected" : ""}`}
-                x={bar.x}
-                y={seg.y}
-                width={bar.w}
-                height={seg.height}
-              />
+        {#if stepTransition}
+          <g class="bar-fade-out" data-step-transition>
+            {#each stepTransition.from as bar (bar.rawStart)}
+              {#each bar.segments as seg (seg.kind)}
+                <Rect
+                  class={`concurrency-seg ${seg.kind}`}
+                  x={bar.x}
+                  y={seg.y}
+                  width={bar.w}
+                  height={seg.height}
+                />
+              {/each}
             {/each}
           </g>
-        {/each}
+        {/if}
+        <!-- Motion is fixed when a Rect mounts, so remount the bars when a
+             step transition starts and again when it ends. -->
+        {#key stepTransition}
+          {#each bars as bar (bar.rawStart)}
+            {@const selected = isBarSelected(bar)}
+            {@const origin = stepTransition?.originByRaw[bar.rawStart]}
+            <g class="concurrency-bar" data-concurrency-bar={bar.idx}>
+              {#each bar.segments as seg (seg.kind)}
+                {@const from = origin?.segments.find((s) => s.kind === seg.kind)}
+                <Rect
+                  class={`concurrency-seg ${seg.kind}${selected ? " selected" : ""}`}
+                  motion={origin ? BAR_TWEEN : undefined}
+                  initialX={origin?.x}
+                  initialWidth={origin?.w}
+                  initialY={origin ? (from?.y ?? PLOT_BOTTOM) : undefined}
+                  initialHeight={origin ? (from?.height ?? 0) : undefined}
+                  x={bar.x}
+                  y={seg.y}
+                  width={bar.w}
+                  height={seg.height}
+                />
+              {/each}
+            </g>
+          {/each}
+        {/key}
 
         {#if overlayMetric !== "none" && overlayPoints.length > 0}
           <Spline
@@ -1090,6 +1157,17 @@
   .timeline :global(.concurrency-seg.user_messages),
   .timeline :global(.concurrency-seg.assistant_messages) {
     stroke: none;
+  }
+
+  .timeline :global(.bar-fade-out) {
+    pointer-events: none;
+    animation: bar-fade-out 280ms ease-out forwards;
+  }
+
+  @keyframes bar-fade-out {
+    to {
+      opacity: 0;
+    }
   }
 
   .timeline :global(.concurrency-seg.selected) {
