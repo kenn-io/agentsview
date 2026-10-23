@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -63,6 +64,7 @@ func defaultUsageDateRange(
 }
 
 type UsageDailyConfig struct {
+	cmd          *cobra.Command
 	JSON         bool
 	Since        string
 	Until        string
@@ -184,6 +186,7 @@ func runUsageDailyResult(ctx context.Context, cfg UsageDailyConfig) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Command:              cfg.cmd,
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		AutoStart:            true,
@@ -295,6 +298,7 @@ func noTokenDataNote(agent string, totals db.UsageTotals) string {
 }
 
 type UsageStatuslineConfig struct {
+	cmd          *cobra.Command
 	JSON         bool
 	Agent        string
 	Offline      bool
@@ -343,6 +347,7 @@ func runUsageStatuslineResult(ctx context.Context, cfg UsageStatuslineConfig) er
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Command:              cfg.cmd,
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		AutoStart:            true,
@@ -677,7 +682,7 @@ func fetchHTTPDailyUsage(
 	if filter.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(filter.MinUserMessages))
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := transportAPIClient(tr, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return dailyUsageReport{}, err
 	}

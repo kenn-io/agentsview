@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
@@ -25,6 +26,7 @@ import (
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
 type ActivityReportConfig struct {
+	cmd                 *cobra.Command
 	Preset              string
 	Date                string
 	From                string
@@ -70,6 +72,7 @@ func runActivityReport(ctx context.Context, cfg ActivityReportConfig) error {
 		}
 	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Command:              cfg.cmd,
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
@@ -143,7 +146,7 @@ func fetchHTTPActivityReport(
 		}
 		q.Date = &runtime.Date{Time: date}
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := transportAPIClient(tr, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -228,7 +231,7 @@ func fetchHTTPActivitySessionPage(
 	if cfg.SessionsReportID != "" {
 		query.IncludeReport = new(true)
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := transportAPIClient(tr, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -377,8 +380,14 @@ func resolveActivityReportPriced(
 // query, and runs the report against the database. It is the testable seam:
 // all validation (timezone, bounds, bucket allow-list, range limits) happens
 // inside activity.ResolveQuery before any database query.
+type activityCLIStore interface {
+	db.Store
+	db.ActivityReportArtifactStore
+	db.ActivityReportTokenStore
+}
+
 func resolveActivityReport(
-	ctx context.Context, cfg ActivityReportConfig, database *db.DB,
+	ctx context.Context, cfg ActivityReportConfig, database activityCLIStore,
 ) (activity.Report, error) {
 	var q activity.Query
 	var f db.AnalyticsFilter
@@ -496,7 +505,7 @@ func resolveCLIActivitySelection(
 }
 
 func decodeCLIActivitySessionCursor(
-	database *db.DB,
+	database db.ActivityReportTokenStore,
 	token string,
 ) (cliActivitySessionCursor, error) {
 	payload, err := database.DecodeActivityReportToken(token)

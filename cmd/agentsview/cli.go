@@ -529,6 +529,7 @@ func newTokenUseCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			noticeLocalArchive(cmd)
 			return runTokenUse(cmd, args)
 		},
 	}
@@ -578,10 +579,11 @@ func newProjectsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runProjects(cmd.Context(), outputFormat(cmd) == "json")
+			runProjects(cmd, outputFormat(cmd) == "json")
 		},
 	}
 	registerFormatFlags(cmd.Flags())
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -608,6 +610,7 @@ func newHealthCommand() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.Limit, "limit",
 		defaultHealthLimit,
 		"Number of sessions to list (max 500)")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -625,6 +628,7 @@ func newUsageCommand() *cobra.Command {
 	cmd.AddCommand(newUsageDailyCommand())
 	cmd.AddCommand(newUsageStatuslineCommand())
 	cmd.AddCommand(newUsageCursorCommand())
+	registerRemoteReadFlags(cmd.PersistentFlags())
 	return cmd
 }
 
@@ -645,6 +649,7 @@ func newUsageDailyCommand() *cobra.Command {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
+			cfg.cmd = cmd
 			return runUsageDaily(cmd.Context(), cfg)
 		},
 	}
@@ -654,8 +659,8 @@ func newUsageDailyCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.All, "all", false, "Include all history (overrides default 30-day window)")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Breakdown, "breakdown", false, "Show per-model breakdown rows")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
 	cmd.Flags().StringVar(&cfg.Timezone, "timezone", "", "IANA timezone for date bucketing")
 	return cmd
 }
@@ -676,13 +681,14 @@ func newUsageStatuslineCommand() *cobra.Command {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
+			cfg.cmd = cmd
 			return runUsageStatusline(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
 	return cmd
 }
 
@@ -698,6 +704,7 @@ func newActivityCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newActivityReportCommand())
+	registerRemoteReadFlags(cmd.PersistentFlags())
 	return cmd
 }
 
@@ -717,6 +724,7 @@ func newActivityReportCommand() *cobra.Command {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
+			cfg.cmd = cmd
 			return runActivityReport(cmd.Context(), cfg)
 		},
 	}
@@ -745,8 +753,8 @@ func newActivityReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.SessionsBucketEnd, "sessions-bucket-end", "",
 		"Exclusive end of the zero-based session bucket range")
 	registerFormatFlags(cmd.Flags())
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
 	return cmd
 }
 
