@@ -332,8 +332,11 @@ candidate examples exclude hidden sessions.
 
 Scope changes invalidate existing session cursors when the served set or public
 aliases change. Physical projection reads still include shadow rows. `list`
-counts physical raw rows, including user trash, as served or shadow, and prints
-the last stored parity audit.
+counts physical raw rows, including user trash, as served or shadow. It also
+prints superseded legacy counts, unresolved legacy pins and the last gate audit.
+A shared group may contribute to several scope rows. `raw-sync server-status`
+returns the same scope states and counts in its `rollout` array; these diagnostics
+cannot authorize activation.
 
 Follow [the existing-deployment upgrade recipe](#upgrade-an-existing-deployment)
 after upgrading. The runtime needs `SELECT` on `raw_rollout_scopes`, and must
@@ -366,7 +369,7 @@ Once those prerequisites are available, use this order:
    target. For example: `pg raw-rollout activate provision --device device-a`.
    `--accept-differences` waives only content differences. The audit retains the
    original counts, pass result and explicit waiver; it never stores transcripts.
-5. Inspect `pg raw-rollout list provision`. Confirm
+5. Inspect `pg raw-rollout list provision` and `raw-sync server-status`. Confirm
    reads use the server before retiring local ingestion and embedding work on
    each device. Confirm raw capture continues uploading after any restart.
 6. To return a scope to legacy service, run

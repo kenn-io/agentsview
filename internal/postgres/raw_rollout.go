@@ -21,6 +21,7 @@ type RawRolloutScope struct {
 	Served                  int64          `json:"served"`
 	Shadow                  int64          `json:"shadow"`
 	Superseded              int64          `json:"superseded"`
+	UnresolvedPins          int64          `json:"unresolved_pins"`
 }
 
 func effectiveRawRollout(scopes []RawRolloutScope, device, provider string) string {
@@ -171,20 +172,9 @@ func ListRawRollout(ctx context.Context, database *sql.DB, schema, tenant, devic
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	scopes, err := loadRawRolloutScopes(ctx, tx)
+	scopes, err := loadRawRolloutDiagnostics(ctx, tx, device, provider)
 	if err != nil {
 		return nil, err
 	}
-	selected := []RawRolloutScope{}
-	for _, scope := range scopes {
-		if device != "" && scope.DeviceID != device || provider != "" && scope.Provider != provider {
-			continue
-		}
-		err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE NOT s.rollout_hidden),count(*) FILTER(WHERE s.rollout_hidden) FROM sessions s WHERE s.provenance_kind='raw' AND EXISTS(SELECT 1 FROM raw_session_branches b JOIN raw_source_projections p ON p.source_id=b.source_id WHERE b.group_id=s.raw_group_id AND b.active AND ($1='' OR p.device_id=$1) AND ($2='' OR p.provider=$2))`, scope.DeviceID, scope.Provider).Scan(&scope.Served, &scope.Shadow)
-		if err != nil {
-			return nil, err
-		}
-		selected = append(selected, scope)
-	}
-	return selected, tx.Commit()
+	return scopes, tx.Commit()
 }
