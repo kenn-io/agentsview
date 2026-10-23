@@ -10,9 +10,10 @@ import (
 // replica generation (and one chunk table); Model and Dimension are recorded
 // for diagnostics and to size the vector column.
 type VectorGenerationInfo struct {
-	Fingerprint string
-	Model       string
-	Dimension   int
+	Fingerprint      string
+	Model            string
+	Dimension        int
+	IncludeAutomated *bool
 	// Params is the generation's immutable input recipe; nil when the
 	// generation is unpublished or predates recipe publication.
 	Params map[string]string

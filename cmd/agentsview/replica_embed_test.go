@@ -195,8 +195,12 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 			require.Len(t, replica.pushed, 1)
 			assert.Equal(t, published.Fingerprint, replica.pushed[0].Fingerprint)
 			require.Len(t, replica.planned, 1, "the push plans the generation before building")
-			assert.Equal(t, replica.pushed[0], replica.planned[0],
-				"the planned generation is the one the build exports")
+			// Only the completed export verifies scope; planning identifies its recipe.
+			assert.Nil(t, replica.planned[0].IncludeAutomated)
+			assert.Equal(t, new(false), replica.pushed[0].IncludeAutomated)
+			exportedRecipe := replica.pushed[0]
+			exportedRecipe.IncludeAutomated = nil
+			assert.Equal(t, exportedRecipe, replica.planned[0], "the planned recipe is the one the build exports")
 			if adopted {
 				assert.Nil(t, replica.pushed[0].Params)
 			} else {

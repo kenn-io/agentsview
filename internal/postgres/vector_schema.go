@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS vector_generation_machines (
     generation_id BIGINT NOT NULL,
     machine       TEXT NOT NULL,
     last_push_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    data_version INTEGER,
+    include_automated BOOLEAN,
     PRIMARY KEY (generation_id, machine)
 );
 CREATE TABLE IF NOT EXISTS vector_documents (

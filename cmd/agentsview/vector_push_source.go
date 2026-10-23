@@ -153,7 +153,7 @@ func (e *vectorPushExport) Generation() storage.VectorGenerationInfo {
 	exp := e.export.Generation()
 	return storage.VectorGenerationInfo{
 		Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension,
-		Params: e.params,
+		Params: e.params, IncludeAutomated: exp.IncludeAutomated,
 	}
 }
 

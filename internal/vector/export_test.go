@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
+	"hegel.dev/go/hegel"
 )
 
 // fakeExportEncoder returns a deterministic 4-dimensional encoder for export
@@ -385,4 +387,70 @@ func sessionDocHashes(t *testing.T, ix *Index) map[string]string {
 	hashes, err := export.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	return hashes
+}
+
+func TestExportPreservesUnknownScope(t *testing.T) {
+	ix, _ := newBuiltTestIndex(t)
+	require.NoError(t, ix.metaDelete(t.Context(), scopeIncludeAutomatedKey))
+	exp, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer exp.Close()
+	assert.Nil(t, exp.Generation().IncludeAutomated, "a legacy mirror has no published scope")
+}
+
+func TestExportScopeRejectsConcurrentCommit(t *testing.T) {
+	ix, gen := newBuiltTestIndex(t)
+	hegel.Test(t, func(ht *hegel.T) {
+		before := hegel.Draw(ht, hegel.Booleans())
+		afterSnapshot := hegel.Draw(ht, hegel.Booleans())
+		require.NoError(ht, ix.setIncludeAutomatedScope(ht.Context(), before))
+		snap, _, err := ix.exportSnapshot(ht.Context(), gen.Fingerprint(), func(ctx context.Context, fp string) (*sqlitevec.Snapshot[string, string], error) {
+			change := func() {
+				require.NoError(ht, ix.setIncludeAutomatedScope(ctx, !before))
+				require.NoError(ht, ix.setIncludeAutomatedScope(ctx, before))
+			}
+			if !afterSnapshot {
+				change()
+			}
+			snapshot, err := ix.store.Snapshot(ctx, fp)
+			if afterSnapshot {
+				change()
+			}
+			return snapshot, err
+		})
+		require.ErrorIs(ht, err, ErrExportNotReady)
+		require.Nil(ht, snap)
+		exp, ok, err := ix.BeginExport(ht.Context(), nil)
+		require.NoError(ht, err)
+		require.True(ht, ok)
+		require.NotNil(ht, exp.Generation().IncludeAutomated)
+		require.Equal(ht, before, *exp.Generation().IncludeAutomated)
+		require.NoError(ht, exp.Close())
+	}, hegel.WithTestCases(1000))
+}
+
+func TestExportCanceledScopeChangeDoesNotCertifyOldScope(t *testing.T) {
+	ix, gen := newBuiltTestIndex(t)
+	_, err := ix.Build(t.Context(), exportTestSource(), fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: true})
+	require.NoError(t, err)
+	_, err = ix.Build(t.Context(), failingRefreshSource{
+		unit: db.EmbeddableUnit{Kind: "user", SessionID: "session-2", SourceUUID: "u2", Deleted: true},
+		err:  context.Canceled,
+	}, fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: false})
+	require.ErrorIs(t, err, context.Canceled)
+	export, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, export.Close()) })
+	assert.Nil(t, export.Generation().IncludeAutomated, "interrupted scope changes cannot certify the previous scope")
+	require.NoError(t, export.Close())
+	_, err = ix.Build(t.Context(), exportTestSource(), fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: false})
+	require.NoError(t, err)
+	recovered, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, recovered.Generation().IncludeAutomated)
+	assert.False(t, *recovered.Generation().IncludeAutomated)
+	require.NoError(t, recovered.Close())
 }

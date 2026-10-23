@@ -273,6 +273,10 @@ The latest release is
   Remote credentials use bounded file reads and redirects stay on the same
   origin. Memory lifecycle hooks use this default only in hosted-reader mode.
 
+- PostgreSQL vector pushes now record parser and automated-session scope
+  compatibility. A changed session invalidates stale coverage from other
+  generations before clients can reuse its embeddings.
+
 **Bug fixes**
 
 - Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and

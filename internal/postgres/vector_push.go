@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -217,7 +218,7 @@ func (s *Sync) pushVectors(
 	requestedScope := scope
 	var resolved vectorGeneration
 	if scope != nil {
-		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -240,7 +241,7 @@ func (s *Sync) pushVectors(
 				s.afterVectorGenerationLookup = nil
 				hook()
 			}
-			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 			if err != nil {
 				return res, err
 			}
@@ -319,6 +320,13 @@ func (s *Sync) pushVectors(
 		log.Printf("vector push: comparing %d local session(s) against %d PG state row(s) for generation %d",
 			len(local), len(pgState), resolved.id)
 	}
+	// Session writes commit separately. Invalidate changed compatibility before
+	// any chunks become visible, and certify it only after full reconciliation.
+	if scope == nil {
+		if err := s.markVectorGenerationMachinePending(ctx, gen, resolved, witnessKey); err != nil {
+			return res, err
+		}
+	}
 	if err := s.applyVectorDeltas(
 		ctx, resolved, owner, full, local, pgState, export,
 		failedSessions, onProgress, &res,
@@ -344,7 +352,7 @@ func (s *Sync) pushVectors(
 				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
 			)
 		}
-		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -375,7 +383,7 @@ func (s *Sync) pushVectors(
 				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
 			)
 		}
-		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -405,7 +413,7 @@ func (s *Sync) pushVectors(
 			hook()
 		}
 		recorded, err := s.recordVectorGenerationMachine(
-			ctx, gen.Fingerprint, resolved, witnessKey,
+			ctx, gen.Fingerprint, resolved, witnessKey, gen.IncludeAutomated,
 		)
 		if err != nil {
 			return res, err
@@ -427,7 +435,7 @@ func (s *Sync) pushVectors(
 }
 
 func (s *Sync) lookupVectorGeneration(
-	ctx context.Context, fingerprint, witnessKey string,
+	ctx context.Context, fingerprint, witnessKey string, includeAutomated *bool,
 ) (vectorGeneration, bool, error) {
 	var genID int64
 	var createdAt time.Time
@@ -452,8 +460,9 @@ func (s *Sync) lookupVectorGeneration(
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2)`,
-		genID, witnessKey).Scan(&machineRecorded); err != nil {
+     WHERE generation_id = $1 AND machine = $2
+       AND data_version = $3 AND include_automated IS NOT DISTINCT FROM $4)`,
+		genID, witnessKey, db.CurrentDataVersion(), includeAutomated).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, false, fmt.Errorf(
 			"reading vector push machine record: %w", err,
 		)
@@ -490,6 +499,19 @@ func (s *Sync) prepareVectorBaseSchema(
 	if unavailable != "" {
 		res.Skipped, res.SkippedReason = true, unavailable
 		return true, nil
+	}
+	existing, err := loadExistingColumns(ctx, s.pg, nil, "vector_generation_machines")
+	if err != nil {
+		return false, err
+	}
+	if _, err := ensureColumns(ctx, s.pg, existing, []columnMigration{
+		{table: "vector_generation_machines", column: "data_version", def: "data_version INTEGER"},
+		{table: "vector_generation_machines", column: "include_automated", def: "include_automated BOOLEAN"},
+	}); err != nil {
+		if s.skipVectorsOnPrivilegeError(err, res) {
+			return true, nil
+		}
+		return false, fmt.Errorf("adding vector compatibility metadata: %w", err)
 	}
 	return false, nil
 }
@@ -927,16 +949,40 @@ func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
 	return s.machine + "|" + s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), nil
 }
 
-func (s *Sync) recordVectorGenerationMachine(
-	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string,
-) (bool, error) {
-	res, err := s.pg.ExecContext(ctx, `
-INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-SELECT id, $4, now()
+func (s *Sync) markVectorGenerationMachinePending(
+	ctx context.Context, info storage.VectorGenerationInfo, gen vectorGeneration, witnessKey string,
+) error {
+	_, err := s.pg.ExecContext(ctx, `
+INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
+SELECT id, $4, now(), NULL, NULL
   FROM vector_generations
  WHERE id = $1 AND fingerprint = $2 AND created_at = $3
-ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at`,
-		gen.id, fingerprint, gen.createdAt, witnessKey)
+ON CONFLICT (generation_id, machine) DO UPDATE SET data_version = NULL, include_automated = NULL
+ WHERE vector_generation_machines.data_version IS DISTINCT FROM $5
+    OR vector_generation_machines.include_automated IS DISTINCT FROM $6`,
+		gen.id, info.Fingerprint, gen.createdAt, witnessKey, db.CurrentDataVersion(), info.IncludeAutomated)
+	if err != nil {
+		return fmt.Errorf("marking vector push compatibility pending: %w", err)
+	}
+	return nil
+}
+
+func (s *Sync) recordVectorGenerationMachine(
+	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string, includeAutomated *bool,
+) (bool, error) {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("starting vector push witness transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
+INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
+SELECT id, $4, now(), $5, $6
+  FROM vector_generations
+ WHERE id = $1 AND fingerprint = $2 AND created_at = $3
+ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at,
+ data_version = EXCLUDED.data_version, include_automated = EXCLUDED.include_automated`,
+		gen.id, fingerprint, gen.createdAt, witnessKey, db.CurrentDataVersion(), includeAutomated)
 	if err != nil {
 		return false, fmt.Errorf("recording vector push machine: %w", err)
 	}
@@ -944,7 +990,22 @@ ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_
 	if err != nil {
 		return false, fmt.Errorf("confirming vector push machine record: %w", err)
 	}
-	return rows > 0, nil
+	if rows == 0 {
+		return false, nil
+	}
+	// The marker and filter scope identify this publisher across machine renames.
+	// Publish its new compatibility and retire aliases in one transaction.
+	suffix := witnessKey[strings.LastIndex(witnessKey, "|"+pushMarkerKeyPrefix):]
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine <> $2
+   AND right(machine, length($3)) = $3`, gen.id, witnessKey, suffix); err != nil {
+		return false, fmt.Errorf("retiring renamed vector push witnesses: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("committing vector push witness: %w", err)
+	}
+	return true, nil
 }
 
 // readVectorPushState loads the delta state for genID, joined with each
@@ -1099,6 +1160,27 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
+	// Remove invalidated chunks before their coverage records, so later scope
+	// eviction can prune shared documents without orphaned searchable vectors.
+	// Re-read generations under the session lock; another pusher may have
+	// published one after this push collected its outer scope.
+	generations, err := existingChunkGenerationsTx(ctx, tx)
+	if err != nil {
+		return vectorSessionOutcome{}, err
+	}
+	for _, id := range generations {
+		if id == scope.gen.id {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (
+ SELECT d.doc_key FROM vector_documents d JOIN vector_push_state ps ON ps.session_id=d.session_id
+ WHERE d.session_id=$1 AND ps.generation_id=$2 AND ps.doc_agg_hash<>$3)`, sessionID, id, aggHash); err != nil {
+			return vectorSessionOutcome{}, fmt.Errorf("removing invalidated vector chunks: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vector_push_state WHERE session_id=$1 AND generation_id<>$2 AND doc_agg_hash<>$3`, sessionID, scope.gen.id, aggHash); err != nil {
+		return vectorSessionOutcome{}, fmt.Errorf("invalidating stale vector coverage: %w", err)
+	}
 	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
