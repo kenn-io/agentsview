@@ -26991,6 +26991,37 @@ type RawsyncParseJobCounts struct {
 	Superseded int64 `json:"superseded"`
 }
 
+type RawsyncRolloutScopeStatus struct {
+	DeviceID       *string `json:"device_id" validate:"required"`
+	Provider       *string `json:"provider" validate:"required"`
+	Served         int64   `json:"served"`
+	Shadow         int64   `json:"shadow"`
+	State          string  `json:"state" validate:"required"`
+	Superseded     int64   `json:"superseded"`
+	UnresolvedPins int64   `json:"unresolved_pins"`
+}
+
+func (r RawsyncRolloutScopeStatus) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(r.DeviceID).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("DeviceID", err)
+		}
+	}
+	if v, ok := any(r.Provider).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Provider", err)
+		}
+	}
+	if err := typesValidator.Var(r.State, "required"); err != nil {
+		errors = errors.Append("State", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type RawsyncSourceHeadStatus struct {
 	ConfiguredRootID     string     `json:"configured_root_id" validate:"required"`
 	DeviceID             string     `json:"device_id" validate:"required"`
@@ -27009,11 +27040,12 @@ func (r RawsyncSourceHeadStatus) Validate() error {
 }
 
 type RawsyncStatus struct {
-	ActiveDeviceCount int64                      `json:"active_device_count"`
-	Devices           []RawsyncDeviceStatus      `json:"devices" validate:"required"`
-	ParseJobs         RawsyncParseJobCounts      `json:"parse_jobs"`
-	SourceHeads       []RawsyncSourceHeadStatus  `json:"source_heads" validate:"required"`
-	Uploads           RawsyncUploadStatusSummary `json:"uploads"`
+	ActiveDeviceCount int64                       `json:"active_device_count"`
+	Devices           []RawsyncDeviceStatus       `json:"devices" validate:"required"`
+	ParseJobs         RawsyncParseJobCounts       `json:"parse_jobs"`
+	Rollout           []RawsyncRolloutScopeStatus `json:"rollout" validate:"required"`
+	SourceHeads       []RawsyncSourceHeadStatus   `json:"source_heads" validate:"required"`
+	Uploads           RawsyncUploadStatusSummary  `json:"uploads"`
 }
 
 func (r RawsyncStatus) Validate() error {
@@ -27031,6 +27063,16 @@ func (r RawsyncStatus) Validate() error {
 	if v, ok := any(r.ParseJobs).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("ParseJobs", err)
+		}
+	}
+	if err := typesValidator.Var(r.Rollout, "required"); err != nil {
+		errors = errors.Append("Rollout", err)
+	}
+	for i, item := range r.Rollout {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Rollout[%d]", i), err)
+			}
 		}
 	}
 	if err := typesValidator.Var(r.SourceHeads, "required"); err != nil {

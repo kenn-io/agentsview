@@ -1394,8 +1394,8 @@ agentsview pg raw-rollout activate [target] [--device ID] [--provider P] [--acce
 ```
 
 The tenant scope must exist before narrower scopes and can be cleared only
-when no narrower scopes remain. List output includes physical served and shadow
-counts, plus the last stored parity audit.
+when no narrower scopes remain. List output includes physical served, shadow,
+superseded and unresolved-pin counts, plus the last stored parity audit.
 `activate` is an owner-only, transactional parity gate. Its optional waiver
 accepts only content differences and preserves their counts in the audit.
 

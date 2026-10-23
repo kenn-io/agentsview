@@ -6127,6 +6127,36 @@ components:
         - failed
         - superseded
       type: object
+    RawsyncRolloutScopeStatus:
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        provider:
+          type: string
+        served:
+          format: int64
+          type: integer
+        shadow:
+          format: int64
+          type: integer
+        state:
+          type: string
+        superseded:
+          format: int64
+          type: integer
+        unresolved_pins:
+          format: int64
+          type: integer
+      required:
+        - device_id
+        - provider
+        - state
+        - served
+        - shadow
+        - superseded
+        - unresolved_pins
+      type: object
     RawsyncSourceHeadStatus:
       additionalProperties: false
       properties:
@@ -6212,6 +6242,10 @@ components:
           type: array
         parse_jobs:
           $ref: "#/components/schemas/RawsyncParseJobCounts"
+        rollout:
+          items:
+            $ref: "#/components/schemas/RawsyncRolloutScopeStatus"
+          type: array
         source_heads:
           items:
             $ref: "#/components/schemas/RawsyncSourceHeadStatus"
@@ -6219,6 +6253,7 @@ components:
         uploads:
           $ref: "#/components/schemas/RawsyncUploadStatusSummary"
       required:
+        - rollout
         - source_heads
         - parse_jobs
         - active_device_count

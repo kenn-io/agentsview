@@ -261,3 +261,10 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/rawsync
         name: rawsync
+  # Required pointers distinguish a present empty wildcard from an absent key.
+  - target: $.components.schemas.RawsyncRolloutScopeStatus.properties.device_id
+    update:
+      x-go-type: "*string"
+  - target: $.components.schemas.RawsyncRolloutScopeStatus.properties.provider
+    update:
+      x-go-type: "*string"
