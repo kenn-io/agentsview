@@ -316,7 +316,19 @@ Cutover tooling can read complete physical PostgreSQL sessions through the
 tenant runtime role, including trashed rows. These reads use one caller-owned
 `REPEATABLE READ READ ONLY` transaction for the entire comparison and source
 readiness report. They apply no public transcript limits or visibility filters.
-The operator comparison command is not available yet.
+
+Matching support pairs projected sessions with retained pushed history using
+an equal agent and an exact recorded parser ID. Codex thread and page IDs stay
+distinct, and variants keep their own prefixes. Piebald and sessions without a
+stable source ID are `unmatchable` when a legacy candidate exists, or `raw_only`
+otherwise. Host-prefixed and multi-machine legacy IDs remain `legacy_only`
+history. Matching never strips prefixes or guesses an alias from content.
+
+The matcher groups connected candidates before classifying them. A stable-ID
+component with more than one candidate on either side is `ambiguous`; a unique
+pair is eligible for content comparison. Identity matching alone does not
+establish content parity or permit activation. The operator comparison command
+is not available yet.
 
 The stored-content comparison uses this field matrix:
 
