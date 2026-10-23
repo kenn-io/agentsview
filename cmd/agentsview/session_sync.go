@@ -66,6 +66,9 @@ func classifySyncArgForCommand(
 func syncService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
+	if cfg.HostedRawMode() {
+		return nil, nil, config.ErrHostedRawMode
+	}
 	if tr.Mode == transportHTTP {
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil

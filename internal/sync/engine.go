@@ -940,6 +940,11 @@ func (e *Engine) ResetStagedProviderStatHashes() {
 func NewEngine(ctx context.Context,
 	database *db.DB, cfg EngineConfig,
 ) *Engine {
+	sourceSyncErr := database.RequireSourceSync(ctx)
+	if errors.Is(sourceSyncErr, config.ErrHostedRawMode) {
+		cfg.Ephemeral = true
+		cfg.DisableSignalRecomputation = true
+	}
 	database.SetArchiveContent(cfg.ArchiveContent)
 	skipCache := make(map[string]int64)
 	if !cfg.Ephemeral {
@@ -957,7 +962,6 @@ func NewEngine(ctx context.Context,
 	if cfg.ProviderFactories != nil {
 		providerFactories = append([]parser.ProviderFactory(nil), cfg.ProviderFactories...)
 	}
-	sourceSyncErr := database.RequireSourceSync(ctx)
 	if errors.Is(sourceSyncErr, db.ErrArchiveOnly) && cfg.ArchiveReparse {
 		sourceSyncErr = nil
 	}
@@ -4986,6 +4990,9 @@ func (stats *SyncStats) ProcessingComplete() bool {
 func (e *Engine) RunStartupMaintenance(
 	ctx context.Context, work func() error,
 ) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if e.startupMaintenanceReady != nil {
 		select {
 		case <-ctx.Done():
@@ -5037,6 +5044,9 @@ func (e *Engine) RunStartupSyncFallback(
 // sync and resync operations. Use this for daemon-owned maintenance operations
 // that must serialize with sync but should not force a local sync first.
 func (e *Engine) RunExclusive(work func() error) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if e.refuseWriteInForceParse("RunExclusive") {
 		return errors.New(
 			"RunExclusive refused on report-only parse-diff engine",
@@ -5051,6 +5061,9 @@ func (e *Engine) RunExclusive(work func() error) error {
 // lock when ctx ends, such as a push holding the daemon's push turn. It
 // returns ctx.Err() without running work if ctx ends before the lock is free.
 func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if e.refuseWriteInForceParse("RunExclusiveCtx") {
 		return errors.New(
 			"RunExclusiveCtx refused on report-only parse-diff engine",
@@ -5083,6 +5096,9 @@ func (e *Engine) lockSync(try bool) error {
 // lost; user-triggered sync requests use this method to fail promptly instead
 // of waiting behind a filesystem operation that may be stalled.
 func (e *Engine) TryRunExclusive(work func() error) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if e.refuseWriteInForceParse("TryRunExclusive") {
 		return errors.New(
 			"TryRunExclusive refused on report-only parse-diff engine",
@@ -5102,6 +5118,9 @@ func (e *Engine) TryRunExclusive(work func() error) error {
 // recomputes must land first or pushed sessions could carry stale
 // signal/secret fields.
 func (e *Engine) RunExclusiveFlushed(work func() error) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if e.refuseWriteInForceParse("RunExclusiveFlushed") {
 		return errors.New(
 			"RunExclusiveFlushed refused on report-only parse-diff engine",
@@ -8286,7 +8305,7 @@ func (e *Engine) syncAllLocked(
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
 	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
-	if e.sourceSyncErr != nil && e.archiveStore == nil {
+	if e.sourceSyncErr != nil && (e.archiveStore == nil || errors.Is(e.sourceSyncErr, config.ErrHostedRawMode)) {
 		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}}
 	}
 	if ctx.Err() != nil {

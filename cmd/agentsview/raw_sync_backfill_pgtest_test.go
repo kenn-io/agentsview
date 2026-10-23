@@ -30,6 +30,7 @@ import (
 )
 
 func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T) {
+	t.Setenv("AGENTSVIEW_RAW_SYNC_HOSTED", "true")
 	serverCfg, admin := hostedRuntimeConfig(t)
 	authStore, err := postgres.NewRawDeviceAuthStore(admin)
 	require.NoError(t, err)

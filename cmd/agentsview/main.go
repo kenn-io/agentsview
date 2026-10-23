@@ -164,7 +164,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if err != nil {
 		fatal("reading archive mode: %v", err)
 	}
-	if archiveOnly {
+	if archiveOnly || cfg.HostedRawMode() {
 		cfg.NoSync = true
 	}
 	start := time.Now()
@@ -230,7 +230,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var workerStartupResult workerResult
 	workerSyncDone := false
 	startupRebuild := false
-	if !cfg.NoSync || archiveOnly {
+	if !cfg.HostedRawMode() && (!cfg.NoSync || archiveOnly) {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
 		if err != nil && opts.SkipInitialSync {
 			fatal("checking archive before startup: %v", err)
@@ -268,7 +268,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	startupProgress.SetPhase("opening database")
 	databaseProgress := newResyncProgressPrinter(os.Stdout, time.Now)
-	database, writeLock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
+	database, writeLock, err := openServeDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 		return openDBWithProgress(ctx, cfg, func(p db.OpenProgress) {
 			if p.ResyncRequired {
 				fmt.Println(p.Detail)
@@ -290,7 +290,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}()
 
-	if archiveOnly && database.NeedsResync() && !startupRebuild {
+	if archiveOnly && !cfg.HostedRawMode() && database.NeedsResync() && !startupRebuild {
 		// The engine disables every provider for an archive-only database and
 		// carries stored sessions forward without accessing receiving-host roots.
 		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
@@ -314,7 +314,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	for _, def := range parser.Registry {
-		if archiveOnly || !cfg.IsUserConfigured(def.Type) {
+		if archiveOnly || cfg.HostedRawMode() || !cfg.IsUserConfigured(def.Type) {
 			continue
 		}
 		warnMissingDirs(
@@ -324,7 +324,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	// Remove stale temp DB from a prior crashed resync.
-	cleanResyncTemp(cfg.DBPath)
+	if !cfg.HostedRawMode() {
+		cleanResyncTemp(cfg.DBPath)
+	}
 
 	idleTracker := newDaemonIdleTracker(cfg, stop)
 
@@ -365,7 +367,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	var frictionReviews *frictionReviewer
-	if cfg.Friction.Enabled {
+	if cfg.Friction.Enabled && !cfg.HostedRawMode() {
 		frictionReviews = newFrictionReviewer()
 		emitter = notifyTeeEmitter{primary: emitter, notify: frictionReviews.Notify}
 	}
@@ -532,7 +534,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer engine.Close()
 	}
 
-	if !archiveOnly {
+	if !archiveOnly && !cfg.HostedRawMode() {
 		identityBackfillEngine := engine
 		if identityBackfillEngine == nil {
 			identityBackfillEngine = sync.NewEngine(ctx, database, sync.EngineConfig{
@@ -563,16 +565,22 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if engine != nil {
 		pricingRefreshRunner = engine
 	}
-	seedPricing(database, pricingRefreshRunner)
+	if !cfg.HostedRawMode() {
+		seedPricing(database, pricingRefreshRunner)
+	}
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
-	scheduler := poller.Start(ctx,
+	jobs := []poller.Job{
 		pricingRefreshJob(database, pricingRefreshRunner),
 		codexCloudSyncJob(codexCloudSync, idleTracker),
 		codexCloudLiveJob(codexCloudMonitor, idleTracker),
-	)
+	}
+	if cfg.HostedRawMode() {
+		jobs = nil
+	}
+	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {
 		stop()
@@ -719,7 +727,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		idleTracker.Touch()
 		go idleTracker.Run(ctx)
 	}
-	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
+	if !cfg.HostedRawMode() {
+		startDaemonUsageCacheBackfill(ctx, database, idleTracker)
+	}
 	if engine != nil && !cfg.NoSync && opts.SkipInitialSync {
 		go func() {
 			timer := time.NewTimer(deferredStartupSyncGracePeriod)
@@ -1732,11 +1742,20 @@ func openDBWithProgress(ctx context.Context, cfg config.Config, progress db.Open
 func openReadOnlyDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 	applyClassifierConfig(cfg)
 	database, err := db.OpenReadOnly(ctx, cfg.DBPath)
+	if cfg.HostedRawMode() && errors.Is(err, os.ErrNotExist) {
+		database, err = db.OpenEmptyReadOnly(ctx)
+	}
 	if err != nil {
 		return nil, schemaUpgradeHint(err)
 	}
+	if cfg.HostedRawMode() {
+		database.DisableLocalDerivation()
+	}
 	database.SetArchiveContent(cfg.ArchiveContent)
-	if database.NeedsResync() {
+	if cfg.HostedRawMode() && database.NeedsResync() {
+		log.Print("[raw_sync] hosted: serving stored archive without local resync")
+	}
+	if database.NeedsResync() && !cfg.HostedRawMode() {
 		database.Close()
 		return nil, appendDaemonRestartUpgradeHint(
 			errors.New("opening read-only database: archive data needs resync"))
@@ -1804,6 +1823,9 @@ func openWriteDBWith(
 	ctx context.Context, cfg config.Config,
 	openArchive func(context.Context, config.Config) (*db.DB, error),
 ) (*db.DB, *writeOwnerLock, error) {
+	if cfg.HostedRawMode() {
+		return nil, nil, config.ErrHostedRawMode
+	}
 	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
 		return nil, nil, err
 	}
