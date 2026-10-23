@@ -40,6 +40,11 @@ func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg str
 }
 
 func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
+	_, err := retryPGCuration(ctx, func() (struct{}, error) { return struct{}{}, s.projectOnce(ctx, lease, m, parsed) })
+	return err
+}
+
+func (s *RawProjectionStore) projectOnce(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
 	if err := s.validateManifest(m); err != nil {
 		return err
 	}
@@ -54,6 +59,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return err
+	}
 	if err = s.lockHead(ctx, tx, m); err != nil {
 		return err
 	}
