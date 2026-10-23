@@ -17,7 +17,7 @@ const rawEffectivePinCandidatesSQL = `WITH eligible AS (
  SELECT b.branch_id,b.group_id,b.session_id,
  COALESCE((SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id=b.branch_id AND c.field='trashed'),(SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id='' AND c.field='trashed'),false) trashed
  FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id
- WHERE b.active AND ($1='' OR s.id=$1) AND ($1<>'' OR s.deleted_at IS NULL) AND ($2='' OR s.project=$2)
+ WHERE b.active AND NOT s.rollout_hidden AND ($1='' OR s.id=$1) AND ($1<>'' OR s.deleted_at IS NULL) AND ($2='' OR s.project=$2)
  AND NOT COALESCE((SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id=b.branch_id AND c.field='excluded'),(SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id='' AND c.field='excluded'),false)
 ), members AS (
  SELECT b.* FROM eligible b WHERE NOT trashed OR NOT EXISTS(SELECT 1 FROM eligible v WHERE v.session_id=b.session_id AND NOT v.trashed)
@@ -41,7 +41,7 @@ func (s *RawProjectionStore) pinReferencePage(ctx context.Context, id, project s
  SELECT session_id,message_key,ordinal,note,created_at,0::bigint legacy_id FROM effective
  UNION ALL
  SELECT p.session_id,''::text,p.ordinal,p.note,p.created_at,p.id FROM pinned_messages p JOIN sessions s ON s.id=p.session_id
- WHERE s.provenance_kind='legacy' AND ($1='' OR s.id=$1) AND ($1<>'' OR s.deleted_at IS NULL) AND ($2='' OR s.project=$2)
+ WHERE s.provenance_kind='legacy' AND NOT s.rollout_hidden AND ($1='' OR s.id=$1) AND ($1<>'' OR s.deleted_at IS NULL) AND ($2='' OR s.project=$2)
  ), page AS MATERIALIZED (
  SELECT * FROM candidates ORDER BY created_at DESC,session_id,message_key,legacy_id DESC LIMIT CASE WHEN $1='' THEN 500 ELSE NULL END
  )

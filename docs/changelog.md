@@ -16,8 +16,10 @@ The latest release is
   identities and sources that are not ready, including trashed sessions.
 
 - Hosted operators can record tenant, device and provider rollout scopes and
-  inspect their physical session counts. This prepares staged cutover;
-  public-read filtering and parity-gated activation are not available yet.
+  inspect their physical session counts. Shadow sessions stay out of session
+  lists, details, search, pins and trash while their stored data remains
+  available for comparison and rollback. Complete report snapshot protection
+  and parity-gated activation arrive in later stages.
 
 - Hosted cutover comparisons resolve parent and subagent targets from each
   source's physical evidence. Missing, excluded or ambiguous targets no longer
