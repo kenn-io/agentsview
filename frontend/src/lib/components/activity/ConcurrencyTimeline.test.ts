@@ -299,6 +299,14 @@ function controllableResizeObserver() {
 }
 
 // Reports one content width to every observer, as a resized panel would.
+function useChartWidth(width: number) {
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: resizeObserverWithWidth(width),
+  });
+}
+
 function resizeObserverWithWidth(width: number) {
   return class {
     constructor(private callback: ResizeObserverCallback) {}
@@ -1074,6 +1082,7 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
   it("merges five-minute buckets into wider bars on a narrow chart", async () => {
+    useChartWidth(700);
     const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -1082,9 +1091,13 @@ describe("ConcurrencyTimeline", () => {
       props: { report: fullDayMinuteReport(), onSelectRange },
     });
     await tick();
-    // 600px leaves a 552px plot: 5- and 10-minute bars would be under 4px.
+    // 700px leaves a 652px plot: 5- and 10-minute bars would draw under 5px.
     const hits = target.querySelectorAll<SVGRectElement>(".slot-hit");
     expect(hits.length).toBe(96);
+    const drawn = Array.from(target.querySelectorAll(".concurrency-seg")).map((seg) =>
+      Number(seg.getAttribute("width")),
+    );
+    expect(Math.min(...drawn)).toBeGreaterThanOrEqual(5);
 
     hits[1]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     await tick();
@@ -1115,6 +1128,7 @@ describe("ConcurrencyTimeline", () => {
   });
 
   it("highlights every bar that overlaps a selection of report buckets", async () => {
+    useChartWidth(700);
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
@@ -1135,7 +1149,7 @@ describe("ConcurrencyTimeline", () => {
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,
-      value: resizeObserverWithWidth(1500),
+      value: resizeObserverWithWidth(1900),
     });
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -1150,6 +1164,7 @@ describe("ConcurrencyTimeline", () => {
   });
 
   it("labels message bars with the merged interval", async () => {
+    useChartWidth(700);
     const { container, getByRole } = render(ConcurrencyTimeline, {
       report: fullDayMinuteReport(),
     });
@@ -1171,17 +1186,17 @@ describe("ConcurrencyTimeline", () => {
       props: { report: fullDayMinuteReport() },
     });
     await tick();
-    observer.resize(1500);
+    observer.resize(1900);
     await tick();
     // The first measurement replaces the placeholder width without animating.
     expect(target.querySelector("[data-step-transition]")).toBeNull();
     expect(target.querySelectorAll(".slot-hit").length).toBe(288);
 
-    observer.resize(1490);
+    observer.resize(1880);
     await tick();
     expect(target.querySelector("[data-step-transition]")).toBeNull();
 
-    observer.resize(600);
+    observer.resize(700);
     await tick();
     expect(target.querySelectorAll(".slot-hit").length).toBe(96);
     const fading = target.querySelector("[data-step-transition]");

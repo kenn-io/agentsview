@@ -353,19 +353,26 @@
   const rangeEndMs = $derived(Date.parse(report.range_end));
   const rangeSpanMs = $derived(Math.max(rangeEndMs - rangeStartMs, 1));
 
+  // Space between neighbouring bars, taken from each bucket's slot.
+  function barGap(cellW: number): number {
+    return Math.min(cellW * 0.2, 2);
+  }
+
   // A narrow chart merges minute buckets into wider bars so each bar stays
-  // readable. The step is the finest one whose bars are at least MIN_BAR_PX
-  // wide. Minute buckets are fixed tiles anchored at range_start, so grouping
-  // by elapsed time keeps merged bars on clock boundaries.
-  const MIN_BAR_PX = 4;
+  // readable. The step is the finest one whose drawn bars, after the gap,
+  // are at least MIN_BAR_PX wide. Minute buckets are fixed tiles anchored at
+  // range_start, so grouping by elapsed time keeps merged bars on clock
+  // boundaries.
+  const MIN_BAR_PX = 5;
   const DISPLAY_STEPS_SECONDS = [600, 900, 1800, 3600];
   const displayStepSeconds = $derived.by(() => {
     const raw = report.bucket_seconds;
     if (report.bucket_unit !== "minute" || raw <= 0) return raw;
     const pxPerSecond = (plotWidth * 1000) / rangeSpanMs;
-    if (raw * pxPerSecond >= MIN_BAR_PX) return raw;
+    const wideEnough = (s: number) => s * pxPerSecond - barGap(s * pxPerSecond) >= MIN_BAR_PX;
+    if (wideEnough(raw)) return raw;
     const steps = DISPLAY_STEPS_SECONDS.filter((s) => s > raw && s % raw === 0);
-    return steps.find((s) => s * pxPerSecond >= MIN_BAR_PX) ?? steps.at(-1) ?? raw;
+    return steps.find(wideEnough) ?? steps.at(-1) ?? raw;
   });
   const messageInterval = $derived(new Intl.NumberFormat(getLocale(), {
     style: "unit",
@@ -506,7 +513,7 @@
     const end = Date.parse(bucket.end);
     const cellX = xForMs(start);
     const cellW = Math.max(((end - start) / rangeSpanMs) * plotWidth, 1);
-    const gap = Math.min(cellW * 0.2, 2);
+    const gap = barGap(cellW);
     let top = PLOT_BOTTOM;
     const segments = metric === "concurrency" ? classes.flatMap((cls) => {
       const count = bucket[cls.atPeak];
