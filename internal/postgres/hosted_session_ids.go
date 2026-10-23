@@ -128,6 +128,31 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 		ids = append(ids, l.owner, l.alias)
 		ids = append(ids, edges[l.owner+"\x00"+l.alias]...)
 	}
+	// Legacy relationships carry literal archive IDs, not source-owned raw
+	// edges. Redirect hidden superseded targets to every current served cohort
+	// before public-ID mapping. Raw owner authority remains exclusively above.
+	redirects := map[string][]string{}
+	if len(r.links) > 0 {
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT legacy_id,session_id FROM `+hostedLegacyTargetsSQL+` legacy_target WHERE legacy_id=ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var legacy, target string
+			if err = rows.Scan(&legacy, &target); err != nil {
+				break
+			}
+			redirects[legacy] = append(redirects[legacy], target)
+			ids = append(ids, target)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	if len(ids) == 0 {
@@ -166,7 +191,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 	for _, l := range r.links {
 		targets := edges[l.owner+"\x00"+l.alias]
 		if kinds[l.owner] == "legacy" {
-			targets = []string{l.alias}
+			targets = redirects[l.alias]
 		}
 		variants := make([]string, 0, len(targets))
 		for _, id := range targets {

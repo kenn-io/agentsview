@@ -106,19 +106,13 @@ func (h *HostedStore) GetChildSessions(ctx context.Context, id string) ([]db.Ses
 		if err != nil || target.SessionID == "" {
 			return nil, err
 		}
-		var children []db.Session
-		if target.Legacy {
-			children, err = h.physical.GetChildSessions(ctx, target.SessionID)
-		} else {
-			rows, e := h.physical.pg.QueryContext(ctx, `SELECT `+pgSessionCols+` FROM sessions WHERE id IN (SELECT owner.session_id `+hostedLinkFromSQL+` AND e.kind='parent' AND target.session_id=$1) AND deleted_at IS NULL AND NOT rollout_hidden ORDER BY COALESCE(started_at,created_at),id`, target.SessionID)
-			if e != nil {
-				return nil, e
-			}
-			defer rows.Close()
-			children, err = scanPGSessionRows(rows)
-			rows.Close()
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT `+pgSessionCols+` FROM sessions WHERE EXISTS(SELECT 1 FROM sessions parent WHERE parent.id=$1 AND `+h.physical.sessionDialect().ParentRelation("sessions", "parent")+`) AND deleted_at IS NULL AND NOT rollout_hidden ORDER BY COALESCE(started_at,created_at),id`, target.SessionID)
+		if err != nil {
+			return nil, err
 		}
-		s := children
+		defer rows.Close()
+		s, err := scanPGSessionRows(rows)
+		rows.Close()
 		if err != nil {
 			return nil, err
 		}

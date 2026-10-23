@@ -91,12 +91,27 @@ const hostedLinkFromSQL = ` FROM raw_session_links e
  JOIN sessions target_session ON target_session.id=target.session_id
  WHERE NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=owner.group_id AND c.field='excluded' AND c.branch_id IN ('',owner.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) `
 
+// Legacy owners refer to literal archive IDs. A visible target keeps that
+// identity; a hidden mapped target expands to all currently eligible raw
+// cohorts. This relation never supplies authority for a raw owner's edge.
+const hostedLegacyTargetsSQL = `(
+ SELECT l.id AS legacy_id,l.id AS session_id FROM sessions l
+ WHERE NOT l.rollout_hidden
+ UNION
+ SELECT l.id,s.id FROM sessions l
+ JOIN raw_legacy_supersessions x ON x.tenant_id=l.tenant_id AND x.legacy_session_id=l.id
+ JOIN sessions s ON s.tenant_id=x.tenant_id AND s.raw_group_id=x.group_id AND s.provenance_kind='raw' AND NOT s.rollout_hidden
+ JOIN raw_session_branches b ON b.tenant_id=s.tenant_id AND b.session_id=s.id AND b.group_id=x.group_id AND b.active
+ WHERE l.provenance_kind='legacy' AND l.rollout_hidden
+ AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)
+)`
+
 func (s *Store) sessionDialect() db.QueryDialect {
 	d := db.PostgresQueryDialect()
 	if !s.hostedRelations {
 		return d
 	}
 	return d.WithParentRelation(func(child, parent string) string {
-		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id AND EXISTS(SELECT 1 FROM sessions eligible_parent WHERE eligible_parent.id=" + parent + ".id AND NOT eligible_parent.rollout_hidden)) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
+		return "((" + child + ".provenance_kind='legacy' AND EXISTS(SELECT 1 FROM " + hostedLegacyTargetsSQL + " legacy_target WHERE legacy_target.legacy_id=" + child + ".parent_session_id AND legacy_target.session_id=" + parent + ".id)) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})
 }
