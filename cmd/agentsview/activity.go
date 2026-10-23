@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
@@ -25,6 +26,7 @@ import (
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
 type ActivityReportConfig struct {
+	cmd                 *cobra.Command
 	ctx                 context.Context
 	Preset              string
 	Date                string
@@ -58,6 +60,7 @@ func runActivityReport(cfg ActivityReportConfig) {
 		ctx = context.Background()
 	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Command:              cfg.cmd,
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
@@ -130,7 +133,7 @@ func fetchHTTPActivityReport(
 		}
 		q.Date = &runtime.Date{Time: date}
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := transportAPIClient(tr, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -215,7 +218,7 @@ func fetchHTTPActivitySessionPage(
 	if cfg.SessionsReportID != "" {
 		query.IncludeReport = new(true)
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := transportAPIClient(tr, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -364,9 +367,19 @@ func resolveActivityReportPriced(
 // query, and runs the report against the database. It is the testable seam:
 // all validation (timezone, bounds, bucket allow-list, range limits) happens
 // inside activity.ResolveQuery before any database query.
+type activityCLIStore interface {
+	db.Store
+	db.ActivityReportArtifactStore
+	db.ActivityReportTokenStore
+}
+
 func resolveActivityReport(
-	cfg ActivityReportConfig, database *db.DB,
+	cfg ActivityReportConfig, database activityCLIStore,
 ) (activity.Report, error) {
+	ctx := cfg.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var q activity.Query
 	var f db.AnalyticsFilter
 	var cursor *cliActivitySessionCursor
@@ -392,7 +405,7 @@ func resolveActivityReport(
 		if err != nil {
 			return activity.Report{}, err
 		}
-		f.Machine, err = db.ResolveMachineFilter(context.Background(), database, f.Machine)
+		f.Machine, err = db.ResolveMachineFilter(ctx, database, f.Machine)
 		if err != nil {
 			return activity.Report{}, err
 		}
@@ -403,7 +416,7 @@ func resolveActivityReport(
 		onProgress = newActivityProgressPrinter(cfg.ProgressWriter)
 	}
 	artifacts, err := database.BuildActivityReportArtifacts(
-		context.Background(), f, q, onProgress,
+		ctx, f, q, onProgress,
 	)
 	if err != nil {
 		return activity.Report{}, err
@@ -483,7 +496,7 @@ func resolveCLIActivitySelection(
 }
 
 func decodeCLIActivitySessionCursor(
-	database *db.DB,
+	database db.ActivityReportTokenStore,
 	token string,
 ) (cliActivitySessionCursor, error) {
 	payload, err := database.DecodeActivityReportToken(token)

@@ -112,10 +112,29 @@ agentsview doctor remote
 agentsview --local session list
 ```
 
-The default applies to session list, get, messages, tool-calls, search and
-usage; recall reads; insight reads; health; and MCP. `doctor remote` reports the
-effective target, configuration origin, redacted URL, credential source and
-probe result. It never prints the credential.
+The default applies to these read commands:
+
+| Command | Configured remote behavior |
+| --- | --- |
+| `session list/get/messages/tool-calls/search/usage` | Read the selected hub |
+| `usage daily/statusline` | Read archived hub usage |
+| `activity report` | Read hub activity, including session pages |
+| `projects`, `health` | Read the selected hub |
+| `stats` | Require the server's session-stats capability; otherwise return an error with a `--local` hint |
+| Recall reads, insight reads, MCP | Read the selected hub |
+| `export`, `token-use` | Read the local archive and print a notice on stderr |
+| `usage cursor`, other local-only commands | Keep their local behavior |
+
+`--server` and `--pg` select an explicit target ahead of `[remote]`. `--local`
+bypasses the default remote; it cannot be combined with either target flag.
+`doctor remote` reports the effective target, configuration origin, redacted
+URL, credential source and probe result. It never prints the credential.
+
+Usage and activity reads accept `--offline` and `--no-sync` for compatibility
+but ignore them for an HTTP target. They do not start a local daemon or sync
+source transcripts on the hub. An unavailable remote returns an error without
+falling back to local data. `export` and `token-use` keep their machine-readable
+stdout unchanged and never load the configured remote credential.
 
 For `mcp --profile memory` and `memory session-start --mode hosted-reader`,
 existing memory target variables take precedence over `[remote]`. Explicit

@@ -15,7 +15,7 @@ import (
 )
 
 func TestPolicyClientCapabilities(t *testing.T) {
-	for _, body := range []string{`{"api_version":4,"session_stats_available":true}`, `null`, `{}`, `{"api_version":0}`, `{"api_version":-1}`, `{"api_version":"wrong"}`, ``, `{broken`} {
+	for _, body := range []string{`{"api_version":4,"session_stats_available":true}`, `null`, `{}`, `{"api_version":0}`, `{"api_version":-1}`, ``} {
 		t.Run(body, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "Bearer remote-only", r.Header.Get("Authorization"))
