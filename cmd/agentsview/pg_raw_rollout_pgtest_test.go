@@ -32,3 +32,19 @@ func TestRawRolloutCommandScopes(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+// The current config type cannot attest that embeddings are disabled. The real
+// owner command must fail closed even with a waiver; runtime role rejection is
+// independently observable through the same command entry point.
+func TestRawRolloutActivationConfigPrerequisite(t *testing.T) {
+	cfg, _ := hostedRuntimeConfig(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+	t.Setenv("AGENTSVIEW_PG_URL", "")
+	t.Setenv("AGENTSVIEW_PG_SCHEMA", "")
+	body := fmt.Sprintf("[pg.provision]\nurl = %q\nschema = %q\nraw_tenant = %q\n[pg.runtime]\nurl = %q\nschema = %q\nraw_tenant = %q\n", os.Getenv("TEST_PG_URL"), cfg.PG.Schema, cfg.PG.RawTenant, cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(body), 0600))
+	_, err := executeCommand(newPGRawRolloutCommand(), "activate", "provision", "--accept-differences")
+	require.ErrorContains(t, err, "unknown")
+	_, err = executeCommand(newPGRawRolloutCommand(), "activate", "runtime", "--accept-differences")
+	require.ErrorContains(t, err, "owner")
+}
