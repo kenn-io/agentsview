@@ -667,11 +667,44 @@ clears obsolete job warnings. The separate `dead_letters` object reports
 historical selections, until replay or supersession. Its timestamp is null
 when no failure timestamp is available.
 
-`stale_source_heads` reports parse lag: current manifests accepted at least
-`stale_after_seconds` ago with no completed parse job for a selected processing
-version. It includes pending tombstones but excludes successfully parsed idle
+`stale_source_heads` reports source acceptance age: current manifests accepted
+at least `stale_after_seconds` ago with no completed parse job for a selected
+processing version. It includes pending tombstones but excludes successfully parsed idle
 sessions. Rows expose `accepted_at`, the time used for this threshold. All
 response timestamps use UTC.
+
+Use the same device credential and server settings as `server-status` to read
+health from the CLI. Both threshold flags are required:
+
+```sh
+agentsview raw-sync server-health --max-attempts 5 --stale-after-seconds 3600
+```
+
+Hosted status and health include a `recovery` object:
+
+- `parse_lag_seconds` is the oldest selection age whose selected job is not
+  complete. A new processing version on the same manifest starts a new
+  selection clock. `oldest_pending_source_age_seconds` measures source
+  acceptance age separately.
+- `oldest_ready_age_seconds` and `oldest_retrying_age_seconds` measure job age
+  from creation, including time waiting for retries. These cover all job stages.
+- `oldest_open_upload_age_seconds` and `queued_bytes` describe stored-open
+  upload sessions. Bytes are the full declared sizes, including bytes already
+  received. This is a server-visible proxy; laptop lag remains local.
+- `degraded_sources` counts current sources with incomplete membership, failed
+  jobs without a projection, older successful projections, or unknown
+  provenance. Categories can overlap. Legacy rows keep unknown provenance;
+  upgrades do not guess selection times or successful versions.
+- `outcome_buckets` holds committed entries into `retrying`, `complete`,
+  `failed`, and `superseded`, by stage and UTC hour. Replays do not erase
+  failures. Counts cover the current hour and previous 23 hours; each recorded
+  transition prunes older buckets in its transaction. Historical failures are
+  not backfilled. Use these counts to calculate rates for the reported window.
+
+Ages are `null` when no matching timestamp is known. Ordinary raw custody mode
+omits `recovery`. After upgrading an existing hosted schema, rerun owner
+provisioning and grant the runtime role `SELECT, INSERT, UPDATE, DELETE` on
+`raw_job_outcome_buckets` before restarting the server.
 
 Each affected-row list holds at most 50 rows, failure classes hold at most 20
 rows, and totals stay exact. The read is tenant-wide, excludes raw error

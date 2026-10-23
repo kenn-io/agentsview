@@ -70,6 +70,7 @@ func newRawSyncCommand() *cobra.Command {
 	cmd.AddCommand(newRawSyncStatusCommand())
 	cmd.AddCommand(newRawSyncCleanUploadsCommand())
 	cmd.AddCommand(newRawSyncServerStatusCommand())
+	cmd.AddCommand(newRawSyncServerHealthCommand())
 	return cmd
 }
 
