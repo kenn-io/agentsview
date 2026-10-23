@@ -55,7 +55,7 @@ func newSessionUsageCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("no-sync", false,
-		"Use archived usage without synchronizing source transcripts")
+		"Use archived usage without synchronizing source transcripts (ignored for a configured remote)")
 	cmd.Flags().Bool("own-only", false,
 		"Report only this session's own usage, excluding subagents")
 	return cmd
@@ -140,27 +140,24 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 		OwnOnly: ownOnly, NoSync: noSync,
 	}
 
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, errors.New("--server and --pg are mutually exclusive")
-		}
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return nil, err
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	if err != nil {
+		return nil, err
+	}
+	if target.isHTTP() {
+		if target.Kind == readTargetRemote {
+			query.NoSync = true
 		}
 		if !query.OwnOnly {
-			if err := requireRemoteSubagentUsageSupport(
-				ctx, remote, token, !query.NoSync,
-			); err != nil {
-				return nil, err
+			if err := requireRemoteSubagentUsageSupportWithClient(ctx, target.URL, target.Cred, !query.NoSync, target.client); err != nil {
+				return nil, target.remoteError(err)
 			}
 		}
 		return &sessionUsageBackend{
-			service: servicehttp.NewHTTPBackend(remote, token, false, ""),
+			service: target.backend(nil),
 			read: func(id string) (*sessionUsageOutput, int, error) {
 				query.SessionID = id
-				return httpSessionUsageData(ctx, remote, token, query)
+				return httpSessionUsageDataWithClient(ctx, target.URL, target.Cred, query, target.client)
 			},
 		}, nil
 	}
@@ -216,12 +213,8 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	}, nil
 }
 
-func requireRemoteSubagentUsageSupport(
-	ctx context.Context, baseURL, token string, refresh bool,
-) error {
-	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
-		ctx, baseURL, token,
-	)
+func requireRemoteSubagentUsageSupportWithClient(ctx context.Context, baseURL, token string, refresh bool, client *http.Client) error {
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilitiesWithClient(ctx, baseURL, token, client)
 	if err != nil {
 		return err
 	}
@@ -257,11 +250,15 @@ func httpSessionUsageData(
 	token string,
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
+	return httpSessionUsageDataWithClient(ctx, baseURL, token, query, nil)
+}
+
+func httpSessionUsageDataWithClient(ctx context.Context, baseURL, token string, query sessionUsageQuery, client *http.Client) (*sessionUsageOutput, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	sessionID := query.SessionID
-	backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
+	backend := servicehttp.NewHTTPBackendWithClient(baseURL, token, false, "", client)
 	resolvedID, err := resolveServiceSessionID(ctx, backend, sessionID)
 	if err != nil {
 		if !errors.Is(err, errSessionNotFound) {

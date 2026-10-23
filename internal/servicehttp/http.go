@@ -1774,7 +1774,7 @@ func HTTPErrorDetails(err error) (status int, message string, ok bool) {
 
 func (b *httpBackend) diagnosticURL() string {
 	if b.remotePolicy {
-		return remotecred.Redact(b.baseURL)
+		return remotecred.Redact(b.baseURL) + " (try --local)"
 	}
 	return b.baseURL
 }

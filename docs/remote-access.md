@@ -99,6 +99,37 @@ supplied.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
 
+## Query a Hub From the CLI
+
+On unreleased `main`, configure a [default remote read target](/docs/configuration/#default-remote-reads)
+to query a hub without repeating `--server` and its token:
+
+```bash
+agentsview session list
+agentsview session get <id>
+agentsview session usage <id>
+agentsview doctor remote
+agentsview --local session list
+```
+
+The default applies to session list, get, messages, tool-calls, search and
+usage; recall reads; insight reads; health; and MCP. `doctor remote` reports the
+effective target, configuration origin, redacted URL, credential source and
+probe result. It never prints the credential.
+
+For `mcp --profile memory` and `memory session-start --mode hosted-reader`,
+existing memory target variables take precedence over `[remote]`. Explicit
+target flags keep their existing priority, including `--pg=false` suppressing
+memory environment injection. `--local` suppresses that injection too. Local
+and hosted-contributor memory lifecycle modes ignore `[remote]`.
+
+Writes such as session sync, label and parent, insight generate and recall
+import require their existing explicit target selection. Local-only commands
+and `doctor memory` ignore `[remote]`. A remote read uses the remote credential
+rather than the local daemon's `auth_token`. Configured-remote session usage
+reads archived values without asking the hub to sync source transcripts;
+`--no-sync` is accepted and ignored for this target.
+
 ## HTTP Remote Sync
 
 A `[[remote_hosts]]` entry syncs a remote machine over one of two transports:
