@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 )
 
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
@@ -1894,7 +1896,7 @@ func TestHermesLedgerFingerprintChangesOnlyItsMember(t *testing.T) {
 	conn, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
 	defer conn.Close()
-	createHermesUsageLedger(t, conn)
+	hermesfixture.CreateLedger(t, conn)
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, model, started_at) VALUES ('sibling', 'cli', 'main', 1778767200)`)
 	require.NoError(t, err)
 	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}, Machine: "test"})

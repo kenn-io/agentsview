@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -62,12 +64,37 @@ func readHermesModelUsage(ctx context.Context, conn *sql.DB, sessionID string) (
 	}
 	defer rows.Close()
 	out := make(map[string][]hermesModelUsage)
+	malformed := make(map[string]bool)
 	for rows.Next() {
 		var row hermesModelUsage
+		var tokens [5]any
+		var estimate, actual any
 		if err := rows.Scan(&row.SessionID, &row.Model, &row.Provider, &row.BaseURL, &row.Mode, &row.Task,
-			&row.Input, &row.Output, &row.CacheRead, &row.CacheWrite, &row.Reasoning,
-			&row.Estimate, &row.Actual, &row.Status, &row.Source); err != nil {
+			&tokens[0], &tokens[1], &tokens[2], &tokens[3], &tokens[4],
+			&estimate, &actual, &row.Status, &row.Source); err != nil {
 			return nil, fmt.Errorf("scan hermes usage: %w", err)
+		}
+		if malformed[row.SessionID] {
+			continue
+		}
+		var numericErr error
+		for i, target := range []*int{&row.Input, &row.Output, &row.CacheRead, &row.CacheWrite, &row.Reasoning} {
+			*target, numericErr = strconv.Atoi(fmt.Sprint(tokens[i]))
+			if numericErr != nil {
+				break
+			}
+		}
+		if numericErr == nil {
+			numericErr = row.Estimate.Scan(estimate)
+		}
+		if numericErr == nil {
+			numericErr = row.Actual.Scan(actual)
+		}
+		if numericErr != nil {
+			log.Printf("hermes: invalid ledger number for session %q: %v; using session summary", row.SessionID, numericErr)
+			malformed[row.SessionID] = true
+			delete(out, row.SessionID)
+			continue
 		}
 		out[row.SessionID] = append(out[row.SessionID], row)
 	}
@@ -80,13 +107,17 @@ func hermesUsageEvents(ss hermesStateSession, sessionID string) []ParsedUsageEve
 	}
 	var events []ParsedUsageEvent
 	var summaryCost *money.Money
+	var remainder int64
 	if summary := hermesSummaryUsageEvents(ss, sessionID); len(summary) > 0 {
 		summaryCost = summary[0].Cost
+		if summaryCost != nil {
+			remainder = summaryCost.Microdollars
+		}
 	}
 	for _, row := range ss.modelUsage {
 		actual := row.Actual
 		// Hermes stores default zero in the ledger even when cost is unknown.
-		if actual.Float64 == 0 {
+		if actual.Float64 == 0 && (row.Status != "actual" || !hermesHasCostSource(row.Source)) {
 			actual.Valid = false
 		}
 		part := hermesStateSession{
@@ -103,9 +134,17 @@ func hermesUsageEvents(ss hermesStateSession, sessionID string) []ParsedUsageEve
 		event.ProviderID = row.Provider
 		event.DedupKey = fmt.Sprintf("ledger:%q:%q:%q:%q:%q:%q", sessionID, row.Model, row.Provider, row.BaseURL, row.Mode, row.Task)
 		if row.Task == "" || row.Task == "voice_chat" {
-			event.Cost = nil
 			if summaryCost != nil {
+				// Delta writes update both stores with the same cost basis.
+				// Gateway reports can later replace only the session summary.
+				part.actualCost = row.Actual
+				part.actualCost.Valid = ss.actualCost.Valid
+				part.costStatus, part.costSource = ss.costStatus, ss.costSource
 				event.Cost = &money.Money{}
+				if priced := hermesSummaryUsageEvents(part, sessionID); len(priced) > 0 && priced[0].Cost != nil {
+					event.Cost = priced[0].Cost
+				}
+				remainder = max(remainder-event.Cost.Microdollars, 0)
 			}
 			ss.inputTokens = max(ss.inputTokens-event.InputTokens, 0)
 			ss.outputTokens = max(ss.outputTokens-event.OutputTokens, 0)
@@ -115,9 +154,12 @@ func hermesUsageEvents(ss hermesStateSession, sessionID string) []ParsedUsageEve
 		}
 		events = append(events, event)
 	}
-	// Known main cost stays on the summary model, including a cost-only event.
-	if ss.inputTokens > 0 || ss.outputTokens > 0 || ss.cacheReadTokens > 0 || ss.cacheWriteTokens > 0 || ss.reasoningTokens > 0 || summaryCost != nil {
-		events = append(events, hermesSummaryUsageEvents(ss, sessionID)...)
+	if ss.inputTokens > 0 || ss.outputTokens > 0 || ss.cacheReadTokens > 0 || ss.cacheWriteTokens > 0 || ss.reasoningTokens > 0 || remainder > 0 {
+		summary := hermesSummaryUsageEvents(ss, sessionID)
+		if len(summary) > 0 && summaryCost != nil {
+			summary[0].Cost = &money.Money{Microdollars: remainder}
+		}
+		events = append(events, summary...)
 	}
 	return events
 }

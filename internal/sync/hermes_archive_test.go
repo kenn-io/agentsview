@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 )
 
 // hermesArchiveAggregateFileInfo mirrors the legacy engine helper
@@ -2415,13 +2416,12 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 		t.Run(string(agent), func(t *testing.T) {
 			root := t.TempDir()
 			stateDB := writeHermesArchiveStateDB(t, root)
-			execHermesState(t, stateDB, `CREATE TABLE session_model_usage (
-				session_id TEXT, model TEXT, billing_provider TEXT DEFAULT '', billing_base_url TEXT DEFAULT '', billing_mode TEXT DEFAULT '', task TEXT DEFAULT '',
-				input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
-				cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
-				estimated_cost_usd REAL DEFAULT 0, actual_cost_usd REAL DEFAULT 0, cost_status TEXT, cost_source TEXT);
-				UPDATE sessions SET input_tokens = 100;
-				INSERT INTO session_model_usage (session_id, model, task, input_tokens) VALUES ('child', 'review', 'background_review', 20)`)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			hermesfixture.CreateLedger(t, conn)
+			require.NoError(t, conn.Close())
+			execHermesState(t, stateDB, `UPDATE sessions SET input_tokens = 100;
+				INSERT INTO session_model_usage (session_id, model, task, input_tokens, estimated_cost_usd) VALUES ('child', 'review', 'background_review', 20, 0.02)`)
 			database := dbtest.OpenTestDB(t)
 			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
 			t.Cleanup(engine.Close)
@@ -2430,10 +2430,14 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			before, err := database.GetSession(t.Context(), id)
 			require.NoError(t, err)
 			require.NotNil(t, before)
-			// Model a released archive so the declared provider scope must reparse it.
-			require.NoError(t, database.SetSessionDataVersion(t.Context(), id, 142))
 			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 142")
+				_, err := tx.ExecContext(t.Context(), "DELETE FROM usage_events WHERE session_id = ? AND model = 'review'", id)
+				return err
+			}))
+			// Model a released archive so the declared provider scope must reparse it.
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), id, 143))
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 143")
 				return err
 			}))
 			engine.Close()
@@ -2442,7 +2446,7 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			database, err = db.OpenIsolated(t.Context(), path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
-			assert.Equal(t, 142, database.GetSessionDataVersion(t.Context(), id))
+			assert.Equal(t, 143, database.GetSessionDataVersion(t.Context(), id))
 			engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
 			t.Cleanup(engine.Close)
 			// The version upgrade must reparse even when the source is unchanged.
@@ -2454,6 +2458,14 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			assert.Equal(t, before.ID, after.ID)
 			assert.Equal(t, before.FilePath, after.FilePath)
 
+			upgraded, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, upgraded, 2)
+			assert.Equal(t, "review", upgraded[0].Model)
+			assert.Equal(t, 20, upgraded[0].InputTokens)
+			require.NotNil(t, upgraded[0].Cost)
+			assert.Equal(t, int64(20000), upgraded[0].Cost.Microdollars)
+
 			execHermesState(t, stateDB, `DELETE FROM session_model_usage`)
 			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
 			events, err := database.GetUsageEvents(t.Context(), id)
@@ -2463,6 +2475,44 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 				got[event.Model] += event.InputTokens
 			}
 			assert.Equal(t, map[string]int{"gpt-5.4": 100}, got)
+		})
+	}
+}
+
+func TestHermesLedgerModelCostsThroughUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, summary, rows string
+		want                map[string]int64
+	}{
+		{"estimates", "estimated_cost_usd = 3", "('child', 'model-a', 60, 1, 9), ('child', 'model-b', 40, 2, 8)", map[string]int64{"model-a": 1000000, "model-b": 2000000}},
+		{"actuals", "actual_cost_usd = 3", "('child', 'model-a', 60, 9, 1), ('child', 'model-b', 40, 8, 2)", map[string]int64{"model-a": 1000000, "model-b": 2000000}},
+		{"gateway remainder", "estimated_cost_usd = 3.5", "('child', 'model-a', 60, 1, 0), ('child', 'model-b', 40, 2, 0)", map[string]int64{"model-a": 1000000, "model-b": 2000000, "gpt-5.4": 500000}},
+		{"ledger ahead of summary", "estimated_cost_usd = 0.5", "('child', 'model-a', 60, 1, 0), ('child', 'model-b', 40, 2, 0)", map[string]int64{"model-a": 1000000, "model-b": 2000000}},
+		{"gateway estimate cleared", "estimated_cost_usd = 0", "('child', 'model-a', 60, 1, 0), ('child', 'model-b', 40, 2, 0)", map[string]int64{"model-a": 1000000, "model-b": 2000000}},
+		{"unknown row with known summary", "estimated_cost_usd = 3", "('child', 'model-a', 60, 0, 0), ('child', 'model-b', 40, 1, 0)", map[string]int64{"model-a": 0, "model-b": 1000000, "gpt-5.4": 2000000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			hermesfixture.CreateLedger(t, conn)
+			require.NoError(t, conn.Close())
+			execHermesState(t, stateDB, `UPDATE sessions SET input_tokens = 100, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0, reasoning_tokens = 0, estimated_cost_usd = NULL, actual_cost_usd = NULL;
+				UPDATE sessions SET `+tc.summary+`;
+				INSERT INTO session_model_usage (session_id, model, input_tokens, estimated_cost_usd, actual_cost_usd) VALUES `+tc.rows)
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			usage, err := database.GetDailyUsage(t.Context(), db.UsageFilter{})
+			require.NoError(t, err)
+			require.Len(t, usage.Daily, 1)
+			costs := map[string]int64{}
+			for _, model := range usage.Daily[0].ModelBreakdowns {
+				costs[model.ModelName] = model.Cost.Microdollars
+			}
+			assert.Equal(t, tc.want, costs)
 		})
 	}
 }

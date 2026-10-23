@@ -3522,10 +3522,12 @@ schemas keep their existing ordering behavior.
   count once and keep their recorded model. Missing ledgers retain summary
   accounting; ledgers without `task` describe main usage. Member fingerprints
   include ordered ledger keys and accounting fields for both Hermes and
-  Augure Desktop. Ledger default-zero costs remain unknown unless a sourced
-  included status identifies free usage. Known main cost stays on the session
-  model, while main ledger rows carry explicit zero cost to prevent duplicate
-  catalog charges. Unknown main cost uses catalog pricing by model.
+  Augure Desktop. Reverified the producer's delta transaction: main ledger
+  costs use the summary's cost basis, leaving only positive uncovered cost
+  on its model. Unknown summary cost preserves known ledger costs and lets
+  catalog pricing fill unknown costs. Sourced actual and included zeros remain
+  known; default zero estimates remain unknown. Malformed numbers warn and fall
+  back to that session's summary, preserving state messages and sibling ledgers.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

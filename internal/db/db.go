@@ -601,8 +601,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (143: keep each repeated antigravity-cli history.jsonl prompt as its own
 // turn when the SQLite decode missed it. Re-parse unchanged antigravity-cli
 // sources in place; source and session identities are unchanged.)
-// (143 also reconciles Hermes and Augure Desktop model usage in place.)
-const dataVersion = 143
+// (144: reconcile Hermes and Augure Desktop model usage in place.)
+const dataVersion = 144
 
 const archiveOnlyVersionBase = 1 << 20
 
