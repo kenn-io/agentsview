@@ -489,8 +489,8 @@ func countEmbeddingStoreUnits(
 }
 
 // runEmbeddingsBuildDirect acquires the vectors write lock, opens the
-// archive read-only (so it never competes with a daemon for the SQLite
-// write lock) and vectors.db read-write, and runs one build synchronously.
+// archive and vectors.db, and runs one build synchronously. Remote pulls
+// reserve the archive writer while publishing validated chunks.
 func runEmbeddingsBuildDirect(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
@@ -500,7 +500,18 @@ func runEmbeddingsBuildDirect(
 	}
 	defer lock.Close()
 
-	archiveDB, err := openReadOnlyDB(ctx, cfg)
+	openArchive := openReadOnlyDB
+	if cfg.Vector.Producer == "remote" && req.Store != vector.RecallIndexSpec().Name {
+		stale, _, err := db.ArchiveResyncState(ctx, cfg.DBPath)
+		if err != nil {
+			return err
+		}
+		if stale {
+			return errors.New("archive data needs resync; restart the daemon before pulling vectors")
+		}
+		openArchive = openDB
+	}
+	archiveDB, err := openArchive(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("opening archive database: %w", err)
 	}
@@ -519,9 +530,12 @@ func runEmbeddingsBuildDirect(
 	}
 	defer ix.Close()
 
-	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
-	if err != nil {
-		return err
+	var encoders vector.EncoderSet
+	if cfg.Vector.Producer != "remote" || spec.Name == vector.RecallIndexSpec().Name {
+		encoders, err = vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+		if err != nil {
+			return err
+		}
 	}
 
 	m := embeddingManager(ix, archiveDB, encoders, cfg, spec.Name)
@@ -584,10 +598,14 @@ func embeddingManager(
 			Source: database, Generation: gen,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
-		return vector.NewResolvingManager(
+		m := vector.NewResolvingManager(
 			ix, encoders, gen,
 			func(context.Context) (vector.BuildTarget, error) { return target, nil },
 		)
+		if cfg.Vector.Producer == "remote" {
+			m.SetDocumentBuildPolicy(hubProducerBuild(ix, database, cfg))
+		}
+		return m
 	}
 	return vector.NewResolvingManager(
 		ix,

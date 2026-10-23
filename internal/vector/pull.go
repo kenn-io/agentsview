@@ -16,9 +16,10 @@ type HubLookup interface {
 	LookupHubVectors(context.Context, HubLookupRequest) (HubLookupReply, error)
 }
 type PullOptions struct {
-	IncludeAutomated bool
-	MapSession       func(string) string
-	Progress         func(BuildProgress)
+	IncludeAutomated           bool
+	FullRebuild, RepairInvalid bool
+	MapSession                 func(string) string
+	Progress                   func(BuildProgress)
 }
 
 type pullSource struct {
@@ -122,7 +123,7 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 	if err = ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
 	}
-	target, building, err := ix.resolveBuildTarget(ctx, gen, gen.Fingerprint(), embedmodel.Descriptor{}, false)
+	target, building, err := ix.resolveBuildTarget(ctx, gen, gen.Fingerprint(), embedmodel.Descriptor{}, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -130,6 +131,14 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		return BuildResult{}, err
 	}
 	result := BuildResult{Fingerprint: target, Refresh: stats}
+	if o.RepairInvalid {
+		repair, err := ix.repairInvalidVectors(ctx, target)
+		result.Repair = repair.Stats
+		if err != nil {
+			return result, err
+		}
+	}
+	store := &repairQueueCompletingStore{Store: ix.store, db: ix.db, spec: ix.spec}
 	raw, err := json.Marshal(gen)
 	if err != nil {
 		return result, err
@@ -145,7 +154,6 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 	if err != nil {
 		return result, err
 	}
-	saving := &repairQueueCompletingStore{Store: ix.store, db: ix.db, spec: ix.spec}
 	var after string
 	var done int64
 	for {
@@ -196,7 +204,7 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 				if (absent[i] && len(vectors[i]) != 0) || current.identities[p.Doc].ContentHash != identities[i].ContentHash {
 					continue
 				}
-				if err := saving.SaveVectors(ctx, target, p.Doc, p.Revision, vectors[i]); err != nil && !errors.Is(err, kitvec.ErrStale) {
+				if err := store.SaveVectors(ctx, target, p.Doc, p.Revision, vectors[i]); err != nil && !errors.Is(err, kitvec.ErrStale) {
 					return err
 				}
 			}
