@@ -24,6 +24,10 @@ func LoadRawParitySnapshots(ctx context.Context, tx *sql.Tx, ids []string) (map[
 	if err := checkRawParityTransaction(ctx, tx); err != nil {
 		return nil, err
 	}
+	return loadRawParitySnapshots(ctx, tx, ids)
+}
+
+func loadRawParitySnapshots(ctx context.Context, tx *sql.Tx, ids []string) (map[string]rawparity.Snapshot, error) {
 	out := make(map[string]rawparity.Snapshot, len(ids))
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
