@@ -10,7 +10,7 @@ import (
 
 func TestRawRolloutRetriesCommitExactlyOnce(t *testing.T) {
 	for _, code := range []string{"40001", "40P01"} {
-		for _, operation := range []string{"projection", "curation"} {
+		for _, operation := range []string{"projection", "curation", "scope"} {
 			t.Run(code+"/"+operation, func(t *testing.T) { testRawRolloutRetry(t, code, operation) })
 		}
 	}
@@ -24,7 +24,7 @@ func testRawRolloutRetry(t *testing.T, code, operation string) {
 	table := "raw_content_revisions"
 	if operation != "projection" {
 		require.NoError(t, f.sink.Project(t.Context(), lease, m, projectionOutcome("retained")))
-		table = "raw_curation"
+		table = map[string]string{"curation": "raw_curation", "scope": "raw_rollout_scopes"}[operation]
 	}
 	_, err := f.admin.Exec(`CREATE SEQUENCE rollout_attempt;
  CREATE FUNCTION rollout_retry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -38,6 +38,8 @@ func testRawRolloutRetry(t *testing.T, code, operation string) {
 		err = f.sink.Project(t.Context(), lease, m, projectionOutcome("retained"))
 	case "curation":
 		err = f.sink.SetCuration(t.Context(), "codex:portable", "starred", true)
+	case "scope":
+		err = ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow")
 	}
 	require.NoError(t, err)
 	var attempts int
@@ -74,5 +76,13 @@ func testRawRolloutRetry(t *testing.T, code, operation string) {
 		var starred bool
 		require.NoError(t, f.runtime.QueryRow(`SELECT EXISTS(SELECT 1 FROM starred_sessions WHERE session_id=$1) AND EXISTS(SELECT 1 FROM raw_curation WHERE field='starred' AND value='true'::jsonb)`, resolved.SessionID).Scan(&starred))
 		require.True(t, starred)
+	}
+	if operation == "scope" {
+		var state string
+		require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_rollout_scopes WHERE device_id='' AND provider=''`).Scan(&state))
+		require.Equal(t, "shadow", state)
+		for _, row := range f.rolloutRows(t) {
+			require.True(t, row.Hidden)
+		}
 	}
 }

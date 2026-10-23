@@ -15,6 +15,10 @@ The latest release is
   `pg raw-parity`. Its JSON report names content differences, unresolved
   identities and sources that are not ready, including trashed sessions.
 
+- Hosted operators can record tenant, device and provider rollout scopes and
+  inspect their physical session counts. This prepares staged cutover;
+  public-read filtering and parity-gated activation are not available yet.
+
 - Hosted cutover comparisons resolve parent and subagent targets from each
   source's physical evidence. Missing, excluded or ambiguous targets no longer
   appear equal solely because stored aliases match. Hidden and trashed
