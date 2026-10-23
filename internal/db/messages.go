@@ -982,12 +982,12 @@ func (db *DB) scanEmbeddableUnits(
 	}
 	defer rows.Close()
 
-	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
-	maxEnded, err = reduceUnitRows(rows, red)
+	red := &UnitReducer{MaxRunRunes: maxRunRunes}
+	maxEnded, err = reduceUnitRows(rows, red, fn)
 	if err != nil {
 		return "", err
 	}
-	if err := red.finish(); err != nil {
+	if err := red.Flush(fn); err != nil {
 		return "", err
 	}
 	return maxEnded, nil
@@ -996,15 +996,15 @@ func (db *DB) scanEmbeddableUnits(
 // reduceUnitRows scans every row of an open ScanEmbeddableUnits query into
 // red, tracking the chronologically latest sessions.ended_at seen across
 // them. It does not flush red's final open run -- callers must call
-// red.finish() once scanning completes.
-func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err error) {
+// red.Flush(fn) once scanning completes.
+func reduceUnitRows(rows *sql.Rows, red *UnitReducer, emit func(EmbeddableUnit) error) (maxEnded string, err error) {
 	for rows.Next() {
-		var row unitRow
+		var row UnitRow
 		var relationshipType string
 		var parentSessionID, ended sql.NullString
 		if err := rows.Scan(
-			&row.sessionID, &row.role, &row.sourceUUID, &row.ordinal,
-			&row.content, &row.sidechain, &relationshipType,
+			&row.SessionID, &row.Role, &row.SourceUUID, &row.Ordinal,
+			&row.Content, &row.IsSidechain, &relationshipType,
 			&parentSessionID, &ended,
 		); err != nil {
 			return "", fmt.Errorf("scanning embeddable unit row: %w", err)
@@ -1012,8 +1012,8 @@ func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err erro
 		if ended.Valid && endedAfter(ended.String, maxEnded) {
 			maxEnded = ended.String
 		}
-		row.subordinateSession = isSubordinateSession(relationshipType, parentSessionID)
-		if err := red.push(row); err != nil {
+		row.Subordinate = isSubordinateSession(relationshipType, parentSessionID)
+		if err := red.Push(row, emit); err != nil {
 			return "", err
 		}
 	}
@@ -1047,106 +1047,111 @@ func SubordinateSessionSQL(sessionAlias string) string {
 		parent + " <> '' AND " + rel + " <> 'continuation'))"
 }
 
-// unitRow is one scanned ScanEmbeddableUnits row, carrying the
+// UnitRow is one scanned ScanEmbeddableUnits row, carrying the
 // session-level subordinate classification alongside the per-message fields
 // needed to build either a user doc or a run member.
-type unitRow struct {
-	sessionID          string
-	role               string
-	sourceUUID         string
-	ordinal            int
-	content            string
-	sidechain          bool
-	subordinateSession bool
+type UnitRow struct {
+	SessionID   string
+	Role        string
+	SourceUUID  string
+	Ordinal     int
+	Content     string
+	IsSystem    bool
+	IsSidechain bool
+	Subordinate bool
 }
 
-// unitReducer accumulates ScanEmbeddableUnits rows (already ordered by
-// session_id, ordinal) into EmbeddableUnit documents, emitting each through
-// fn as soon as it closes. Rows must be pushed in stream order; finish must
-// be called once after the last row to flush any run still open at the end
-// of the scan.
-type unitReducer struct {
-	fn func(EmbeddableUnit) error
-
+// UnitReducer accumulates ScanEmbeddableUnits rows (already ordered by
+// session_id, ordinal) into EmbeddableUnit documents. Rows must be pushed
+// in stream order. Call Flush after the last row to emit any open run.
+// Stores apply system-prefix and automated-session filters before Push.
+type UnitReducer struct {
 	haveSession bool
 	sessionID   string
-	run         []unitRow
+	run         []UnitRow
 	runRunes    int
-	maxRunRunes int
+	// MaxRunRunes closes a run after the member that reaches this rune count,
+	// including separators. Nonpositive values close after every member.
+	MaxRunRunes int
 }
 
-// push feeds one row into the reducer, emitting a user unit immediately or
+// Push feeds one row into the reducer, emitting a user unit immediately or
 // accumulating an assistant row into the open run. It closes any open run
 // first whenever the row starts a new session, is a user row, or (for an
 // assistant row) has an is_sidechain value different from the open run's.
 // After appending a member, it closes the run if its rune count reaches the cap.
-func (r *unitReducer) push(row unitRow) error {
-	newSession := r.haveSession && row.sessionID != r.sessionID
-	if err := r.closeRunIf(newSession); err != nil {
+// System rows and roles other than user/assistant are ignored. Stop feeding rows
+// after an emit error; Push and Flush return it unchanged.
+func (r *UnitReducer) Push(row UnitRow, emit func(EmbeddableUnit) error) error {
+	if row.IsSystem || (row.Role != "user" && row.Role != "assistant") {
+		return nil
+	}
+	newSession := r.haveSession && row.SessionID != r.sessionID
+	if err := r.closeRunIf(newSession, emit); err != nil {
 		return err
 	}
 	r.haveSession = true
-	r.sessionID = row.sessionID
+	r.sessionID = row.SessionID
 
-	if row.role == "user" {
-		if err := r.closeRun(); err != nil {
+	if row.Role == "user" {
+		if err := r.closeRun(emit); err != nil {
 			return err
 		}
-		return r.fn(userUnit(row))
+		return emit(userUnit(row))
 	}
 
-	sidechainFlip := len(r.run) > 0 && row.sidechain != r.run[0].sidechain
-	if err := r.closeRunIf(sidechainFlip); err != nil {
+	sidechainFlip := len(r.run) > 0 && row.IsSidechain != r.run[0].IsSidechain
+	if err := r.closeRunIf(sidechainFlip, emit); err != nil {
 		return err
 	}
 	if len(r.run) > 0 {
 		r.runRunes += len("\n\n")
 	}
-	r.runRunes += utf8.RuneCountInString(row.content)
+	r.runRunes += utf8.RuneCountInString(row.Content)
 	r.run = append(r.run, row)
-	return r.closeRunIf(r.runRunes >= r.maxRunRunes)
+	return r.closeRunIf(r.runRunes >= r.MaxRunRunes, emit)
 }
 
 // closeRunIf closes the open run when cond is true; it is a no-op otherwise.
-func (r *unitReducer) closeRunIf(cond bool) error {
+func (r *UnitReducer) closeRunIf(cond bool, emit func(EmbeddableUnit) error) error {
 	if !cond {
 		return nil
 	}
-	return r.closeRun()
+	return r.closeRun(emit)
 }
 
-// finish flushes any run left open at the end of the scan.
-func (r *unitReducer) finish() error {
-	return r.closeRun()
+// Flush flushes any run left open at the end of the scan.
+func (r *UnitReducer) Flush(emit func(EmbeddableUnit) error) error {
+	return r.closeRun(emit)
 }
 
-func (r *unitReducer) closeRun() error {
+func (r *UnitReducer) closeRun(emit func(EmbeddableUnit) error) error {
 	if len(r.run) == 0 {
 		return nil
 	}
 	unit := runUnit(r.run)
 	r.run = nil
 	r.runRunes = 0
-	return r.fn(unit)
+	return emit(unit)
 }
 
 // userUnit builds the single-member "user" unit for an embeddable user row.
-func userUnit(row unitRow) EmbeddableUnit {
+func userUnit(row UnitRow) EmbeddableUnit {
 	return EmbeddableUnit{
-		SessionID:   row.sessionID,
+		SessionID:   row.SessionID,
 		Kind:        "user",
-		SourceUUID:  row.sourceUUID,
-		Ordinal:     row.ordinal,
-		OrdinalEnd:  row.ordinal,
-		Subordinate: row.subordinateSession || row.sidechain,
-		Content:     row.content,
+		SourceUUID:  row.SourceUUID,
+		Ordinal:     row.Ordinal,
+		OrdinalEnd:  row.Ordinal,
+		Subordinate: row.Subordinate || row.IsSidechain,
+		Content:     row.Content,
 	}
 }
 
 // runUnit joins a closed run's members with "\n\n" into one "run" unit,
 // recording each member's rune/byte offset into the joined content. The
 // separator is ASCII, so its rune and byte lengths are equal.
-func runUnit(members []unitRow) EmbeddableUnit {
+func runUnit(members []UnitRow) EmbeddableUnit {
 	const sep = "\n\n"
 	first := members[0]
 	var b strings.Builder
@@ -1159,19 +1164,19 @@ func runUnit(members []unitRow) EmbeddableUnit {
 			byteStart += len(sep)
 		}
 		offsets[i] = UnitOffset{
-			Ordinal: m.ordinal, RuneStart: runeStart, ByteStart: byteStart,
+			Ordinal: m.Ordinal, RuneStart: runeStart, ByteStart: byteStart,
 		}
-		b.WriteString(m.content)
-		runeStart += utf8.RuneCountInString(m.content)
-		byteStart += len(m.content)
+		b.WriteString(m.Content)
+		runeStart += utf8.RuneCountInString(m.Content)
+		byteStart += len(m.Content)
 	}
 	return EmbeddableUnit{
-		SessionID:   first.sessionID,
+		SessionID:   first.SessionID,
 		Kind:        "run",
-		SourceUUID:  first.sourceUUID,
-		Ordinal:     first.ordinal,
-		OrdinalEnd:  members[len(members)-1].ordinal,
-		Subordinate: first.subordinateSession || first.sidechain,
+		SourceUUID:  first.SourceUUID,
+		Ordinal:     first.Ordinal,
+		OrdinalEnd:  members[len(members)-1].Ordinal,
+		Subordinate: first.Subordinate || first.IsSidechain,
 		Content:     b.String(),
 		Offsets:     offsets,
 	}
@@ -1179,7 +1184,7 @@ func runUnit(members []unitRow) EmbeddableUnit {
 
 // embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
 // scan takes sessionID first; an incremental scan takes since after it. The
-// query always emits rows in (session_id, ordinal) order, which unitReducer
+// query always emits rows in (session_id, ordinal) order, which UnitReducer
 // depends on.
 func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string {
 	preds := []string{
