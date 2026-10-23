@@ -42,6 +42,7 @@ type memorySessionStartRequest struct {
 	Server      string
 	ServerToken string
 	PG          bool
+	HTTPClient  *http.Client
 }
 
 var (
@@ -138,10 +139,29 @@ func runMemorySessionStartCommand(
 		Server: strings.TrimSpace(server),
 		PG:     pg,
 	}
+	// Preserve the hosted-reader validation diagnostic before resolving a
+	// default target or opening a credential.
+	if req.Mode == memoryModeHostedReader && req.Server != "" && req.PG {
+		return req.validate(strings.TrimSpace(serverTokenFile) != "")
+	}
+	if err := validateTargetFlags(cmd); err != nil {
+		return err
+	}
+	if req.Mode == memoryModeHostedReader {
+		selected, err := resolveReadTarget(cmd, readTargetDefault)
+		if err != nil {
+			return err
+		}
+		if localReadRequested(cmd) {
+			req.Mode, req.Target = memoryModeLocal, ""
+		} else if selected.Kind == readTargetRemote {
+			req.Server, req.ServerToken, req.HTTPClient = selected.URL, selected.Cred, selected.client
+		}
+	}
 	if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
 		return err
 	}
-	if req.Server != "" {
+	if req.Server != "" && req.HTTPClient == nil {
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return err
@@ -156,6 +176,9 @@ func runMemorySessionStartCommand(
 }
 
 func applyMemorySessionEnv(cmd *cobra.Command) error {
+	if localReadRequested(cmd) {
+		return nil
+	}
 	for _, name := range []string{"mode", "target", "server", "server-token-file", "pg"} {
 		if cmd.Flags().Changed(name) {
 			return nil
@@ -309,6 +332,10 @@ func checkHostedReaderAvailability(
 	ctx context.Context, req memorySessionStartRequest,
 ) error {
 	if req.Server != "" {
+		if req.HTTPClient != nil {
+			_, err := (readTarget{Kind: readTargetRemote, URL: req.Server, Cred: req.ServerToken, client: req.HTTPClient}).probe(ctx)
+			return err
+		}
 		if err := probeMemoryHostedReaderHTTP(
 			ctx, req.Server, req.ServerToken,
 		); err != nil {

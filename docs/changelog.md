@@ -27,6 +27,11 @@ The latest release is
 - Scheduled daemon pulls also use the ten-minute incremental timeout. Set
   `sync_timeout = "0s"` in a remote-host entry to keep those pulls unbounded.
 
+- CLI session, recall, insight and MCP reads can use a configured hub by default.
+  Use `--local` for local data and `doctor remote` to check the selected target.
+  Remote credentials use bounded file reads and redirects stay on the same
+  origin. Memory lifecycle hooks use this default only in hosted-reader mode.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message

@@ -145,3 +145,25 @@ func TestRemotePolicyRedactsFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteRecallUnavailableIsRedacted(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotImplemented) }))
+	defer ts.Close()
+	client, err := remotecred.Client(ts.URL, false)
+	require.NoError(t, err)
+	backend := NewHTTPBackendWithClient(ts.URL+"/private?token=secret", "remote-only", false, "", client)
+	for _, call := range []func() error{
+		func() error { _, e := backend.ListRecallEntries(t.Context(), service.RecallFilter{}); return e },
+		func() error { _, e := backend.GetRecallEntry(t.Context(), "entry"); return e },
+		func() error {
+			_, e := backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "query"})
+			return e
+		},
+	} {
+		err = call()
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "private")
+		require.NotContains(t, err.Error(), "secret")
+		require.Contains(t, err.Error(), "--local")
+	}
+}
