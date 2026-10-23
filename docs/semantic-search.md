@@ -20,6 +20,47 @@ concurrency, and the search path — see
     [DuckDB mirror](/docs/duckdb/) has no vector backend, so `--semantic`/`--hybrid`
     against a DuckDB-backed server return the "not available" error described below.
 
+## Reusing a remote hub's message vectors
+
+On newer `main`, a spoke can pull its own message embeddings from a PostgreSQL
+hub instead of encoding documents again. Use the hub's SSH importer label as
+`spoke_host` and configure a local query endpoint:
+
+```toml
+[remote]
+url = "https://hub.example"
+token_file = "/path/to/hub-token"
+spoke_host = "node"
+
+[vector]
+enabled = true
+producer = "remote"
+
+[vector.embeddings.servers.query]
+endpoint = "http://127.0.0.1:11434/v1"
+# api_key_env = "QUERY_EMBEDDINGS_API_KEY"
+```
+
+The hub supplies the model, dimension and prompt recipe. Any recipe fields you
+set explicitly must match it. Parser versions and automated-session scope must
+also match. Pulls cover locally owned sessions and run through every message
+build path, including scheduled work, full rebuilds and repairs. Recall stays
+local; configure model and dimension to use Recall embeddings.
+
+Run `agentsview embeddings build` to pull. A new generation becomes active only
+when every current document has coverage. `agentsview embeddings list` and
+`agentsview doctor embeddings` show the last pull's persistent reason and
+unmatched count. To encode unmatched documents with the pinned recipe, run
+`agentsview embeddings build --local-producer`. It refuses `--full-rebuild`,
+`--backstop` and Recall builds.
+
+`agentsview session search "connection pooling" --semantic --local` uses the
+saved active recipe and the local query endpoint. It reads no hub credential.
+An incomplete next generation does not displace the active one. Without an
+active generation or query encoder, semantic search reports "semantic search
+unavailable locally"; lexical search remains available. Default remote reads
+continue to use the hub.
+
 ## Enabling `[vector]`
 
 Semantic search is disabled by default. Add a `[vector]` section to

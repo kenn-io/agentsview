@@ -24791,6 +24791,7 @@ type EmbeddingsBuildRequest struct {
 	Backstop         *bool   `json:"backstop,omitempty"`
 	FullRebuild      *bool   `json:"full_rebuild,omitempty"`
 	IncludeAutomated *bool   `json:"include_automated,omitempty"`
+	LocalProducer    *bool   `json:"local_producer,omitempty"`
 	RepairInvalid    *bool   `json:"repair_invalid,omitempty"`
 	Store            *string `json:"store,omitempty"`
 	Using            *string `json:"using,omitempty"`

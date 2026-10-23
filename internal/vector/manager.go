@@ -60,6 +60,9 @@ func (e *unknownServerError) Error() string {
 func (e *unknownServerError) Is(target error) bool { return target == ErrUnknownServer }
 
 func validateBuildRequest(req BuildRequest) error {
+	if req.LocalProducer && (req.FullRebuild || req.Backstop) {
+		return fmt.Errorf("%w: local-producer refuses full-rebuild and backstop", ErrInvalidBuildRequest)
+	}
 	if req.RepairInvalid && req.FullRebuild {
 		return fmt.Errorf("%w: repair-invalid and full-rebuild are mutually exclusive",
 			ErrInvalidBuildRequest)
@@ -121,6 +124,7 @@ type BuildRequest struct {
 	// RepairInvalid scans only the selected target generation and queues
 	// documents containing unusable stored vectors for regeneration.
 	RepairInvalid bool `json:"repair_invalid,omitempty"`
+	LocalProducer bool `json:"local_producer,omitempty"`
 	// IncludeAutomated is the resolved include-automated scope for this
 	// build (caller-resolved from config and, for the CLI's one-off
 	// --include-automated flag, its override). See BuildOptions.IncludeAutomated.
@@ -248,6 +252,9 @@ func NewResolvingManager(
 func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
 	if m.usesDocumentPolicy() {
 		return ManagedEncoder{}, nil
+	}
+	if req.LocalProducer {
+		return ManagedEncoder{}, fmt.Errorf("%w: local-producer requires the remote messages producer", ErrInvalidBuildRequest)
 	}
 
 	name := req.Using

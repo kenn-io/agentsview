@@ -9,6 +9,10 @@ The latest release is
 
 ## Unreleased
 
+- Spokes can reuse their hub's message embeddings and search them locally with
+  the saved recipe. Pull diagnostics name compatibility failures and unmatched
+  documents; `--local-producer` can fill missing coverage.
+
 - PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
   with bounded, resumable responses and optional zstd compression.
 
