@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS vector_push_state (
 );
 `
 
+type vectorRecipeSchemaWriter interface {
+	pgSessionQueryer
+	pgProjectIdentityExecer
+}
+
 // VectorExtensionAvailable reports whether the pgvector extension is
 // installed in this database (probe only; no DDL).
 func VectorExtensionAvailable(ctx context.Context, pg *sql.DB) (bool, error) {
@@ -152,7 +157,7 @@ func vectorChunkTable(genID int64) string {
 // halfvec_cosine_ops must be schema-qualified with it, or every schema
 // besides the one that happened to install the extension fails to resolve
 // them.
-func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
+func vectorExtensionSchema(ctx context.Context, pg pgGenAIPricingQuerier) (string, error) {
 	var extSchema string
 	if err := pg.QueryRowContext(ctx,
 		`SELECT n.nspname FROM pg_extension e
@@ -197,9 +202,9 @@ CREATE TABLE IF NOT EXISTS %s (
 }
 
 // ensureVectorRecipeColumn adds vector_generations.params for writers whose
-// tables predate recipe publication. It runs only on the push path, never in
-// serve-side schema preparation.
-func ensureVectorRecipeColumn(ctx context.Context, pg *sql.DB) error {
+// tables predate recipe publication. Only push and owner provisioning migrate
+// this column; serve-side schema preparation remains read-only.
+func ensureVectorRecipeColumn(ctx context.Context, pg vectorRecipeSchemaWriter) error {
 	existing, err := loadExistingColumns(ctx, pg, nil, "vector_generations")
 	if err != nil {
 		return fmt.Errorf("checking vector recipe column: %w", err)
@@ -216,7 +221,7 @@ func ensureVectorRecipeColumn(ctx context.Context, pg *sql.DB) error {
 // row has none. Stored params are never overwritten: a fingerprint names
 // one immutable recipe.
 func publishVectorRecipe(
-	ctx context.Context, pg *sql.DB, fingerprint string, params map[string]string,
+	ctx context.Context, pg pgSessionExecer, fingerprint string, params map[string]string,
 ) error {
 	encoded, err := json.Marshal(params, json.Deterministic(true))
 	if err != nil {
@@ -234,7 +239,7 @@ WHERE fingerprint = $1 AND params IS NULL`,
 // ensureVectorGeneration registers fingerprint's generation, returning its
 // id. Machines with matching embedding configs share one generation.
 func ensureVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint, model string, dimension int,
 ) (int64, error) {
 	if _, err := pg.ExecContext(ctx, `
 INSERT INTO vector_generations (fingerprint, model, dimension)
@@ -258,7 +263,7 @@ VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
 // treated as a clean not-found, not an error, so pg serve degrades to a
 // plain "semantic search unavailable" notice instead of failing startup.
 func LookupVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint string,
+	ctx context.Context, pg pgGenAIPricingQuerier, fingerprint string,
 ) (int64, int, bool, error) {
 	var id int64
 	var dim int
