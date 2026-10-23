@@ -983,6 +983,7 @@ type sessionSourceConfig struct {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	Remote RemoteConfig `json:"remote,omitempty" toml:"remote"`
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
 	CodexCloud CodexCloudConfig `json:"-" toml:"-"`
@@ -1728,6 +1729,7 @@ func (c *Config) loadFileReadOnly() error {
 }
 
 func (c *Config) loadFileWithMigration(migrate bool) error {
+	defer c.applyRemoteEnv()
 	if migrate {
 		if err := c.migrateJSONToTOML(); err != nil {
 			return err
@@ -1839,6 +1841,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		Remote                         RemoteConfig           `toml:"remote"`
 		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1902,6 +1905,8 @@ func (c *Config) applyConfigTOML(data string) error {
 	if err := c.ValidateArchiveSources(); err != nil {
 		return err
 	}
+	c.Remote = file.Remote
+	c.Remote.TokenFile = remoteTokenPath(c.Remote.TokenFile, filepath.Dir(c.configPath()))
 	if meta.IsDefined("vector") {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
