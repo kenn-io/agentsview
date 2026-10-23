@@ -232,6 +232,16 @@ func importEngineConfig(
 
 func rebuildIDPrefix(host string) string { return host + "~" }
 
+// HubSessionID maps a local session into the namespace used by remote imports.
+// Empty IDs and IDs already carrying this host's prefix are unchanged.
+func HubSessionID(host, id string) string {
+	prefix := rebuildIDPrefix(host)
+	if id == "" || strings.HasPrefix(id, prefix) {
+		return id
+	}
+	return prefix + id
+}
+
 func loadImportSkipCache(ctx context.Context,
 	database *db.DB,
 	host string,

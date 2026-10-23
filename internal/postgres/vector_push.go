@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -217,7 +218,7 @@ func (s *Sync) pushVectors(
 	requestedScope := scope
 	var resolved vectorGeneration
 	if scope != nil {
-		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -240,7 +241,7 @@ func (s *Sync) pushVectors(
 				s.afterVectorGenerationLookup = nil
 				hook()
 			}
-			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 			if err != nil {
 				return res, err
 			}
@@ -344,7 +345,7 @@ func (s *Sync) pushVectors(
 				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
 			)
 		}
-		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -375,7 +376,7 @@ func (s *Sync) pushVectors(
 				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
 			)
 		}
-		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 		if err != nil {
 			return res, err
 		}
@@ -405,7 +406,7 @@ func (s *Sync) pushVectors(
 			hook()
 		}
 		recorded, err := s.recordVectorGenerationMachine(
-			ctx, gen.Fingerprint, resolved, witnessKey,
+			ctx, gen.Fingerprint, resolved, witnessKey, gen.IncludeAutomated,
 		)
 		if err != nil {
 			return res, err
@@ -427,7 +428,7 @@ func (s *Sync) pushVectors(
 }
 
 func (s *Sync) lookupVectorGeneration(
-	ctx context.Context, fingerprint, witnessKey string,
+	ctx context.Context, fingerprint, witnessKey string, includeAutomated *bool,
 ) (vectorGeneration, bool, error) {
 	var genID int64
 	var createdAt time.Time
@@ -452,8 +453,9 @@ func (s *Sync) lookupVectorGeneration(
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2)`,
-		genID, witnessKey).Scan(&machineRecorded); err != nil {
+     WHERE generation_id = $1 AND machine = $2
+       AND data_version = $3 AND include_automated IS NOT DISTINCT FROM $4)`,
+		genID, witnessKey, db.CurrentDataVersion(), includeAutomated).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, false, fmt.Errorf(
 			"reading vector push machine record: %w", err,
 		)
@@ -490,6 +492,19 @@ func (s *Sync) prepareVectorBaseSchema(
 	if unavailable != "" {
 		res.Skipped, res.SkippedReason = true, unavailable
 		return true, nil
+	}
+	existing, err := loadExistingColumns(ctx, s.pg, nil, "vector_generation_machines")
+	if err != nil {
+		return false, err
+	}
+	if _, err := ensureColumns(ctx, s.pg, existing, []columnMigration{
+		{table: "vector_generation_machines", column: "data_version", def: "data_version INTEGER"},
+		{table: "vector_generation_machines", column: "include_automated", def: "include_automated BOOLEAN"},
+	}); err != nil {
+		if s.skipVectorsOnPrivilegeError(err, res) {
+			return true, nil
+		}
+		return false, fmt.Errorf("adding vector compatibility metadata: %w", err)
 	}
 	return false, nil
 }
@@ -928,15 +943,16 @@ func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
 }
 
 func (s *Sync) recordVectorGenerationMachine(
-	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string,
+	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string, includeAutomated *bool,
 ) (bool, error) {
 	res, err := s.pg.ExecContext(ctx, `
-INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-SELECT id, $4, now()
+INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
+SELECT id, $4, now(), $5, $6
   FROM vector_generations
  WHERE id = $1 AND fingerprint = $2 AND created_at = $3
-ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at`,
-		gen.id, fingerprint, gen.createdAt, witnessKey)
+ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at,
+ data_version = EXCLUDED.data_version, include_automated = EXCLUDED.include_automated`,
+		gen.id, fingerprint, gen.createdAt, witnessKey, db.CurrentDataVersion(), includeAutomated)
 	if err != nil {
 		return false, fmt.Errorf("recording vector push machine: %w", err)
 	}
@@ -1099,6 +1115,10 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
+	// Shared document revisions cannot validate another generation's old chunks.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vector_push_state WHERE session_id=$1 AND generation_id<>$2 AND doc_agg_hash<>$3`, sessionID, scope.gen.id, aggHash); err != nil {
+		return vectorSessionOutcome{}, fmt.Errorf("invalidating stale vector coverage: %w", err)
+	}
 	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}

@@ -136,13 +136,13 @@ func restrictedOperation(grant, method, path string) bool {
 		return false
 	}
 	if method == http.MethodPost {
-		return path == "/api/v1/recall/query"
+		return path == "/api/v1/recall/query" || path == "/api/v1/vectors/lookup"
 	}
 	if method != http.MethodGet {
 		return false
 	}
 	switch path {
-	case "/api/ping", "/api/v1/version",
+	case "/api/ping", "/api/v1/version", "/api/v1/vectors/generation",
 		"/api/v1/sessions", "/api/v1/sessions/sidebar-index", "/api/v1/session-ids/resolve",
 		"/api/v1/projects", "/api/v1/machines", "/api/v1/agents", "/api/v1/branches",
 		"/api/v1/search", "/api/v1/search/content", "/api/v1/events",
