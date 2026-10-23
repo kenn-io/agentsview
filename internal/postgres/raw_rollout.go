@@ -78,25 +78,32 @@ func beginRawRollout(ctx context.Context, database *sql.DB, schema, tenant strin
 			return fail(err)
 		}
 	}
-	quoted, _ := quoteIdentifier(schema)
-	if _, err = tx.ExecContext(ctx, `SELECT set_config('search_path',$1,true),set_config('agentsview.tenant_id',$2,true)`, quoted, tenant); err != nil {
-		return fail(err)
-	}
-	var owner bool
-	err = tx.QueryRowContext(ctx, `SELECT n.nspowner=r.oid OR r.rolsuper FROM pg_namespace n CROSS JOIN pg_roles r WHERE n.nspname=$1 AND r.rolname=current_user`, schema).Scan(&owner)
-	if err != nil {
-		return fail(err)
-	}
-	if !owner {
-		return fail(errors.New("raw-rollout requires the hosted schema owner connection"))
-	}
-	if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
-		return fail(err)
-	}
-	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
+	if err = validateRawRolloutTransaction(ctx, tx, schema, tenant); err != nil {
 		return fail(err)
 	}
 	return tx, nil
+}
+
+func validateRawRolloutTransaction(ctx context.Context, tx *sql.Tx, schema, tenant string) error {
+	quoted, _ := quoteIdentifier(schema)
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('search_path',$1,true),set_config('agentsview.tenant_id',$2,true)`, quoted, tenant); err != nil {
+		return err
+	}
+	var owner bool
+	err := tx.QueryRowContext(ctx, `SELECT n.nspowner=r.oid OR r.rolsuper FROM pg_namespace n CROSS JOIN pg_roles r WHERE n.nspname=$1 AND r.rolname=current_user`, schema).Scan(&owner)
+	if err != nil {
+		return err
+	}
+	if !owner {
+		return errors.New("raw-rollout requires the hosted schema owner connection")
+	}
+	if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
+		return err
+	}
+	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ChangeRawRollout records shadow policy or clears exactly one scope. Activation
