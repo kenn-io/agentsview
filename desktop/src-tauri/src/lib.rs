@@ -2616,6 +2616,9 @@ fn apply_appimage_host_wayland_preload() {
         return;
     }
 
+    let Some(process_elf) = read_elf_identity(Path::new("/proc/self/exe")) else {
+        return;
+    };
     let existing_preload = std::env::var("LD_PRELOAD").ok();
     let listing = read_ldconfig_library_listing();
     let ordered = ordered_wayland_client_paths(
@@ -2623,11 +2626,7 @@ fn apply_appimage_host_wayland_preload() {
         std::env::consts::ARCH,
         HOST_WAYLAND_CLIENT_FALLBACKS,
     );
-    let existing_candidate_paths: Vec<&str> = ordered
-        .iter()
-        .map(String::as_str)
-        .filter(|path| Path::new(*path).is_file())
-        .collect();
+    let existing_candidate_paths = loadable_wayland_client_paths(&ordered, process_elf);
     let Some(preload) = appimage_host_wayland_preload(
         appimage.as_deref(),
         appdir.as_deref(),
@@ -2655,6 +2654,29 @@ fn read_ldconfig_library_listing() -> String {
         return String::new();
     }
     String::from_utf8(output.stdout).unwrap_or_default()
+}
+
+// The loader ignores a preload whose ELF class, byte order, or machine
+// differs from the process, so a 32-bit /usr/lib copy on a lib64 host
+// must not win over the 64-bit one.
+#[cfg(any(test, target_os = "linux"))]
+fn loadable_wayland_client_paths(ordered: &[String], process_elf: [u8; 4]) -> Vec<&str> {
+    ordered
+        .iter()
+        .map(String::as_str)
+        .filter(|path| read_elf_identity(Path::new(*path)) == Some(process_elf))
+        .collect()
+}
+
+// EI_CLASS, EI_DATA, and the two e_machine bytes from an ELF header.
+#[cfg(any(test, target_os = "linux"))]
+fn read_elf_identity(path: &Path) -> Option<[u8; 4]> {
+    let mut header = [0u8; 20];
+    fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
+    if !header.starts_with(b"\x7fELF") {
+        return None;
+    }
+    Some([header[4], header[5], header[18], header[19]])
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -6814,6 +6836,50 @@ agentsview running at http://127.0.0.1:18082
             .as_deref(),
             Some("/usr/lib/libwayland-client.so.0"),
         );
+    }
+
+    #[test]
+    fn appimage_host_wayland_skips_client_built_for_another_arch() {
+        fn elf_header(class: u8, machine: u16) -> Vec<u8> {
+            let mut header = vec![0u8; 64];
+            header[..4].copy_from_slice(b"\x7fELF");
+            header[4] = class;
+            header[5] = 1;
+            header[18..20].copy_from_slice(&machine.to_le_bytes());
+            header
+        }
+        let dir = tempdir().expect("tempdir");
+        let lib32 = dir.path().join("lib/libwayland-client.so.0");
+        let lib64 = dir.path().join("lib64/libwayland-client.so.0");
+        let script = dir.path().join("script/libwayland-client.so.0");
+        for path in [&lib32, &lib64, &script] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        fs::write(&lib32, elf_header(1, 3)).unwrap();
+        fs::write(&lib64, elf_header(2, 62)).unwrap();
+        fs::write(&script, b"#!/bin/sh\n").unwrap();
+        let ordered: Vec<String> = [
+            lib32.to_str().unwrap(),
+            dir.path().join("missing.so.0").to_str().unwrap(),
+            script.to_str().unwrap(),
+            lib64.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+        assert_eq!(
+            loadable_wayland_client_paths(&ordered, [2, 1, 62, 0]),
+            [lib64.to_str().unwrap()],
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_host_wayland_reads_running_process_elf_identity() {
+        let identity = read_elf_identity(Path::new("/proc/self/exe")).expect("process ELF header");
+        let class = if cfg!(target_pointer_width = "64") { 2 } else { 1 };
+        assert_eq!(identity[0], class);
     }
 
     #[test]
