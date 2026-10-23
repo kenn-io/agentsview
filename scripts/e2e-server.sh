@@ -56,7 +56,7 @@ else
     echo "Building test fixture..."
     restore_pricing_snapshot
     FIXTURE="$TMPDIR/testfixture"
-    CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
+    CGO_ENABLED=1 go build -tags fts5 \
       -o "$FIXTURE" "$ROOT/cmd/testfixture"
 fi
 fixture_args=(-out "$DB_PATH")
@@ -79,7 +79,7 @@ else
     printf '%s\n' \
       'keep embed dir for generated frontend assets' \
       > "$ROOT/internal/web/dist/.keep"
-    CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
+    CGO_ENABLED=1 go build -tags fts5 \
       -o "$SERVER" "$ROOT/cmd/agentsview"
 fi
 

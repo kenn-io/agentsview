@@ -75,7 +75,7 @@ func TestE2EServerRestoresPricingSnapshotBeforeServerBuild(t *testing.T) {
 		"fixture -out",
 		"go run ./internal/pricing/cmd/litellm-snapshot -restore",
 		"npm run build",
-		"go build -tags fts5,kit_posthog_disabled",
+		"go build -tags fts5",
 		"built-binary serve --port 8090 --no-browser",
 	)
 }
@@ -100,7 +100,7 @@ func TestE2EServerRestoresPricingSnapshotBeforeFixtureBuild(t *testing.T) {
 
 	assertEventOrder(t, stubs.events(t),
 		"go run ./internal/pricing/cmd/litellm-snapshot -restore",
-		"go build -tags fts5,kit_posthog_disabled",
+		"go build -tags fts5",
 		"built-binary -out",
 		"server serve --port 8090 --no-browser",
 	)

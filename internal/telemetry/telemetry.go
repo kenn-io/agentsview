@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"testing"
 	"time"
 
 	kittelemetry "go.kenn.io/kit/telemetry/posthog"
@@ -15,7 +14,6 @@ import (
 const (
 	EnabledEnv            = "AGENTSVIEW_TELEMETRY_ENABLED"
 	GenericEnabledEnv     = kittelemetry.GenericEnabledEnv
-	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive     = "daemon_active"
 	EventSetupFinished    = "setup_finished"
 	EventAppOpened        = "app_opened"
@@ -64,9 +62,6 @@ func NewReporter(opts Options) (*Reporter, error) {
 		}
 		return &Reporter{client: client}, nil
 	}
-	if runningUnderGoTest() {
-		return DisabledReporter(), nil
-	}
 	if strings.TrimSpace(opts.InstallationID) == "" {
 		return nil, errors.New("installation ID is required")
 	}
@@ -96,7 +91,7 @@ func (r *Reporter) Enabled() bool {
 }
 
 func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
-	if runningUnderGoTest() || !r.Enabled() {
+	if !r.Enabled() {
 		return nil
 	}
 	select {
@@ -147,10 +142,6 @@ func (r *Reporter) SanitizeProperties(
 	return r.client.SanitizeProperties(event, properties)
 }
 
-func runningUnderGoTest() bool {
-	return testing.Testing()
-}
-
 func (r *Reporter) Close() error {
 	if r == nil || r.client == nil {
 		return nil
@@ -159,8 +150,13 @@ func (r *Reporter) Close() error {
 }
 
 func newKitReporter(opts Options) (*kittelemetry.Reporter, error) {
-	return kittelemetry.NewReporter(kittelemetry.Options{
-		APIKey:      postHogAPIKey,
+	return kittelemetry.NewReporter(kitOptions(opts), allowedEventOptions(opts)...)
+}
+
+// kitOptions leaves APIKey empty so kit uses the project key that release
+// builds set at link time.
+func kitOptions(opts Options) kittelemetry.Options {
+	return kittelemetry.Options{
 		Application: application,
 		EnvPrefix:   envPrefix,
 		DistinctID:  opts.InstallationID,
@@ -168,7 +164,7 @@ func newKitReporter(opts Options) (*kittelemetry.Reporter, error) {
 		Version:     opts.Version,
 		Commit:      opts.Commit,
 		Source:      "daemon",
-	}, allowedEventOptions(opts)...)
+	}
 }
 
 func allowedEventOptions(opts Options) []kittelemetry.Option {
