@@ -3526,8 +3526,9 @@ schemas keep their existing ordering behavior.
   costs use the summary's cost basis, leaving only positive uncovered cost
   on its model. Unknown summary cost preserves known ledger costs and lets
   catalog pricing fill unknown costs. Sourced actual and included zeros remain
-  known; default zero estimates remain unknown. Malformed numbers warn and fall
-  back to that session's summary, preserving state messages and sibling ledgers.
+  known; default zero estimates remain unknown. Malformed numeric rows warn and
+  are omitted, preserving valid rows and leaving uncovered main usage in the
+  session summary. Nullable ledger token counters count as zero.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

@@ -8,7 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// CreateLedger creates the Hermes model usage ledger.
+// CreateLedger creates the Hermes model usage ledger. Schema from the pinned producer:
+// https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py
 func CreateLedger(t *testing.T, conn *sql.DB) {
 	t.Helper()
 	_, err := conn.ExecContext(t.Context(), `CREATE TABLE session_model_usage (

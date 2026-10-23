@@ -49,7 +49,7 @@ func readHermesModelUsage(ctx context.Context, conn *sql.DB, sessionID string) (
 		}
 	}
 	query := fmt.Sprintf(`SELECT session_id, model, %s, %s, %s, %s,
-		input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+		COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), COALESCE(cache_read_tokens, 0), COALESCE(cache_write_tokens, 0), COALESCE(reasoning_tokens, 0),
 		estimated_cost_usd, actual_cost_usd, COALESCE(cost_status, ''), COALESCE(cost_source, '')
 		FROM session_model_usage`, identity[1], identity[2], identity[3], identity[0])
 	var args []any
@@ -64,7 +64,6 @@ func readHermesModelUsage(ctx context.Context, conn *sql.DB, sessionID string) (
 	}
 	defer rows.Close()
 	out := make(map[string][]hermesModelUsage)
-	malformed := make(map[string]bool)
 	for rows.Next() {
 		var row hermesModelUsage
 		var tokens [5]any
@@ -73,9 +72,6 @@ func readHermesModelUsage(ctx context.Context, conn *sql.DB, sessionID string) (
 			&tokens[0], &tokens[1], &tokens[2], &tokens[3], &tokens[4],
 			&estimate, &actual, &row.Status, &row.Source); err != nil {
 			return nil, fmt.Errorf("scan hermes usage: %w", err)
-		}
-		if malformed[row.SessionID] {
-			continue
 		}
 		var numericErr error
 		for i, target := range []*int{&row.Input, &row.Output, &row.CacheRead, &row.CacheWrite, &row.Reasoning} {
@@ -91,9 +87,7 @@ func readHermesModelUsage(ctx context.Context, conn *sql.DB, sessionID string) (
 			numericErr = row.Actual.Scan(actual)
 		}
 		if numericErr != nil {
-			log.Printf("hermes: invalid ledger number for session %q: %v; using session summary", row.SessionID, numericErr)
-			malformed[row.SessionID] = true
-			delete(out, row.SessionID)
+			log.Printf("hermes: invalid ledger number for session %q model %q task %q: %v; skipping row", row.SessionID, row.Model, row.Task, numericErr)
 			continue
 		}
 		out[row.SessionID] = append(out[row.SessionID], row)
@@ -144,6 +138,7 @@ func hermesUsageEvents(ss hermesStateSession, sessionID string) []ParsedUsageEve
 				if priced := hermesSummaryUsageEvents(part, sessionID); len(priced) > 0 && priced[0].Cost != nil {
 					event.Cost = priced[0].Cost
 				}
+				// Keep ledger charges even when a gateway lowers the summary cost.
 				remainder = max(remainder-event.Cost.Microdollars, 0)
 			}
 			ss.inputTokens = max(ss.inputTokens-event.InputTokens, 0)
