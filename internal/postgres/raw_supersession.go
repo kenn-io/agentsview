@@ -1,6 +1,11 @@
 package postgres
 
 import (
+	"context"
+	"database/sql"
+	"errors"
+	"slices"
+
 	"go.kenn.io/agentsview/internal/rawparity"
 )
 
@@ -43,4 +48,123 @@ func rawLogicalSupersessions(rows []rawparity.Candidate, served map[string]bool,
 		}
 	}
 	return out
+}
+
+type rawSupersessionChange struct{ Legacy, Before, After string }
+type rawLegacyVisibility struct {
+	Legacy string
+	Hidden bool
+}
+
+// Changes and Visibility expose the complete map/legacy row write set for the
+// caller's prelock closure. Cache/curation writes and final legacy visibility
+// writes are separate: legacy UPDATE triggers publish corpus immediately.
+// IdentityChanged must reach the caller's publication even if its ordinary
+// materializer reported no content change. No exact revision count is promised.
+type rawSupersessionPlan struct {
+	Changes         []rawSupersessionChange
+	Visibility      []rawLegacyVisibility
+	IdentityChanged bool
+}
+
+func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]bool) (rawSupersessionPlan, error) {
+	var plan rawSupersessionPlan
+	candidates, err := loadRawParityCandidates(ctx, tx)
+	if err != nil {
+		return plan, err
+	}
+	previous := map[string]string{}
+	rows, err := tx.QueryContext(ctx, `SELECT legacy_session_id,group_id FROM raw_legacy_supersessions ORDER BY legacy_session_id`)
+	if err != nil {
+		return plan, err
+	}
+	for rows.Next() {
+		var legacy, group string
+		if err = rows.Scan(&legacy, &group); err != nil {
+			break
+		}
+		previous[legacy] = group
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return plan, err
+	}
+	next := rawLogicalSupersessions(candidates, served, previous)
+	ids := []string{}
+	for legacy := range previous {
+		ids = append(ids, legacy)
+	}
+	for legacy := range next {
+		ids = append(ids, legacy)
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	for _, legacy := range ids {
+		if previous[legacy] != next[legacy] {
+			plan.Changes = append(plan.Changes, rawSupersessionChange{legacy, previous[legacy], next[legacy]})
+		}
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT id,rollout_hidden FROM sessions WHERE provenance_kind='legacy' AND id=ANY($1) ORDER BY id`, ids)
+	if err != nil {
+		return plan, err
+	}
+	for rows.Next() {
+		var id string
+		var hidden bool
+		if err = rows.Scan(&id, &hidden); err != nil {
+			break
+		}
+		if want := next[id] != ""; want != hidden {
+			plan.Visibility = append(plan.Visibility, rawLegacyVisibility{id, want})
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	plan.IdentityChanged = len(plan.Changes) > 0 || len(plan.Visibility) > 0
+	return plan, err
+}
+
+// writeRawSupersessionCache requires the caller's rollout/alias/group/session
+// and child/FK locks. It neither acquires corpus nor publishes. Absent keys are
+// protected by those writer guards, not by a SELECT of existing cache rows.
+func writeRawSupersessionCache(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
+	for _, c := range plan.Changes {
+		if c.Before != "" {
+			result, err := tx.ExecContext(ctx, `DELETE FROM raw_legacy_supersessions WHERE legacy_session_id=$1 AND group_id=$2`, c.Legacy, c.Before)
+			if err != nil {
+				return err
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return errors.New("supersession preparation changed; retry transaction")
+			}
+		}
+		if c.After != "" {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO raw_legacy_supersessions(legacy_session_id,group_id) VALUES($1,$2)`, c.Legacy, c.After); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// applyRawLegacyVisibility belongs after ALL ordinary writes and prelocks, not
+// inside a per-group materialization loop. The caller retains its publication
+// fences through commit and accounts for the trigger's identity/corpus bumps.
+// Only derived visibility changes; original legacy content/curation survives.
+func applyRawLegacyVisibility(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
+	for _, v := range plan.Visibility {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE id=$1 AND provenance_kind='legacy' AND rollout_hidden IS DISTINCT FROM $2`, v.Legacy, v.Hidden); err != nil {
+			return err
+		}
+	}
+	return nil
 }

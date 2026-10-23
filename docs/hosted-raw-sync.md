@@ -136,7 +136,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
 GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.sessions, hosted_sessions.session_sources,
   hosted_sessions.pinned_messages, hosted_sessions.raw_curation,
-  hosted_sessions.raw_pins TO hosted_runtime;
+  hosted_sessions.raw_pins,
+  hosted_sessions.raw_legacy_supersessions TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.friction_findings TO hosted_runtime;
@@ -152,7 +153,10 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 Run `agentsview pg hosted-provision provision`, then reapply
 `GRANT SELECT ON ALL TABLES IN SCHEMA hosted_sessions TO hosted_runtime` as the
 owner, along with the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants
-above. The SELECT grant includes the new `raw_rollout_scopes` table.
+above. The SELECT grant includes `raw_rollout_scopes` and
+`raw_legacy_supersessions`. The latter also needs the projection write grants
+above; it stores derived legacy-to-raw group mappings. Public activation is
+still unavailable.
 `ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
 fails startup until provisioning and these grants are complete.
 
