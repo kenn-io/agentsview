@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -85,8 +86,9 @@ type httpBackend struct {
 	readOnly          bool
 	recallQueries     bool
 	// apiVersion is the probed server API version, or 0 when unknown.
-	apiVersion int
-	token      string
+	apiVersion   int
+	token        string
+	remotePolicy bool
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -94,9 +96,10 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly           bool `json:"read_only"`
-	APIVersion         int  `json:"api_version"`
-	NonRecordingRecall bool
+	ReadOnly              bool `json:"read_only"`
+	SessionStatsAvailable bool `json:"session_stats_available"`
+	APIVersion            int  `json:"api_version"`
+	NonRecordingRecall    bool
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -130,6 +133,29 @@ func NewHTTPBackendForServer(
 	return b
 }
 
+// NewHTTPBackendWithClient uses a caller-supplied transport policy when non-nil.
+func NewHTTPBackendWithClient(baseURL, token string, readOnly bool, browserURL string, client *http.Client) service.SessionService {
+	b := NewHTTPBackend(baseURL, token, readOnly, browserURL).(*httpBackend)
+	b.setClient(client)
+	return b
+}
+
+// NewHTTPBackendForServerWithClient applies server capabilities and transport policy.
+func NewHTTPBackendForServerWithClient(baseURL, token string, caps HTTPServerCapabilities, client *http.Client) service.SessionService {
+	b := NewHTTPBackendForServer(baseURL, token, caps).(*httpBackend)
+	b.setClient(client)
+	return b
+}
+func (b *httpBackend) setClient(client *http.Client) {
+	if client != nil {
+		b.remotePolicy = true
+		b.client = client
+		long := *client
+		long.Timeout = 0
+		b.longRunningClient = &long
+	}
+}
+
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
@@ -154,7 +180,13 @@ func newHTTPBackend(
 func ProbeHTTPServerCapabilities(
 	ctx context.Context, baseURL, token string,
 ) (HTTPServerCapabilities, error) {
+	return ProbeHTTPServerCapabilitiesWithClient(ctx, baseURL, token, nil)
+}
+
+// ProbeHTTPServerCapabilitiesWithClient probes with the selected transport policy.
+func ProbeHTTPServerCapabilitiesWithClient(ctx context.Context, baseURL, token string, client *http.Client) (HTTPServerCapabilities, error) {
 	b := newHTTPBackend(baseURL, token, false, false)
+	b.setClient(client)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return HTTPServerCapabilities{}, err
@@ -172,7 +204,10 @@ func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HT
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
+	if response.JSON200 == nil || response.JSON200.APIVersion <= 0 {
+		return HTTPServerCapabilities{}, errors.New("probing server capabilities: invalid version response")
+	}
+	return HTTPServerCapabilities{SessionStatsAvailable: response.JSON200.SessionStatsAvailable, ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
@@ -294,7 +329,11 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
 	if version == 0 {
-		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		api, err := b.apiClient(b.client)
+		if err != nil {
+			return err
+		}
+		capabilities, err := probeHTTPServerCapabilities(ctx, api)
 		if err != nil {
 			return err
 		}
@@ -1612,6 +1651,9 @@ func parseScanStream(
 }
 
 func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) {
+	if b.remotePolicy {
+		return apiclient.NewHTTPClientWithResponsePolicy(b.baseURL, b.token, client, remotecred.ResponsePolicy(b.baseURL))
+	}
 	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
 }
 
