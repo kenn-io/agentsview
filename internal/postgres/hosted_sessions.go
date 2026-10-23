@@ -110,7 +110,7 @@ func (h *HostedStore) GetChildSessions(ctx context.Context, id string) ([]db.Ses
 		if target.Legacy {
 			children, err = h.physical.GetChildSessions(ctx, target.SessionID)
 		} else {
-			rows, e := h.physical.pg.QueryContext(ctx, `SELECT `+pgSessionCols+` FROM sessions WHERE id IN (SELECT owner.session_id `+hostedLinkFromSQL+` AND e.kind='parent' AND target.session_id=$1) AND deleted_at IS NULL ORDER BY COALESCE(started_at,created_at),id`, target.SessionID)
+			rows, e := h.physical.pg.QueryContext(ctx, `SELECT `+pgSessionCols+` FROM sessions WHERE id IN (SELECT owner.session_id `+hostedLinkFromSQL+` AND e.kind='parent' AND target.session_id=$1) AND deleted_at IS NULL AND NOT rollout_hidden ORDER BY COALESCE(started_at,created_at),id`, target.SessionID)
 			if e != nil {
 				return nil, e
 			}
@@ -154,7 +154,7 @@ func (h *HostedStore) findAliases(ctx context.Context, term string, limit int, s
 		if suffix {
 			predicate = `(a.alias_id=$1 OR right(a.alias_id,length($1)+1)=':'||$1 OR right(a.alias_id,length($1)+1)='~'||$1)`
 		}
-		rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT s.id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE b.active AND s.deleted_at IS NULL AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) AND `+predicate+` UNION SELECT id FROM sessions WHERE provenance_kind='legacy' AND deleted_at IS NULL AND `+func() string {
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT s.id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE b.active AND s.deleted_at IS NULL AND NOT s.rollout_hidden AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) AND `+predicate+` UNION SELECT id FROM sessions WHERE provenance_kind='legacy' AND deleted_at IS NULL AND NOT rollout_hidden AND `+func() string {
 			if suffix {
 				return `(id=$1 OR right(id,length($1)+1)=':'||$1 OR right(id,length($1)+1)='~'||$1)`
 			}

@@ -312,16 +312,20 @@ the previous visibility policy. Precedence is device plus provider, device,
 provider, then tenant. A group shared by several sources is eligible when any
 source is active, even if another device is in shadow.
 
-Rollout visibility is independent of user trash. Hidden sessions do not take
-part in public identity selection or curation. Restore and purge preserve hidden
-rows. A purge that would record a global alias exclusion covering a hidden
-session returns HTTP 409 before deletion; EmptyTrash also keeps raw trash when
-a legacy alias conflicts. Other visible purges remain permanent.
+Shadow sessions stay out of session lists, details, search, pins and trash.
+Shared analytics and usage queries also exclude their contributions. Rollout
+visibility is independent of user trash: restoring or emptying trash cannot
+expose or purge a hidden session. A purge whose global alias exclusion also
+covers a protected session returns HTTP 409 before any deletion. EmptyTrash
+also keeps raw trash when a legacy alias conflicts. Other visible purges remain
+permanent. Purging a thread keeps hidden pages and their durable exclusions
+untouched; the returned count includes only deleted rows.
 
-Scope changes invalidate identity cursors when membership or public aliases
-change. Public-read
-filtering, activation with a parity gate, and legacy supersession arrive in
-later cutover stages; **shadow is not yet a public-read isolation boundary**.
+Scope changes invalidate existing session cursors when the served set or public
+aliases change. Physical projection reads still include shadow rows. Forwarded
+report snapshot protection and source-probe filtering arrive in the next
+cutover stage; **shadow is not yet a complete public-read isolation boundary**.
+Activation with a parity gate and legacy supersession arrive in later stages.
 `list` counts physical raw rows as served or shadow according to that column,
 including user trash, and prints the scope's stored parity report. Superseded
 counts remain zero until legacy supersession is implemented.
