@@ -1442,6 +1442,22 @@ from pgvector — see
 
 ______________________________________________________________________
 
+### `agentsview replica pg raw-rollout`
+
+Inspect or record hosted session rollout scopes through an owner target:
+
+```bash
+agentsview replica pg raw-rollout list [target] [--device ID] [--provider P]
+agentsview replica pg raw-rollout shadow [target] [--device ID] [--provider P]
+agentsview replica pg raw-rollout clear [target] [--device ID] [--provider P]
+```
+
+The tenant scope must exist before narrower scopes and can be cleared only
+when no narrower scopes remain. List output includes physical served, shadow
+and superseded counts, plus the last stored parity report. Public-read
+filtering and activation are pending later cutover stages; see
+[rollout scopes](/docs/hosted-raw-sync/#rollout-scopes) for current limits.
+
 <a id="agentsview-pg-service"></a>
 
 ### `agentsview replica pg service`
