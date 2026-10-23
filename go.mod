@@ -10,7 +10,7 @@ require (
 	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/coder/websocket v1.8.15
 	github.com/danielgtaylor/huma/v2 v2.39.1
-	github.com/dlclark/regexp2/v2 v2.8.4
+	github.com/dlclark/regexp2/v2 v2.9.0
 	github.com/dmarkham/enumer v1.7.2
 	github.com/doordash-oss/oapi-codegen-dd/v3 v3.76.3
 	github.com/duckdb/duckdb-go/v2 v2.10506.0
@@ -47,7 +47,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	modernc.org/libc v1.78.0
+	modernc.org/libc v1.79.0
 	modernc.org/sqlite v1.60.1
 )
 
@@ -132,7 +132,7 @@ require (
 	github.com/moby/sys/user v0.4.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
-	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
