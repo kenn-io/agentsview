@@ -3,9 +3,10 @@
 package postgres
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Named regression for the shrunk crash-budget counterexample (maximum one).

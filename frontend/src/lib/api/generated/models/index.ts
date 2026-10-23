@@ -396,6 +396,7 @@ export * from "./putApiV1SessionsByIdParentPathParameters.ts";
 export * from "./putApiV1SessionsByIdStarPathParameters.ts";
 export * from "./putApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters.ts";
 export * from "./putApiV1SettingsWorktreeMappingsByIdPathParameters.ts";
+export * from "./rawsyncDeadLetterHealth.ts";
 export * from "./rawsyncDeviceStatus.ts";
 export * from "./rawsyncEntry.ts";
 export * from "./rawsyncExpiredLease.ts";

@@ -5811,6 +5811,21 @@ components:
         - provider
         - object
       type: object
+    RawsyncDeadLetterHealth:
+      additionalProperties: false
+      properties:
+        count:
+          format: int64
+          type: integer
+        oldest_failed_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+      required:
+        - count
+        - oldest_failed_at
+      type: object
     RawsyncDeviceStatus:
       additionalProperties: false
       properties:
@@ -5948,6 +5963,8 @@ components:
     RawsyncJobHealthReport:
       additionalProperties: false
       properties:
+        dead_letters:
+          $ref: "#/components/schemas/RawsyncDeadLetterHealth"
         expired_lease_count:
           format: int64
           type: integer
@@ -6002,6 +6019,7 @@ components:
         - expired_lease_count
         - failed_jobs_by_error_class
         - failed_job_count
+        - dead_letters
         - retrying_near_limit
         - retrying_near_limit_count
         - stale_source_heads

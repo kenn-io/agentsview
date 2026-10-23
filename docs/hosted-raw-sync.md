@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -225,8 +225,28 @@ remain retained but cannot be projected by this worker. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
-unresolved members and retry finitely. Exhausted jobs remain failed until new
-source or processing-version selection provides new work.
+unresolved members and retry finitely. Expired leases consume the same attempt
+budget as recorded failures. Once the budget is exhausted, the next claim
+marks the job failed: `lease:expired` for an expired lease, or
+`attempts:exhausted` for queued work above a lowered limit.
+Each claim fails at most its requested batch size of exhausted jobs. Every
+claim and replay advances a monotonic lease epoch, so a delayed worker cannot
+act after replay.
+Exhausted jobs remain failed until an operator replays them or a new source or
+processing-version selection provides new work.
+
+Use `agentsview pg raw-jobs list [target]` to see counts by state and stored
+error class, with each group's oldest failure timestamp. Replay one batch with
+`agentsview pg raw-jobs retry [target] --error-class parse`,
+`--manifest ID`, or `--all`; exactly one filter is required. Replay handles at
+most 64 failed jobs per invocation to keep source-head locks short. Repeat
+until both reported counts are zero. It resets attempts for the source's
+durable selected parser version; obsolete failures become superseded.
+Concurrent invocations reset each failure at most once.
+
+Upgrades add `lease_epoch` and `failed_at` through `pg hosted-provision`.
+Existing failed jobs use their stored `updated_at` as the initial failure
+timestamp; new failures record their transition time.
 
 Equivalent content from several devices coalesces when it shares a stable
 provider session identity. Piebald's numeric database IDs stay scoped to their
@@ -600,7 +620,10 @@ without parse jobs, expired leased parse jobs, failed parse jobs grouped by
 their stored error class, and retrying jobs at or above
 `greatest(1, max_attempts - 1)`. These counts include only current source heads
 and selected processing versions, so replacing a manifest or parser version
-clears obsolete job warnings.
+clears obsolete job warnings. The separate `dead_letters` object reports
+`count` and `oldest_failed_at` for all failed parse jobs in the tenant, including
+historical selections, until replay or supersession. Its timestamp is null
+when no failure timestamp is available.
 
 `stale_source_heads` reports parse lag: current manifests accepted at least
 `stale_after_seconds` ago with no completed parse job for a selected processing

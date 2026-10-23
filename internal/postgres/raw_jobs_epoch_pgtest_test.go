@@ -8,36 +8,33 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/rawderive"
-	"hegel.dev/go/hegel"
 )
 
-// A reset retry budget must never make a delayed ownership token valid again.
-func TestRawJobsDelayedOperationProperty(t *testing.T) {
+// Named regression for the shrunk ABA heartbeat counterexample, plus sibling mutations.
+func TestRawJobsDelayedHeartbeatAfterReplay(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device", "replay", "")
-	hegel.Test(t, func(ht *hegel.T) {
-		operation := hegel.Draw(ht, hegel.Integers(0, 4))
-		_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET state='ready',attempt_count=0,lease_owner='',lease_expires_at=NULL`)
-		require.NoError(ht, err)
+	for operation := 0; operation <= 4; operation++ {
+		_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET state='ready',attempt_count=0,failed_at=NULL,lease_owner='',lease_expires_at=NULL`)
+		require.NoError(t, err)
 		old := f.lease(t, m)
-		require.NoError(ht, f.jobs.FailRawParseJob(t.Context(), old, "parse", "parse:internal"))
-		_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET state='ready',attempt_count=0`)
-		require.NoError(ht, err)
-		_ = f.lease(t, m)
-		switch operation {
-		case 0:
-			err = f.jobs.HeartbeatRawParseJob(t.Context(), old, time.Minute)
-		case 1:
-			err = f.jobs.FailRawParseJob(t.Context(), old, "parse", "parse:internal")
-		case 2:
-			err = f.jobs.RetryRawParseJob(t.Context(), old, time.Now(), "parse", "parse:internal")
-		case 3:
-			err = f.jobs.CompleteRawParseJob(t.Context(), old)
-		case 4:
-			err = f.sink.Project(t.Context(), old, m, projectionOutcome("stale"))
-		}
-		require.ErrorIs(ht, err, rawderive.ErrLeaseLost)
-	}, hegel.WithTestCases(1000), hegel.WithDatabase(t.TempDir()))
+		require.NoError(t, f.jobs.FailRawParseJob(t.Context(), old, "parse", "parse:internal"))
+		result, err := f.sink.RetryFailedRawJobs(t.Context(), RawJobRetryFilter{ManifestID: m.ManifestID})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), result.Replayed)
+		fresh := f.lease(t, m)
+		require.Equal(t, old.Attempt, fresh.Attempt)
+		require.Equal(t, old.Owner, fresh.Owner)
+		require.Greater(t, fresh.LeaseEpoch, old.LeaseEpoch)
+		require.ErrorIs(t, recoveryOperation(t.Context(), f, m, old, operation), rawderive.ErrLeaseLost)
+		var state string
+		var epoch int64
+		var published int
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,lease_epoch,(SELECT count(*) FROM sessions)+(SELECT count(*) FROM raw_embedding_outbox) FROM raw_ingest_jobs WHERE id=$1`, fresh.ID).Scan(&state, &epoch, &published))
+		require.Equal(t, "leased", state)
+		require.Equal(t, fresh.LeaseEpoch, epoch)
+		require.Zero(t, published)
+	}
 }
 
 func TestRawJobsRecoveryUpgrade(t *testing.T) {
