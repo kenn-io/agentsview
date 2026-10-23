@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -147,10 +147,24 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   TO hosted_runtime;
 ```
 
-For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+### Upgrade an existing deployment
+
+Run `agentsview pg hosted-provision provision`, then reapply
+`GRANT SELECT ON ALL TABLES IN SCHEMA hosted_sessions TO hosted_runtime` as the
+owner, along with the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants
+above. The SELECT grant includes the new `raw_rollout_scopes` table.
+`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
+fails startup until provisioning and these grants are complete.
+
+The hosted schema reserves `raw_rollout_scopes` for owner-managed cutover policy.
+Runtime roles need `SELECT` and must have no table or column write grants on it.
+Provisioning adds `sessions.rollout_hidden` while preserving existing rows,
+visibility and user trash. Rollout controls arrive in the next cutover stage.
+
+Projection and curation acquire the tenant rollout lock before source, lease or
+group row locks. They retry the whole transaction after a serialization conflict
+or deadlock, so retries cannot publish only part of a projection or curation
+change.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.

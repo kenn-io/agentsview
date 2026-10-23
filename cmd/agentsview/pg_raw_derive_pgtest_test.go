@@ -50,7 +50,7 @@ func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {
 	password := make([]byte, 32)
 	_, err = rand.Read(password)
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE ROLE "` + role + `" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '` + hex.EncodeToString(password) + `';GRANT USAGE ON SCHEMA "` + schema + `" TO "` + role + `";GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA "` + schema + `" TO "` + role + `";GRANT USAGE ON ALL SEQUENCES IN SCHEMA "` + schema + `" TO "` + role + `"`)
+	_, err = admin.Exec(`CREATE ROLE "` + role + `" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '` + hex.EncodeToString(password) + `';GRANT USAGE ON SCHEMA "` + schema + `" TO "` + role + `";GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA "` + schema + `" TO "` + role + `";GRANT USAGE ON ALL SEQUENCES IN SCHEMA "` + schema + `" TO "` + role + `";REVOKE INSERT,UPDATE,DELETE ON "` + schema + `".raw_rollout_scopes FROM "` + role + `"`)
 	require.NoError(t, err)
 	u, err := url.Parse(dsn)
 	require.NoError(t, err)
