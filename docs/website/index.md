@@ -5,9 +5,6 @@ recorded conversations from more than 60 agent formats, compare activity and
 costs, and reuse lessons from past work. The archive stays on your machine
 unless you turn on a feature that shares it.
 
-[New in v0.46.1](/docs/changelog/#0461): Antigravity transcript and read-only
-mount fixes, plus repaired container builds.
-
 ## Install
 
 On macOS or Linux:
