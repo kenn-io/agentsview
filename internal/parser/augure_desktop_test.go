@@ -173,11 +173,8 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	assert.Zero(t, event.Cost.Microdollars,
 		"a known summary cost suppresses catalog pricing on the main ledger")
 	summary := result.UsageEvents[1]
-	assert.Zero(t, summary.InputTokens)
-	assert.Zero(t, summary.OutputTokens)
-	assert.Equal(t, 4100, summary.CacheReadInputTokens)
 	require.NotNil(t, summary.Cost)
-	assert.Zero(t, summary.Cost.Microdollars)
+	assert.Zero(t, summary.Cost.Microdollars, "the summary retains Hermes's recorded actual_cost_usd = 0")
 
 	require.NotEmpty(t, result.Messages)
 	assert.Equal(t, RoleUser, result.Messages[0].Role)

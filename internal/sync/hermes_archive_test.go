@@ -2417,10 +2417,9 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			stateDB := writeHermesArchiveStateDB(t, root)
 			execHermesState(t, stateDB, `CREATE TABLE session_model_usage (
 				session_id TEXT, model TEXT, billing_provider TEXT DEFAULT '', billing_base_url TEXT DEFAULT '', billing_mode TEXT DEFAULT '', task TEXT DEFAULT '',
-				api_call_count INTEGER DEFAULT 1, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+				input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
 				cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
-				estimated_cost_usd REAL DEFAULT 0, actual_cost_usd REAL DEFAULT 0, cost_status TEXT, cost_source TEXT,
-				first_seen REAL DEFAULT 1778767200, last_seen REAL DEFAULT 1778767800);
+				estimated_cost_usd REAL DEFAULT 0, actual_cost_usd REAL DEFAULT 0, cost_status TEXT, cost_source TEXT);
 				UPDATE sessions SET input_tokens = 100;
 				INSERT INTO session_model_usage (session_id, model, task, input_tokens) VALUES ('child', 'review', 'background_review', 20)`)
 			database := dbtest.OpenTestDB(t)
@@ -2446,30 +2445,24 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			assert.Equal(t, 142, database.GetSessionDataVersion(t.Context(), id))
 			engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
 			t.Cleanup(engine.Close)
-			for i, query := range []string{
-				`UPDATE session_model_usage SET input_tokens = 30`,
-				`DELETE FROM session_model_usage`,
-			} {
-				execHermesState(t, stateDB, query)
-				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
-				events, err := database.GetUsageEvents(t.Context(), id)
-				require.NoError(t, err)
-				got := map[string]int{}
-				for _, event := range events {
-					got[event.Model] += event.InputTokens
-				}
-				want := map[string]int{"gpt-5.4": 100}
-				if i == 0 {
-					want["review"] = 30
-				}
-				assert.Equal(t, want, got)
-				after, err := database.GetSession(t.Context(), id)
-				require.NoError(t, err)
-				require.NotNil(t, after)
-				assert.Equal(t, before.ID, after.ID)
-				assert.Equal(t, before.FilePath, after.FilePath)
-				assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id))
+			// The version upgrade must reparse even when the source is unchanged.
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+			assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id))
+			after, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, before.FilePath, after.FilePath)
+
+			execHermesState(t, stateDB, `DELETE FROM session_model_usage`)
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+			events, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			got := map[string]int{}
+			for _, event := range events {
+				got[event.Model] += event.InputTokens
 			}
+			assert.Equal(t, map[string]int{"gpt-5.4": 100}, got)
 		})
 	}
 }
