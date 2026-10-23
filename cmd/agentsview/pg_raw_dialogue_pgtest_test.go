@@ -61,7 +61,7 @@ func TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion(t *testi
 	require.NoError(t, err)
 	_, err = sink.SelectSourceGeneration(t.Context(), m, previousVersion)
 	require.NoError(t, err)
-	leases, err := jobs.ClaimRawParseJobs(t.Context(), "previous-worker", 1, time.Minute)
+	leases, err := jobs.ClaimRawParseJobs(t.Context(), "previous-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	out := rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true, Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{
@@ -76,13 +76,13 @@ func TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion(t *testi
 	// A new run ID at the old production version leaves completed uploads alone.
 	_, err = sink.ScheduleCurrentHeads(t.Context(), "previous-version", previousVersion, 64)
 	require.NoError(t, err)
-	leases, err = jobs.ClaimRawParseJobs(t.Context(), "reparse-worker", 1, time.Minute)
+	leases, err = jobs.ClaimRawParseJobs(t.Context(), "reparse-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Empty(t, leases)
 
 	_, err = sink.ScheduleCurrentHeads(t.Context(), "dialogue-upgrade", currentVersion, 64)
 	require.NoError(t, err)
-	leases, err = jobs.ClaimRawParseJobs(t.Context(), "reparse-worker", 1, time.Minute)
+	leases, err = jobs.ClaimRawParseJobs(t.Context(), "reparse-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	assert.Equal(t, m.ManifestID, leases[0].ManifestID)

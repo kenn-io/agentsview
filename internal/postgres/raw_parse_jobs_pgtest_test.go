@@ -26,14 +26,14 @@ func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
 	_, err := store.CommitManifest(t.Context(), manifest, "parser-data-17")
 	require.NoError(t, err)
 
-	first, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 1, time.Minute)
+	first, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, first, 1)
 	assert.Equal(t, manifest.ManifestID, first[0].ManifestID)
 	assert.Equal(t, 1, first[0].Attempt)
 	assert.Equal(t, identity, first[0].Identity)
 
-	other, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	other, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 	require.NoError(t, err)
 	assert.Empty(t, other, "an active lease must be exclusive")
 
@@ -43,7 +43,7 @@ func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
 		WHERE id = $1`, first[0].ID)
 	require.NoError(t, err)
 
-	second, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	second, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, second, 1)
 	assert.Equal(t, first[0].ID, second[0].ID)
@@ -83,7 +83,7 @@ func TestRawParseJobsSupersedeNonHeadManifestsOnShortClaim(t *testing.T) {
 	// it as a legacy row the commit path never reached.
 	reOpenSupersededRawParseJobs(t, pg)
 
-	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute)
+	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	assert.Equal(t, secondManifest.ManifestID, leases[0].ManifestID)
@@ -115,7 +115,7 @@ func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
 	require.NoError(t, store.RetryRawParseJob(
 		t.Context(), lease, retryAt, "object_store", "temporary failure",
 	))
-	leasing, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	leasing, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 	require.NoError(t, err)
 	assert.Empty(t, leasing)
 
@@ -123,7 +123,7 @@ func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
 		UPDATE raw_ingest_jobs SET available_at = now() - interval '1 second'
 		WHERE id = $1`, lease.ID)
 	require.NoError(t, err)
-	leasing, err = store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	leasing, err = store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leasing, 1)
 	assert.Equal(t, lease.Attempt+1, leasing[0].Attempt)
@@ -184,7 +184,7 @@ func TestRawParseJobsRecordTerminalFailureWithLeaseFence(t *testing.T) {
 	assert.Equal(t, "parse", errorClass)
 	assert.Equal(t, "unsupported provider format", message)
 
-	leasing, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	leasing, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 	require.NoError(t, err)
 	assert.Empty(t, leasing)
 }
@@ -286,7 +286,7 @@ func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testin
 	require.Equal(t, 4, countJobs("ready"),
 		"setup must leave two legacy obsolete and two current-head ready jobs")
 
-	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute)
+	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute, 5)
 
 	require.NoError(t, err)
 	require.Len(t, leases, 2)
@@ -298,7 +298,7 @@ func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testin
 		"a full current-head claim must not pay the obsolete-job supersede scan")
 	assert.Zero(t, countJobs("superseded"))
 
-	starved, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	starved, err := store.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 
 	require.NoError(t, err)
 	assert.Empty(t, starved,
@@ -342,7 +342,7 @@ func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.
 		identity.TenantID, firstManifest.ManifestID, maxRawParseSupersedeBatch+1)
 	require.NoError(t, err)
 
-	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 10, time.Minute)
+	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 10, time.Minute, 5)
 
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
@@ -406,7 +406,7 @@ func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
 	// must keep retiring.
 	reOpenSupersededRawParseJobs(t, pg)
 
-	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 3, time.Minute)
+	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 3, time.Minute, 5)
 
 	require.NoError(t, err)
 	require.Len(t, leases, 1,
@@ -510,7 +510,7 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 		return count
 	}
 
-	leases, err := workerStore.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute)
+	leases, err := workerStore.ClaimRawParseJobs(t.Context(), "worker-a", 2, time.Minute, 5)
 
 	require.NoError(t, err,
 		"a restricted parse worker must fill a full claim batch")
@@ -522,7 +522,7 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 	assert.Equal(t, 2, countJobs("ready"),
 		"a full restricted claim must not disturb the legacy obsolete rows")
 
-	starved, err := workerStore.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute)
+	starved, err := workerStore.ClaimRawParseJobs(t.Context(), "worker-b", 1, time.Minute, 5)
 
 	require.NoError(t, err,
 		"a restricted parse worker must run the obsolete-job cleanup")
@@ -533,7 +533,7 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 
 func claimOneRawParseJob(t *testing.T, store *RawIngestStore) rawderive.JobLease {
 	t.Helper()
-	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 1, time.Minute)
+	leases, err := store.ClaimRawParseJobs(t.Context(), "worker-a", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	return leases[0]
