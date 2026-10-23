@@ -8,8 +8,11 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.46.0**. Check the
+The latest release is **v0.46.1**. Check the
 [changelog](https://agentsview.io/docs/changelog/) for what it includes.
+
+Version 0.46.1 fixes Antigravity transcripts and read-only mounts, preserves
+repeated prompts, and restores container builds.
 
 Version 0.46.0 adds
 [Claude.ai Sync through Chrome](https://agentsview.io/docs/chat-import/#sync-claudeai-chats),

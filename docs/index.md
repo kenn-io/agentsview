@@ -15,7 +15,7 @@ New here? The [product overview](/){target=_self} explains what AgentsView is fo
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.46.0**. Check the [changelog](/docs/changelog/) for what each
+release, **v0.46.1**. Check the [changelog](/docs/changelog/) for what each
 release includes.
 
 <p class="hero-actions">

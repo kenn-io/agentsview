@@ -92,9 +92,12 @@ totals note that its token counts are low. See
 [Codex Cloud](/docs/configuration/#codex-cloud) for setup and limits.
 
 Junie coverage is for CLI sessions; it excludes tool calls and IDE-only
-conversations. Antigravity plaintext-only transcripts include conversation,
-reasoning, and tool calls but no token usage or cost. Antigravity sessions with
-a usable database can still contribute recorded usage.
+conversations. Antigravity plaintext transcripts include conversation,
+reasoning, and tool calls. Without a usable database or usage-bearing trajectory
+sidecar, they have no token usage or cost. Since 0.46.1, Antigravity CLI can
+combine a plaintext transcript with its database's usage and attach the model
+and token counts to the matching model replies. See
+[Antigravity transcript sources](/docs/configuration/#session-discovery).
 
 When an agent filter selects only agents that do not expose per-message token
 rows, AgentsView reports that as an unsupported usage state instead of silently

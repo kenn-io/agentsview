@@ -5,21 +5,29 @@ description: Release history for AgentsView
 ---
 
 The latest release is
-[0.46.0](https://github.com/kenn-io/agentsview/releases/tag/v0.46.0).
+[0.46.1](https://github.com/kenn-io/agentsview/releases/tag/v0.46.1).
 
-## Unreleased
+## 0.46.1
 
-Planned for 0.46.1:
+<small>2026-10-22</small>
 
-- Build container images with the request definitions needed by the Claude.ai
-  Chrome extension.
-- Read Antigravity databases on read-only mounts after their write-ahead logs
-  have been checkpointed.
-- Import Antigravity CLI brain transcripts with their recorded models and token
-  usage. Existing CLI sessions refresh during the upgrade.
-- Preserve archived Antigravity replies when a source database cannot be read,
-  instead of replacing them with an incomplete transcript. Incomplete readable
-  transcripts remain eligible for retry.
+**Improvements**
+
+- Antigravity CLI sessions show plaintext transcripts with model and token usage
+  attached to the matching model replies.
+
+**Bug fixes**
+
+- Antigravity sessions parse again on read-only mounts, including read-only
+  Docker volumes.
+- Archived Antigravity CLI replies stay intact when the session database cannot
+  be read.
+- Repeated prompts remain separate turns in Antigravity CLI sessions. Existing
+  archives are reprocessed to recover missing turns.
+- Docker builds no longer fail because a required Claude.ai Chrome extension
+  file is missing.
+
+**Contributors**
 
 Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 [#2337](https://github.com/kenn-io/agentsview/pull/2337), and

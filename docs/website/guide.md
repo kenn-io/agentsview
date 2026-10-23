@@ -4,7 +4,7 @@ Your agents already write the raw data. AgentsView turns it into a searchable
 archive, and the archive into answers your agents can use on their next run.
 Nine stops, five minutes.
 
-Updated for [v0.46.0](/docs/changelog/#0460), including cloud chats, selectable
+Updated for [v0.46.1](/docs/changelog/#0461), including cloud chats, selectable
 cost breakdowns, and tool-effectiveness reports.
 
 ## 01. Capture every session
