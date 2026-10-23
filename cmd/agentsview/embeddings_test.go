@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/kit/embedconfig"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
+	"hegel.dev/go/hegel"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -653,6 +654,35 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 				"a stale generation must be refused before the query is encoded")
 		})
 	}
+	checkServing := func(ht require.TestingT, hosted bool) {
+		cfg.RawSync.Hosted = hosted
+		before := capturedCount()
+		serving, err := setupVectorServing(t.Context(), cfg, database, nil)
+		require.NoError(ht, err)
+		require.NotNil(ht, serving.Close)
+		defer serving.Close()
+		if hosted {
+			require.Equal(ht, before, capturedCount(), "hosted startup must not encode documents")
+		}
+		beforeQuery := capturedCount()
+		result, err := database.SearchContent(t.Context(), filter)
+		require.NoError(ht, err)
+		require.NotEmpty(ht, result.Matches)
+		require.Equal(ht, beforeQuery+1, capturedCount(), "search must add exactly one query encoding")
+		mu.Lock()
+		queryInputs := append([]string(nil), captured[beforeQuery:]...)
+		mu.Unlock()
+		require.Equal(ht, []string{"query: find greeting<eos>"}, queryInputs)
+	}
+	t.Run("hosted startup with populated index", func(t *testing.T) {
+		checkServing(t, true)
+	})
+	t.Run("ordinary startup with populated index", func(t *testing.T) {
+		checkServing(t, false)
+	})
+	hegel.Test(t, func(ht *hegel.T) {
+		checkServing(ht, hegel.Draw(ht, hegel.Booleans()))
+	}, hegel.WithTestCases(8), hegel.WithDatabase(""))
 }
 
 func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {

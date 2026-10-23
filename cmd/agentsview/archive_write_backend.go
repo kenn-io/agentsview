@@ -348,6 +348,9 @@ func resolveArchiveWriteBackend(
 	appCfg config.Config,
 	intent transportIntent,
 ) (archiveWriteBackend, func(), error) {
+	if appCfg.HostedRawMode() {
+		return nil, nil, config.ErrHostedRawMode
+	}
 	tr, err := ensureTransportContext(
 		ctx, &appCfg, intent, 0,
 	)
@@ -393,6 +396,9 @@ func resolveArchiveWriteBackend(
 // receiving-host source roots. Archive-only mode is permanent, so retrying
 // the daemon's rejection could never succeed.
 func requireDaemonSourceSync(ctx context.Context, cfg config.Config) error {
+	if cfg.HostedRawMode() {
+		return config.ErrHostedRawMode
+	}
 	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("reading archive mode: %w", err)

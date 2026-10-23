@@ -315,6 +315,9 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 	currentVersion := db.CurrentDataVersion()
 
 	fmt.Fprintln(w, "Sync Diagnostics")
+	if unsupported := unsupportedRawSyncProviders(report.Config); len(unsupported) > 0 {
+		fmt.Fprintf(w, "Raw sync unsupported enabled providers: %s\n", strings.Join(unsupported, ", "))
+	}
 	fmt.Fprintf(w, "Version: %s (commit %s, built %s)\n",
 		version, commit, buildDate)
 	fmt.Fprintf(w, "Data directory: %s\n", report.Config.DataDir)

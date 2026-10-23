@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/vector"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -139,6 +140,9 @@ func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 func (s *Server) humaEmbeddingsBuild(
 	_ context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
+	if s.cfg.HostedRawMode() {
+		return nil, apiError(http.StatusForbidden, config.ErrHostedRawMode.Error())
+	}
 	manager := s.embeddingsManagerFor(in.Body.Store)
 	if manager == nil {
 		return nil, s.embeddingsUnavailableError()

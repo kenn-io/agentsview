@@ -875,7 +875,11 @@ type DB struct {
 	// a later close reports success, or write ownership could be released
 	// (or the database file replaced) while a connection still holds the
 	// file. Guarded by connMu.
-	undrainedPools   []*sql.DB
+	undrainedPools []*sql.DB
+
+	localDerivationDisabled atomic.Bool
+	temporaryDir            string
+
 	readOnly         bool
 	toolResultImages config.ToolResultImages
 	assetsDir        string
@@ -5178,6 +5182,9 @@ func (db *DB) Close() error {
 // It still closes every pool before returning a deadline error so no new work
 // can start after cancellation.
 func (db *DB) CloseContext(ctx context.Context) error {
+	if db.temporaryDir != "" {
+		defer func() { _ = os.RemoveAll(db.temporaryDir) }()
+	}
 	_, callerBounded := ctx.Deadline()
 	if !callerBounded {
 		var cancel context.CancelFunc

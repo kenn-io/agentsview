@@ -946,6 +946,7 @@ type sessionSourceConfig struct {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	RawSync RawSyncConfig `json:"raw_sync" toml:"raw_sync"`
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
 	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
@@ -1670,6 +1671,13 @@ func (c *Config) loadFileReadOnly() error {
 }
 
 func (c *Config) loadFileWithMigration(migrate bool) error {
+	if v := os.Getenv("AGENTSVIEW_RAW_SYNC_HOSTED"); v != "" {
+		hosted, err := strconv.ParseBool(v)
+		if err != nil {
+			return errors.New("AGENTSVIEW_RAW_SYNC_HOSTED must be a boolean")
+		}
+		c.RawSync.Hosted = hosted
+	}
 	if migrate {
 		if err := c.migrateJSONToTOML(); err != nil {
 			return err
@@ -1781,6 +1789,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		RawSync                        RawSyncConfig          `toml:"raw_sync"`
 		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1863,6 +1872,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	var raw map[string]any
 	if _, err := toml.Decode(data, &raw); err != nil {
 		return fmt.Errorf("parsing config raw: %w", err)
+	}
+	if os.Getenv("AGENTSVIEW_RAW_SYNC_HOSTED") == "" {
+		c.RawSync = file.RawSync
 	}
 	if file.GithubToken != "" {
 		c.GithubToken = file.GithubToken
