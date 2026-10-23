@@ -423,12 +423,18 @@
   // Slot hits are keyed by index, so a date change can drop or reuse them
   // without mouseleave. Clear any hover box captured against the previous
   // report before the new bars paint.
-  // A resize that changes the display step also reindexes the bars.
   $effect.pre(() => {
     void report;
     void metric;
-    void displayStepSeconds;
     hideTip();
+  });
+
+  // Bar indexes change only with new buckets or a new display step. A session
+  // page replaces the report but keeps its buckets, so a keyboard selection
+  // keeps extending from its anchor.
+  $effect.pre(() => {
+    void buckets;
+    void displayStepSeconds;
     keyboardAnchorIndex = null;
     cancelRangeDrag();
   });

@@ -838,6 +838,35 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
+  it("keeps the keyboard anchor when a session page replaces the report", async () => {
+    const onSelectRange = vi.fn();
+    const report = minuteReport();
+    const { container, rerender } = render(ConcurrencyTimeline, {
+      report,
+      onSelectRange,
+    });
+    const shiftRight = (idx: number) =>
+      container
+        .querySelector(`[data-concurrency-bucket-index="${idx}"]`)!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }),
+        );
+
+    shiftRight(0);
+    await tick();
+    expect(onSelectRange).toHaveBeenLastCalledWith(expect.objectContaining({ start: 0, end: 2 }));
+
+    // ActivityPage loads the selected sessions and stores a new report object
+    // that keeps the same buckets.
+    await rerender({
+      report: { ...report, report_id: "page-2", by_session: [] },
+      selectedRange: { start: 0, end: 2 },
+    });
+    shiftRight(1);
+    await tick();
+    expect(onSelectRange).toHaveBeenLastCalledWith(expect.objectContaining({ start: 0, end: 3 }));
+  });
+
   it("selects a slot with a keyboard Enter", async () => {
     const onSelectRange = vi.fn();
     const target = document.createElement("div");
