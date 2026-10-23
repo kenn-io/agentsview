@@ -52,13 +52,13 @@ func newPGRawRolloutCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "DEVICE\tPROVIDER\tSTATE\tSERVED\tSHADOW\tSUPERSEDED\tPARITY")
+			fmt.Fprintln(cmd.OutOrStdout(), "DEVICE\tPROVIDER\tSTATE\tSERVED\tSHADOW\tSUPERSEDED\tUNRESOLVED_PINS\tPARITY")
 			for _, scope := range scopes {
 				parity := string(scope.Parity)
 				if parity == "" {
 					parity = "null"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%q\t%q\t%s\t%d\t%d\t%d\t%s\n", scope.DeviceID, scope.Provider, scope.State, scope.Served, scope.Shadow, scope.Superseded, parity)
+				fmt.Fprintf(cmd.OutOrStdout(), "%q\t%q\t%s\t%d\t%d\t%d\t%d\t%s\n", scope.DeviceID, scope.Provider, scope.State, scope.Served, scope.Shadow, scope.Superseded, scope.UnresolvedPins, parity)
 			}
 			return nil
 		}}

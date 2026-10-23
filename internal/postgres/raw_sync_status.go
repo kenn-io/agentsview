@@ -32,6 +32,7 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	status := rawsync.Status{
 		SourceHeads: make([]rawsync.SourceHeadStatus, 0),
 		Devices:     make([]rawsync.DeviceStatus, 0),
+		Rollout:     make([]rawsync.RolloutScopeStatus, 0),
 	}
 	if err := readRawSyncStatusHeads(ctx, tx, identity.TenantID, &status); err != nil {
 		return rawsync.Status{}, err
@@ -45,6 +46,18 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	if err := readRawSyncStatusUploads(ctx, tx, identity.TenantID, &status); err != nil {
 		return rawsync.Status{}, err
 	}
+	// Only an explicitly tenant-bound hosted store has rollout tables.
+	if s.tenant != "" {
+		scopes, err := loadRawRolloutDiagnostics(ctx, tx, "", "")
+		if err != nil {
+			return rawsync.Status{}, err
+		}
+		status.Rollout = make([]rawsync.RolloutScopeStatus, 0, len(scopes))
+		for _, scope := range scopes {
+			status.Rollout = append(status.Rollout, rawsync.RolloutScopeStatus{DeviceID: scope.DeviceID, Provider: scope.Provider, State: scope.State, Served: scope.Served, Shadow: scope.Shadow, Superseded: scope.Superseded, UnresolvedPins: scope.UnresolvedPins})
+		}
+	}
+
 	return status, nil
 }
 

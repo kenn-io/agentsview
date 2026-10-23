@@ -24,7 +24,7 @@ func TestRawRolloutCommandScopes(t *testing.T) {
 	}
 	output, err := executeCommand(newPGRawRolloutCommand(), "list", "provision", "--device", "device-'alpha")
 	require.NoError(t, err)
-	require.Contains(t, output, "\"device-'alpha\"\t\"codex\"\tshadow\t0\t0\t0\tnull")
+	require.Contains(t, output, "\"device-'alpha\"\t\"codex\"\tshadow\t0\t0\t0\t0\tnull")
 	_, err = executeCommand(newPGRawRolloutCommand(), "clear", "provision")
 	require.ErrorContains(t, err, "clear narrower rollout scopes")
 	for _, args := range [][]string{{"clear", "provision", "--device", "device-'alpha", "--provider", "codex"}, {"clear", "provision"}} {
@@ -47,4 +47,7 @@ func TestRawRolloutActivationConfigPrerequisite(t *testing.T) {
 	require.ErrorContains(t, err, "unknown")
 	_, err = executeCommand(newPGRawRolloutCommand(), "activate", "runtime", "--accept-differences")
 	require.ErrorContains(t, err, "owner")
+	output, err := executeCommand(newPGRawRolloutCommand(), "list", "provision")
+	require.NoError(t, err)
+	require.Contains(t, output, "UNRESOLVED_PINS")
 }
