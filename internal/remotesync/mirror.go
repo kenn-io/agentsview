@@ -4,17 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"iter"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
+	"go.kenn.io/kit/spill"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -52,22 +53,29 @@ func sanitizeMirrorHost(host string) string {
 	return s
 }
 
-// mirrorFetchMaxBytes bounds the remote paths a mirror diff lists for
-// download. One delta request could not carry many more, so past it the diff
-// stops listing and the sync replaces the mirror from the full archive.
-const mirrorFetchMaxBytes = 64 << 20
+// mirrorListMemoryBytes bounds the fetch and deletion lists a mirror diff
+// keeps in memory. A larger list moves to a temporary file next to the
+// mirror, so memory stays flat however large the change is.
+const mirrorListMemoryBytes = 4 << 20
 
-// MirrorDelta is the result of diffing a manifest against the mirror.
+// MirrorDelta is the result of diffing a manifest against the mirror. Close
+// releases the lists.
 type MirrorDelta struct {
-	Fetch     []string
-	Deletions []string
+	// Fetch holds the remote paths of files that are absent from the mirror
+	// or differ in size or mtime, in mirror path order.
+	Fetch *spill.List
+	// Deletions holds the local paths of mirror files absent from the
+	// manifest, in mirror path order.
+	Deletions *spill.List
 	Total     int
-	// Overflow reports that the fetch list passed mirrorFetchMaxBytes. Fetch
-	// and Deletions are then empty, and the whole mirror is out of date.
-	Overflow bool
-	// codexIndexes lists every Codex session index in the mirror, whose
-	// titles must be read before an overflow replaces the mirror.
+	// codexIndexes lists the local paths of Codex session indexes that the
+	// sync will replace or delete.
 	codexIndexes []string
+}
+
+// Close removes any temporary files the lists moved to.
+func (d MirrorDelta) Close() error {
+	return errors.Join(d.Fetch.Close(), d.Deletions.Close())
 }
 
 // mirrorDiff compares a manifest against the mirror one entry at a time. A
@@ -78,7 +86,7 @@ type MirrorDelta struct {
 //
 // The manifest must arrive sorted by mirror path, as BuildManifest sorts it,
 // and the mirror is walked in the same order. Only the fetch and deletion
-// lists are kept, so memory follows the size of the change.
+// lists are kept, and they move to disk past mirrorListMemoryBytes.
 //
 // Mirror content from file-scoped agents (Windsurf) is never in the
 // manifest, so the deletion pass removes it every sync. That is
@@ -86,19 +94,22 @@ type MirrorDelta struct {
 // archive right after, so only the remote's current export survives,
 // the same parity the legacy temp-dir path had.
 type mirrorDiff struct {
-	root       string
-	next       func() (mirrorFile, error, bool)
-	stop       func()
-	started    bool
-	local      *mirrorFile
-	lastKey    string
-	fetchBytes int
-	delta      MirrorDelta
+	root    string
+	next    func() (mirrorFile, error, bool)
+	stop    func()
+	started bool
+	local   *mirrorFile
+	lastKey string
+	delta   MirrorDelta
 }
 
 func newMirrorDiff(mirrorRoot string) *mirrorDiff {
 	next, stop := iter.Pull2(sortedMirrorFiles(mirrorRoot))
-	return &mirrorDiff{root: mirrorRoot, next: next, stop: stop}
+	dir, name := filepath.Split(mirrorRoot)
+	return &mirrorDiff{root: mirrorRoot, next: next, stop: stop, delta: MirrorDelta{
+		Fetch:     spill.New(dir, "."+name+"-fetch-*", mirrorListMemoryBytes),
+		Deletions: spill.New(dir, "."+name+"-deletions-*", mirrorListMemoryBytes),
+	}}
 }
 
 // add compares one manifest entry.
@@ -133,14 +144,15 @@ func (d *mirrorDiff) add(entry ManifestEntry) error {
 	d.lastKey = key
 	d.delta.Total++
 	for d.local != nil && d.local.rel < key {
-		d.remove(*d.local)
+		if err := d.remove(*d.local); err != nil {
+			return err
+		}
 		if err := d.advance(); err != nil {
 			return err
 		}
 	}
 	if d.local != nil && d.local.rel == key {
 		info := d.local.info
-		d.note(*d.local)
 		if err := d.advance(); err != nil {
 			return err
 		}
@@ -149,11 +161,15 @@ func (d *mirrorDiff) add(entry ManifestEntry) error {
 			return nil
 		}
 	}
-	d.fetch(entry.Path)
+	d.noteCodexIndex(local)
+	if err := d.delta.Fetch.Append(entry.Path); err != nil {
+		return fmt.Errorf("record mirror fetch: %w", err)
+	}
 	return nil
 }
 
-// finish queues the mirror files after the last entry for deletion.
+// finish queues the mirror files after the last entry for deletion. The
+// caller owns the returned delta and must close it.
 func (d *mirrorDiff) finish() (MirrorDelta, error) {
 	if !d.started {
 		if err := d.advance(); err != nil {
@@ -161,19 +177,30 @@ func (d *mirrorDiff) finish() (MirrorDelta, error) {
 		}
 	}
 	for d.local != nil {
-		d.remove(*d.local)
+		if err := d.remove(*d.local); err != nil {
+			return MirrorDelta{}, err
+		}
 		if err := d.advance(); err != nil {
 			return MirrorDelta{}, err
 		}
 	}
-	d.close()
-	sort.Strings(d.delta.Fetch)
-	sort.Strings(d.delta.Deletions)
-	return d.delta, nil
+	d.stop()
+	delta := d.delta
+	d.delta = MirrorDelta{}
+	return delta, nil
 }
 
-// close ends the mirror walk. It is safe to call more than once.
-func (d *mirrorDiff) close() { d.stop() }
+// close ends the mirror walk and releases lists that finish did not hand
+// over. It is safe to call more than once and after finish.
+func (d *mirrorDiff) close() error {
+	d.stop()
+	if d.delta.Fetch == nil {
+		return nil
+	}
+	err := d.delta.Close()
+	d.delta = MirrorDelta{}
+	return err
+}
 
 func (d *mirrorDiff) advance() error {
 	file, err, ok := d.next()
@@ -188,31 +215,60 @@ func (d *mirrorDiff) advance() error {
 	return nil
 }
 
-func (d *mirrorDiff) note(file mirrorFile) {
-	if filepath.Base(file.path) == parser.CodexSessionIndexFilename {
-		d.delta.codexIndexes = append(d.delta.codexIndexes, file.path)
+func (d *mirrorDiff) noteCodexIndex(localPath string) {
+	if filepath.Base(localPath) == parser.CodexSessionIndexFilename {
+		d.delta.codexIndexes = append(d.delta.codexIndexes, localPath)
 	}
 }
 
-func (d *mirrorDiff) remove(file mirrorFile) {
-	d.note(file)
-	if !d.delta.Overflow {
-		d.delta.Deletions = append(d.delta.Deletions, file.path)
+func (d *mirrorDiff) remove(file mirrorFile) error {
+	d.noteCodexIndex(file.path)
+	if err := d.delta.Deletions.Append(file.path); err != nil {
+		return fmt.Errorf("record mirror deletion: %w", err)
 	}
+	return nil
 }
 
-func (d *mirrorDiff) fetch(remotePath string) {
-	if d.delta.Overflow {
-		return
+// collectPaths reads a whole delta list into memory.
+func collectPaths(list *spill.List) ([]string, error) {
+	paths := make([]string, 0, list.Len())
+	for path, err := range list.All() {
+		if err != nil {
+			return nil, fmt.Errorf("read mirror change list: %w", err)
+		}
+		paths = append(paths, path)
 	}
-	d.fetchBytes += len(remotePath)
-	if d.fetchBytes > mirrorFetchMaxBytes {
-		d.delta.Overflow = true
-		d.delta.Fetch = nil
-		d.delta.Deletions = nil
-		return
+	return paths, nil
+}
+
+// mirrorBatchBytes bounds the paths in one batch of a large mirror change,
+// and so the delta file list of one archive request.
+const mirrorBatchBytes = 4 << 20
+
+// pathBatches yields a delta list in order, in batches whose paths total at
+// most maxBytes. A longer path forms a batch of its own.
+func pathBatches(list *spill.List, maxBytes int) iter.Seq2[[]string, error] {
+	return func(yield func([]string, error) bool) {
+		var batch []string
+		size := 0
+		for path, err := range list.All() {
+			if err != nil {
+				yield(nil, fmt.Errorf("read mirror change list: %w", err))
+				return
+			}
+			if len(batch) > 0 && size+len(path) > maxBytes {
+				if !yield(batch, nil) {
+					return
+				}
+				batch, size = nil, 0
+			}
+			batch = append(batch, path)
+			size += len(path)
+		}
+		if len(batch) > 0 {
+			yield(batch, nil)
+		}
 	}
-	d.delta.Fetch = append(d.delta.Fetch, remotePath)
 }
 
 // mtimeMicros truncates a Unix-nanosecond mtime to microseconds. Some
@@ -284,28 +340,6 @@ func mirrorSortName(entry fs.DirEntry) string {
 		return entry.Name() + "/"
 	}
 	return entry.Name()
-}
-
-// clearMirror removes every regular file in the mirror that keep does not
-// claim, then prunes the directories left empty.
-func clearMirror(mirrorRoot string, keep func(rel string) (bool, error)) error {
-	for file, err := range sortedMirrorFiles(mirrorRoot) {
-		if err != nil {
-			return err
-		}
-		kept, err := keep(file.rel)
-		if err != nil {
-			return err
-		}
-		if kept {
-			continue
-		}
-		if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("delete mirror file %q: %w", file.path, err)
-		}
-		pruneEmptyMirrorDirs(mirrorRoot, filepath.Dir(file.path))
-	}
-	return nil
 }
 
 // ApplyMirrorDeletions removes mirror files that no longer exist on

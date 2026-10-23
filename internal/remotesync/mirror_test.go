@@ -1,6 +1,7 @@
 package remotesync
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,17 +21,36 @@ func TestMirrorDirDisambiguatesSanitizedCollisions(t *testing.T) {
 	assert.NotContains(t, filepath.Base(a), ":")
 }
 
+// diffResult is a MirrorDelta read back into memory.
+type diffResult struct {
+	Fetch     []string
+	Deletions []string
+	Total     int
+}
+
 // diffManifest compares a whole manifest against the mirror, as a sync does
 // while the manifest streams in.
-func diffManifest(root string, m Manifest) (MirrorDelta, error) {
+func diffManifest(root string, m Manifest) (result diffResult, err error) {
 	diff := newMirrorDiff(root)
-	defer diff.close()
+	defer func() { err = errors.Join(err, diff.close()) }()
 	for _, entry := range m.Files {
 		if err := diff.add(entry); err != nil {
-			return MirrorDelta{}, err
+			return diffResult{}, err
 		}
 	}
-	return diff.finish()
+	delta, err := diff.finish()
+	if err != nil {
+		return diffResult{}, err
+	}
+	defer func() { err = errors.Join(err, delta.Close()) }()
+	result.Total = delta.Total
+	if result.Fetch, err = collectPaths(delta.Fetch); err != nil {
+		return diffResult{}, err
+	}
+	if result.Deletions, err = collectPaths(delta.Deletions); err != nil {
+		return diffResult{}, err
+	}
+	return result, nil
 }
 
 func writeMirrorFile(t *testing.T, root, remotePath, content string, mtime time.Time) string {
@@ -133,12 +153,13 @@ func TestMirrorDiffRejectsAManifestOutOfOrder(t *testing.T) {
 	require.ErrorContains(t, err, "not sorted by mirror path")
 }
 
-func TestMirrorDiffStopsListingAChangeTooLargeForOneRequest(t *testing.T) {
-	root := t.TempDir()
-	writeMirrorFile(t, root, "/home/u/stale.jsonl", "x",
+func TestMirrorDiffListsAChangeLargerThanItsMemoryLimit(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mirror")
+	stale := writeMirrorFile(t, root, "/home/u/stale.jsonl", "x",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC))
-	// Each path is 4 KiB, so this many new files pass the fetch cap.
-	count := mirrorFetchMaxBytes/4096 + 1
+	// Each path is 4 KiB, so the fetch list passes the memory limit.
+	count := mirrorListMemoryBytes/4096 + 1
 	m := Manifest{}
 	for i := range count {
 		name := fmt.Sprintf("/home/u/new/%08d-", i)
@@ -150,10 +171,16 @@ func TestMirrorDiffStopsListingAChangeTooLargeForOneRequest(t *testing.T) {
 	delta, err := diffManifest(root, m)
 
 	require.NoError(t, err)
-	assert.True(t, delta.Overflow)
-	assert.Empty(t, delta.Fetch)
-	assert.Empty(t, delta.Deletions)
 	assert.Equal(t, count, delta.Total)
+	require.Len(t, delta.Fetch, count)
+	assert.Equal(t, m.Files[0].Path, delta.Fetch[0])
+	assert.Equal(t, m.Files[count-1].Path, delta.Fetch[count-1])
+	assert.Equal(t, []string{stale}, delta.Deletions)
+	// Closing the delta removes the list's temporary file.
+	entries, err := os.ReadDir(parent)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "mirror", entries[0].Name())
 }
 
 func TestApplyMirrorDeletionsConfinedToRoot(t *testing.T) {

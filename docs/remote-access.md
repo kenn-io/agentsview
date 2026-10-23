@@ -318,12 +318,13 @@ host's syncable source corpus for it.
    size and modification time at microsecond precision, so neither the manifest
    nor the mirror listing is held in memory. It schedules missing or changed
    files for fetch and removes mirror files that disappeared from the manifest.
-   Before changing the mirror, it durably merges those paths into a bounded
-   recovery journal next to the mirror.
-1. The collector requests only missing or changed files. When every manifest
-   file needs fetching, it requests a full archive instead of sending the full
-   file list. When the changed paths would pass 64 MiB, the collector stops
-   listing them, clears the mirror, and requests a full archive. Archive
+   Each list stays in memory up to 4 MiB of paths and moves to a temporary file
+   next to the mirror past that. Before changing the mirror, it durably merges
+   those paths into a bounded recovery journal next to the mirror. A change too
+   large for the journal is recorded as one full import.
+1. The collector requests only missing or changed files, in requests of at
+   most 4 MiB of paths each. When every manifest file needs fetching, it
+   requests a full archive instead of sending the full file list. Archive
    transfers prefer Zstandard compression; gzip remains available through HTTP
    encoding negotiation. Manifests use gzip.
 1. The archive is extracted into the mirror with remote modification times
@@ -415,8 +416,6 @@ A full HTTP transfer occurs in these cases:
 
 - the per-host mirror is new or was removed
 - every manifest file is missing or changed
-- the changed paths are too many to list in one request; the collector clears
-  the mirror first and imports the host as one full import
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
 

@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/kit/atomicfile"
+	"go.kenn.io/kit/spill"
 )
 
 const (
@@ -173,10 +174,7 @@ func mergeMirrorChangesWithForce(
 
 	if journal.FullImport {
 		if len(observed) > 0 {
-			journal.InvalidateAll = true
-			if len(forceFullParse) > 0 {
-				journal.ForceFullParseAll = true
-			}
+			journal = overflowMirrorChanges(journal, len(forceFullParse) > 0)
 		}
 		return journal, JournalMergeStats{Rearmed: len(observed)}, nil
 	}
@@ -212,9 +210,7 @@ func mergeMirrorChangesWithForce(
 	}
 	if len(paths)+fileScopedPathCount > mirrorJournalMaxEntries ||
 		pathBytes+fileScopedPathBytes > mirrorJournalMaxPathBytes {
-		overflow := overflowMirrorChangeJournal()
-		overflow.FileScopedDirs = journal.FileScopedDirs
-		return overflow, stats, nil
+		return overflowMirrorChanges(journal, true), stats, nil
 	}
 	sort.Strings(paths)
 	journal.Entries = make([]MirrorChangeEntry, 0, len(paths))
@@ -222,6 +218,68 @@ func mergeMirrorChangesWithForce(
 		journal.Entries = append(journal.Entries, entries[path])
 	}
 	return journal, stats, nil
+}
+
+// overflowMirrorChanges records changes that are too many to keep path by
+// path. A journal that is already a full import keeps its reason and is
+// armed to reread every file, and to fully reparse them when forceFullParse
+// is set. Any other journal becomes an overflow full import.
+func overflowMirrorChanges(
+	journal MirrorChangeJournal, forceFullParse bool,
+) MirrorChangeJournal {
+	if journal.FullImport {
+		journal.InvalidateAll = true
+		if forceFullParse {
+			journal.ForceFullParseAll = true
+		}
+		return journal
+	}
+	overflow := overflowMirrorChangeJournal()
+	overflow.FileScopedDirs = journal.FileScopedDirs
+	return overflow
+}
+
+// largeChangeStats counts the fetched and deleted files of a change too
+// large to journal path by path against the pending journal entries, the
+// way mergeMirrorChangesWithForce counts observed paths.
+func largeChangeStats(
+	journal MirrorChangeJournal, delta MirrorDelta, mirrorRoot string,
+) (JournalMergeStats, error) {
+	if journal.FullImport {
+		return JournalMergeStats{
+			Rearmed: delta.Fetch.Len() + delta.Deletions.Len(),
+		}, nil
+	}
+	pending := make(map[string]struct{}, len(journal.Entries))
+	for _, entry := range journal.Entries {
+		pending[entry.Path] = struct{}{}
+	}
+	var stats JournalMergeStats
+	count := func(list *spill.List, normalize func(string, string) (string, error)) error {
+		for value, err := range list.All() {
+			if err != nil {
+				return fmt.Errorf("read mirror change list: %w", err)
+			}
+			path, err := normalize(mirrorRoot, value)
+			if err != nil {
+				return err
+			}
+			if _, ok := pending[path]; ok {
+				stats.Rearmed++
+			} else {
+				stats.New++
+			}
+		}
+		return nil
+	}
+	if err := count(delta.Fetch, mirrorRelativeRemoteChangePath); err != nil {
+		return JournalMergeStats{}, err
+	}
+	if err := count(delta.Deletions, mirrorRelativeLocalChangePath); err != nil {
+		return JournalMergeStats{}, err
+	}
+	stats.Replayed = len(pending) - stats.Rearmed
+	return stats, nil
 }
 
 func overflowMirrorChangeJournal() MirrorChangeJournal {
