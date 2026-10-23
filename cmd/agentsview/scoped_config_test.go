@@ -306,7 +306,7 @@ func TestScopedConfigDirectDaemonClientsUseDeploymentAuth(t *testing.T) {
 			var err error
 			switch tt.name {
 			case "chrome":
-				err = syncClaudeAIChrome(t.Context())
+				err = syncChrome(t.Context(), "claude-ai")
 			case "conversation initialization":
 				cmd := parseCommand(t, []string{"export", "conversations", "changes"})
 				cmd.SetContext(t.Context())

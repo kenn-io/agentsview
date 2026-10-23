@@ -262,6 +262,8 @@ func TestWriteSessionBatchAtomicFillsEmptyToolResults(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.PinMessage(ctx, id, fillTestMessageID(t, d, id, 1), nil)
 	require.NoError(t, err)
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{messageCountWrite("other-session", 1)})
+	require.NoError(t, err)
 
 	const messagesQuery = `SELECT * FROM messages WHERE session_id = ? ORDER BY ordinal`
 	const unfilledCallsQuery = `SELECT tc.* FROM tool_calls tc
@@ -359,6 +361,8 @@ func TestWriteSessionBatchAtomicExtendsTruncatedText(t *testing.T) {
 		_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
 			Session: extendTestSession(id, len(msgs)), Messages: msgs, ReplaceMessages: true,
 		}})
+		require.NoError(t, err)
+		_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{messageCountWrite("other-session", 1)})
 		require.NoError(t, err)
 	}
 	candidateWrite := func(id string, complete bool) SessionBatchWrite {
@@ -458,6 +462,58 @@ func TestWriteSessionBatchAtomicExtendsTruncatedText(t *testing.T) {
 		require.Equal(t, "Run the formatter. Then run the tests.", stored[0].Content)
 		require.False(t, requireRecallEntry(t, d, "extend-entry").ProvenanceOK)
 	})
+}
+
+func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *testing.T) {
+	for _, initial := range []Message{
+		{},
+		{SourceUUID: "original", Model: "gpt-4o"},
+		{SourceParentUUID: "original-parent"},
+		{SourceUUID: "incoming", SourceParentUUID: "incoming-parent", Model: "gpt-4o"},
+	} {
+		t.Run(initial.SourceUUID+"/"+initial.SourceParentUUID, func(t *testing.T) {
+			d := testDB(t)
+			write := messageCountWrite("identities", 1)
+			write.Messages[0].SourceUUID = initial.SourceUUID
+			write.Messages[0].SourceParentUUID = initial.SourceParentUUID
+			write.Messages[0].Model = initial.Model
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			before, err := d.GetAllMessages(t.Context(), "identities")
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+			// Keep a higher message ID so replacement cannot reuse the target row's ID.
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{messageCountWrite("other-session", 1)})
+			require.NoError(t, err)
+
+			write.CompleteStoredRows = true
+			write.ReplaceMessages = false
+			write.Messages[0].SourceUUID = "incoming"
+			write.Messages[0].SourceParentUUID = "incoming-parent"
+			write.Messages[0].Model = "gpt-5"
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), "identities")
+			require.NoError(t, err)
+			require.Len(t, after, 1)
+			assert.Equal(t, before[0].ID, after[0].ID)
+			assert.Equal(t, before[0].Content, after[0].Content)
+			wantID, wantParent := "incoming", "incoming-parent"
+			if initial.SourceUUID != "" {
+				wantID = initial.SourceUUID
+			}
+			if initial.SourceParentUUID != "" {
+				wantParent = initial.SourceParentUUID
+			}
+			assert.Equal(t, wantID, after[0].SourceUUID)
+			assert.Equal(t, wantParent, after[0].SourceParentUUID)
+			wantModel := "gpt-5"
+			if initial.Model != "" {
+				wantModel = initial.Model
+			}
+			assert.Equal(t, wantModel, after[0].Model)
+		})
+	}
 }
 
 func TestWriteSessionBatchAtomicExtendedDialogueSearch(t *testing.T) {

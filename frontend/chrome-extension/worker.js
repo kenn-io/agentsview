@@ -1,7 +1,7 @@
 import { allowedPath } from "./paths.js";
 
 // Covers message encoding and request shapes; bump both peers together.
-const version = 1;
+const version = 3;
 
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
@@ -9,9 +9,9 @@ async function loadedTab(id) {
       if (tabId === id && change.status === "complete") finish();
     };
     const removed = (tabId) => {
-      if (tabId === id) finish(new Error("Claude.ai tab closed"));
+      if (tabId === id) finish(new Error("Browser tab closed"));
     };
-    const timer = setTimeout(() => finish(new Error("Claude.ai tab did not load")), 45000);
+    const timer = setTimeout(() => finish(new Error("Browser tab did not load")), 45000);
     function finish(error) {
       clearTimeout(timer);
       chrome.tabs.onUpdated.removeListener(updated);
@@ -27,23 +27,50 @@ async function loadedTab(id) {
   });
 }
 
-async function request({ id, path }, port) {
+const platforms = {
+  "claude-ai": {
+    origin: "https://claude.ai",
+    tabURL: "https://claude.ai/*",
+    newTabURL: "https://claude.ai/new",
+    scripts: ["claude_fetch.js"],
+    fetchFunction: "claudeFetch",
+  },
+  chatgpt: {
+    origin: "https://chatgpt.com",
+    tabURL: "https://chatgpt.com/*",
+    newTabURL: "https://chatgpt.com/",
+    scripts: ["claude_fetch.js", "chatgpt_fetch.js"],
+    fetchFunction: "chatgptFetch",
+  },
+  gemini: {
+    origin: "https://gemini.google.com",
+    tabURL: "https://gemini.google.com/*",
+    newTabURL: "https://gemini.google.com/app",
+    scripts: ["claude_fetch.js", "gemini_fetch.js"],
+    fetchFunction: "geminiFetch",
+  },
+};
+
+async function request({ id, path, platform }, port) {
   let result;
   try {
-    if (!(await allowedPath(path))) throw new Error("Unsupported Claude fetch path");
-    let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
-    if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
+    const config = Object.hasOwn(platforms, platform) ? platforms[platform] : undefined;
+    if (!config || !(await allowedPath(platform, path)))
+      throw new Error("Unsupported browser fetch path");
+    let [tab] = await chrome.tabs.query({ url: config.tabURL, discarded: false });
+    if (!tab) tab = await chrome.tabs.create({ url: config.newTabURL, active: false });
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
-    await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
+    await chrome.scripting.executeScript({ target, files: config.scripts, world: "ISOLATED" });
     const [reply] = await chrome.scripting.executeScript({
       target,
       world: "ISOLATED",
-      func: (url) => (typeof claudeFetch === "function" ? claudeFetch(url) : undefined),
-      args: [`https://claude.ai${path}`],
+      func: (name, url) =>
+        typeof globalThis[name] === "function" ? globalThis[name](url) : undefined,
+      args: [config.fetchFunction, `${config.origin}${path}`],
     });
     if (typeof reply?.result?.status !== "number")
-      throw new Error("Claude.ai page changed during Sync; try Sync again");
+      throw new Error("The browser page changed during Sync; try Sync again");
     result = { ...reply.result, id, version };
   } catch (error) {
     result = { id, version, status: 0, error: error.message };

@@ -9,7 +9,15 @@ import (
 const FrameLimit = 64 << 20
 
 // Version covers message encoding and supported request shapes; bump both peers together.
-const Version = 1
+const Version = 3
+
+type Platform string
+
+const (
+	ClaudeAI Platform = "claude-ai"
+	ChatGPT  Platform = "chatgpt"
+	Gemini   Platform = "gemini"
+)
 
 var ErrCompatibility = errors.New("Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.") //nolint:staticcheck // Recovery instructions appear directly in the UI.
 

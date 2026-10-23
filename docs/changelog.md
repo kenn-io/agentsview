@@ -7,6 +7,24 @@ description: Release history for AgentsView
 The latest release is
 [0.46.1](https://github.com/kenn-io/agentsview/releases/tag/v0.46.1).
 
+## Unreleased
+
+**Upgrade notes**
+
+- Chrome Sync users must rerun `agentsview chrome setup` and reload the
+  extension once because the native-host protocol moved to version 3.
+
+**New features**
+
+- Sync Gemini chats from gemini.google.com through the Chrome extension with
+  `agentsview import --type gemini-apps --sync`. Each chat becomes one session
+  with all of its turns; regenerated or shortened chats keep the previous
+  version in Trash.
+- Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
+  `agentsview import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
+
 ## 0.46.1
 
 <small>2026-10-22</small>
