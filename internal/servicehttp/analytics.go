@@ -82,7 +82,7 @@ func (b *httpBackend) ToolAnalytics(
 	if response == nil {
 		return nil, err
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	return response.JSON200, nil
@@ -106,7 +106,7 @@ func (b *httpBackend) SignalAnalytics(
 	if response == nil {
 		return nil, err
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	return response.JSON200, nil
@@ -138,7 +138,7 @@ func (b *httpBackend) SignalSessions(
 	if response == nil {
 		return nil, err
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	return response.JSON200, nil
@@ -191,7 +191,7 @@ func (b *httpBackend) ActivityReport(
 	if response == nil {
 		return nil, err
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	report := response.JSON200
@@ -206,7 +206,7 @@ func (b *httpBackend) ActivityReport(
 		if page == nil {
 			return nil, err
 		}
-		if err := serviceResponseError(page.HTTPResponse, page.Body, err); err != nil {
+		if err := b.responseError(page.HTTPResponse, page.Body, err); err != nil {
 			return nil, err
 		}
 		body := page.JSON200
