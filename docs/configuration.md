@@ -451,7 +451,16 @@ transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 interval = "5m" # optional; zero or omitted means manual sync only
+sync_timeout = "10m" # optional; incremental attempt deadline
+full_sync_timeout = "0s" # optional; no full-import deadline by default
 ```
+
+On unreleased `main`, scheduled pulls by the collector daemon and periodic
+pulls by `pg push --watch` use these per-attempt deadlines. `sync_timeout`
+defaults to ten minutes. First pulls, empty mirrors, and data-version rebuilds
+use `full_sync_timeout`, which defaults to no deadline. Set either to `0s` to
+remove its bound. Attempts still stop on shutdown. One-shot `sync` commands
+keep their existing timeout behavior.
 
 An SSH entry needs no daemon and no install on the remote host. It runs your
 `ssh` client. SSH transport is available in 0.46.0 and later:
@@ -478,6 +487,7 @@ Configuration is rejected when:
 - An SSH entry sets `url` or `token`.
 - An SSH entry's destination starts with `-`. The destination is `destination`,
   or `host` when `destination` is omitted.
+- Either timeout is negative.
 
 HTTP remote sync calls the remote daemon's archive endpoints and always uses a
 bearer token, even when the rest of that daemon has `require_auth = false`. The

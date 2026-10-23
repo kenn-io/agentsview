@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -1014,6 +1015,15 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if err := b.appCfg.ValidateRemoteHosts(); err != nil {
+		return err
+	}
+	if err := b.database.RequireSourceSync(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	debounce, interval = watchTimings(debounce, interval)
 	var embedder *replicaEmbedder
 	var emitter syncpkg.Emitter
@@ -1025,6 +1035,61 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		embedder.resolveRetry = interval
 		emitter = embedder
 	}
+	var coordinatedStartup func(context.Context, *syncpkg.Engine, bool) (bool, error)
+	incrementalStartup := false
+	if len(b.appCfg.RemoteHosts) > 0 {
+		runStartup := func(c context.Context, full bool) (bool, error) {
+			rebuilt, failures, err := runConfiguredLocalAndRemotesForWatch(c, b.appCfg, b.database, b.appCfg.RemoteHosts, full, func(p syncpkg.Progress) {
+				if p.Detail != "" {
+					log.Print(p.Detail)
+				}
+			})
+			reportRemoteFailures(failures)
+			return rebuilt, err
+		}
+		startupDatabaseID, idErr := b.database.GetDatabaseID(ctx)
+		if idErr != nil {
+			return idErr
+		}
+		rebuilt, startupErr := runStartup(ctx, cfg.Full)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if _, pending := errors.AsType[*remotesync.PendingCleanupError](startupErr); pending {
+			return startupErr
+		}
+		afterStartupID, err := b.database.GetDatabaseID(ctx)
+		if err != nil {
+			return err
+		}
+		incrementalStartup = startupErr == nil
+		cfg.Full = cfg.Full || (rebuilt && startupErr == nil) || afterStartupID != startupDatabaseID
+		if startupErr != nil {
+			// Keep pushes paused on failure; retries serialize with engine work.
+			coordinatedStartup = func(c context.Context, engine *syncpkg.Engine, full bool) (bool, error) {
+				if startupErr != nil {
+					err := startupErr
+					startupErr = nil
+					return false, err
+				}
+				var rebuilt bool
+				err := engine.RunExclusiveCtx(c, func() error {
+					before, err := b.database.GetDatabaseID(c)
+					if err != nil {
+						return err
+					}
+					rebuilt, err = runStartup(c, full && before == startupDatabaseID)
+					after, idErr := b.database.GetDatabaseID(c)
+					if idErr == nil && before != after {
+						err = errors.Join(err, engine.ResetCachesAfterSwap(c))
+					}
+					return errors.Join(err, idErr)
+				})
+				return rebuilt, err
+			}
+		}
+	}
+
 	engine, err := b.startWatchEngine(ctx, emitter)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1089,11 +1154,26 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		}
 	}
 	return archivePushWatch{
-		hooks:    b.watchHooks,
-		appCfg:   b.appCfg,
-		engine:   engine,
-		database: b.database,
-		label:    name + " watch",
+		hooks:              b.watchHooks,
+		appCfg:             b.appCfg,
+		engine:             engine,
+		database:           b.database,
+		label:              name + " watch",
+		incrementalStartup: incrementalStartup,
+		startupSync:        coordinatedStartup,
+		startRemotes: func(c context.Context, loop *pushLoop) func() {
+			c, cancel := context.WithCancel(c)
+			var workers stdsync.WaitGroup
+			for _, host := range b.appCfg.RemoteHosts {
+				if host.Interval <= 0 {
+					continue
+				}
+				workers.Go(func() {
+					startRemoteHostSync(c, b.appCfg, b.database, engine, host, remotePushEmitter{loop: loop, embedder: embedder}, nil)
+				})
+			}
+			return func() { cancel(); workers.Wait() }
+		},
 		debounce: debounce,
 		interval: interval,
 		full:     cfg.Full,
@@ -1197,5 +1277,18 @@ func replicaPusherOptions(
 		SyncStateTarget:        target.SyncStateTarget(),
 		MigrateLegacySyncState: target.MigrateLegacySyncState(),
 		VectorSource:           vectorSource,
+	}
+}
+
+// remotePushEmitter forwards committed imports to both asynchronous consumers.
+type remotePushEmitter struct {
+	loop     *pushLoop
+	embedder *replicaEmbedder
+}
+
+func (e remotePushEmitter) Emit(scope string) {
+	e.loop.NotifyDirty()
+	if e.embedder != nil {
+		e.embedder.Emit(scope)
 	}
 }

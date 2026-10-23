@@ -541,6 +541,11 @@ type remoteHostFailure struct {
 	Summary string
 }
 
+type remoteAttemptDeadlineError struct{ error }
+
+func (remoteAttemptDeadlineError) HostUnavailable() bool { return false }
+func (e remoteAttemptDeadlineError) Unwrap() error       { return e.error }
+
 // runRemoteHosts syncs each configured host in declared order via syncFn and
 // continues past host-attributable failures. A pending cleanup from an earlier
 // host stops iteration and is returned separately because the callback for the
@@ -609,6 +614,51 @@ func runConfiguredLocalAndRemotes(
 	full bool,
 	progress sync.ProgressFunc,
 ) (didResync bool, failures []remoteHostFailure, retErr error) {
+	return runConfiguredLocalAndRemotesCore(ctx, appCfg, database, hosts, full, progress, false)
+}
+
+// The push watcher bounds remote work without changing one-shot sync behavior.
+func runConfiguredLocalAndRemotesForWatch(ctx context.Context, appCfg config.Config, database *db.DB, hosts []config.RemoteHost, full bool, progress sync.ProgressFunc) (bool, []remoteHostFailure, error) {
+	return runConfiguredLocalAndRemotesCore(ctx, appCfg, database, hosts, full, progress, true)
+}
+
+func runConfiguredLocalAndRemotesCore(ctx context.Context, appCfg config.Config, database *db.DB, hosts []config.RemoteHost, full bool, progress sync.ProgressFunc, bounded bool) (didResync bool, failures []remoteHostFailure, retErr error) {
+	var lifecycle func(config.RemoteHost) *remotesync.RemoteSyncLifecycle
+	if bounded {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		defer cancel(nil)
+		var timers []*time.Timer
+		defer func() {
+			for _, timer := range timers {
+				timer.Stop()
+			}
+		}()
+		lifecycle = func(host config.RemoteHost) *remotesync.RemoteSyncLifecycle {
+			var timer *time.Timer
+			stop := func() {
+				if timer != nil {
+					timer.Stop()
+				}
+			}
+			return &remotesync.RemoteSyncLifecycle{
+				PrepareStarted: func() {
+					if host.FullSyncTimeout > 0 {
+						timer = time.AfterFunc(host.FullSyncTimeout, func() {
+							cancel(&remotesync.HostError{Host: host.Host, Operation: "full sync", Err: context.DeadlineExceeded})
+						})
+						timers = append(timers, timer)
+					}
+				},
+				PrepareFinished: func(err error) {
+					if err != nil {
+						stop()
+					}
+				},
+				RebuildFinished: func(sync.SyncStats, error) { stop() },
+			}
+		}
+	}
 	didResync = full || database.NeedsResync()
 	fullReason := remotesync.FullImportDataRebuild
 	if full {
@@ -621,7 +671,7 @@ func runConfiguredLocalAndRemotes(
 			ctx, appCfg, database, full, progress,
 			func() (sync.RebuildOptions, sync.RebuildCleanup, error) {
 				prepared, err := prepareConfiguredRemoteHosts(
-					ctx, appCfg, database, hosts, fullReason, progress,
+					ctx, appCfg, database, hosts, fullReason, progress, lifecycle,
 				)
 				if err != nil {
 					return sync.RebuildOptions{}, prepared, err
@@ -647,12 +697,26 @@ func runConfiguredLocalAndRemotes(
 				failures, blocked = runRemoteHosts(
 					hosts, forceFull, progress,
 					func(rh config.RemoteHost, remoteFull bool) error {
+						attemptCtx := ctx
+						cancel := func() {}
+						if bounded {
+							attemptCtx, cancel = remoteHostAttemptContext(ctx, appCfg, database, rh)
+						}
+						defer cancel()
 						_, err := runRemoteSyncTransport(
-							ctx, appCfg, database, rh, remoteFull,
+							attemptCtx, appCfg, database, rh, remoteFull,
 						)
+						if bounded && err != nil && errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+							return remoteAttemptDeadlineError{err}
+						}
 						return err
 					},
 				)
+				if bounded {
+					for _, failure := range failures {
+						blocked = errors.Join(blocked, failure.Err)
+					}
+				}
 				return blocked
 			},
 		)
@@ -665,8 +729,16 @@ func runConfiguredLocalAndRemotes(
 	} else {
 		_, coordinatorErr = run()
 	}
+	if bounded && context.Cause(ctx) != nil && ctx.Err() != nil {
+		return didResync, failures, errors.Join(context.Cause(ctx), coordinatorErr)
+	}
 	if coordinatorErr == nil {
 		return didResync, failures, nil
+	}
+	if bounded {
+		// A watcher must retry coordinated startup before it can push.
+		// Converting preparation errors to warnings would lose --full.
+		return false, failures, coordinatorErr
 	}
 	if _, ok := errors.AsType[*remotesync.PendingCleanupError](coordinatorErr); ok {
 		return didResync, failures, coordinatorErr
@@ -689,6 +761,7 @@ func prepareConfiguredRemoteHosts(
 	hosts []config.RemoteHost,
 	fullReason remotesync.FullImportReason,
 	progress sync.ProgressFunc,
+	lifecycles ...func(config.RemoteHost) *remotesync.RemoteSyncLifecycle,
 ) (preparedHTTPRebuildCLI, error) {
 	if len(hosts) == 0 {
 		return nil, nil
@@ -701,8 +774,13 @@ func prepareConfiguredRemoteHosts(
 		if err != nil {
 			return nil, &remotesync.HostError{Host: host.Host, Operation: "configure", Err: err}
 		}
+		var observer *remotesync.RemoteSyncLifecycle
+		if len(lifecycles) > 0 && lifecycles[0] != nil {
+			observer = lifecycles[0](host)
+		}
 		syncs = append(syncs, remotesync.RemoteSync{
 			Host:                    host.Host,
+			Lifecycle:               observer,
 			Source:                  source,
 			Full:                    true,
 			FullReason:              fullReason,

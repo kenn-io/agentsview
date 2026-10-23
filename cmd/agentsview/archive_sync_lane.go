@@ -31,6 +31,9 @@ type archivePushWatch struct {
 	label              string
 	debounce, interval time.Duration
 	full               bool
+	incrementalStartup bool
+	startupSync        func(context.Context, *syncpkg.Engine, bool) (bool, error)
+	startRemotes       func(context.Context, *pushLoop) func()
 	// push runs one push. batch is the watcher scope a daemon owner syncs
 	// before it pushes; a local owner has already synced it.
 	push func(ctx context.Context, reason pushReason, full bool, batch *syncpkg.WatchBatch) error
@@ -46,6 +49,13 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		requests: make(chan struct{}, 1),
 	}
 	lane.fullPending.Store(w.full)
+	stopRemotes := func() {}
+	defer func() { stopRemotes() }()
+	lane.onReady = stdsync.OnceFunc(func() {
+		if w.startRemotes != nil {
+			stopRemotes = w.startRemotes(ctx, lane.loop)
+		}
+	})
 	loop, stopLoop := newArchivePushLoop(
 		w.hooks, w.label, w.debounce, w.interval,
 		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
@@ -89,7 +99,11 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		if w.hooks != nil && w.hooks.startupSync != nil {
 			lane.startupSync = w.hooks.startupSync
 		}
-		lane.full = w.full
+		if w.startupSync != nil {
+			lane.startupSync = w.startupSync
+		}
+		// Skip the duplicate archive rebuild; fullPending still controls the push.
+		lane.full = w.full && !w.incrementalStartup
 		lane.database = w.database
 		startDatabaseID, err := w.database.GetDatabaseID(ctx)
 		if err != nil {
@@ -117,6 +131,9 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		wake = nil
 	}
 
+	if w.engine == nil {
+		lane.onReady()
+	}
 	if lane.canPush() {
 		// The startup push runs on this goroutine before the loop starts, so
 		// it skips the change debounce. A failed startup push stays queued
@@ -137,6 +154,7 @@ func (w archivePushWatch) run(ctx context.Context) error {
 			return nil
 		}
 	}
+
 	loop.RunWithWake(ctx, wake)
 	return nil
 }
@@ -158,6 +176,7 @@ type archiveSyncLane struct {
 	retry, maxRetry time.Duration
 	startupFailures int
 	openDispatch    func()
+	onReady         func()
 	requests        chan struct{}
 	// startupSync runs the startup sync, including any archive rebuild it
 	// needs. The lane retries it until one completes. full is the watch's
@@ -174,7 +193,8 @@ type archiveSyncLane struct {
 	// owner also holds pushes until then: a full push deletes remote rows
 	// missing locally, so it must never read an archive that a failed startup
 	// sync left incomplete.
-	ready atomic.Bool
+	ready     atomic.Bool
+	readyOnce stdsync.Once
 	// fullPending asks the next push to resend every session. The first
 	// push that reaches the destination clears it, even if that push fails:
 	// each mirror records an unfinished full push and resumes it on the next
@@ -187,11 +207,19 @@ type archiveSyncLane struct {
 // markReady opens watcher dispatch the first time the archive catches up and
 // reports whether this call did so.
 func (l *archiveSyncLane) markReady() bool {
-	if !l.ready.CompareAndSwap(false, true) {
+	if l.ready.Load() {
 		return false
 	}
-	l.openDispatch()
-	return true
+	marked := false
+	l.readyOnce.Do(func() {
+		if l.onReady != nil {
+			l.onReady()
+		}
+		l.ready.Store(true)
+		l.openDispatch()
+		marked = true
+	})
+	return marked
 }
 
 // canPush reports whether a push may run now. A daemon owner always may: its
