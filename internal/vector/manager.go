@@ -78,6 +78,7 @@ func validateBuildRequest(req BuildRequest) error {
 // their check-then-act refusal invariants (Missing coverage, the
 // active-generation check) hold under concurrent calls.
 type Manager struct {
+	documentBuild func(context.Context, BuildRequest, func(BuildProgress)) (BuildResult, error)
 	ix            *Index
 	encoders      EncoderSet
 	gen           kitvec.Generation
@@ -245,6 +246,10 @@ func NewResolvingManager(
 // entry when Using is set, the set's default otherwise. It fails when the
 // name is unknown so a mistyped --using errors before a build starts.
 func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
+	if m.usesDocumentPolicy() {
+		return ManagedEncoder{}, nil
+	}
+
 	name := req.Using
 	if name == "" {
 		name = m.encoders.Default
@@ -459,6 +464,9 @@ func (m *Manager) runBuild(
 			err = fmt.Errorf("build panicked: %v", r)
 		}
 	}()
+	if m.usesDocumentPolicy() {
+		return m.documentBuild(ctx, req, m.reportProgress)
+	}
 	target, err := m.resolveTarget(ctx)
 	if err != nil {
 		return BuildResult{}, err
@@ -531,4 +539,13 @@ func (m *Manager) isRunning() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.running
+}
+
+// SetDocumentBuildPolicy configures the message build boundary before use.
+// Recall keeps its local encoder and build lifecycle.
+func (m *Manager) SetDocumentBuildPolicy(policy func(context.Context, BuildRequest, func(BuildProgress)) (BuildResult, error)) {
+	m.documentBuild = policy
+}
+func (m *Manager) usesDocumentPolicy() bool {
+	return m.documentBuild != nil && m.ix.spec.Name == MessageIndexSpec().Name
 }
