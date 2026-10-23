@@ -159,7 +159,8 @@ fails startup until provisioning and these grants are complete.
 The hosted schema reserves `raw_rollout_scopes` for owner-managed cutover policy.
 Runtime roles need `SELECT` and must have no table or column write grants on it.
 Provisioning adds `sessions.rollout_hidden` while preserving existing rows,
-visibility and user trash. Rollout controls arrive in the next cutover stage.
+visibility and user trash. Use the rollout commands below to inspect or change
+policy.
 
 Projection and curation acquire the tenant rollout lock before source, lease or
 group row locks. They retry the whole transaction after a serialization conflict
@@ -292,6 +293,38 @@ The maintenance pass examines at most 64 indexed pending signal rows with a
 10-second timeout. It does not scan the archive during idle polling. Shutdown
 cancels and joins worker, materializer and parser work before closing custody
 and PostgreSQL.
+
+## Rollout scopes
+
+Operators can record rollout policy with an owner target:
+
+```bash
+agentsview pg raw-rollout shadow provision
+agentsview pg raw-rollout shadow provision --device device-a --provider codex
+agentsview pg raw-rollout list provision
+agentsview pg raw-rollout clear provision --device device-a --provider codex
+agentsview pg raw-rollout clear provision
+```
+
+Create the tenant scope (no selectors) before narrower scopes. Clear narrower
+scopes before clearing the tenant scope. With no scopes, all raw groups retain
+the previous visibility policy. Precedence is device plus provider, device,
+provider, then tenant. A group shared by several sources is eligible when any
+source is active, even if another device is in shadow.
+
+This stage records `sessions.rollout_hidden` independently of user trash and
+keeps projection and curation consistent with scope changes. Public-read
+filtering, activation with a parity gate, and legacy supersession arrive in
+later cutover stages; **shadow is not yet a public-read isolation boundary**.
+`list` counts physical raw rows as served or shadow according to that column,
+including user trash, and prints the scope's stored parity report. Superseded
+counts remain zero until legacy supersession is implemented.
+
+Follow [the existing-deployment upgrade recipe](#upgrade-an-existing-deployment)
+after upgrading. The runtime needs `SELECT` on `raw_rollout_scopes`, and must
+have no insert, update or delete privileges on it. Scope changes use the schema
+owner connection. Scope writes, projection and curation serialize through a
+tenant advisory lock; changes never delete sessions or change their trash state.
 
 ## Reparse and rollback
 
