@@ -873,6 +873,12 @@ push_vectors = false
 embeddings automatically. A machine without `[vector]` enabled has no generation
 to push and skips the phase regardless.
 
+On newer `main`, vector pushes also publish the parser data version and the
+stored automated-session scope per generation and pushing machine. A legacy
+mirror without a stored scope publishes it as unknown until embeddings are
+rebuilt. Updating a session invalidates coverage in other generations when
+their document set differs; an unchanged set remains covered in both.
+
 ### Serving semantic search
 
 `pg serve` — and every `--pg` direct-read command — wires PG-backed semantic
