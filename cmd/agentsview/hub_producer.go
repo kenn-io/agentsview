@@ -1,0 +1,147 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotecred"
+	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/vector"
+)
+
+func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func(context.Context, vector.BuildRequest, func(vector.BuildProgress)) (vector.BuildResult, error) {
+	return func(ctx context.Context, req vector.BuildRequest, progress func(vector.BuildProgress)) (result vector.BuildResult, buildErr error) {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			status := vector.HubPullStatus{Unmatched: -1}
+			previous, err := ix.HubPullStatus(ctx)
+			buildErr = errors.Join(buildErr, err)
+			if previous != nil {
+				status = *previous
+			}
+			if result.Fingerprint != "" {
+				missing, err := ix.MissingEmbeddedDocs(ctx, result.Fingerprint, nil)
+				buildErr = errors.Join(buildErr, err)
+				if err == nil {
+					status.Fingerprint, status.Unmatched = result.Fingerprint, missing
+				}
+			}
+			if buildErr != nil {
+				status.Reason = "hub pull unavailable"
+				for _, reason := range []string{"data version mismatch", "automated scope mismatch", "recipe mismatch"} {
+					if strings.HasPrefix(buildErr.Error(), reason) {
+						status.Reason = reason
+						break
+					}
+				}
+			} else if status.Unmatched > 0 {
+				status.Reason = "hash mismatch or hub coverage missing"
+			}
+			buildErr = errors.Join(buildErr, ix.SetHubPullStatus(ctx, status))
+		}()
+		client, err := remotecred.Client(cfg.Remote.URL, cfg.Remote.AllowInsecureHTTP)
+		if err != nil {
+			return vector.BuildResult{}, err
+		}
+		token := strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN"))
+		if cfg.Remote.TokenFile != "" {
+			token, err = remotecred.ReadToken(cfg.Remote.TokenFile)
+			if err != nil {
+				return vector.BuildResult{}, err
+			}
+		}
+		hub := &vector.HTTPHub{URL: cfg.Remote.URL, Token: token, Client: client}
+		for range 3 {
+			h, err := hub.HubVectorGeneration(ctx)
+			if errors.Is(err, vector.ErrHubGenerationChanged) {
+				continue
+			}
+			if err != nil {
+				return vector.BuildResult{}, err
+			}
+			cfg.Vector.IncludeAutomated = req.IncludeAutomated
+			recipe, err := decodeHubRecipe(cfg, h)
+			if err != nil {
+				return vector.BuildResult{}, err
+			}
+			result, err := ix.Pull(ctx, database.LocalEmbeddableSource(), hub, vectorGeneration(recipe), vector.PullOptions{
+				IncludeAutomated: req.IncludeAutomated, FullRebuild: req.FullRebuild, RepairInvalid: req.RepairInvalid,
+				MapSession: func(id string) string { return remotesync.HubSessionID(cfg.Remote.SpokeHost, id) },
+				Progress:   progress,
+			})
+			if !errors.Is(err, vector.ErrHubGenerationChanged) {
+				if err != nil || !req.LocalProducer {
+					return result, err
+				}
+				enc, err := newVectorDocumentEncoder(recipe, req.Using)
+				if err != nil {
+					return result, err
+				}
+				_, server, err := recipe.Server(req.Using)
+				if err != nil {
+					return result, err
+				}
+				built, err := ix.Build(ctx, database.LocalEmbeddableSource(), enc, vectorGeneration(recipe), vector.BuildOptions{
+					IncludeAutomated: req.IncludeAutomated, BatchSize: server.BatchSize,
+					ModelContextTokens: recipe.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens,
+					Concurrency: server.Concurrency, Progress: progress,
+				})
+				built.Repair = result.Repair
+				return built, err
+			}
+		}
+		return vector.BuildResult{}, vector.ErrHubGenerationChanged
+	}
+}
+
+// decodeHubRecipe adopts only a strictly reproducible hub recipe. Defaults do
+// not conflict; fields the user explicitly configured must describe that space.
+func decodeHubRecipe(cfg config.Config, h vector.HubGeneration) (config.VectorEmbeddingsConfig, error) {
+	if h.Unavailable != "" {
+		return config.VectorEmbeddingsConfig{}, errors.New("hub generation unavailable")
+	}
+	if h.DataVersion != db.CurrentDataVersion() {
+		return config.VectorEmbeddingsConfig{}, fmt.Errorf("data version mismatch: hub %d, local %d", h.DataVersion, db.CurrentDataVersion())
+	}
+	if h.IncludeAutomated != cfg.Vector.IncludeAutomated {
+		return config.VectorEmbeddingsConfig{}, errors.New("automated scope mismatch")
+	}
+	recipe, ok := decodeReplicaRecipe(storage.VectorGenerationInfo{Fingerprint: h.Fingerprint, Model: h.Model, Dimension: h.Dimension, Params: h.Params})
+	if !ok {
+		return recipe, errors.New("recipe mismatch: unsupported hub recipe")
+	}
+	local := cfg.Vector.Embeddings
+	check := recipe
+	for key := range local.RecipeKeys {
+		switch key {
+		case "model":
+			check.Model = local.Model
+		case "dimension":
+			check.Dimension = local.Dimension
+		case "request_dimensions":
+			check.RequestDimensions = local.RequestDimensions
+		case "max_input_chars":
+			check.MaxInputChars = local.MaxInputChars
+		case "query_prefix":
+			check.QueryPrefix = local.QueryPrefix
+		case "document_prefix":
+			check.DocumentPrefix = local.DocumentPrefix
+		case "input_suffix":
+			check.InputSuffix = local.InputSuffix
+		}
+	}
+	if vectorGeneration(check).Fingerprint() != h.Fingerprint {
+		return recipe, errors.New("recipe mismatch: explicit local fields conflict with the hub")
+	}
+	recipe.Servers, recipe.DefaultServer = local.Servers, local.DefaultServer
+	recipe.ModelContextTokens = local.ModelContextTokens
+	return recipe, nil
+}

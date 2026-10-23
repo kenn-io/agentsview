@@ -4719,6 +4719,8 @@ components:
           type: boolean
         include_automated:
           type: boolean
+        local_producer:
+          type: boolean
         repair_invalid:
           type: boolean
         store:
@@ -8097,6 +8099,112 @@ components:
         - fingerprint
         - embedded
         - missing
+      type: object
+    VectorHubChunk:
+      additionalProperties: false
+      properties:
+        chunk_count:
+          format: int64
+          type: integer
+        chunk_index:
+          format: int64
+          type: integer
+        index:
+          format: int64
+          type: integer
+        vector:
+          type: string
+      required:
+        - index
+        - chunk_index
+        - chunk_count
+        - vector
+      type: object
+    VectorHubGeneration:
+      additionalProperties: false
+      properties:
+        data_version:
+          format: int64
+          type: integer
+        dimension:
+          format: int64
+          type: integer
+        fingerprint:
+          type: string
+        include_automated:
+          type: boolean
+        model:
+          type: string
+        params:
+          additionalProperties:
+            type: string
+          type: object
+        unavailable:
+          type: string
+      required:
+        - include_automated
+      type: object
+    VectorHubIdentity:
+      additionalProperties: false
+      properties:
+        content_hash:
+          type: string
+        occurrence:
+          format: int64
+          type: integer
+        ordinal:
+          format: int64
+          type: integer
+        session_id:
+          type: string
+        source_uuid:
+          type: string
+        unit_kind:
+          type: string
+      required:
+        - session_id
+        - unit_kind
+        - content_hash
+      type: object
+    VectorHubLookupReply:
+      additionalProperties: false
+      properties:
+        absent:
+          items:
+            format: int64
+            type: integer
+          type: array
+        chunks:
+          items:
+            $ref: "#/components/schemas/VectorHubChunk"
+          type: array
+        fingerprint:
+          type: string
+        next_cursor:
+          type: string
+        version:
+          type: string
+      required:
+        - version
+        - fingerprint
+        - chunks
+        - absent
+      type: object
+    VectorHubLookupRequest:
+      additionalProperties: false
+      properties:
+        cursor:
+          type: string
+        fingerprint:
+          type: string
+        identities:
+          items:
+            $ref: "#/components/schemas/VectorHubIdentity"
+          maxItems: 256
+          type: array
+      required:
+        - fingerprint
+        - identities
       type: object
     VectorRefreshStats:
       additionalProperties: false
@@ -24776,6 +24884,164 @@ paths:
       summary: Get top usage sessions
       tags:
         - Usage
+  /api/v1/vectors/generation:
+    get:
+      operationId: get-api-v1-vectors-generation
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VectorHubGeneration"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get the selected vector generation
+      tags:
+        - Vectors
+  /api/v1/vectors/lookup:
+    post:
+      operationId: post-api-v1-vectors-lookup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VectorHubLookupRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VectorHubLookupReply"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Look up pinned document vectors
+      tags:
+        - Vectors
   /api/v1/version:
     get:
       operationId: get-api-v1-version

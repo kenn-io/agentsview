@@ -123,10 +123,12 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 		// dropColumn simulates tables created before recipe publication.
 		dropColumn bool
 		// revokeUpdate denies UPDATE on vector_generations.
-		revokeUpdate bool
+		revokeUpdate      bool
+		dropCompatibility bool
 	}{
 		{name: "cannot add the column", dropColumn: true},
 		{name: "cannot update the row", revokeUpdate: true},
+		{name: "cannot add compatibility columns", dropCompatibility: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			admin, err := Open(pgURL, schema, true)
@@ -143,6 +145,10 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			genID, err := ensureVectorGeneration(ctx, admin, "fp-role", "m", 4)
 			require.NoError(t, err)
 			require.NoError(t, ensureVectorChunkTable(ctx, admin, genID, 4))
+			if tc.dropCompatibility {
+				_, err = admin.Exec(`ALTER TABLE vector_generation_machines DROP COLUMN data_version, DROP COLUMN include_automated`)
+				require.NoError(t, err)
+			}
 			if tc.dropColumn {
 				_, err = admin.Exec(`ALTER TABLE vector_generations DROP COLUMN params`)
 				require.NoError(t, err)
@@ -170,7 +176,9 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 				"vector_documents", "vector_push_state",
 				"vector_generation_machines", vectorChunkTable(genID),
 			} {
-				grants = append(grants, `ALTER TABLE `+table+` OWNER TO `+role)
+				if table != "vector_generation_machines" || !tc.dropCompatibility {
+					grants = append(grants, `ALTER TABLE `+table+` OWNER TO `+role)
+				}
 			}
 			// pgvector's types and operator classes live wherever the
 			// extension was first installed in this database.
@@ -205,6 +213,12 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			pushed, err := sync.Push(ctx, false, nil)
 			require.NoError(t, err)
 			res := pushed.Vectors
+			if tc.dropCompatibility {
+				assert.True(t, res.Skipped)
+				assert.Contains(t, res.SkippedReason, "privileges")
+				assert.Equal(t, 0, countRows(t, admin, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)))
+				return
+			}
 			assert.False(t, res.Skipped, res.SkippedReason)
 			assert.Equal(t, 1, res.SessionsPushed)
 			assert.Equal(t, 1, countRows(t, admin,

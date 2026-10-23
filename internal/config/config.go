@@ -202,8 +202,9 @@ func (c *DuckDBConfig) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
-	Enabled bool   `toml:"enabled" json:"enabled"`
-	DBPath  string `toml:"db_path" json:"db_path,omitempty"`
+	Producer string `toml:"producer" json:"producer"`
+	Enabled  bool   `toml:"enabled" json:"enabled"`
+	DBPath   string `toml:"db_path" json:"db_path,omitempty"`
 	// IncludeAutomated controls whether automated (e.g. roborev) sessions'
 	// messages are embedded into the vector index, mirroring the
 	// IncludeAutomated convention search already uses to exclude those
@@ -238,8 +239,10 @@ type VectorConfig struct {
 // Servers differ only in transport and capacity, so a build run on any server
 // produces vectors every other server's queries can search.
 type VectorEmbeddingsConfig struct {
-	Model     string `toml:"model" json:"model"`
-	Dimension int    `toml:"dimension" json:"dimension"`
+	// RecipeKeys records explicit TOML recipe fields, excluding default values.
+	RecipeKeys map[string]bool `toml:"-" json:"-"`
+	Model      string          `toml:"model" json:"model"`
+	Dimension  int             `toml:"dimension" json:"dimension"`
 	// RequestDimensions, when true, sends Dimension as the OpenAI-compatible
 	// "dimensions" request field — for documents at build time and queries at
 	// search time alike — asking the endpoint for Matryoshka-reduced vectors
@@ -444,6 +447,12 @@ const DefaultRecallMaxRevisionLag = 256
 // Validate checks the vector config for internal consistency. It is a
 // no-op when the section is disabled.
 func (c VectorConfig) Validate() error {
+	switch c.Producer {
+	case "", "local", "remote":
+	default:
+		return errors.New("[vector] producer must be local or remote")
+	}
+
 	if !c.Enabled {
 		return nil
 	}
@@ -452,10 +461,10 @@ func (c VectorConfig) Validate() error {
 			"[vector] recall_max_revision_lag must be 0 or greater, got %d",
 			c.RecallMaxRevisionLag)
 	}
-	if c.Embeddings.Model == "" {
+	if c.Producer != "remote" && c.Embeddings.Model == "" {
 		return errors.New("[vector.embeddings] model is required when [vector] is enabled")
 	}
-	if c.Embeddings.Dimension <= 0 {
+	if c.Producer != "remote" && c.Embeddings.Dimension <= 0 {
 		return errors.New("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
 	}
 	if c.Embeddings.MaxInputChars <= 0 {
@@ -910,6 +919,7 @@ type sessionSourceConfig struct {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	Remote RemoteConfig `json:"remote,omitempty" toml:"remote"`
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
 	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
@@ -1327,6 +1337,7 @@ func Default() (Config, error) {
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
+			Producer:             "local",
 			RecallMaxRevisionLag: DefaultRecallMaxRevisionLag,
 			Embeddings: VectorEmbeddingsConfig{
 				MaxInputChars: 8192,
@@ -1628,6 +1639,7 @@ func (c *Config) loadFileReadOnly() error {
 }
 
 func (c *Config) loadFileWithMigration(migrate bool) error {
+	defer c.applyRemoteEnv()
 	if migrate {
 		if err := c.migrateJSONToTOML(); err != nil {
 			return err
@@ -1739,6 +1751,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		Remote                         RemoteConfig           `toml:"remote"`
 		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1785,6 +1798,8 @@ func (c *Config) applyConfigTOML(data string) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	c.Remote = file.Remote
+	c.Remote.TokenFile = remoteTokenPath(c.Remote.TokenFile, filepath.Dir(c.configPath()))
 	if meta.IsDefined("vector") {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
@@ -2007,6 +2022,18 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
 		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
+	}
+	if file.Vector.Producer != "" {
+		c.Vector.Producer = file.Vector.Producer
+	}
+	c.Vector.Embeddings.RecipeKeys = nil
+	for _, key := range []string{"model", "dimension", "request_dimensions", "max_input_chars", "query_prefix", "document_prefix", "input_suffix"} {
+		if meta.IsDefined("vector", "embeddings", key) {
+			if c.Vector.Embeddings.RecipeKeys == nil {
+				c.Vector.Embeddings.RecipeKeys = map[string]bool{}
+			}
+			c.Vector.Embeddings.RecipeKeys[key] = true
+		}
 	}
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true

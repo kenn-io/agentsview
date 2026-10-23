@@ -7,6 +7,19 @@ description: Release history for AgentsView
 The latest release is
 [0.46.1](https://github.com/kenn-io/agentsview/releases/tag/v0.46.1).
 
+## Unreleased
+
+- Spokes can reuse their hub's message embeddings and search them locally with
+  the saved recipe. Pull diagnostics name compatibility failures and unmatched
+  documents; `--local-producer` can fill missing coverage.
+
+- PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
+  with bounded, resumable responses and optional zstd compression.
+
+- PostgreSQL vector pushes now record parser and automated-session scope
+  compatibility. A changed session invalidates stale coverage from other
+  generations before clients can reuse its embeddings.
+
 ## 0.46.1
 
 <small>2026-10-22</small>

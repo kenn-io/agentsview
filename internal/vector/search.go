@@ -119,6 +119,18 @@ func (ix *Index) SearchPage(
 func (ix *Index) PrepareSearch(
 	ctx context.Context, enc kitvec.EncodeFunc, query string,
 ) (func(context.Context, int) ([]Hit, bool, error), error) {
+	return ix.prepareSearch(ctx, enc, query, "")
+}
+
+// PrepareSearchForGeneration pairs a saved recipe with its active generation
+// and captures its chunk settings without changing the shared index.
+func (ix *Index) PrepareSearchForGeneration(ctx context.Context, enc kitvec.EncodeFunc, query, fingerprint string, maxInputChars int) (func(context.Context, int) ([]Hit, bool, error), error) {
+	view := Index{db: ix.db, store: ix.store, spec: ix.spec, readOnly: ix.readOnly, versionMismatch: ix.versionMismatch,
+		split: kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}}
+	return view.prepareSearch(ctx, enc, query, fingerprint)
+}
+
+func (ix *Index) prepareSearch(ctx context.Context, enc kitvec.EncodeFunc, query, expected string) (func(context.Context, int) ([]Hit, bool, error), error) {
 	if ix.versionMismatch {
 		return nil, ErrMirrorVersionMismatch
 	}
@@ -131,6 +143,9 @@ func (ix *Index) PrepareSearch(
 		return nil, ix.noActiveGenerationError(ctx)
 	}
 
+	if expected != "" && active != expected {
+		return nil, fmt.Errorf("%w: active generation changed", ErrNoActiveGeneration)
+	}
 	queryVector, err := kitvec.EncodeOne(ctx, enc, query)
 	if err != nil {
 		return nil, &QueryEncodeError{Err: err}

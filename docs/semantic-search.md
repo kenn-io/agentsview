@@ -20,6 +20,47 @@ concurrency, and the search path — see
     [DuckDB mirror](/docs/duckdb/) has no vector backend, so `--semantic`/`--hybrid`
     against a DuckDB-backed server return the "not available" error described below.
 
+## Reusing a remote hub's message vectors
+
+On newer `main`, a spoke can pull its own message embeddings from a PostgreSQL
+hub instead of encoding documents again. Use the hub's SSH importer label as
+`spoke_host` and configure a local query endpoint:
+
+```toml
+[remote]
+url = "https://hub.example"
+token_file = "/path/to/hub-token"
+spoke_host = "node"
+
+[vector]
+enabled = true
+producer = "remote"
+
+[vector.embeddings.servers.query]
+endpoint = "http://127.0.0.1:11434/v1"
+# api_key_env = "QUERY_EMBEDDINGS_API_KEY"
+```
+
+The hub supplies the model, dimension and prompt recipe. Any recipe fields you
+set explicitly must match it. Parser versions and automated-session scope must
+also match. Pulls cover locally owned sessions and run through every message
+build path, including scheduled work, full rebuilds and repairs. Recall stays
+local; configure model and dimension to use Recall embeddings.
+
+Run `agentsview embeddings build` to pull. A new generation becomes active only
+when every current document has coverage. `agentsview embeddings list` and
+`agentsview doctor embeddings` show the last pull's persistent reason and
+unmatched count. To encode unmatched documents with the pinned recipe, run
+`agentsview embeddings build --local-producer`. It refuses `--full-rebuild`,
+`--backstop` and Recall builds.
+
+`agentsview session search "connection pooling" --semantic --local` uses the
+saved active recipe and the local query endpoint. It reads no hub credential.
+An incomplete next generation does not displace the active one. Without an
+active generation or query encoder, semantic search reports "semantic search
+unavailable locally"; lexical search remains available. Default remote reads
+continue to use the hub.
+
 ## Enabling `[vector]`
 
 Semantic search is disabled by default. Add a `[vector]` section to
@@ -872,6 +913,33 @@ push_vectors = false
 `push_vectors` defaults to true, so a machine with `[vector]` enabled pushes its
 embeddings automatically. A machine without `[vector]` enabled has no generation
 to push and skips the phase regardless.
+
+On newer `main`, vector pushes also publish the parser data version and the
+stored automated-session scope per generation and pushing machine. A legacy
+mirror without a stored scope publishes it as unknown until embeddings are
+rebuilt. Updating a session invalidates coverage in other generations when
+their document set differs; an unchanged set remains covered in both.
+
+### Reading vectors from a hub
+
+On newer `main`, `pg serve` exposes its selected generation at
+`GET /api/v1/vectors/generation`. It includes the model, dimension, recipe,
+parser data version and automated-session scope. Older pushes or publishers
+with conflicting compatibility metadata report `unavailable`; run
+`agentsview pg push --full` to publish current metadata. SQLite servers do not
+serve these endpoints.
+
+`POST /api/v1/vectors/lookup` accepts that fingerprint and up to 256 structured
+document identities with content hashes. Matches require the selected
+generation's chunks and a completed session push. Responses use `vectors.v1`:
+request indices, chunk indices and counts, and base64 little-endian float32
+vectors rounded to PostgreSQL's half precision. Non-finite values are rejected.
+
+Clients can request zstd with `Accept-Encoding: zstd`. Each decoded response
+stays below 32 MiB. Continue with `next_cursor` and the same fingerprint and
+identities, assembling complete chunk sets before installation. A different
+selected fingerprint returns `409 generation_changed`. Existing bearer and
+machine-signing authentication apply; lookups remain reads during a rebuild.
 
 ### Serving semantic search
 

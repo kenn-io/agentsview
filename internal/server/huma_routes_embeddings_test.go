@@ -453,3 +453,16 @@ func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusNotFound)
 	assert.Contains(t, w.Body.String(), "999")
 }
+
+func TestEmbeddingsLocalProducerTransport(t *testing.T) {
+	fake := &fakeEmbeddingsManager{}
+	s := newEmbeddingsTestServer(t, fake)
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", map[string]any{"local_producer": true})
+	assertRecorderStatus(t, w, http.StatusAccepted)
+	require.Len(t, fake.startBuildCalls, 1)
+	raw, err := json.Marshal(fake.startBuildCalls[0])
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, true, got["local_producer"])
+}
