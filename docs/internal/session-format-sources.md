@@ -2962,7 +2962,9 @@ schemas keep their existing ordering behavior.
     `d743267388641bc76f17c45ce8b4c231aed1d32c`, retains generation 4 and adds
     [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/session/working-directory/src/index.ts),
     also metadata; the producer separately emits readable directory-change
-    text.
+    text. Desktop `0.2.1-rc.2` generation-4 logs from sessions that run shell
+    commands carry paired `job/registered` and `job/settled` events with only
+    job bookkeeping (`jobId`, `owner`, `kind`, `label`); these are metadata.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.

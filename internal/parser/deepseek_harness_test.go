@@ -1696,6 +1696,30 @@ func TestDeepSeekHarnessV4SessionParses(t *testing.T) {
 	assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
 }
 
+func TestDeepSeekHarnessV4SessionWithJobEventsParses(t *testing.T) {
+	records := deepSeekHarnessV4Fixture("v4-jobs")
+	job := map[string]any{
+		"jobId": "pwsh-c76209594049476e", "owner": "session-v4-jobs",
+		"kind": "pwsh", "label": "Get-ChildItem",
+	}
+	registered := deepSeekHarnessFixtureEvent(0, "job/registered", job, nil)
+	settled := deepSeekHarnessFixtureEvent(0, "job/settled", job, nil)
+	records = append(records[:13], append([]any{registered}, records[13:]...)...)
+	records = append(records[:15], append([]any{settled}, records[15:]...)...)
+	for index, record := range records[1:] {
+		record.(map[string]any)["seq"] = index
+		record.(map[string]any)["time"] = 1700000000001 + index
+	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v4-jobs", deepSeekHarnessFixtureCwd, "zstd", 4, records,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 5)
+	require.Len(t, result.Messages[3].ToolResults, 1)
+	assert.Equal(t, "call-1", result.Messages[3].ToolResults[0].ToolUseID)
+}
+
 func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {
 	for _, test := range []struct {
 		name      string
