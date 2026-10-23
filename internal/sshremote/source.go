@@ -126,23 +126,29 @@ func (s *Source) start(ctx context.Context, op Op, req serveRequest) (*zstdCheck
 	return newZstdChecked(stream), nil
 }
 
-// call runs one operation and decodes its JSON response. Retention removes a
-// binary within moments of its idle check, so a binary that vanished after
-// the probe shows up here, at the first step, before any archive transfer.
-func (s *Source) call(ctx context.Context, op Op, req serveRequest, out any) error {
-	err := s.callOnce(ctx, op, req, out)
+// call runs one operation and decodes its decompressed response with
+// decode. Retention removes a binary within moments of its idle check, so a
+// binary that vanished after the probe shows up here, at the first step,
+// before any archive transfer. Such a remote exits before it writes
+// anything, so the retry never decodes a response twice.
+func (s *Source) call(
+	ctx context.Context, op Op, req serveRequest, decode func(io.Reader) error,
+) error {
+	err := s.callOnce(ctx, op, req, decode)
 	if binaryMissing(err) && s.forgetBinary() {
-		err = s.callOnce(ctx, op, req, out)
+		err = s.callOnce(ctx, op, req, decode)
 	}
 	return err
 }
 
-func (s *Source) callOnce(ctx context.Context, op Op, req serveRequest, out any) error {
+func (s *Source) callOnce(
+	ctx context.Context, op Op, req serveRequest, decode func(io.Reader) error,
+) error {
 	stream, err := s.start(ctx, op, req)
 	if err != nil {
 		return err
 	}
-	decodeErr := decodeZstdJSON(stream, out)
+	decodeErr := decodeZstd(stream, decode)
 	closeErr := stream.Close()
 	// A decode failure stops reading early, so Close then only reports that
 	// it stopped ssh; the decode failure is the cause.
@@ -158,21 +164,25 @@ func (s *Source) callOnce(ctx context.Context, op Op, req serveRequest, out any)
 // Targets implements remotesync.Source.
 func (s *Source) Targets(ctx context.Context) (remotesync.TargetSet, error) {
 	var targets remotesync.TargetSet
-	err := s.call(ctx, OpTargets, serveRequest{}, &targets)
+	err := s.call(ctx, OpTargets, serveRequest{}, func(r io.Reader) error {
+		return decodeTargets(r, &targets)
+	})
 	return targets, err
 }
 
 // Manifest implements remotesync.Source.
 func (s *Source) Manifest(
 	ctx context.Context, targets remotesync.TargetSet,
-) (remotesync.Manifest, bool, error) {
-	var manifest remotesync.Manifest
-	err := s.call(ctx, OpManifest, serveRequest{Targets: &targets}, &manifest)
+	visit func(remotesync.ManifestEntry) error,
+) (bool, error) {
+	err := s.call(ctx, OpManifest, serveRequest{Targets: &targets}, func(r io.Reader) error {
+		return remotesync.DecodeManifest(r, visit)
+	})
 	if cmdErr, ok := errors.AsType[*CommandError](err); ok &&
 		cmdErr.Remote != nil && cmdErr.Remote.Code == CodeUnsupported {
-		return remotesync.Manifest{}, false, nil
+		return false, nil
 	}
-	return manifest, err == nil, err
+	return err == nil, err
 }
 
 // Archive implements remotesync.Source.
@@ -244,33 +254,35 @@ func (c *zstdChecked) Read(p []byte) (int, error) {
 
 func (c *zstdChecked) Close() error { return c.closer.Close() }
 
-// maxResponseBytes bounds a decompressed targets or manifest reply, so a
-// small, highly compressible reply cannot exhaust memory. Manifests are the
-// largest replies, at about 190 bytes per file for real agent data, so the
-// cap fits about 700,000 files. A manifest is about 1.5 times its full delta
-// list, so at those path lengths every manifest whose delta request fits in
-// maxServeRequestBytes fits here too.
-const maxResponseBytes = 128 << 20
+// maxTargetsBytes bounds the decompressed targets reply. Every later request
+// carries the targets back to the remote, so a larger set could not be sent
+// anyway.
+const maxTargetsBytes = maxServeRequestBytes
 
-var errResponseTooLarge = fmt.Errorf("response is larger than the %d MiB limit", maxResponseBytes>>20)
+var errTargetsTooLarge = fmt.Errorf(
+	"targets reply is larger than the %d MiB request limit", maxTargetsBytes>>20,
+)
 
-// decodeZstdJSON decodes one zstd-compressed JSON value and reads r to EOF,
-// so the ssh stream behind it ends normally. A reply over maxResponseBytes
-// fails without draining r.
-func decodeZstdJSON(r io.Reader, out any) error {
+// decodeTargets decodes a targets reply of at most maxTargetsBytes. A reply
+// that runs past the cap fails, even when a complete value ends at it.
+func decodeTargets(r io.Reader, out *remotesync.TargetSet) error {
+	limited := &io.LimitedReader{R: r, N: maxTargetsBytes + 1}
+	err := json.UnmarshalRead(limited, out)
+	if limited.N == 0 {
+		return errTargetsTooLarge
+	}
+	return err
+}
+
+// decodeZstd decodes one zstd-compressed response with decode and reads r to
+// EOF, so the ssh stream behind it ends normally.
+func decodeZstd(r io.Reader, decode func(io.Reader) error) error {
 	zr, err := remotesync.NewZstdReader(r)
 	if err != nil {
 		return err
 	}
 	defer zr.Close()
-	// One byte past the cap tells an oversized reply apart from one that
-	// ends exactly at it; a value cut at the cap must not decode.
-	limited := &io.LimitedReader{R: zr, N: maxResponseBytes + 1}
-	err = json.UnmarshalRead(limited, out)
-	if limited.N == 0 {
-		return errResponseTooLarge
-	}
-	if err != nil {
+	if err := decode(zr); err != nil {
 		return err
 	}
 	if _, err := io.Copy(io.Discard, r); err != nil {

@@ -413,8 +413,8 @@ bearer token, even when the rest of that daemon has `require_auth = false`. The
 per-host `token` must match the remote daemon's `auth_token`. Do not reuse the
 collector daemon's own `auth_token` for untrusted remote endpoints. HTTP and
 SSH transfers use a persistent per-host mirror and fetch only changed files. A
-full archive is used only when every manifest file needs fetching or a delta
-request is refused; see
+full archive is used only when every manifest file needs fetching, the changed
+files are too many to list, or a delta request is refused; see
 [Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured

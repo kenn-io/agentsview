@@ -13,10 +13,13 @@ import (
 type Source interface {
 	// Targets resolves the files the remote publishes.
 	Targets(ctx context.Context) (TargetSet, error)
-	// Manifest lists targets with sizes and mtimes. supported is false when
-	// the remote cannot build a manifest; the caller then falls back to a full
-	// archive.
-	Manifest(ctx context.Context, targets TargetSet) (manifest Manifest, supported bool, err error)
+	// Manifest passes each file under targets to visit, with its size and
+	// mtime, in the order BuildManifest sorts them. A visit error stops the
+	// listing and is returned. supported is false when the remote cannot
+	// build a manifest; the caller then falls back to a full archive.
+	Manifest(
+		ctx context.Context, targets TargetSet, visit func(ManifestEntry) error,
+	) (supported bool, err error)
 	// Archive opens a tar stream for request. Close on the stream reports
 	// any failure the remote reported after the body ended.
 	Archive(ctx context.Context, request ArchiveRequest) (*ArchiveStream, error)
