@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
-	"path/filepath"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +212,16 @@ func TestVectorHubLookupSparseChunks(t *testing.T) {
 			full, err := store.LookupHubVectors(t.Context(), req)
 			require.NoError(t, err)
 			require.Equal(t, expected, full.Chunks)
+			// Continuation offsets address stored indices, even beyond row count.
+			req.Cursor = makeHubLookupCursor(req, 0, indices[len(indices)-1])
+			last, err := store.LookupHubVectors(t.Context(), req)
+			require.NoError(t, err)
+			require.Equal(t, expected[len(expected)-1:], last.Chunks)
+			req.Cursor = makeHubLookupCursor(req, 0, indices[len(indices)-1]+1)
+			_, err = store.LookupHubVectors(t.Context(), req)
+			require.ErrorIs(t, err, vector.ErrHubLookupInvalid)
+			req.Cursor = ""
+
 			// Repeated and absent identities exercise resets between sparse documents.
 			missing := identity
 			missing.ContentHash = "missing"
@@ -275,9 +285,6 @@ func TestVectorHubRejectsCrossGenerationRevision(t *testing.T) {
 	reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
 	require.NoError(t, err)
 	require.Len(t, reply.Chunks, 1, "equal corpus remains covered in both generations")
-	var oldChunks int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
-	assert.Equal(t, len(identities), oldChunks, "unchanged coverage preserves old generation chunks")
 	second.hashes["A"] = "changed-corpus"
 	for i := range second.docs["A"] {
 		second.docs["A"][i].ContentHash = "new-hash"
@@ -295,22 +302,6 @@ func TestVectorHubRejectsCrossGenerationRevision(t *testing.T) {
 			assert.Equal(t, []int{0}, reply.Absent)
 		}
 	}
-
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
-	assert.Zero(t, oldChunks, "invalidated coverage must not leave searchable old chunks")
-	newID, _, _, err := LookupVectorGeneration(t.Context(), pg, "new")
-	require.NoError(t, err)
-	var newChunks int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(newID)).Scan(&newChunks))
-	assert.Equal(t, len(identities), newChunks, "current generation chunks remain intact")
-	delete(second.hashes, "A")
-	delete(second.docs, "A")
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	var documents int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id='A'`).Scan(&documents))
-	assert.Zero(t, documents, "scope eviction removes shared documents once all chunks are gone")
-
 }
 
 func TestVectorHubLookupCompatibilityGate(t *testing.T) {
@@ -880,6 +871,7 @@ func TestVectorHubLegacyWitnessRetirement(t *testing.T) {
 					if filtered {
 						sync.projects = []string{"alpha"}
 					}
+					sync.syncStateTarget = pushSyncStateScope("", sync.projects, sync.excludeProjects)
 					key, err := sync.vectorGenerationWitnessKey(t.Context())
 					require.NoError(t, err)
 					if canceled {

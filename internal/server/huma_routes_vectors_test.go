@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,8 +61,12 @@ func TestVectorHubLookupWire(t *testing.T) {
 	s.cfg.RequireAuth = true
 	s.cfg.AuthToken = "test-token"
 	for _, tc := range []struct{ encoding, want string }{
-		{"identity", ""}, {"zstd", "zstd"}, {"ZsTd;q=0, gzip;q=1", ""},
-		{"ZsTd;q=0.001, gzip;q=1", "zstd"}, {"zstd;q=0.5", "zstd"}, {"zstd;q=1", "zstd"},
+		{"identity", ""},
+		{"zstd", "zstd"},
+		{"ZsTd;q=0, gzip;q=1", ""},
+		{"ZsTd;q=0.001, gzip;q=1", "zstd"},
+		{"zstd;q=0.5", "zstd"},
+		{"zstd;q=1", "zstd"},
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -135,7 +140,7 @@ func TestVectorHubLookupDeadline(t *testing.T) {
 	var bounded bool
 	s.db = hubTestStore{Store: s.db, t: t, hook: func(ctx context.Context) { deadline, bounded = ctx.Deadline() }}
 	for _, seconds := range []int{1, 30, 300} {
-		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+		t.Run(strconv.Itoa(seconds), func(t *testing.T) {
 			s.cfg.WriteTimeout = time.Duration(seconds) * time.Second
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
 			req.Header.Set("Content-Type", "application/json")

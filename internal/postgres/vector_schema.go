@@ -201,6 +201,10 @@ CREATE TABLE IF NOT EXISTS %s (
 	if _, err := ensureColumns(ctx, pg, existing, []columnMigration{{
 		table: table, column: "source_hash", def: "source_hash TEXT",
 	}}); err != nil {
+		if isInsufficientPrivilege(err) {
+			// The provisioned legacy table remains writable without hub proof.
+			return nil
+		}
 		return fmt.Errorf("adding %s provenance columns: %w", table, err)
 	}
 	if _, err := pg.ExecContext(ctx, fmt.Sprintf(

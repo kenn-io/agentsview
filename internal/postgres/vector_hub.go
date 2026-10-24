@@ -33,6 +33,7 @@ func readHubVectorGeneration(ctx context.Context, reader pgSessionQueryer, selec
  (to_jsonb(m)->>'chunk_hash_version')::integer
  FROM vector_generations g LEFT JOIN vector_generation_machines m ON m.generation_id=g.id
  WHERE g.id=$1 AND g.fingerprint=$2 AND g.created_at=$3 AND g.dimension=$4
+ AND to_jsonb(m) ? 'chunk_hash_version'
  AND EXISTS (SELECT 1 FROM pg_attribute
      WHERE attrelid=to_regclass($5) AND attname='source_hash' AND NOT attisdropped)`,
 		selected.genID, selected.fingerprint, selected.createdAt, selected.dimension, selected.chunkTable)
@@ -130,6 +131,7 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 		}
 		defer rows.Close()
 		count := 0
+		before := len(reply.Chunks)
 		for rows.Next() {
 			var chunk vector.HubChunk
 			var literal string
@@ -168,6 +170,9 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 		rows.Close()
 		if err != nil {
 			return reply, err
+		}
+		if count > 0 && len(reply.Chunks) == before {
+			return reply, fmt.Errorf("%w: cursor beyond stored chunks", vector.ErrHubLookupInvalid)
 		}
 		if count == 0 {
 			reply.Absent = append(reply.Absent, i)

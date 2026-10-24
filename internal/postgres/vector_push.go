@@ -40,6 +40,8 @@ type vectorGeneration struct {
 	halfvecType          string
 	machineRecorded      bool
 	compatibilityColumns bool
+	hashVersionColumn    bool
+	missingSourceHash    bool
 }
 
 // vectorPushScope carries the push-wide constants threaded through every
@@ -474,21 +476,26 @@ func (s *Sync) lookupVectorGeneration(
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines m
      WHERE generation_id = $1 AND machine = $2
-       AND (NOT (to_jsonb(m) ?& ARRAY['data_version','include_automated','chunk_hash_version'])
-            OR ((to_jsonb(m)->>'data_version')::integer IS NOT DISTINCT FROM $3
-                AND (to_jsonb(m)->>'include_automated')::boolean IS NOT DISTINCT FROM $4
-                AND (to_jsonb(m)->>'chunk_hash_version')::integer = 1)))`,
+       AND (NOT (to_jsonb(m) ? 'data_version') OR (to_jsonb(m)->>'data_version')::integer IS NOT DISTINCT FROM $3)
+       AND (NOT (to_jsonb(m) ? 'include_automated') OR (to_jsonb(m)->>'include_automated')::boolean IS NOT DISTINCT FROM $4)
+       AND (NOT (to_jsonb(m) ? 'chunk_hash_version') OR (to_jsonb(m)->>'chunk_hash_version')::integer = 1))`,
 		genID, witnessKey, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, false, fmt.Errorf(
 			"reading vector push machine record: %w", err,
 		)
 	}
-	compatibilityColumns, err := vectorCompatibilityColumns(ctx, s.pg)
+	columns, err := loadExistingColumns(ctx, s.pg, nil, "vector_generation_machines", vectorChunkTable(genID))
 	if err != nil {
 		return vectorGeneration{}, false, err
 	}
+	_, version := columns["vector_generation_machines"]["data_version"]
+	_, automated := columns["vector_generation_machines"]["include_automated"]
+	_, hashVersion := columns["vector_generation_machines"]["chunk_hash_version"]
+	_, sourceHash := columns[vectorChunkTable(genID)]["source_hash"]
 	return vectorGeneration{
-		compatibilityColumns: compatibilityColumns,
+		compatibilityColumns: version && automated,
+		hashVersionColumn:    hashVersion,
+		missingSourceHash:    !sourceHash,
 		id:                   genID,
 		createdAt:            createdAt,
 		halfvecType:          extSchema + ".halfvec",
@@ -532,7 +539,7 @@ func (s *Sync) prepareVectorBaseSchema(
 	}); err != nil {
 		if isInsufficientPrivilege(err) {
 			// Optional metadata must not revoke the legacy writer's capability.
-			// Readers refuse hub compatibility while either column is absent.
+			// Readers refuse hub compatibility while required metadata is absent.
 			return false, nil
 		}
 		return false, fmt.Errorf("adding vector compatibility metadata: %w", err)
@@ -942,37 +949,14 @@ func (s *Sync) resolveVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, err
 	}
-	extSchema, err := vectorExtensionSchema(ctx, s.pg)
+	resolved, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
 	if err != nil {
 		return vectorGeneration{}, err
 	}
-	var createdAt time.Time
-	if err := s.pg.QueryRowContext(ctx,
-		`SELECT created_at FROM vector_generations WHERE id = $1`, genID,
-	).Scan(&createdAt); err != nil {
-		return vectorGeneration{}, fmt.Errorf("reading vector generation created_at: %w", err)
+	if !found || resolved.id != genID {
+		return vectorGeneration{}, errors.New("vector generation changed during registration")
 	}
-	var machineRecorded bool
-	if err := s.pg.QueryRowContext(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2
-       AND data_version = $3 AND include_automated IS NOT DISTINCT FROM $4
-       AND chunk_hash_version = 1)`,
-		genID, witnessKey, db.CurrentDataVersion(), gen.IncludeAutomated).Scan(&machineRecorded); err != nil {
-		return vectorGeneration{}, fmt.Errorf("reading vector push machine record: %w", err)
-	}
-	compatibilityColumns, err := vectorCompatibilityColumns(ctx, s.pg)
-	if err != nil {
-		return vectorGeneration{}, err
-	}
-	return vectorGeneration{
-		compatibilityColumns: compatibilityColumns,
-		id:                   genID,
-		createdAt:            createdAt,
-		halfvecType:          extSchema + ".halfvec",
-		machineRecorded:      machineRecorded,
-	}, nil
+	return resolved, nil
 }
 
 func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
@@ -983,21 +967,15 @@ func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
 	return s.machine + "|" + s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), nil
 }
 
-func vectorCompatibilityColumns(ctx context.Context, pg *sql.DB) (bool, error) {
-	columns, err := loadExistingColumns(ctx, pg, nil, "vector_generation_machines")
-	if err != nil {
-		return false, err
-	}
-	_, version := columns["vector_generation_machines"]["data_version"]
-	_, automated := columns["vector_generation_machines"]["include_automated"]
-	return version && automated, nil
-}
-
 func (s *Sync) markVectorGenerationMachinePending(
 	ctx context.Context, info storage.VectorGenerationInfo, gen vectorGeneration, witnessKey string,
 ) error {
 	if !gen.compatibilityColumns {
 		return nil
+	}
+	hashMismatch := ""
+	if gen.hashVersionColumn {
+		hashMismatch = " OR vector_generation_machines.chunk_hash_version IS DISTINCT FROM 1"
 	}
 	_, err := s.pg.ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
@@ -1006,8 +984,7 @@ SELECT id, $4, now(), NULL, NULL
  WHERE id = $1 AND fingerprint = $2 AND created_at = $3
 ON CONFLICT (generation_id, machine) DO UPDATE SET data_version = NULL, include_automated = NULL
  WHERE vector_generation_machines.data_version IS DISTINCT FROM $5
-    OR vector_generation_machines.include_automated IS DISTINCT FROM $6
-    OR vector_generation_machines.chunk_hash_version IS DISTINCT FROM 1`,
+    OR vector_generation_machines.include_automated IS DISTINCT FROM $6`+hashMismatch,
 		gen.id, info.Fingerprint, gen.createdAt, witnessKey, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated)
 	if err != nil {
 		return fmt.Errorf("marking vector push compatibility pending: %w", err)
@@ -1037,22 +1014,28 @@ func (s *Sync) recordVectorGenerationMachine(
 		return false, fmt.Errorf("starting vector push witness transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	query := `
-INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated, chunk_hash_version)
-SELECT id, $4, now(), $5, $6, 1
-  FROM vector_generations
- WHERE id = $1 AND fingerprint = $2 AND created_at = $3
-ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at,
- data_version = EXCLUDED.data_version, include_automated = EXCLUDED.include_automated,
- chunk_hash_version = EXCLUDED.chunk_hash_version`
-	args := []any{gen.id, info.Fingerprint, gen.createdAt, witnessKey, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated}
-	if !gen.compatibilityColumns {
-		query = `INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-SELECT id, $4, now() FROM vector_generations
- WHERE id=$1 AND fingerprint=$2 AND created_at=$3
-ON CONFLICT (generation_id,machine) DO UPDATE SET last_push_at=EXCLUDED.last_push_at`
-		args = args[:4]
+	columns, values, updates := "", "", ""
+	args := []any{gen.id, info.Fingerprint, gen.createdAt, witnessKey}
+	if gen.compatibilityColumns {
+		columns = ", data_version, include_automated"
+		values = ", $5, $6"
+		updates = ", data_version=EXCLUDED.data_version, include_automated=EXCLUDED.include_automated"
+		args = append(args, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated)
 	}
+	if gen.hashVersionColumn {
+		columns += ", chunk_hash_version"
+		hashVersion := "NULL"
+		if !gen.missingSourceHash {
+			hashVersion = "1"
+		}
+		values += ", " + hashVersion
+		updates += ", chunk_hash_version=EXCLUDED.chunk_hash_version"
+	}
+	query := `INSERT INTO vector_generation_machines (generation_id, machine, last_push_at` + columns + `)
+SELECT id, $4, now()` + values + ` FROM vector_generations
+ WHERE id=$1 AND fingerprint=$2 AND created_at=$3
+ON CONFLICT (generation_id,machine) DO UPDATE SET last_push_at=EXCLUDED.last_push_at` + updates
+
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("recording vector push machine: %w", err)
@@ -1468,19 +1451,27 @@ DELETE FROM %s WHERE doc_key IN (
 		end := min(start+vectorChunkInsertBatch, len(rows))
 		batch := rows[start:end]
 		var values strings.Builder
-		args := make([]any, 0, len(batch)*4)
+		width, columns := 4, "doc_key, chunk_index, embedding, source_hash"
+		if gen.missingSourceHash {
+			width, columns = 3, "doc_key, chunk_index, embedding"
+		}
+		args := make([]any, 0, len(batch)*width)
 		for i, r := range batch {
 			if i > 0 {
 				values.WriteByte(',')
 			}
-			base := i * 4
-			fmt.Fprintf(&values, "($%d,$%d,$%d::%s,$%d)",
-				base+1, base+2, base+3, gen.halfvecType, base+4)
-			args = append(args, r.docKey, r.chunkIndex, r.embedding, r.sourceHash)
+			base := i * width
+			fmt.Fprintf(&values, "($%d,$%d,$%d::%s", base+1, base+2, base+3, gen.halfvecType)
+			args = append(args, r.docKey, r.chunkIndex, r.embedding)
+			if !gen.missingSourceHash {
+				fmt.Fprintf(&values, ",$%d", base+4)
+				args = append(args, r.sourceHash)
+			}
+			values.WriteByte(')')
 		}
 		stmt := fmt.Sprintf(
-			`INSERT INTO %s (doc_key, chunk_index, embedding, source_hash) VALUES %s`,
-			table, values.String())
+			`INSERT INTO %s (%s) VALUES %s`,
+			table, columns, values.String())
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
 			return 0, fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
 		}

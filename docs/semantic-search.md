@@ -894,8 +894,9 @@ without discarding compatible vectors. Removing the last embeddable document
 clears retained coverage even when the replacement generation has never pushed
 that session. Project and automated-session exclusions preserve retained history.
 A writer that cannot add the optional
-compatibility columns keeps publishing vectors. Hub compatibility remains
-unavailable until an owner adds those columns and a complete push certifies them.
+compatibility or chunk-provenance columns keeps publishing vectors and updates
+the metadata its schema supports. Hub compatibility remains unavailable until an
+owner adds the missing columns and a complete push certifies them.
 
 The hub backend pins the selected generation's fingerprint, dimension and
 creation time when the serving process starts. If that generation is removed or
@@ -921,10 +922,11 @@ SQLite servers do not serve these endpoints.
 document identities with content hashes. Matches require the selected
 generation's chunks and a completed session push. Each stored chunk must also
 carry its original source hash, matching the request and the shared document.
-Chunk tables that predate this proof report the generation unavailable until a
-writer adds the column. Legacy chunks without proof are then returned as absent
-until their owner republishes them; another publisher cannot certify that
-coverage. A document with any unproven chunk is absent as a whole.
+Tables that predate the source-hash or chunk-hash-version columns report the
+generation unavailable until a writer adds the missing columns. Legacy chunks
+without proof are then returned as absent until their owner republishes them;
+another publisher cannot certify that coverage. A document with any unproven
+chunk is absent as a whole.
 
 An explicitly recorded chunk-hash version other than version 1 makes the
 generation unavailable. Legacy null versions remain valid when compatibility
@@ -939,9 +941,11 @@ vectors rounded to PostgreSQL's half precision. Non-finite values are rejected.
 
 Clients can request zstd with `Accept-Encoding: zstd`. Each decoded response
 stays below 32 MiB. Continue with `next_cursor` and the same fingerprint and
-identities, assembling complete chunk sets before installation. A different
-selected fingerprint returns `409 generation_changed`. Existing bearer and
-machine-signing authentication apply; lookups remain reads during a rebuild.
+identities, assembling complete chunk sets before installation. Cursors use the
+actual stored chunk indices, which can have gaps. A cursor beyond the stored
+range returns HTTP 400. A different selected fingerprint returns
+`409 generation_changed`. Existing bearer and machine-signing authentication
+apply; lookups remain reads during a rebuild.
 
 ### Serving semantic search
 
