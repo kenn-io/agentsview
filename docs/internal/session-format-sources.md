@@ -1488,6 +1488,28 @@ fixtures retain this field; missing identities remain source-local.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
+- **Chrome Sync format:** gemini.google.com answers batchexecute POSTs to
+  `/_/BardChatUi/data/batchexecute` with a `)]}'` prefix, length lines, and
+  chunks whose `["wrb.fr", <rpc>, "<payload JSON>", ...]` entry carries the
+  result. `MaZiqc` lists chats: payload `[_, cursor, [entry...]]`, entry
+  `[0]` is the `c_` chat ID, `[1]` the title, and `[5]` the `[seconds, nanos]`
+  update time. `hNvQHb` returns `[turns, cursor, ...]` with turns newest first;
+  turn `[0]` is `[chat, response]`, `[2][0][0]` the prompt, `[3][0]` the reply
+  drafts (`[id, [text, ...], ...]`), `[3][3]` the shown draft's ID, and the last
+  `[seconds, nanos]` child the turn time. Turn `[1]` names the previous turn,
+  not this one. Cursors are base64 text with `+` and `/`.
+- **Chrome Sync evidence:** `no-public-source`. A read-only probe of a signed-in web
+  app (build `boq_gemini-web-uiserver_20261020.01_p0`) on 2026-10-21 checked
+  every position above, list and turn paging with real cursors, and that the
+  list update time equals the newest turn time. Sanitized captures with the
+  real array layout are `internal/importer/testdata/gemini_web/`, exercised by
+  `TestSyncGeminiCapturedPages` and `TestGeminiRPCPayload`. The account had no
+  pinned chats, so whether pinned chats appear in the default list is
+  unverified. Gemini publishes no schema; RPC names and positions can change
+  with any web app build.
+- **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
+  `internal/importer/gemini_sync.go`, and
+  `frontend/chrome-extension/gemini_fetch.js`.
 
 ## Grok Build (`grok`)
 
@@ -3389,6 +3411,70 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** The contributor reports live use of the private session,
+  conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226), checked
+  2026-10-17. Sync uses the export conversation parser; list timestamps accept
+  ISO strings or Unix seconds, and detail timestamps use Unix seconds. A supplied
+  signed-in capture has a detail timestamp 0.68 s after the list
+  timestamp and a `mapping` object. Reverified 2026-10-18 with
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail`: Sync allows 5 s of
+  endpoint skew and re-fetches detail 60 s newer than the list.
+  The [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and archived
+  (`is_archived=true`) conversation lists. Sync pages both lists each run.
+  The [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with `page_info`
+  pagination. Each detail without a `mapping` object or either `conversation_id`
+  or `id` counts toward the two-consecutive-failures stop. A single unsupported
+  detail reports the update error after the remaining chats finish, verified by
+  `TestSyncChatGPTSingleUnsupportedDetail` on 2026-10-18. Sync does not parse the
+  flat format or cache freshness for details without an identity.
+  Reverified against the parser and synthetic importer regressions on 2026-10-18:
+  tool nodes attach to assistant messages, and browser image placeholders carry
+  no asset identity. The parser records user message and parent IDs in the
+  archive's existing source identity fields. Sync preserves uploaded images on
+  user turns with matching ordinals, roles, timestamps, and sanitized surrounding
+  text. Saved message and parent IDs must match when present in the archive;
+  older ZIP imports have neither ID. Matching turns fill empty source identities
+  before Sync caches freshness under full and transcripts storage, verified by
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`.
+  Generated images use the browser snapshot. Sync keeps the previous version in
+  Trash when it replaces history with a different branch under full,
+  transcripts, and usage storage, with its pins, notes, and any archived images.
+  Appending turns makes no copy. Reverified with
+  `TestSyncChatGPTUsageArchiveAppendMakesNoTrashedCopy` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy` on 2026-10-18.
+  Re-syncing the same chat makes no further copy, verified by
+  `TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`, and
+  `TestSyncChatGPTZipImageReconciliation` on 2026-10-18.
+  Sync replaces turns with conflicting nonempty source message IDs.
+  Sync fills missing models and keeps nonempty stored models under full,
+  transcripts, and usage storage, including when later replies cause the parser
+  to infer a different model for an older reply during appends or replacements.
+  Reverified 2026-10-18 with
+  `TestSyncChatGPTArchiveUpdatesAppendedTurns` and
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`.
+  Usage-only sync also fills missing models when turns and `update_time`
+  match, verified by
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`.
+  Usage-only sync keeps a Trash copy when shorter snapshots have matching
+  retained assistant turns, including when only a trailing user turn was
+  dropped. It refreshes counts and end time and fills missing models before
+  caching freshness.
+  Reverified 2026-10-18 with
+  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`.
+  When detail `create_time` is null or absent, Sync keeps the stored start time
+  or uses the first non-zero message timestamp for a new chat, skipping undated
+  messages. Numeric `create_time` takes precedence. Reverified against the parser
+  and synthetic importer test
+  `TestSyncChatGPTMissingCreateTime` on 2026-10-18; ZIP import is unchanged.
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` reports an active browser sync.
+  Stream errors use `chatgpt_auth_required` for sign-in and
+  `chrome_host_update_required` for an incompatible native host.
 
 ## Kiro CLI (`kiro`)
 

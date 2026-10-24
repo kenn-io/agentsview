@@ -9,8 +9,21 @@ The latest release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- Chrome Sync users must rerun `agentsview chrome setup` and reload the
+  extension once because the native-host protocol moved to version 3.
+
 **New features**
 
+- Sync Gemini chats from gemini.google.com through the Chrome extension with
+  `agentsview import --type gemini-apps --sync`. Each chat becomes one session
+  with all of its turns; regenerated or shortened chats keep the previous
+  version in Trash.
+- Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
+  `agentsview import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
 - When Friction Log review is enabled, AgentsView stores daily digests and
   catches up on completed days missed while offline, including sessions that
   arrive late within the configured backfill window. Digests retain findings,

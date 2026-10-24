@@ -28,7 +28,7 @@ import (
 const chromeNativeHost = chromehost.NativeHost
 
 func newChromeCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "chrome", Short: "Set up Claude.ai Sync in Chrome", GroupID: groupData}
+	cmd := &cobra.Command{Use: "chrome", Short: "Set up browser Sync in Chrome", GroupID: groupData}
 	cmd.AddCommand(&cobra.Command{Use: "setup", Short: "Install the Chrome native host", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 		if err != nil {
@@ -231,7 +231,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 	if err := atomicfile.WriteFile(launcher, []byte(command), atomicfile.WithPerm(0o700)); err != nil {
 		return "", err
 	}
-	body, err := json.Marshal(map[string]any{"name": chromeNativeHost, "description": "AgentsView Claude.ai Sync", "path": launcher, "type": "stdio", "allowed_origins": []string{"chrome-extension://" + id.String() + "/"}})
+	body, err := json.Marshal(map[string]any{"name": chromeNativeHost, "description": "AgentsView Browser Sync", "path": launcher, "type": "stdio", "allowed_origins": []string{"chrome-extension://" + id.String() + "/"}})
 	if err != nil {
 		return "", err
 	}
