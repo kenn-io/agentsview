@@ -58,7 +58,7 @@ func TestRemotePolicyUsedByLazyProbe(t *testing.T) {
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"sessions":[{"id":"example"}],"total":1}`))
 				default:
-					t.Errorf("unexpected request %s", r.URL.Path)
+					assert.Failf(t, "unexpected request", "path: %s", r.URL.Path)
 					w.WriteHeader(500)
 				}
 			}))
