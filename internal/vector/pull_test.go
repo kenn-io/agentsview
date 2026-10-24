@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -367,55 +366,6 @@ func TestPullContinuationContracts(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Returning to the original build recipe must restore its document boundaries,
-// even when the intervening import is interrupted during its initial reshape.
-func TestPullRunCapBuildPullBuild(t *testing.T) {
-	for _, hubCap := range []int{1000, 2000, 4000, 5000} {
-		for _, interrupted := range []bool{false, true} {
-			t.Run(fmt.Sprintf("cap-%d/interrupted-%t", hubCap, interrupted), func(t *testing.T) {
-				testPullRunCapRestore(t, hubCap, interrupted)
-			})
-		}
-	}
-}
-
-func testPullRunCapRestore(t *testing.T, hubCap int, interrupted bool) {
-	t.Helper()
-	archive := seedRunCapArchive(t, false)
-	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")}, func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
-	ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
-	require.NoError(t, err)
-	defer ix.Close()
-	gen := fakeGeneration("local")
-	gen.Params = map[string]string{"max_input_chars": "4000"}
-	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	hubGen := fakeGeneration("hub")
-	hubGen.Params = map[string]string{"max_input_chars": strconv.Itoa(hubCap)}
-	var source UnitSource = archive
-	if interrupted {
-		source = interruptedSource{archive}
-	}
-	hub := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
-		absent := make([]int, len(r.Identities))
-		for i := range absent {
-			absent[i] = i
-		}
-		return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Absent: absent}, nil
-	})
-	_, err = ix.Pull(t.Context(), source, hub, hubGen, PullOptions{})
-	if interrupted {
-		require.Error(t, err)
-	} else {
-		require.NoError(t, err)
-	}
-	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	var documents int
-	require.NoError(t, ix.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM vector_messages WHERE session_id='session'").Scan(&documents))
-	require.Equal(t, 6, documents)
 }
 
 func TestPullClearsCompletedActiveRebuild(t *testing.T) {

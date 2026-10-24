@@ -102,6 +102,42 @@ func (ix *Index) publishPullStage(ctx context.Context, stage *Index, fp string) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// The mirror is shared by every generation. Remove disappeared documents
+	// from retired vector tables too, or they consume KNN slots on revival.
+	rows, err := tx.QueryContext(ctx, `SELECT ordinal FROM `+ix.spec.generationsTable())
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ordinals []int64
+	for rows.Next() {
+		var other int64
+		if err := rows.Scan(&other); err != nil {
+			return err
+		}
+		ordinals = append(ordinals, other)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	absent := `doc_key NOT IN (SELECT doc_key FROM ` + stage.spec.DocsTable + `)`
+	for _, other := range ordinals {
+		if other == ordinal {
+			continue // The target is replaced in full below.
+		}
+		query := fmt.Sprintf(`DELETE FROM %s_v%d WHERE rowid IN (SELECT vec_rowid FROM %s WHERE ordinal=? AND %s)`, ix.spec.VectorsPrefix, other, ix.spec.chunksTable(), absent)
+		if _, err := tx.ExecContext(ctx, query, other); err != nil {
+			return fmt.Errorf("delete disappeared hub vectors: %w", err)
+		}
+	}
+	for _, table := range []string{ix.spec.chunksTable(), ix.spec.stampsTable(), ix.spec.repairQueueTable()} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+absent); err != nil {
+			return fmt.Errorf("delete disappeared hub documents: %w", err)
+		}
+	}
 	vec := fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal)
 	stagedVec := fmt.Sprintf("%s_v%d", stage.spec.VectorsPrefix, stagedOrdinal)
 	queries := []struct {
