@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DocbankStatus from "../content/DocbankStatus.svelte";
   import {
     ChartColumnIcon,
     CheckIcon,
@@ -1438,6 +1439,7 @@
     </span>
   {/if}
 </div>
+<DocbankStatus />
 
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />

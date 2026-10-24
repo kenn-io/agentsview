@@ -44,14 +44,11 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		name := strings.TrimPrefix(ref, "asset://")
-		want := strings.TrimSuffix(name, filepath.Ext(name))
-		decoded, err := hex.DecodeString(want)
-		if err != nil || len(decoded) != sha256.Size || filepath.Base(name) != name {
-			// Transcript examples can use this scheme without naming a stored
-			// object. Only content-addressed references create dependencies.
-			return nil //nolint:nilerr // Invalid transcript URLs do not name stored objects.
+		want, _, valid := assetReferenceDigest(ref)
+		if !valid {
+			return nil
 		}
+		name := strings.TrimPrefix(ref, "asset://")
 		if root == nil {
 			root, err = os.OpenRoot(directory)
 			if err != nil {
@@ -94,15 +91,60 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 			continue
 		}
 		// Parse actual image nodes; examples inside code are not dependencies.
-		source := []byte(content)
-		if err := ast.Walk(markdown.Parse(source), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-			if image, ok := node.(*ast.Image); ok && entering {
-				return ast.WalkContinue, check(image.Destination.Value(source))
-			}
-			return ast.WalkContinue, nil
-		}); err != nil {
+		if err := walkMarkdownImages(markdown, content, check); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+func walkMarkdownImages(markdown parser.Parser, content string, visit func(string) error) error {
+	return ast.Walk(parseAssetMarkdown(markdown, content), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if image, ok := node.(*ast.Image); ok && entering {
+			return ast.WalkContinue, visit(image.Destination.Value([]byte(content)))
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+// parseAssetMarkdown skips parsing content with no asset reference. A nil
+// parser is built only when the content needs one.
+func parseAssetMarkdown(markdown parser.Parser, content string) ast.Node {
+	if !strings.Contains(content, "asset://") {
+		return ast.NewDocument()
+	}
+	if markdown == nil {
+		markdown = parser.New()
+	}
+	return markdown.Parse([]byte(content))
+}
+
+func assetReferenceDigest(ref string) (string, string, bool) {
+	if !strings.HasPrefix(ref, "asset://") {
+		return "", "", false
+	}
+	name := strings.TrimPrefix(ref, "asset://")
+	ext := filepath.Ext(name)
+	digest := strings.TrimSuffix(name, ext)
+	decoded, err := hex.DecodeString(digest)
+	return digest, ext, err == nil && len(decoded) == sha256.Size && filepath.Base(name) == name
+}
+
+func assetImageDigest(ref string) (string, string, bool) {
+	digest, ext, valid := assetReferenceDigest(ref)
+	_, image := assets.MediaTypeForExt(ext)
+	return digest, ext, valid && digest == strings.ToLower(digest) && image
+}
+
+// MarkdownAssetImages excludes links and code examples by walking image nodes.
+func MarkdownAssetImages(content string) []RetainedImage {
+	var images []RetainedImage
+	_ = walkMarkdownImages(nil, content, func(ref string) error {
+		if digest, ext, ok := assetImageDigest(ref); ok {
+			mediaType, _ := assets.MediaTypeForExt(ext)
+			images = append(images, RetainedImage{Index: len(images), MediaType: mediaType, SHA256: digest})
+		}
+		return nil
+	})
+	return images
 }

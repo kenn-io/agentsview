@@ -263,6 +263,7 @@ zoom_level = 120
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
+| `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log) |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
@@ -2413,3 +2414,47 @@ Disable the CLI/web UI update check with any of:
 
 The desktop app's auto-updater is controlled separately via
 `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`.
+
+## Find transcript images in Docbank
+
+Configure your Docbank server to find where it holds the exact bytes of a
+transcript image. Results show current files, prior versions, and trash. Set
+`web_url` to make each match link to its exact version in the browser. Exact-version
+links require [docbank#1024](https://github.com/kenn-io/docbank/pull/1024).
+
+```toml
+[integrations.docbank]
+url = "https://docbank.example.com"
+web_url = "https://docbank.example.com"
+api_key_env = "DOCBANK_API_KEY"
+```
+
+Set `DOCBANK_API_KEY` in the environment of each consumer, including the daemon, CLI, and MCP server. Both `url` and `api_key_env`
+are required to enable lookup. Omit the section to disable it. Invalid configuration stops consumers that build a local backend. CLI commands
+that connect to a daemon use the daemon's integration configuration.
+
+MCP offers `get_session_file_references` when its backend enables Docbank
+lookup. Connections through a signed reader listener omit this tool.
+
+| Setting                            | Purpose                                           |
+| ---------------------------------- | ------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
+
+Lookup covers retained tool-result images, including offloaded assets, inline
+OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`
+images in message text. Claude pasted images aren't covered yet. Native Codex
+attachments and files handled by tools require exact bytes in the archive;
+paths and references alone aren't covered.
+
+Only SHA-256 digests leave the machine. Transcript reads run independently of
+Docbank. Database reads and Docbank requests each have their own five-second
+budget. Each lookup resolves up to 50 distinct digests with four requests at a
+time and shows up to ten matches per digest. Docbank lookup failures report
+Docbank unavailable and can be retried. Archive read failures report session
+files unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
+Images dropped by the image policy have no bytes to hash, so they report
+`bytes_not_kept` without a lookup.
+Results refresh when the transcript changes or the session reopens. No migration
+or resync is required.

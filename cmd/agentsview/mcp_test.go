@@ -592,6 +592,27 @@ func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
 	assert.Equal(t, 1, readOnlyRequests)
 }
 
+func TestMCPDaemonFileReferencesUsesServingCapability(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			forbidStartBackgroundServeForTransport(t, "use the serving daemon")
+			backend := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+				"/api/v1/version": func(w http.ResponseWriter, r *http.Request) {
+					assert.NoError(t, json.MarshalWrite(w, map[string]any{"api_version": 12, "docbank_enabled": enabled}))
+				},
+			})
+			host, port := splitTestServerURL(t, backend.URL)
+			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+			cfg := config.Config{DataDir: dir}
+			if !enabled {
+				cfg.Integrations.Docbank = config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
+			}
+			assert.Equal(t, enabled, service.SupportsFileReferences(newMCPDaemonService(cfg)))
+		})
+	}
+}
+
 func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
 	dir := runtimeTestDir(t)
 	forbidStartBackgroundServeForTransport(t, "MCP must use the replacement daemon")

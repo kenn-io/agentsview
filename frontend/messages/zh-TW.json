@@ -2855,5 +2855,18 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud：即時權杖需要處理",
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
-  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"
+  "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}",
+  "docbank_subagent_open_session": "作為工作階段開啟後會顯示檔案比對結果。",
+  "docbank_checking": "正在查詢 Docbank…",
+  "docbank_current": "目前版本",
+  "docbank_prior": "先前版本",
+  "docbank_trash": "垃圾桶",
+  "docbank_not_found": "Docbank 中找不到",
+  "docbank_read_unavailable": "無法讀取工作階段檔案",
+  "docbank_unavailable": "Docbank 無法使用",
+  "docbank_limit_exceeded": "已達到 Docbank 查詢上限",
+  "docbank_bytes_not_kept": "未保留圖片位元組",
+  "docbank_file": "檔案 {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "檔案 {n} · {mediaType}",
+  "docbank_more": "Docbank 中還有 {count} 項"
 }

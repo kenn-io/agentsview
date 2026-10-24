@@ -29,11 +29,7 @@ function message(content: string, overrides: Partial<Message> = {}): Message {
 }
 
 function call(tool_name: string, params: Record<string, unknown>): ToolCall {
-  return {
-    category: "",
-    tool_name,
-    input_json: JSON.stringify(params),
-  };
+  return { call_index: 0, category: "", tool_name, input_json: JSON.stringify(params) };
 }
 
 describe("collectSearchBlocks", () => {
@@ -61,6 +57,7 @@ describe("collectSearchBlocks", () => {
       message("", {
         tool_calls: [
           {
+            call_index: 0,
             category: "",
             tool_name: "view_image",
             result_content: content,
@@ -152,8 +149,8 @@ describe("collectSearchBlocks", () => {
       message("", {
         has_tool_use: true,
         tool_calls: [
-          { tool_name: "exec", category: "Bash", input_json: script },
-          { tool_name: "apply_patch", category: "Edit", input_json: patch },
+          { call_index: 0, tool_name: "exec", category: "Bash", input_json: script },
+          { call_index: 1, tool_name: "apply_patch", category: "Edit", input_json: patch },
         ],
       }),
     );
@@ -234,25 +231,13 @@ describe("collectSearchBlocks", () => {
 
   it("caches by message identity and refreshes replaced tool output", () => {
     const original = message("", {
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "first",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "first" }],
     });
     const blocks = collectSearchBlocks(original);
     expect(collectSearchBlocks(original)).toBe(blocks);
     const replacement = {
       ...original,
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "other",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "other" }],
     };
     expect(collectSearchBlocks(replacement)).not.toBe(blocks);
     expect(collectSearchBlocks(replacement)[0]?.text).toBe("other");
@@ -302,11 +287,7 @@ describe("resolveToolInputText", () => {
   it.each(["{broken", "null", "false", "[]"])("handles invalid input %s", (input_json) => {
     expect(
       resolveToolInputText(
-        {
-          category: "",
-          tool_name: "Bash",
-          input_json,
-        },
+        { call_index: 0, category: "", tool_name: "Bash", input_json },
         "legacy",
       ),
     ).toBe("legacy");
@@ -315,18 +296,24 @@ describe("resolveToolInputText", () => {
   it.each([undefined, "", "{}", "null", "[]"])(
     "retains empty display behavior for input %s",
     (input_json) => {
-      expect(resolveToolInputText({ tool_name: "exec", category: "Bash", input_json }, "")).toBe(
-        "",
-      );
+      expect(
+        resolveToolInputText(
+          { call_index: 0, tool_name: "exec", category: "Bash", input_json },
+          "",
+        ),
+      ).toBe("");
     },
   );
 
   it.each(['"use strict"', "42", "false", '["a"]'])(
     "shows non-object JSON input %s verbatim",
     (input_json) => {
-      expect(resolveToolInputText({ tool_name: "exec", category: "Bash", input_json }, "")).toBe(
-        input_json,
-      );
+      expect(
+        resolveToolInputText(
+          { call_index: 0, tool_name: "exec", category: "Bash", input_json },
+          "",
+        ),
+      ).toBe(input_json);
     },
   );
 

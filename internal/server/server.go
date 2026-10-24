@@ -42,6 +42,7 @@ import (
 
 // VersionInfo holds build-time version metadata.
 type VersionInfo struct {
+	DocbankEnabled             bool   `json:"docbank_enabled,omitempty"`
 	Version                    string `json:"version"`
 	Commit                     string `json:"commit"`
 	BuildDate                  string `json:"build_date"`
@@ -260,12 +261,15 @@ func New(
 	// still need the local handle. Non-SQLite stores use the generic read-only
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
+	backendOptions := []service.DirectBackendOption{service.WithModelGroups(modelGroups)}
+	docbankOption := service.WithConfiguredDocbank(cfg)
+	backendOptions = append(backendOptions, docbankOption)
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
 		local.SetArchiveContent(cfg.ArchiveContent)
-		sessions = service.NewDirectBackend(local, engine, service.WithModelGroups(modelGroups))
+		sessions = service.NewDirectBackend(local, engine, backendOptions...)
 	} else {
-		sessions = service.NewReadOnlyBackend(database, service.WithModelGroups(modelGroups))
+		sessions = service.NewReadOnlyBackend(database, backendOptions...)
 	}
 
 	s := &Server{

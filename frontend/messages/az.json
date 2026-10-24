@@ -2948,5 +2948,18 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: canlı tokenlər diqqət tələb edir",
   "status_bar_codex_cloud_oldest_failure": "Ən köhnə uğursuzluq: {time}",
   "status_bar_codex_cloud_last_success": "Son uğurlu sinxronizasiya: {time}",
-  "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}"
+  "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}",
+  "docbank_subagent_open_session": "Fayl uyğunluqları sessiya kimi açıldıqda görünür.",
+  "docbank_checking": "Docbank yoxlanılır…",
+  "docbank_current": "Cari versiya",
+  "docbank_prior": "Əvvəlki versiya",
+  "docbank_trash": "Zibil qutusu",
+  "docbank_not_found": "Docbank-da yoxdur",
+  "docbank_read_unavailable": "Sessiya faylları əlçatan deyil",
+  "docbank_unavailable": "Docbank əlçatan deyil",
+  "docbank_limit_exceeded": "Docbank axtarış limitinə çatılıb",
+  "docbank_bytes_not_kept": "Şəkil baytları saxlanılmayıb",
+  "docbank_file": "Fayl {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "Fayl {n} · {mediaType}",
+  "docbank_more": "Docbank-da daha {count} nəticə"
 }

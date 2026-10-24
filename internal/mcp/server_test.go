@@ -18,8 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/integrations/docbank"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
@@ -42,14 +44,19 @@ func newInMemoryPair(
 	return ss, cs
 }
 
+// withTestDocbank configures Docbank at an address nothing listens on, enough to advertise the lookup tool.
+func withTestDocbank() service.DirectBackendOption {
+	return service.WithDocbank(docbank.New(config.DocbankIntegration{URL: "http://127.0.0.1:1", APIKeyEnv: "DOCBANK_TEST_KEY"}))
+}
+
 func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersSixteenReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersSeventeenReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
-		Service: service.NewDirectBackend(d, nil),
+		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 		Now:     func() time.Time { return fixedNow },
 	})
 	require.NotNil(t, srv)
@@ -57,7 +64,7 @@ func TestNewServer_RegistersSixteenReadOnlyTools(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 16)
+	require.Len(t, tools.Tools, 17)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,

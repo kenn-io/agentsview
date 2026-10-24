@@ -2970,5 +2970,18 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: los tokens en vivo requieren atención",
   "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
   "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
-  "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}"
+  "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}",
+  "docbank_subagent_open_session": "Las coincidencias de archivos aparecen al abrir como sesión.",
+  "docbank_checking": "Buscando en Docbank…",
+  "docbank_current": "Versión actual",
+  "docbank_prior": "Versión anterior",
+  "docbank_trash": "Papelera",
+  "docbank_not_found": "No está en Docbank",
+  "docbank_read_unavailable": "Archivos de sesión no disponibles",
+  "docbank_unavailable": "Docbank no disponible",
+  "docbank_limit_exceeded": "Se alcanzó el límite de búsquedas en Docbank",
+  "docbank_bytes_not_kept": "No se conservaron los bytes de la imagen",
+  "docbank_file": "Archivo {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "Archivo {n} · {mediaType}",
+  "docbank_more": "+{count} más en Docbank"
 }

@@ -2970,5 +2970,18 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud\u202f: les jetons en direct demandent votre attention",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec\u202f: {time}",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie\u202f: {time}",
-  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}"
+  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}",
+  "docbank_subagent_open_session": "Les fichiers correspondants apparaissent à l’ouverture en tant que session.",
+  "docbank_checking": "Recherche dans Docbank…",
+  "docbank_current": "Version actuelle",
+  "docbank_prior": "Version antérieure",
+  "docbank_trash": "Corbeille",
+  "docbank_not_found": "Absent de Docbank",
+  "docbank_read_unavailable": "Fichiers de session indisponibles",
+  "docbank_unavailable": "Docbank indisponible",
+  "docbank_limit_exceeded": "Limite de recherche Docbank atteinte",
+  "docbank_bytes_not_kept": "Octets de l'image non conservés",
+  "docbank_file": "Fichier {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "Fichier {n} · {mediaType}",
+  "docbank_more": "+{count} dans Docbank"
 }

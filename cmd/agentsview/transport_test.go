@@ -1420,3 +1420,39 @@ func TestServicePreservesIPv6BrowserURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "http://[::1]:8080/sessions/codex/session:42", detail.WebURL)
 }
+
+func TestNewServiceDocbankConfigured(t *testing.T) {
+	for _, mode := range []string{"direct", "pg"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "sessions.db")
+			seed, err := db.Open(t.Context(), path)
+			require.NoError(t, err)
+			defer seed.Close()
+			require.NoError(t, seed.UpsertSession(t.Context(), db.Session{ID: "session-a", Agent: "codex", Project: "example"}))
+			require.NoError(t, seed.InsertMessages(t.Context(), []db.Message{{SessionID: "session-a", Ordinal: 2, Role: "assistant", Content: `![image](asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png)`}}))
+			t.Setenv("DOCBANK_TEST_KEY", "test-key")
+			requests := 0
+			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			}))
+			defer stub.Close()
+			cfg := config.Config{DBPath: path}
+			cfg.Integrations.Docbank = config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}
+			var svc service.SessionService
+			var cleanup func()
+			if mode == "pg" {
+				stubPGReadStore(t, seed)
+				svc, cleanup, err = newPGReadService(cfg, config.PGConfig{})
+			} else {
+				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
+			}
+			require.NoError(t, err)
+			defer cleanup()
+			_, err = service.FileReferences(t.Context(), svc, "session-a")
+			require.NoError(t, err)
+			assert.Equal(t, 1, requests)
+		})
+	}
+}
