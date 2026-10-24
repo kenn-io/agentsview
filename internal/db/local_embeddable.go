@@ -31,3 +31,19 @@ func (s localEmbeddableSource) ScanEmbeddableUnitsForSession(ctx context.Context
 func (s localEmbeddableSource) WithEmbeddableSnapshot(ctx context.Context, fn func(EmbeddableSnapshot) error) error {
 	return s.db.withEmbeddableSnapshot(ctx, true, fn)
 }
+
+func (s localEmbeddableSource) GetDatabaseID(ctx context.Context) (string, error) {
+	return s.db.GetDatabaseID(ctx)
+}
+
+func (s localEmbeddableSource) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
+	return s.db.SessionDeletionPublicationRevision(ctx)
+}
+
+func (s localEmbeddableSource) LoadSessionDeletionChanges(ctx context.Context, after, through int64) ([]string, error) {
+	return s.db.LoadSessionDeletionChanges(ctx, after, through)
+}
+
+func (s localEmbeddableSource) EmbeddingDataVersion(ctx context.Context, scope bool) (int, error) {
+	return s.db.EmbeddingDataVersion(ctx, scope)
+}

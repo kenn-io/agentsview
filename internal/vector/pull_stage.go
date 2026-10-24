@@ -68,6 +68,13 @@ func (ix *Index) withProjection(ctx context.Context, spec IndexSpec) (*Index, er
 	return &projected, nil
 }
 
+// HasPendingPull reports whether this recipe has a retained hub import.
+// Completing it requires an archive writer reservation, including for local builds.
+func (ix *Index) HasPendingPull(ctx context.Context, fp string) (bool, error) {
+	_, found, err := ix.metaGet(ctx, pullStageKey+fp)
+	return found, err
+}
+
 func (ix *Index) pendingPullStage(ctx context.Context, fp string) (*Index, error) {
 	prefix, found, err := ix.metaGet(ctx, pullStageKey+fp)
 	if err != nil || !found {

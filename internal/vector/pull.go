@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/embedmodel"
@@ -16,40 +15,19 @@ type HubLookup interface {
 	LookupHubVectors(context.Context, HubLookupRequest) (HubLookupReply, error)
 }
 type PullOptions struct {
-	IncludeAutomated           bool
-	FullRebuild, RepairInvalid bool
-	MapSession                 func(string) string
-	Progress                   func(BuildProgress)
+	IncludeAutomated                     bool
+	FullRebuild, Backstop, RepairInvalid bool
+	MapSession                           func(string) string
+	Progress                             func(BuildProgress)
 }
 
 type pullSource struct {
-	UnitSource
 	identities map[string]HubIdentity
-	mapSession func(string) string
-}
-
-func (s pullSource) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (int, error) {
-	if source, ok := s.UnitSource.(dataVersionSource); ok {
-		return source.EmbeddingDataVersion(ctx, includeAutomated)
-	}
-	return 0, nil
-}
-
-func (s pullSource) ScanEmbeddableUnits(ctx context.Context, since string, scope bool, limit int, fn func(db.EmbeddableUnit) error) (string, error) {
-	occurrences := map[string]int{}
-	return s.UnitSource.ScanEmbeddableUnits(ctx, since, scope, limit, func(u db.EmbeddableUnit) error {
-		s.record(u, occurrences)
-		return fn(u)
-	})
 }
 
 func (s pullSource) record(u db.EmbeddableUnit, occurrences map[string]int) {
 	n := unitOccurrence(u, occurrences)
-	id := u.SessionID
-	if s.mapSession != nil {
-		id = s.mapSession(id)
-	}
-	s.identities[DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, n)] = HubIdentity{SessionID: id, UnitKind: u.Kind, SourceUUID: u.SourceUUID, Occurrence: n, Ordinal: u.Ordinal, ContentHash: contentHash(u.Content)}
+	s.identities[DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, n)] = HubIdentity{SessionID: u.SessionID, UnitKind: u.Kind, SourceUUID: u.SourceUUID, Occurrence: n, Ordinal: u.Ordinal, ContentHash: contentHash(u.Content)}
 }
 
 type snapshotSource interface {
@@ -113,27 +91,11 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 
 func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSource, hub HubLookup, gen kitvec.Generation, o PullOptions, publish func() error) (BuildResult, error) {
 	ix = ix.forGeneration(gen)
-	// A failed reshape must force a full scan when the previous build cap returns.
-	if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
-		return BuildResult{}, err
-	}
-	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
+	stats, err := ix.refreshBuildMirror(ctx, src, gen, BuildOptions{FullRebuild: o.FullRebuild, Backstop: o.Backstop, IncludeAutomated: o.IncludeAutomated, Progress: o.Progress})
 	if err != nil {
 		return BuildResult{}, err
 	}
-	if !hasScope || storedScope != o.IncludeAutomated {
-		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
-			return BuildResult{}, fmt.Errorf("clearing changed embedding scope: %w", err)
-		}
-	}
-	captured := pullSource{UnitSource: src, identities: map[string]HubIdentity{}, mapSession: o.MapSession}
-	stats, err := ix.Refresh(ctx, captured, true, o.IncludeAutomated)
-	if err != nil {
-		return BuildResult{}, err
-	}
-	if err = ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
-		return BuildResult{}, err
-	}
+
 	target, building, err := ix.resolveBuildTarget(ctx, gen, gen.Fingerprint(), embedmodel.Descriptor{}, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
@@ -175,13 +137,22 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		// Advance even when the hub has no vectors for every document in this page.
 		after = batch[len(batch)-1].Doc
 		identities := make([]HubIdentity, len(batch))
-		for i, p := range batch {
-			var ok bool
-			identities[i], ok = captured.identities[p.Doc]
-			if !ok {
-				return result, errors.New("local document changed during scan")
+		err = ix.withPullIdentities(ctx, reserved, batch, o, func(current map[string]HubIdentity) error {
+			for i, p := range batch {
+				identities[i] = current[p.Doc]
+				if identities[i].ContentHash != p.Revision {
+					return errors.New("local document changed before hub lookup")
+				}
+				if o.MapSession != nil {
+					identities[i].SessionID = o.MapSession(identities[i].SessionID)
+				}
 			}
+			return nil
+		})
+		if err != nil {
+			return result, err
 		}
+
 		vectors, absent, err := ix.pullBatch(ctx, hub, target, gen.Dimensions, batch, identities)
 		if err != nil {
 			return result, err
@@ -207,12 +178,13 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		}
 	}
 	err = reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
-		if _, err := ix.Refresh(ctx, snapshot, true, o.IncludeAutomated); err != nil {
+		// Non-journal sources retain the full reconciliation fallback. Archive
+		// reservations expose the same journal as the initial incremental refresh.
+		_, journaled := snapshot.(sessionJournalSource)
+		if _, err := ix.Refresh(ctx, snapshot, !journaled, o.IncludeAutomated); err != nil {
 			return err
 		}
-		if err := ix.metaSet(ctx, runMaxRunesMetaKey, strconv.Itoa(RunMaxRunes(ix.split.MaxRunes))); err != nil {
-			return err
-		}
+
 		var err error
 		result.Activated, err = ix.maybeActivate(ctx, target, building)
 		if err != nil {

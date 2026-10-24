@@ -62,3 +62,24 @@ func TestRecipeKeysExcludeDefaultsAndRetainExplicitZeroValues(t *testing.T) {
 	require.Equal(t, map[string]bool{"model": true, "request_dimensions": true, "query_prefix": true}, cfg.Vector.Embeddings.RecipeKeys)
 	require.Positive(t, cfg.Vector.Embeddings.MaxInputChars)
 }
+
+func TestDisabledRemoteProducerDoesNotRequireUnusedHubSettings(t *testing.T) {
+	for _, tc := range []struct{ name, remote, producer, want string }{
+		{name: "no hub settings", producer: "remote"},
+		{name: "no spoke host", remote: "[remote]\nurl='https://hub.example'\n", producer: "remote"},
+		{name: "no URL", remote: "[remote]\nspoke_host='node'\n", producer: "remote"},
+		{name: "unknown producer", producer: "other", want: "producer must"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(tc.remote+fmt.Sprintf("[vector]\nenabled=false\nproducer=%q\n", tc.producer)), 0o600))
+			cfg, err := LoadReadOnlyFor(0)
+			if tc.want != "" {
+				require.ErrorContains(t, err, tc.want)
+				return
+			}
+			require.NoError(t, err)
+			require.False(t, cfg.Vector.Enabled)
+		})
+	}
+}

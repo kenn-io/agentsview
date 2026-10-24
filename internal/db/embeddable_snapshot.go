@@ -59,3 +59,15 @@ func (s embeddableSnapshot) ScanEmbeddableUnitsForSession(ctx context.Context, i
 	_, err := scanEmbeddableUnits(ctx, s.conn, "", id, scope, limit, s.localOnly, fn)
 	return err
 }
+
+func (s embeddableSnapshot) GetDatabaseID(ctx context.Context) (string, error) {
+	return getDatabaseID(ctx, s.conn)
+}
+
+func (s embeddableSnapshot) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
+	return sessionDeletionPublicationRevision(ctx, s.conn)
+}
+
+func (s embeddableSnapshot) LoadSessionDeletionChanges(ctx context.Context, after, through int64) ([]string, error) {
+	return loadSessionDeletionChanges(ctx, s.conn, after, through)
+}

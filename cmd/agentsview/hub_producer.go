@@ -35,7 +35,7 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 				return vector.BuildResult{}, err
 			}
 			result, err := ix.Pull(ctx, database.LocalEmbeddableSource(), hub, vectorGeneration(recipe), vector.PullOptions{
-				IncludeAutomated: req.IncludeAutomated, FullRebuild: req.FullRebuild, RepairInvalid: req.RepairInvalid,
+				IncludeAutomated: req.IncludeAutomated, FullRebuild: req.FullRebuild, Backstop: req.Backstop, RepairInvalid: req.RepairInvalid,
 				MapSession: func(id string) string { return remotesync.HubSessionID(cfg.Remote.SpokeHost, id) },
 				Progress:   progress,
 			})

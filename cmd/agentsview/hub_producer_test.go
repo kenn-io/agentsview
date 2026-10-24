@@ -199,9 +199,26 @@ func TestHubRecipeRejectsPersistentIncompatibilities(t *testing.T) {
 func TestHubRecipeChecksExplicitZeroRecipeFields(t *testing.T) {
 	c := publishedRecipeConfig("hub")
 	g := vectorGeneration(c)
-	for _, key := range []string{"model", "dimension", "request_dimensions", "max_input_chars", "query_prefix", "document_prefix", "input_suffix"} {
+	for _, key := range []string{"request_dimensions", "query_prefix", "document_prefix", "input_suffix"} {
 		t.Run(key, func(t *testing.T) {
-			cfg := config.Config{Vector: config.VectorConfig{Embeddings: config.VectorEmbeddingsConfig{RecipeKeys: map[string]bool{key: true}}}}
+			cfg := vectorTestConfig(t.TempDir())
+			cfg.Vector.Producer = "remote"
+			transport := cfg.Vector.Embeddings
+			cfg.Vector.Embeddings = c
+			cfg.Vector.Embeddings.Servers = transport.Servers
+			cfg.Vector.Embeddings.DefaultServer = transport.DefaultServer
+			cfg.Vector.Embeddings.RecipeKeys = map[string]bool{key: true}
+			switch key {
+			case "request_dimensions":
+				cfg.Vector.Embeddings.RequestDimensions = false
+			case "query_prefix":
+				cfg.Vector.Embeddings.QueryPrefix = ""
+			case "document_prefix":
+				cfg.Vector.Embeddings.DocumentPrefix = ""
+			case "input_suffix":
+				cfg.Vector.Embeddings.InputSuffix = ""
+			}
+			require.NoError(t, cfg.Vector.Validate())
 			h := vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}
 			if key == "input_suffix" {
 				h.Params = maps.Clone(g.Params)
@@ -306,4 +323,64 @@ func TestRemoteProducerExportsAdoptedRecipe(t *testing.T) {
 	e.source.cfg.Vector.Embeddings.Model = "other"
 	_, _, err = e.PlannedGeneration(t.Context())
 	require.ErrorContains(t, err, "recipe mismatch")
+}
+
+// A failed remote replacement survives a config switch to an ordinary local build.
+func TestDirectLocalBuildCompletesPersistedHubStage(t *testing.T) {
+	cfg, database, _ := hubProducerFixture(t)
+	cfg.InstallationID = "installation"
+	cfg.Vector.Producer = "local"
+	oldEndpoint := newEmbeddingsStubServer(t, 3)
+	defer oldEndpoint.Close()
+	server := cfg.Vector.Embeddings.Servers["local"]
+	server.Endpoint = oldEndpoint.URL + "/v1"
+	cfg.Vector.Embeddings.Servers["local"] = server
+	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
+	// An ordinary local build must not adopt or rewrite archive ownership.
+	session, err := database.GetSession(t.Context(), "local")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "local", session.Machine)
+	g := vectorGeneration(publishedRecipeConfig("hub-model"))
+	var lookups atomic.Int32
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+			return
+		}
+		lookups.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer hub.Close()
+	cfg.Vector.Producer = "remote"
+	cfg.Remote.URL = hub.URL
+	require.Error(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
+	require.Positive(t, lookups.Load())
+	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), true, 1000)
+	require.NoError(t, err)
+	gens, err := ix.Generations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
+	require.Equal(t, "active", gens[0].State)
+	require.Equal(t, "building", gens[1].State)
+	require.Equal(t, g.Fingerprint(), gens[1].Fingerprint)
+	require.Positive(t, gens[1].Missing)
+	require.NoError(t, ix.Close())
+	endpoint := newEmbeddingsStubServer(t, 4)
+	defer endpoint.Close()
+	cfg.Vector.Producer = "local"
+	cfg.Vector.Embeddings = publishedRecipeConfig("hub-model")
+	server.Endpoint = endpoint.URL + "/v1"
+	cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": server}
+	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
+	ix, err = vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), true, 1000)
+	require.NoError(t, err)
+	defer ix.Close()
+	active, ok, err := ix.ActiveFingerprint(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, g.Fingerprint(), active)
+	missing, err := ix.MissingEmbeddedDocs(t.Context(), active, nil)
+	require.NoError(t, err)
+	assert.Zero(t, missing)
 }

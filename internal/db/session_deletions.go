@@ -33,11 +33,18 @@ END;`
 // SessionDeletionPublicationRevision is an O(1) change token for hard
 // session deletions and repairs, advanced by triggers.
 func (db *DB) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
+	return sessionDeletionPublicationRevision(ctx, db.getReader())
+}
+
+func sessionDeletionPublicationRevision(ctx context.Context, source interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+},
+) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var raw string
-	err := db.getReader().QueryRowContext(ctx,
+	err := source.QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		archiveMetadataSessionDeletionRevisionKey,
 	).Scan(&raw)
@@ -113,6 +120,13 @@ func (db *DB) LoadSessionDeletionDelta(
 func (db *DB) LoadSessionDeletionChanges(
 	ctx context.Context, afterRevision, throughRevision int64,
 ) ([]string, error) {
+	return loadSessionDeletionChanges(ctx, db.getReader(), afterRevision, throughRevision)
+}
+
+func loadSessionDeletionChanges(ctx context.Context, source interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, afterRevision, throughRevision int64,
+) ([]string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -129,7 +143,7 @@ func (db *DB) LoadSessionDeletionChanges(
 	where, args := sessionDeletionPublicationChangeWhere(
 		"c", afterRevision, throughRevision, nil, nil,
 	)
-	rows, err := db.getReader().QueryContext(ctx, `
+	rows, err := source.QueryContext(ctx, `
 		SELECT c.session_id
 		FROM session_deletion_changes c
 		`+where+`

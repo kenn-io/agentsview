@@ -115,6 +115,16 @@ Message builds, full rebuilds, backstops and invalid-vector repairs all use
 the hub. Invalid-vector repair requires an existing generation and repairs
 only its queued targets; it does not discover documents or activate a generation.
 Recall continues to use the local encoder and needs a complete local recipe.
+
+After-sync pulls reuse the local refresh watermark and session deletion journal.
+They load identities only for sessions with pending documents. First imports,
+replacement recipes, full rebuilds, backstops, changed scope or chunk caps, and
+archive recovery still reconcile the full source when needed. If a replacement
+pull stops, a later pull or local message build with the same recipe can finish
+it while the previous generation remains available.
+
+With vector search disabled, a retained `producer = "remote"` setting does not
+require a hub URL or spoke host.
 Requests to a restricted signing listener use the existing `AGENTSVIEW_SIGNING_*`
 configuration (`AGENTSVIEW_SIGNING_URL`, `AGENTSVIEW_SIGNING_KEY_ID` and
 `AGENTSVIEW_SIGNING_KEY_FILE`).

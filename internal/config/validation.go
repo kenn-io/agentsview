@@ -94,7 +94,7 @@ func invalidTargetLayout(format string, args ...any) error {
 }
 
 func (c *Config) validateVector() error {
-	if c.Vector.Producer == "remote" {
+	if c.Vector.Enabled && c.Vector.Producer == "remote" {
 		if strings.TrimSpace(c.Remote.URL) == "" {
 			return errors.New("[remote].url is required for vector producer=remote")
 		}

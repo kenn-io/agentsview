@@ -489,8 +489,8 @@ func countEmbeddingStoreUnits(
 }
 
 // runEmbeddingsBuildDirect acquires the vectors write lock, opens the
-// archive and vectors.db, and runs one build synchronously. Remote pulls
-// reserve the archive writer while publishing validated chunks.
+// archive and vectors.db, and runs one build synchronously. Hub pulls and
+// local completion of retained imports reserve the archive writer.
 func runEmbeddingsBuildDirect(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
@@ -499,23 +499,6 @@ func runEmbeddingsBuildDirect(
 		return err
 	}
 	defer lock.Close()
-
-	openArchive := openReadOnlyDB
-	if cfg.Vector.Producer == "remote" && req.Store != vector.RecallIndexSpec().Name {
-		stale, _, err := db.ArchiveResyncState(ctx, cfg.DBPath)
-		if err != nil {
-			return err
-		}
-		if stale {
-			return errors.New("archive data needs resync; restart the daemon before pulling vectors")
-		}
-		openArchive = openDB
-	}
-	archiveDB, err := openArchive(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("opening archive database: %w", err)
-	}
-	defer archiveDB.Close()
 
 	spec, err := vectorStoreSpec(req.Store)
 	if err != nil {
@@ -529,6 +512,32 @@ func runEmbeddingsBuildDirect(
 		return fmt.Errorf("opening vectors.db: %w", err)
 	}
 	defer ix.Close()
+
+	openArchive := openReadOnlyDB
+	if spec.Name == vector.MessageIndexSpec().Name {
+		needsReservation := cfg.Vector.Producer == "remote"
+		if !needsReservation && !req.RepairInvalid {
+			needsReservation, err = ix.HasPendingPull(ctx, vectorGeneration(cfg.Vector.Embeddings).Fingerprint())
+			if err != nil {
+				return err
+			}
+		}
+		if needsReservation {
+			stale, _, err := db.ArchiveResyncState(ctx, cfg.DBPath)
+			if err != nil {
+				return err
+			}
+			if stale {
+				return errors.New("archive data needs resync; restart the daemon before building vectors")
+			}
+			openArchive = openDB
+		}
+	}
+	archiveDB, err := openArchive(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("opening archive database: %w", err)
+	}
+	defer archiveDB.Close()
 
 	var encoders vector.EncoderSet
 	if cfg.Vector.Producer != "remote" || spec.Name == vector.RecallIndexSpec().Name {
