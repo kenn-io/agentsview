@@ -80,6 +80,14 @@ no parser resync or data-version bump is required. Read-only opens of older
 archives still check readiness correctly without the index, but may scan live
 sessions until a writable open builds it.
 
+Embedding refresh also records the source ownership view in its existing corpus
+fingerprint metadata. Local production includes the complete archive; remote
+production includes only locally owned sessions. Switching views reconciles the
+corpus once, removing excluded documents or recovering older included documents.
+The first build or pull of a legacy mirror also reconciles once. Stable views
+keep incremental refreshes. Ownership does not change the embedding recipe
+fingerprint.
+
 ### Artifact checkpoint landings
 
 Land artifact checkpoints only through

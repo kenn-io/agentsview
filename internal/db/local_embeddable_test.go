@@ -15,6 +15,13 @@ func TestLocalEmbeddableSourceFiltersMachinesAndPrefixes(t *testing.T) {
 		require.NoError(t, err)
 		insertMessages(t, d, Message{SessionID: tc.id, Ordinal: 0, Role: "user", Content: "content", Timestamp: tsZero})
 	}
+	source := d.LocalEmbeddableSource()
+	localFingerprint, err := source.EmbeddingCorpusFingerprint(t.Context())
+	require.NoError(t, err)
+	allFingerprint, err := d.EmbeddingCorpusFingerprint(t.Context())
+	require.NoError(t, err)
+	require.NotEmpty(t, localFingerprint)
+	require.NotEqual(t, allFingerprint, localFingerprint)
 	collect := func(s EmbeddableSnapshot) {
 		var ids []string
 		_, err := s.ScanEmbeddableUnits(t.Context(), "", false, 4000, func(u EmbeddableUnit) error { ids = append(ids, u.SessionID); return nil })
@@ -26,7 +33,6 @@ func TestLocalEmbeddableSourceFiltersMachinesAndPrefixes(t *testing.T) {
 		require.ErrorContains(t, s.ScanEmbeddableUnitsForSession(t.Context(), "", false, 4000, func(EmbeddableUnit) error { n++; return nil }), "session ID is required")
 		require.Zero(t, n)
 	}
-	source := d.LocalEmbeddableSource()
 	collect(source)
 	require.NoError(t, source.WithEmbeddableSnapshot(t.Context(), func(s EmbeddableSnapshot) error { collect(s); return nil }))
 }

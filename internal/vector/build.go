@@ -806,6 +806,18 @@ func (ix *Index) refreshBuildMirror(ctx context.Context, src UnitSource, gen kit
 	// build compares against a real stored scope again.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
+	// Explicit generation corpus identity (Recall) takes priority. Archives can
+	// instead identify the ownership view without changing the vector space.
+	if corpusFingerprint == "" {
+		if source, ok := src.(interface {
+			EmbeddingCorpusFingerprint(context.Context) (string, error)
+		}); ok {
+			corpusFingerprint, err = source.EmbeddingCorpusFingerprint(ctx)
+			if err != nil {
+				return RefreshStats{}, fmt.Errorf("reading source corpus fingerprint: %w", err)
+			}
+		}
+	}
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
 	)
@@ -843,6 +855,13 @@ func (ix *Index) refreshBuildMirror(ctx context.Context, src UnitSource, gen kit
 	// only render a misleading "0/0 chunks".
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
+	}
+	if corpusChanged {
+		// Refresh commits in batches. Invalidate before mutating membership so an
+		// interrupted switch back cannot certify a partially reconciled old view.
+		if err := ix.metaDelete(ctx, corpusFingerprintMetaKey); err != nil {
+			return RefreshStats{}, fmt.Errorf("clearing changed corpus fingerprint: %w", err)
+		}
 	}
 	if scopeChanged {
 		// Refresh commits incrementally. An interrupted scope change must not
