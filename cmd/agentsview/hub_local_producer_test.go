@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -38,13 +39,14 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/vectors/generation":
-			require.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+			assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
 		case "/api/v1/vectors/lookup":
 			var req vector.HubLookupRequest
-			require.NoError(t, json.UnmarshalRead(r.Body, &req))
-			require.Len(t, req.Identities, 1)
-			require.Equal(t, "node~missing", req.Identities[0].SessionID)
-			require.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Absent: []int{0}}))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) || !assert.Len(t, req.Identities, 1) {
+				return
+			}
+			assert.Equal(t, "node~missing", req.Identities[0].SessionID)
+			assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Absent: []int{0}}))
 		case "/v1/embeddings":
 			encoded.Add(1)
 			var body struct {
@@ -52,18 +54,19 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 				Input      []string `json:"input"`
 				Dimensions int      `json:"dimensions"`
 			}
-			require.NoError(t, json.UnmarshalRead(r.Body, &body))
-			require.Equal(t, "hub-model", body.Model)
-			require.Len(t, body.Input, 1)
-			if body.Input[0] == "query: needle" {
-				require.Equal(t, []string{"query: needle"}, body.Input)
-			} else {
-				require.Equal(t, []string{"passage: missing content"}, body.Input)
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) || !assert.Len(t, body.Input, 1) {
+				return
 			}
-			require.Equal(t, 4, body.Dimensions)
-			require.NoError(t, json.MarshalWrite(w, map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0}}}}))
+			assert.Equal(t, "hub-model", body.Model)
+			if body.Input[0] == "query: needle" {
+				assert.Equal(t, []string{"query: needle"}, body.Input)
+			} else {
+				assert.Equal(t, []string{"passage: missing content"}, body.Input)
+			}
+			assert.Equal(t, 4, body.Dimensions)
+			assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0}}}}))
 		default:
-			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			assert.Fail(t, "unexpected endpoint", "%s", r.URL.Path)
 		}
 	}))
 	defer endpoint.Close()
@@ -101,7 +104,6 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	page, err := database.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 2)
-
 }
 
 func TestHubLocalProducerRefusesRebuildAndRecall(t *testing.T) {
@@ -145,9 +147,9 @@ func TestHubPullStatusSurvivesReopen(t *testing.T) {
 				g := vectorGeneration(publishedRecipeConfig("hub-model"))
 				hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method == http.MethodGet {
-						require.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: version}))
+						assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: version}))
 					} else {
-						require.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Absent: []int{0}}))
+						assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Absent: []int{0}}))
 					}
 				}))
 				defer hub.Close()
@@ -201,7 +203,7 @@ spoke_host = "node"
 allow_insecure_http = true
 token_file = %q
 `, filepath.Join(cfg.DataDir, "missing-token"))
-	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(text), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(text), 0o600))
 	status, err := readHubPullStatus(t.Context(), cfg)
 	require.NoError(t, err)
 	require.Equal(t, &want, status)

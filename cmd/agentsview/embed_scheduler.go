@@ -372,10 +372,10 @@ func (t teeEmitter) Emit(scope string) {
 // translating its error taxonomy into db.ErrSemanticUnavailable-wrapped
 // errors and enforcing the config-drift staleness gate before every query.
 type searcherAdapter struct {
-	ix            *vector.Index
-	enc           kitvec.EncodeFunc
-	space         embedmodel.Descriptor
-	fingerprint   string
+	ix          *vector.Index
+	enc         kitvec.EncodeFunc
+	space       embedmodel.Descriptor
+	fingerprint string
 }
 
 type recallSearcherAdapter struct {
@@ -772,7 +772,7 @@ func setupVectorServing(
 		recallIX, database, encoders, cfg, vector.RecallIndexSpec().Name,
 	)
 	if cfg.Vector.Producer == "remote" {
-		database.SetVectorSearcher(hubSearcherAdapter{searcherAdapter: searcherAdapter{ix: ix}, local: cfg.Vector.Embeddings})
+		database.SetVectorSearcher(hubSearcherAdapter{ix: ix, local: cfg.Vector.Embeddings})
 	} else {
 		database.SetVectorSearcher(newSearcherAdapter(
 			ix, queryEnc, vectorSpace(cfg.Vector.Embeddings, gen),
@@ -917,7 +917,7 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	if ix != nil {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		if cfg.Vector.Producer == "remote" {
-			d.SetVectorSearcher(hubSearcherAdapter{searcherAdapter: searcherAdapter{ix: ix}, local: cfg.Vector.Embeddings})
+			d.SetVectorSearcher(hubSearcherAdapter{ix: ix, local: cfg.Vector.Embeddings})
 		} else {
 			d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorSpace(cfg.Vector.Embeddings, gen)))
 		}

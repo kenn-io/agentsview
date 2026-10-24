@@ -1471,7 +1471,9 @@ func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
 		gotPath = r.URL.Path
 		gotOrigin = r.Header.Get("Origin")
 		var body map[string]any
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
 		assert.Equal(t, true, body["local_producer"])
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)

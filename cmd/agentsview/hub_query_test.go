@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -29,12 +30,14 @@ func TestHubLocalQueryUsesSavedRecipeWithoutHubCredentials(t *testing.T) {
 			Input      []string `json:"input"`
 			Dimensions int      `json:"dimensions"`
 		}
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
-		require.Equal(t, "hub-model", body.Model)
-		require.Equal(t, []string{"query: needle"}, body.Input)
-		require.Equal(t, 4, body.Dimensions)
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		assert.Equal(t, "hub-model", body.Model)
+		assert.Equal(t, []string{"query: needle"}, body.Input)
+		assert.Equal(t, 4, body.Dimensions)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0}}}}))
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0}}}}))
 	}))
 	t.Cleanup(endpoint.Close)
 	cfg.Remote.URL = "http://127.0.0.1:1"
