@@ -95,6 +95,7 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 					return result, err
 				}
 				built, err := ix.Build(ctx, database.LocalEmbeddableSource(), enc, vectorGeneration(recipe), vector.BuildOptions{
+					RepairInvalid:    req.RepairInvalid,
 					IncludeAutomated: req.IncludeAutomated, BatchSize: server.BatchSize,
 					ModelContextTokens: recipe.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens,
 					Concurrency: server.Concurrency, Progress: progress,

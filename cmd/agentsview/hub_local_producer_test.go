@@ -244,3 +244,45 @@ token_file = %q
 	}
 	require.Equal(t, expected, out.String())
 }
+
+// A repair-only request must not discover or encode unrelated source documents.
+func TestHubLocalProducerRepairDoesNotDiscoverUnrelatedDocuments(t *testing.T) {
+	cfg, database, _ := hubProducerFixture(t)
+	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
+	require.NoError(t, err)
+	defer ix.Close()
+	_, err = hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
+	require.NoError(t, err)
+	dbtest.SeedSessionWithMessages(t, database, "unrelated", "project", []db.Message{dbtest.UserMsg("unrelated", 0, "unrelated content")})
+	var encoded atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		encoded.Add(1)
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		data := make([]map[string]any, len(body.Input))
+		for i := range body.Input {
+			data[i] = map[string]any{"index": i, "embedding": []float32{1, 0, 0, 0}}
+		}
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+	}))
+	defer endpoint.Close()
+	server := cfg.Vector.Embeddings.Servers["local"]
+	server.Endpoint = endpoint.URL + "/v1"
+	cfg.Vector.Embeddings.Servers["local"] = server
+	m := embeddingManager(ix, database, vector.EncoderSet{}, cfg, vector.MessageIndexSpec().Name)
+	defer m.Shutdown()
+	ran, err := m.TryBuild(t.Context(), vector.BuildRequest{RepairInvalid: true, LocalProducer: true})
+	require.NoError(t, err)
+	require.True(t, ran)
+	assert.Zero(t, encoded.Load(), "zero repair targets must not encode an unrelated new document")
+	gens, err := ix.Generations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	assert.EqualValues(t, 1, gens[0].Embedded)
+	assert.Zero(t, gens[0].Missing)
+	assert.Equal(t, "active", gens[0].State)
+}
