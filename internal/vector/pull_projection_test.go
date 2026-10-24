@@ -22,7 +22,7 @@ import (
 // preserve the old documents, anchors and snippets, rather than only its flag.
 // Publishing a smaller corpus must also keep retired-generation search usable.
 func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
-	for _, mode := range []string{"hub failure", "canceled", "absent", "scope change", "local completion", "local full rebuild", "unknown replacement", "corpus shrink", "shrink publication failed"} {
+	for _, mode := range []string{"hub failure", "canceled", "absent", "scope change", "local completion", "local full rebuild", "unknown replacement", "retired active", "corpus shrink", "shrink publication failed"} {
 		t.Run(mode, func(t *testing.T) {
 			shrink := strings.Contains(mode, "shrink")
 			archive := seedRunCapArchive(t, false)
@@ -138,6 +138,13 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			assert.False(t, *export.Generation().IncludeAutomated, "an incomplete target must not certify its scope on the old generation")
 			require.NoError(t, export.Close())
 
+			if mode == "retired active" {
+				require.NoError(t, manager.Retire(t.Context(), infos[0].ID, true))
+				_, hasActive, activeErr := ix.ActiveFingerprint(t.Context())
+				require.NoError(t, activeErr)
+				require.False(t, hasActive, "forced retirement leaves the replacement stage without an active generation")
+			}
+
 			var observer *pullContentConnector
 			if mode == "shrink publication failed" {
 				oldDB := ix.db
@@ -208,9 +215,23 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			after, err = ix.Search(t.Context(), enc, "work", 256)
 			require.NoError(t, err)
 			assert.Len(t, after, wantDocs)
+			missing, err = ix.MissingEmbeddedDocs(t.Context(), next.Fingerprint(), nil)
+			require.NoError(t, err)
+			assert.Zero(t, missing, "completed publication and coverage diagnostics use the same projection")
+			if mode == "retired active" {
+				completed, generationErr := manager.Generations(t.Context())
+				require.NoError(t, generationErr)
+				require.Len(t, completed, 2)
+				assert.Equal(t, string(sqlitevec.StateActive), completed[1].State)
+				assert.EqualValues(t, 11, completed[1].Embedded)
+				assert.Zero(t, completed[1].Missing)
+			}
 			export, ok, err = ix.BeginExport(t.Context(), nil)
 			require.NoError(t, err)
 			require.True(t, ok)
+			docs, _, err = export.SessionDocs(t.Context(), "session")
+			require.NoError(t, err)
+			assert.Len(t, docs, wantDocs, "search and export publish the same completed document projection")
 			require.NotNil(t, export.Generation().IncludeAutomated)
 			assert.Equal(t, includeAutomated, *export.Generation().IncludeAutomated)
 			wantVersion := version + 1

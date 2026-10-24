@@ -68,15 +68,23 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 	if !ok {
 		return BuildResult{}, errors.New("hub import requires an archive writer reservation")
 	}
-	active, hasActive, err := ix.ActiveFingerprint(ctx)
+	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
 	if err != nil {
 		return BuildResult{}, err
 	}
-	if hasActive && active != gen.Fingerprint() {
-		stage, err := ix.newPullStage(ctx, gen)
+	if stage == ix {
+		active, hasActive, err := ix.ActiveFingerprint(ctx)
 		if err != nil {
 			return BuildResult{}, err
 		}
+		if hasActive && active != gen.Fingerprint() {
+			stage, err = ix.newPullStage(ctx, gen)
+			if err != nil {
+				return BuildResult{}, err
+			}
+		}
+	}
+	if stage != ix {
 		published := false
 		result, err := stage.pull(ctx, src, reserved, hub, gen, o, func() error {
 			if err := ix.publishPullStage(ctx, stage, gen.Fingerprint()); err != nil {
