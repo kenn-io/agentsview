@@ -6,6 +6,7 @@ import {
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
   syncClaudeAI,
+  syncChatGPTChrome,
   connectClaudeAI,
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
@@ -339,6 +340,24 @@ describe("syncClaudeAI browser relay", () => {
     );
     await expect(syncClaudeAI(host, undefined, controller.signal)).rejects.toThrow("Aborted");
     expect(host.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("syncChatGPTChrome", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("posts to the local Chrome route", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n', {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await syncChatGPTChrome();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/v1/import/chatgpt/sync",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });
 

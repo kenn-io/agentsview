@@ -2519,6 +2519,8 @@
   "import_claude_open_chrome": "打开 Chrome 并启用 AgentsView 扩展程序。如果你在启动 AgentsView 之后运行了设置，请重启 AgentsView。",
   "import_claude_tab_note": "如果没有打开 claude.ai 标签页，同步会在后台打开一个。同步后，该标签页会保持打开。",
   "import_claude_signed_out": "请在安装了 AgentsView 扩展程序的 Chrome 个人资料中登录 claude.ai。请仅在一个 Chrome 个人资料中启用扩展程序。同步会使用最先连接的个人资料。",
+  "import_chatgpt_tab_note": "如果没有打开 chatgpt.com 标签页，同步会在后台打开一个。同步后，该标签页会保持打开。",
+  "import_chatgpt_signed_out": "请在安装了 AgentsView 扩展程序的 Chrome 个人资料中登录 ChatGPT。请仅在一个 Chrome 个人资料中启用扩展程序。同步会使用最先连接的个人资料。",
   "import_claude_reload_extension": "然后在 {url} 中重新加载扩展程序。",
   "import_claude_update_app": "如果你升级了 AgentsView，请重启它。",
   "import_claude_syncing": "正在同步...",

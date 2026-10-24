@@ -448,6 +448,14 @@ export async function syncClaudeAI(
   }
 }
 
+export async function syncChatGPTChrome(
+  cb?: ImportCallbacks,
+  signal?: AbortSignal,
+): Promise<ImportStats> {
+  const response = await ImportService.postApiV1ImportChatgptSync({ signal });
+  return readImportResponse(response, cb);
+}
+
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
     await ImportService.postApiV1ImportClaudeAi({ file }, undefined, {

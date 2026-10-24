@@ -182,6 +182,62 @@ UI.
 Claude.ai's private endpoints can change without notice. Sign in again if Sync
 reports that your sign-in expired.
 
+## Sync ChatGPT chats
+
+Chrome Sync also supports ChatGPT. Set up the AgentsView Chrome extension using
+the steps above, then sign in to ChatGPT in the Chrome profile that has the
+extension enabled. In **Import conversations**, select **ChatGPT** and click
+**Sync**. If no ChatGPT tab is open, Sync opens one in the background and leaves
+it open.
+
+The extension gets the short-lived access token inside the ChatGPT page and
+uses it for the approved conversation-list and conversation-detail requests.
+The token is not sent to AgentsView or through native messaging; only the
+conversation responses return to the local server. Sync is available only from
+a local writable archive with Chrome connected.
+
+The CLI can sync without an AgentsView tab open:
+
+```bash
+agentsview import --type chatgpt --sync
+```
+
+The first Sync has no stored freshness, so it fetches the conversations returned
+by ChatGPT's main active and archived lists, including chats already stored by a
+ZIP import. At about 3 seconds per chat, a 2,000-chat archive takes about 100
+minutes. Coverage of Project chats and Business workspaces is unverified.
+
+Sync fills missing source IDs and models and keeps stored models under every
+archive policy.
+
+Sync checks each conversation's `update_time`, imports changed details through
+the existing ChatGPT parser, and appends compatible history to the existing
+`chatgpt:<conversation id>` session. When you edit or regenerate a chat, Sync
+replaces the archive with ChatGPT's visible branch, including shorter histories.
+Sync keeps the previous version in Trash when it replaces a chat's history with
+a different branch, under every archive policy, with its pins, notes, and any
+archived images. Appending turns makes no copy. Re-syncing the same chat makes
+no further copy. A conversation without a `mapping` object or conversation
+ID counts as one failed detail. Sync processes the remaining chats and reports
+that AgentsView needs an update.
+ChatGPT's private API can change without notice; sign in again if Sync reports
+that authentication expired.
+
+Each conversation has a 32 MiB response limit. Larger conversations count as
+failed while Sync continues. Two chat failures in a row end Sync; oversized
+conversations do not count toward that stop. A rate limit that lasts through
+retries, or a requested wait longer than 60 seconds, ends Sync early. Completed
+conversations stay imported. Run Sync again later to continue.
+
+Images appear as `[image unavailable]`. Sync keeps a ZIP-imported upload when
+the user turn's ordinal, role, timestamp, and surrounding text match. Saved
+message and parent IDs must also match when the archive has them. Older ZIP
+imports without these IDs keep matching uploads.
+Generated images use the browser snapshot, so regenerating an image clears the
+old reference from the visible transcript. Sync keeps the previous branch in
+Trash with its archived images.
+ZIP imports follow the usual append and refusal rules.
+
 ## Importing via the CLI
 
 Use `agentsview import` to import from the command line:
@@ -195,6 +251,7 @@ agentsview import --type gemini-apps ~/Downloads/takeout.zip
 | Flag | Description |
 |------|-------------|
 | `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
+| `--sync` | Sync Claude.ai or ChatGPT from Chrome instead of importing a file (`claude-ai` and `chatgpt` only) |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file
