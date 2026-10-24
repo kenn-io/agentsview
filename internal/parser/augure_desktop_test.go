@@ -10,12 +10,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // createAugureDesktopStateDB builds a minimal Hermes-schema state.db under
 // an .augure-desktop root: one session with a user message, an assistant
 // tool-call message, a tool result row, and realistic token/cost columns.
-// The estimated cost is a real present-zero (0, not NULL) to guard the
+// The actual cost is a real present-zero (0, not NULL) to guard the
 // nullable-float decode treating 0 as absent.
 func createAugureDesktopStateDB(t *testing.T, root string) string {
 	t.Helper()
@@ -157,20 +159,14 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 	assert.Equal(t, 5200+4100, sess.PeakContextTokens)
 
-	// Usage events carry the raw store's session ID rewritten onto the
-	// augure-desktop: namespace, plus the recorded model. actual_cost_usd = 0
-	// (SQL 0, not NULL) decodes as a present-zero cost: the nullable-float
-	// decode keeps 0 and NULL distinct, so a real recorded $0 survives. An
-	// estimated 0 deliberately does not masquerade as $0, matching stock
-	// Hermes.
-	require.NotEmpty(t, result.UsageEvents)
-	event := result.UsageEvents[0]
-	assert.Equal(t, "augure-desktop:"+id, event.SessionID)
-	assert.Equal(t, "ossington-5", event.Model)
-	require.NotNil(t, event.Cost)
-	assert.Equal(t, "estimated", event.CostStatus)
-	assert.Zero(t, event.Cost.Microdollars,
-		"actual_cost_usd = 0 must decode as present-zero, not absent")
+	// The old schema omits task and billing-route columns; its actual zero remains known.
+	costs := map[string]*money.Money{}
+	for _, event := range result.UsageEvents {
+		costs[event.Model] = event.Cost
+	}
+	require.Contains(t, costs, "ossington-5")
+	require.NotNil(t, costs["ossington-5"])
+	assert.Zero(t, costs["ossington-5"].Microdollars)
 
 	require.NotEmpty(t, result.Messages)
 	assert.Equal(t, RoleUser, result.Messages[0].Role)

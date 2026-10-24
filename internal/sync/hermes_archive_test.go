@@ -17,7 +17,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 )
 
 // hermesArchiveAggregateFileInfo mirrors the legacy engine helper
@@ -2408,4 +2410,69 @@ func execHermesState(t *testing.T, stateDB, statement string) {
 	defer conn.Close()
 	_, err = conn.ExecContext(t.Context(), statement)
 	require.NoError(t, err)
+}
+
+func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			previousVersion := db.AgentDataVersion(agent) - 1
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			hermesfixture.CreateLedger(t, conn)
+			require.NoError(t, conn.Close())
+			execHermesState(t, stateDB, `UPDATE sessions SET input_tokens = 100, estimated_cost_usd = 0.123;
+				INSERT INTO session_model_usage (session_id, model, task, input_tokens, estimated_cost_usd) VALUES ('child', 'gpt-5.4', '', 60, 0), ('child', 'review', 'background_review', 20, 0.02)`)
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			id := string(agent) + ":child"
+			before, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{
+				Source: "session", Model: "gpt-5.4", InputTokens: 100,
+				Cost: &money.Money{Microdollars: 123000}, OccurredAt: "2026-05-14T14:10:00Z", DedupKey: "session:" + id,
+			}}))
+			// Model a released archive so the declared provider scope must reparse it.
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), id, previousVersion))
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", previousVersion))
+				return err
+			}))
+			engine.Close()
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.Equal(t, previousVersion, database.GetSessionDataVersion(t.Context(), id))
+			engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			// The version upgrade must reparse even when the source is unchanged.
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+			assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id))
+			after, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, before.FilePath, after.FilePath)
+
+			upgraded, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, upgraded, 3)
+			tokens := map[string]int{}
+			for _, event := range upgraded {
+				tokens[event.Model] += event.InputTokens
+			}
+			assert.Equal(t, map[string]int{"gpt-5.4": 100, "review": 20}, tokens)
+
+			// Known zero on the main ledger prevents an extra catalog charge.
+			usage, err := database.GetDailyUsage(t.Context(), db.UsageFilter{})
+			require.NoError(t, err)
+			assert.Equal(t, int64(143000), usage.Totals.TotalCost.Microdollars)
+		})
+	}
 }

@@ -24,7 +24,7 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			v2 := layout != "v1"
 			var allocations []float64
-			for _, count := range []int{8, 800} {
+			for _, count := range []int{8, 80} {
 				t.Run(strconv.Itoa(count), func(t *testing.T) {
 					env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 					oc := createOpenCodeDB(t, env.opencodeDir)
@@ -89,7 +89,10 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 				})
 			}
 			require.Len(t, allocations, 2)
-			assert.Less(t, allocations[1], allocations[0]*3,
+			t.Logf("8 sessions %.0f allocations; 80 sessions %.0f allocations", allocations[0], allocations[1])
+			// The +50 limit sits between the +28 peak under -race (30 runs)
+			// and the +72 a one-allocation-per-session regression adds.
+			assert.Less(t, allocations[1], allocations[0]+50,
 				"an existing virtual member must not trigger archive-wide absence checks")
 		})
 	}
@@ -100,7 +103,7 @@ func TestOpenCodeMissingSidecarWorkStaysBounded(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	allocations := map[string][]float64{"-wal": {}, "-shm": {}}
-	for _, count := range []int{8, 800} {
+	for _, count := range []int{8, 80} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 			oc := createOpenCodeDB(t, env.opencodeDir)
@@ -134,8 +137,10 @@ func TestOpenCodeMissingSidecarWorkStaysBounded(t *testing.T) {
 	}
 	for suffix, work := range allocations {
 		require.Len(t, work, 2)
-		t.Logf("%s: 8 sessions %.0f allocations; 800 sessions %.0f allocations", suffix, work[0], work[1])
-		assert.Less(t, work[1], work[0]*3, "missing sidecar work must not scale with archive size")
+		t.Logf("%s: 8 sessions %.0f allocations; 80 sessions %.0f allocations", suffix, work[0], work[1])
+		// Three runs per mode peaked at +1 allocation under -race.
+		// Allow 20, below the +72 a one-allocation-per-session regression adds.
+		assert.Less(t, work[1], work[0]+20, "missing sidecar work must not scale with archive size")
 	}
 }
 

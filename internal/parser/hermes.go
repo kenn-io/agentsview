@@ -61,6 +61,7 @@ type hermesStateSession struct {
 	title            string
 	cronJob          string
 	apiCallCount     int
+	modelUsage       []hermesModelUsage
 }
 
 type hermesStateMessage struct {
@@ -772,7 +773,18 @@ func readHermesStateSessions(ctx context.Context,
 		ss.endedAt = hermesUnixTime(ended)
 		out = append(out, ss)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	usage, err := readHermesModelUsage(ctx, conn, "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].modelUsage = usage[out[i].id]
+	}
+	return out, nil
 }
 
 func readHermesStateMessages(ctx context.Context,
@@ -880,6 +892,11 @@ func readHermesStateSession(ctx context.Context,
 			"query hermes session %s: %w", rawSessionID, err,
 		)
 	}
+	usage, err := readHermesModelUsage(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, false, err
+	}
+	ss.modelUsage = usage[rawSessionID]
 	return ss, true, nil
 }
 
@@ -1242,7 +1259,7 @@ func hermesHasCostSource(costSource string) bool {
 	return costSource != "" && costSource != "none"
 }
 
-func hermesUsageEvents(
+func hermesSummaryUsageEvents(
 	ss hermesStateSession, sessionID string,
 ) []ParsedUsageEvent {
 	if ss.model == "" {

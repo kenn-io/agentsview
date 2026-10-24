@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 )
 
 // newHermesTestProvider builds a concrete hermesProvider for the given roots so
@@ -990,7 +991,7 @@ func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 // TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage is proof
 // row 3's P5 half: internal/parser/hermes.go:946-948 returns ok == false
 // only when there are no converted messages AND no usage events. This
-// session has no model (hermesUsageEvents' own model == "" guard returns
+// session has no model (hermesSummaryUsageEvents' own model == "" guard returns
 // nil) and no state messages, so both halves of the early return's
 // condition are hit at once, unlike the usage-only case above.
 func TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage(t *testing.T) {
@@ -1125,12 +1126,12 @@ func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
 	assert.Equal(t, 320, res.Session.PeakContextTokens)
 }
 
-func TestHermesUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
+func TestHermesSummaryUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
 	// estimated_cost_usd is a literal 0 with cost_status "unknown":
 	// Hermes does not actually know the cost, so the event must leave
 	// Cost nil and let agentsview price it from the catalog rather
 	// than asserting a false known $0.
-	events := hermesUsageEvents(hermesStateSession{
+	events := hermesSummaryUsageEvents(hermesStateSession{
 		model:         "gpt-5.5",
 		inputTokens:   100,
 		outputTokens:  50,
@@ -1141,11 +1142,11 @@ func TestHermesUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
 	assert.Nil(t, events[0].Cost)
 }
 
-func TestHermesUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
+func TestHermesSummaryUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
 	// cost_status "included" backed by a real cost_source means the
 	// usage is genuinely covered/free, so a known $0 is correct even
 	// when no estimated cost is recorded.
-	events := hermesUsageEvents(hermesStateSession{
+	events := hermesSummaryUsageEvents(hermesStateSession{
 		model:        "openrouter/owl-alpha",
 		inputTokens:  100,
 		outputTokens: 50,
@@ -1157,14 +1158,14 @@ func TestHermesUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
 	assert.Equal(t, money.Money{}, *events[0].Cost)
 }
 
-func TestHermesUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testing.T) {
+func TestHermesSummaryUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testing.T) {
 	// Hermes marks models it does not price (e.g. gpt-5.5) cost_status
 	// "included" with cost_source "none". That is a default placeholder,
 	// not a confident free-usage signal, so the event must leave Cost
 	// nil and let agentsview price it from the catalog instead of
 	// reporting a false $0.
 	for _, src := range []string{"none", ""} {
-		events := hermesUsageEvents(hermesStateSession{
+		events := hermesSummaryUsageEvents(hermesStateSession{
 			model:         "gpt-5.5",
 			inputTokens:   100,
 			outputTokens:  50,
@@ -1178,8 +1179,8 @@ func TestHermesUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testin
 	}
 }
 
-func TestHermesUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
-	events := hermesUsageEvents(hermesStateSession{
+func TestHermesSummaryUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
+	events := hermesSummaryUsageEvents(hermesStateSession{
 		model:         "gpt-5.5",
 		inputTokens:   100,
 		actualCost:    sql.NullFloat64{Float64: 1.23, Valid: true},
@@ -1191,8 +1192,8 @@ func TestHermesUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 1_230_000}, *events[0].Cost)
 }
 
-func TestHermesUsageEvents_InvalidCostPreservesTokenUsage(t *testing.T) {
-	events := hermesUsageEvents(hermesStateSession{
+func TestHermesSummaryUsageEvents_InvalidCostPreservesTokenUsage(t *testing.T) {
+	events := hermesSummaryUsageEvents(hermesStateSession{
 		model:       "gpt-5.5",
 		inputTokens: 123,
 		actualCost:  sql.NullFloat64{Float64: -0.01, Valid: true},
@@ -1203,8 +1204,8 @@ func TestHermesUsageEvents_InvalidCostPreservesTokenUsage(t *testing.T) {
 	assert.Nil(t, events[0].Cost)
 }
 
-func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
-	events := hermesUsageEvents(hermesStateSession{
+func TestHermesSummaryUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
+	events := hermesSummaryUsageEvents(hermesStateSession{
 		model:         "gpt-5.5",
 		inputTokens:   100,
 		estimatedCost: sql.NullFloat64{Float64: 0.5, Valid: true},
@@ -1221,13 +1222,13 @@ func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
 // never satisfy the new branch's len(stateMessages) > 0 guard and so cannot
 // prove anything about it. This session's one message (12:00:01) is after
 // its startedAt (12:00:00), so the branch actually fires: Session.EndedAt is
-// back-filled to the message time. hermesUsageEvents (internal/parser/hermes.go:943)
+// back-filled to the message time. hermesSummaryUsageEvents
 // runs and consumes ss before that branch runs, and the branch only ever
 // writes sess.EndedAt, never ss, so the usage event's own OccurredAt
 // (internal/parser/hermes.go:1121, timeString(ss.endedAt, ss.startedAt))
 // must stay pinned to startedAt rather than follow the back-filled
 // Session.EndedAt. inputTokens is set (the prior version of this test had
-// none) so hermesUsageEvents actually returns an event to assert on;
+// none) so hermesSummaryUsageEvents actually returns an event to assert on;
 // outputTokens is still 0, so TotalOutputTokens/HasTotalOutputTokens stay
 // unset, and PeakContextTokens now reflects the input tokens.
 func TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills(t *testing.T) {
@@ -2241,4 +2242,160 @@ func TestHermesStoredPathIsAggregateArchive(t *testing.T) {
 			assert.Equal(t, tc.want, HermesStoredPathIsAggregateArchive(tc.path))
 		})
 	}
+}
+
+func TestHermesLedgerSummaryRemainder(t *testing.T) {
+	for _, tc := range []struct {
+		name, summary, rows string
+		want                map[string][5]int
+		costs               map[string]int64
+	}{
+		{
+			"reported auxiliary gap", "input_tokens = 100, output_tokens = 30, cache_read_tokens = 10, cache_write_tokens = 2, reasoning_tokens = 2, estimated_cost_usd = 0.123",
+			"('child', 'main', '', 100, 30, 10, 2, 2, 0.04, 0), ('child', 'review', 'background_review', 20, 10, 5, 3, 1, 0.02, 0)",
+			map[string][5]int{"main": {100, 30, 10, 2, 2}, "review": {20, 10, 5, 3, 1}, "gpt-5.4": {}},
+			map[string]int64{"main": 40000, "review": 20000, "gpt-5.4": 83000},
+		},
+		{
+			"gateway summary and auxiliary", "input_tokens = 300, output_tokens = 70, cache_read_tokens = 20, cache_write_tokens = 5, reasoning_tokens = 9, estimated_cost_usd = 0.123",
+			"('child', 'review', 'title_generation', 20, 5, 2, 1, 1, 0.02, 0)",
+			map[string][5]int{"review": {20, 5, 2, 1, 1}, "gpt-5.4": {300, 70, 20, 5, 9}},
+			map[string]int64{"review": 20000, "gpt-5.4": 123000},
+		},
+		// The ledger retains known charges when a gateway overwrites the summary with lower totals.
+		{
+			"clamp covered buckets", "input_tokens = 300, output_tokens = 70, cache_read_tokens = 20, cache_write_tokens = 5, reasoning_tokens = 9, estimated_cost_usd = 0.123",
+			"('child', 'main', '', 400, 80, 30, 6, 10, 0.2, 0)",
+			map[string][5]int{"main": {400, 80, 30, 6, 10}},
+			map[string]int64{"main": 200000},
+		},
+		{
+			"estimates and voice overlap", "input_tokens = 100, estimated_cost_usd = 3",
+			"('child', 'a', '', 60, 0, 0, 0, 0, 1, 9), ('child', 'b', 'voice_chat', 40, 0, 0, 0, 0, 2, 8)",
+			map[string][5]int{"a": {60}, "b": {40}},
+			map[string]int64{"a": 1000000, "b": 2000000},
+		},
+		{
+			"actuals", "input_tokens = 100, actual_cost_usd = 3",
+			"('child', 'a', '', 60, 0, 0, 0, 0, 9, 1), ('child', 'b', '', 40, 0, 0, 0, 0, 8, 2)",
+			map[string][5]int{"a": {60}, "b": {40}},
+			map[string]int64{"a": 1000000, "b": 2000000},
+		},
+		{
+			"gateway remainder", "input_tokens = 100, estimated_cost_usd = 3.5",
+			"('child', 'a', '', 60, 0, 0, 0, 0, 1, 0), ('child', 'b', '', 40, 0, 0, 0, 0, 2, 0)",
+			map[string][5]int{"a": {60}, "b": {40}, "gpt-5.4": {}},
+			map[string]int64{"a": 1000000, "b": 2000000, "gpt-5.4": 500000},
+		},
+		{
+			"gateway estimate cleared", "input_tokens = 100, estimated_cost_usd = 0",
+			"('child', 'a', '', 60, 0, 0, 0, 0, 1, 0), ('child', 'b', '', 40, 0, 0, 0, 0, 2, 0)",
+			map[string][5]int{"a": {60}, "b": {40}},
+			map[string]int64{"a": 1000000, "b": 2000000},
+		},
+		{
+			"unknown row with known summary", "input_tokens = 100, estimated_cost_usd = 3",
+			"('child', 'a', '', 60, 0, 0, 0, 0, 0, 0), ('child', 'b', '', 40, 0, 0, 0, 0, 1, 0)",
+			map[string][5]int{"a": {60}, "b": {40}, "gpt-5.4": {}},
+			map[string]int64{"a": 0, "b": 1000000, "gpt-5.4": 2000000},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+			require.NoError(t, err)
+			defer conn.Close()
+			hermesfixture.CreateLedger(t, conn)
+			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0, reasoning_tokens = 0, estimated_cost_usd = NULL, actual_cost_usd = NULL;
+				UPDATE sessions SET `+tc.summary+`;
+				INSERT INTO session_model_usage (session_id, model, task, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd, actual_cost_usd) VALUES `+tc.rows+`;
+				UPDATE session_model_usage SET billing_provider = 'openrouter', cost_status = 'estimated', cost_source = 'catalog'`)
+			require.NoError(t, err)
+			results, err := parseHermesTestArchive(t, root, "", "test")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			got := map[string][5]int{}
+			costs := map[string]int64{}
+			for _, event := range results[0].UsageEvents {
+				got[event.Model] = [5]int{event.InputTokens, event.OutputTokens, event.CacheReadInputTokens, event.CacheCreationInputTokens, event.ReasoningTokens}
+				require.NotNil(t, event.Cost)
+				costs[event.Model] = event.Cost.Microdollars
+				if event.Model != "gpt-5.4" {
+					assert.Equal(t, "openrouter", event.ProviderID)
+				}
+			}
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.costs, costs)
+		})
+	}
+}
+
+func TestHermesLedgerMalformedNumberFallsBackPerSession(t *testing.T) {
+	for _, tc := range []struct {
+		name, task, update string
+		readable           bool
+	}{
+		{"main tokens", "", "input_tokens = 'invalid'", false},
+		{"voice cost", "voice_chat", "estimated_cost_usd = 'invalid'", false},
+		{"auxiliary tokens", "background_review", "input_tokens = 'invalid'", false},
+		{"nullable counters", "", "input_tokens = NULL, output_tokens = NULL, cache_read_tokens = NULL, cache_write_tokens = NULL, reasoning_tokens = NULL", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+			require.NoError(t, err)
+			defer conn.Close()
+			hermesfixture.CreateLedger(t, conn)
+			_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, model, started_at, input_tokens) VALUES ('sibling', 'cli', 'main', 1778767200, 10);
+				INSERT INTO session_model_usage (session_id, model, task, input_tokens) VALUES
+				('child', 'a-main', '', 60), ('child', 'z-valid', 'approval', 2), ('child', 'broken', ?, 3), ('sibling', 'review', 'background_review', 7)`, tc.task)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "UPDATE session_model_usage SET "+tc.update+" WHERE model = 'broken'")
+			require.NoError(t, err)
+			results, err := parseHermesTestArchive(t, root, "", "test")
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			for _, result := range results {
+				got := map[string]int{}
+				for _, event := range result.UsageEvents {
+					got[event.Model] = event.InputTokens
+				}
+				if result.Session.ID == "hermes:child" {
+					want := map[string]int{"a-main": 60, "z-valid": 2, "gpt-5.4": 240}
+					if tc.readable {
+						want["broken"] = 0
+					}
+					assert.Equal(t, want, got)
+					require.NotEmpty(t, result.Messages)
+				} else {
+					assert.Equal(t, map[string]int{"review": 7, "main": 10}, got)
+				}
+			}
+		})
+	}
+}
+
+func TestHermesLedgerZeroCostSources(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+	require.NoError(t, err)
+	defer conn.Close()
+	hermesfixture.CreateLedger(t, conn)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET estimated_cost_usd = NULL, actual_cost_usd = NULL;
+		INSERT INTO session_model_usage (session_id, model, task, input_tokens, actual_cost_usd, cost_status, cost_source) VALUES
+		('child', 'default-zero', 'approval', 1, 0, 'unknown', 'none'),
+		('child', 'estimate-zero', 'approval', 1, 0, 'estimated', 'catalog'),
+		('child', 'positive-actual', '', 60, 0.5, 'actual', 'provider')`)
+	require.NoError(t, err)
+	results, err := parseHermesTestArchive(t, root, "", "test")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	costs := map[string]*money.Money{}
+	for _, event := range results[0].UsageEvents {
+		costs[event.Model] = event.Cost
+	}
+	assert.Equal(t, map[string]*money.Money{"default-zero": nil, "estimate-zero": nil, "positive-actual": {Microdollars: 500000}, "gpt-5.4": nil}, costs)
 }

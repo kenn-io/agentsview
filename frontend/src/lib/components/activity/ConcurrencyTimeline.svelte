@@ -42,11 +42,6 @@
     const key = metric;
     return buckets.reduce((total, bucket) => total + bucket[key], 0);
   });
-  const messageInterval = $derived(new Intl.NumberFormat(getLocale(), {
-    style: "unit",
-    unit: report.bucket_unit,
-    unitDisplay: "short",
-  }).format(report.bucket_unit === "minute" ? report.bucket_seconds / 60 : 1));
 
   let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
   let tooltipEl = $state<HTMLDivElement>();
@@ -141,16 +136,6 @@
     tooltip = null;
   }
 
-  // ActivityPage keeps this chart mounted and replaces the report in place.
-  // Slot hits are keyed by index, so a date change can drop or reuse them
-  // without mouseleave. Clear any hover box captured against the previous
-  // report before the new bars paint.
-  $effect.pre(() => {
-    void report;
-    void metric;
-    hideTip();
-  });
-
   function fmtSelectionRange(start: number, end: number): string {
     const first = buckets[start];
     const last = buckets[end - 1];
@@ -168,12 +153,19 @@
     return selectedRange?.start === start && selectedRange.end === end;
   }
 
+  // Bars may merge several report buckets. Selections are always half-open
+  // report bucket ranges, so map an inclusive pair of bar indexes back.
+  function rawRange(startBar: number, endBar: number): { start: number; end: number } {
+    const lo = Math.min(startBar, endBar);
+    const hi = Math.max(startBar, endBar);
+    return { start: displayBuckets[lo]!.rawStart, end: displayBuckets[hi]!.rawEnd };
+  }
+
   // Bucket membership is computed by the shared backend aggregator. The chart
   // emits a half-open range; ActivityPage requests that page asynchronously.
   function selectRange(startIndex: number, endIndex: number) {
     if (!onSelectRange) return;
-    const start = Math.min(startIndex, endIndex);
-    const end = Math.max(startIndex, endIndex) + 1;
+    const { start, end } = rawRange(startIndex, endIndex);
     if (sameRange(start, end)) {
       onSelectRange(null);
       return;
@@ -221,13 +213,7 @@
   let dragEnd = $state<number | null>(null);
 
   const activeRange = $derived.by(() => {
-    if (dragStart !== null) {
-      const end = dragEnd ?? dragStart;
-      return {
-        start: Math.min(dragStart, end),
-        end: Math.max(dragStart, end) + 1,
-      };
-    }
+    if (dragStart !== null) return rawRange(dragStart, dragEnd ?? dragStart);
     return selectedRange;
   });
 
@@ -363,6 +349,96 @@
   const rangeEndMs = $derived(Date.parse(report.range_end));
   const rangeSpanMs = $derived(Math.max(rangeEndMs - rangeStartMs, 1));
 
+  // Space between neighbouring bars, taken from each bucket's slot.
+  function barGap(cellW: number): number {
+    return Math.min(cellW * 0.2, 2);
+  }
+
+  // A narrow chart merges minute buckets into wider bars so each bar stays
+  // readable. The step is the finest one whose drawn bars, after the gap,
+  // are at least MIN_BAR_PX wide. Minute buckets are fixed tiles anchored at
+  // range_start, so grouping by elapsed time keeps merged bars on clock
+  // boundaries.
+  const MIN_BAR_PX = 5;
+  const DISPLAY_STEPS_SECONDS = [600, 900, 1800, 3600];
+  const displayStepSeconds = $derived.by(() => {
+    const raw = report.bucket_seconds;
+    if (report.bucket_unit !== "minute" || raw <= 0) return raw;
+    const pxPerSecond = (plotWidth * 1000) / rangeSpanMs;
+    const wideEnough = (s: number) => s * pxPerSecond - barGap(s * pxPerSecond) >= MIN_BAR_PX;
+    if (wideEnough(raw)) return raw;
+    const steps = DISPLAY_STEPS_SECONDS.filter((s) => s > raw && s % raw === 0);
+    return steps.find(wideEnough) ?? steps.at(-1) ?? raw;
+  });
+  const messageInterval = $derived(new Intl.NumberFormat(getLocale(), {
+    style: "unit",
+    unit: report.bucket_unit,
+    unitDisplay: "short",
+  }).format(report.bucket_unit === "minute" ? displayStepSeconds / 60 : 1));
+
+  // The merged bar's stack comes from its tallest member, so the segments
+  // still sum to the combined peak at a single instant.
+  function mergeBuckets(a: ActivityBucket, b: ActivityBucket): ActivityBucket {
+    const peak = b.max_agents > a.max_agents ? b : a;
+    return {
+      start: a.start,
+      end: b.end,
+      max_agents: peak.max_agents,
+      interactive_at_peak: peak.interactive_at_peak,
+      subagent_at_peak: peak.subagent_at_peak,
+      automated_at_peak: peak.automated_at_peak,
+      max_interactive_agents: Math.max(a.max_interactive_agents, b.max_interactive_agents),
+      max_subagent_agents: Math.max(a.max_subagent_agents, b.max_subagent_agents),
+      max_automated_agents: Math.max(a.max_automated_agents, b.max_automated_agents),
+      agent_minutes: a.agent_minutes + b.agent_minutes,
+      user_messages: a.user_messages + b.user_messages,
+      assistant_messages: a.assistant_messages + b.assistant_messages,
+      input_tokens: a.input_tokens === undefined && b.input_tokens === undefined
+        ? undefined
+        : (a.input_tokens ?? 0) + (b.input_tokens ?? 0),
+      output_tokens: a.output_tokens + b.output_tokens,
+      cost: moneyFromMicrodollars(a.cost.microdollars + b.cost.microdollars),
+    };
+  }
+
+  // Each displayed bar covers report buckets [rawStart, rawEnd).
+  const displayBuckets = $derived.by(() => {
+    const stepMs = displayStepSeconds * 1000;
+    const merge = displayStepSeconds !== report.bucket_seconds;
+    const out: Array<{ bucket: ActivityBucket; rawStart: number; rawEnd: number; slot: number }> = [];
+    buckets.forEach((bucket, i) => {
+      const slot = merge ? Math.floor((Date.parse(bucket.start) - rangeStartMs) / stepMs) : i;
+      const last = out.at(-1);
+      if (last && last.slot === slot) {
+        last.bucket = mergeBuckets(last.bucket, bucket);
+        last.rawEnd = i + 1;
+      } else {
+        out.push({ bucket, rawStart: i, rawEnd: i + 1, slot });
+      }
+    });
+    return out;
+  });
+
+  // ActivityPage keeps this chart mounted and replaces the report in place.
+  // Slot hits are keyed by index, so a date change can drop or reuse them
+  // without mouseleave. Clear any hover box captured against the previous
+  // report before the new bars paint.
+  $effect.pre(() => {
+    void report;
+    void metric;
+    hideTip();
+  });
+
+  // Bar indexes change only with new buckets or a new display step. A session
+  // page replaces the report but keeps its buckets, so a keyboard selection
+  // keeps extending from its anchor.
+  $effect.pre(() => {
+    void buckets;
+    void displayStepSeconds;
+    keyboardAnchorIndex = null;
+    cancelRangeDrag();
+  });
+
   // x pixel for a given instant within the range.
   function xForMs(ms: number): number {
     return Y_LABEL_W + ((ms - rangeStartMs) / rangeSpanMs) * plotWidth;
@@ -416,7 +492,7 @@
 
   // Each metric gets its own scale so assistant volume cannot hide user prompts.
   const yScale = $derived(
-    niceScale(Math.max(0, ...buckets.map((bucket) =>
+    niceScale(Math.max(0, ...displayBuckets.map(({ bucket }) =>
       metric === "concurrency" ? bucket.max_agents : bucket[metric],
     ))),
   );
@@ -434,12 +510,12 @@
   // The stacked bar and selection share bucket bounds.
   // Segments are stacked from the baseline in class order; zero-count classes
   // draw nothing.
-  const bars = $derived(buckets.map((bucket, idx) => {
+  const bars = $derived(displayBuckets.map(({ bucket, rawStart, rawEnd }, idx) => {
     const start = Date.parse(bucket.start);
     const end = Date.parse(bucket.end);
     const cellX = xForMs(start);
     const cellW = Math.max(((end - start) / rangeSpanMs) * plotWidth, 1);
-    const gap = Math.min(cellW * 0.2, 2);
+    const gap = barGap(cellW);
     let top = PLOT_BOTTOM;
     const segments = metric === "concurrency" ? classes.flatMap((cls) => {
       const count = bucket[cls.atPeak];
@@ -458,24 +534,24 @@
       cellX,
       cellW,
       idx,
+      rawStart,
+      rawEnd,
       segments,
     };
   }));
 
   const selectionBounds = $derived.by(() => {
     if (!activeRange) return null;
-    const first = bars[activeRange.start];
-    const last = bars[activeRange.end - 1];
+    const first = buckets[activeRange.start];
+    const last = buckets[activeRange.end - 1];
     if (!first || !last) return null;
-    return {
-      x: first.cellX,
-      width: last.cellX + last.cellW - first.cellX,
-    };
+    const x = xForMs(Date.parse(first.start));
+    return { x, width: xForMs(Date.parse(last.end)) - x };
   });
 
   const overlayDataMax = $derived.by(() => {
     let m = 0;
-    for (const b of buckets) {
+    for (const { bucket: b } of displayBuckets) {
       const v = bucketOverlayValue(b);
       if (v > m) m = v;
     }
@@ -486,7 +562,7 @@
   const overlayPoints = $derived(
     overlayMetric === "none"
       ? []
-      : buckets.map((bucket) => ({
+      : displayBuckets.map(({ bucket }) => ({
           time: (Date.parse(bucket.start) + Date.parse(bucket.end)) / 2,
           value: bucketOverlayValue(bucket) / overlayMax,
         })),
@@ -582,10 +658,14 @@
   // tooltipped, or selected. Buckets are chronological, so this is a prefix
   // of bars and slot indexes stay aligned.
   const liveBars = $derived(
-    bars.filter((bar) => Date.parse(buckets[bar.idx]!.start) < futureStartMs),
+    bars.filter((bar) => Date.parse(displayBuckets[bar.idx]!.bucket.start) < futureStartMs),
   );
 
   const svgH = PLOT_BOTTOM + X_LABEL_H;
+
+  function isBarSelected(bar: { rawStart: number; rawEnd: number }): boolean {
+    return activeRange !== null && bar.rawStart < activeRange.end && bar.rawEnd > activeRange.start;
+  }
 
   function setOverlayMetric(value: string) {
     overlayMetric = value as "none" | "tokens" | "cost";
@@ -703,7 +783,7 @@
           />
         {/each}
         {#each bars as bar (bar.idx)}
-          {@const selected = activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
+          {@const selected = isBarSelected(bar)}
           <g class="concurrency-bar" data-concurrency-bar={bar.idx}>
             {#each bar.segments as seg (seg.kind)}
               <Rect
@@ -775,7 +855,7 @@
         {/if}
 
         {#each liveBars as bar (bar.idx)}
-          {@const b = buckets[bar.idx]}
+          {@const b = displayBuckets[bar.idx]!.bucket}
           <Rect
             class="slot-hit"
             data-bucket-bar
@@ -786,11 +866,11 @@
             height={PLOT_H}
             role="button"
             tabindex={0}
-            aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
+            aria-pressed={isBarSelected(bar)}
             aria-label={metric === "concurrency" ? m.activity_filter_active_in_range() : m.activity_message_bucket_label({
-              range: fmtBucketRange(b!), metric: metricLabel, count: b![metric].toLocaleString(getLocale()),
+              range: fmtBucketRange(b), metric: metricLabel, count: b[metric].toLocaleString(getLocale()),
             })}
-            onmouseenter={(event) => b && showSlotTip(event, b)}
+            onmouseenter={(event) => showSlotTip(event, b)}
             onmouseleave={hideTip}
             onpointerdown={(event) => beginRangeDrag(event, bar.idx)}
             onpointerenter={() => extendRangeDrag(bar.idx)}

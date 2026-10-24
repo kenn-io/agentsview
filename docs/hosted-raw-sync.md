@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-10-22
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -704,10 +704,9 @@ unchanged owner's session stream; graph-only live refresh is not guaranteed.
 
 ## Native HTTP request signing
 
-Native signing is development functionality. A deployment needs a release that
-includes the `signing` command and the restricted machine listener before these
-settings can be used. Signing adds an independent HMAC key to existing device or
-reader authentication. Browsers continue using the normal viewer listener.
+Native HTTP request signing is available in 0.46.0 and later. It adds an
+independent HMAC key to existing device or reader authentication. Browsers
+continue using the normal viewer listener.
 
 Create private key and replay files in an isolated operator-owned directory:
 

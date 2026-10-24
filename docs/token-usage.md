@@ -49,6 +49,10 @@ cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
 
+gptme messages use provider-reported billed costs when available, including a
+reported zero. Messages with estimated costs still use catalog pricing.
+Provider-routing suffixes in model names do not prevent a catalog match.
+
 fx stopped writing `usage-v2.json` in
 [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226).
 AgentsView reads it when an older session has one, as cumulative totals per
@@ -88,9 +92,12 @@ totals note that its token counts are low. See
 [Codex Cloud](/docs/configuration/#codex-cloud) for setup and limits.
 
 Junie coverage is for CLI sessions; it excludes tool calls and IDE-only
-conversations. Antigravity plaintext-only transcripts include conversation,
-reasoning, and tool calls but no token usage or cost. Antigravity sessions with
-a usable database can still contribute recorded usage.
+conversations. Antigravity plaintext transcripts include conversation,
+reasoning, and tool calls. Without a usable database or usage-bearing trajectory
+sidecar, they have no token usage or cost. Since 0.46.1, Antigravity CLI can
+combine a plaintext transcript with its database's usage and attach the model
+and token counts to the matching model replies. See
+[Antigravity transcript sources](/docs/configuration/#session-discovery).
 
 When an agent filter selects only agents that do not expose per-message token
 rows, AgentsView reports that as an unsupported usage state instead of silently
@@ -195,6 +202,21 @@ to see its groups and
 individual sessions for the selected date range. On touch screens, use **Open**.
 Usage outside the opened project's top 100 tiles appears under **Other**.
 Enter and Space select any item.
+
+Hermes and Augure Desktop Usage includes model calls recorded in
+`session_model_usage`, including background review and title generation.
+Main-loop and voice-chat calls count once, alongside any main usage recorded
+only in the session summary. Each ledger row keeps its recorded model and
+billing provider. Main ledger costs use the session summary's actual, included,
+or estimated cost basis, with any positive uncovered cost on the summary model.
+When the summary cost is unknown, known ledger costs stay on their models, and
+unknown costs use catalog pricing. Auxiliary calls use their own recorded cost.
+Sourced actual and included zero costs remain known; default zero estimates
+remain open to catalog pricing. Older databases without the ledger use session
+summaries. Malformed ledger rows are omitted with a warning; uncovered main
+usage remains in the session summary.
+Session-list token totals continue to show the session summary.
+
 Hermes cron jobs from different homes stay separate. They show their latest
 recorded name in that range and their home-scoped ID on hover.
 **All projects**, Escape, and Backspace
@@ -205,6 +227,8 @@ The **Projects** picker excludes a project. Usage-only and discarded-evidence
 archives omit titles and show job IDs, as do archives without `state.db` titles.
 Archived Hermes and Augure Desktop cron runs whose sources were gone before
 upgrading stay individual sessions unless they already have a stored job ID.
+
+![A selected project in the cost breakdown](/docs/assets/generated/screenshots/usage-attribution-selected.png)
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,

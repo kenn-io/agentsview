@@ -1038,7 +1038,7 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	assertDuckDBCount(t, conn, "tool_result_events", 1)
 	assertDuckDBCount(t, conn, "usage_events", 1)
 	assertDuckDBCount(t, conn, "secret_findings", 1)
-	assertDuckDBCount(t, conn, "model_pricing", 1)
+	assertDuckDBCount(t, conn, "model_pricing", 2)
 	assertDuckDBCount(t, conn, "starred_sessions", 1)
 	assertDuckDBCount(t, conn, "pinned_messages", 1)
 
@@ -1480,7 +1480,7 @@ func TestSessionFingerprintsWriteColumn(t *testing.T) {
 
 func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 	ctx := t.Context()
-	local := newLocalDB(t)
+	local := dbtest.OpenTestDB(t)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
@@ -2240,7 +2240,12 @@ type syncFixture struct {
 
 func newLocalDB(t *testing.T) *db.DB {
 	t.Helper()
-	return dbtest.OpenTestDB(t)
+	local := dbtest.OpenTestDB(t)
+	// Avoid copying the full fallback pricing table on every push.
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "duckdb-test-seed",
+	}}))
+	return local
 }
 
 func newTestSync(

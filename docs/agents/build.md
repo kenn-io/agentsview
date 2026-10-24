@@ -16,7 +16,11 @@ disable the built-in cache in `actions/setup-go`. Use npm caching in
 packages the job installs. Desktop jobs cache Rust dependencies through
 `Swatinem/rust-cache` with the GitHub cache backend. Pull-request workflow
 callers set `cache-mode: read` so jobs can restore caches without saving copies.
-Playwright jobs install browsers and system dependencies on each run.
+Playwright jobs run browsers in Microsoft's public MCR image through a remote
+server.
+
+`desktop-artifacts.yml` builds the frontend once on Linux and packages those
+assets in its Windows, Linux, and Linux ARM64 desktop builds.
 
 Desktop sidecar builds use `-trimpath` by default. Pull-request desktop builds
 set `AGENTSVIEW_SIDECAR_TRIMPATH=false` to reuse Go compile results from test

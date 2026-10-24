@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 )
 
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
@@ -1884,5 +1886,52 @@ func TestHermesStandaloneEventsPreferJSONL(t *testing.T) {
 				assert.Equal(t, test.want, sources[0].DisplayPath)
 			}
 		})
+	}
+}
+
+func TestHermesLedgerFingerprintChangesOnlyItsMember(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	defer conn.Close()
+	hermesfixture.CreateLedger(t, conn)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, model, started_at) VALUES ('sibling', 'cli', 'main', 1778767200)`)
+	require.NoError(t, err)
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}, Machine: "test"})
+	require.True(t, ok)
+	fingerprints := func() map[string]string {
+		t.Helper()
+		ctx, cleanup, err := WithReconciliationCache(t.Context())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, cleanup()) }()
+		require.NoError(t, seedHermesMemberCoresLocked(ctx, stateDB))
+		out := map[string]string{}
+		for _, id := range []string{"child", "sibling"} {
+			source, found, err := provider.FindSource(t.Context(), FindSourceRequest{FullSessionID: "hermes:" + id})
+			require.NoError(t, err)
+			require.True(t, found)
+			direct, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			seeded, err := provider.Fingerprint(ctx, source)
+			require.NoError(t, err)
+			assert.Equal(t, direct.Hash, seeded.Hash)
+			out[id] = direct.Hash
+		}
+		return out
+	}
+	before := fingerprints()
+	for _, query := range []string{
+		`INSERT INTO session_model_usage (session_id, model, task, input_tokens) VALUES ('child', 'review', 'background_review', 20)`,
+		`UPDATE session_model_usage SET input_tokens = 30`,
+		`DELETE FROM session_model_usage`,
+	} {
+		_, err := conn.ExecContext(t.Context(), query)
+		require.NoError(t, err)
+		after := fingerprints()
+		assert.NotEqual(t, before["child"], after["child"])
+		assert.Equal(t, before["sibling"], after["sibling"])
+		before = after
 	}
 }

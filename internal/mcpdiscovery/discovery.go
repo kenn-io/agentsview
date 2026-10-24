@@ -77,7 +77,8 @@ func Publish(directory, address, token, backendURL string) (func() error, error)
 }
 
 // List is observational: it never starts a daemon or prunes another process's
-// records. Dead-process records are omitted, including after an unclean exit.
+// records. It omits records only when kit can determine their process has exited;
+// records whose process identity kit cannot judge remain listed.
 func List(directory string) ([]Endpoint, error) {
 	endpoints := []Endpoint{}
 	if _, err := os.Stat(directory); errors.Is(err, os.ErrNotExist) {
@@ -93,7 +94,7 @@ func List(directory string) ([]Endpoint, error) {
 		return nil, fmt.Errorf("read MCP listener status: %w", err)
 	}
 	for _, rec := range records {
-		if rec.Service != service || !daemon.ProcessAlive(rec.PID) {
+		if rec.Service != service || !daemon.RuntimeProcessAlive(rec) {
 			continue
 		}
 		endpoints = append(endpoints, Endpoint{PID: rec.PID, Transport: "http", URL: rec.Metadata["url"], BackendURL: rec.Metadata["backend_url"], TokenPath: rec.Metadata["token_path"]})

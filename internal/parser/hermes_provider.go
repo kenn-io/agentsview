@@ -2168,6 +2168,9 @@ func addHermesStateSessionFingerprint(
 	); err != nil {
 		return err
 	}
+	if err := json.MarshalWrite(h, ss.modelUsage); err != nil {
+		return err
+	}
 	return encodeHermesStateSessionJSONL(h, ss, messages)
 }
 

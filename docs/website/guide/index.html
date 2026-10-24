@@ -101,7 +101,7 @@
         <p class="eyebrow">Five-minute guide</p>
         <h1>The session intelligence loop</h1>
         <p class="lede">Your agents already write the raw data. AgentsView turns it into a searchable archive, and the archive into answers your agents can use on their next run.</p>
-          <p>Updated for <a href="/docs/changelog/#0450">v0.45.0</a>, including Spanish, tool sequences, and conversation-memory plugins.</p>
+          <p>Updated for <a href="/docs/changelog/#0461">v0.46.1</a>, including cloud chats, selectable cost breakdowns, and tool-effectiveness reports.</p>
         <ol class="guide-nav" aria-label="Guide stops">
           <li><a href="#capture">01 Capture</a></li>
           <li><a href="#browse">02 Browse</a></li>
@@ -120,6 +120,7 @@
           <div class="guide-copy">
             <h2>Capture every session</h2>
             <p>The daemon discovers the session directories behind more than 60 agent formats, including Claude Code, Codex, Cursor, Copilot, and Gemini, and syncs them into one local SQLite archive with full-text indexes. It keeps watching, so the archive stays current while you work.</p>
+            <p>Sync Claude.ai through Chrome, or enable Codex Cloud on one machine for chats that live on OpenAI's servers. Muse Code and fx sessions also join the local archive.</p>
             <a href="/docs/quickstart/">Quick start</a>
           </div>
           <div class="guide-media">
@@ -136,6 +137,7 @@
           <div class="guide-copy">
             <h2>Browse the full conversation</h2>
             <p>Read the prompts, responses, reasoning, and tool calls recorded by each agent. Filter by project, agent, date, and message count, or press Ctrl/Cmd+G to open a session by ID. The Resume menu lets supported agents, including Pi, pick up where they left off.</p>
+            <p>Find related work with exact labels and Claude Code pull-request links. Launcher links keep independently started workers under their manager and include their costs in its total.</p>
             <p>Use the opt-in <a href="/docs/data/#enable-the-project-workspace">project workspace</a> to correct project names with folder suggestions, transcript previews, and bulk corrections.</p>
             <a href="/docs/usage/">Usage guide</a>
           </div>
@@ -169,6 +171,7 @@
           <div class="guide-copy">
             <h2>Meter tokens and cost</h2>
             <p>Usage reports show recorded tokens and estimated costs, including prompt-cache writes and reads. Reports reuse saved archive data; the first request after an upgrade or sync may need time to prepare its cache. The CLI answers in the terminal, the statusline shows today's spend inside your editor, and one-shot capture reports recorded usage for a single Claude or Codex CI run. Total Input includes prompt-cache reads and writes; Uncached Input keeps those tokens separate. Choose Smooth, Lines, or Bars for the cost chart.</p>
+            <p>Select a project, model, or agent in the cost breakdown to narrow the page. Open hermes-cron to compare individual jobs. Model aliases combine variants after each has been priced.</p>
             <a href="/docs/token-usage/">Token usage and costs</a>
             <figure class="terminal">
               <code><span class="prompt">$</span> agentsview usage daily --breakdown
@@ -206,14 +209,15 @@
           <div class="guide-copy">
             <h2>Assess session health</h2>
             <p>Health scores point to tool failures, context pressure, and repeated loops in the transcript. Open Analysis to see Session Vitals: measured tool execution and time that cannot be assigned to a phase. Click an activity row to inspect its transcript entry. Open the health badge for tool sequences that trace errors, retries, switches, and recovery back to recorded calls, without model charges.</p>
+            <p>Tool Usage shows empty-result, repeat-call, and recovery rates with links to contributing sessions. Choose Analyze tool effectiveness from a session's actions menu for a model assessment that cites the calls it judged.</p>
             <a href="/docs/session-intelligence/">Session intelligence</a>
           </div>
           <div class="guide-media">
             <figure class="capture">
-              <a href="/docs/assets/generated/screenshots/session-vital-signs.png" data-lightbox>
-                <img src="/docs/assets/generated/screenshots/session-vital-signs.png" alt="AgentsView session transcript with Analysis timing panel" loading="lazy">
+              <a href="/docs/assets/generated/screenshots/tool-effectiveness-report.png" data-lightbox>
+                <img src="/docs/assets/generated/screenshots/tool-effectiveness-report.png" alt="Tool effectiveness report with conclusions and cited calls" loading="lazy">
               </a>
-              <figcaption class="caption">Measured tool execution and unattributed turn time.</figcaption>
+              <figcaption class="caption">A saved assessment linked to the calls it judged.</figcaption>
             </figure>
           </div>
         </li>
@@ -238,6 +242,7 @@
           <div class="guide-copy">
             <h2>Give your agents the archive</h2>
             <p>The loop closes when agents read their own history. The MCP server exposes session history as assistant tools, the REST API and CLI serve scripts and hooks, and SSE streams live messages. An agent can check what a previous run tried before repeating it. Native memory plugins for Claude Code and Codex bundle recall instructions, focused search, and session-start refresh.</p>
+            <p>Read-only MCP tools also expose file edits, tool calls, child sessions, Activity reports, tool usage, cost comparisons, and offline guide search.</p>
             <a href="/docs/mcp/">MCP server</a> · <a href="/docs/session-api/">Session API</a>
           </div>
           <div class="guide-media">
@@ -251,6 +256,7 @@
           <div class="guide-copy">
             <h2>Extend beyond one machine</h2>
             <p>Push each machine's archive to PostgreSQL for a merged team view, use ClickHouse for a remote dashboard, mirror into DuckDB for analytical queries, read source files through the filesystem or S3, or keep original files in hosted storage. Hosted raw sync can also parse uploaded sources directly into PostgreSQL without a local SQLite archive or a separate push.</p>
+            <p>SSH sync fetches sessions from remote Linux and macOS hosts without a manually installed daemon. Archive capture and seed import preserve a retired computer's history and original files; keep new local sessions in a separate data directory.</p>
             <a href="/docs/pg-sync/">PostgreSQL sync</a> · <a href="/docs/clickhouse-sync/">ClickHouse sync</a> · <a href="/docs/duckdb/">DuckDB mirror</a>
           </div>
           <div class="guide-media">

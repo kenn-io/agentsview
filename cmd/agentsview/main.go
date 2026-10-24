@@ -619,6 +619,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
 	srv := server.New(cfg, database, engine, srvOpts...)
+	waitFriction := startLocalFrictionReview(ctx, cfg, database, srv, idleTracker)
+	defer func() {
+		stop()
+		waitFriction()
+	}()
 
 	stopAudit := func() {}
 	if engine != nil {

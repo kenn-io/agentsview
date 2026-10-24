@@ -836,6 +836,8 @@ jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    env:
+      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
     strategy:
       fail-fast: false
       matrix:
@@ -895,12 +897,25 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Install Playwright browsers and system dependencies
+      - name: Start Playwright browser server
+        id: browser_server
+        timeout-minutes: 10
         run: |
-          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
-            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
-            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          npx playwright install --with-deps ${{ matrix.browser }}
+          version=$(node -p 'require("./node_modules/@playwright/test/package.json").version')
+          image="mcr.microsoft.com/playwright:v$version-noble"
+          if ! docker pull "$image"; then
+            echo "::error::Could not pull $image. Microsoft may not have published the image for this @playwright/test version yet."
+            exit 1
+          fi
+          cid=$(docker run -d --name playwright-browser-server --init --ipc=host --network host \
+            -v "$PWD:$PWD:ro" -w "$PWD" \
+            "$image" \
+            node node_modules/@playwright/test/cli.js run-server \
+            --port 3000 --host 127.0.0.1 --unsafe)
+          until curl -s http://127.0.0.1:3000/; do
+            [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { docker logs "$cid"; exit 1; }
+            sleep 1
+          done
         working-directory: frontend
 
       - name: Run E2E tests
@@ -918,3 +933,7 @@ jobs:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
           E2E_PREBUILT_SERVER: /tmp/agentsview
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
+
+      - name: Print Playwright browser server logs on failure
+        if: failure() && steps.browser_server.outcome == 'success'
+        run: docker logs playwright-browser-server

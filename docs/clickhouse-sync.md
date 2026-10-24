@@ -443,6 +443,17 @@ it, an upgraded `clickhouse serve` with that role fails to start with
 create tables adds the table itself at startup, so the order does not matter for
 it.
 
+#### Required system-table permissions
+
+Schema setup needs `SELECT ON system.projections` to inspect the prepared usage
+projections. This applies to `clickhouse push` and to `clickhouse serve` when
+its role can create tables. Without it, setup fails with
+`reading prepared usage projections` and an access-denied error. An
+administrator must run `GRANT SELECT ON system.projections TO <schema_user>`.
+For an XML-managed user, add `<query>GRANT SELECT ON system.projections</query>`
+to its `<grants>` and run `SYSTEM RELOAD USERS`. A read-only serve role does not
+need this grant; run a push with the schema-capable role first.
+
 The serve role also needs `GRANT SELECT ON system.parts`. The Activity report
 checks whether the mirror changed by hashing the active parts of its source
 tables before it rescans them. With the default server setting

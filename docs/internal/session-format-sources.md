@@ -140,6 +140,13 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Channel messages (2026-10-23):** Reverified against the synthetic Claude
+  Code 2.1.305 Telegram transcript in
+  [#2400](https://github.com/kenn-io/agentsview/issues/2400), kept in
+  `internal/parser/testdata/claude/channel_messages.jsonl`. Inbound channel
+  questions are `user` entries with `isMeta: true` and `origin.kind: channel`.
+  They remain user turns; other `isMeta` entries stay hidden. Transcript text
+  retains the `<channel>` envelope, while session previews show its body.
 - **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
   and ingest fixtures. Text blocks retain literal thinking and tool markers;
   separate thinking blocks remain available as reasoning. Cowork, iCodeMate
@@ -264,11 +271,11 @@ fixtures retain this field; missing identities remain source-local.
   `promptSource:"system"` carrying a delivery notice. Native parsing
   classifies a prompt that starts with `<cross-session-message` as a system
   row with `source_subtype` `peer_message`, keeping the wrapper so the sender
-  stays visible; `isMeta` user records stay dropped. Task notifications in the
-  same release are `type:"user"` records with
+  stays visible; non-channel `isMeta` user records remain dropped. Task
+  notifications in the same release are `type:"user"` records with
   `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
-  which the existing `task_notification` rule already covers. Checked against
-  a local transcript corpus; the synthetic fixture
+  which the existing `task_notification` rule already covers. Checked against a
+  local transcript corpus; the synthetic fixture
   `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
   shapes. Data version 126 reparses existing sessions once.
 
@@ -3523,6 +3530,23 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Model usage check (2026-10-22):**
+  [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
+  records per-model and billing-route deltas in `session_model_usage`.
+  Task-empty and `voice_chat` rows also update the session summary. Auxiliary
+  tasks, including background review and title generation, update only the
+  ledger. Cumulative gateway updates write only the summary. Agentsview counts
+  ledger rows plus each token bucket's uncovered summary remainder, so calls
+  count once and keep their recorded model. Missing ledgers retain summary
+  accounting; ledgers without `task` describe main usage. Member fingerprints
+  include ordered ledger keys and accounting fields for both Hermes and Augure
+  Desktop. Reverified the producer's delta transaction: main ledger costs use
+  the summary's cost basis, leaving only positive uncovered cost on its model.
+  Unknown summary cost preserves known ledger costs and lets catalog pricing
+  fill unknown costs. Sourced actual and included zeros remain known; default
+  zero estimates remain unknown. Malformed numeric rows warn and are omitted,
+  preserving valid rows and leaving uncovered main usage in the session
+  summary. Nullable ledger token counters count as zero.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

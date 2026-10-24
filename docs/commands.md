@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-04
+last_edited: 2026-10-22
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -8,9 +8,9 @@ description: All AgentsView commands, flags, and environment variables
 
 ### `agentsview archive`
 
-These commands are under development and are not in the latest release. They
-retain closed captures from several machines, recover their original files, and
-reparse Claude and Codex sessions after the original directories are gone.
+Available in 0.46.0 and later, these commands retain captures from several
+machines, recover their original files, and reparse Claude and Codex sessions
+after the original directories are gone.
 `capture` can snapshot live SQLite databases. Regular files must stay unchanged
 while copied; a changing transcript aborts the capture. Stop source writers for
 the final retirement capture. Stop the destination daemon before import,
@@ -1885,6 +1885,7 @@ agentsview insight list [--type <type>] [--project <project>] \
 agentsview insight get <id>
 agentsview insight generate --type daily_activity --date-from <date> \
   --date-to <date> [flags]
+agentsview insight generate --type tool_effectiveness --session-id <id>
 ```
 
 `insight list` accepts `--type`, `--project`, `--date-from`, and `--date-to`.
@@ -1898,6 +1899,12 @@ The type defaults to `daily_activity`. The server validates fields, selects the
 configured agent or endpoint, and decides whether the selected backend can save
 the result. Local commands discover or start the configured daemon; an explicit
 `--server <url>` targets an already running server.
+
+Use `tool_effectiveness` with `--session-id` to assess one session's tool calls.
+The saved report marks conclusions as helped, did not help, or unclear and
+cites the calls behind them. See
+[Tool effectiveness reports](/docs/recall/#tool-effectiveness-reports) for the
+input limits and what is sent to the configured model.
 
 Generation status and log events go to stderr. The saved insight is the only
 result written to stdout, which keeps JSON output usable in scripts. For an

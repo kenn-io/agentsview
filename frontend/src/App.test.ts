@@ -220,6 +220,7 @@ describe("App Recall availability", () => {
       api_version: 1,
       data_version: 1,
       session_stats_available: false,
+      friction_available: false,
       insight_generation_available: false,
       version: "dev",
       commit: "unknown",

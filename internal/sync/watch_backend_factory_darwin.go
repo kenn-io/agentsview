@@ -873,7 +873,7 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 	}
 	for _, state := range b.logical {
 		lossSignaled := state.signal.Swap(0)&darwinRootSignalLoss != 0
-		if lossSignaled {
+		if lossSignaled && state.active {
 			state.lossRequested = true
 		}
 		if state.lossRequested && state.active &&

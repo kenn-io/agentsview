@@ -34,6 +34,11 @@ measured tool time from unattributed time and links activity rows to the
 transcript. Timing and health scores answer different questions: where time
 went, and what patterns deserve attention.
 
+For a model assessment of which calls helped, open **Session actions > Analyze
+tool effectiveness**. Its saved report cites the calls behind each conclusion.
+See [Tool effectiveness reports](/docs/recall/#tool-effectiveness-reports) for
+how to generate and read it, including what is sent to the model.
+
 ## Health Score
 
 The health score is a penalty-based score out of 100. AgentsView

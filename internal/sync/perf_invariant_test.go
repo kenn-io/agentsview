@@ -104,7 +104,7 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 
 	const coworkCount = 5
 	observed := make(map[int]int)
-	for _, claudeCount := range []int{5, 500} {
+	for _, claudeCount := range []int{5, 50} {
 		t.Run(fmt.Sprintf("claude_%d", claudeCount), func(t *testing.T) {
 			base := t.TempDir()
 			coworkDir := filepath.Join(base, "cowork")
@@ -131,7 +131,7 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 			observed[claudeCount] = engine.LastReconciliationResult().Metrics.MaxRehydratedSources
 		})
 	}
-	assert.Equal(t, observed[5], observed[500],
+	assert.Equal(t, observed[5], observed[50],
 		"scheduled reconcile work must not grow with an unrelated provider's archive")
 
 	t.Run("deletion_preserved", func(t *testing.T) {

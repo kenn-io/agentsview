@@ -383,8 +383,7 @@ interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
 An SSH entry needs no daemon and no install on the remote host. It runs your
-`ssh` client. The SSH transport is newer than the latest release and is
-available on `main`:
+`ssh` client. SSH transport is available in 0.46.0 and later:
 
 ```toml
 [[remote_hosts]]
@@ -1020,36 +1019,53 @@ databases and AES-encrypted `.pb` files. AgentsView reads whichever source is
 richest, in this order:
 
 1. **Decrypted trajectory sidecar.** For either format, if a
-    `<uuid>.trajectory.json` file sits next to the source `.db` or `.pb` file
-    (under `conversations/` or `implicit/`) and covers the session, AgentsView
-    uses it as the source of truth for the full structured transcript —
-    messages, tool calls, tool results, reasoning, and diffs. This is the
-    highest-fidelity source for both formats. These sidecars are written
-    out-of-process by [agy-reader](https://github.com/mjacobs/agy-reader),
-    which performs the decryption; AgentsView reads the resulting plain JSON as
-    untrusted input and needs no `ANTIGRAVITY_KEY` in this mode.
+   `<uuid>.trajectory.json` file sits next to the source `.db` or `.pb` file
+   (under `conversations/` or `implicit/`) and covers the session, AgentsView
+   uses it as the source of truth for the full structured transcript — messages,
+   tool calls, tool results, reasoning, and diffs. This is the highest-fidelity
+   source for both formats. These sidecars are written out-of-process by
+   [agy-reader](https://github.com/mjacobs/agy-reader), which performs the
+   decryption; AgentsView reads the resulting plain JSON as untrusted input and
+   needs no `ANTIGRAVITY_KEY` in this mode.
+1. **Plaintext brain transcript.** Since 0.46.1, AgentsView reads
+   `brain/<uuid>/.system_generated/logs/transcript.jsonl`. For SQLite sessions,
+   it uses this transcript when it covers every database step. Model and token
+   usage from the database attach to the matching model replies. Prompts from
+   `history.jsonl` that the transcript has not recorded yet are added back;
+   repeated prompts stay separate turns. For older `.pb` sessions, a brain
+   transcript can supply the conversation without a decryption key.
 1. **SQLite trajectory database.** Newer Antigravity CLI releases write
-    `conversations/<uuid>.db`. Without a covering sidecar (above), AgentsView
-    opens the database read-only and decodes the trajectory steps directly.
-    This direct decode is heuristic: it recovers prompts and tool-call names
-    but not full structured tool results, reasoning, or diffs — a degraded
-    **summary mode** transcript. If both `conversations/<uuid>.db` and
-    `conversations/<uuid>.pb` exist, the SQLite database wins. Change detection
-    also factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active sessions
-    resync as SQLite sidecar files move.
+   `conversations/<uuid>.db`. Without a covering sidecar or brain transcript,
+   AgentsView opens the database read-only and decodes the trajectory steps
+   directly. This direct decode is heuristic: it recovers prompts and tool-call
+   names but not full structured tool results, reasoning, or diffs — a degraded
+   **summary mode** transcript. If both `conversations/<uuid>.db` and
+   `conversations/<uuid>.pb` exist, the SQLite database wins. Change detection
+   includes data-bearing `<uuid>.db-wal` changes. SQLite's temporary
+   `<uuid>.db-shm` index does not trigger a re-import.
 1. **In-process `.pb` decryption.** With no sidecar present, set
-    `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32 bytes after decoding)
-    before starting AgentsView and it decrypts the `.pb` payloads itself,
-    mirroring the upstream Python tool
-    [`antigravity_decryptor`](https://github.com/arashz/antigravity_decryptor).
+   `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32 bytes after decoding)
+   before starting AgentsView and it decrypts the `.pb` payloads itself,
+   mirroring the upstream Python tool
+   [`antigravity_decryptor`](https://github.com/arashz/antigravity_decryptor).
 1. **Plaintext summary mode.** Otherwise AgentsView reads only `history.jsonl`
-    and the `brain/` summaries — enough to populate session metadata and a
-    high-level transcript.
+   and the `brain/` summaries — enough to populate session metadata and a
+   high-level transcript.
 
-Any session not backed by a covering sidecar — heuristic `.db` decode,
-in-process `.pb` decryption, or plaintext summary mode — shows a "Summary mode"
-badge in the detail header. Install `agy-reader` when you want high-resolution
-transcripts for `.db` and `.pb` sessions alike:
+If the database cannot be read, AgentsView keeps archived replies and reports
+the parse error unless a trajectory sidecar supplies the transcript. A brain
+transcript alone cannot establish coverage of an unreadable database. Partial
+transcripts from readable databases remain eligible for retry.
+
+Antigravity IDE and CLI databases work on read-only mounts when their pending
+writes have been checkpointed into the database. AgentsView does not ignore
+uncheckpointed writes to make a read succeed. The 0.46.1 upgrade reprocesses
+existing Antigravity CLI sessions to recover missing repeated turns.
+
+Heuristic `.db` decode, in-process `.pb` decryption, and plaintext summary mode
+show a "Summary mode" badge in the detail header. Covering trajectory sidecars
+and brain transcripts show the full transcript. Install `agy-reader` when you
+need a structured trajectory sidecar for `.db` or `.pb` sessions:
 
 ```bash
 go install github.com/mjacobs/agy-reader@latest
@@ -2011,6 +2027,9 @@ transcript a second time.
 ```toml
 [friction]
 enabled = true
+backfill_days = 7
+timezone = "" # Local time on SQLite, UTC on PostgreSQL; or an IANA zone.
+seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
 ```
 
 Restart the daemon after changing this setting. When enabled:
@@ -2028,6 +2047,34 @@ Restart the daemon after changing this setting. When enabled:
   restored archive-only database. Its sessions are reviewed before a
   PostgreSQL push. A `--no-sync` daemon also catches up after it restarts with
   automatic sync.
+
+An hourly job builds one stored digest per completed local day, catching up
+within `backfill_days` (1–3650, default 7). It never builds today. Set
+`AGENTSVIEW_FRICTION_TZ` to override the configured timezone. Seat patterns label
+digest findings from session paths without changing the stored detections.
+
+Digests keep Markdown, schema 1 summary JSON, frozen findings and usage,
+session membership, and pattern recurrence. SQLite keeps this state through a
+full resync when the archive retains transcript text. Usage-only SQLite archives
+do not build or update digests. PostgreSQL builds its own digests from pushed
+findings when its serving role can write the review tables. Read APIs and CLI
+commands arrive in a later slice; this change stores the digests but does not
+expose a digest page.
+
+Local days wait until their sessions have current findings; the wait does not
+expire. Other completed days can build while review catches up. PostgreSQL uses
+the findings pushed by each source, including other rules versions, and skips
+sessions whose source has not enabled review. Sessions over the review budget
+are excluded immediately.
+
+Catch-up fills missing dates throughout `backfill_days`, including empty days,
+and revisits dates with unrecorded sessions inside that window, so late
+syncs and pushes update an existing digest. A session belongs to only one digest
+even if it resumes later, and rebuilding does not count its patterns twice.
+Sessions that arrive or finish review outside the window require a larger
+`backfill_days` setting. Each daily build holds the sync lock only for that day.
+PostgreSQL defaults to UTC; configure the same timezone on every process serving
+the same hub.
 
 Hosted raw sync reviews sessions as it projects them, whatever this setting
 says. See [Hosted Raw Sync](/docs/hosted-raw-sync/).

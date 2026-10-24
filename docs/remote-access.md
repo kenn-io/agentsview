@@ -159,7 +159,7 @@ single-host selection and failure behavior.
 
 SSH remote sync collects sessions from a machine you can reach with `ssh`. The
 remote machine needs no AgentsView install and no running daemon. The feature is
-newer than the latest release and is available on `main`.
+available in 0.46.0 and later.
 
 ### Set Up
 

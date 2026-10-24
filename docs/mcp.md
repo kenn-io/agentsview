@@ -47,9 +47,10 @@ IPv6) so local clients can connect. Other bound addresses remain unchanged.
 
 The listener publishes its actual bound port after startup, including when
 started with port zero, and removes its record on orderly shutdown. Status omits
-records whose process has exited. Stdio sessions are not listening endpoints and
-do not appear. An empty JSON list means no HTTP listeners were found in this
-application's configured data directory.
+records it can determine have exited. Records from another PID namespace remain
+listed when kit cannot judge their process identity. Stdio sessions are not
+listening endpoints and do not appear. An empty JSON list means no HTTP
+listeners were found in this application's configured data directory.
 
 ## Quick Start
 

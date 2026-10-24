@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -1104,6 +1105,11 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != ""
 }
 
+func isHiddenClaudeMeta(line string) bool {
+	return gjson.Get(line, "isMeta").Bool() &&
+		gjson.Get(line, "origin.kind").Str != "channel"
+}
+
 func claudeSDKPrompt(line string) bool {
 	return gjson.Get(line, "turnOrigin").Str == "sdk" &&
 		gjson.Get(line, "origin.kind").Str != "human"
@@ -1127,10 +1133,9 @@ func claudeWorkerMessages(entrypoint, kind string, messages []ParsedMessage) boo
 // already carried by collectClaudeSubagentLinks. Only result-bearing
 // links suppress a late result: a queue/progress mapping for the same
 // tool_use carries no content, so its result still has to be copied
-// here. isMeta carriers are skipped: the full parser drops those lines
-// entirely, so their result content never reaches the stored tool call
-// there either. Results
-// whose tool_use id is unknown to the store no-op at apply time,
+// here. isMeta carriers remain excluded from tool-result linkage, even when
+// their channel text is visible in the transcript. Results whose tool_use id
+// is unknown to the store no-op at apply time,
 // matching the full parser's unpaired-result behavior.
 func collectClaudeUnmatchedToolResults(
 	entries []dagEntry, agentLinks []ClaudeSubagentLink,
@@ -1362,7 +1367,7 @@ func extractMessagesFrom(
 		}
 
 		if e.entryType == "user" {
-			if gjson.Get(e.line, "isMeta").Bool() {
+			if isHiddenClaudeMeta(e.line) {
 				continue
 			}
 		}
@@ -1461,6 +1466,8 @@ func extractMessagesFrom(
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			tokenPresenceKnown: e.entryType == "assistant",
+
+			claudeChannelOrigin: gjson.Get(e.line, "origin.kind").Str == "channel",
 		}
 
 		if e.entryType == "assistant" {
@@ -1653,7 +1660,7 @@ func parseDAG(
 			}
 
 			// Fork point: count user turns on first child's branch.
-			firstChildTurns, err := countUserTurnsContext(
+			firstChildTurns, channelTurns, err := countUserTurnsContext(
 				ctx, entries, children, kids[0],
 			)
 			if err != nil {
@@ -1663,9 +1670,13 @@ func parseDAG(
 				// Small-gap retry: follow the last child.
 				current = kids[len(kids)-1]
 			} else {
-				// Large-gap fork: follow first child on main,
-				// collect other children as fork branches.
-				for _, kid := range kids[1:] {
+				mainKid, forkKids := kids[0], kids[1:]
+				if firstChildTurns-channelTurns <= forkThreshold {
+					// Newly visible channel turns retain the discarded branch
+					// as a fork; the stored retry keeps its existing identity.
+					mainKid, forkKids = kids[len(kids)-1], kids[:len(kids)-1]
+				}
+				for _, kid := range forkKids {
 					forkSID := sessionID + "-" +
 						entries[kid].uuid
 					forkPath, err := walkBranch(kid, forkSID)
@@ -1680,7 +1691,7 @@ func parseDAG(
 						},
 					)
 				}
-				current = kids[0]
+				current = mainKid
 			}
 		}
 
@@ -2590,28 +2601,31 @@ func countUserTurnsContext(
 	entries []dagEntry,
 	children map[string][]int,
 	startIdx int,
-) (int, error) {
-	count := 0
+) (int, int, error) {
+	count, channelCount := 0, 0
 	stack := []int{startIdx}
 	visited := 0
 	for len(stack) > 0 {
 		if err := contextErrEvery(ctx, visited); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		visited++
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if isCountedClaudeUserTurn(ctx, entries[current]) {
 			count++
+			if gjson.Get(entries[current].line, "isMeta").Bool() {
+				channelCount++
+			}
 		}
 		stack = append(stack, children[entries[current].uuid]...)
 	}
-	return count, ctx.Err()
+	return count, channelCount, ctx.Err()
 }
 
 func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
 	if entry.entryType != "user" ||
-		gjson.Get(entry.line, "isMeta").Bool() ||
+		isHiddenClaudeMeta(entry.line) ||
 		gjson.Get(entry.line, "isCompactSummary").Bool() {
 		return false
 	}
@@ -2681,7 +2695,7 @@ func extractMessagesContext(
 
 		// Tier 1: skip system-injected user entries.
 		if e.entryType == "user" {
-			if gjson.Get(e.line, "isMeta").Bool() {
+			if isHiddenClaudeMeta(e.line) {
 				continue
 			}
 		}
@@ -2779,6 +2793,8 @@ func extractMessagesContext(
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			claudeSDKOrigin:    claudeSDKPrompt(e.line),
 			tokenPresenceKnown: e.entryType == "assistant",
+
+			claudeChannelOrigin: gjson.Get(e.line, "origin.kind").Str == "channel",
 		}
 
 		if e.entryType == "assistant" {
@@ -3166,12 +3182,38 @@ func firstMessageAndUserCountContext(
 		userCount++
 		if firstMsg == "" &&
 			!IsSkippablePreviewCommand(m.Content) {
+			preview := m.Content
+			if m.claudeChannelOrigin {
+				preview = claudeChannelPreview(preview)
+			}
 			firstMsg = truncate(
-				strings.ReplaceAll(m.Content, "\n", " "), 300,
+				strings.ReplaceAll(preview, "\n", " "), 300,
 			)
 		}
 	}
 	return firstMsg, userCount, ctx.Err()
+}
+
+// claudeChannelPreview parses opening tags only: channel bodies are user text,
+// so XML characters in a question must remain literal.
+func claudeChannelPreview(text string) string {
+	remaining := strings.TrimSpace(text)
+	var bodies []string
+	for remaining != "" {
+		decoder := xml.NewDecoder(strings.NewReader(remaining))
+		token, err := decoder.Token()
+		opening, ok := token.(xml.StartElement)
+		if err != nil || !ok || opening.Name.Local != "channel" || opening.Name.Space != "" {
+			return text
+		}
+		body, tail, ok := strings.Cut(remaining[decoder.InputOffset():], "</channel>")
+		if !ok {
+			return text
+		}
+		bodies = append(bodies, strings.TrimSpace(body))
+		remaining = strings.TrimSpace(tail)
+	}
+	return strings.Join(bodies, " ")
 }
 
 func isRealClaudeUserMessage(m ParsedMessage) bool {

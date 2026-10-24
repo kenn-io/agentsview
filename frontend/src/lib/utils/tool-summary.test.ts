@@ -354,6 +354,68 @@ describe("summarizeToolCall", () => {
         ),
       ).toBe("TODO");
     });
+
+    it.each([
+      ["Found 1 file\nsrc/a.go", "TODO (1 files)"],
+      ["Found 2 files\nsrc/a.go\nsrc/b.go", "TODO (2 files)"],
+      ["Found 2 files limit: 2, offset: 0\nsrc/a.go\nsrc/b.go", "TODO (2 files)"],
+    ])("reads the file total from files_with_matches output %j", (result_content, expected) => {
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "Grep",
+            category: "Grep",
+            input_json: JSON.stringify({ pattern: "TODO" }),
+            result_content,
+          }),
+        ),
+      ).toBe(expected);
+    });
+
+    it("reads the match total from OpenCode output", () => {
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "grep",
+            category: "Grep",
+            input_json: JSON.stringify({ pattern: "TODO" }),
+            result_content:
+              "Found 2 matches\n/repo/a.go:\n  Line 1: TODO\n\n/repo/b.go:\n  Line 7: TODO",
+          }),
+        ),
+      ).toBe("TODO (2 matches)");
+    });
+
+    it("leaves the pagination note out of the count", () => {
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "Grep",
+            category: "Grep",
+            input_json: JSON.stringify({ pattern: "TODO", output_mode: "content", head_limit: 2 }),
+            result_content:
+              "a.go:1:TODO\nb.go:2:TODO\n\n[Showing results with pagination = limit: 2, offset: 0]",
+          }),
+        ),
+      ).toBe("TODO (2 matches)");
+    });
+
+    it.each([
+      "No files found",
+      "No matches found",
+      "No matches found\n\n[Showing results with pagination = limit: 15, offset: 0]",
+    ])("omits the count for the empty reply %j", (result_content) => {
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "Grep",
+            category: "Grep",
+            input_json: JSON.stringify({ pattern: "TODO" }),
+            result_content,
+          }),
+        ),
+      ).toBe("TODO");
+    });
   });
 
   describe("Glob", () => {
@@ -378,6 +440,19 @@ describe("summarizeToolCall", () => {
             category: "Glob",
             input_json: JSON.stringify({ pattern: "**/*.ts" }),
             result_content: "   ",
+          }),
+        ),
+      ).toBe("**/*.ts");
+    });
+
+    it("omits the count when no files are found", () => {
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "Glob",
+            category: "Glob",
+            input_json: JSON.stringify({ pattern: "**/*.ts" }),
+            result_content: "No files found",
           }),
         ),
       ).toBe("**/*.ts");

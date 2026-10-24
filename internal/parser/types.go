@@ -1708,6 +1708,9 @@ type ParsedMessage struct {
 	IsSidechain       bool
 	IsCompactBoundary bool
 
+	// claudeChannelOrigin limits preview unwrapping to channel entries.
+	claudeChannelOrigin bool
+
 	// StopReason is the reason the assistant stopped generating
 	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";
 	// other agents may use their own vocabulary or leave it empty).

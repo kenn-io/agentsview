@@ -29,7 +29,9 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	141: {parser.AgentGptme},
 	142: {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentIflow, parser.AgentClaude, parser.AgentCowork, parser.AgentIcodemate, parser.AgentQoder, parser.AgentCursor, parser.AgentAmp, parser.AgentOpenClaude, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands},
 	143: {parser.AgentAntigravityCLI},
-	144: {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentIflow, parser.AgentClaude, parser.AgentCowork, parser.AgentIcodemate, parser.AgentQoder, parser.AgentCursor, parser.AgentAmp, parser.AgentOpenClaude, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands, parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+	144: {parser.AgentHermes, parser.AgentAugureDesktop},
+	145: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
+	146: {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentIflow, parser.AgentClaude, parser.AgentCowork, parser.AgentIcodemate, parser.AgentQoder, parser.AgentCursor, parser.AgentAmp, parser.AgentOpenClaude, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands, parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

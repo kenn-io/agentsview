@@ -12,14 +12,41 @@ function countLines(s: string): number {
   return body === "" ? 0 : body.split("\n").length;
 }
 
-/** Count non-empty lines, or null when empty/blank (used for result lists). */
-function countResultLines(s: string | undefined): number | null {
+/** Replies Claude Code and OpenCode give when a search finds nothing. */
+const EMPTY_SEARCH_REPLIES = new Set(["No files found", "No matches found"]);
+
+/** Total that Claude Code's files_with_matches mode and OpenCode put above a
+ *  result list: "Found 1 file", "Found 10 files limit: 10, offset: 0", or
+ *  "Found 2 matches". */
+const SEARCH_TOTAL_RE = /^Found (\d+) (file|match)(?:es|s)?\b/;
+
+/** Note Claude Code appends to Grep output when head_limit or offset is set. */
+const PAGINATION_NOTE = "[Showing results with pagination = ";
+
+interface SearchCount {
+  count: number;
+  /** What the reply's own total counts, when it states one. */
+  unit?: "files" | "matches";
+}
+
+/** Count the results a search reply lists, or null when it lists none. A
+ *  leading total wins; otherwise count non-empty lines, leaving out the
+ *  pagination note and the reply for an empty search. */
+function countSearchResults(s: string | undefined): SearchCount | null {
   if (!s) return null;
-  let n = 0;
-  for (const line of s.split("\n")) {
-    if (line.trim() !== "") n += 1;
+  const lines = s
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith(PAGINATION_NOTE));
+  const [first = ""] = lines;
+  const total = SEARCH_TOTAL_RE.exec(first);
+  if (total) {
+    const count = Number(total[1]);
+    if (count === 0) return null;
+    return { count, unit: total[2] === "file" ? "files" : "matches" };
   }
-  return n > 0 ? n : null;
+  if (lines.length === 1 && EMPTY_SEARCH_REPLIES.has(first)) return null;
+  return lines.length > 0 ? { count: lines.length } : null;
 }
 
 function firstLine(s: string): string {
@@ -172,16 +199,16 @@ export function summarizeToolCall(toolCall: ToolCall): string | null {
     if (!pattern) return null;
     let suffix = "";
     if (p.output_mode !== "count") {
-      const n = countResultLines(toolCall.result_content);
-      if (n != null) suffix = ` (${n} matches)`;
+      const results = countSearchResults(toolCall.result_content);
+      if (results) suffix = ` (${results.count} ${results.unit ?? "matches"})`;
     }
     return `${pattern.slice(0, MAX)}${suffix}`;
   }
   if (key === "Glob") {
     const pattern = asString(p.pattern);
     if (!pattern) return null;
-    const n = countResultLines(toolCall.result_content);
-    const suffix = n != null ? ` (${n} files)` : "";
+    const results = countSearchResults(toolCall.result_content);
+    const suffix = results ? ` (${results.count} files)` : "";
     return `${pattern.slice(0, MAX)}${suffix}`;
   }
 

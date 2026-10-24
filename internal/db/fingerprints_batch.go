@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -66,9 +67,10 @@ func (m fingerprintBuilders) mergeInto(out map[string]string) {
 // MessageContentAggregate mirrors MessageContentFingerprint's
 // sum/max/min triple for the batched lookup.
 type MessageContentAggregate struct {
-	Sum int64
-	Max int64
-	Min int64
+	Count int
+	Sum   int64
+	Max   int64
+	Min   int64
 }
 
 // MessageContentFingerprints is the batched twin of
@@ -81,7 +83,7 @@ func (db *DB) MessageContentFingerprints(ctx context.Context,
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(ctx, `
-			SELECT session_id, COALESCE(SUM(content_length), 0),
+			SELECT session_id, COUNT(*), COALESCE(SUM(content_length), 0),
 				COALESCE(MAX(content_length), 0),
 				COALESCE(MIN(content_length), 0)
 			FROM messages
@@ -97,7 +99,7 @@ func (db *DB) MessageContentFingerprints(ctx context.Context,
 			var sessionID string
 			var agg MessageContentAggregate
 			if err := rows.Scan(
-				&sessionID, &agg.Sum, &agg.Max, &agg.Min,
+				&sessionID, &agg.Count, &agg.Sum, &agg.Max, &agg.Min,
 			); err != nil {
 				return err
 			}
@@ -475,16 +477,16 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 		var indexer toolCallIndexer
 		for rows.Next() {
 			var sessionID string
-			var r toolCallFingerprintRow
+			var r ToolCallFingerprintFields
 			if err := rows.Scan(
-				&sessionID, &r.messageOrdinal, &r.toolName, &r.category,
-				&r.toolUseID, &r.inputJSON, &r.skillName,
-				&r.subagentSessionID, &r.resultContentLength,
-				&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
+				&sessionID, &r.MessageOrdinal, &r.ToolName, &r.Category,
+				&r.ToolUseID, &r.InputValue, &r.SkillName,
+				&r.SubagentSessionID, &r.ResultContentLength,
+				&r.ResultValue, &r.FilePathValue, &r.ObservedOutcome, &r.ObservedRepeat, &r.SequenceEnding,
 			); err != nil {
 				return err
 			}
-			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
+			r.CallIndex = indexer.next(sessionID, r.MessageOrdinal)
 			r.appendTo(builders.get(sessionID))
 		}
 		if err := rows.Err(); err != nil {
@@ -727,46 +729,69 @@ func (r flagsFingerprintRow) appendTo(b *strings.Builder) {
 		r.ordinal, r.isSystem, r.hasThinking, r.hasToolUse, sum)
 }
 
-type toolCallFingerprintRow struct {
-	messageOrdinal      int
-	callIndex           int
-	toolName            string
-	category            string
-	toolUseID           string
-	inputJSON           string
-	skillName           string
-	subagentSessionID   string
-	resultContentLength int
-	resultContent       string
-	filePath            string
-	observedOutcome     string
-	observedRepeat      string
-	sequenceEnding      string
+// ToolCallFingerprintFields holds one tool-call fingerprint row.
+// InputValue, ResultValue, and FilePathValue hold text for persisted fingerprints
+// or hexadecimal SHA-256 digests for compact comparisons.
+type ToolCallFingerprintFields struct {
+	MessageOrdinal      int
+	CallIndex           int
+	ToolName            string
+	Category            string
+	ToolUseID           string
+	InputValue          string
+	SkillName           string
+	SubagentSessionID   string
+	ResultContentLength int
+	ResultValue         string
+	FilePathValue       string
+	ObservedOutcome     string
+	ObservedRepeat      string
+	SequenceEnding      string
 }
 
-func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
-	toolName := SanitizeUTF8(r.toolName)
-	category := SanitizeUTF8(r.category)
-	toolUseID := SanitizeUTF8(r.toolUseID)
-	inputJSON := SanitizeUTF8(r.inputJSON)
-	skillName := SanitizeUTF8(r.skillName)
-	subagentSessionID := SanitizeUTF8(r.subagentSessionID)
-	resultContent := SanitizeUTF8(r.resultContent)
-	filePath := SanitizeUTF8(r.filePath)
+func (r ToolCallFingerprintFields) sanitized() ToolCallFingerprintFields {
+	r.ToolName = SanitizeUTF8(r.ToolName)
+	r.Category = SanitizeUTF8(r.Category)
+	r.ToolUseID = SanitizeUTF8(r.ToolUseID)
+	r.InputValue = SanitizeUTF8(r.InputValue)
+	r.SkillName = SanitizeUTF8(r.SkillName)
+	r.SubagentSessionID = SanitizeUTF8(r.SubagentSessionID)
+	r.ResultValue = SanitizeUTF8(r.ResultValue)
+	r.FilePathValue = SanitizeUTF8(r.FilePathValue)
+	return r
+}
+
+func (r ToolCallFingerprintFields) appendTo(b *strings.Builder) {
+	AppendToolCallFingerprintFields(b, r.sanitized())
+}
+
+// AppendToolCallFingerprintFields appends one length-prefixed tool-call row.
+func AppendToolCallFingerprintFields(b *strings.Builder, r ToolCallFingerprintFields) {
 	fmt.Fprintf(b,
 		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-		r.messageOrdinal, r.callIndex,
-		len(toolName), toolName,
-		len(category), category,
-		len(toolUseID), toolUseID,
-		len(inputJSON), inputJSON,
-		len(skillName), skillName,
-		len(subagentSessionID), subagentSessionID,
-		r.resultContentLength,
-		len(resultContent), resultContent,
-		len(filePath), filePath,
+		r.MessageOrdinal, r.CallIndex,
+		len(r.ToolName), r.ToolName,
+		len(r.Category), r.Category,
+		len(r.ToolUseID), r.ToolUseID,
+		len(r.InputValue), r.InputValue,
+		len(r.SkillName), r.SkillName,
+		len(r.SubagentSessionID), r.SubagentSessionID,
+		r.ResultContentLength,
+		len(r.ResultValue), r.ResultValue,
+		len(r.FilePathValue), r.FilePathValue,
 	)
-	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
+	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.ObservedOutcome), r.ObservedOutcome, len(r.ObservedRepeat), r.ObservedRepeat, len(r.SequenceEnding), r.SequenceEnding)
+}
+
+func (r ToolCallFingerprintFields) appendComparisonTo(b *strings.Builder) {
+	r = r.sanitized()
+	inputHash := sha256.Sum256([]byte(r.InputValue))
+	resultHash := sha256.Sum256([]byte(r.ResultValue))
+	pathHash := sha256.Sum256([]byte(r.FilePathValue))
+	r.InputValue = hex.EncodeToString(inputHash[:])
+	r.ResultValue = hex.EncodeToString(resultHash[:])
+	r.FilePathValue = hex.EncodeToString(pathHash[:])
+	AppendToolCallFingerprintFields(b, r)
 }
 
 // toolCallIndexer derives the per-message call index from rows ordered by
@@ -833,4 +858,65 @@ func (r toolResultEventFingerprintRow) appendTo(
 		contentSum,
 		len(timestamp), timestamp,
 	)
+}
+
+// MessageComparisonFields holds the encoded streams for a published message.
+type MessageComparisonFields struct {
+	ContentHash string
+	RoleTime    string
+	Flags       string
+	Dialogue    string
+	Token       string
+	ToolCalls   string
+	ToolResults string
+}
+
+// MessageComparisonRow describes every published message field and its
+// dependent calls and events, using the same encodings as session comparisons.
+func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) MessageComparisonFields {
+	var contentHash, roleTime, flags, dialogue, token, toolCalls, toolResults strings.Builder
+	appendContentHashFingerprintRow(&contentHash, m.Ordinal, m.ContentLength, m.Content)
+	appendRoleTimeFingerprintRow(&roleTime, m.Ordinal, m.Role, m.Timestamp, normalizeTimestamp)
+	flagsFingerprintRow{ordinal: m.Ordinal, isSystem: m.IsSystem, hasThinking: m.HasThinking, hasToolUse: m.HasToolUse, thinkingText: m.ThinkingText}.appendTo(&flags)
+	if m.DialogueText != nil {
+		EncodeMessageDialogueFingerprint(&dialogue, m.Ordinal, *m.DialogueText)
+	}
+	tokenFingerprintRow{
+		ordinal: m.Ordinal, model: m.Model, reasoningEffort: m.ReasoningEffort, providerID: m.ProviderID, tokenUsage: string(m.TokenUsage),
+		contextTokens: m.ContextTokens, outputTokens: m.OutputTokens, hasContextTokens: m.HasContextTokens, hasOutputTokens: m.HasOutputTokens,
+		claudeMessageID: m.ClaudeMessageID, claudeRequestID: m.ClaudeRequestID, sourceType: m.SourceType, sourceSubtype: m.SourceSubtype,
+		promptSource: m.PromptSource, sourceUUID: m.SourceUUID, sourceParentUUID: m.SourceParentUUID, isSidechain: m.IsSidechain, isCompactBoundary: m.IsCompactBoundary,
+	}.appendTo(&token)
+	for i, tc := range m.ToolCalls {
+		call := ToolCallFingerprintFields{
+			MessageOrdinal: m.Ordinal, CallIndex: i, ToolName: tc.ToolName, Category: tc.Category, ToolUseID: tc.ToolUseID, InputValue: tc.InputJSON,
+			SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID, ResultContentLength: tc.ResultContentLength,
+			ResultValue: DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents), FilePathValue: tc.FilePath,
+		}
+		if tc.ObservedOutcome != nil {
+			call.ObservedOutcome = *tc.ObservedOutcome
+		}
+		if tc.ObservedRepeat != nil {
+			call.ObservedRepeat = *tc.ObservedRepeat
+		}
+		if tc.SequenceEnding != nil {
+			call.SequenceEnding = *tc.SequenceEnding
+		}
+		call.appendComparisonTo(&toolCalls)
+		for _, ev := range tc.ResultEvents {
+			toolResultEventFingerprintRow{
+				messageOrdinal: m.Ordinal, callIndex: i, eventIndex: ev.EventIndex, toolUseID: ev.ToolUseID, agentID: ev.AgentID,
+				subagentSessionID: ev.SubagentSessionID, source: ev.Source, status: ev.Status, content: ev.Content, contentLength: ev.ContentLength, timestamp: ev.Timestamp,
+			}.appendTo(&toolResults, normalizeTimestamp)
+		}
+	}
+	return MessageComparisonFields{
+		ContentHash: contentHash.String(),
+		RoleTime:    roleTime.String(),
+		Flags:       flags.String(),
+		Dialogue:    dialogue.String(),
+		Token:       token.String(),
+		ToolCalls:   toolCalls.String(),
+		ToolResults: toolResults.String(),
+	}
 }

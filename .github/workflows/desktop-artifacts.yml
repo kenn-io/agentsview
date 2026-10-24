@@ -25,8 +25,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "24.22.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: make frontend
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: desktop-frontend
+          path: frontend/dist
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+
   build:
     name: Desktop Build (${{ matrix.name }})
+    needs: frontend
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -55,8 +79,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: desktop-frontend
+          path: frontend/dist
+
       - uses: ./.github/actions/build-desktop-artifact
         with:
+          frontend_prebuilt: 'true'
           bundle: ${{ matrix.bundle }}
           target_triple: ${{ matrix.target_triple }}
           artifact_name: ${{ matrix.artifact_name }}

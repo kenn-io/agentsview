@@ -12,7 +12,43 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/daemon"
 )
+
+func TestListUnknownIdentityWithoutLocalPID(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity daemon.ProcessIdentity
+		listed   bool
+	}{
+		{"unknown identity", "future-v1:unavailable", true},
+		{"no identity", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.Chmod(dir, 0o700))
+			const pid = 1<<30 - 1
+			require.False(t, daemon.ProcessAlive(pid))
+			rec := daemon.RuntimeRecord{
+				Service: "agentsview-mcp", PID: pid,
+				Network: "tcp", Address: "127.0.0.1:4321",
+				ProcessIdentityV2: tc.identity,
+				Metadata:          map[string]string{"url": "http://127.0.0.1:4321/mcp"},
+			}
+			path, err := (daemon.RuntimeStore{Dir: dir, Prefix: "mcp"}).Write(rec)
+			require.NoError(t, err)
+
+			rows, err := List(dir)
+			require.NoError(t, err)
+			if tc.listed {
+				assert.Equal(t, []Endpoint{{PID: pid, Transport: "http", URL: "http://127.0.0.1:4321/mcp"}}, rows)
+			} else {
+				assert.Empty(t, rows)
+			}
+			assert.FileExists(t, path)
+		})
+	}
+}
 
 func TestPublishedURLConnectsToListener(t *testing.T) {
 	for _, tc := range []struct {

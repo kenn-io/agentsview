@@ -5,9 +5,6 @@ recorded conversations from more than 60 agent formats, compare activity and
 costs, and reuse lessons from past work. The archive stays on your machine
 unless you turn on a feature that shares it.
 
-[New in v0.45.0](/docs/changelog/#0450): Spanish, Junie/OMO/StepCode sessions,
-tool sequences, and conversation-memory plugins.
-
 ## Install
 
 On macOS or Linux:
@@ -40,6 +37,12 @@ OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more. Every
 supported source is listed in
 [session discovery](/docs/configuration/#session-discovery).
 
+Import [Claude.ai chats through Chrome](/docs/chat-import/#sync-claudeai-chats),
+including Google sign-in. Enable [Codex Cloud](/docs/configuration/#codex-cloud)
+on one machine to fetch ChatGPT dot, Codex web, and cloud task chats. Cloud
+chats without token counts show plan usage; optional live capture records only
+turns heard while connected and can send queued messages.
+
 - **60+** agent formats parsed
 - **1** binary, zero accounts
 - **SQLite** archive of record
@@ -59,7 +62,9 @@ dashboard adds message-role comparisons and Git outcome totals.
 instead of reparsing raw session files every time. Pricing tracks LiteLLM and
 OpenRouter rates with an offline fallback, and cache-aware accounting covers
 prompt-cache creation and reads. Compare Total Input with Uncached Input, and
-choose Smooth, Lines, or Bars for the daily cost chart.
+choose Smooth, Lines, or Bars for the daily cost chart. Select a cost breakdown
+item to narrow totals and charts, open `hermes-cron` to compare jobs, and group
+model variants with configurable aliases.
 
 ```bash
 agentsview usage daily          # last 30 days, terminal table
@@ -76,7 +81,11 @@ Find a conversation by project and date in the
 [Health scores](/docs/session-intelligence/) and
 [quality signals](/docs/quality/) link back to the transcript so you can check
 the evidence. Tool sequences follow errors, retries, switches, and recovery
-through the recorded calls without running a model.
+through the recorded calls without running a model. Tool Usage rates link to
+sessions with empty results, repeated calls, and recovery. For an assessment of
+one session,
+[Analyze tool effectiveness](/docs/recall/#tool-effectiveness-reports) generates
+a report with citations to the calls it judged.
 
 ## Turn transcripts into durable knowledge
 
@@ -98,7 +107,9 @@ The same archive you browse is available to your agents:
 - **Desktop:** native app sharing the same data directory.
 
 An agent can check what a previous session already tried, quote its own history,
-or watch its spend mid-run. Native conversation-memory plugins bundle recall
+or watch its spend mid-run. Eight new read-only MCP tools expose file edits,
+tool calls, child sessions, Activity reports, tool usage, cost comparisons, and
+offline guide search. Native conversation-memory plugins bundle recall
 instructions and session-start refresh for Claude Code and Codex. See
 [memory setup](/docs/mcp/#focused-memory-profile).
 
@@ -120,6 +131,10 @@ SQLite is the archive of record. From there:
   hosted storage with device authentication and resumable uploads. Opt-in
   server parsing makes those sessions browsable in PostgreSQL without a local
   SQLite archive or a separate `pg push`.
+- [SSH sync](/docs/remote-access/#ssh-remote-sync) fetches sessions from Linux
+  and macOS hosts without a manual AgentsView install or a remote daemon.
+- [Local archives](/docs/commands/#agentsview-archive) preserve a retired
+  computer's history, annotations, and original Claude and Codex files.
 - [Remote access](/docs/remote-access/) stays loopback-only by default, with
   explicit flags for SSH forwards and authenticated exposure.
 
@@ -129,7 +144,8 @@ Your agent transcripts are some of the most sensitive data on your machine.
 AgentsView starts with one local SQLite archive and a loopback-only server.
 Session content leaves the machine only when you choose a feature such as
 PostgreSQL or ClickHouse sync, remote DuckDB access, Generated Insights, GitHub
-publishing, or hosted raw sync. Each feature documents what it sends and where it goes.
+publishing, or hosted raw sync. Each feature documents what it sends and where
+it goes.
 
 ## Start
 

@@ -15,7 +15,7 @@ New here? The [product overview](/){target=_self} explains what AgentsView is fo
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.45.0**. Check the [changelog](/docs/changelog/) for what each
+release, **v0.46.1**. Check the [changelog](/docs/changelog/) for what each
 release includes.
 
 <p class="hero-actions">
@@ -37,6 +37,9 @@ release includes.
 | Browse extracted, provenance-linked knowledge     | [Recall](/docs/recall/)                                                                                                                                                                                    |
 | Give agents and scripts access to the archive     | [MCP Server](/docs/mcp/) and [Session API](/docs/session-api/)                                                                                                                                             |
 | Share sessions across machines                    | [Local Session Archive](https://agentsview.io/docs/commands/#agentsview-archive), [Hosted Raw Sync](/docs/hosted-raw-sync/), [PostgreSQL Sync](/docs/pg-sync/), [ClickHouse Sync](/docs/clickhouse-sync/), [DuckDB Mirror](/docs/duckdb/), [Filesystem Session Sync](/docs/filesystem-sync/) |
+| Sync Claude.ai or import chat exports | [Chat Import](/docs/chat-import/) |
+| Fetch Codex cloud chats | [Codex Cloud](/docs/configuration/#codex-cloud) |
+| Sync a remote machine over SSH | [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync) |
 | Configure discovery, paths, and settings          | [Configuration](/docs/configuration/)                                                                                                                                                                      |
 | Look up a command or flag                         | [CLI Reference](/docs/commands/)                                                                                                                                                                           |
 

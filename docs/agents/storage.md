@@ -131,7 +131,7 @@ Copies preserve both projections and apply content policy to both.
 
 Keep a known dialogue projection even when it equals display content; NULL also
 represents unclassified messages and cannot carry both meanings. Data version
-144 reparses providers with dialogue classification in place, including the
+146 reparses providers with dialogue classification in place, including the
 shared Codex parser. Retained sources that cannot be reparsed keep their content
 and classification gaps; export itself never reads the original source.
 
@@ -720,10 +720,11 @@ row IDs. The SQLite archive and the usage cache keep the original text and
 order.
 
 A metadata-only push therefore leaves unchanged messages, tool calls and usage
-events in place. A change to any accounting field still replaces the session's
-mirrored rows. A malformed local timestamp keeps its original text in the
-comparison, so it never matches PostgreSQL and the push reports the session as
-an error.
+events in place. When the transcript matches, accounting changes replace only
+usage events. A changed transcript replaces messages and their tool calls and
+results from the first changed message. A malformed local timestamp keeps its
+original text in the comparison, so it never matches PostgreSQL and the push
+reports the session as an error.
 
 ### Tool result summaries
 

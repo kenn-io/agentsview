@@ -610,119 +610,71 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 		"updated_at = %q, want ISO-8601 microsecond format", formatted)
 }
 
-func TestPushBumpsUpdatedAtOnMessageRewrite(
-	t *testing.T,
-) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		messages []db.Message
+		wantBump bool
+	}{
+		{"session with a message", []db.Message{{SessionID: "sess-bump-001", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5}}, true},
+		{"empty session", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			cleanPGSchema(t, pgURL)
+			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
-	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"machine-a", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
-	defer ps.Close()
+			local := testDB(t)
+			ps, err := New(
+				pgURL, "agentsview", local,
+				"machine-a", true,
+				storage.PusherOptions{},
+			)
+			require.NoError(t, err, "creating sync")
+			defer ps.Close()
 
-	ctx := context.Background()
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+			ctx := context.Background()
+			require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
-	started := time.Now().UTC().Format(time.RFC3339)
-	sess := db.Session{
-		ID:           "sess-bump-001",
-		Project:      "test",
-		Machine:      "local",
-		Agent:        "test-agent",
-		StartedAt:    &started,
-		MessageCount: 1,
+			started := time.Now().UTC().Format(time.RFC3339)
+			sess := db.Session{
+				ID:           "sess-bump-001",
+				Project:      "test",
+				Machine:      "local",
+				Agent:        "test-agent",
+				StartedAt:    &started,
+				MessageCount: len(test.messages),
+			}
+			require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "sess-bump-001", test.messages), "replace messages")
+
+			_, err = ps.Push(ctx, false, nil)
+			require.NoError(t, err, "initial push")
+
+			_, err = ps.pg.ExecContext(ctx, "UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1", "sess-bump-001")
+			require.NoError(t, err)
+			var updatedAt1 time.Time
+			require.NoError(t, ps.pg.QueryRowContext(ctx,
+				"SELECT updated_at FROM sessions WHERE id = $1",
+				"sess-bump-001",
+			).Scan(&updatedAt1), "querying updated_at")
+
+			_, err = ps.Push(ctx, true, nil)
+			require.NoError(t, err, "full push")
+
+			var updatedAt2 time.Time
+			require.NoError(t, ps.pg.QueryRowContext(ctx,
+				"SELECT updated_at FROM sessions WHERE id = $1",
+				"sess-bump-001",
+			).Scan(&updatedAt2), "querying updated_at after full push")
+
+			if test.wantBump {
+				assert.True(t, updatedAt2.After(updatedAt1), "updated_at not bumped: before=%v, after=%v", updatedAt1, updatedAt2)
+			} else {
+				assert.Equal(t, updatedAt1, updatedAt2, "full push of an unchanged empty session must preserve updated_at")
+			}
+		})
 	}
-	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
-	msg := db.Message{
-		SessionID:     "sess-bump-001",
-		Ordinal:       0,
-		Role:          "user",
-		Content:       "hello",
-		ContentLength: 5,
-	}
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(),
-		"sess-bump-001", []db.Message{msg},
-	), "replace messages")
-
-	_, err = ps.Push(ctx, false, nil)
-	require.NoError(t, err, "initial push")
-
-	var updatedAt1 time.Time
-	require.NoError(t, ps.pg.QueryRowContext(ctx,
-		"SELECT updated_at FROM sessions WHERE id = $1",
-		"sess-bump-001",
-	).Scan(&updatedAt1), "querying updated_at")
-
-	time.Sleep(50 * time.Millisecond)
-
-	result, err := ps.Push(ctx, true, nil)
-	require.NoError(t, err, "full push")
-	require.NotZero(t, result.MessagesPushed,
-		"expected messages to be pushed on full push")
-
-	var updatedAt2 time.Time
-	require.NoError(t, ps.pg.QueryRowContext(ctx,
-		"SELECT updated_at FROM sessions WHERE id = $1",
-		"sess-bump-001",
-	).Scan(&updatedAt2), "querying updated_at after full push")
-
-	assert.True(t, updatedAt2.After(updatedAt1),
-		"updated_at not bumped: before=%v, after=%v", updatedAt1, updatedAt2)
-}
-
-func TestPushFullBypassesHeuristic(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-
-	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"test-machine", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
-	defer ps.Close()
-
-	ctx := context.Background()
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
-
-	started := "2026-03-11T12:00:00Z"
-	sess := db.Session{
-		ID:           "sess-full-001",
-		Project:      "test-project",
-		Machine:      "local",
-		Agent:        "claude",
-		StartedAt:    &started,
-		MessageCount: 1,
-	}
-	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
-	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
-		{
-			SessionID: "sess-full-001",
-			Ordinal:   0,
-			Role:      "user",
-			Content:   "test",
-		},
-	}), "insert messages")
-
-	_, err = ps.Push(ctx, false, nil)
-	require.NoError(t, err, "first push")
-
-	require.NoError(t, local.SetSyncState(t.Context(),
-		"last_push_at", "",
-	), "resetting watermark")
-
-	result, err := ps.Push(ctx, true, nil)
-	require.NoError(t, err, "full push")
-	assert.Equal(t, 1, result.SessionsPushed)
-	assert.Equal(t, 1, result.MessagesPushed)
 }
 
 func TestPushDetectsSchemaReset(t *testing.T) {

@@ -238,6 +238,11 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
 		assert.Equal(t, 1, sess.MessageCount)
 		assert.Equal(t, "real question", sess.FirstMessage)
+		path := createTestFile(t, "meta.jsonl", content)
+		appended, _, _, _, err := claudeParseSessionFrom(path, 0, claudeIncrementalScan{})
+		require.NoError(t, err)
+		require.Len(t, appended, 1)
+		assert.Equal(t, "real question", appended[0].Content)
 	})
 
 	t.Run("persists isCompactSummary as system message", func(t *testing.T) {
