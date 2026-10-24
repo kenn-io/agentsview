@@ -15,6 +15,10 @@ The latest release is
   hashes with PostgreSQL instead of downloading the session's old text.
   Sessions with rows written before control-character cleanup are rewritten once.
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message
