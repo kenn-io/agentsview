@@ -179,16 +179,13 @@ func TestRemotePolicy503RecallPreservesSemanticTransient(t *testing.T) {
 		Query: "example", Mode: "vector", Limit: 10,
 	})
 	require.ErrorIs(t, err, db.ErrSemanticTransient)
+	assert.ErrorContains(t, err, "--local")
+	assert.ErrorContains(t, err, "127.0.0.1")
 	assert.NotContains(t, err.Error(), "private")
 	assert.NotContains(t, err.Error(), "secret")
 }
 
 func TestRemotePolicyServiceErrorsRedactConfiguredURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
-	}))
-	t.Cleanup(srv.Close)
-	baseURL := srv.URL + "/private/path?token=url-secret"
 	tests := []struct {
 		name     string
 		readOnly bool
@@ -213,9 +210,24 @@ func TestRemotePolicyServiceErrorsRedactConfiguredURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			backend := NewHTTPBackendWithClient(baseURL, "", tt.readOnly, "", srv.Client()).(*httpBackend)
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				if tt.readOnly {
+					t.Errorf("local rejection sent HTTP %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(http.StatusNotImplemented)
+			}))
+			defer srv.Close()
+			backend := NewHTTPBackendWithClient(srv.URL+"/private/path?token=url-secret", "", tt.readOnly, "", srv.Client()).(*httpBackend)
 			err := tt.call(backend)
 			require.ErrorIs(t, err, db.ErrReadOnly)
+			assert.ErrorContains(t, err, "--local")
+			if tt.readOnly {
+				assert.Zero(t, hits)
+			} else {
+				assert.Equal(t, 1, hits)
+			}
 			assert.NotContains(t, err.Error(), "/private/path")
 			assert.NotContains(t, err.Error(), "url-secret")
 			assert.Contains(t, err.Error(), "127.0.0.1")
@@ -238,22 +250,6 @@ func TestRemotePolicyConflictErrorRedactsRequestURL(t *testing.T) {
 	assert.NotContains(t, err.Error(), "/private/path")
 	assert.NotContains(t, err.Error(), "url-secret")
 	assert.NotContains(t, err.Error(), "token=secret")
-}
-
-func TestRemotePolicyAnnotation501RedactsConfiguredURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
-	}))
-	t.Cleanup(srv.Close)
-	baseURL := srv.URL + "/private/path?token=url-secret"
-	backend := NewHTTPBackendWithClient(baseURL, "", false, "", srv.Client()).(*httpBackend)
-	backend.apiVersion = service.SessionAnnotationsAPIVersion
-
-	_, err := backend.UpdateSessionLabels(t.Context(), "session", []string{"label"}, nil, false)
-	require.ErrorIs(t, err, db.ErrReadOnly)
-	assert.NotContains(t, err.Error(), "/private/path")
-	assert.NotContains(t, err.Error(), "url-secret")
-	assert.Contains(t, err.Error(), "127.0.0.1")
 }
 
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
@@ -485,6 +481,8 @@ func TestRemotePolicyRecall501PreservesReadOnly(t *testing.T) {
 				backend := NewHTTPBackendWithClient(srv.URL, "", false, "", srv.Client())
 				_, err := backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "example", Mode: mode, Limit: 10})
 				require.ErrorIs(t, err, tc.want)
+				assert.ErrorContains(t, err, "--local")
+				assert.ErrorContains(t, err, "127.0.0.1")
 				assert.NotContains(t, err.Error(), "response-secret")
 			})
 		}
