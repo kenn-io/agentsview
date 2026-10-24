@@ -69,6 +69,17 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 	if !ok {
 		return BuildResult{}, errors.New("hub import requires an archive writer reservation")
 	}
+	if o.RepairInvalid {
+		fp := gen.Fingerprint()
+		if _, err := ix.ordinalForFingerprint(ctx, fp); err != nil {
+			return BuildResult{Fingerprint: fp}, err
+		}
+		projection, err := ix.pendingPullStage(ctx, fp)
+		if err != nil {
+			return BuildResult{Fingerprint: fp}, err
+		}
+		return projection.forGeneration(gen).pullInvalidRepair(ctx, src, reserved, hub, gen, o)
+	}
 	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
 	if err != nil {
 		return BuildResult{}, err
@@ -131,13 +142,7 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		return BuildResult{}, err
 	}
 	result := BuildResult{Fingerprint: target, Refresh: stats}
-	if o.RepairInvalid {
-		repair, err := ix.repairInvalidVectors(ctx, target)
-		result.Repair = repair.Stats
-		if err != nil {
-			return result, err
-		}
-	}
+
 	store := &repairQueueCompletingStore{Store: ix.store, db: ix.db, spec: ix.spec}
 	raw, err := json.Marshal(gen)
 	if err != nil {

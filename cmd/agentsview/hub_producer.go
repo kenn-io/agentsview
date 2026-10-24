@@ -11,24 +11,17 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
 func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func(context.Context, vector.BuildRequest, func(vector.BuildProgress)) (vector.BuildResult, error) {
 	return func(ctx context.Context, req vector.BuildRequest, progress func(vector.BuildProgress)) (vector.BuildResult, error) {
-		client, err := remotecred.Client(cfg.Remote.URL, cfg.Remote.AllowInsecureHTTP)
+		hub, err := newProducerHub(cfg)
 		if err != nil {
 			return vector.BuildResult{}, err
 		}
-		token := strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN"))
-		if cfg.Remote.TokenFile != "" {
-			token, err = remotecred.ReadToken(cfg.Remote.TokenFile)
-			if err != nil {
-				return vector.BuildResult{}, err
-			}
-		}
-		hub := &vector.HTTPHub{URL: cfg.Remote.URL, Token: token, Client: client}
 		for range 3 {
 			h, err := hub.HubVectorGeneration(ctx)
 			if errors.Is(err, vector.ErrHubGenerationChanged) {
@@ -53,6 +46,38 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 		}
 		return vector.BuildResult{}, vector.ErrHubGenerationChanged
 	}
+}
+
+// newProducerHub preserves the remote credential policy and native request signing.
+func newProducerHub(cfg config.Config) (*vector.HTTPHub, error) {
+	client, err := remotecred.Client(cfg.Remote.URL, cfg.Remote.AllowInsecureHTTP)
+	if err != nil {
+		return nil, err
+	}
+	client, err = requestsign.ClientFromEnvironment(cfg.Remote.URL, client)
+	if err != nil {
+		return nil, err
+	}
+	token := strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN"))
+	if cfg.Remote.TokenFile != "" {
+		token, err = remotecred.ReadToken(cfg.Remote.TokenFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &vector.HTTPHub{URL: cfg.Remote.URL, Token: token, Client: client}, nil
+}
+
+func producerRecipe(ctx context.Context, cfg config.Config) (config.VectorEmbeddingsConfig, error) {
+	hub, err := newProducerHub(cfg)
+	if err != nil {
+		return config.VectorEmbeddingsConfig{}, err
+	}
+	h, err := hub.HubVectorGeneration(ctx)
+	if err != nil {
+		return config.VectorEmbeddingsConfig{}, err
+	}
+	return decodeHubRecipe(cfg, h)
 }
 
 // decodeHubRecipe adopts only a strictly reproducible hub recipe. Defaults do

@@ -208,7 +208,8 @@ func (e *replicaEmbedder) PlannedGeneration(
 	if err := e.resolve(ctx); err != nil {
 		return storage.VectorGenerationInfo{}, false, err
 	}
-	return e.source.configuredGeneration(), true, nil
+	gen, err := e.source.plannedGeneration(ctx)
+	return gen, err == nil, err
 }
 
 // PrepareExport builds once for a one-shot push. The replica calls it only
@@ -238,6 +239,9 @@ func (e *replicaEmbedder) BeginExport(
 	export, ok, err := e.source.BeginExport(ctx, sessionIDs)
 	if err != nil || !ok || export == nil {
 		return export, ok, err
+	}
+	if e.source.cfg.Vector.Producer == "remote" {
+		return export, true, nil
 	}
 	active := export.Generation().Fingerprint
 	recipe := e.source.configuredGeneration().Fingerprint

@@ -246,7 +246,7 @@ func NewResolvingManager(
 // entry when Using is set, the set's default otherwise. It fails when the
 // name is unknown so a mistyped --using errors before a build starts.
 func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
-	if m.usesDocumentPolicy() {
+	if m.usesDocumentPolicy() && req.Using == "" {
 		return ManagedEncoder{}, nil
 	}
 

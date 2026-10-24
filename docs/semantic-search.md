@@ -69,8 +69,9 @@ input beyond the window. Changing this cap on an existing index
 [creates a new generation and re-embeds the archive](#building-the-index) on the
 next build.
 
-`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
-entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
+For local production, `model`, `dimension`, and at least one
+`[vector.embeddings.servers.<name>]` entry with an `endpoint` are required once
+`enabled = true`; `agentsview` fails
 fast with an actionable message if any is missing or a duration field doesn't
 parse. Restart the daemon (or run a CLI command) after editing the file.
 
@@ -86,6 +87,37 @@ vector and hybrid queries fail closed as unavailable once the served Recall
 corpus is more than `recall_max_revision_lag` revisions newer than the last
 completed build; lexical queries remain available while an automatic or manual
 refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
+
+### Reusing a remote hub's vectors
+
+A spoke can pull message vectors from a configured hub instead of sending
+its documents to an embeddings endpoint. It imports only locally owned
+sessions. Configure a query server for local semantic searches:
+
+```toml
+[remote]
+url = "https://hub.example"
+spoke_host = "workstation"
+token_file = "/path/to/private/hub-token"
+
+[vector]
+enabled = true
+producer = "remote"
+
+[vector.embeddings.servers.query]
+endpoint = "http://localhost:11434/v1"
+```
+
+The spoke adopts the hub's model, dimensions, prefixes and chunk recipe.
+Omit these fields to adopt them; explicitly configured recipe fields must
+match the hub. Query-server transport settings are still validated locally.
+Message builds, full rebuilds, backstops and invalid-vector repairs all use
+the hub. Invalid-vector repair requires an existing generation and repairs
+only its queued targets; it does not discover documents or activate a generation.
+Recall continues to use the local encoder and needs a complete local recipe.
+Requests to a restricted signing listener use the existing `AGENTSVIEW_SIGNING_*`
+configuration (`AGENTSVIEW_SIGNING_URL`, `AGENTSVIEW_SIGNING_KEY_ID` and
+`AGENTSVIEW_SIGNING_KEY_FILE`).
 
 ### Named embeddings servers
 

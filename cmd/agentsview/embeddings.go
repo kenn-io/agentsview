@@ -593,6 +593,17 @@ func embeddingManager(
 	cfg config.Config, store string,
 ) *vector.Manager {
 	if store != vector.RecallIndexSpec().Name {
+		if cfg.Vector.Producer == "remote" {
+			// Names remain valid --using inputs even though pulls do not construct
+			// document encoders or require a query endpoint.
+			encoders.ByName = maps.Clone(encoders.ByName)
+			if encoders.ByName == nil {
+				encoders.ByName = map[string]vector.ManagedEncoder{}
+			}
+			for name := range cfg.Vector.Embeddings.Servers {
+				encoders.ByName[name] = vector.ManagedEncoder{}
+			}
+		}
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
 			Source: database, Generation: gen,

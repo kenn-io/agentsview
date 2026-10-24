@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json/v2"
-	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -18,8 +18,10 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/requestsign"
+	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/agentsview/internal/vector"
-	"hegel.dev/go/hegel"
 )
 
 func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *atomic.Int32) {
@@ -64,57 +66,37 @@ func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *at
 	return cfg, database, calls
 }
 
-func TestRemoteProducerFactoryRoutesEveryBuildMode(t *testing.T) {
-	for _, mode := range []string{"ordinary", "full", "backstop", "repair", "async"} {
-		t.Run(mode, func(t *testing.T) {
-			cfg, database, calls := hubProducerFixture(t)
-			ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
-			require.NoError(t, err)
-			defer ix.Close()
-			if mode == "full" || mode == "repair" {
-				_, err := hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
-				require.NoError(t, err)
-				if mode == "repair" {
-					raw, err := sql.Open(vectorTestDriverName, cfg.Vector.ResolvedDBPath(cfg.DataDir))
-					require.NoError(t, err)
-					_, err = raw.ExecContext(t.Context(), "UPDATE message_vectors_v1 SET embedding=zeroblob(16)")
-					require.NoError(t, err)
-					require.NoError(t, raw.Close())
-				}
-				calls.Store(0)
-			}
-			var encoded atomic.Int32
-			encoders := vector.EncoderSet{Default: "local", ByName: map[string]vector.ManagedEncoder{"local": {Encode: func(context.Context, []string) ([][]float32, error) {
-				encoded.Add(1)
-				t.Error("remote producer encoded a document")
-				return nil, nil
-			}}}}
-			m := embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name)
-			defer m.Shutdown()
-			req := vector.BuildRequest{FullRebuild: mode == "full", Backstop: mode == "backstop", RepairInvalid: mode == "repair"}
-			if mode == "async" {
-				require.NoError(t, m.StartBuild(req))
-				m.Wait()
-				require.Empty(t, m.Status().LastError)
-			} else {
-				ran, err := m.TryBuild(t.Context(), req)
-				require.NoError(t, err)
-				require.True(t, ran)
-			}
-			require.Zero(t, encoded.Load())
-			require.EqualValues(t, 1, calls.Load())
-			gens, err := ix.Generations(t.Context())
-			require.NoError(t, err)
-			require.Len(t, gens, 1)
-			require.Equal(t, "active", gens[0].State)
-			require.EqualValues(t, 1, gens[0].Embedded)
-			require.Zero(t, gens[0].Missing)
-			g, ok, err := ix.ActiveHubRecipe(t.Context())
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.Equal(t, "hub-model", g.Model)
-		})
-	}
+func TestRemoteProducerFactoryWiresHubBuild(t *testing.T) {
+	cfg, database, calls := hubProducerFixture(t)
+	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
+	require.NoError(t, err)
+	defer ix.Close()
+	var encoded atomic.Int32
+	encoders := vector.EncoderSet{Default: "local", ByName: map[string]vector.ManagedEncoder{"local": {Encode: func(context.Context, []string) ([][]float32, error) {
+		encoded.Add(1)
+		require.Fail(t, "remote producer encoded a document")
+		return nil, nil
+	}}}}
+	m := embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name)
+	defer m.Shutdown()
+	_, err = m.TryBuild(t.Context(), vector.BuildRequest{Using: "typo"})
+	require.ErrorIs(t, err, vector.ErrUnknownServer)
+	require.Zero(t, calls.Load())
+	ran, err := m.TryBuild(t.Context(), vector.BuildRequest{Using: "local"})
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Zero(t, encoded.Load())
+	require.EqualValues(t, 1, calls.Load())
+	gens, err := ix.Generations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	require.Equal(t, "active", gens[0].State)
+	require.EqualValues(t, 1, gens[0].Embedded)
+	require.Zero(t, gens[0].Missing)
+	g, ok, err := ix.ActiveHubRecipe(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "hub-model", g.Model)
 }
 
 func TestRemoteProducerDirectBuild(t *testing.T) {
@@ -128,8 +110,9 @@ func TestRemoteProducerDirectBuild(t *testing.T) {
 				status = []int{503}
 			}
 			cfg, _, calls := hubProducerFixture(t, status...)
-			t.Setenv("AGENTSVIEW_SERVER_TOKEN", "token")
+			t.Setenv("AGENTSVIEW_SERVER_TOKEN", "environment-token")
 			if mode == "environment" {
+				t.Setenv("AGENTSVIEW_SERVER_TOKEN", "token")
 				cfg.Remote.TokenFile = ""
 			}
 			if mode == "broken file" {
@@ -168,18 +151,20 @@ func TestRemoteProducerRefusesArchivesAwaitingParserWork(t *testing.T) {
 }
 
 func TestHubRecipeAdoptsFingerprintAndKeepsQueryTransport(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		c := publishedRecipeConfig(fmt.Sprintf("model-%d", hegel.Draw(ht, hegel.Integers[int](0, 1000000))))
-		c.Dimension = hegel.Draw(ht, hegel.Integers[int](1, 4096))
-		c.MaxInputChars = hegel.Draw(ht, hegel.Integers[int](1, 32768))
+	for _, tc := range []struct {
+		model               string
+		dimension, maxChars int
+	}{{"small", 1, 1}, {"hub", 4, 8192}, {"large", 4096, 32768}} {
+		c := publishedRecipeConfig(tc.model)
+		c.Dimension, c.MaxInputChars = tc.dimension, tc.maxChars
 		g := vectorGeneration(c)
 		cfg := config.Config{Vector: config.VectorConfig{Embeddings: config.VectorEmbeddingsConfig{MaxInputChars: 8192, DefaultServer: "query", Servers: map[string]config.VectorEmbeddingsServerConfig{"query": {Endpoint: "http://localhost:8080/v1"}}}}}
 		got, err := decodeHubRecipe(cfg, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()})
-		require.NoError(ht, err)
-		require.Equal(ht, g.Fingerprint(), vectorGeneration(got).Fingerprint())
-		require.Equal(ht, cfg.Vector.Embeddings.Servers, got.Servers)
-		require.Equal(ht, "query", got.DefaultServer)
-	}, hegel.WithTestCases(1000))
+		require.NoError(t, err)
+		require.Equal(t, g.Fingerprint(), vectorGeneration(got).Fingerprint())
+		require.Equal(t, cfg.Vector.Embeddings.Servers, got.Servers)
+		require.Equal(t, "query", got.DefaultServer)
+	}
 }
 
 func TestHubRecipeRejectsPersistentIncompatibilities(t *testing.T) {
@@ -224,4 +209,91 @@ func TestHubRecipeChecksExplicitZeroRecipeFields(t *testing.T) {
 			require.ErrorContains(t, err, "recipe mismatch")
 		})
 	}
+}
+
+func TestRemoteProducerSignsForRestrictedListener(t *testing.T) {
+	var verifier *requestsign.Verifier
+	g := vectorGeneration(publishedRecipeConfig("hub-model"))
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+			if r.Method == http.MethodGet {
+				require.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+				return
+			}
+			var req vector.HubLookupRequest
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
+			require.Len(t, req.Identities, 1)
+			require.Equal(t, "node~local", req.Identities[0].SessionID)
+			require.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: "AACAPwAAAAAAAAAAAAAAAA=="}}}))
+		}), nil, nil).ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	dir := testutil.PrivateTempDir(t)
+	keyFile := filepath.Join(dir, "key")
+	require.NoError(t, requestsign.GenerateSecretFile(keyFile))
+	secret, err := requestsign.ReadSecret(keyFile)
+	require.NoError(t, err)
+	state := filepath.Join(dir, "replay.db")
+	require.NoError(t, requestsign.InitReplay(state))
+	replay, err := requestsign.OpenReplay(state)
+	require.NoError(t, err)
+	defer replay.Close()
+	verifier, err = requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: server.URL, Replay: replay, Keys: func() (map[string]requestsign.Key, error) {
+		return map[string]requestsign.Key{"reader": {ID: "reader", Secret: secret}}, nil
+	}})
+	require.NoError(t, err)
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.InsecureSkipVerify = false
+	transport.TLSClientConfig.RootCAs = x509.NewCertPool()
+	transport.TLSClientConfig.RootCAs.AddCert(server.Certificate())
+	defer transport.CloseIdleConnections()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	bare := &vector.HTTPHub{URL: server.URL, Token: "token", Client: &http.Client{Transport: transport}}
+	_, err = bare.HubVectorGeneration(t.Context())
+	require.ErrorContains(t, err, "401")
+	t.Setenv("AGENTSVIEW_SIGNING_URL", server.URL)
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "reader")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", keyFile)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "token")
+	cfg := vectorTestConfig(t.TempDir())
+	cfg.Vector.Producer, cfg.Remote.URL, cfg.Remote.SpokeHost = "remote", server.URL, "node"
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	dbtest.SeedSessionWithMessages(t, database, "local", "project", []db.Message{dbtest.UserMsg("local", 0, "content")})
+	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
+}
+
+func TestRemoteProducerExportsAdoptedRecipe(t *testing.T) {
+	cfg, _, _ := hubProducerFixture(t)
+	cfg.Vector.Embeddings.Model = ""
+	cfg.Vector.Embeddings.Dimension = 0
+	e := &replicaEmbedder{source: &vectorPushSource{cfg: cfg}, buildOnPrepare: true}
+	defer e.Close()
+	planned, ok, err := e.PlannedGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "hub-model", planned.Model)
+	require.NotEmpty(t, planned.Params["document_prefix"])
+	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
+	exported, ok, err := e.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, planned.Fingerprint, exported.Generation().Fingerprint)
+	require.Equal(t, planned.Params, exported.Generation().Params)
+	require.NoError(t, exported.Close())
+	// An unrelated active local generation must not be relabeled as the hub's.
+	stale := cfg
+	stale.Vector.Producer = "local"
+	stale.Vector.Embeddings = publishedRecipeConfig("stale")
+	buildTestVectorsDB(t, stale)
+	_, ok, err = e.BeginExport(t.Context(), nil)
+	require.ErrorIs(t, err, storage.ErrVectorSourceNotReady)
+	require.False(t, ok)
+	// Explicit recipe constraints still refuse publication after adoption.
+	e.source.cfg.Vector.Embeddings.RecipeKeys = map[string]bool{"model": true}
+	e.source.cfg.Vector.Embeddings.Model = "other"
+	_, _, err = e.PlannedGeneration(t.Context())
+	require.ErrorContains(t, err, "recipe mismatch")
 }

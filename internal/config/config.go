@@ -461,10 +461,11 @@ func (c VectorConfig) Validate() error {
 			"[vector] recall_max_revision_lag must be 0 or greater, got %d",
 			c.RecallMaxRevisionLag)
 	}
-	if c.Embeddings.Model == "" {
+	localRecipe := c.Producer != "remote" || c.Embed.Recall
+	if (localRecipe || c.Embeddings.RecipeKeys["model"]) && c.Embeddings.Model == "" {
 		return errors.New("[vector.embeddings] model is required when [vector] is enabled")
 	}
-	if c.Embeddings.Dimension <= 0 {
+	if (localRecipe || c.Embeddings.RecipeKeys["dimension"] || c.Embeddings.Dimension != 0) && c.Embeddings.Dimension <= 0 {
 		return errors.New("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
 	}
 	if c.Embeddings.MaxInputChars <= 0 {

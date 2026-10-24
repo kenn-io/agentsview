@@ -80,7 +80,7 @@ func TestHubHTTPBoundedWire(t *testing.T) {
 					body = []byte(`{"version":"vectors.v1","fingerprint":"fp","chunks":[{"index":0,"chunk_index":0,"chunk_count":1,"vector":"AACAPw=="}],"absent":[]}`)
 				}
 				if mode == "oversize" {
-					body = []byte(strings.Repeat(" ", MaxHubLookupBytes+1))
+					body = append(body, []byte(strings.Repeat(" ", MaxHubLookupBytes))...)
 				}
 				if mode != "plain" {
 					enc, err := zstd.NewWriter(nil)
@@ -95,7 +95,7 @@ func TestHubHTTPBoundedWire(t *testing.T) {
 			hub := &HTTPHub{URL: server.URL, Token: "token", Client: server.Client()}
 			gen, err := hub.HubVectorGeneration(t.Context())
 			if mode == "oversize" {
-				require.Error(t, err)
+				require.ErrorContains(t, err, "exceeds 32 MiB")
 				return
 			}
 			if mode == "changed" {
@@ -127,7 +127,7 @@ func TestMessageBuildPolicyPrecedesDocumentEncoder(t *testing.T) {
 				progress(BuildProgress{Phase: "pulling", Done: 1, Total: 1})
 				return BuildResult{Fingerprint: "hub"}, nil
 			}
-			req := BuildRequest{FullRebuild: mode == "full", Backstop: mode == "backstop", RepairInvalid: mode == "repair", Using: "not-a-document-server"}
+			req := BuildRequest{FullRebuild: mode == "full", Backstop: mode == "backstop", RepairInvalid: mode == "repair", Using: "local"}
 			if mode == "async" {
 				require.NoError(t, m.StartBuild(req))
 				m.Wait()
@@ -164,4 +164,18 @@ func TestDocumentBuildPolicyLeavesRecallLocal(t *testing.T) {
 	require.True(t, ran)
 	require.Positive(t, encoded)
 	require.Zero(t, pulled)
+}
+
+func TestDocumentPolicyRejectsExplicitUnknownServer(t *testing.T) {
+	ix := openTestIndex(t)
+	m := NewManager(ix, twoDocSource(), EncoderSet{}, fakeGeneration("local"))
+	defer m.Shutdown()
+	m.documentBuild = func(context.Context, BuildRequest, func(BuildProgress)) (BuildResult, error) {
+		require.FailNow(t, "invalid explicit server started a pull")
+		return BuildResult{}, nil
+	}
+	require.ErrorIs(t, m.StartBuild(BuildRequest{Using: "typo"}), ErrUnknownServer)
+	ran, err := m.TryBuild(t.Context(), BuildRequest{Using: "typo"})
+	require.ErrorIs(t, err, ErrUnknownServer)
+	require.False(t, ran)
 }
