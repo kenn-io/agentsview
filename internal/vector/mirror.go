@@ -149,6 +149,16 @@ func DocKey(kind, sessionID, sourceUUID string, ordinal, occurrence int) string 
 	return ordinalPrefix + session + ":" + strconv.Itoa(ordinal)
 }
 
+// unitOccurrence shares the archive scan-order identity rule with hub lookups.
+func unitOccurrence(u db.EmbeddableUnit, occurrences map[string]int) int {
+	if u.SourceUUID == "" {
+		return 1
+	}
+	key := u.SessionID + "\x00" + u.SourceUUID
+	occurrences[key]++
+	return occurrences[key]
+}
+
 // escapeDocKeyComponent percent-encodes the characters DocKey uses as
 // delimiters — ':', '#', and '%' itself — so a session_id or source_uuid
 // containing them cannot be mistaken for key structure, keeping DocKey
@@ -293,12 +303,7 @@ func (ix *Index) Refresh(
 		return RefreshStats{}, err
 	}
 	visitUnit := func(u db.EmbeddableUnit) error {
-		occurrence := 1
-		if u.SourceUUID != "" {
-			occKey := u.SessionID + "\x00" + u.SourceUUID
-			occurrences[occKey]++
-			occurrence = occurrences[occKey]
-		}
+		occurrence := unitOccurrence(u, occurrences)
 		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
 		if u.Deleted {
 			deleted, err := ix.deleteMirrorDocument(ctx, key)

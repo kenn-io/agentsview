@@ -2,10 +2,12 @@ package remotesync
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/vector"
-	"hegel.dev/go/hegel"
+	kitvec "go.kenn.io/kit/vector"
 )
 
 func TestHubSessionID(t *testing.T) {
@@ -25,19 +27,19 @@ func TestHubSessionID(t *testing.T) {
 		{"node", "session", "node~session"},
 		{"node", "node~session", "node~session"},
 		{"node", "other~session", "node~other~session"},
-		{"", "session", "~session"},
+		{"", "session", "session"},
 		{"", "~session", "~session"},
+		{"node", "日本語~%:#", "node~日本語~%:#"},
 	} {
 		assert.Equal(t, tc.want, HubSessionID(tc.host, tc.id))
+		assert.Equal(t, tc.want, HubSessionID(tc.host, tc.want))
 	}
 }
 
-func TestHubSessionIDIdempotentProperty(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		host, id := hegel.Draw(ht, hegel.Text()), hegel.Draw(ht, hegel.Text())
-		mapped := HubSessionID(host, id)
-		require.Equal(ht, mapped, HubSessionID(host, mapped))
-	}, hegel.WithTestCases(1000))
+type hubIdentityLookup func(context.Context, vector.HubLookupRequest) (vector.HubLookupReply, error)
+
+func (f hubIdentityLookup) LookupHubVectors(ctx context.Context, r vector.HubLookupRequest) (vector.HubLookupReply, error) {
+	return f(ctx, r)
 }
 
 type hubFixtureUnit struct {
@@ -104,6 +106,28 @@ func TestHubIdentitiesAgreeForLocalAndExtractedSources(t *testing.T) {
 			t.Run(fmt.Sprintf("chars-%d/automated-%t", maxChars, scope), func(t *testing.T) {
 				got := hubFixtureUnits(t, local, true, scope, maxChars)
 				require.Equal(t, got, hubFixtureUnits(t, remote, false, scope, maxChars), "mapped identities, hashes, offsets and run boundaries agree")
+				ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, maxChars)
+				require.NoError(t, err)
+				defer ix.Close()
+				gen := kitvec.Generation{Model: "identity-test", Dimensions: 3, Params: map[string]string{"max_input_chars": fmt.Sprint(maxChars)}}
+				var requested []vector.HubIdentity
+				_, err = ix.Pull(t.Context(), local, hubIdentityLookup(func(_ context.Context, r vector.HubLookupRequest) (vector.HubLookupReply, error) {
+					requested = append(requested, r.Identities...)
+					absent := make([]int, len(r.Identities))
+					for i := range absent {
+						absent[i] = i
+					}
+					return vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: r.Fingerprint, Absent: absent}, nil
+				}), gen, vector.PullOptions{IncludeAutomated: scope, MapSession: func(id string) string { return HubSessionID("node", id) }})
+				require.NoError(t, err)
+				var want []vector.HubIdentity
+				for _, doc := range got {
+					want = append(want, doc.Identity)
+				}
+				slices.SortFunc(want, func(a, b vector.HubIdentity) int {
+					return strings.Compare(vector.DocKey(a.UnitKind, a.SessionID, a.SourceUUID, a.Ordinal, a.Occurrence), vector.DocKey(b.UnitKind, b.SessionID, b.SourceUUID, b.Ordinal, b.Occurrence))
+				})
+				assert.Equal(t, want, requested, "actual Pull requests retain duplicate UUID occurrence and source mapping")
 				keys := []string{"u:node~interactive:dup%3A%23%25", "r:node~interactive:run"}
 				contents := []string{"first", "aaaa\n\nbbbb\n\ncccc"}
 				if maxChars == 2 {

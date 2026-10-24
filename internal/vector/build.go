@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
@@ -131,6 +132,36 @@ func (ix *Index) Build(
 	ix = ix.forGeneration(gen)
 	if o.RepairInvalid {
 		return ix.buildInvalidRepair(ctx, enc, gen, o)
+	}
+	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if stage != ix {
+		reserved, ok := src.(snapshotSource)
+		if !ok {
+			return BuildResult{}, errors.New("completing hub import requires an archive writer reservation")
+		}
+		result, err := stage.Build(ctx, src, enc, gen, o)
+		result.Activated = false
+		if err != nil {
+			return result, err
+		}
+		err = reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
+			if _, err := stage.Refresh(ctx, snapshot, true, o.IncludeAutomated); err != nil {
+				return err
+			}
+			missing, err := stage.MissingEmbeddedDocs(ctx, gen.Fingerprint(), nil)
+			if err != nil || missing != 0 {
+				return err
+			}
+			if err := ix.publishPullStage(ctx, stage, gen.Fingerprint()); err != nil {
+				return err
+			}
+			result.Activated = true
+			return nil
+		})
+		return result, err
 	}
 
 	firstEver, err := ix.noWatermarkYet(ctx)

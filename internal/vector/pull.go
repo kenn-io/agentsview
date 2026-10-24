@@ -36,12 +36,7 @@ func (s pullSource) ScanEmbeddableUnits(ctx context.Context, since string, scope
 }
 
 func (s pullSource) record(u db.EmbeddableUnit, occurrences map[string]int) {
-	n := 1
-	if u.SourceUUID != "" {
-		k := u.SessionID + "\x00" + u.SourceUUID
-		occurrences[k]++
-		n = occurrences[k]
-	}
+	n := unitOccurrence(u, occurrences)
 	id := u.SessionID
 	if s.mapSession != nil {
 		id = s.mapSession(id)
@@ -66,6 +61,30 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 	if !ok {
 		return BuildResult{}, errors.New("hub import requires an archive writer reservation")
 	}
+	active, hasActive, err := ix.ActiveFingerprint(ctx)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if hasActive && active != gen.Fingerprint() {
+		stage, err := ix.newPullStage(ctx, gen)
+		if err != nil {
+			return BuildResult{}, err
+		}
+		published := false
+		result, err := stage.pull(ctx, src, reserved, hub, gen, o, func() error {
+			if err := ix.publishPullStage(ctx, stage, gen.Fingerprint()); err != nil {
+				return err
+			}
+			published = true
+			return nil
+		})
+		result.Activated = published
+		return result, err
+	}
+	return ix.pull(ctx, src, reserved, hub, gen, o, nil)
+}
+
+func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSource, hub HubLookup, gen kitvec.Generation, o PullOptions, publish func() error) (BuildResult, error) {
 	ix = ix.forGeneration(gen)
 	// A failed reshape must force a full scan when the previous build cap returns.
 	if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
@@ -193,13 +212,25 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 		if err != nil || missing != 0 {
 			return err
 		}
-		return ix.clearActiveFullRebuildPending(ctx, target)
+		if err := ix.clearActiveFullRebuildPending(ctx, target); err != nil {
+			return err
+		}
+		if publish != nil {
+			result.Activated = false
+			if err := publish(); err != nil {
+				return err
+			}
+			result.Activated = true
+		}
+		return nil
 	})
 	return result, err
 }
 
 // Resolve the bounded key page before loading content. This preserves kit's
 // coverage predicate, including documents invalidated after their last stamp.
+// Pinned kit PendingForGeneration has no after cursor: retrying its first page
+// would starve later documents when the hub lacks coverage for earlier ones.
 func (ix *Index) pullPendingPage(ctx context.Context, ordinal int64, after string) ([]kitvec.Pending[string], error) {
 	rows, err := ix.db.QueryContext(ctx, `
 WITH pending AS MATERIALIZED (

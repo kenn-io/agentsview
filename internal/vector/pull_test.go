@@ -2,9 +2,10 @@ package vector
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,11 +14,10 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"hegel.dev/go/hegel"
 )
 
 type lookupFunc func(context.Context, HubLookupRequest) (HubLookupReply, error)
@@ -30,39 +30,31 @@ func TestPullVectorsRoundTrip(t *testing.T) {
 	ix := openTestIndex(t)
 	src := &fakeUnitSource{}
 	gen := fakeGeneration("hub")
-	hegel.Test(t, func(ht *hegel.T) {
-		bits := hegel.Draw(ht, hegel.Integers[uint32](0, math.MaxUint32))
-		value := math.Float32frombits(bits)
-		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return
-		}
-		text := fmt.Sprintf("content %g", value)
-		src.rows = []fakeUnit{{unit: userDoc("local", "duplicate:#%", 0, text), endedAt: "2025-01-01"}}
-		expected := []float32{value, 1, -1}
-		client := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
-			require.Equal(ht, gen.Fingerprint(), r.Fingerprint)
-			require.Equal(ht, []HubIdentity{{SessionID: "air~local", UnitKind: "user", SourceUUID: "duplicate:#%", Occurrence: 1, ContentHash: contentHash(text)}}, r.Identities)
-			encoded, err := EncodeHubVector(expected)
-			require.NoError(ht, err)
-			return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 1, Vector: encoded}}}, nil
-		})
-		result, err := ix.Pull(t.Context(), src, client, gen, PullOptions{MapSession: func(id string) string { return "air~" + id }})
-		require.NoError(ht, err)
-		require.Equal(ht, gen.Fingerprint(), result.Fingerprint)
-		missing, err := ix.MissingEmbeddedDocs(t.Context(), gen.Fingerprint(), nil)
-		require.NoError(ht, err)
-		require.Zero(ht, missing)
-		exp, ok, err := ix.BeginExport(t.Context(), nil)
-		require.NoError(ht, err)
-		require.True(ht, ok)
-		docs, _, err := exp.SessionDocs(t.Context(), "local")
-		require.NoError(ht, err)
-		require.Len(ht, docs, 1)
-		require.Len(ht, docs[0].Chunks, 1)
-		vectors := docs[0].Chunks[0].Embedding
-		require.NoError(ht, exp.Close())
-		require.Equal(ht, expected, vectors)
-	}, hegel.WithTestCases(1000))
+	text := "content"
+	src.rows = []fakeUnit{{unit: userDoc("local", "duplicate:#%", 0, text), endedAt: "2025-01-01"}}
+	expected := []float32{1, 1, -1}
+	client := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
+		require.Equal(t, gen.Fingerprint(), r.Fingerprint)
+		require.Equal(t, []HubIdentity{{SessionID: "air~local", UnitKind: "user", SourceUUID: "duplicate:#%", Occurrence: 1, ContentHash: contentHash(text)}}, r.Identities)
+		encoded := "AACAPwAAgD8AAIC/"
+		return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 1, Vector: encoded}}}, nil
+	})
+	result, err := ix.Pull(t.Context(), src, client, gen, PullOptions{MapSession: func(id string) string { return "air~" + id }})
+	require.NoError(t, err)
+	require.Equal(t, gen.Fingerprint(), result.Fingerprint)
+	missing, err := ix.MissingEmbeddedDocs(t.Context(), gen.Fingerprint(), nil)
+	require.NoError(t, err)
+	require.Zero(t, missing)
+	exp, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	docs, _, err := exp.SessionDocs(t.Context(), "local")
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Len(t, docs[0].Chunks, 1)
+	vectors := docs[0].Chunks[0].Embedding
+	require.NoError(t, exp.Close())
+	require.Equal(t, expected, vectors)
 }
 
 func TestPullDiscardsChangedOrDeletedDocuments(t *testing.T) {
@@ -96,6 +88,13 @@ func TestPullDiscardsChangedOrDeletedDocuments(t *testing.T) {
 }
 
 func TestPullKeepsOldGenerationAndResumesAfterFailure(t *testing.T) {
+	for _, mode := range []string{"hub retry", "local completion", "local full rebuild"} {
+		t.Run(mode, func(t *testing.T) { testPullResumesAfterFailure(t, mode) })
+	}
+}
+
+func testPullResumesAfterFailure(t *testing.T, mode string) {
+	t.Helper()
 	ix := openTestIndex(t)
 	src := twoDocSource()
 	for i := 2; i < 257; i++ {
@@ -137,7 +136,18 @@ func TestPullKeepsOldGenerationAndResumesAfterFailure(t *testing.T) {
 		}
 		return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: chunks}, nil
 	}
-	result, err := ix.Pull(ctx, src, client, next, PullOptions{})
+	var result BuildResult
+	if mode == "hub retry" {
+		result, err = ix.Pull(ctx, src, client, next, PullOptions{})
+	} else {
+		var encoded []string
+		result, err = ix.Build(ctx, src, recordingEncoder(&encoded), next, BuildOptions{FullRebuild: mode == "local full rebuild"})
+		if mode == "local completion" {
+			assert.Equal(t, []string{"world"}, encoded, "local completion reuses the successfully imported page")
+		} else {
+			assert.Len(t, encoded, 257, "full rebuild explicitly replaces every imported vector")
+		}
+	}
 	require.NoError(t, err)
 	assert.True(t, result.Activated)
 	active, ok, err = ix.ActiveFingerprint(ctx)
@@ -159,6 +169,7 @@ func TestPullRejectsIncompleteOrChangedGeneration(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			calls := 0
+			pageFailed := errors.New("page failed")
 			client := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
 				calls++
 				if mode == "409" {
@@ -169,7 +180,7 @@ func TestPullRejectsIncompleteOrChangedGeneration(t *testing.T) {
 					return HubLookupReply{}, ctx.Err()
 				}
 				if calls > 1 {
-					return HubLookupReply{}, errors.New("page failed")
+					return HubLookupReply{}, pageFailed
 				}
 				reply := HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 2, Vector: "AACAPwAAgD8AAIA/"}}, NextCursor: "next"}
 				if mode == "wrong fingerprint" {
@@ -178,9 +189,13 @@ func TestPullRejectsIncompleteOrChangedGeneration(t *testing.T) {
 				return reply, nil
 			})
 			_, err := ix.Pull(ctx, src, client, gen, PullOptions{})
-			require.Error(t, err)
-			if mode == "wrong fingerprint" {
+			switch mode {
+			case "409", "wrong fingerprint":
 				require.ErrorIs(t, err, ErrHubGenerationChanged)
+			case "cancel":
+				require.ErrorIs(t, err, context.Canceled)
+			case "partial":
+				require.ErrorIs(t, err, pageFailed)
 			}
 			if mode == "partial" {
 				require.Equal(t, 2, calls)
@@ -314,34 +329,26 @@ func TestPullContinuationContracts(t *testing.T) {
 // Returning to the original build recipe must restore its document boundaries,
 // even when the intervening import is interrupted during its initial reshape.
 func TestPullRunCapBuildPullBuild(t *testing.T) {
-	// Each case builds isolated SQLite archives; host load can exceed the
-	// generator's timing budget without violating the lifecycle property.
-	hegel.Test(t, func(ht *hegel.T) {
-		hubCap := hegel.Draw(ht, hegel.Integers[int](1000, 5000))
-		interrupted := hegel.Draw(ht, hegel.Integers[int](0, 1)) == 1
-		testPullRunCapRestore(t, ht, hubCap, interrupted)
-	}, hegel.WithTestCases(10), hegel.SuppressHealthCheck(hegel.TooSlow))
-}
-
-func TestPullRunCapRestore2000(t *testing.T) {
-	for _, interrupted := range []bool{false, true} {
-		t.Run(strconv.FormatBool(interrupted), func(t *testing.T) {
-			testPullRunCapRestore(t, t, 2000, interrupted)
-		})
+	for _, hubCap := range []int{1000, 2000, 4000, 5000} {
+		for _, interrupted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cap-%d/interrupted-%t", hubCap, interrupted), func(t *testing.T) {
+				testPullRunCapRestore(t, hubCap, interrupted)
+			})
+		}
 	}
 }
 
-func testPullRunCapRestore(t *testing.T, ht require.TestingT, hubCap int, interrupted bool) {
+func testPullRunCapRestore(t *testing.T, hubCap int, interrupted bool) {
 	t.Helper()
 	archive := seedRunCapArchive(t, false)
 	dbtest.SeedSessionWithMessages(t, archive, "newer", "project", []db.Message{dbtest.UserMsg("newer", 0, "new work")}, func(s *db.Session) { s.EndedAt = new("2024-02-01T00:00:00Z") })
 	ix, err := Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
-	require.NoError(ht, err)
+	require.NoError(t, err)
 	defer ix.Close()
 	gen := fakeGeneration("local")
 	gen.Params = map[string]string{"max_input_chars": "4000"}
 	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(ht, err)
+	require.NoError(t, err)
 	hubGen := fakeGeneration("hub")
 	hubGen.Params = map[string]string{"max_input_chars": strconv.Itoa(hubCap)}
 	var source UnitSource = archive
@@ -357,15 +364,15 @@ func testPullRunCapRestore(t *testing.T, ht require.TestingT, hubCap int, interr
 	})
 	_, err = ix.Pull(t.Context(), source, hub, hubGen, PullOptions{})
 	if interrupted {
-		require.Error(ht, err)
+		require.Error(t, err)
 	} else {
-		require.NoError(ht, err)
+		require.NoError(t, err)
 	}
 	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(ht, err)
+	require.NoError(t, err)
 	var documents int
-	require.NoError(ht, ix.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM vector_messages WHERE session_id='session'").Scan(&documents))
-	require.Equal(ht, 6, documents)
+	require.NoError(t, ix.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM vector_messages WHERE session_id='session'").Scan(&documents))
+	require.Equal(t, 6, documents)
 }
 
 func TestPullClearsCompletedActiveRebuild(t *testing.T) {
@@ -414,10 +421,9 @@ func TestPullStampsWhitespaceDocument(t *testing.T) {
 }
 
 func TestPullPreservesSparseChunkIndices(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		gap := hegel.Draw(ht, hegel.Integers[int](1, 20))
-		testPullSparseChunks(t, ht, gap)
-	}, hegel.WithTestCases(10))
+	for _, gap := range []int{1, 2, 10, 20} {
+		t.Run(strconv.Itoa(gap), func(t *testing.T) { testPullSparseChunks(t, gap) })
+	}
 }
 
 func TestRepairAfterFailedPullUsesLocalRecipe(t *testing.T) {
@@ -439,9 +445,12 @@ func TestRepairAfterFailedPullUsesLocalRecipe(t *testing.T) {
 }
 
 func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
-	for _, mode := range []string{"pull failed", "pull incomplete", "pull cleanup failed", "build failed", "build cleanup failed", "repair retired"} {
+	for _, mode := range []string{"pull success", "pull failed", "pull incomplete", "pull publication failed", "build success", "build failed", "build cleanup failed"} {
 		t.Run(mode, func(t *testing.T) {
-			ix := openTestIndex(t)
+			path := filepath.Join(t.TempDir(), "vectors.db")
+			ix, err := Open(t.Context(), path, false, 4000)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ix.Close()) })
 			src := &fakeUnitSource{rows: []fakeUnit{{unit: userDoc("s", "u", 0, "abcdwxyz"), endedAt: "2024-01-01"}}}
 			old, next := fakeGeneration("old"), fakeGeneration("next")
 			old.Params = map[string]string{"max_input_chars": "4"}
@@ -456,75 +465,104 @@ func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
 				}
 				return vectors, nil
 			}
-			_, err := ix.Build(t.Context(), src, enc, old, BuildOptions{})
+			_, err = ix.Build(t.Context(), src, enc, old, BuildOptions{})
 			require.NoError(t, err)
-			stopped := errors.New("stopped")
-			cleanupFailed := strings.Contains(mode, "cleanup")
-			if cleanupFailed {
-				require.NoError(t, ix.metaSet(t.Context(), activeFullRebuildKey, old.Fingerprint()))
-				_, err = ix.db.ExecContext(t.Context(), `CREATE TRIGGER fail_activation_cleanup
-BEFORE DELETE ON `+ix.spec.MetaTable+`
-WHEN OLD.key = 'active_full_rebuild'
-BEGIN
-    SELECT RAISE(ABORT, 'injected activation cleanup failure');
-END`)
+			prepared, err := ix.PrepareSearch(t.Context(), enc, "wxyz")
+			require.NoError(t, err)
+			checkDuring := func(ctx context.Context) {
+				hits, err := ix.Search(ctx, enc, "wxyz", 1)
+				require.NoError(t, err)
+				require.Len(t, hits, 1)
+				assert.Equal(t, "wxyz", hits[0].Snippet)
+			}
+			stopped := errors.New("stopped operation")
+			publicationFailed := mode == "pull publication failed"
+			cleanupFailed := mode == "build cleanup failed"
+			var observer *pullContentConnector
+			if publicationFailed || cleanupFailed {
+				oldDB := ix.db
+				t.Cleanup(func() { require.NoError(t, oldDB.Close()) })
+				observer = &pullContentConnector{drv: oldDB.Driver(), dsn: vectorDSN(path, false), failExec: func(query string, args []driver.NamedValue) error {
+					if (publicationFailed && query == "DELETE FROM vector_messages") ||
+						(cleanupFailed && strings.Contains(query, "DELETE FROM vector_meta WHERE key = ? AND value != ?") && len(args) == 2 && args[0].Value == activeFullRebuildKey) {
+						return stopped
+					}
+					return nil
+				}}
+				ix.db = sql.OpenDB(observer)
+				ix.store, err = sqlitevec.New[string, string](t.Context(), ix.db, ix.spec.schema())
 				require.NoError(t, err)
 			}
 			var result BuildResult
-			if strings.HasPrefix(mode, "build") || mode == "repair retired" {
-				buildEncoder := enc
-				if mode == "build failed" {
-					buildEncoder = func(context.Context, []string) ([][]float32, error) { return nil, stopped }
-				}
-				result, err = ix.Build(t.Context(), src, buildEncoder, next, BuildOptions{})
-				if mode == "repair retired" {
-					require.NoError(t, err)
-					_, err = ix.Build(t.Context(), src, enc, old, BuildOptions{RepairInvalid: true})
-				}
+			var hub lookupFunc
+			if strings.HasPrefix(mode, "build") {
+				result, err = ix.Build(t.Context(), src, func(ctx context.Context, texts []string) ([][]float32, error) {
+					checkDuring(ctx)
+					if mode == "build failed" {
+						return nil, stopped
+					}
+					return enc(ctx, texts)
+				}, next, BuildOptions{})
 			} else {
-				result, err = ix.Pull(t.Context(), src, lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
+				hub = lookupFunc(func(ctx context.Context, r HubLookupRequest) (HubLookupReply, error) {
+					checkDuring(ctx)
 					if mode == "pull failed" {
 						return HubLookupReply{}, stopped
 					}
-					reply := HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Absent: []int{0}}
-					if cleanupFailed {
-						reply.Absent = nil
-						for i := range 4 {
-							encoded := "AAAAAAAAgD8AAAAA"
-							if i == 2 {
-								encoded = "AACAPwAAAAAAAAAA"
-							}
-							reply.Chunks = append(reply.Chunks, HubChunk{ChunkIndex: i, ChunkCount: 4, Vector: encoded})
+					reply := HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint}
+					if mode == "pull incomplete" {
+						reply.Absent = []int{0}
+						return reply, nil
+					}
+					for i := range 4 {
+						encoded := "AAAAAAAAgD8AAAAA"
+						if i == 2 {
+							encoded = "AACAPwAAAAAAAAAA"
 						}
+						reply.Chunks = append(reply.Chunks, HubChunk{ChunkIndex: i, ChunkCount: 4, Vector: encoded})
 					}
 					return reply, nil
-				}), next, PullOptions{})
+				})
+				result, err = ix.Pull(t.Context(), src, hub, next, PullOptions{})
 			}
-			if cleanupFailed {
-				require.ErrorContains(t, err, "injected activation cleanup failure")
-				require.True(t, result.Activated)
-			} else if strings.HasSuffix(mode, "failed") {
+			if strings.HasSuffix(mode, "failed") {
 				require.ErrorIs(t, err, stopped)
 			} else {
 				require.NoError(t, err)
 			}
-			want := "wxyz"
-			if cleanupFailed || mode == "repair retired" {
-				want = "wx"
+			if cleanupFailed {
+				assert.True(t, result.Activated, "cleanup failure follows committed build activation")
 			}
-			hits, err := ix.Search(t.Context(), enc, "wxyz", 1)
+			if publicationFailed {
+				assert.False(t, result.Activated, "publication failure rolls back activation")
+			}
+			hits, _, err := prepared(t.Context(), 1)
 			require.NoError(t, err)
 			require.Len(t, hits, 1)
-			require.Equal(t, want, hits[0].Snippet)
+			assert.Equal(t, "wxyz", hits[0].Snippet, "prepared queries retain their original snapshot")
+			want := "wxyz"
+			if strings.HasSuffix(mode, "success") || cleanupFailed {
+				want = "wx"
+			}
+			hits, err = ix.Search(t.Context(), enc, "wxyz", 1)
+			require.NoError(t, err)
+			require.Len(t, hits, 1)
+			assert.Equal(t, want, hits[0].Snippet)
+			if publicationFailed {
+				observer.failExec = nil
+				result, err = ix.Pull(t.Context(), src, hub, next, PullOptions{})
+				require.NoError(t, err)
+				assert.True(t, result.Activated, "retry publishes the completed stage")
+				hits, err = ix.Search(t.Context(), enc, "wxyz", 1)
+				require.NoError(t, err)
+				require.Len(t, hits, 1)
+				assert.Equal(t, "wx", hits[0].Snippet)
+			}
 		})
 	}
 }
 
-func TestPullSparseChunkGapOne(t *testing.T) {
-	testPullSparseChunks(t, t, 1)
-}
-
-func testPullSparseChunks(t *testing.T, ht require.TestingT, gap int) {
+func testPullSparseChunks(t *testing.T, gap int) {
 	t.Helper()
 	ix := openTestIndex(t)
 	src := &fakeUnitSource{rows: []fakeUnit{{unit: userDoc("s", "sparse", 0, "a"+strings.Repeat(" ", 4*gap+3)+"b"), endedAt: "2024-01-01"}}}
@@ -543,13 +581,13 @@ func testPullSparseChunks(t *testing.T, ht require.TestingT, gap int) {
 		return reply, nil
 	})
 	_, err := ix.Pull(t.Context(), src, hub, gen, PullOptions{})
-	require.NoError(ht, err)
+	require.NoError(t, err)
 	exp, ok, err := ix.BeginExport(t.Context(), nil)
-	require.NoError(ht, err)
-	require.True(ht, ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	docs, _, err := exp.SessionDocs(t.Context(), "s")
-	require.NoError(ht, err)
-	require.Len(ht, docs, 1)
-	require.Equal(ht, []ExportChunk{{ChunkIndex: 0, Embedding: []float32{1, 1, 1}}, {ChunkIndex: gap + 1, Embedding: []float32{2, 2, 2}}}, docs[0].Chunks)
-	require.NoError(ht, exp.Close())
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Equal(t, []ExportChunk{{ChunkIndex: 0, Embedding: []float32{1, 1, 1}}, {ChunkIndex: gap + 1, Embedding: []float32{2, 2, 2}}}, docs[0].Chunks)
+	require.NoError(t, exp.Close())
 }

@@ -693,7 +693,11 @@ func (ix *Index) MissingEmbeddedDocs(
 	if ix.versionMismatch {
 		return 0, ErrMirrorVersionMismatch
 	}
-	snap, err := ix.store.Snapshot(ctx, fingerprint)
+	projection, err := ix.pendingPullStage(ctx, fingerprint)
+	if err != nil {
+		return 0, err
+	}
+	snap, err := projection.store.Snapshot(ctx, fingerprint)
 	if err != nil {
 		return 0, err
 	}
@@ -725,7 +729,11 @@ func scanGenerationRow(src genInfoScanner) (GenerationInfo, error) {
 // revision, including stamp-only documents with no embeddable text; Missing
 // counts documents still pending for the generation.
 func (ix *Index) fillGenerationInfo(ctx context.Context, info *GenerationInfo) error {
-	coverage, err := ix.store.Coverage(ctx, info.key, "")
+	projection, err := ix.pendingPullStage(ctx, info.key)
+	if err != nil {
+		return err
+	}
+	coverage, err := projection.store.Coverage(ctx, info.key, "")
 	if err != nil {
 		return fmt.Errorf("generation %d coverage: %w", info.ID, err)
 	}

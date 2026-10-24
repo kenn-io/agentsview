@@ -46,6 +46,10 @@ func (ix *Index) generationSplit(ctx context.Context, fingerprint string) (kitve
 	if !found {
 		return ix.split, nil
 	} // Legacy generations use the immutable Open recipe.
+	return splitFromRecipe(raw, fingerprint)
+}
+
+func splitFromRecipe(raw, fingerprint string) (kitvec.SplitOptions, error) {
 	maxChars, err := strconv.Atoi(raw)
 	if err != nil {
 		return kitvec.SplitOptions{}, fmt.Errorf("invalid chunk recipe for generation %q", fingerprint)

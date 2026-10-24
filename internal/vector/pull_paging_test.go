@@ -20,9 +20,10 @@ import (
 // Observe content rows crossing the SQL boundary, independently of the query's
 // spelling. A batch must reach the hub before another page enters memory.
 type pullContentConnector struct {
-	drv   driver.Driver
-	dsn   string
-	reads atomic.Int64
+	drv      driver.Driver
+	dsn      string
+	reads    atomic.Int64
+	failExec func(string, []driver.NamedValue) error
 }
 
 func (c *pullContentConnector) Connect(context.Context) (driver.Conn, error) {
@@ -48,12 +49,22 @@ func (c *pullContentConn) Prepare(query string) (driver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pullContentStmt{Stmt: stmt, owner: c.owner}, nil
+	return &pullContentStmt{Stmt: stmt, owner: c.owner, query: query}, nil
 }
 
 type pullContentStmt struct {
+	query string
 	driver.Stmt
 	owner *pullContentConnector
+}
+
+func (s *pullContentStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if s.owner.failExec != nil {
+		if err := s.owner.failExec(s.query, args); err != nil {
+			return nil, err
+		}
+	}
+	return s.Stmt.(driver.StmtExecContext).ExecContext(ctx, args)
 }
 
 func (s *pullContentStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
@@ -159,4 +170,39 @@ func TestPullCompletesInterruptedInvalidRepair(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, encoded, "imported replacement vectors must complete durable repair work")
 	assert.Zero(t, result.Repair.Documents)
+}
+
+// The local cursor adapter must select the same revisions the pinned kit store
+// considers pending, while its search excludes exactly those stale documents.
+func TestPullPendingUsesStoreFreshness(t *testing.T) {
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s", "fresh", 0, "fresh"), endedAt: "2024-01-01"},
+		{unit: userDoc("s", "edited", 1, "original"), endedAt: "2024-01-01"},
+		{unit: userDoc("s", "deleted", 2, "gone"), endedAt: "2024-01-01"},
+		{unit: userDoc("s", "blank", 3, " \t"), endedAt: "2024-01-01"},
+	}}
+	gen := fakeGeneration("hub")
+	_, err := ix.Build(t.Context(), src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[1].unit.Content = "revised"
+	src.rows = append(src.rows[:2], src.rows[3])
+	src.rows = append(src.rows, fakeUnit{unit: userDoc("s", "new", 4, "new"), endedAt: "2024-01-01"})
+	_, err = ix.Refresh(t.Context(), src, true, false)
+	require.NoError(t, err)
+	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
+	require.NoError(t, err)
+	pending, err := ix.pullPendingPage(t.Context(), ordinal, "")
+	require.NoError(t, err)
+	kitPending, err := ix.store.PendingForGeneration(t.Context(), gen.Fingerprint(), 256)
+	require.NoError(t, err)
+	assert.Equal(t, kitPending, pending)
+	require.Len(t, pending, 2)
+	assert.Equal(t, "u:s:edited", pending[0].Doc)
+	assert.Equal(t, "revised", pending[0].Content)
+	assert.Equal(t, "u:s:new", pending[1].Doc)
+	hits, err := ix.Search(t.Context(), fakeBuildEncoder(), "query", 100)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	assert.Equal(t, "fresh", hits[0].Snippet, "edited, removed, blank and unfilled rows cannot surface as current hits")
 }
