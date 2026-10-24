@@ -13,6 +13,12 @@ import (
 
 // NewHTTPClient connects the generated API to the selected daemon transport.
 func NewHTTPClient(baseURL, token string, client *http.Client) (*Client, error) {
+	return NewHTTPClientWithResponsePolicy(baseURL, token, client, nil)
+}
+
+// NewHTTPClientWithResponsePolicy applies a response policy after net/http has
+// constructed its errors, before API decoding or error reporting.
+func NewHTTPClientWithResponsePolicy(baseURL, token string, client *http.Client, policy func(*http.Response, error) (*http.Response, error)) (*Client, error) {
 	client, err := requestsign.ClientFromEnvironment(baseURL, client)
 	if err != nil {
 		return nil, err
@@ -22,7 +28,7 @@ func NewHTTPClient(baseURL, token string, client *http.Client) (*Client, error) 
 		return nil, err
 	}
 	origin.Path, origin.RawPath, origin.RawQuery, origin.Fragment = "", "", "", ""
-	return NewDefaultClient(strings.TrimSuffix(baseURL, "/"), runtime.WithHTTPClient(httpTransport{client}), runtime.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+	return NewDefaultClient(strings.TrimSuffix(baseURL, "/"), runtime.WithHTTPClient(httpTransport{Client: client, policy: policy}), runtime.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -33,10 +39,16 @@ func NewHTTPClient(baseURL, token string, client *http.Client) (*Client, error) 
 	}))
 }
 
-type httpTransport struct{ *http.Client }
+type httpTransport struct {
+	*http.Client
+	policy func(*http.Response, error) (*http.Response, error)
+}
 
 func (c httpTransport) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	response, err := c.Client.Do(req.WithContext(ctx))
+	if c.policy != nil {
+		response, err = c.policy(response, err)
+	}
 	ObserveArchiveFreshness(ctx, response)
 	return response, err
 }
