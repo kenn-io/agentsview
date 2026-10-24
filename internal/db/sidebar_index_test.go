@@ -54,6 +54,7 @@ func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 	}
 	_, err := d.getWriter().Exec(t.Context(), `
 		DROP INDEX idx_sessions_parent;
+		DROP INDEX idx_sessions_embedding_readiness;
 		CREATE INDEX idx_sessions_parent ON sessions(parent_session_id)
 		WHERE parent_session_id IS NOT NULL;
 		ANALYZE`)
@@ -68,6 +69,7 @@ func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	assert.Contains(t, output.String(), sidebarParentIndexRebuildLog)
+	requireIndexColumns(t, d, "idx_sessions_embedding_readiness", []string{"is_automated", "data_version"})
 
 	var stat string
 	require.NoError(t, d.getReader().QueryRow(t.Context(),

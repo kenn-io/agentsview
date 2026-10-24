@@ -101,6 +101,7 @@ func TestEmbeddingDataVersionBoundedProbe(t *testing.T) {
 					assert.Equal(t, want, got)
 					rows, err := d.getReader().QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+embeddingReadinessQuery, tc.includeAutomated, current)
 					require.NoError(t, err)
+					defer rows.Close()
 					details := explainQueryPlanDetails(t, rows)
 					require.NoError(t, rows.Close())
 					var searches []string
@@ -177,6 +178,7 @@ func TestEmbeddingDataVersionLegacyReadOnly(t *testing.T) {
 	assert.Equal(t, CurrentDataVersion(), got)
 	rows, err := d.getReader().QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+embeddingReadinessQuery, false, CurrentDataVersion())
 	require.NoError(t, err)
+	defer rows.Close()
 	details := explainQueryPlanDetails(t, rows)
 	require.NoError(t, rows.Close())
 	assert.Contains(t, strings.Join(details, "\n"), "idx_sessions_embedding_readiness")

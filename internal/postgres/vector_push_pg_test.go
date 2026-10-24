@@ -153,6 +153,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 		Content:       id,
 		ContentLength: len(id),
 	}}), "InsertMessages "+id)
+	require.NoError(t, localDB.SetSessionDataVersion(t.Context(), id, db.CurrentDataVersion()))
 }
 
 // seedVectorSessionProject inserts a minimal session under the given project so
@@ -175,6 +176,7 @@ func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) 
 		Content:       id,
 		ContentLength: len(id),
 	}}), "InsertMessages "+id)
+	require.NoError(t, localDB.SetSessionDataVersion(t.Context(), id, db.CurrentDataVersion()))
 }
 
 // vdoc builds a storage.VectorPushDoc with the supplied embeddings as consecutive
@@ -777,7 +779,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4, DataVersion: db.CurrentDataVersion()},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
 		docs: map[string][]storage.VectorPushDoc{
@@ -791,8 +793,13 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
+	assert.Equal(t, 2, res.Vectors.SessionsPushed, "baseline publishes both sessions")
 	witnessKey, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err, "vectorGenerationWitnessKey")
+	assert.Equal(t, 1, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine = $2 AND data_version = $3`, genID, witnessKey, db.CurrentDataVersion()),
+		"baseline records the proved producer parser version")
 	_, err = pg.Exec(
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
