@@ -47,10 +47,10 @@ func TestSessionAnnotationWritesMapRemoteReadOnly(t *testing.T) {
 				require.ErrorIs(t, err, db.ErrReadOnly)
 				if configured {
 					assert.NotContains(t, err.Error(), "private")
-					assert.ErrorContains(t, err, "--local")
-					assert.ErrorContains(t, err, srv.URL)
+					require.ErrorContains(t, err, "--local")
+					require.ErrorContains(t, err, srv.URL)
 				}
-				assert.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
+				require.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
 			})
 		}
 	}

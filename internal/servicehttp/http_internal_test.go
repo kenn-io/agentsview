@@ -179,8 +179,8 @@ func TestRemotePolicy503RecallPreservesSemanticTransient(t *testing.T) {
 		Query: "example", Mode: "vector", Limit: 10,
 	})
 	require.ErrorIs(t, err, db.ErrSemanticTransient)
-	assert.ErrorContains(t, err, "--local")
-	assert.ErrorContains(t, err, "127.0.0.1")
+	require.ErrorContains(t, err, "--local")
+	require.ErrorContains(t, err, "127.0.0.1")
 	assert.NotContains(t, err.Error(), "private")
 	assert.NotContains(t, err.Error(), "secret")
 }
@@ -222,7 +222,7 @@ func TestRemotePolicyServiceErrorsRedactConfiguredURL(t *testing.T) {
 			backend := NewHTTPBackendWithClient(srv.URL+"/private/path?token=url-secret", "", tt.readOnly, "", srv.Client()).(*httpBackend)
 			err := tt.call(backend)
 			require.ErrorIs(t, err, db.ErrReadOnly)
-			assert.ErrorContains(t, err, "--local")
+			require.ErrorContains(t, err, "--local")
 			if tt.readOnly {
 				assert.Zero(t, hits)
 			} else {
@@ -481,8 +481,8 @@ func TestRemotePolicyRecall501PreservesReadOnly(t *testing.T) {
 				backend := NewHTTPBackendWithClient(srv.URL, "", false, "", srv.Client())
 				_, err := backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "example", Mode: mode, Limit: 10})
 				require.ErrorIs(t, err, tc.want)
-				assert.ErrorContains(t, err, "--local")
-				assert.ErrorContains(t, err, "127.0.0.1")
+				require.ErrorContains(t, err, "--local")
+				require.ErrorContains(t, err, "127.0.0.1")
 				assert.NotContains(t, err.Error(), "response-secret")
 			})
 		}
