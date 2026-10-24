@@ -1,6 +1,7 @@
 package servicehttp
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,19 +26,33 @@ func TestSessionAnnotationWritesMapRemoteReadOnly(t *testing.T) {
 			return err
 		}},
 	} {
-		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, tt.method, r.Method)
-				assert.Equal(t, tt.path, r.URL.Path)
-				w.WriteHeader(http.StatusNotImplemented)
-			}))
-			t.Cleanup(srv.Close)
-			backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-			backend.apiVersion = service.SessionAnnotationsAPIVersion
-			err := tt.call(backend)
-			require.ErrorIs(t, err, db.ErrReadOnly)
-			assert.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
-		})
+		for _, configured := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s %s/configured=%t", tt.method, tt.path, configured), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, tt.method, r.Method)
+					prefix := ""
+					if configured {
+						prefix = "/private"
+					}
+					assert.Equal(t, prefix+tt.path, r.URL.Path)
+					w.WriteHeader(http.StatusNotImplemented)
+				}))
+				t.Cleanup(srv.Close)
+				backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+				if configured {
+					backend = NewHTTPBackendWithClient(srv.URL+"/private", "", false, "", srv.Client()).(*httpBackend)
+				}
+				backend.apiVersion = service.SessionAnnotationsAPIVersion
+				err := tt.call(backend)
+				require.ErrorIs(t, err, db.ErrReadOnly)
+				if configured {
+					assert.NotContains(t, err.Error(), "private")
+					require.ErrorContains(t, err, "--local")
+					require.ErrorContains(t, err, srv.URL)
+				}
+				require.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
+			})
+		}
 	}
 }
 

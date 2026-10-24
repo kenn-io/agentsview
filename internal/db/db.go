@@ -3791,6 +3791,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
 	}
 	indexes := []string{
+		// Readiness is checked on every incremental embedding refresh. Seek
+		// version mismatches without visiting the unchanged live corpus.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_embedding_readiness
+         ON sessions(is_automated, data_version) WHERE deleted_at IS NULL`,
 		// Activity checks terminal events even for sessions whose ended_at
 		// predates the report. Avoid reading historical result payloads for
 		// every session just to find a recent tool completion.

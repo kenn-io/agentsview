@@ -4,8 +4,10 @@
 
 export interface ConfigRemoteHost {
   destination?: string;
+  full_sync_timeout?: number;
   host: string;
   interval?: number;
+  sync_timeout?: number;
   transport?: string;
   url?: string;
 }

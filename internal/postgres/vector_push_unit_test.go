@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
@@ -87,4 +90,49 @@ func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
 	assert.False(t, res.Skipped)
 	assert.Zero(t, res.SessionsPushed)
 	assert.Zero(t, res.SessionsEvicted)
+}
+
+// An existence probe must do the same work for one unit and a long transcript,
+// while preserving empty results and every error other than its own stop signal.
+func TestHasEmbeddableUnitsForSession(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		units      int
+		scanErr    error
+		want       bool
+		wantVisits int
+	}{
+		{name: "one unit", units: 1, want: true, wantVisits: 1},
+		{name: "long transcript", units: 10000, want: true, wantVisits: 1},
+		{name: "empty"},
+		{name: "EOF is a real error", scanErr: io.EOF},
+		{name: "canceled", scanErr: context.Canceled},
+		{name: "scan failure", scanErr: errors.New("archive read failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			visits := 0
+			scan := func(gotCtx context.Context, sessionID string, includeAutomated bool, maxRunRunes int, fn func(db.EmbeddableUnit) error) error {
+				assert.Equal(t, ctx, gotCtx)
+				assert.Equal(t, "session", sessionID)
+				assert.True(t, includeAutomated, "scope exclusions must not invalidate other generations")
+				assert.Zero(t, maxRunRunes)
+				for i := range tc.units {
+					visits++
+					if err := fn(db.EmbeddableUnit{SessionID: "session", Kind: "user", Content: "content", Ordinal: i, OrdinalEnd: i}); err != nil {
+						return fmt.Errorf("scan callback: %w", err)
+					}
+				}
+				return tc.scanErr
+			}
+			got, err := hasEmbeddableUnitsForSession(ctx, "session", scan)
+			if tc.scanErr != nil {
+				require.ErrorIs(t, err, tc.scanErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantVisits, visits)
+		})
+	}
 }
