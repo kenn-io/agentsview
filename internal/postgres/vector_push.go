@@ -1412,7 +1412,9 @@ DELETE FROM %s WHERE doc_key IN (
 }
 
 // evictVectorSessions removes each session's chunks and push state for the
-// scoped generation and prunes its now-orphaned shared doc rows, one
+// scoped generation and prunes its now-orphaned shared doc rows. If the archive
+// has no embeddable units even with automated sessions included, all generations
+// are invalidated. Scope exclusions retain other generations. There is one
 // transaction per session. Ownership was adjudicated from the delta scan's
 // state read, which can be minutes stale by the time evictions run, so each
 // transaction re-probes the sessions row FOR UPDATE (the same lock discipline
@@ -1428,7 +1430,6 @@ func (s *Sync) evictVectorSessions(
 	if len(sessionIDs) == 0 {
 		return nil
 	}
-	table := vectorChunkTable(scope.gen.id)
 	for _, sessionID := range sessionIDs {
 		tx, err := s.pg.BeginTx(ctx, nil)
 		if err != nil {
@@ -1451,21 +1452,42 @@ func (s *Sync) evictVectorSessions(
 			res.Conflicts++
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-DELETE FROM %s WHERE doc_key IN (
-    SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
-			sessionID); err != nil {
+		// Absence from the export can also mean an automated-scope exclusion.
+		// Consult the archive with that filter disabled before invalidating
+		// other generations, under the same ownership reservation as deletion.
+		hasUnits := false
+		if err := s.local.ScanEmbeddableUnitsForSession(ctx, sessionID, true, 0, func(db.EmbeddableUnit) error {
+			hasUnits = true
+			return nil
+		}); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("evicting chunks for session %s: %w", sessionID, err)
+			return fmt.Errorf("checking evicted session content %s: %w", sessionID, err)
+		}
+		generations, err := existingChunkGenerationsTx(ctx, tx)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		for _, id := range generations {
+			if hasUnits && id != scope.gen.id {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+DELETE FROM %s WHERE doc_key IN (
+    SELECT doc_key FROM vector_documents WHERE session_id = $1)`, vectorChunkTable(id)),
+				sessionID); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("evicting chunks for session %s: %w", sessionID, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `
 DELETE FROM vector_push_state
- WHERE generation_id = $1 AND session_id = $2`,
-			scope.gen.id, sessionID); err != nil {
+ WHERE session_id = $2 AND (generation_id = $1 OR $3)`,
+			scope.gen.id, sessionID, !hasUnits); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("evicting push state for session %s: %w", sessionID, err)
 		}
-		deleted, err := deleteOrphanVectorDocs(ctx, tx, sessionID, scope.genIDs)
+		deleted, err := deleteOrphanVectorDocs(ctx, tx, sessionID, generations)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
