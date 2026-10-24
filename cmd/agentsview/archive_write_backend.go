@@ -1015,8 +1015,16 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
-	if err := b.appCfg.ValidateRemoteHosts(); err != nil {
-		return err
+	var autoHosts []config.RemoteHost
+	if backend.Name() == "pg" {
+		if err := b.appCfg.ValidateRemoteHosts(); err != nil {
+			return err
+		}
+		for _, host := range b.appCfg.RemoteHosts {
+			if host.Interval > 0 {
+				autoHosts = append(autoHosts, host)
+			}
+		}
 	}
 	if err := b.database.RequireSourceSync(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -1037,14 +1045,6 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	}
 	var coordinatedStartup func(context.Context, *syncpkg.Engine, bool) (bool, error)
 	incrementalStartup := false
-	var autoHosts []config.RemoteHost
-	if backend.Name() == "pg" {
-		for _, host := range b.appCfg.RemoteHosts {
-			if host.Interval > 0 {
-				autoHosts = append(autoHosts, host)
-			}
-		}
-	}
 	if len(autoHosts) > 0 {
 		runStartup := func(c context.Context, full bool) (bool, error) {
 			rebuilt, failures, err := runConfiguredLocalAndRemotesForWatch(c, b.appCfg, b.database, autoHosts, full, func(p syncpkg.Progress) {
