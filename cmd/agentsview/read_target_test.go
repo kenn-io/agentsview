@@ -34,7 +34,7 @@ func TestReadTargetSelection(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	tokenPath := filepath.Join(dir, "token")
 	require.NoError(t, os.WriteFile(tokenPath, []byte("selected-token"), 0o600))
-	for bits := 0; bits < 128; bits++ {
+	for bits := range 128 {
 		t.Run(strconv.Itoa(bits), func(t *testing.T) {
 			local, pg, server := bits&1 != 0, bits&2 != 0, bits&4 != 0
 			remote, available, defaults, pgChanged := bits&8 != 0, bits&16 != 0, bits&32 != 0, bits&64 != 0
