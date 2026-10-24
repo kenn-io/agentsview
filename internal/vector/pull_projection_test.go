@@ -55,7 +55,7 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			require.Len(t, before, 6)
 			preparedCtx, release := context.WithCancel(t.Context())
 			defer release()
-			prepared, err := ix.PrepareSearchForGeneration(preparedCtx, enc, "work", old.Fingerprint(), 4000)
+			prepared, err := ix.PrepareSearchForGeneration(preparedCtx, enc, "work", old.Fingerprint())
 			require.NoError(t, err)
 			oldExport, ok, err := ix.BeginExport(t.Context(), nil)
 			require.NoError(t, err)

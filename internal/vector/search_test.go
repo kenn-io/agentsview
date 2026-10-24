@@ -1008,7 +1008,7 @@ func TestHubPreparedSearchPinsRecipeAndHydration(t *testing.T) {
 			ix.split = kitvec.SplitOptions{MaxRunes: 8192, Overlap: ChunkOverlap(8192)}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			search, err := ix.PrepareSearchForGeneration(ctx, fakeSearchEncoder(), "beta", gen.Fingerprint(), 100)
+			search, err := ix.PrepareSearchForGeneration(ctx, fakeSearchEncoder(), "beta", gen.Fingerprint())
 			if mode == "generation" {
 				require.ErrorIs(t, err, ErrNoActiveGeneration, "a query recipe must never search another active generation")
 				return

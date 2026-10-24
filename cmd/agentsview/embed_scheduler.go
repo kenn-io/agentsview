@@ -376,7 +376,6 @@ type searcherAdapter struct {
 	enc           kitvec.EncodeFunc
 	space         embedmodel.Descriptor
 	fingerprint   string
-	maxInputChars int
 }
 
 type recallSearcherAdapter struct {
@@ -557,7 +556,7 @@ func (a searcherAdapter) PrepareSemanticSearch(
 
 	var search func(context.Context, int) ([]vector.Hit, bool, error)
 	if a.fingerprint != "" {
-		search, err = a.ix.PrepareSearchForGeneration(ctx, a.enc, query, a.fingerprint, a.maxInputChars)
+		search, err = a.ix.PrepareSearchForGeneration(ctx, a.enc, query, a.fingerprint)
 	} else {
 		search, err = a.ix.PrepareSearch(ctx, a.enc, query)
 	}

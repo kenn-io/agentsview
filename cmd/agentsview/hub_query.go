@@ -43,7 +43,7 @@ func (a hubSearcherAdapter) active(ctx context.Context) (searcherAdapter, error)
 		return searcherAdapter{}, localSemanticUnavailable("configure a local query encoder")
 	}
 	adapter := newSearcherAdapter(a.ix, enc, vectorSpace(recipe, g))
-	adapter.fingerprint, adapter.maxInputChars = g.Fingerprint(), recipe.MaxInputChars
+	adapter.fingerprint = g.Fingerprint()
 	return adapter, nil
 }
 

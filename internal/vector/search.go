@@ -128,12 +128,10 @@ func (ix *Index) PrepareSearch(
 	return ix.prepareSearch(ctx, enc, query, "")
 }
 
-// PrepareSearchForGeneration pairs a saved recipe with its active generation
-// and captures its chunk settings without changing the shared index.
-func (ix *Index) PrepareSearchForGeneration(ctx context.Context, enc kitvec.EncodeFunc, query, fingerprint string, maxInputChars int) (func(context.Context, int) ([]Hit, bool, error), error) {
-	view := Index{db: ix.db, store: ix.store, spec: ix.spec, readOnly: ix.readOnly, versionMismatch: ix.versionMismatch,
-		split: kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}}
-	return view.prepareSearch(ctx, enc, query, fingerprint)
+// PrepareSearchForGeneration rejects a changed active generation before encoding
+// the query and loads its persisted chunk settings in the same read snapshot.
+func (ix *Index) PrepareSearchForGeneration(ctx context.Context, enc kitvec.EncodeFunc, query, fingerprint string) (func(context.Context, int) ([]Hit, bool, error), error) {
+	return ix.prepareSearch(ctx, enc, query, fingerprint)
 }
 
 func (ix *Index) prepareSearch(ctx context.Context, enc kitvec.EncodeFunc, query, expected string) (func(context.Context, int) ([]Hit, bool, error), error) {
