@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,7 +110,7 @@ func TestHubIdentitiesAgreeForLocalAndExtractedSources(t *testing.T) {
 				ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, maxChars)
 				require.NoError(t, err)
 				defer ix.Close()
-				gen := kitvec.Generation{Model: "identity-test", Dimensions: 3, Params: map[string]string{"max_input_chars": fmt.Sprint(maxChars)}}
+				gen := kitvec.Generation{Model: "identity-test", Dimensions: 3, Params: map[string]string{"max_input_chars": strconv.Itoa(maxChars)}}
 				var requested []vector.HubIdentity
 				_, err = ix.Pull(t.Context(), local, hubIdentityLookup(func(_ context.Context, r vector.HubLookupRequest) (vector.HubLookupReply, error) {
 					requested = append(requested, r.Identities...)

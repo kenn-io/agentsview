@@ -44,6 +44,15 @@ func (c *pullContentConn) BeginTx(ctx context.Context, opts driver.TxOptions) (d
 	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
 }
 
+func (c *pullContentConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if c.owner.failExec != nil {
+		if err := c.owner.failExec(query, args); err != nil {
+			return nil, err
+		}
+	}
+	return c.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
+}
+
 func (c *pullContentConn) Prepare(query string) (driver.Stmt, error) {
 	stmt, err := c.Conn.Prepare(query)
 	if err != nil {
