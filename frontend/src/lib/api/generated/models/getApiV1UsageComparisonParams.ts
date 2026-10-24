@@ -32,9 +32,17 @@ export type GetApiV1UsageComparisonParams = {
    */
   machine?: string;
   /**
-   * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+   * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
    */
   git_branch?: string;
+  /**
+   * Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+   */
+  exclude_git_branch?: string;
+  /**
+   * Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys
+   */
+  selected_git_branch?: string;
   /**
    * Exclude a project
    */
@@ -84,6 +92,10 @@ export type GetApiV1UsageComparisonParams = {
    * Include per-model, per-project, and per-agent breakdowns
    */
   breakdowns?: boolean;
+  /**
+   * Include per-project branch breakdowns
+   */
+  branch_breakdowns?: boolean;
   /**
    * Include distinct session counts
    */

@@ -955,6 +955,12 @@ func (b *directBackend) UsageSummary(
 		return nil, err
 	}
 	result, err := b.db.GetDailyUsage(ctx, f)
+	if errors.Is(err, db.ErrBranchBreakdownsUnsupported) {
+		return nil, &UsageInputError{
+			Code: UsageErrorCodeBranchBreakdownsUnsupported,
+			Msg:  err.Error(),
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1082,6 +1088,8 @@ func (b *directBackend) UsagePairwiseComparison(
 	}
 	leftFilter.Breakdowns = false
 	rightFilter.Breakdowns = false
+	leftFilter.BranchBreakdowns = false
+	rightFilter.BranchBreakdowns = false
 	leftFilter.SkipSessionCounts = false
 	rightFilter.SkipSessionCounts = false
 

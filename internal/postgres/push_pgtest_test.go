@@ -1933,10 +1933,11 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	defer store.Close()
 
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:       "2026-05-14",
-		To:         "2026-05-14",
-		Timezone:   "UTC",
-		Breakdowns: true,
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err, "GetDailyUsage")
 	require.Len(t, result.Daily, 1, "daily entries")
@@ -1952,6 +1953,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+	assert.Empty(t, result.Daily[0].BranchBreakdowns, "cursor-only usage has no branch attribution")
 }
 
 func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {

@@ -52,7 +52,9 @@ type UsageFilterInput struct {
 	Project           string `query:"project" doc:"Filter by project"`
 	ProjectKey        string `query:"project_key" doc:"Filter by an opaque project key"`
 	Machine           string `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
-	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch         string `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
+	ExcludeGitBranch  string `query:"exclude_git_branch" doc:"Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
+	SelectedGitBranch string `query:"selected_git_branch" doc:"Second branch include list, matched against git_branch by branch name and project; project-qualified values may use opaque project keys"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
 	ExcludeAgent      string `query:"exclude_agent" doc:"Exclude an agent"`
@@ -65,6 +67,7 @@ type UsageFilterInput struct {
 	IncludeAutomated  bool   `query:"include_automated" doc:"Include automated sessions"`
 	NoDefaultRange    bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
 	Breakdowns        bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
+	BranchBreakdowns  bool   `query:"branch_breakdowns" default:"false" doc:"Include per-project branch breakdowns"`
 	SessionCounts     bool   `query:"session_counts" default:"true" doc:"Include distinct session counts"`
 }
 
@@ -113,6 +116,8 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		ProjectKey:        in.ProjectKey,
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
+		ExcludeGitBranch:  in.ExcludeGitBranch,
+		SelectedGitBranch: in.SelectedGitBranch,
 		ExcludeProject:    in.ExcludeProject,
 		ExcludeProjectKey: in.ExcludeProjectKey,
 		ExcludeAgent:      in.ExcludeAgent,
@@ -125,6 +130,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		IncludeAutomated:  in.IncludeAutomated,
 		NoDefaultRange:    in.NoDefaultRange,
 		Breakdowns:        &in.Breakdowns,
+		BranchBreakdowns:  &in.BranchBreakdowns,
 		SessionCounts:     &in.SessionCounts,
 	}
 }
@@ -339,6 +345,7 @@ func (s *Server) computeUsageComparison(
 	priorFilter.ProjectLabels = slices.Clone(f.ProjectLabels)
 	priorFilter.ExcludeProjectLabels = slices.Clone(f.ExcludeProjectLabels)
 	priorFilter.Breakdowns = false
+	priorFilter.BranchBreakdowns = false
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)
 	if err != nil {
 		return nil, err

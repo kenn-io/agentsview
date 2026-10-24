@@ -136,7 +136,7 @@ describe("OutcomeTotals", () => {
       stats: { repos_active: 1, commits: 7, loc_added: 0, loc_removed: 0, files_changed: 1 },
     });
     expect(target.textContent).toContain(
-      "Clear machine, model, termination, minimum-message, recent-activity, and time-of-day filters",
+      "Clear branch, machine, model, termination, minimum-message, recent-activity, and time-of-day filters",
     );
     expect(metric(target, "Commits")).toBe("");
     expect(target.querySelector(".outcome-load-prs")).toBeNull();

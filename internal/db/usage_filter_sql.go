@@ -38,6 +38,9 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 			preds = append(preds, pred)
 		}
 	}
+	if f.ExcludeGitBranch != "" {
+		preds = append(preds, BranchPairExcludePredicate("s.project", "s.git_branch", f.ExcludeGitBranch, func(v string) string { return b.Add(v) }))
+	}
 	if sessionID != "" {
 		preds = append(preds, "s.id = "+b.Add(sessionID))
 	}

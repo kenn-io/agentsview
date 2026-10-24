@@ -42,7 +42,7 @@ type AnalyticsFilterInput struct {
 	Timezone         string           `query:"timezone" doc:"IANA timezone name"`
 	Machine          string           `query:"machine" doc:"Exact machine ID or alias, comma-separated IDs or aliases, or a unique whole display label (case-sensitive). Blank means all machines; unknown or ambiguous values return HTTP 400."`
 	Project          string           `query:"project" doc:"Filter by project"`
-	GitBranch        string           `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch        string           `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	Agent            string           `query:"agent" doc:"Filter by agent"`
 	Model            string           `query:"model" doc:"Comma-separated model filter"`
 	DayOfWeek        optionalIntParam `query:"dow" minimum:"0" maximum:"6" doc:"Day of week, Monday=0 through Sunday=6"`

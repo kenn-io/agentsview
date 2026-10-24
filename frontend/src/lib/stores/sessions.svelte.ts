@@ -7,6 +7,8 @@ import type {
   DbAgentInfo as AgentInfo,
   DbSidebarSessionIndexRow as SidebarSessionIndexRow,
 } from "../api/generated/index.js";
+import { BRANCH_LIST_SEP } from "../branchFilters.js";
+import { toggleListValue } from "../utils/lists.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
@@ -95,6 +97,7 @@ export interface RecentlyDeletedSessions {
 export interface Filters {
   project: string;
   machine: string;
+  branch: string;
   agent: string;
   termination: string;
   date: string;
@@ -118,6 +121,7 @@ function defaultFilters(): Filters {
   return {
     project: "",
     machine: "",
+    branch: "",
     agent: "",
     termination: "",
     date: "",
@@ -215,6 +219,7 @@ export function filtersToParams(f: Filters): Record<string, string> {
   const p: Record<string, string> = {};
   if (f.project) p["project"] = f.project;
   if (f.machine) p["machine"] = f.machine;
+  if (f.branch) p["git_branch"] = f.branch;
   if (f.agent) p["agent"] = f.agent;
   if (f.termination) p["termination"] = f.termination;
   if (f.date) p["date"] = f.date;
@@ -284,6 +289,7 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
   return {
     project,
     machine: params["machine"] ?? "",
+    branch: params["git_branch"] ?? "",
     agent: params["agent"] ?? "",
     termination: params["termination"] ?? "",
     date: params["date"] ?? "",
@@ -389,6 +395,7 @@ class SessionsStore {
       project: f.project || undefined,
       exclude_project: exclude,
       machine: f.machine || undefined,
+      git_branch: f.branch || undefined,
       agent: f.agent || undefined,
       termination: f.termination || undefined,
       date: f.date || undefined,
@@ -1280,6 +1287,25 @@ class SessionsStore {
       : [this.filters.machine];
   }
 
+  setBranchFilters(values: string[]) {
+    this.filters.branch = values.join(BRANCH_LIST_SEP);
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  toggleBranchFilter(token: string) {
+    this.setBranchFilters(
+      toggleListValue(this.filters.branch, token, BRANCH_LIST_SEP)
+        .split(BRANCH_LIST_SEP)
+        .filter(Boolean),
+    );
+  }
+
+  get selectedBranches(): string[] {
+    if (!this.filters.branch) return [];
+    return this.filters.branch.split(BRANCH_LIST_SEP);
+  }
+
   setAgentFilter(agent: string) {
     if (this.filters.agent === agent) {
       this.filters.agent = "";
@@ -1291,14 +1317,7 @@ class SessionsStore {
   }
 
   toggleAgentFilter(agent: string) {
-    const current = this.filters.agent ? this.filters.agent.split(",") : [];
-    const idx = current.indexOf(agent);
-    if (idx >= 0) {
-      current.splice(idx, 1);
-    } else {
-      current.push(agent);
-    }
-    this.filters.agent = current.join(",");
+    this.filters.agent = toggleListValue(this.filters.agent, agent, ",");
     this.setActiveSession(null);
     void this.load();
   }
@@ -1409,20 +1428,33 @@ class SessionsStore {
 
   /** Filters the session list shares with the usage and analytics pages. */
   get hasSharedFilters(): boolean {
+    return this.sharedFilterCount > 0;
+  }
+
+  // Counts active shared filter dimensions for the filter-button badge.
+  // Project is excluded: it is not a control inside the filter dropdown.
+  // The date trio counts as one "date range" dimension.
+  get sharedFilterCount(): number {
     const f = this.filters;
-    return !!(
-      f.machine ||
-      f.agent ||
-      f.termination ||
-      f.recentlyActive ||
-      f.hideUnknownProject ||
-      f.dateFrom ||
-      f.dateTo ||
-      f.date ||
-      f.minUserMessages > 0 ||
-      !f.includeOneShot ||
-      f.includeAutomated ||
-      f.automatedFilterSet
+    let n = 0;
+    if (f.machine) n++;
+    if (f.branch) n++;
+    if (f.agent) n++;
+    if (f.termination) n++;
+    if (f.recentlyActive) n++;
+    if (f.hideUnknownProject) n++;
+    if (f.date || f.dateFrom || f.dateTo) n++;
+    if (f.minUserMessages > 0) n++;
+    if (!f.includeOneShot) n++;
+    if (f.includeAutomated || f.automatedFilterSet) n++;
+    return n;
+  }
+
+  /** Shared filter dimensions plus the session-list-only label and pull
+   *  request filters. */
+  get activeFilterCount(): number {
+    return (
+      this.sharedFilterCount + (this.filters.labels.length > 0 ? 1 : 0) + (this.filters.pr ? 1 : 0)
     );
   }
 

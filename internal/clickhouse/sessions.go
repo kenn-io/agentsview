@@ -299,6 +299,47 @@ func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomate
 	return out, rows.Err()
 }
 
+// SearchBranchNames mirrors db.DB.SearchBranchNames for ClickHouse.
+func (s *Store) SearchBranchNames(ctx context.Context, query db.BranchQuery) (db.BranchResult, error) {
+	query = db.NormalizeBranchQuery(query)
+	q := `SELECT git_branch FROM sessions
+		WHERE message_count > 0
+		  AND deleted_at IS NULL`
+	args := []any{}
+	if query.Scope == db.BranchScopeRoots {
+		q += " AND relationship_type NOT IN ('subagent', 'fork')"
+	}
+	if query.ExcludeOneShot {
+		if !query.ExcludeAutomated {
+			q += " AND (user_message_count > 1 OR is_automated = true)"
+		} else {
+			q += " AND user_message_count > 1"
+		}
+	}
+	if query.ExcludeAutomated {
+		q += " AND is_automated = false"
+	}
+	if len(query.Projects) > 0 {
+		placeholders, projectArgs := db.InPlaceholders(query.Projects)
+		q += " AND project IN " + placeholders
+		args = append(args, projectArgs...)
+	}
+	if query.Search != "" {
+		q += " AND git_branch ILIKE ?"
+		args = append(args, "%"+db.EscapeLikePattern(query.Search)+"%")
+	}
+	q += ` GROUP BY git_branch
+		ORDER BY MAX(` + sessionActivityExpr + `) DESC NULLS LAST, git_branch
+		LIMIT ?`
+	args = append(args, query.Limit+1)
+	rows, err := s.queryContext(ctx, q, args...)
+	if err != nil {
+		return db.BranchResult{}, fmt.Errorf("querying clickhouse branch names: %w", err)
+	}
+	defer rows.Close()
+	return db.ScanBranchResult(rows, query)
+}
+
 func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
 	filter := `message_count > 0
 		AND relationship_type NOT IN ('subagent', 'fork')

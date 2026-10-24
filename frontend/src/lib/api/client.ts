@@ -11,6 +11,7 @@ import {
   SessionsService,
   InsightsService,
   ImportService,
+  MetadataService,
   type DbSessionTiming as SessionTiming,
   type ImporterImportStats as ImportStats,
 } from "./generated/index.js";
@@ -21,6 +22,35 @@ import type { BrowserHost } from "./browserHost.js";
 export interface SyncHandle {
   abort: () => void;
   done: Promise<SyncStats>;
+}
+
+export interface BranchSearchParams {
+  projects?: string[];
+  search?: string;
+  limit?: number;
+  includeOneShot?: boolean;
+  includeAutomated?: boolean;
+  scope?: "roots" | "all";
+}
+
+export interface BranchSearchResponse {
+  branches: Array<{ branch: string }>;
+  has_more: boolean;
+}
+
+export async function searchBranches(params: BranchSearchParams): Promise<BranchSearchResponse> {
+  const response = await MetadataService.getApiV1BranchNames({
+    projects: params.projects,
+    search: params.search || undefined,
+    limit: params.limit ?? 100,
+    include_one_shot: params.includeOneShot,
+    include_automated: params.includeAutomated,
+    scope: params.scope,
+  });
+  return {
+    branches: (response.branches ?? []) as Array<{ branch: string }>,
+    has_more: response.has_more,
+  };
 }
 
 export async function consumeEvents<T>(

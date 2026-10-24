@@ -2982,6 +2982,85 @@ func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T)
 		"the source child metadata must not override parent attribution")
 }
 
+func TestUsageBranchBreakdownsUseAttributedSnapshotBranch(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  money.MustParseDollars("5"),
+		OutputPerMTok: money.MustParseDollars("25"),
+	}}))
+
+	first := syncMessage(
+		"duck-branch-parent", 0, "assistant", "partial",
+		"2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "msg-branch"
+	first.ClaudeRequestID = "req-branch"
+	first.TokenUsage = jsontext.Value(
+		`{"input_tokens":1000,"output_tokens":5}`)
+	first.OutputTokens = 5
+	second := syncMessage(
+		"duck-branch-child", 0, "assistant", "complete",
+		"2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "msg-branch"
+	second.ClaudeRequestID = "req-branch"
+	second.TokenUsage = jsontext.Value(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	second.OutputTokens = 631
+
+	parent := syncSession(
+		"duck-branch-parent", "alpha", "parent first message",
+		"2026-01-13T00:00:00.000Z", 1)
+	parent.GitBranch = "main"
+	child := syncSession(
+		"duck-branch-child", "alpha", "child first message",
+		"2026-01-13T00:01:00.000Z", 1)
+	child.GitBranch = "feature"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{
+			Session:         parent,
+			Messages:        []db.Message{first},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         child,
+			Messages:        []db.Message{second},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		BranchBreakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	require.Len(t, result.Daily[0].BranchBreakdowns, 1)
+	assert.Equal(t, "main", result.Daily[0].BranchBreakdowns[0].Branch,
+		"the complete child snapshot is charged to the attributed parent branch")
+	assert.Equal(t, 631, result.Daily[0].BranchBreakdowns[0].OutputTokens)
+
+	mainOnly, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		GitBranch:        db.EncodeBranchFilterToken("alpha", "main"),
+		BranchBreakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, mainOnly.Daily, 1)
+	require.Len(t, mainOnly.Daily[0].BranchBreakdowns, 1)
+	assert.Equal(t, "main", mainOnly.Daily[0].BranchBreakdowns[0].Branch,
+		"usage kept by the main filter must not be labeled with the excluded branch")
+}
+
 func TestUsageSessionCountsFilterAfterCrossSessionSnapshotSelection(
 	t *testing.T,
 ) {
@@ -3746,10 +3825,11 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 
 	store := NewStoreFromDB(syncer.DB())
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:       "2026-05-14",
-		To:         "2026-05-14",
-		Timezone:   "UTC",
-		Breakdowns: true,
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)
@@ -3765,6 +3845,7 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+	assert.Empty(t, result.Daily[0].BranchBreakdowns, "cursor-only usage has no branch attribution")
 }
 
 func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {
@@ -4416,20 +4497,27 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 
+	// Timestamps drive the recency ordering; d-d and d-e tie so the pair
+	// itself breaks the tie alphabetically.
 	seed := []struct {
-		id, project, branch string
-		input, output       int
+		id, project, branch, ts string
+		input, output           int
 	}{
-		{"d-a", "alpha", "main", 100, 10},
-		{"d-b", "alpha", "feature-x", 200, 20},
-		{"d-c", "beta", "main", 300, 30},
-		{"d-d", "alpha", "", 400, 40},
-		{"d-e", "alpha", "unknown", 500, 50},
+		{"d-a", "alpha", "main", "2026-02-03T12:00:00.000Z", 100, 10},
+		{"d-b", "alpha", "feature-x", "2026-02-05T12:00:00.000Z", 200, 20},
+		{"d-c", "beta", "main", "2026-02-04T12:00:00.000Z", 300, 30},
+		{"d-d", "alpha", "", "2026-02-01T12:00:00.000Z", 400, 40},
+		{"d-e", "alpha", "unknown", "2026-02-01T12:00:00.000Z", 500, 50},
+		{"d-f", "delta", "fork-only", "2026-01-30T12:00:00.000Z", 0, 0},
 	}
 	var writes []db.SessionBatchWrite
 	for _, s := range seed {
-		sess := syncSession(s.id, s.project, s.id+" first", "2026-02-01T12:00:00.000Z", 1)
+		sess := syncSession(s.id, s.project, s.id+" first", s.ts, 1)
 		sess.GitBranch = s.branch
+		// A fork-only pair exercises the GetBranches relationship scopes.
+		if s.id == "d-f" {
+			sess.RelationshipType = "fork"
+		}
 		writes = append(writes, db.SessionBatchWrite{
 			Session: sess,
 			// A token-free user message so only the usage event below feeds the
@@ -4459,39 +4547,64 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
+	qualified, err := store.GetBranches(ctx, false, false)
+	require.NoError(t, err, "GetBranches")
+	assert.Contains(t, qualified, db.BranchInfo{
+		Project: "alpha",
+		Branch:  "feature-x",
+		Token:   "alpha\x1ffeature-x",
+	})
 
-	branches, err := store.GetBranches(ctx, false, false)
+	branches, err := store.SearchBranchNames(ctx, db.BranchQuery{
+		Projects: []string{"alpha", "beta"},
+		Search:   "MAIN",
+		Limit:    1,
+	})
 	require.NoError(t, err)
-	assert.Equal(t, []db.BranchInfo{
-		{
-			Project: "alpha",
-			Branch:  "",
-			Token:   db.EncodeBranchFilterToken("alpha", ""),
-		},
-		{
-			Project: "alpha",
-			Branch:  "feature-x",
-			Token:   db.EncodeBranchFilterToken("alpha", "feature-x"),
-		},
-		{
-			Project: "alpha",
-			Branch:  "main",
-			Token:   db.EncodeBranchFilterToken("alpha", "main"),
-		},
-		{
-			Project: "alpha",
-			Branch:  "unknown",
-			Token:   db.EncodeBranchFilterToken("alpha", "unknown"),
-		},
-		{
-			Project: "beta",
-			Branch:  "main",
-			Token:   db.EncodeBranchFilterToken("beta", "main"),
-		},
-	}, branches)
+	assert.Equal(t, db.BranchResult{
+		Branches: []db.BranchOption{{Branch: "main"}},
+		HasMore:  false,
+	}, branches, "same-named branches deduplicate after filtering selected projects")
+
+	withForks, err := store.SearchBranchNames(ctx, db.BranchQuery{
+		Scope:    db.BranchScopeAll,
+		Projects: []string{"delta"},
+		Limit:    100,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, withForks.Branches, db.BranchOption{Branch: "fork-only"},
+		"fork-only branch included when scope is all")
+
+	wide := db.UsageFilter{From: "2026-01-01", To: "2026-12-31", Breakdowns: true}
+	withoutBranches, err := store.GetDailyUsage(ctx, wide)
+	require.NoError(t, err)
+	require.NotEmpty(t, withoutBranches.Daily)
+	assert.Empty(t, withoutBranches.Daily[0].BranchBreakdowns)
+	assert.NotEmpty(t, withoutBranches.Daily[0].ProjectBreakdowns)
+
+	wide.BranchBreakdowns = true
+	daily, err := store.GetDailyUsage(ctx, wide)
+	require.NoError(t, err)
+	assert.Equal(t, withoutBranches.Totals, daily.Totals)
+	byKey := map[db.BranchInfo]int{}
+	for _, day := range daily.Daily {
+		for _, b := range day.BranchBreakdowns {
+			byKey[db.BranchInfo{Project: b.Project, Branch: b.Branch}] += b.InputTokens
+		}
+	}
+	require.Len(t, byKey, 6, "one bucket per distinct (project, branch)")
+	assert.Equal(t, 0, byKey[db.BranchInfo{Project: "delta", Branch: "fork-only"}],
+		"fork sessions count in usage breakdowns even though the root branch scope hides them")
+	assert.Equal(t, 100, byKey[db.BranchInfo{Project: "alpha", Branch: "main"}])
+	assert.Equal(t, 200, byKey[db.BranchInfo{Project: "alpha", Branch: "feature-x"}])
+	assert.Equal(t, 300, byKey[db.BranchInfo{Project: "beta", Branch: "main"}],
+		"beta/main distinct from alpha/main")
+	assert.Equal(t, 400, byKey[db.BranchInfo{Project: "alpha", Branch: ""}],
+		"branchless usage keeps the raw empty branch")
+	assert.Equal(t, 500, byKey[db.BranchInfo{Project: "alpha", Branch: "unknown"}])
 
 	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-01-01", To: "2026-12-31",
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
 		GitBranch: db.EncodeBranchFilterToken("alpha", "main"),
 	})
 	require.NoError(t, err)
@@ -4500,6 +4613,29 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		total += day.InputTokens
 	}
 	assert.Equal(t, 100, total, "branch filter restricts usage to alpha/main")
+
+	excluded, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
+		ExcludeGitBranch: db.EncodeBranchFilterToken("alpha", "main"),
+	})
+	require.NoError(t, err)
+	total = 0
+	for _, day := range excluded.Daily {
+		total += day.InputTokens
+	}
+	assert.Equal(t, 1400, total,
+		"exclude filter drops only alpha/main, beta/main stays")
+
+	malformed, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
+		ExcludeGitBranch: "no-separator-here",
+	})
+	require.NoError(t, err)
+	total = 0
+	for _, day := range malformed.Daily {
+		total += day.InputTokens
+	}
+	assert.Equal(t, 1500, total, "malformed exclude token excludes nothing")
 }
 
 func TestSearch_DateRange(t *testing.T) {

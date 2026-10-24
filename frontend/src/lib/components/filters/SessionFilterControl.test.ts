@@ -1,28 +1,57 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { flushSync, mount, unmount } from "svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { flushSync, mount, tick, unmount } from "svelte";
 import { fireEvent, screen } from "@testing-library/svelte";
 import SessionFilterControl from "./SessionFilterControl.svelte";
 import SessionActiveFilters from "./SessionActiveFilters.svelte";
-import { sessions, filtersToParams } from "../../stores/sessions.svelte.js";
+import { sessions, filtersToParams, parseFiltersFromParams } from "../../stores/sessions.svelte.js";
 import { ApiError } from "../../api/runtime.js";
+import { starred } from "../../stores/starred.svelte.js";
 import { MetadataService } from "../../api/generated/index.js";
+import { branchFilterToken } from "../../branchFilters.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
-afterEach(() => {
-  if (component) unmount(component);
-  component = undefined;
-  document.body.innerHTML = "";
+function resetSessionState() {
+  sessions.filters = parseFiltersFromParams({});
   sessions.agents = [];
-  sessions.filters.agent = "";
   sessions.machines = [];
   sessions.machineLabels = {};
-  sessions.filters.machine = "";
-  sessions.filters.minUserMessages = 0;
-  sessions.filters.labels = [];
-  sessions.filters.pr = "";
+  starred.filterOnly = false;
+}
+
+async function openDropdown() {
+  component = mount(SessionFilterControl, { target: document.body });
+  await tick();
+  document.querySelector<HTMLButtonElement>(".filter-btn")!.click();
+  await tick();
+}
+
+function sectionRowNames(label: string): string[] {
+  const section = Array.from(document.querySelectorAll<HTMLDivElement>(".filter-section")).find(
+    (s) => s.querySelector(".filter-section-label")?.textContent?.trim() === label,
+  );
+  expect(section, `section ${label}`).toBeTruthy();
+  return Array.from(section!.querySelectorAll<HTMLSpanElement>(".agent-select-name")).map(
+    (el) => el.textContent?.trim() ?? "",
+  );
+}
+
+beforeEach(() => {
+  resetSessionState();
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+});
+
+afterEach(() => {
+  if (component) {
+    unmount(component);
+    component = undefined;
+  }
+  resetSessionState();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
 });
 
 it("shows and searches machine labels while selecting the stored machine key", async () => {
@@ -34,9 +63,11 @@ it("shows and searches machine labels while selecting the stored machine key", a
   vi.spyOn(MetadataService, "getApiV1Machines").mockImplementation(async (params) =>
     params?.machine ? { ...response, resolved_machines: ["installation-a"] } : response,
   );
-  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "load").mockResolvedValue();
+  // The shared beforeEach stubs loadMachines; this test needs the real loader.
+  vi.mocked(sessions.loadMachines).mockRestore();
   await sessions.loadMachines();
+  vi.spyOn(sessions, "loadMachines").mockResolvedValue();
 
   component = mount(SessionFilterControl, { target: document.body });
   await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
@@ -57,7 +88,8 @@ it("shows and searches machine labels while selecting the stored machine key", a
 });
 
 it("shows a temporary machine failure, disables rows, and retries when reopened", async () => {
-  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  // The shared beforeEach stubs loadMachines; this test needs the real loader.
+  vi.mocked(sessions.loadMachines).mockRestore();
   vi.spyOn(sessions, "load").mockResolvedValue();
   sessions.setMachineFilter("Retry label");
   let fail!: (reason: unknown) => void;
@@ -101,21 +133,16 @@ it("shows a temporary machine failure, disables rows, and retries when reopened"
 });
 
 describe("SessionFilterControl agent options", () => {
-  it("keeps custom session labels under one base Claude option", () => {
+  it("keeps custom session labels under one base Claude option", async () => {
     sessions.agents = [{ name: "claude", session_count: 2 }];
-    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
-
-    component = mount(SessionFilterControl, { target: document.body });
-    document.querySelector<HTMLButtonElement>(".filter-btn")?.click();
-    flushSync();
+    await openDropdown();
 
     const rows = document.querySelectorAll(".agent-select-row");
     expect(rows).toHaveLength(2);
     expect(document.querySelectorAll(".agent-select-name")[1]?.textContent).toBe("Claude");
 
     (rows[1] as HTMLButtonElement).click();
-    flushSync();
+    await tick();
     expect(sessions.filters.agent).toBe("claude");
   });
 });
@@ -213,5 +240,78 @@ describe("SessionFilterControl label and pull request filters", () => {
     expect(sessions.filters.agent).toBe("");
     expect(sessions.filters.labels).toEqual(["ticket=example"]);
     expect(sessions.filters.pr).toBe("acme/widgets#42");
+  });
+});
+
+describe("SessionFilterControl filter badge", () => {
+  it("shows no badge without active filters", async () => {
+    await openDropdown();
+    expect(document.querySelector(".filter-badge")).toBeNull();
+  });
+
+  it("shows the active filter count", async () => {
+    sessions.filters.machine = "host-a";
+    sessions.filters.branch = branchFilterToken("proj", "main");
+    sessions.filters.includeAutomated = true;
+    await openDropdown();
+
+    const badge = document.querySelector(".filter-badge");
+    expect(badge?.textContent).toBe("3");
+  });
+});
+
+describe("SessionFilterControl selected-to-top sort", () => {
+  it("floats the selected agent above higher-count agents", async () => {
+    sessions.agents = [
+      { name: "claude", session_count: 10 },
+      { name: "codex", session_count: 2 },
+    ];
+    sessions.filters.agent = "codex";
+    await openDropdown();
+
+    const names = sectionRowNames("Agent");
+    const codexIdx = names.findIndex((n) => n.includes("Codex"));
+    const claudeIdx = names.findIndex((n) => n.includes("Claude"));
+    expect(codexIdx).toBeGreaterThanOrEqual(0);
+    expect(claudeIdx).toBeGreaterThanOrEqual(0);
+    expect(codexIdx).toBeLessThan(claudeIdx);
+  });
+
+  it("floats the selected machine above alphabetical order", async () => {
+    sessions.machines = ["alpha-host", "zeta-host"];
+    sessions.filters.machine = "zeta-host";
+    await openDropdown();
+
+    const names = sectionRowNames("Machine");
+    expect(names[0]).toBe("zeta-host");
+    expect(names[1]).toBe("alpha-host");
+  });
+
+  it("searches root-session branches within the current project", async () => {
+    const searchBranches = vi
+      .spyOn(MetadataService, "getApiV1BranchNames")
+      .mockResolvedValue({ branches: [], has_more: false });
+    sessions.filters.project = "proj-a";
+    await openDropdown();
+
+    document.querySelector<HTMLButtonElement>(".branch-picker-trigger")!.click();
+
+    await vi.waitFor(() =>
+      expect(searchBranches).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projects: ["proj-a"],
+          scope: "roots",
+        }),
+      ),
+    );
+  });
+
+  it("decodes a selected legacy project-pair branch for display", async () => {
+    sessions.filters.branch = branchFilterToken("proj", "mid");
+    await openDropdown();
+
+    const branchTrigger = document.querySelector<HTMLButtonElement>(".branch-picker-trigger");
+    expect(branchTrigger?.textContent).toContain("mid");
+    expect(branchTrigger?.textContent).not.toContain("proj/");
   });
 });

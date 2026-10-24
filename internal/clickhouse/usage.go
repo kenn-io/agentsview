@@ -331,11 +331,7 @@ func chCursorUsageRowsWhere(
 	f db.UsageFilter, b chUsageBounds,
 ) (string, []any, bool) {
 	hasTermFilter := f.Termination != "" && f.Termination != "all"
-	if len(f.ProjectFilterLabels()) > 0 ||
-		len(f.ExcludedProjectFilterLabels()) > 0 ||
-		len(db.CSVFilterValues(f.Machine)) > 0 || f.GitBranch != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || hasTermFilter ||
-		f.ActiveSince != "" {
+	if f.RequiresSessionScope() || hasTermFilter {
 		return "", nil, false
 	}
 	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
@@ -1505,6 +1501,9 @@ var errUsagePriceContextChanged = errors.New("usage price context changed during
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
+	if f.BranchBreakdowns {
+		return db.DailyUsageResult{}, db.ErrBranchBreakdownsUnsupported
+	}
 	// One parts snapshot names the prepared state and the kept read alike,
 	// so a push that lands during the read makes the next request miss.
 	ctx, err := s.withPartsSnapshot(ctx)

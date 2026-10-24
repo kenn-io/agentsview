@@ -14,6 +14,15 @@ import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
+import {
+  BRANCH_LIST_SEP,
+  branchFilterToken,
+  branchFilterValuesEqual,
+  isOpaqueProjectKey,
+  portableBranchFilterValues,
+  scopeBranchFilterValues,
+  splitBranchFilterToken,
+} from "../branchFilters.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
@@ -59,7 +68,7 @@ export interface UsageProjectFilterItem {
   count?: number;
 }
 
-export type GroupBy = "project" | "model" | "agent";
+export type GroupBy = "project" | "model" | "agent" | "branch";
 export type TimeSeriesView = "smooth" | "lines" | "bars";
 export type AttributionView = "treemap" | "list" | "bars";
 
@@ -78,7 +87,7 @@ function defaultToggles(): Toggles {
 }
 
 function isGroupBy(value: unknown): value is GroupBy {
-  return value === "project" || value === "model" || value === "agent";
+  return value === "project" || value === "model" || value === "agent" || value === "branch";
 }
 
 function isTimeSeriesView(value: unknown): value is TimeSeriesView {
@@ -143,6 +152,7 @@ export interface UsageFilterState {
   excludedProjects: string;
   excludedProjectKeys?: string;
   excludedAgents: string;
+  selectedGitBranch: string;
   excludedModels: string;
 }
 
@@ -150,11 +160,16 @@ function loadUsageFilters(): UsageFilterState {
   try {
     const raw = localStorage.getItem(USAGE_FILTERS_KEY);
     if (raw) {
+      // Saved excludedGitBranch exclusion lists from the retired
+      // exclude-mode branch filter are dropped: an exclusion set cannot
+      // be mapped onto an include selection, so those views reset to
+      // "all branches".
       const saved = JSON.parse(raw) as Partial<UsageFilterState>;
       return {
         excludedProjects: saved.excludedProjects ?? "",
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
+        selectedGitBranch: saved.selectedGitBranch ?? "",
         excludedModels: saved.excludedModels ?? "",
       };
     }
@@ -165,6 +180,7 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjects: "",
     excludedProjectKeys: "",
     excludedAgents: "",
+    selectedGitBranch: "",
     excludedModels: "",
   };
 }
@@ -174,6 +190,7 @@ function saveUsageFilters(f: UsageFilterState): void {
     const data: UsageFilterState = {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
+      selectedGitBranch: f.selectedGitBranch,
       excludedModels: f.excludedModels,
     };
     localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
@@ -208,7 +225,13 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
 export type UsageMode = "cost" | "token";
 
 function selectionKey(params: UsageParams): string {
-  return [params.project_key, params.model, params.agent].join("|");
+  return [
+    params.project_key,
+    params.model,
+    params.agent,
+    params.git_branch,
+    params.selected_git_branch,
+  ].join("|");
 }
 
 // active_since follows the clock, so only whether it is set changes the scope.
@@ -225,6 +248,7 @@ function summaryForDateRange(
   const projectTotals = new Map<string, UsageSummaryResponse["projectTotals"][number]>();
   const modelTotals = new Map<string, UsageSummaryResponse["modelTotals"][number]>();
   const agentTotals = new Map<string, UsageSummaryResponse["agentTotals"][number]>();
+  const branchTotals = new Map<string, UsageSummaryResponse["branchTotals"][number]>();
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheCreationTokens = 0;
@@ -289,6 +313,28 @@ function summaryForDateRange(
       total.cost.microdollars += item.cost.microdollars;
       agentTotals.set(item.agent, total);
     }
+
+    // Branch totals exist only when the window was fetched with branch
+    // breakdowns, matching how the server folds them from the same days.
+    for (const item of day.branchBreakdowns ?? []) {
+      const key = branchFilterToken(item.project_key, item.branch);
+      const total = branchTotals.get(key) ?? {
+        project_key: item.project_key,
+        project: item.project,
+        branch: item.branch,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: { microdollars: 0 },
+      };
+      total.inputTokens += item.inputTokens;
+      total.outputTokens += item.outputTokens;
+      total.cacheCreationTokens += item.cacheCreationTokens;
+      total.cacheReadTokens += item.cacheReadTokens;
+      total.cost.microdollars += item.cost.microdollars;
+      branchTotals.set(key, total);
+    }
   }
 
   // Plan-only sessions have no usage events, so daily entries cannot place
@@ -337,6 +383,13 @@ function summaryForDateRange(
     agentTotals: [...agentTotals.values()].sort(
       (a, b) => byCost(a, b) || a.agent.localeCompare(b.agent),
     ),
+    branchTotals: [...branchTotals.values()].sort(
+      (a, b) =>
+        byCost(a, b) ||
+        a.project_key.localeCompare(b.project_key) ||
+        a.project.localeCompare(b.project) ||
+        a.branch.localeCompare(b.branch),
+    ),
     cacheStats: {
       cacheReadTokens,
       cacheCreationTokens,
@@ -359,10 +412,14 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Picker exclusions persist across tab switches.
+  // Picker exclusions and the included branch list persist across tab
+  // switches. Branch selection is include-based: an exclusion complement
+  // would grow with the branch catalog (deselect-all over thousands of
+  // (project, branch) pairs) instead of with the user's selection.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
+  selectedGitBranch: string = $state("");
   excludedModels: string = $state("");
   knownProjects: UsageProjectFilterItem[] = $state([]);
 
@@ -371,6 +428,7 @@ class UsageStore {
     this.excludedProjects = saved.excludedProjects;
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
+    this.selectedGitBranch = saved.selectedGitBranch;
     this.excludedModels = saved.excludedModels;
   }
 
@@ -387,6 +445,16 @@ class UsageStore {
   private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
+  private summaryHasBranchBreakdowns = $state(false);
+  // Set when loading branch breakdowns fails, so Branch grouping shows the
+  // failure instead of charting every cost as Unattributed.
+  branchBreakdownError = $state<string | null>(null);
+  // The full-window chart summary is fetched separately while a range is
+  // brushed, so it tracks its own branch breakdown availability.
+  private contextHasBranchBreakdowns = false;
+  private branchBreakdownContextVersion = 0;
+  private branchBreakdownSummaryVersion = 0;
+  private branchBreakdownRequestVersion = 0;
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   private zoomed = $state(false);
 
@@ -477,6 +545,8 @@ class UsageStore {
       timezone: this.timezone,
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
+      git_branch: sessionFilters.branch || undefined,
+      selected_git_branch: this.projectScopedLocalBranch() || undefined,
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
       min_user_messages:
@@ -486,6 +556,7 @@ class UsageStore {
       active_since: sessionFilters.recentlyActive
         ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
         : undefined,
+      branch_breakdowns: this.toggles.attribution.groupBy === "branch" ? true : undefined,
     };
     if (sessionFilters.hideUnknownProject && sessionFilters.project !== "unknown") {
       p.exclude_project = joinCsvParts(this.excludedProjects, "unknown");
@@ -512,6 +583,9 @@ class UsageStore {
     const params = this.baseParams();
     if (by === "project") delete params.project_key;
     else if (by === "model") delete params.model;
+    // The sidebar branch filter still scopes the panel; only the usage
+    // page's own branch selection is lifted.
+    else if (by === "branch") delete params.selected_git_branch;
     else delete params.agent;
     return params;
   }
@@ -525,6 +599,17 @@ class UsageStore {
   // selection, or failing to refresh after clearing, keeps them still too.
   get colorSummary(): UsageSummaryResponse | null {
     return this.referenceSummary ?? this.timeSeriesSummary;
+  }
+
+  // Plain branch names apply within the separately supplied project scope.
+  // Legacy project-pair tokens remain valid for stored URLs; only conflicting
+  // legacy pairs are dropped when a project is pinned.
+  private projectScopedLocalBranch(): string {
+    const local = this.selectedGitBranch;
+    if (!local) return local;
+    return scopeBranchFilterValues(local.split(BRANCH_LIST_SEP), sessions.filters.project).join(
+      BRANCH_LIST_SEP,
+    );
   }
 
   get pairwiseModelOptions(): string[] {
@@ -597,6 +682,7 @@ class UsageStore {
     if (this.isPinned && this.from === from && this.to === to) return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
     this.isTimeRangeSummaryProvisional = false;
     this.isPinned = true;
     this.from = from;
@@ -614,6 +700,7 @@ class UsageStore {
       return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
     this.isTimeRangeSummaryProvisional = false;
     this.windowDays = days;
     this.isPinned = false;
@@ -639,6 +726,7 @@ class UsageStore {
     }
     if (this.selectedTimeRange === null) {
       this.timeSeriesContextSummary = this.summary;
+      this.contextHasBranchBreakdowns = this.summaryHasBranchBreakdowns;
     }
     this.selectedTimeRange = { from, to };
     if (this.timeSeriesContextSummary) {
@@ -658,13 +746,18 @@ class UsageStore {
   clearTimeRange(refresh = true) {
     if (this.selectedTimeRange === null) return;
     this.selectedTimeRange = null;
-    if (this.timeSeriesContextSummary) {
-      this.summary = this.timeSeriesContextSummary;
-      this.timeSeriesContextSummary = null;
-    }
+    this.restoreTimeSeriesContext();
     if (this.referenceSummary) this.attributionSummary = this.referenceSummary;
     this.isTimeRangeSummaryProvisional = false;
     if (refresh) void this.fetchAll();
+  }
+
+  private restoreTimeSeriesContext(): void {
+    if (!this.timeSeriesContextSummary) return;
+    this.summary = this.timeSeriesContextSummary;
+    this.summaryHasBranchBreakdowns = this.contextHasBranchBreakdowns;
+    this.timeSeriesContextSummary = null;
+    this.contextHasBranchBreakdowns = false;
   }
 
   setPairwiseSide(side: UsagePairwiseSide, updates: Partial<UsagePairwiseSideSelection>): void {
@@ -700,6 +793,7 @@ class UsageStore {
   }
 
   isSelected(by: GroupBy, id: string): boolean {
+    if (by === "branch") return this.isBranchSelected(id);
     return by === "agent"
       ? sessions.isAgentSelected(id)
       : (by === "project"
@@ -708,6 +802,7 @@ class UsageStore {
   }
 
   hasSelection(by: GroupBy): boolean {
+    if (by === "branch") return this.selectedGitBranch !== "";
     return (
       (by === "agent"
         ? sessions.filters.agent
@@ -722,7 +817,8 @@ class UsageStore {
       sessions.filters.agent = "";
       return;
     }
-    if (by === "project") {
+    if (by === "branch") this.selectedGitBranch = "";
+    else if (by === "project") {
       this.selectedProjectKey = "";
       this.backToProjects();
     } else this.selectedModel = "";
@@ -730,6 +826,10 @@ class UsageStore {
   }
 
   toggleSelection(by: GroupBy, id: string): void {
+    if (by === "branch") {
+      this.toggleBranch(id, { preserveTimeRange: true });
+      return;
+    }
     const clear = this.isSelected(by, id);
     if (by === "agent") {
       sessions.filters.agent = clear
@@ -820,6 +920,61 @@ class UsageStore {
     });
   }
 
+  // Usage rows know each opaque project key's label, so a key and a legacy
+  // label-qualified filter for the same project compare equal.
+  private projectLabelForKey = (projectKey: string): string | undefined => {
+    for (const summary of [
+      this.summary,
+      this.timeSeriesContextSummary,
+      this.referenceSummary,
+      this.attributionSummary,
+    ]) {
+      const match =
+        summary?.branchTotals.find((total) => total.project_key === projectKey) ??
+        summary?.projectTotals.find((total) => total.project_key === projectKey);
+      if (match) return match.project;
+    }
+    return undefined;
+  };
+
+  // A reload has no usage rows to resolve an opaque key against yet. Storing
+  // the selection in the sidebar's label form keeps it matching the sidebar.
+  private sidebarFormOfBranch(value: string): string {
+    if (!isOpaqueProjectKey(splitBranchFilterToken(value).project)) return value;
+    const sidebar = sessions.filters.branch ? sessions.filters.branch.split(BRANCH_LIST_SEP) : [];
+    return (
+      sidebar.find((token) => {
+        const project = splitBranchFilterToken(token).project;
+        return (
+          project !== "" &&
+          !isOpaqueProjectKey(project) &&
+          branchFilterValuesEqual(token, value, this.projectLabelForKey)
+        );
+      }) ?? value
+    );
+  }
+
+  toggleBranch(value: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.selectedGitBranch;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
+    const current = this.selectedGitBranch ? this.selectedGitBranch.split(BRANCH_LIST_SEP) : [];
+    const matches = (selected: string) =>
+      branchFilterValuesEqual(selected, value, this.projectLabelForKey);
+    this.selectedGitBranch = current.some(matches)
+      ? current.filter((selected) => !matches(selected)).join(BRANCH_LIST_SEP)
+      : [...current, this.sidebarFormOfBranch(value)].join(BRANCH_LIST_SEP);
+    if (!options.preserveTimeRange) {
+      void this.fetchAll();
+      return;
+    }
+    const changed = this.selectedGitBranch;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.selectedGitBranch !== changed) return;
+      this.selectedGitBranch = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
+  }
+
   private toggleCsv(csv: string, name: string): string {
     const current = csv ? csv.split(",") : [];
     const idx = current.indexOf(name);
@@ -853,6 +1008,13 @@ class UsageStore {
     return this.excludedModels.split(",").includes(name);
   }
 
+  isBranchSelected(value: string): boolean {
+    if (!this.selectedGitBranch) return false;
+    return this.selectedGitBranch
+      .split(BRANCH_LIST_SEP)
+      .some((selected) => branchFilterValuesEqual(selected, value, this.projectLabelForKey));
+  }
+
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
@@ -878,6 +1040,11 @@ class UsageStore {
     void this.fetchAll();
   }
 
+  selectAllBranches(): void {
+    this.selectedGitBranch = "";
+    void this.fetchAll();
+  }
+
   selectAllModels(): void {
     this.excludedModels = "";
     void this.fetchAll();
@@ -895,6 +1062,7 @@ class UsageStore {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
+    this.selectedGitBranch = "";
     this.excludedModels = "";
     if (refresh) void this.fetchAll();
   }
@@ -906,6 +1074,7 @@ class UsageStore {
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
+      this.selectedGitBranch !== "" ||
       this.excludedModels !== ""
     );
   }
@@ -965,6 +1134,7 @@ class UsageStore {
     this.backToProjects();
     if (this.hasSelection(previous) || this.hasSelection(g))
       void this.fetchAll({ preserveTimeRange: true });
+    else if (g === "branch") void this.ensureBranchBreakdowns();
   }
 
   setAttributionView(v: AttributionView) {
@@ -1000,10 +1170,7 @@ class UsageStore {
     const hadSelectedRange = this.selectedTimeRange !== null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
-      if (this.timeSeriesContextSummary) {
-        this.summary = this.timeSeriesContextSummary;
-        this.timeSeriesContextSummary = null;
-      }
+      this.restoreTimeSeriesContext();
       this.isTimeRangeSummaryProvisional = false;
     }
     const fetchVersion = ++this.fetchAllVersion;
@@ -1177,7 +1344,19 @@ class UsageStore {
         ]);
       }
       if (this.versions.summary === v) {
-        this.summary = data;
+        const responseHasBranchBreakdowns = params.branch_breakdowns === true;
+        const preserveRichSummary =
+          !responseHasBranchBreakdowns &&
+          this.toggles.attribution.groupBy === "branch" &&
+          this.summaryHasBranchBreakdowns &&
+          this.branchBreakdownSummaryVersion === v &&
+          this.summary !== null;
+        const currentSummary = preserveRichSummary ? this.summary! : data;
+        if (!preserveRichSummary) {
+          this.summary = data;
+          this.summaryHasBranchBreakdowns = responseHasBranchBreakdowns;
+          this.branchBreakdownSummaryVersion = responseHasBranchBreakdowns ? v : 0;
+        }
         this.summarySelection = selectionKey(params);
         if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
@@ -1213,19 +1392,33 @@ class UsageStore {
           );
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
-          this.timeSeriesContextSummary = contextData;
+          const contextHasBranchBreakdowns = contextParams?.branch_breakdowns === true;
+          const preserveRichContext =
+            !contextHasBranchBreakdowns &&
+            this.toggles.attribution.groupBy === "branch" &&
+            this.contextHasBranchBreakdowns &&
+            this.branchBreakdownContextVersion === v &&
+            this.timeSeriesContextSummary !== null;
+          if (!preserveRichContext) {
+            this.timeSeriesContextSummary = contextData;
+            this.contextHasBranchBreakdowns = contextHasBranchBreakdowns;
+          }
         } else if (this.selectedTimeRange === null) {
           this.timeSeriesContextSummary = null;
+          this.contextHasBranchBreakdowns = false;
         }
         this.errors.summary = null;
         const loaded = {
           version: v,
-          summary: data,
+          summary: currentSummary,
           params,
           projectScopeRecovered: false,
         };
+        if (!responseHasBranchBreakdowns && this.toggles.attribution.groupBy === "branch") {
+          void this.ensureBranchBreakdowns();
+        }
         if (loadComparison) {
-          void this.fetchComparison(v, data, params);
+          void this.fetchComparison(v, currentSummary, params);
           void this.fetchPairwise(params, this.pairwiseSelectionUnavailable());
         }
         return loaded;
@@ -1237,18 +1430,31 @@ class UsageStore {
         return null;
       }
       status = "error";
+      const portableGitBranch = portableBranchFilterValues(
+        this.selectedGitBranch ? this.selectedGitBranch.split(BRANCH_LIST_SEP) : [],
+      ).join(BRANCH_LIST_SEP);
+      const hasExcludedProjectKeys =
+        this.excludedProjectKeys !== "" || this.selectedProjectKey !== "";
+      const hasOpaqueBranchKeys = portableGitBranch !== this.selectedGitBranch;
       if (
         recoverProjectScope &&
         this.versions.summary === v &&
-        (this.excludedProjectKeys !== "" || this.selectedProjectKey !== "") &&
+        (hasExcludedProjectKeys || hasOpaqueBranchKeys) &&
         isUnknownProjectKeyError(e)
       ) {
+        // The API intentionally does not reveal which opaque key failed.
+        // Preserve branch precision by clearing excluded project keys first;
+        // downgrade branch keys only if a retry proves they are stale too.
         this.excludedProjectKeys = "";
         if (this.selectedProjectKey) {
           this.selectedProjectKey = "";
           this.backToProjects();
         }
         this.invalidatePanel("pairwise");
+        if (!hasExcludedProjectKeys) {
+          this.selectedGitBranch = portableGitBranch;
+        }
+        saveUsageFilters(this);
         this.abortPanel("topSessions");
         const recoveredParams = this.baseParams();
         const loaded = await this.fetchSummary({
@@ -1261,7 +1467,7 @@ class UsageStore {
                 to: options.contextParams.to,
               }
             : undefined,
-          recoverProjectScope: false,
+          recoverProjectScope: hasExcludedProjectKeys && hasOpaqueBranchKeys,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
@@ -1281,9 +1487,8 @@ class UsageStore {
           this.timeSeriesContextSummary !== null
         ) {
           this.invalidatePanel("pairwise");
-          this.summary = this.timeSeriesContextSummary;
+          this.restoreTimeSeriesContext();
           this.selectedTimeRange = null;
-          this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
           this.attributionSummary = this.referenceSummary;
@@ -1325,6 +1530,65 @@ class UsageStore {
     return null;
   }
 
+  private async ensureBranchBreakdowns(): Promise<void> {
+    const summaryVersion = this.versions.summary;
+    const range = this.selectedTimeRange;
+    const needSummary = !this.summaryHasBranchBreakdowns;
+    // While a range is brushed the chart draws the full-window summary, so it
+    // needs branch breakdowns too or every series falls into Unattributed.
+    const needContext =
+      range !== null && this.timeSeriesContextSummary !== null && !this.contextHasBranchBreakdowns;
+    if (
+      this.summary === null ||
+      (!needSummary && !needContext) ||
+      this.branchBreakdownRequestVersion === summaryVersion
+    )
+      return;
+    this.branchBreakdownRequestVersion = summaryVersion;
+    this.branchBreakdownError = null;
+    try {
+      const params: UsageParams = { ...this.baseParams(), branch_breakdowns: true };
+      const [data, contextData] = await Promise.all([
+        needSummary ? UsageService.getApiV1UsageSummary(params) : null,
+        needContext
+          ? UsageService.getApiV1UsageSummary({ ...params, from: this.from, to: this.to })
+          : null,
+      ]);
+      if (this.versions.summary !== summaryVersion || this.summary === null) return;
+      if (data !== null) {
+        this.summary = {
+          ...data,
+          comparison: this.summary.comparison,
+        };
+        this.summaryHasBranchBreakdowns = true;
+        this.branchBreakdownSummaryVersion = summaryVersion;
+      }
+      if (
+        contextData !== null &&
+        this.selectedTimeRange?.from === range?.from &&
+        this.selectedTimeRange?.to === range?.to &&
+        this.timeSeriesContextSummary !== null
+      ) {
+        this.timeSeriesContextSummary = contextData;
+        this.contextHasBranchBreakdowns = true;
+        this.branchBreakdownContextVersion = summaryVersion;
+      }
+    } catch (e) {
+      if (this.versions.summary === summaryVersion && !isAbortError(e)) {
+        this.branchBreakdownError =
+          e instanceof ApiError && e.code === "branch_breakdowns_unsupported"
+            ? m.usage_branch_breakdowns_unsupported()
+            : e instanceof Error
+              ? e.message
+              : m.shared_failed_to_load();
+      }
+    } finally {
+      if (this.branchBreakdownRequestVersion === summaryVersion) {
+        this.branchBreakdownRequestVersion = 0;
+      }
+    }
+  }
+
   private async fetchComparison(
     summaryVersion: number,
     summary: UsageSummaryResponse,
@@ -1344,7 +1608,7 @@ class UsageStore {
         { signal },
       );
       if (this.versions.summary === summaryVersion) {
-        this.summary = { ...summary, comparison };
+        this.summary = { ...(this.summary ?? summary), comparison };
         this.noteStep("comparison", liveStep, started, comparison);
         return "ok";
       }
@@ -1663,6 +1927,7 @@ export interface UsageUrlState {
   excludedProjects: string;
   excludedProjectKeys: string;
   excludedAgents: string;
+  selectedGitBranch: string;
   excludedModels: string;
 }
 
@@ -1695,6 +1960,11 @@ export function buildUsageUrlParams(state: UsageUrlState): Record<string, string
   // set. Keep them in live request state only; URLs outlive that scope.
   if (state.excludedAgents) {
     params["exclude_agent"] = state.excludedAgents;
+  }
+  // "branch" (not "git_branch") because session filters already own the
+  // git_branch key when usage and session params merge into one URL.
+  if (state.selectedGitBranch) {
+    params["branch"] = state.selectedGitBranch;
   }
   return params;
 }

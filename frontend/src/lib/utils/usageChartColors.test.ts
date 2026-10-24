@@ -57,11 +57,13 @@ function tenModelSummary(
         projectBreakdowns: [],
         agentBreakdowns: [],
         machineBreakdowns: [],
+        branchBreakdowns: [],
       },
     ],
     projectTotals: [],
     modelTotals,
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: { total: 10, byProject: {}, byAgent: {} },
     cacheStats: {
       cacheReadTokens: 0,
