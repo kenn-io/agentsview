@@ -76,6 +76,12 @@ func testPushUnitSource() fakePushUnitSource {
 	}}
 }
 
+type versionedPushUnitSource struct{ fakePushUnitSource }
+
+func (versionedPushUnitSource) EmbeddingDataVersion(context.Context, bool) (int, error) {
+	return 144, nil
+}
+
 // buildTestVectorsDB opens a read-write index at cfg's resolved vectors.db
 // path, builds and activates one generation over two sessions, then closes
 // it so the push source can reopen the file read-only.
@@ -92,7 +98,7 @@ func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
 	result, err := ix.Build(
-		ctx, testPushUnitSource(), fakePushEncoder(), gen, vector.BuildOptions{},
+		ctx, versionedPushUnitSource{testPushUnitSource()}, fakePushEncoder(), gen, vector.BuildOptions{},
 	)
 	require.NoError(t, err)
 	require.True(t, result.Activated)
@@ -252,6 +258,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	assert.NotEmpty(t, export.Generation().Fingerprint)
 	assert.Equal(t, "fake-model", export.Generation().Model)
 	assert.Equal(t, 4, export.Generation().Dimension)
+	assert.Equal(t, 144, export.Generation().DataVersion)
 	require.NotNil(t, export.Generation().IncludeAutomated)
 	assert.False(t, *export.Generation().IncludeAutomated, "configured next-build scope must not describe the stored vectors")
 

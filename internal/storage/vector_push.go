@@ -14,6 +14,9 @@ type VectorGenerationInfo struct {
 	Model            string
 	Dimension        int
 	IncludeAutomated *bool
+	// DataVersion is persisted full-mirror source proof, not the binary version.
+	// Zero leaves legacy publication usable without hub compatibility proof.
+	DataVersion int
 	// Params is the generation's immutable input recipe; nil when the
 	// generation is unpublished or predates recipe publication.
 	Params map[string]string

@@ -4,7 +4,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +45,7 @@ func builtVectorSource(t *testing.T, ix *vector.Index, units vector.UnitSource, 
 		hasGen: true, hashes: hashes, docs: map[string][]storage.VectorPushDoc{},
 		gen: storage.VectorGenerationInfo{
 			Fingerprint: info.Fingerprint, Model: info.Model, Dimension: info.Dimension,
-			Params: gen.Params, IncludeAutomated: info.IncludeAutomated,
+			Params: gen.Params, IncludeAutomated: info.IncludeAutomated, DataVersion: info.DataVersion,
 		},
 	}
 	for _, d := range docs {
@@ -133,8 +135,21 @@ func TestVectorPushPinnedGenerationContentCompatibility(t *testing.T) {
 // Empty hash maps can mean removal or an intentional build/push scope change.
 // Only real removal may invalidate the other generations' retained history.
 func TestVectorPushLastDocumentRemoval(t *testing.T) {
-	for _, mode := range []string{"removed", "automated scope", "project scope"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode      string
+		seedReplacement bool
+	}{
+		{"removed after G2 push", "removed", true},
+		{"automated scope after G2 push", "automated scope", true},
+		{"project scope after G2 push", "project scope", true},
+		{"removed before first G2 push", "removed", false},
+		{"automated scope before first G2 push", "automated scope", false},
+		{"project scope before first G2 push", "project scope", false},
+		{"foreign owner before first G2 push", "foreign owner", false},
+		{"failed session before first G2 push", "failed session", false},
+		{"changed scope retains other session", "changed scope", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_empty_test")
 			seedVectorSession(t, local, "A")
 			ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 8192)
@@ -148,16 +163,18 @@ func TestVectorPushLastDocumentRemoval(t *testing.T) {
 			store := &Store{pg: pg}
 			setHubTestSearcher(t, store, pushed.Vectors.GenerationID)
 			request := vector.HubLookupRequest{Fingerprint: first.gen.Fingerprint, Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", SourceUUID: first.docs["A"][0].SourceUUID, Occurrence: 1, ContentHash: first.docs["A"][0].ContentHash}}}
-			second := builtVectorSource(t, ix, local, "second", true)
-			sync.vectorSource = second
-			current, err := sync.Push(t.Context(), false, nil)
-			require.NoError(t, err)
-			require.NotEqual(t, pushed.Vectors.GenerationID, current.Vectors.GenerationID)
+			if tc.seedReplacement {
+				second := builtVectorSource(t, ix, local, "second", true)
+				sync.vectorSource = second
+				current, err := sync.Push(t.Context(), false, nil)
+				require.NoError(t, err)
+				require.NotEqual(t, pushed.Vectors.GenerationID, current.Vectors.GenerationID)
+			}
 			before, err := store.LookupHubVectors(t.Context(), request)
 			require.NoError(t, err)
 			require.Len(t, before.Chunks, 1)
-			switch mode {
-			case "removed":
+			switch tc.mode {
+			case "removed", "failed session", "foreign owner", "changed scope":
 				require.NoError(t, local.ReplaceSessionMessages(t.Context(), "A", nil))
 			case "automated scope":
 				session, err := local.GetSession(t.Context(), "A")
@@ -169,16 +186,27 @@ func TestVectorPushLastDocumentRemoval(t *testing.T) {
 				require.NoError(t, local.ReplaceSessionMessages(t.Context(), "A", nil))
 				sync.excludeProjects = []string{"proj"}
 			}
-			latest := builtVectorSource(t, ix, local, "second")
+			if tc.mode == "foreign owner" {
+				_, err := pg.ExecContext(t.Context(), "UPDATE sessions SET owner_marker='another-publisher' WHERE id='A'")
+				require.NoError(t, err)
+			}
+			latest := builtVectorSource(t, ix, local, "second", tc.mode == "changed scope")
 			require.Empty(t, latest.hashes)
 			sync.vectorSource = latest
-			_, err = sync.Push(t.Context(), false, nil)
+			switch tc.mode {
+			case "failed session":
+				_, err = sync.pushVectors(t.Context(), false, nil, 0, map[string]struct{}{"A": {}}, nil)
+			case "changed scope":
+				_, err = sync.pushVectors(t.Context(), false, []string{"B"}, 0, nil, nil)
+			default:
+				_, err = sync.Push(t.Context(), false, nil)
+			}
 			require.NoError(t, err)
 			after, err := store.LookupHubVectors(t.Context(), request)
 			require.NoError(t, err)
 			var coverage int
 			require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE generation_id=$1 AND session_id='A'`, pushed.Vectors.GenerationID).Scan(&coverage))
-			if mode == "removed" {
+			if tc.mode == "removed" {
 				assert.Empty(t, after.Chunks)
 				assert.Equal(t, []int{0}, after.Absent)
 				assert.Zero(t, coverage)
@@ -192,4 +220,88 @@ func TestVectorPushLastDocumentRemoval(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A parser upgrade without an embedding refresh must retain the mirror's actual
+// source version. Legacy mirrors keep pushing without acquiring new hub proof.
+func TestVectorPushStaleMirrorParserWitness(t *testing.T) {
+	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_stale_parser_test")
+	seedVectorSession(t, local, "A")
+	oldVersion := db.CurrentDataVersion() - 1
+	setVersion := func(version int) {
+		require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=?", version); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(t.Context(), "PRAGMA user_version="+strconv.Itoa(version))
+			return err
+		}))
+	}
+	setVersion(oldVersion)
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := vector.Open(t.Context(), path, false, 8192)
+	require.NoError(t, err)
+	first := builtVectorSource(t, ix, local, "first")
+	require.Equal(t, oldVersion, first.gen.DataVersion)
+	require.NoError(t, ix.Close())
+	setVersion(db.CurrentDataVersion())
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "A", []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", Content: "new parser output", ContentLength: 17}}))
+	ix, err = vector.Open(t.Context(), path, true, 8192)
+	require.NoError(t, err)
+	exp, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, oldVersion, exp.Generation().DataVersion)
+	docs, _, err := exp.SessionDocs(t.Context(), "A")
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Equal(t, "A", docs[0].Content)
+	require.NoError(t, exp.Close())
+	require.NoError(t, ix.Close())
+	sync.vectorSource = first
+	pushed, err := sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.False(t, pushed.Vectors.Skipped)
+	var stamped sql.NullInt64
+	require.NoError(t, pg.QueryRowContext(t.Context(), "SELECT data_version FROM vector_generation_machines WHERE generation_id=$1", pushed.Vectors.GenerationID).Scan(&stamped))
+	assert.Equal(t, int64(oldVersion), stamped.Int64)
+	assert.True(t, stamped.Valid)
+	store := &Store{pg: pg}
+	setHubTestSearcher(t, store, pushed.Vectors.GenerationID)
+	discovery, err := store.HubVectorGeneration(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, oldVersion, discovery.DataVersion, "discovery reports actual old proof, so current-parser importers reject reuse")
+	// A source without proof still publishes to existing readers.
+	mirror, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = mirror.ExecContext(t.Context(), "DELETE FROM vector_meta WHERE key='source_data_version'")
+	require.NoError(t, err)
+	require.NoError(t, mirror.Close())
+	legacy, err := vector.Open(t.Context(), path, true, 8192)
+	require.NoError(t, err)
+	legacyExport, ok, err := legacy.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	first.gen.DataVersion = legacyExport.Generation().DataVersion
+	require.Zero(t, first.gen.DataVersion)
+	require.NoError(t, legacyExport.Close())
+	require.NoError(t, legacy.Close())
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.NoError(t, pg.QueryRowContext(t.Context(), "SELECT data_version FROM vector_generation_machines WHERE generation_id=$1", pushed.Vectors.GenerationID).Scan(&stamped))
+	assert.False(t, stamped.Valid)
+	discovery, err = store.HubVectorGeneration(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, discovery.Unavailable)
+	assert.Equal(t, 1, countRows(t, pg, "SELECT count(*) FROM "+vectorChunkTable(pushed.Vectors.GenerationID)))
+	ix, err = vector.Open(t.Context(), path, false, 8192)
+	require.NoError(t, err)
+	defer ix.Close()
+	sync.vectorSource = builtVectorSource(t, ix, local, "first")
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	discovery, err = store.HubVectorGeneration(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, discovery.Unavailable)
+	assert.Equal(t, db.CurrentDataVersion(), discovery.DataVersion, "explicit full refresh recovers current source proof")
 }
