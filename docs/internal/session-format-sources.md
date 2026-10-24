@@ -2912,7 +2912,13 @@ schemas keep their existing ordering behavior.
   replacement coordinates as `startSeq`/`endSeq`. Generation 4 promotes tool
   results to `role: tool` messages with direct content, `toolCallId`, and
   optional `isError`, and adds `developer/message` for incremental
-  instructions and named tool additions/removals. Session IDs are arbitrary
+  instructions and named tool additions/removals. Harness builds from
+  `0.2.1-rc.2` onward also append one `job/registered` and one `job/settled`
+  pair for every `pwsh` tool execution. Both are log-only bookkeeping for live
+  job control: they carry no transcript content, they are not surface events,
+  and the upstream type notes state that collecting model output from them is
+  not required. They are in the known-event inventory and are ignored when a
+  session is rebuilt. Session IDs are arbitrary
   non-empty strings and are injectively encoded before use as a directory
   name. A sessions root belongs to one physical encoding; the upstream backend
   rejects an opposite-suffix artifact rather than providing mixed-root
