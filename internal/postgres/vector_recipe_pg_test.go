@@ -156,7 +156,7 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, ensureVectorChunkTable(ctx, admin, genID, 4))
 			if tc.dropCompatibility {
-				_, err = admin.Exec(`ALTER TABLE vector_generation_machines DROP COLUMN data_version, DROP COLUMN include_automated`)
+				_, err = admin.ExecContext(t.Context(), `ALTER TABLE vector_generation_machines DROP COLUMN data_version, DROP COLUMN include_automated`)
 				require.NoError(t, err)
 			}
 			if tc.dropColumn {

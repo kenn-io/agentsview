@@ -705,7 +705,7 @@ func TestInsightResponseErrors(t *testing.T) {
 					defer ts.Close()
 					cmdArgs := append([]string{"insight"}, args...)
 					if configured {
-						t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL+"/private-token?token=url-secret")
+						t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL+"/private-token/url-secret")
 					} else {
 						t.Setenv("AGENTSVIEW_REMOTE_URL", "")
 						cmdArgs = append(cmdArgs, "--server", ts.URL)

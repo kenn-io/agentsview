@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestVectorHubPushPublishesCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	var version int
 	var automated bool
-	require.NoError(t, pg.QueryRow(`SELECT data_version, include_automated FROM vector_generation_machines`).Scan(&version, &automated))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT data_version, include_automated FROM vector_generation_machines`).Scan(&version, &automated))
 	assert.Equal(t, db.CurrentDataVersion(), version)
 	assert.False(t, automated)
 	source := hubRecipeSource("hub-metadata", map[string]string{"max_input_chars": "8192"})
@@ -35,7 +36,7 @@ func TestVectorHubPushPublishesCompatibility(t *testing.T) {
 	sync.vectorSource = source
 	_, err = sync.Push(t.Context(), true, nil)
 	require.NoError(t, err)
-	require.NoError(t, pg.QueryRow(`SELECT data_version, include_automated FROM vector_generation_machines`).Scan(&version, &automated))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT data_version, include_automated FROM vector_generation_machines`).Scan(&version, &automated))
 	assert.True(t, automated)
 }
 
@@ -51,7 +52,7 @@ func TestVectorHubLookupRoundTrip(t *testing.T) {
 		seedVectorSession(t, local, session)
 		source.hashes[session] = "corpus"
 		source.docs[session] = nil
-		for i := 0; i < 64; i++ {
+		for i := range 64 {
 			kind, prefix, uuid, occurrence := "user", "u:", fmt.Sprintf("unit-%d", i), 1
 			if i%2 == 1 {
 				kind, prefix = "run", "r:"
@@ -68,17 +69,17 @@ func TestVectorHubLookupRoundTrip(t *testing.T) {
 				key = fmt.Sprintf("ro:%s:%d", session, i)
 			}
 			values := []float32{float32(i) / 32, -float32(i) / 32, 0.1, 1}
-			doc := vdoc(session, key, i, "content", fmt.Sprint(i), values)
+			doc := vdoc(session, key, i, "content", strconv.Itoa(i), values)
 			doc.SourceUUID = uuid
 			source.docs[session] = append(source.docs[session], doc)
 			// PG halfvec rounds 0.1 to this exact float32 value.
-			fixtures = append(fixtures, fixture{vector.HubIdentity{SessionID: session, UnitKind: kind, SourceUUID: uuid, Occurrence: occurrence, Ordinal: i, ContentHash: fmt.Sprint(i)}, []float32{values[0], values[1], 0.0999755859375, 1}})
+			fixtures = append(fixtures, fixture{vector.HubIdentity{SessionID: session, UnitKind: kind, SourceUUID: uuid, Occurrence: occurrence, Ordinal: i, ContentHash: strconv.Itoa(i)}, []float32{values[0], values[1], 0.0999755859375, 1}})
 		}
 	}
 	sync.vectorSource = source
 	_, err := sync.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	_, err = pg.Exec(`DELETE FROM vector_push_state WHERE session_id='B'`)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_push_state WHERE session_id='B'`)
 	require.NoError(t, err)
 	require.Equal(t, 64, countRows(t, pg, `SELECT count(*) FROM vector_documents WHERE session_id='B'`))
 	id, _, ok, err := LookupVectorGeneration(t.Context(), pg, "hub-lookup")
@@ -168,11 +169,11 @@ func TestVectorHubLookupPagination(t *testing.T) {
 	}
 	req.Identities[0].ContentHash = "changed"
 	_, err = store.LookupHubVectors(t.Context(), req)
-	assert.ErrorIs(t, err, vector.ErrHubLookupInvalid)
+	require.ErrorIs(t, err, vector.ErrHubLookupInvalid)
 	generation, err := store.HubVectorGeneration(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, generation.Unavailable)
-	_, err = pg.Exec(`INSERT INTO vector_generation_machines(generation_id,machine,data_version,include_automated) VALUES($1,'other',$2,true)`, id, db.CurrentDataVersion())
+	_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_generation_machines(generation_id,machine,data_version,include_automated) VALUES($1,'other',$2,true)`, id, db.CurrentDataVersion())
 	require.NoError(t, err)
 	generation, err = store.HubVectorGeneration(t.Context())
 	require.NoError(t, err)
@@ -205,10 +206,10 @@ func TestVectorHubScopedCompatibilityChangePromotesReconciliation(t *testing.T) 
 	_, err = sync.pushVectors(t.Context(), false, []string{"A"}, 0, nil, nil)
 	require.NoError(t, err)
 	var scope bool
-	require.NoError(t, pg.QueryRow(`SELECT include_automated FROM vector_generation_machines`).Scan(&scope))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT include_automated FROM vector_generation_machines`).Scan(&scope))
 	assert.True(t, scope)
 	var hash string
-	require.NoError(t, pg.QueryRow(`SELECT content_hash FROM vector_documents WHERE session_id='B'`).Scan(&hash))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT content_hash FROM vector_documents WHERE session_id='B'`).Scan(&hash))
 	assert.Equal(t, "b2", hash, "scope change reconciles the whole corpus")
 }
 
@@ -249,7 +250,7 @@ func TestVectorHubIncompleteCompatibilityPushIsUnavailable(t *testing.T) {
 				store := &Store{pg: pg}
 				setHubTestSearcher(t, store, res.Vectors.GenerationID)
 				if first {
-					_, err = pg.Exec(`UPDATE vector_generation_machines SET machine='other-pusher'`)
+					_, err = pg.ExecContext(t.Context(), `UPDATE vector_generation_machines SET machine='other-pusher'`)
 					require.NoError(t, err)
 				}
 				automated := true
@@ -296,7 +297,7 @@ func TestVectorHubIncompleteCompatibilityPushIsUnavailable(t *testing.T) {
 func setHubTestSearcher(t *testing.T, store *Store, generationID int64) {
 	t.Helper()
 	var fingerprint string
-	require.NoError(t, store.pg.QueryRow(`SELECT fingerprint FROM vector_generations WHERE id=$1`, generationID).Scan(&fingerprint))
+	require.NoError(t, store.pg.QueryRowContext(t.Context(), `SELECT fingerprint FROM vector_generations WHERE id=$1`, generationID).Scan(&fingerprint))
 	searcher, reason, err := (Backend{}).OpenVectorSearcher(t.Context(), store, storage.VectorGenerationInfo{Fingerprint: fingerprint}, 8192, nil)
 	require.NoError(t, err)
 	require.Empty(t, reason)
@@ -324,10 +325,10 @@ func TestVectorHubRejectsRecreatedSelectedGeneration(t *testing.T) {
 			store := &Store{pg: pg}
 			setHubTestSearcher(t, store, res.Vectors.GenerationID)
 			var before string
-			require.NoError(t, pg.QueryRow(`SELECT created_at::text FROM vector_generations WHERE id=$1`, res.Vectors.GenerationID).Scan(&before))
+			require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT created_at::text FROM vector_generations WHERE id=$1`, res.Vectors.GenerationID).Scan(&before))
 			// Recreate before the first discovery call: pinning cannot be lazy.
 			for _, table := range []string{vectorChunkTable(res.Vectors.GenerationID), "vector_push_state", "vector_generation_machines", "vector_documents", "vector_generations"} {
-				_, err = pg.Exec(`DROP TABLE ` + table)
+				_, err = pg.ExecContext(t.Context(), `DROP TABLE `+table)
 				require.NoError(t, err)
 			}
 			source.gen.Fingerprint = tc.fingerprint
@@ -338,7 +339,7 @@ func TestVectorHubRejectsRecreatedSelectedGeneration(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, res.Vectors.GenerationID, pushed.GenerationID, "table recreation reuses the selected ID")
 			var after string
-			require.NoError(t, pg.QueryRow(`SELECT created_at::text FROM vector_generations WHERE id=$1`, pushed.GenerationID).Scan(&after))
+			require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT created_at::text FROM vector_generations WHERE id=$1`, pushed.GenerationID).Scan(&after))
 			require.NotEqual(t, before, after)
 			generation, err := store.HubVectorGeneration(t.Context())
 			require.NoError(t, err)
@@ -368,7 +369,7 @@ func TestVectorHubRejectsMissingSelectedChunks(t *testing.T) {
 				require.NoError(t, err)
 				require.Empty(t, generation.Unavailable)
 			}
-			_, err = pg.Exec(`DROP TABLE ` + vectorChunkTable(res.Vectors.GenerationID))
+			_, err = pg.ExecContext(t.Context(), `DROP TABLE `+vectorChunkTable(res.Vectors.GenerationID))
 			require.NoError(t, err)
 			generation, err := store.HubVectorGeneration(t.Context())
 			require.NoError(t, err)
