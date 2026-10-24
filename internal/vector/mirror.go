@@ -318,6 +318,7 @@ func (ix *Index) Refresh(
 				continue
 			}
 			if scanErr = journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); scanErr != nil {
+				scanErr = fmt.Errorf("rescanning journaled session %s: %w", id, scanErr)
 				return
 			}
 		}
