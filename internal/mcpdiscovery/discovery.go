@@ -77,8 +77,8 @@ func Publish(directory, address, token, backendURL string) (func() error, error)
 }
 
 // List is observational: it never starts a daemon or prunes another process's
-// records. Dead-process records are omitted, including after an unclean exit.
-// Records whose process identity kit cannot judge are listed.
+// records. It omits records only when kit can determine their process has exited;
+// records whose process identity kit cannot judge remain listed.
 func List(directory string) ([]Endpoint, error) {
 	endpoints := []Endpoint{}
 	if _, err := os.Stat(directory); errors.Is(err, os.ErrNotExist) {
