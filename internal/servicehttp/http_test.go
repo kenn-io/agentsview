@@ -29,8 +29,8 @@ func TestPolicyClientCapabilities(t *testing.T) {
 				require.True(t, caps.SessionStatsAvailable)
 			} else {
 				require.Error(t, err)
-				assert.ErrorContains(t, err, ts.URL)
-				assert.ErrorContains(t, err, "--local")
+				require.ErrorContains(t, err, ts.URL)
+				require.ErrorContains(t, err, "--local")
 			}
 		})
 	}
@@ -59,7 +59,7 @@ func TestRemotePolicyUsedByLazyProbe(t *testing.T) {
 					_, _ = w.Write([]byte(`{"sessions":[{"id":"example"}],"total":1}`))
 				default:
 					assert.Failf(t, "unexpected request", "path: %s", r.URL.Path)
-					w.WriteHeader(500)
+					w.WriteHeader(http.StatusInternalServerError)
 				}
 			}))
 			defer source.Close()
@@ -72,8 +72,8 @@ func TestRemotePolicyUsedByLazyProbe(t *testing.T) {
 				require.ErrorIs(t, err, errHTTPNotImplemented)
 				assert.NotContains(t, err.Error(), "secret")
 				assert.NotContains(t, err.Error(), "private")
-				assert.ErrorContains(t, err, "--local")
-				assert.ErrorContains(t, err, source.URL)
+				require.ErrorContains(t, err, "--local")
+				require.ErrorContains(t, err, source.URL)
 			} else {
 				require.NoError(t, err)
 				require.Len(t, result.Sessions, 1)
@@ -130,16 +130,16 @@ func TestRemotePolicyRedactsFailures(t *testing.T) {
 				}
 				require.Error(t, err)
 				assert.Equal(t, 1, hits)
-				assert.ErrorContains(t, err, ts.URL)
-				assert.ErrorContains(t, err, "--local")
+				require.ErrorContains(t, err, ts.URL)
+				require.ErrorContains(t, err, "--local")
 				assert.NotContains(t, err.Error(), "private")
 				assert.NotContains(t, err.Error(), "secret")
 				if tc.want != nil {
-					assert.ErrorIs(t, err, tc.want)
+					require.ErrorIs(t, err, tc.want)
 				}
 				if tc.decode {
 					var decode *runtime.ResponseDecodeError
-					assert.ErrorAs(t, err, &decode)
+					require.ErrorAs(t, err, &decode)
 				}
 			})
 		}
