@@ -230,7 +230,6 @@ func TestLocalOnlyReadersIgnoreRemote(t *testing.T) {
 	out, err = executeCommand(newRootCommand(), "recall", "extract", "preview", "--session", "missing", "--json")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"session_id":"missing","dry_run":true,"message_count":0,"chunk_count":0,"chunk_max_chars":0,"chunks":[]}`, out)
-
 }
 
 func TestRemoteProbeDiagnostics(t *testing.T) {
