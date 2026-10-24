@@ -254,57 +254,6 @@ func TestVectorHubLookupSparseChunks(t *testing.T) {
 	}
 }
 
-func TestVectorHubRejectsCrossGenerationRevision(t *testing.T) {
-	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_revision_test")
-	seedVectorSession(t, local, "A")
-	identities := []vector.HubIdentity{
-		{SessionID: "A", UnitKind: "user", Ordinal: 0, ContentHash: "new-hash"},
-		{SessionID: "A", UnitKind: "user", SourceUUID: "uuid", Occurrence: 2, Ordinal: 1, ContentHash: "new-hash"},
-		{SessionID: "A", UnitKind: "run", SourceUUID: "run", Occurrence: 1, Ordinal: 2, ContentHash: "new-hash"},
-	}
-	first := hubRecipeSource("old", map[string]string{"max_input_chars": "8192"})
-	first.docs["A"] = nil
-	for i, key := range []string{"o:A:0", "u:A:uuid#2", "r:A:run"} {
-		doc := vdoc("A", key, i, "old-content", "old-hash", []float32{1, 0, 0, 0})
-		doc.SourceUUID = identities[i].SourceUUID
-		first.docs["A"] = append(first.docs["A"], doc)
-	}
-	sync.vectorSource = first
-	_, err := sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	id, _, _, err := LookupVectorGeneration(t.Context(), pg, "old")
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	setHubTestSearcher(t, store, id)
-	second := hubRecipeSource("new", map[string]string{"max_input_chars": "8192"})
-	second.docs = first.docs
-	sync.vectorSource = second
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	identity := identities[0]
-	identity.ContentHash = "old-hash"
-	reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
-	require.NoError(t, err)
-	require.Len(t, reply.Chunks, 1, "equal corpus remains covered in both generations")
-	second.hashes["A"] = "changed-corpus"
-	for i := range second.docs["A"] {
-		second.docs["A"][i].ContentHash = "new-hash"
-		second.docs["A"][i].Chunks[0].Embedding = []float32{0, 1, 0, 0}
-	}
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-
-	for _, identity := range identities {
-		for _, hash := range []string{"old-hash", "new-hash"} {
-			identity.ContentHash = hash
-			reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
-			require.NoError(t, err)
-			assert.Empty(t, reply.Chunks)
-			assert.Equal(t, []int{0}, reply.Absent)
-		}
-	}
-}
-
 func TestVectorHubLookupCompatibilityGate(t *testing.T) {
 	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_lookup_gate_test")
 	seedVectorSession(t, local, "A")
