@@ -2179,7 +2179,7 @@ func TestHTTPDeltaProgressSeparatesTransferPendingAndImportScope(t *testing.T) {
 	assert.NotContains(t, joined, changed)
 	assert.NotContains(t, logs.String(), changed)
 	for _, field := range []string{
-		"phase=targets", "phase=manifest", "phase=compare",
+		"phase=targets", "phase=manifest",
 		"download_duration=", "extract_duration=", "wire_bytes=",
 	} {
 		assert.Contains(t, logs.String(), field)

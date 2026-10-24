@@ -328,7 +328,7 @@ func TestIsHostUnavailableWhenHTTPJSONBodyIsTruncated(t *testing.T) {
 		{
 			name: "manifest",
 			fetch: func(ctx context.Context, source HTTPSource) error {
-				_, _, err := source.Manifest(ctx, TargetSet{})
+				_, err := source.Manifest(ctx, TargetSet{}, func(ManifestEntry) error { return nil })
 				return err
 			},
 		},
@@ -381,8 +381,8 @@ func TestIsHostUnavailableWhenHTTPManifestGzipHeaderIsTruncated(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, _, err := (HTTPSource{URL: server.URL, Client: server.Client()}).Manifest(
-		t.Context(), TargetSet{},
+	_, err := (HTTPSource{URL: server.URL, Client: server.Client()}).Manifest(
+		t.Context(), TargetSet{}, func(ManifestEntry) error { return nil },
 	)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.True(t, IsHostUnavailable(err))

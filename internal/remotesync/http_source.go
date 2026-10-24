@@ -59,28 +59,28 @@ func positiveContentLength(n int64) int64 {
 }
 
 func (s HTTPSource) Manifest(
-	ctx context.Context, targets TargetSet,
-) (Manifest, bool, error) {
+	ctx context.Context, targets TargetSet, visit func(ManifestEntry) error,
+) (bool, error) {
 	body := generatedTargets(targets)
 	resp, err := apiclient.RawRequest(s.URL, s.client(), func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1RemoteSyncManifestWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncManifestRequestOptions{Body: &body})
 		return err
 	}, s.transferHeaders)
 	if err != nil {
-		return Manifest{}, false, err
+		return false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotImplemented {
 		if err := ValidateProtocolHeader(resp.Header); err != nil {
-			return Manifest{}, false, err
+			return false, err
 		}
-		return Manifest{}, false, nil
+		return false, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Manifest{}, false, httpStatusError(resp)
+		return false, httpStatusError(resp)
 	}
 	if err := ValidateProtocolHeader(resp.Header); err != nil {
-		return Manifest{}, false, err
+		return false, err
 	}
 	bodyReader := &httpBodyReader{r: resp.Body}
 	reader := io.Reader(bodyReader)
@@ -90,19 +90,18 @@ func (s HTTPSource) Manifest(
 			if bodyReader.err != nil {
 				err = bodyReader.err
 			}
-			return Manifest{}, false, fmt.Errorf("decode manifest gzip: %w", err)
+			return false, fmt.Errorf("decode manifest gzip: %w", err)
 		}
 		defer gz.Close()
 		reader = gz
 	}
-	var manifest Manifest
-	if err := json.UnmarshalRead(reader, &manifest); err != nil {
+	if err := DecodeManifest(reader, visit); err != nil {
 		if bodyReader.err != nil {
 			err = bodyReader.err
 		}
-		return Manifest{}, false, fmt.Errorf("decode remote manifest: %w", err)
+		return false, fmt.Errorf("decode remote manifest: %w", err)
 	}
-	return manifest, true, nil
+	return true, nil
 }
 
 func (s HTTPSource) Targets(

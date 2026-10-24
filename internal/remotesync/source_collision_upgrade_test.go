@@ -38,7 +38,7 @@ func TestHTTPSyncUpgradeRestoresUnchangedSourceCollisions(t *testing.T) {
 			require.Len(t, before, 1)
 			manifest, err := BuildManifest(t.Context(), remote.targets)
 			require.NoError(t, err)
-			delta, err := MirrorDiff(mirrorRoot, manifest)
+			delta, err := diffManifest(mirrorRoot, manifest)
 			require.NoError(t, err)
 			require.Empty(t, delta.Fetch)
 			require.Empty(t, delta.Deletions)

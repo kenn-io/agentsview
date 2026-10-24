@@ -521,8 +521,14 @@ func (hs RemoteSync) prepare(
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
 	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
+	// The mirror is compared while the manifest streams in. The diff only
+	// reads the mirror, and the lock keeps other syncs from changing it.
+	_, mirrorStatErr := os.Stat(mirrorRoot)
+	bootstrap := errors.Is(mirrorStatErr, os.ErrNotExist)
+	diff := newMirrorDiff(mirrorRoot)
+	defer func() { err = errors.Join(err, diff.close()) }()
 	manifestStarted := time.Now()
-	manifest, supported, err := hs.Source.Manifest(ctx, dirScoped)
+	supported, err := hs.Source.Manifest(ctx, dirScoped, diff.add)
 	logRemotePhase(hs.Host, "manifest", manifestStarted)
 	if err != nil {
 		return nil, err
@@ -538,11 +544,16 @@ func (hs RemoteSync) prepare(
 		return prepared, nil
 	}
 
+	delta, err := diff.finish()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, delta.Close()) }()
 	prepared.root = mirrorRoot
 	prepared.mirrorImport, err = hs.prepareMirror(ctx, splitTargets{
 		dirScoped:  dirScoped,
 		fileScoped: fileScoped,
-	}, manifest, mirrorRoot, prepared)
+	}, delta, bootstrap, mirrorRoot, prepared)
 	if err != nil {
 		return nil, err
 	}
@@ -884,13 +895,15 @@ func mirrorFileScopedRoots(
 	return roots, nil
 }
 
-// prepareMirror applies the manifest delta to the persistent mirror. The
-// caller holds the mirror lock from before the manifest fetch until the
-// prepared source is closed.
+// prepareMirror applies the manifest delta to the persistent mirror.
+// bootstrap reports that the mirror did not exist before the manifest
+// fetch. The caller holds the mirror lock from before the manifest fetch
+// until the prepared source is closed.
 func (hs RemoteSync) prepareMirror(
 	ctx context.Context,
 	targets splitTargets,
-	manifest Manifest,
+	delta MirrorDelta,
+	bootstrap bool,
 	mirrorRoot string,
 	prepared *PreparedRemote,
 ) (result *preparedMirrorImport, retErr error) {
@@ -926,18 +939,26 @@ func (hs RemoteSync) prepareMirror(
 			return nil, fmt.Errorf("persist mirror journal recovery marker: %w", replaceErr)
 		}
 	}
-	_, mirrorStatErr := os.Stat(mirrorRoot)
-	bootstrap := errors.Is(mirrorStatErr, os.ErrNotExist)
-	compareStarted := time.Now()
-	delta, err := MirrorDiff(mirrorRoot, manifest)
-	logRemotePhase(hs.Host, "compare", compareStarted)
-	if err != nil {
-		return nil, err
-	}
+	fetchCount, deletionCount := delta.Fetch.Len(), delta.Deletions.Len()
 	hs.reportProgressDetail(fmt.Sprintf(
 		"Compared session manifest from %s: %d total, %d changed, %d deleted",
-		hs.Host, delta.Total, len(delta.Fetch), len(delta.Deletions),
+		hs.Host, delta.Total, fetchCount, deletionCount,
 	))
+	// A change too large for the journal's path entries is journaled as a
+	// full import and applied in batches read back from the delta lists, so
+	// its paths are never all in memory. A list that moved to disk takes the
+	// same path, as reading it back whole would undo the move.
+	large := delta.Fetch.Spilled() || delta.Deletions.Spilled() ||
+		fetchCount+deletionCount > mirrorJournalMaxEntries
+	var fetch, deletions []string
+	if !large {
+		if fetch, err = collectPaths(delta.Fetch); err != nil {
+			return nil, err
+		}
+		if deletions, err = collectPaths(delta.Deletions); err != nil {
+			return nil, err
+		}
+	}
 	pendingFileScopedDirs := journal.FileScopedDirs
 	fileScopedDirs := targets.fileScoped.Dirs
 	if pendingFileScopedDirs != nil {
@@ -984,9 +1005,14 @@ func (hs RemoteSync) prepareMirror(
 			}
 		}
 	}
-	if deferFileScopedRefresh {
-		kept := delta.Deletions[:0]
-		for _, localPath := range delta.Deletions {
+	// A deferred file-scoped snapshot is processed as it stands, so its
+	// files stay in the mirror.
+	keepDeletions := func(localPaths []string) ([]string, error) {
+		if !deferFileScopedRefresh {
+			return localPaths, nil
+		}
+		kept := localPaths[:0]
+		for _, localPath := range localPaths {
 			path, normalizeErr := mirrorRelativeLocalChangePath(
 				mirrorRoot, localPath,
 			)
@@ -997,19 +1023,24 @@ func (hs RemoteSync) prepareMirror(
 			if classifyErr != nil {
 				return nil, classifyErr
 			}
-			if fileScoped {
-				continue
+			if !fileScoped {
+				kept = append(kept, localPath)
 			}
-			kept = append(kept, localPath)
 		}
-		delta.Deletions = kept
+		return kept, nil
+	}
+	if deletions, err = keepDeletions(deletions); err != nil {
+		return nil, err
 	}
 	refreshFileScoped := !targets.fileScoped.IsEmpty() && !deferFileScopedRefresh
-	mutatesMirror := len(delta.Deletions) > 0 || len(delta.Fetch) > 0 ||
-		refreshFileScoped
-	observed := make([]string, 0, len(delta.Fetch)+len(delta.Deletions))
-	forceFullParseObserved := make([]string, 0, len(delta.Fetch))
-	for _, remotePath := range delta.Fetch {
+	pendingDeletions := len(deletions)
+	if large {
+		pendingDeletions = deletionCount
+	}
+	mutatesMirror := pendingDeletions > 0 || fetchCount > 0 || refreshFileScoped
+	observed := make([]string, 0, len(fetch)+len(deletions))
+	forceFullParseObserved := make([]string, 0, len(fetch))
+	for _, remotePath := range fetch {
 		path, normalizeErr := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
 		if normalizeErr != nil {
 			return nil, normalizeErr
@@ -1017,7 +1048,7 @@ func (hs RemoteSync) prepareMirror(
 		observed = append(observed, path)
 		forceFullParseObserved = append(forceFullParseObserved, path)
 	}
-	for _, localPath := range delta.Deletions {
+	for _, localPath := range deletions {
 		path, normalizeErr := mirrorRelativeLocalChangePath(mirrorRoot, localPath)
 		if normalizeErr != nil {
 			return nil, normalizeErr
@@ -1033,18 +1064,7 @@ func (hs RemoteSync) prepareMirror(
 	// Capture the old index's sessions before replacement or deletion loses
 	// their association. Journal transcript paths so replay uses the current
 	// provider metadata, including titles from remaining homes.
-	indexChanges := append([]string(nil), delta.Deletions...)
-	for _, remotePath := range delta.Fetch {
-		localPath, err := safeRemappedRemotePath(mirrorRoot, remotePath)
-		if err != nil {
-			return nil, err
-		}
-		indexChanges = append(indexChanges, localPath)
-	}
-	for _, indexPath := range indexChanges {
-		if filepath.Base(indexPath) != parser.CodexSessionIndexFilename {
-			continue
-		}
+	for _, indexPath := range delta.codexIndexes {
 		parser.EvictCodexSessionIndex(indexPath)
 		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
 			threadID := hs.Host + "~codex:" + uuid
@@ -1067,11 +1087,20 @@ func (hs RemoteSync) prepareMirror(
 			}
 		}
 	}
-	journal, mergeStats, err := mergeMirrorChangesWithForce(
-		journal, observed, forceFullParseObserved,
-	)
-	if err != nil {
-		return nil, err
+	var mergeStats JournalMergeStats
+	if large {
+		mergeStats, err = largeChangeStats(journal, delta, mirrorRoot)
+		if err != nil {
+			return nil, err
+		}
+		journal = overflowMirrorChanges(journal, true)
+	} else {
+		journal, mergeStats, err = mergeMirrorChangesWithForce(
+			journal, observed, forceFullParseObserved,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	captureCurrentFileScopedDirs := refreshFileScoped ||
 		(deferFileScopedRefresh && pendingFileScopedDirs == nil &&
@@ -1151,24 +1180,32 @@ func (hs RemoteSync) prepareMirror(
 	// Deletions precede extraction so remote file/directory type changes cannot
 	// wedge the mirror. File-scoped content is absent from the manifest and is
 	// re-populated by its separate full archive below.
-	if err := ApplyMirrorDeletions(mirrorRoot, delta.Deletions); err != nil {
-		return nil, err
-	}
-	if err := RemoveMirrorTypeConflicts(mirrorRoot, delta.Fetch); err != nil {
-		return nil, err
-	}
-	if len(delta.Fetch) > 0 {
-		full := len(delta.Fetch) == delta.Total
-		err := hs.downloadIntoMirror(
-			ctx, targets.dirScoped, delta.Fetch, full, mirrorRoot,
-		)
-		if err != nil && !full && isRemoteRefusal(err) {
-			err = hs.downloadIntoMirror(
-				ctx, targets.dirScoped, delta.Fetch, true, mirrorRoot,
-			)
-		}
-		if err != nil {
+	if large {
+		if err := hs.applyLargeMirrorChange(
+			ctx, targets.dirScoped, delta, keepDeletions, mirrorRoot,
+		); err != nil {
 			return nil, err
+		}
+	} else {
+		if err := ApplyMirrorDeletions(mirrorRoot, deletions); err != nil {
+			return nil, err
+		}
+		if err := RemoveMirrorTypeConflicts(mirrorRoot, fetch); err != nil {
+			return nil, err
+		}
+		if len(fetch) > 0 {
+			full := len(fetch) == delta.Total
+			err := hs.downloadIntoMirror(
+				ctx, targets.dirScoped, fetch, full, mirrorRoot,
+			)
+			if err != nil && !full && isRemoteRefusal(err) {
+				err = hs.downloadIntoMirror(
+					ctx, targets.dirScoped, fetch, true, mirrorRoot,
+				)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if refreshFileScoped {

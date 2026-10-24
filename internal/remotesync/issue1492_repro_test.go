@@ -279,7 +279,7 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 
 	manifest, err := BuildManifest(t.Context(), fresh)
 	require.NoError(t, err)
-	diff, err := MirrorDiff(mirror, manifest)
+	diff, err := diffManifest(mirror, manifest)
 	require.NoError(t, err)
 	assert.Equal(t, []string{mirrorWorkspace}, diff.Deletions)
 }
@@ -543,7 +543,7 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorPath), 0o755))
 	require.NoError(t, os.WriteFile(mirrorPath, []byte("stale"), 0o644))
-	diff, err := MirrorDiff(mirror, manifest)
+	diff, err := diffManifest(mirror, manifest)
 	require.NoError(t, err)
 	assert.Equal(t, []string{mirrorPath}, diff.Deletions)
 }

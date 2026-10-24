@@ -313,15 +313,20 @@ host's syncable source corpus for it.
 1. The collector locks the host mirror and requests a gzip-compressed manifest
    of regular, non-symlink files. Each entry carries its absolute remote path,
    size, and modification time.
-1. The collector walks the mirror and compares file size and modification time
-   at microsecond precision. It schedules missing or changed files for fetch and
-   removes mirror files that disappeared from the manifest. Before changing the
-   mirror, it durably merges those paths into a bounded recovery journal next to
-   the mirror.
-1. The collector requests only missing or changed files. When every manifest
-   file needs fetching, it requests a full archive instead of sending the full
-   file list. Archive transfers prefer Zstandard compression; gzip remains
-   available through HTTP encoding negotiation. Manifests use gzip.
+1. The remote sends manifest entries sorted by mirror path. As each entry
+   arrives, the collector walks the mirror in the same order and compares file
+   size and modification time at microsecond precision, so neither the manifest
+   nor the mirror listing is held in memory. It schedules missing or changed
+   files for fetch and removes mirror files that disappeared from the manifest.
+   Each list stays in memory up to 4 MiB of paths and moves to a temporary file
+   next to the mirror past that. Before changing the mirror, it durably merges
+   those paths into a bounded recovery journal next to the mirror. A change too
+   large for the journal is recorded as one full import.
+1. The collector requests only missing or changed files, in requests of at
+   most 4 MiB of paths each. When every manifest file needs fetching, it
+   requests a full archive instead of sending the full file list. Archive
+   transfers prefer Zstandard compression; gzip remains available through HTTP
+   encoding negotiation. Manifests use gzip.
 1. The archive is extracted into the mirror with remote modification times
    preserved. AgentsView classifies the pending journal paths and imports only
    their affected sources. A provider whose exact scope cannot be proven falls
@@ -333,10 +338,11 @@ An explicit full import reparses the complete mirror without forcing unchanged
 bytes across the network. If a rejected delta request requires a full archive,
 the collector still imports only the affected sources.
 
-Sync logs report target resolution, manifest fetch and comparison times, plus
-each archive's encoding, compressed byte count, download time, and extraction
-time. Download time includes waiting for the remote response. The existing
-import log reports planning, processing, and cache persistence times.
+Sync logs report target resolution time and manifest time. The manifest time
+includes the mirror comparison. They also report each archive's encoding,
+compressed byte count, download time, and extraction time. Download time
+includes waiting for the remote response. The existing import log reports
+planning, processing, and cache persistence times.
 
 For a configured full sync that includes local sources, mirror preparation
 finishes before database work begins. Up to four remote hosts prepare at once
@@ -449,8 +455,10 @@ The remote daemon recomputes its allowed sync targets for each request and
 rejects paths outside them. Manifest walks omit symlinks and special files;
 delta requests must either match an allowed extra file exactly or use an
 absolute path in the same POSIX, drive-letter, or UNC dialect as the allowed
-root. Symlinked roots or intermediate components are refused. Mirror deletions
-and type-conflict cleanup are separately confined to the per-host mirror root.
+root. Symlinked roots or intermediate components are refused. The collector
+rejects a manifest whose entry is larger than 256 KiB, which is well above the
+longest path any supported system allows. Mirror deletions and type-conflict
+cleanup are separately confined to the per-host mirror root.
 
 These checks limit what authenticated sync requests can read, but they do not
 replace network isolation or bearer-token security. Keep the daemon on a private
