@@ -2538,6 +2538,10 @@ func TestHTTPSyncRejectsNonJSONManifest(t *testing.T) {
 }
 
 func TestHTTPSyncReportsAMirrorFailureAsLocal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports listing a file as a directory as not found, " +
+			"so the mirror walk sees an empty mirror instead of failing")
+	}
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
