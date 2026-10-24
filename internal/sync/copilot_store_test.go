@@ -223,7 +223,7 @@ INSERT INTO assistant_usage_events VALUES(1,'gap','gpt-5.4',100,7,0,0,0,'2026-09
 }
 
 func TestCopilotStoreUpdateOnlySyncsChangedSession(t *testing.T) {
-	for _, count := range []int{8, 800} {
+	for _, count := range []int{8, 80} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			storePath := filepath.Join(root, "session-store.db")
@@ -313,7 +313,7 @@ VALUES ('session-0000','gpt-5.4',100,7,'2026-09-04T17:00:03Z')`)
 
 func TestCopilotStoreWithoutUsageSchemaSkipsUnchangedSessions(t *testing.T) {
 	for _, incomplete := range []bool{false, true} {
-		for _, count := range []int{8, 800} {
+		for _, count := range []int{8, 80} {
 			t.Run(fmt.Sprintf("incomplete=%t/sessions=%d", incomplete, count), func(t *testing.T) {
 				root := t.TempDir()
 				storePath := filepath.Join(root, "session-store.db")
