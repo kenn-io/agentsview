@@ -56,15 +56,17 @@ func TestClearRemovesIncompletePullContent(t *testing.T) {
 		require.NoError(t, err)
 		vectorTables = append(vectorTables, fmt.Sprintf("%s_v%d", stage.spec.VectorsPrefix, ordinal))
 		var content []string
-		rows, err := ix.db.QueryContext(ctx, "SELECT content FROM "+stage.spec.DocsTable+" ORDER BY content")
-		require.NoError(t, err)
-		for rows.Next() {
-			var text string
-			require.NoError(t, rows.Scan(&text))
-			content = append(content, text)
-		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
+		func() {
+			rows, err := ix.db.QueryContext(ctx, "SELECT content FROM "+stage.spec.DocsTable+" ORDER BY content")
+			require.NoError(t, err)
+			defer rows.Close()
+			for rows.Next() {
+				var text string
+				require.NoError(t, rows.Scan(&text))
+				content = append(content, text)
+			}
+			require.NoError(t, rows.Err())
+		}()
 		require.Equal(t, []string{"private first prompt", "private second prompt"}, content)
 		require.Equal(t, 1, clearTestRowCount(t, ix, vectorTables[len(vectorTables)-1]))
 	}

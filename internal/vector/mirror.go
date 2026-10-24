@@ -797,22 +797,22 @@ func (ix *Index) Clear(ctx context.Context) error {
 	// Incomplete replacement pulls retain their own transcript and vector
 	// tables. They belong to this store even though search still uses the
 	// active projection above.
-	rows, err := ix.db.QueryContext(ctx, `SELECT key, value FROM `+ix.spec.MetaTable+` WHERE substr(key, 1, ?) = ?`, len(pullStageKey), pullStageKey)
-	if err != nil {
-		return err
-	}
 	stages := map[string]string{}
-	for rows.Next() {
-		var key, prefix string
-		if err := rows.Scan(&key, &prefix); err != nil {
-			rows.Close()
+	if err := func() error {
+		rows, err := ix.db.QueryContext(ctx, `SELECT key, value FROM `+ix.spec.MetaTable+` WHERE substr(key, 1, ?) = ?`, len(pullStageKey), pullStageKey)
+		if err != nil {
 			return err
 		}
-		stages[key] = prefix
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var key, prefix string
+			if err := rows.Scan(&key, &prefix); err != nil {
+				return err
+			}
+			stages[key] = prefix
+		}
+		return rows.Err()
+	}(); err != nil {
 		return err
 	}
 	for key, prefix := range stages {
