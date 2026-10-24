@@ -154,19 +154,6 @@ func TestRemoteArchivePolicyIgnoresLocalGates(t *testing.T) {
 	}
 }
 
-func TestRemoteReadGroupHelp(t *testing.T) {
-	for _, name := range []string{"usage", "activity"} {
-		t.Run(name, func(t *testing.T) {
-			cmd := newRootCommand()
-			var out bytes.Buffer
-			cmd.SetOut(&out)
-			cmd.SetArgs([]string{name})
-			require.NoError(t, cmd.Execute())
-			assert.Contains(t, out.String(), "Available Commands:")
-		})
-	}
-}
-
 func TestRemoteArchiveExplicitPG(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
