@@ -33,7 +33,14 @@ type ConversationExportOptions struct {
 	Limit      int
 }
 
+// ConversationSession describes the session independently of optional usage summaries.
+type ConversationSession struct {
+	Agent      string `json:"agent"`
+	Automation string `json:"automation"`
+}
+
 type ConversationChange struct {
+	Session   *ConversationSession    `json:"session,omitempty"`
 	Type      string                  `json:"type"`
 	SessionID string                  `json:"session_id"`
 	MessageID string                  `json:"message_id"`
@@ -194,7 +201,7 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if more {
 		result.Changes = result.Changes[:opts.Limit]
 	}
-	if err := db.attachConversationProjects(ctx, tx, result.ArchiveID, result.Changes); err != nil {
+	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, result.Changes, mode); err != nil {
 		return result, err
 	}
 	position.Version, position.DatabaseID, position.TextMode = 1, result.DatabaseID, mode
@@ -295,10 +302,10 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 		return ConversationMessage{}, errors.New("offset exceeds message text length")
 	}
 	changes := []ConversationChange{result.ConversationChange}
-	if err := db.attachConversationProjects(ctx, tx, result.ArchiveID, changes); err != nil {
+	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, changes, mode); err != nil {
 		return ConversationMessage{}, err
 	}
-	result.Project = changes[0].Project
+	result.Project, result.Session = changes[0].Project, changes[0].Session
 	result.Offset, result.NextOffset = opts.Offset, opts.Offset
 	if result.Digest != "" {
 		// The projection holds the digest; the archived message holds the text.
@@ -330,7 +337,7 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 	return result, nil
 }
 
-func (db *DB) attachConversationProjects(ctx context.Context, tx *sql.Tx, archiveID string, changes []ConversationChange) error {
+func (db *DB) attachConversationMetadata(ctx context.Context, tx *sql.Tx, archiveID string, changes []ConversationChange, mode string) error {
 	if len(changes) == 0 {
 		return nil
 	}
@@ -346,6 +353,11 @@ func (db *DB) attachConversationProjects(ctx context.Context, tx *sql.Tx, archiv
 	snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, ids)
 	if err != nil {
 		return err
+	}
+	if mode == "visible" {
+		if err := attachConversationSessions(ctx, tx, changes); err != nil {
+			return err
+		}
 	}
 	salt, err := sessionExportMetadataValue(ctx, tx, archiveMetadataArchiveSaltKey, ErrArchiveSaltMissing, "archive salt")
 	if err != nil {

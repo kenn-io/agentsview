@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"go.kenn.io/agentsview/internal/activity"
 )
 
 // Upgrade the derived export index from archived dialogue without reparsing
@@ -108,4 +110,36 @@ BEGIN
  ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
+END;
+CREATE TRIGGER IF NOT EXISTS conversation_session_classification
+AFTER UPDATE OF agent,is_automated,relationship_type ON sessions
+WHEN (OLD.agent IS NOT NEW.agent OR OLD.is_automated IS NOT NEW.is_automated OR OLD.relationship_type IS NOT NEW.relationship_type)
+ AND (EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=NEW.id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=NEW.id))
+BEGIN
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
+ ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO conversation_session_changes(session_id,revision,deleted)
+ SELECT NEW.id,CAST(value AS INTEGER),(NEW.deleted_at IS NOT NULL) FROM archive_metadata WHERE key='conversation_publication_revision'
+ ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;`
+
+func attachConversationSessions(ctx context.Context, tx *sql.Tx, changes []ConversationChange) error {
+	sessions := make(map[string]*ConversationSession)
+	for i := range changes {
+		change := &changes[i]
+		if change.Deleted {
+			continue
+		}
+		session, ok := sessions[change.SessionID]
+		if !ok {
+			var meta activity.SessionMeta
+			if err := tx.QueryRowContext(ctx, `SELECT agent,is_automated,relationship_type='subagent' FROM sessions WHERE id=?`, change.SessionID).Scan(&meta.Agent, &meta.IsAutomated, &meta.IsSubagent); err != nil {
+				return err
+			}
+			session = &ConversationSession{Agent: meta.Agent, Automation: meta.ActivityCategory()}
+			sessions[change.SessionID] = session
+		}
+		change.Session = session
+	}
+	return nil
+}

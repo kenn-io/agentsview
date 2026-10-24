@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 
@@ -192,6 +193,68 @@ func TestConversationVisibleCopyAndPolicy(t *testing.T) {
 				}
 			}
 			assert.Equal(t, 1, messages, "the retained message must remain represented in the export")
+		})
+	}
+}
+
+func TestConversationVisibleCarriesSessionClassification(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		id, relationship, want string
+		automated              bool
+	}{
+		{id: "interactive", want: "interactive"},
+		{id: "automated", automated: true, want: "automated"},
+		{id: "worker", relationship: "subagent", automated: true, want: "subagent"},
+		{id: "fork", relationship: "fork", want: "interactive"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			session := Session{ID: tc.id, Agent: "codex", Project: "sample", Machine: "local", IsAutomated: tc.automated, RelationshipType: tc.relationship}
+			require.NoError(t, d.UpsertSession(t.Context(), session))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Role: "user", Content: "hello", DialogueText: new("hello"), SourceUUID: "prompt"}}))
+			page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{TextMode: "visible"})
+			require.NoError(t, err)
+			var selected ConversationChange
+			for _, c := range page.Changes {
+				if c.SessionID == tc.id && c.Type == "message" {
+					selected = c
+				}
+			}
+			require.NotEmpty(t, selected.MessageID)
+			wire, err := json.Marshal(selected)
+			require.NoError(t, err)
+			var got struct {
+				Session *struct {
+					Agent      string `json:"agent"`
+					Automation string `json:"automation"`
+				} `json:"session"`
+			}
+			require.NoError(t, json.Unmarshal(wire, &got))
+			require.NotNil(t, got.Session, "classification must not require a separate session-summary export")
+			assert.Equal(t, "codex", got.Session.Agent)
+			assert.Equal(t, tc.want, got.Session.Automation)
+			body, err := d.GetConversationMessage(t.Context(), ConversationMessageOptions{TextMode: "visible", DatabaseID: page.DatabaseID, SessionID: tc.id, MessageID: selected.MessageID, Revision: selected.Revision})
+			require.NoError(t, err)
+			wire, err = json.Marshal(body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(wire, &got))
+			require.NotNil(t, got.Session)
+			assert.Equal(t, tc.want, got.Session.Automation)
+			// Classification edits must reach incremental readers even without text edits.
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET agent='claude', is_automated=1, relationship_type='' WHERE id=?", tc.id)
+				return err
+			}))
+			delta, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{TextMode: "visible", Checkpoint: page.Checkpoint})
+			require.NoError(t, err)
+			require.Len(t, delta.Changes, 1)
+			assert.Equal(t, "session", delta.Changes[0].Type)
+			wire, err = json.Marshal(delta.Changes[0])
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(wire, &got))
+			require.NotNil(t, got.Session)
+			assert.Equal(t, "claude", got.Session.Agent)
+			assert.Equal(t, "automated", got.Session.Automation)
 		})
 	}
 }

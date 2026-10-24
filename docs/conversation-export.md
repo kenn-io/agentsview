@@ -151,6 +151,20 @@ facts, not measured per-message costs or human working time. Join records
 through archive and session identity; do not spread session cost evenly over
 messages.
 
+### Session context in visible exports
+
+Each live change and text chunk in visible mode includes a `session` object with
+`agent` and `automation`. Automation uses the same disjoint categories as
+Activity: `interactive`, `automated`, or `subagent`. Delegation takes precedence
+over automation, including a worker without a known parent. Consumers do not
+need a session-summary export to interpret a prompt's context.
+
+Changes to these session fields publish a session change even when message text
+stays unchanged. Session context is read in the same SQLite snapshot as project
+evidence and text. Consumers should compare it across chunked reads, as they do
+project evidence. Deletions omit it; absence is not evidence that a retained
+message came from an interactive session.
+
 ## Identity, gaps and rebuilding
 
 The logical key is `(archive_id, session_id, message_id)` within one source
