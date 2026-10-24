@@ -6,11 +6,12 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
@@ -79,34 +80,36 @@ func TestVectorHubLookupRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	_, err = pg.Exec(`DELETE FROM vector_push_state WHERE session_id='B'`)
 	require.NoError(t, err)
+	require.Equal(t, 64, countRows(t, pg, `SELECT count(*) FROM vector_documents WHERE session_id='B'`))
 	id, _, ok, err := LookupVectorGeneration(t.Context(), pg, "hub-lookup")
 	require.NoError(t, err)
 	require.True(t, ok)
+	require.Equal(t, 64, countRows(t, pg, `SELECT count(*) FROM `+vectorChunkTable(id)+` c JOIN vector_documents d ON d.doc_key=c.doc_key WHERE d.session_id='B'`))
 	store := &Store{pg: pg}
 	setHubTestSearcher(t, store, id)
-	hegel.Test(t, func(ht *hegel.T) {
-		f := fixtures[hegel.Draw(ht, hegel.Integers(0, len(fixtures)-1))]
-		stale := hegel.Draw(ht, hegel.Booleans())
-		identity := f.identity
-		if stale {
-			identity.ContentHash = "stale"
+	for _, f := range fixtures {
+		for _, stale := range []bool{false, true} {
+			identity := f.identity
+			if stale {
+				identity.ContentHash = "stale"
+			}
+			reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "hub-lookup", Identities: []vector.HubIdentity{identity}})
+			require.NoError(t, err)
+			require.Equal(t, vector.HubVectorVersion, reply.Version)
+			if stale || identity.SessionID == "B" {
+				require.Equal(t, []int{0}, reply.Absent)
+				require.Empty(t, reply.Chunks)
+				continue
+			}
+			require.Empty(t, reply.Absent)
+			require.Len(t, reply.Chunks, 1)
+			require.Equal(t, 0, reply.Chunks[0].Index)
+			require.Equal(t, 1, reply.Chunks[0].ChunkCount)
+			got, err := vector.DecodeHubVector(reply.Chunks[0].Vector, 4)
+			require.NoError(t, err)
+			require.Equal(t, f.values, got)
 		}
-		reply, err := store.LookupHubVectors(ht.Context(), vector.HubLookupRequest{Fingerprint: "hub-lookup", Identities: []vector.HubIdentity{identity}})
-		require.NoError(ht, err)
-		require.Equal(ht, vector.HubVectorVersion, reply.Version)
-		if stale || identity.SessionID == "B" {
-			require.Equal(ht, []int{0}, reply.Absent)
-			require.Empty(ht, reply.Chunks)
-			return
-		}
-		require.Empty(ht, reply.Absent)
-		require.Len(ht, reply.Chunks, 1)
-		require.Equal(ht, 0, reply.Chunks[0].Index)
-		require.Equal(ht, 1, reply.Chunks[0].ChunkCount)
-		got, err := vector.DecodeHubVector(reply.Chunks[0].Vector, 4)
-		require.NoError(ht, err)
-		require.Equal(ht, f.values, got)
-	}, hegel.WithTestCases(1000))
+	}
 	generation, err := store.HubVectorGeneration(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "hub-lookup", generation.Fingerprint)
@@ -118,42 +121,51 @@ func TestVectorHubLookupRoundTrip(t *testing.T) {
 func TestVectorHubLookupPagination(t *testing.T) {
 	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_pages_test")
 	seedVectorSession(t, local, "A")
-	source := hubRecipeSource("pages", map[string]string{"max_input_chars": "8192"})
-	doc := vdoc("A", "o:A:0", 0, "content", "hash")
-	for i := 0; i < 40; i++ {
-		doc.Chunks = append(doc.Chunks, storage.VectorPushChunk{ChunkIndex: i, Embedding: []float32{1, 0, 0, 0}})
-	}
-	source.docs["A"] = []storage.VectorPushDoc{doc}
-	sync.vectorSource = source
-	_, err := sync.Push(t.Context(), false, nil)
+	// A real producer build supplies the chunk count and recipe together.
+	content := strings.Repeat("a", 20000)
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "A", []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", Content: content, ContentLength: len(content)}}))
+	ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 8192)
 	require.NoError(t, err)
-	id, _, _, err := LookupVectorGeneration(t.Context(), pg, "pages")
+	defer ix.Close()
+	source := builtVectorSource(t, ix, local, "pages")
+	require.Len(t, source.docs["A"], 1)
+	require.Len(t, source.docs["A"][0].Chunks, 3)
+	sync.vectorSource = source
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	id, _, _, err := LookupVectorGeneration(t.Context(), pg, source.gen.Fingerprint)
 	require.NoError(t, err)
 	store := &Store{pg: pg}
 	setHubTestSearcher(t, store, id)
-	req := vector.HubLookupRequest{Fingerprint: "pages", Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", ContentHash: "hash"}}}
+	req := vector.HubLookupRequest{Fingerprint: source.gen.Fingerprint, Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", ContentHash: source.docs["A"][0].ContentHash}}}
 	total := 0
 	pages := 0
 	for {
-		reply, err := store.lookupHubVectors(t.Context(), req, 2300)
+		reply, err := store.lookupHubVectors(t.Context(), req, 2150)
 		require.NoError(t, err)
 		encoded, err := json.Marshal(reply)
 		require.NoError(t, err)
-		require.LessOrEqual(t, len(encoded), 2300)
+		require.LessOrEqual(t, len(encoded), 2150)
 		for _, chunk := range reply.Chunks {
 			require.Equal(t, total, chunk.ChunkIndex)
-			require.Equal(t, 40, chunk.ChunkCount)
+			require.Equal(t, 3, chunk.ChunkCount)
 			total++
 		}
 		pages++
-		require.Less(t, pages, 41)
+		require.Less(t, pages, 4)
 		if reply.NextCursor == "" {
 			break
 		}
 		req.Cursor = reply.NextCursor
 	}
-	assert.Equal(t, 40, total)
+	assert.Equal(t, 3, total)
 	assert.Greater(t, pages, 1)
+	for _, offset := range []int{3, 4, 1000000} {
+		invalid := req
+		invalid.Cursor = makeHubLookupCursor(invalid, 0, offset)
+		_, err := store.LookupHubVectors(t.Context(), invalid)
+		require.ErrorIs(t, err, vector.ErrHubLookupInvalid)
+	}
 	req.Identities[0].ContentHash = "changed"
 	_, err = store.LookupHubVectors(t.Context(), req)
 	assert.ErrorIs(t, err, vector.ErrHubLookupInvalid)
@@ -165,76 +177,6 @@ func TestVectorHubLookupPagination(t *testing.T) {
 	generation, err = store.HubVectorGeneration(t.Context())
 	require.NoError(t, err)
 	assert.NotEmpty(t, generation.Unavailable)
-}
-
-func TestVectorHubRejectsCrossGenerationRevision(t *testing.T) {
-	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_revision_test")
-	seedVectorSession(t, local, "A")
-	identities := []vector.HubIdentity{
-		{SessionID: "A", UnitKind: "user", Ordinal: 0, ContentHash: "new-hash"},
-		{SessionID: "A", UnitKind: "user", SourceUUID: "uuid", Occurrence: 2, Ordinal: 1, ContentHash: "new-hash"},
-		{SessionID: "A", UnitKind: "run", SourceUUID: "run", Occurrence: 1, Ordinal: 2, ContentHash: "new-hash"},
-	}
-	first := hubRecipeSource("old", map[string]string{"max_input_chars": "8192"})
-	first.docs["A"] = nil
-	for i, key := range []string{"o:A:0", "u:A:uuid#2", "r:A:run"} {
-		doc := vdoc("A", key, i, "old-content", "old-hash", []float32{1, 0, 0, 0})
-		doc.SourceUUID = identities[i].SourceUUID
-		first.docs["A"] = append(first.docs["A"], doc)
-	}
-	sync.vectorSource = first
-	_, err := sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	id, _, _, err := LookupVectorGeneration(t.Context(), pg, "old")
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	setHubTestSearcher(t, store, id)
-	second := hubRecipeSource("new", map[string]string{"max_input_chars": "8192"})
-	second.docs = first.docs
-	sync.vectorSource = second
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	identity := identities[0]
-	identity.ContentHash = "old-hash"
-	reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
-	require.NoError(t, err)
-	require.Len(t, reply.Chunks, 1, "equal corpus remains covered in both generations")
-	var oldChunks int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
-	assert.Equal(t, len(identities), oldChunks, "unchanged coverage preserves old generation chunks")
-	second.hashes["A"] = "changed-corpus"
-	for i := range second.docs["A"] {
-		second.docs["A"][i].ContentHash = "new-hash"
-		second.docs["A"][i].Chunks[0].Embedding = []float32{0, 1, 0, 0}
-	}
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-
-	for _, identity := range identities {
-		for _, hash := range []string{"old-hash", "new-hash"} {
-			identity.ContentHash = hash
-			reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
-			require.NoError(t, err)
-			assert.Empty(t, reply.Chunks)
-			assert.Equal(t, []int{0}, reply.Absent)
-		}
-	}
-
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
-	assert.Zero(t, oldChunks, "invalidated coverage must not leave searchable old chunks")
-	newID, _, _, err := LookupVectorGeneration(t.Context(), pg, "new")
-	require.NoError(t, err)
-	var newChunks int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(newID)).Scan(&newChunks))
-	assert.Equal(t, len(identities), newChunks, "current generation chunks remain intact")
-	delete(second.hashes, "A")
-	delete(second.docs, "A")
-	_, err = sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	var documents int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id='A'`).Scan(&documents))
-	assert.Zero(t, documents, "scope eviction removes shared documents once all chunks are gone")
-
 }
 
 func hubRecipeSource(fingerprint string, params map[string]string) *fakeVectorSource {

@@ -4,11 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 func TestHubVectorCodec(t *testing.T) {
@@ -18,8 +18,12 @@ func TestHubVectorCodec(t *testing.T) {
 	decoded, err := DecodeHubVector("AACAPwAAAMA=", 2)
 	require.NoError(t, err)
 	assert.Equal(t, []float32{1, -2}, decoded)
-	hegel.Test(t, func(ht *hegel.T) {
-		bits := hegel.Draw(ht, hegel.Integers[uint32](0, math.MaxUint32))
+	rng := rand.New(rand.NewPCG(2416, 1))
+	bitsToTest := []uint32{0, 0x80000000, 1, 0x7f7fffff, 0x7f800000, 0xff800000, 0x7fc00000}
+	for range 1000 {
+		bitsToTest = append(bitsToTest, rng.Uint32())
+	}
+	for _, bits := range bitsToTest {
 		value := math.Float32frombits(bits)
 		var bytes [4]byte
 		binary.LittleEndian.PutUint32(bytes[:], bits)
@@ -27,15 +31,15 @@ func TestHubVectorCodec(t *testing.T) {
 		encoded, encErr := EncodeHubVector([]float32{value})
 		decoded, decErr := DecodeHubVector(raw, 1)
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			require.Error(ht, encErr)
-			require.Error(ht, decErr)
-			return
+			require.Error(t, encErr)
+			require.Error(t, decErr)
+			continue
 		}
-		require.NoError(ht, encErr)
-		require.NoError(ht, decErr)
-		require.Equal(ht, raw, encoded)
-		require.Equal(ht, bits, math.Float32bits(decoded[0]))
-	}, hegel.WithTestCases(1000))
+		require.NoError(t, encErr)
+		require.NoError(t, decErr)
+		require.Equal(t, raw, encoded)
+		require.Equal(t, bits, math.Float32bits(decoded[0]))
+	}
 	for _, dimension := range []int{-1, 0, 1, 3, math.MaxInt} {
 		_, err := DecodeHubVector("AACAPwAAAMA=", dimension)
 		require.Error(t, err)

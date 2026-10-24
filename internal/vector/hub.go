@@ -96,9 +96,11 @@ func DecodeHubVector(encoded string, dimension int) ([]float32, error) {
 	if err != nil || len(raw)%4 != 0 || len(raw)/4 != dimension {
 		return nil, fmt.Errorf("vector dimension mismatch: expected %d", dimension)
 	}
-	values := make([]float32, dimension)
+	values, err := decodeFloat32Blob(raw)
+	if err != nil {
+		return nil, err
+	}
 	for i := range values {
-		values[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
 		if math.IsNaN(float64(values[i])) || math.IsInf(float64(values[i]), 0) {
 			return nil, errors.New("non-finite vector")
 		}
