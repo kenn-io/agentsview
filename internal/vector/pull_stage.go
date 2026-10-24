@@ -117,6 +117,7 @@ func (ix *Index) publishPullStage(ctx context.Context, stage *Index, fp string) 
 		{`INSERT INTO ` + ix.spec.stampsTable() + ` SELECT ?,doc_key,revision FROM ` + stage.spec.stampsTable() + ` WHERE ordinal=?`, []any{ordinal, stagedOrdinal}},
 		{`DELETE FROM ` + ix.spec.DocsTable, nil},
 		{`INSERT INTO ` + ix.spec.DocsTable + ` SELECT * FROM ` + stage.spec.DocsTable, nil},
+		{`DELETE FROM ` + ix.spec.MetaTable + ` WHERE key=?`, []any{sourceDataVersionKey}},
 		{`INSERT OR REPLACE INTO ` + ix.spec.MetaTable + ` SELECT key,value FROM ` + stage.spec.MetaTable, nil},
 		{`UPDATE ` + ix.spec.generationsTable() + ` SET state=CASE WHEN gen_key=? THEN 'active' ELSE 'retired' END WHERE gen_key=? OR state IN ('active','building')`, []any{fp, fp}},
 		{`DELETE FROM ` + ix.spec.MetaTable + ` WHERE key=? OR key=?`, []any{pullStageKey + fp, activeFullRebuildKey}},

@@ -24,6 +24,12 @@ func TestEmbeddableSnapshotReservesArchiveWriter(t *testing.T) {
 		_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
 		require.Error(t, err, "a second archive handle must not write during installation")
 		cancel()
+		proof, ok := s.(interface {
+			EmbeddingDataVersion(context.Context, bool) (int, error)
+		})
+		require.True(t, ok)
+		_, err = proof.EmbeddingDataVersion(ctx, false)
+		require.ErrorIs(t, err, context.Canceled)
 		return ctx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)

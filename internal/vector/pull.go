@@ -27,6 +27,13 @@ type pullSource struct {
 	mapSession func(string) string
 }
 
+func (s pullSource) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (int, error) {
+	if source, ok := s.UnitSource.(dataVersionSource); ok {
+		return source.EmbeddingDataVersion(ctx, includeAutomated)
+	}
+	return 0, nil
+}
+
 func (s pullSource) ScanEmbeddableUnits(ctx context.Context, since string, scope bool, limit int, fn func(db.EmbeddableUnit) error) (string, error) {
 	occurrences := map[string]int{}
 	return s.UnitSource.ScanEmbeddableUnits(ctx, since, scope, limit, func(u db.EmbeddableUnit) error {

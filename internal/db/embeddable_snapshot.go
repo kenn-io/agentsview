@@ -37,6 +37,10 @@ func (db *DB) WithEmbeddableSnapshot(ctx context.Context, fn func(EmbeddableSnap
 
 type embeddableSnapshot struct{ conn *sql.Conn }
 
+func (s embeddableSnapshot) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (int, error) {
+	return embeddingDataVersion(ctx, s.conn, includeAutomated)
+}
+
 func (s embeddableSnapshot) ScanEmbeddableUnits(ctx context.Context, since string, scope bool, limit int, fn func(EmbeddableUnit) error) (string, error) {
 	return scanEmbeddableUnits(ctx, s.conn, since, "", scope, limit, fn)
 }

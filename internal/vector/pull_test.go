@@ -26,35 +26,78 @@ func (f lookupFunc) LookupHubVectors(ctx context.Context, r HubLookupRequest) (H
 	return f(ctx, r)
 }
 
+func seedPullDataVersion(t *testing.T, archive *db.DB, version int, sessions ...string) {
+	t.Helper()
+	for _, id := range sessions {
+		require.NoError(t, archive.SetSessionDataVersion(t.Context(), id, version))
+	}
+	require.NoError(t, archive.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "PRAGMA user_version="+strconv.Itoa(version))
+		return err
+	}))
+}
+
 func TestPullVectorsRoundTrip(t *testing.T) {
-	ix := openTestIndex(t)
-	src := &fakeUnitSource{}
-	gen := fakeGeneration("hub")
-	text := "content"
-	src.rows = []fakeUnit{{unit: userDoc("local", "duplicate:#%", 0, text), endedAt: "2025-01-01"}}
-	expected := []float32{1, 1, -1}
-	client := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
-		require.Equal(t, gen.Fingerprint(), r.Fingerprint)
-		require.Equal(t, []HubIdentity{{SessionID: "air~local", UnitKind: "user", SourceUUID: "duplicate:#%", Occurrence: 1, ContentHash: contentHash(text)}}, r.Identities)
-		encoded := "AACAPwAAgD8AAIC/"
-		return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 1, Vector: encoded}}}, nil
-	})
-	result, err := ix.Pull(t.Context(), src, client, gen, PullOptions{MapSession: func(id string) string { return "air~" + id }})
-	require.NoError(t, err)
-	require.Equal(t, gen.Fingerprint(), result.Fingerprint)
-	missing, err := ix.MissingEmbeddedDocs(t.Context(), gen.Fingerprint(), nil)
-	require.NoError(t, err)
-	require.Zero(t, missing)
-	exp, ok, err := ix.BeginExport(t.Context(), nil)
-	require.NoError(t, err)
-	require.True(t, ok)
-	docs, _, err := exp.SessionDocs(t.Context(), "local")
-	require.NoError(t, err)
-	require.Len(t, docs, 1)
-	require.Len(t, docs[0].Chunks, 1)
-	vectors := docs[0].Chunks[0].Embedding
-	require.NoError(t, exp.Close())
-	require.Equal(t, expected, vectors)
+	for _, mode := range []string{"unknown source", "persisted older source", "excluded stale automation", "included stale automation", "future source"} {
+		t.Run(mode, func(t *testing.T) {
+			ix := openTestIndex(t)
+			var src UnitSource
+			wantVersion := 0
+			if mode == "unknown source" {
+				src = &fakeUnitSource{rows: []fakeUnit{{unit: userDoc("local", "duplicate:#%", 0, "content"), endedAt: "2025-01-01"}}}
+			} else {
+				archive := dbtest.OpenTestDB(t)
+				dbtest.SeedSessionWithMessages(t, archive, "local", "project", []db.Message{{SessionID: "local", Ordinal: 0, Role: "user", SourceUUID: "duplicate:#%", Content: "content"}})
+				wantVersion = db.CurrentDataVersion() - 1
+				if mode == "future source" {
+					wantVersion = db.CurrentDataVersion() + 1
+				}
+				seedPullDataVersion(t, archive, wantVersion, "local")
+				if strings.Contains(mode, "stale automation") {
+					require.NoError(t, archive.UpsertSession(t.Context(), db.Session{ID: "worker", Agent: "claude", IsAutomated: true}))
+					require.NoError(t, archive.SetSessionDataVersion(t.Context(), "worker", wantVersion-1))
+					if mode == "included stale automation" {
+						wantVersion = 0
+					}
+				}
+				src = archive
+			}
+			gen := fakeGeneration("hub")
+			text := "content"
+			expected := []float32{1, 1, -1}
+			calls := 0
+			client := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
+				calls++
+				require.Equal(t, gen.Fingerprint(), r.Fingerprint)
+				require.Equal(t, []HubIdentity{{SessionID: "air~local", UnitKind: "user", SourceUUID: "duplicate:#%", Occurrence: 1, ContentHash: contentHash(text)}}, r.Identities)
+				encoded := "AACAPwAAgD8AAIC/"
+				return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 1, Vector: encoded}}}, nil
+			})
+			result, err := ix.Pull(t.Context(), src, client, gen, PullOptions{IncludeAutomated: mode == "included stale automation", MapSession: func(id string) string { return "air~" + id }})
+			if mode == "future source" {
+				var tooNew *db.DataVersionTooNewError
+				require.ErrorAs(t, err, &tooNew)
+				assert.Zero(t, calls, "source proof errors stop before contacting the hub")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, gen.Fingerprint(), result.Fingerprint)
+			missing, err := ix.MissingEmbeddedDocs(t.Context(), gen.Fingerprint(), nil)
+			require.NoError(t, err)
+			require.Zero(t, missing)
+			exp, ok, err := ix.BeginExport(t.Context(), nil)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, wantVersion, exp.Generation().DataVersion)
+			docs, _, err := exp.SessionDocs(t.Context(), "local")
+			require.NoError(t, err)
+			require.Len(t, docs, 1)
+			require.Len(t, docs[0].Chunks, 1)
+			vectors := docs[0].Chunks[0].Embedding
+			require.NoError(t, exp.Close())
+			require.Equal(t, expected, vectors)
+		})
+	}
 }
 
 func TestPullDiscardsChangedOrDeletedDocuments(t *testing.T) {
@@ -465,7 +508,15 @@ func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
 				}
 				return vectors, nil
 			}
-			_, err = ix.Build(t.Context(), src, enc, old, BuildOptions{})
+			var initialSource UnitSource = src
+			oldVersion := db.CurrentDataVersion() - 1
+			if mode == "pull publication failed" {
+				archive := dbtest.OpenTestDB(t)
+				dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{{SessionID: "s", Ordinal: 0, Role: "user", SourceUUID: "u", Content: "abcdwxyz"}})
+				seedPullDataVersion(t, archive, oldVersion, "s")
+				initialSource = archive
+			}
+			_, err = ix.Build(t.Context(), initialSource, enc, old, BuildOptions{})
 			require.NoError(t, err)
 			prepared, err := ix.PrepareSearch(t.Context(), enc, "wxyz")
 			require.NoError(t, err)
@@ -479,11 +530,20 @@ func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
 			publicationFailed := mode == "pull publication failed"
 			cleanupFailed := mode == "build cleanup failed"
 			var observer *pullContentConnector
+			var deletedProof, copiedMeta bool
 			if publicationFailed || cleanupFailed {
 				oldDB := ix.db
 				t.Cleanup(func() { require.NoError(t, oldDB.Close()) })
 				observer = &pullContentConnector{drv: oldDB.Driver(), dsn: vectorDSN(path, false), failExec: func(query string, args []driver.NamedValue) error {
-					if (publicationFailed && query == "DELETE FROM vector_messages") ||
+					if publicationFailed {
+						if query == "DELETE FROM vector_meta WHERE key=?" && len(args) == 1 && args[0].Value == sourceDataVersionKey {
+							deletedProof = true
+						}
+						if strings.HasPrefix(query, "INSERT OR REPLACE INTO vector_meta SELECT key,value FROM ") {
+							copiedMeta = true
+						}
+					}
+					if (publicationFailed && strings.HasPrefix(query, "UPDATE message_vectors_generations SET state=CASE")) ||
 						(cleanupFailed && strings.Contains(query, "DELETE FROM vector_meta WHERE key = ? AND value != ?") && len(args) == 2 && args[0].Value == activeFullRebuildKey) {
 						return stopped
 					}
@@ -534,7 +594,14 @@ func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
 				assert.True(t, result.Activated, "cleanup failure follows committed build activation")
 			}
 			if publicationFailed {
+				assert.True(t, deletedProof, "failure follows proof deletion")
+				assert.True(t, copiedMeta, "failure follows staged metadata copy")
 				assert.False(t, result.Activated, "publication failure rolls back activation")
+				export, ok, exportErr := ix.BeginExport(t.Context(), nil)
+				require.NoError(t, exportErr)
+				require.True(t, ok)
+				assert.Equal(t, oldVersion, export.Generation().DataVersion, "failed publication restores deleted proof")
+				require.NoError(t, export.Close())
 			}
 			hits, _, err := prepared(t.Context(), 1)
 			require.NoError(t, err)
@@ -553,6 +620,11 @@ func TestPullAndBuildKeepSearchRecipeWithActiveGeneration(t *testing.T) {
 				result, err = ix.Pull(t.Context(), src, hub, next, PullOptions{})
 				require.NoError(t, err)
 				assert.True(t, result.Activated, "retry publishes the completed stage")
+				export, ok, exportErr := ix.BeginExport(t.Context(), nil)
+				require.NoError(t, exportErr)
+				require.True(t, ok)
+				assert.Zero(t, export.Generation().DataVersion, "unknown replacement clears old proof")
+				require.NoError(t, export.Close())
 				hits, err = ix.Search(t.Context(), enc, "wxyz", 1)
 				require.NoError(t, err)
 				require.Len(t, hits, 1)

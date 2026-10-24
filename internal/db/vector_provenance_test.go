@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"strconv"
@@ -43,6 +44,21 @@ func TestEmbeddingDataVersion(t *testing.T) {
 				}
 				_, err := tx.ExecContext(t.Context(), "PRAGMA user_version="+strconv.Itoa(tc.archiveVersion))
 				return err
+			}))
+			require.NoError(t, d.WithEmbeddableSnapshot(t.Context(), func(snapshot EmbeddableSnapshot) error {
+				proof, ok := snapshot.(interface {
+					EmbeddingDataVersion(context.Context, bool) (int, error)
+				})
+				require.True(t, ok, "reserved snapshots expose optional source proof")
+				got, err := proof.EmbeddingDataVersion(t.Context(), tc.includeAutomated)
+				if tc.tooNew {
+					var newer *DataVersionTooNewError
+					require.ErrorAs(t, err, &newer)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, tc.want, got)
+				}
+				return nil
 			}))
 			got, err := d.EmbeddingDataVersion(t.Context(), tc.includeAutomated)
 			if tc.tooNew {

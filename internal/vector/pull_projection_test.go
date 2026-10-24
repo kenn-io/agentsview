@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/db"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,9 +15,11 @@ import (
 // A recipe change reshapes real assistant runs. An incomplete replacement must
 // preserve the old documents, anchors and snippets, rather than only its flag.
 func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
-	for _, mode := range []string{"hub failure", "canceled", "absent", "scope change", "local completion", "local full rebuild"} {
+	for _, mode := range []string{"hub failure", "canceled", "absent", "scope change", "local completion", "local full rebuild", "unknown replacement"} {
 		t.Run(mode, func(t *testing.T) {
 			archive := seedRunCapArchive(t, false)
+			version := db.CurrentDataVersion() - 2
+			seedPullDataVersion(t, archive, version, "session")
 			path := filepath.Join(t.TempDir(), "vectors.db")
 			ix, err := Open(t.Context(), path, false, 4000)
 			require.NoError(t, err)
@@ -37,6 +41,12 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 			defer oldExport.Close()
+			assert.Equal(t, version, oldExport.Generation().DataVersion)
+			if mode == "unknown replacement" {
+				require.NoError(t, archive.SetSessionDataVersion(t.Context(), "session", version-1))
+			} else {
+				seedPullDataVersion(t, archive, version+1, "session")
+			}
 			includeAutomated := mode == "scope change"
 			stopped := errors.New("hub unavailable")
 			ctx, cancel := context.WithCancel(t.Context())
@@ -98,6 +108,7 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			docs, _, err := export.SessionDocs(t.Context(), "session")
 			require.NoError(t, err)
 			assert.Len(t, docs, 6)
+			assert.Equal(t, version, export.Generation().DataVersion, "incomplete replacement preserves active proof")
 			require.NotNil(t, export.Generation().IncludeAutomated)
 			assert.False(t, *export.Generation().IncludeAutomated, "an incomplete target must not certify its scope on the old generation")
 			require.NoError(t, export.Close())
@@ -146,10 +157,16 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 			require.True(t, ok)
 			require.NotNil(t, export.Generation().IncludeAutomated)
 			assert.Equal(t, includeAutomated, *export.Generation().IncludeAutomated)
+			wantVersion := version + 1
+			if mode == "unknown replacement" {
+				wantVersion = 0
+			}
+			assert.Equal(t, wantVersion, export.Generation().DataVersion)
 			require.NoError(t, export.Close())
 			pinned, _, err := prepared(t.Context(), 256)
 			require.NoError(t, err)
 			assert.Equal(t, before, pinned, "prepared hydration stays in the old archive projection")
+			assert.Equal(t, version, oldExport.Generation().DataVersion, "pinned export keeps its original proof")
 			docs, _, err = oldExport.SessionDocs(t.Context(), "session")
 			require.NoError(t, err)
 			assert.Len(t, docs, 6, "an existing export also retains its SQLite snapshot")
