@@ -785,7 +785,7 @@ func (ix *Index) setIncludeAutomatedScope(ctx context.Context, value bool) error
 	return ix.metaSet(ctx, scopeIncludeAutomatedKey, strconv.FormatBool(value))
 }
 
-// Clear removes all mirrored documents and their vectors from this index.
+// Clear removes all mirrored documents and vectors, including pending pulls.
 // The caller must hold the vectors write lock and exclude concurrent builds.
 func (ix *Index) Clear(ctx context.Context) error {
 	if err := ix.requireWritable(); err != nil {
@@ -793,6 +793,39 @@ func (ix *Index) Clear(ctx context.Context) error {
 	}
 	if _, err := ix.reconcileDeletions(ctx, nil, ""); err != nil {
 		return err
+	}
+	// Incomplete replacement pulls retain their own transcript and vector
+	// tables. They belong to this store even though search still uses the
+	// active projection above.
+	rows, err := ix.db.QueryContext(ctx, `SELECT key, value FROM `+ix.spec.MetaTable+` WHERE substr(key, 1, ?) = ?`, len(pullStageKey), pullStageKey)
+	if err != nil {
+		return err
+	}
+	stages := map[string]string{}
+	for rows.Next() {
+		var key, prefix string
+		if err := rows.Scan(&key, &prefix); err != nil {
+			rows.Close()
+			return err
+		}
+		stages[key] = prefix
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for key, prefix := range stages {
+		tables, err := mirrorStateTableNames(ctx, ix.db, ix.pullStageSpec(prefix))
+		if err != nil {
+			return err
+		}
+		if err := dropMirrorTables(ctx, ix.db, tables); err != nil {
+			return err
+		}
+		if err := ix.metaDelete(ctx, key); err != nil {
+			return err
+		}
 	}
 	return ix.metaDelete(ctx, refreshWatermarkKey)
 }
