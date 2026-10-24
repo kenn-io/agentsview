@@ -117,7 +117,7 @@ func newSecretsListCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			svc, cleanup, err := resolveService(cmd)
+			svc, cleanup, err := resolveServiceWithIntent(cmd, readTargetExplicitOnly)
 			if err != nil {
 				return err
 			}

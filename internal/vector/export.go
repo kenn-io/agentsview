@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
 
@@ -37,6 +38,8 @@ type ExportDoc struct {
 type ActiveExport struct {
 	Fingerprint, Model string
 	Dimension          int
+	IncludeAutomated   *bool
+	DataVersion        int // zero when the mirror has no full-scan source proof
 }
 
 // ErrExportNotReady marks a snapshot that contains a rebuild marker or
@@ -73,7 +76,8 @@ func (ix *Index) BeginExport(ctx context.Context, scope []string) (*Export, bool
 	if found && value == gen.Fingerprint {
 		return nil, false, fmt.Errorf("%w: active generation %q is being rebuilt in place", ErrExportNotReady, gen.Fingerprint)
 	}
-	snap, err := ix.store.Snapshot(ctx, gen.Fingerprint)
+	snap, proof, err := ix.exportSnapshot(ctx, gen.Fingerprint, ix.store.Snapshot)
+	gen.IncludeAutomated, gen.DataVersion = proof.IncludeAutomated, proof.DataVersion
 	if err != nil {
 		return nil, false, fmt.Errorf("begin export snapshot: %w", err)
 	}
@@ -87,6 +91,54 @@ func (ix *Index) BeginExport(ctx context.Context, scope []string) (*Export, bool
 		return nil, false, fmt.Errorf("%w: %d document(s) pending", ErrExportNotReady, missing)
 	}
 	return &Export{snap: snap, gen: gen}, true, nil
+}
+
+// exportSnapshot detects commits across the metadata and kit snapshot reads.
+// data_version is connection-local and also catches a scope change and reversal.
+func (ix *Index) exportSnapshot(ctx context.Context, fingerprint string, open func(context.Context, string) (*sqlitevec.Snapshot[string, string], error)) (*sqlitevec.Snapshot[string, string], ActiveExport, error) {
+	var proof ActiveExport
+	conn, err := ix.db.Conn(ctx)
+	if err != nil {
+		return nil, proof, err
+	}
+	defer conn.Close()
+	var before, after int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&before); err != nil {
+		return nil, proof, err
+	}
+	var raw string
+	err = conn.QueryRowContext(ctx, "SELECT value FROM "+ix.spec.MetaTable+" WHERE key=?", scopeIncludeAutomatedKey).Scan(&raw)
+	if err == nil {
+		value, _, parseErr := decodeIncludeAutomatedScope(raw)
+		if parseErr != nil {
+			return nil, proof, parseErr
+		}
+		proof.IncludeAutomated = &value
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, proof, err
+	}
+	err = conn.QueryRowContext(ctx, "SELECT value FROM "+ix.spec.MetaTable+" WHERE key=?", sourceDataVersionKey).Scan(&raw)
+	if err == nil {
+		proof.DataVersion, err = strconv.Atoi(raw)
+		if err != nil || proof.DataVersion <= 0 || proof.DataVersion > db.CurrentDataVersion() {
+			return nil, proof, fmt.Errorf("%w: unsupported source parser version %q", ErrExportNotReady, raw)
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, proof, err
+	}
+	snap, err := open(ctx, fingerprint)
+	if err != nil {
+		return nil, proof, err
+	}
+	err = conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&after)
+	if err != nil || before != after {
+		_ = snap.Close()
+		if err != nil {
+			return nil, proof, err
+		}
+		return nil, proof, fmt.Errorf("%w: mirror changed while opening export", ErrExportNotReady)
+	}
+	return snap, proof, nil
 }
 
 func (e *Export) Generation() ActiveExport { return e.gen }

@@ -2664,6 +2664,50 @@ func (o *GetAPIV1UsageSummaryStreamRequestOptions) GetHeader() (map[string]strin
 	return nil, nil
 }
 
+// PostAPIV1VectorsLookupRequestOptions is the options needed to make a request to PostAPIV1VectorsLookup.
+type PostAPIV1VectorsLookupRequestOptions struct {
+	Body *PostAPIV1VectorsLookupBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1VectorsLookupRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1VectorsLookupRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1VectorsLookupRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1VectorsLookupRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1VectorsLookupRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1ActivityReportStreamWithResponse is the envelope form: it populates
 // Stream200 instead of the buffered body field.
 func (c *Client) GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error) {
@@ -5237,6 +5281,8 @@ type ClientInterface interface {
 	GetAPIV1UsageSummaryWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryResp, error)
 	GetAPIV1UsageSummaryStreamWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryStreamRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryStreamResp, error)
 	GetAPIV1UsageSummaryStreamStreamWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryStreamRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryStreamResp, error)
+	GetAPIV1VectorsGenerationWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1VectorsGenerationResp, error)
+	PostAPIV1VectorsLookupWithResponse(ctx context.Context, options *PostAPIV1VectorsLookupRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1VectorsLookupResp, error)
 	GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1VersionResp, error)
 }
 
@@ -17950,6 +17996,436 @@ func (c *Client) GetAPIV1UsageSummaryStreamWithResponse(ctx context.Context, opt
 	}
 }
 
+// GetAPIV1VectorsGeneration Get the selected vector generation
+func (c *Client) GetAPIV1VectorsGenerationWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1VectorsGenerationResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/vectors/generation",
+		Method:     "GET",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/vectors/generation")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1VectorsGenerationResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1VectorsGenerationResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1VectorsGenerationErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1VectorsGenerationErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1VectorsGenerationErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1VectorsGenerationErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1VectorsGenerationErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1VectorsGenerationErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1VectorsGenerationErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1VectorsGenerationErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1VectorsGenerationErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1VectorsGenerationErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1VectorsGenerationErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1VectorsLookup Look up pinned document vectors
+func (c *Client) PostAPIV1VectorsLookupWithResponse(ctx context.Context, options *PostAPIV1VectorsLookupRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1VectorsLookupResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/vectors/lookup",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/vectors/lookup")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1VectorsLookupResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1VectorsLookupResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1VectorsLookupErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1VectorsLookupErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1VectorsLookupErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1VectorsLookupErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1VectorsLookupErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1VectorsLookupErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1VectorsLookupErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1VectorsLookupErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1VectorsLookupErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1VectorsLookupErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1VectorsLookupErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1VectorsLookupErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // GetAPIV1Version Get server version
 func (c *Client) GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1VersionResp, error) {
 	var err error
@@ -18751,6 +19227,8 @@ type PatchAPIV1SessionsIDLabelsBody = UpdateSessionLabelsInputBody
 type PutAPIV1SessionsIDParentBody = SetSessionParentInputBody
 
 type PostAPIV1SyncRemotesBody = RemoteSyncRequest
+
+type PostAPIV1VectorsLookupBody = VectorHubLookupRequest
 
 type GetAPIV1ActivityReportQuery struct {
 	// Preset Range preset
@@ -21589,6 +22067,52 @@ type GetAPIV1UsageSummaryStreamErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1UsageSummaryStreamErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1VectorsGenerationResponse = VectorHubGeneration
+
+type GetAPIV1VectorsGenerationErrorResponse = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1VectorsGenerationErrorResponseJSON504 = APIErrorResponse
+
+type PostAPIV1VectorsLookupResponse = VectorHubLookupReply
+
+type PostAPIV1VectorsLookupErrorResponse = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1VectorsLookupErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1VersionResponse = VersionInfo
 
 type GetAPIV1VersionErrorResponse = APIErrorResponse
@@ -22724,6 +23248,41 @@ type GetAPIV1UsageSummaryStreamResp struct {
 	JSON504      *GetAPIV1UsageSummaryStreamErrorResponseJSON504
 }
 
+type GetAPIV1VectorsGenerationResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1VectorsGenerationResponse
+	JSON400      *GetAPIV1VectorsGenerationErrorResponse
+	JSON401      *GetAPIV1VectorsGenerationErrorResponseJSON
+	JSON403      *GetAPIV1VectorsGenerationErrorResponseJSON403
+	JSON404      *GetAPIV1VectorsGenerationErrorResponseJSON404
+	JSON409      *GetAPIV1VectorsGenerationErrorResponseJSON409
+	JSON500      *GetAPIV1VectorsGenerationErrorResponseJSON500
+	JSON501      *GetAPIV1VectorsGenerationErrorResponseJSON501
+	JSON502      *GetAPIV1VectorsGenerationErrorResponseJSON502
+	JSON503      *GetAPIV1VectorsGenerationErrorResponseJSON503
+	JSON504      *GetAPIV1VectorsGenerationErrorResponseJSON504
+}
+
+type PostAPIV1VectorsLookupResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1VectorsLookupResponse
+	JSON400      *PostAPIV1VectorsLookupErrorResponse
+	JSON401      *PostAPIV1VectorsLookupErrorResponseJSON
+	JSON403      *PostAPIV1VectorsLookupErrorResponseJSON403
+	JSON404      *PostAPIV1VectorsLookupErrorResponseJSON404
+	JSON409      *PostAPIV1VectorsLookupErrorResponseJSON409
+	JSON422      *PostAPIV1VectorsLookupErrorResponseJSON422
+	JSON500      *PostAPIV1VectorsLookupErrorResponseJSON500
+	JSON501      *PostAPIV1VectorsLookupErrorResponseJSON501
+	JSON502      *PostAPIV1VectorsLookupErrorResponseJSON502
+	JSON503      *PostAPIV1VectorsLookupErrorResponseJSON503
+	JSON504      *PostAPIV1VectorsLookupErrorResponseJSON504
+}
+
 type GetAPIV1VersionResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -23028,11 +23587,13 @@ func (c ConfigDuckDBConfig) Validate() error {
 }
 
 type ConfigRemoteHost struct {
-	Destination *string `json:"destination,omitempty"`
-	Host        string  `json:"host" validate:"required"`
-	Interval    *int64  `json:"interval,omitempty"`
-	Transport   *string `json:"transport,omitempty"`
-	URL         *string `json:"url,omitempty"`
+	Destination     *string `json:"destination,omitempty"`
+	FullSyncTimeout *int64  `json:"full_sync_timeout,omitempty"`
+	Host            string  `json:"host" validate:"required"`
+	Interval        *int64  `json:"interval,omitempty"`
+	SyncTimeout     *int64  `json:"sync_timeout,omitempty"`
+	Transport       *string `json:"transport,omitempty"`
+	URL             *string `json:"url,omitempty"`
 }
 
 func (c ConfigRemoteHost) Validate() error {
@@ -25772,6 +26333,96 @@ func (v VectorBuildResult) Validate() error {
 type VectorBuildStatus = vector.BuildStatus
 
 type VectorGenerationInfo = vector.GenerationInfo
+
+type VectorHubChunk struct {
+	ChunkCount int64  `json:"chunk_count"`
+	ChunkIndex int64  `json:"chunk_index"`
+	Index      int64  `json:"index"`
+	Vector     string `json:"vector" validate:"required"`
+}
+
+func (v VectorHubChunk) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(v))
+}
+
+type VectorHubGeneration struct {
+	DataVersion      *int64            `json:"data_version,omitempty"`
+	Dimension        *int64            `json:"dimension,omitempty"`
+	Fingerprint      *string           `json:"fingerprint,omitempty"`
+	IncludeAutomated bool              `json:"include_automated"`
+	Model            *string           `json:"model,omitempty"`
+	Params           map[string]string `json:"params,omitempty"`
+	Unavailable      *string           `json:"unavailable,omitempty"`
+}
+
+type VectorHubIdentity struct {
+	ContentHash string  `json:"content_hash" validate:"required"`
+	Occurrence  *int64  `json:"occurrence,omitempty"`
+	Ordinal     *int64  `json:"ordinal,omitempty"`
+	SessionID   string  `json:"session_id" validate:"required"`
+	SourceUUID  *string `json:"source_uuid,omitempty"`
+	UnitKind    string  `json:"unit_kind" validate:"required"`
+}
+
+func (v VectorHubIdentity) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(v))
+}
+
+type VectorHubLookupReply struct {
+	Absent      []int64          `json:"absent" validate:"required"`
+	Chunks      []VectorHubChunk `json:"chunks" validate:"required"`
+	Fingerprint string           `json:"fingerprint" validate:"required"`
+	NextCursor  *string          `json:"next_cursor,omitempty"`
+	Version     string           `json:"version" validate:"required"`
+}
+
+func (v VectorHubLookupReply) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(v.Absent, "required"); err != nil {
+		errors = errors.Append("Absent", err)
+	}
+	for i, item := range v.Chunks {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Chunks[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(v.Fingerprint, "required"); err != nil {
+		errors = errors.Append("Fingerprint", err)
+	}
+	if err := typesValidator.Var(v.Version, "required"); err != nil {
+		errors = errors.Append("Version", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type VectorHubLookupRequest struct {
+	Cursor      *string             `json:"cursor,omitempty"`
+	Fingerprint string              `json:"fingerprint" validate:"required"`
+	Identities  []VectorHubIdentity `json:"identities" validate:"required"`
+}
+
+func (v VectorHubLookupRequest) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(v.Fingerprint, "required"); err != nil {
+		errors = errors.Append("Fingerprint", err)
+	}
+	for i, item := range v.Identities {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Identities[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
 
 type VectorRefreshStats struct {
 	Deleted   int64 `json:"Deleted"`

@@ -70,6 +70,16 @@ store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
 builds refuse them. This build decodes that range and preserves pending
 rebuilds; ordinary archives keep their parser version unchanged.
 
+### Embedding source readiness
+
+Embedding refresh checks the archive's persisted parser version against live
+sessions using version range seeks within the selected automation partitions.
+The next writable open builds `idx_sessions_embedding_readiness` once for
+existing archives, after column migrations. Startup waits for that index build;
+no parser resync or data-version bump is required. Read-only opens of older
+archives still check readiness correctly without the index, but may scan live
+sessions until a writable open builds it.
+
 ### Artifact checkpoint landings
 
 Land artifact checkpoints only through

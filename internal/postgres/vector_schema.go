@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS vector_generation_machines (
     generation_id BIGINT NOT NULL,
     machine       TEXT NOT NULL,
     last_push_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    data_version INTEGER,
+    include_automated BOOLEAN,
+    chunk_hash_version INTEGER,
     PRIMARY KEY (generation_id, machine)
 );
 CREATE TABLE IF NOT EXISTS vector_documents (
@@ -184,9 +187,25 @@ CREATE TABLE IF NOT EXISTS %s (
     doc_key     TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     embedding   %s.halfvec(%d) NOT NULL,
+    source_hash TEXT,
     PRIMARY KEY (doc_key, chunk_index)
 )`, table, extSchema, dimension)); err != nil {
 		return fmt.Errorf("creating %s: %w", table, err)
+	}
+	// Legacy chunks have no source-hash proof. Do not backfill from the shared
+	// document table: another generation may already have changed that hash.
+	existing, err := loadExistingColumns(ctx, pg, nil, table)
+	if err != nil {
+		return fmt.Errorf("checking %s provenance columns: %w", table, err)
+	}
+	if _, err := ensureColumns(ctx, pg, existing, []columnMigration{{
+		table: table, column: "source_hash", def: "source_hash TEXT",
+	}}); err != nil {
+		if isInsufficientPrivilege(err) {
+			// The provisioned legacy table remains writable without hub proof.
+			return nil
+		}
+		return fmt.Errorf("adding %s provenance columns: %w", table, err)
 	}
 	if _, err := pg.ExecContext(ctx, fmt.Sprintf(
 		`CREATE INDEX IF NOT EXISTS idx_%s_hnsw ON %s

@@ -89,6 +89,7 @@ func newRootCommand() *cobra.Command {
 			_ = cmd.Help()
 		},
 	}
+	root.PersistentFlags().Bool("local", false, "Use the local read target, ignoring configured remote and memory targets")
 	root.AddGroup(
 		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
 		&cobra.Group{ID: groupData, Title: "Data Commands:"},
@@ -502,6 +503,7 @@ func newTokenUseCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			noticeLocalArchive(cmd)
 			runTokenUse(cmd.Context(), args)
 		},
 	}
@@ -547,10 +549,11 @@ func newProjectsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runProjects(cmd.Context(), outputFormat(cmd) == "json")
+			runProjects(cmd, outputFormat(cmd) == "json")
 		},
 	}
 	registerFormatFlags(cmd.Flags())
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -575,6 +578,7 @@ func newHealthCommand() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.Limit, "limit",
 		defaultHealthLimit,
 		"Number of sessions to list (max 500)")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -605,6 +609,7 @@ func newUsageDailyCommand() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
+			cfg.cmd = cmd
 			runUsageDaily(cfg)
 		},
 	}
@@ -614,9 +619,10 @@ func newUsageDailyCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.All, "all", false, "Include all history (overrides default 30-day window)")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Breakdown, "breakdown", false, "Show per-model breakdown rows")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
 	cmd.Flags().StringVar(&cfg.Timezone, "timezone", "", "IANA timezone for date bucketing")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -630,13 +636,15 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
+			cfg.cmd = cmd
 			runUsageStatusline(cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -652,6 +660,7 @@ func newActivityCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newActivityReportCommand())
+	registerRemoteReadFlags(cmd.PersistentFlags())
 	return cmd
 }
 
@@ -665,6 +674,7 @@ func newActivityReportCommand() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
+			cfg.cmd = cmd
 			runActivityReport(cfg)
 		},
 	}
@@ -693,8 +703,8 @@ func newActivityReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.SessionsBucketEnd, "sessions-bucket-end", "",
 		"Exclusive end of the zero-based session bucket range")
 	registerFormatFlags(cmd.Flags())
-	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
-	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
 	return cmd
 }
 
