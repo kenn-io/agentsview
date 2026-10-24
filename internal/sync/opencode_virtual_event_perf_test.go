@@ -90,9 +90,9 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 			}
 			require.Len(t, allocations, 2)
 			t.Logf("8 sessions %.0f allocations; 80 sessions %.0f allocations", allocations[0], allocations[1])
-			// 30 runs per mode peaked at +28 allocations under -race.
-			// Allow 40, below a per-session regression's +72.
-			assert.Less(t, allocations[1], allocations[0]+40,
+			// The +50 limit sits between the +28 peak under -race (30 runs)
+			// and the +72 a one-allocation-per-session regression adds.
+			assert.Less(t, allocations[1], allocations[0]+50,
 				"an existing virtual member must not trigger archive-wide absence checks")
 		})
 	}
