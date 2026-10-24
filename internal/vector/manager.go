@@ -253,7 +253,7 @@ func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
 	if m.usesDocumentPolicy() && req.Using == "" {
 		return ManagedEncoder{}, nil
 	}
-	if req.LocalProducer {
+	if req.LocalProducer && !m.usesDocumentPolicy() {
 		return ManagedEncoder{}, fmt.Errorf("%w: local-producer requires the remote messages producer", ErrInvalidBuildRequest)
 	}
 

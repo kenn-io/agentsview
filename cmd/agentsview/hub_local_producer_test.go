@@ -79,7 +79,7 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	require.EqualValues(t, 1, before.Unmatched)
 	m := embeddingManager(ix, database, vector.EncoderSet{}, cfg, "messages")
 	defer m.Shutdown()
-	ran, err := m.TryBuild(t.Context(), localProducerRequest(t, ""))
+	ran, err := m.TryBuild(t.Context(), localProducerRequest(t, `,"using":"local"`))
 	require.NoError(t, err)
 	require.True(t, ran)
 	require.EqualValues(t, 1, encoded.Load())

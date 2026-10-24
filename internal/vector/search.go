@@ -179,14 +179,17 @@ func (ix *Index) prepareSearch(ctx context.Context, enc kitvec.EncodeFunc, query
 		return nil, &QueryEncodeError{Err: err}
 	}
 	ready = true
-	return func(ctx context.Context, limit int) ([]Hit, bool, error) {
-		q, err := ix.store.BuildCandidateQuery(ctx, tx, active, queryVector, sqlitevec.CandidateQuery{
+	return func(pageCtx context.Context, limit int) ([]Hit, bool, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		q, err := ix.store.BuildCandidateQuery(pageCtx, tx, active, queryVector, sqlitevec.CandidateQuery{
 			CandidateLimit: limit,
 		})
 		if err != nil {
 			return nil, false, fmt.Errorf("search: %w", err)
 		}
-		hits, err := q.All(ctx, tx, func(row *sql.Rows) (kitvec.Hit[string], error) {
+		hits, err := q.All(pageCtx, tx, func(row *sql.Rows) (kitvec.Hit[string], error) {
 			var h kitvec.Hit[string]
 			var distance float64
 			if err := row.Scan(&h.Doc, &h.ChunkIndex, &h.Revision, &distance); err != nil {
@@ -203,7 +206,7 @@ func (ix *Index) prepareSearch(ctx context.Context, enc kitvec.EncodeFunc, query
 		if err != nil {
 			return nil, false, fmt.Errorf("search: %w", err)
 		}
-		hydrated, err := searchIndex.hydrateHitsOn(ctx, tx, hits)
+		hydrated, err := searchIndex.hydrateHitsOn(pageCtx, tx, hits)
 		return hydrated, exhausted, err
 	}, nil
 }

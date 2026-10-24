@@ -98,7 +98,7 @@ func TestRemoteProducerFactoryWiresHubBuild(t *testing.T) {
 	}}}}
 	m := embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name)
 	defer m.Shutdown()
-	_, err = m.TryBuild(t.Context(), vector.BuildRequest{Using: "typo"})
+	_, err = m.TryBuild(t.Context(), vector.BuildRequest{Using: "typo", LocalProducer: true})
 	require.ErrorIs(t, err, vector.ErrUnknownServer)
 	require.Zero(t, calls.Load())
 	ran, err := m.TryBuild(t.Context(), vector.BuildRequest{Using: "local"})

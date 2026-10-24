@@ -118,8 +118,11 @@ func TestDocumentPolicyRejectsExplicitUnknownServer(t *testing.T) {
 		require.FailNow(t, "invalid explicit server started a pull")
 		return BuildResult{}, nil
 	}
-	require.ErrorIs(t, m.StartBuild(BuildRequest{Using: "typo"}), ErrUnknownServer)
-	ran, err := m.TryBuild(t.Context(), BuildRequest{Using: "typo"})
-	require.ErrorIs(t, err, ErrUnknownServer)
-	require.False(t, ran)
+	for _, localProducer := range []bool{false, true} {
+		req := BuildRequest{Using: "typo", LocalProducer: localProducer}
+		require.ErrorIs(t, m.StartBuild(req), ErrUnknownServer)
+		ran, err := m.TryBuild(t.Context(), req)
+		require.ErrorIs(t, err, ErrUnknownServer)
+		require.False(t, ran)
+	}
 }
