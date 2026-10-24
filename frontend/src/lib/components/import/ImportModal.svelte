@@ -131,8 +131,12 @@
     progressStats = null;
     const controller = new AbortController();
     syncController = controller;
+    const callbacks = { onProgress: (stats: ImportStats) => {
+      if (controller === syncController) progressStats = stats;
+    } };
+    let refreshAfterSync = true;
     try {
-      const stats = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
+      const stats = await syncClaudeAI(host, callbacks, controller.signal);
       if (!controller.signal.aborted) result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
@@ -143,15 +147,27 @@
         syncFlag = e.code ?? null;
       } else if (e instanceof ApiError && e.code === "claude_ai_sync_running") {
         syncError = m.import_claude_sync_running();
+        refreshAfterSync = false;
       } else {
         syncError = e instanceof Error ? e.message : m.import_failed();
       }
     }
     finally {
-      importing = false;
-      syncController = undefined;
-      onimported();
+      endSync(controller);
+      if (refreshAfterSync) onimported();
     }
+  }
+
+  // Closing and stopping release the visible state while cancellation settles.
+  function endSync(controller?: AbortController) {
+    if (controller !== syncController) return;
+    importing = false;
+    syncController = undefined;
+  }
+
+  function stopSync() {
+    syncController?.abort();
+    endSync(syncController);
   }
 
   const fileSize = $derived(
@@ -287,7 +303,7 @@
 
   function handleClose() {
     if (importing && !syncController) return;
-    syncController?.abort();
+    stopSync();
     selectedFile = null;
     result = null;
     error = null;
@@ -346,8 +362,8 @@
     closeLabel={m.import_close()}
     width="460px"
     maxWidth="min(460px, 92vw)"
-    closable={!importing}
-    closeOnOverlayClick={!importing}
+    closable={!importing || !!syncController}
+    closeOnOverlayClick={!importing || !!syncController}
     onclose={handleClose}
     footer={actions}
   >
@@ -429,7 +445,7 @@
               <Chip size="xs" tone="success">{m.import_claude_status_connected()}</Chip>
             {/if}
             {#if syncController}
-              <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => syncController?.abort()} />
+              <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={stopSync} />
             {:else}
               {#if host || chromeState === "signed-out"}
                 <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={importing} onclick={connect} />

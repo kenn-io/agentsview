@@ -93,8 +93,8 @@ it("shows setup instructions when disconnected", async () => {
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
 });
 
-it.each(["stop", "cancel"])(
-  "shows progress and refreshes completed chats after %s",
+it.each(["stop", "cancel", "close", "overlay", "escape"])(
+  "cancels Sync with %s, resets progress on Stop, and refreshes completed chats",
   async (exit) => {
     let reject!: (error: Error) => void;
     let signal!: AbortSignal;
@@ -114,14 +114,27 @@ it.each(["stop", "cancel"])(
     progress({ imported: 128, updated: 0, skipped: 0, errors: 0 });
     await tick();
     expect(screen.getByText("128 conversations processed...")).toBeTruthy();
-    await fireEvent.click(
-      screen.getByRole("button", { name: exit === "stop" ? "Stop" : "Cancel" }),
-    );
+    if (exit === "overlay") {
+      const overlay = screen.getByRole("dialog").parentElement!;
+      await fireEvent.pointerDown(overlay);
+      await fireEvent.pointerUp(overlay);
+      await fireEvent.click(overlay);
+    } else if (exit === "escape") {
+      await fireEvent.keyDown(window, { key: "Escape" });
+    } else {
+      const name = exit === "stop" ? "Stop" : exit === "close" ? m.import_close() : "Cancel";
+      await fireEvent.click(screen.getByRole("button", { name }));
+    }
     expect(signal.aborted).toBe(true);
-    expect(p.onclose.mock.calls.length).toBe(exit === "stop" ? 0 : 1);
+    if (exit === "stop") {
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(screen.queryByText("128 conversations processed...")).toBeNull();
+      expect(syncButton().disabled).toBe(false);
+    }
     reject(new Error("Stopped"));
     await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-    if (exit === "stop") expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(p.onclose.mock.calls.length).toBe(exit === "stop" ? 0 : 1);
     expect(screen.queryByText("Stopped")).toBeNull();
   },
 );
@@ -136,6 +149,56 @@ it("reuses results and returns to Ready with Import more", async () => {
   await fireEvent.click(screen.getByRole("button", { name: "Import more" }));
   expect(screen.getByText("Connected")).toBeTruthy();
   expect(syncButton().disabled).toBe(false);
+});
+
+it("starts another Sync while cancellation settles and ignores the old run's progress and cleanup", async () => {
+  let rejectOld!: (error: Error) => void;
+  let resolveNew!: (result: typeof stats) => void;
+  let retrySignal!: AbortSignal;
+  const progress: ((value: typeof stats) => void)[] = [];
+  syncClaudeAI
+    .mockImplementationOnce((_host, callbacks) => {
+      progress.push(callbacks.onProgress);
+      return new Promise((_, reject) => {
+        rejectOld = reject;
+      });
+    })
+    .mockRejectedValueOnce(new ApiError(409, "Server conflict text", "claude_ai_sync_running"))
+    .mockImplementationOnce((_host, callbacks, signal) => {
+      retrySignal = signal;
+      progress.push(callbacks.onProgress);
+      return new Promise<typeof stats>((resolve) => {
+        resolveNew = resolve;
+      });
+    });
+  const p = props();
+  render(ImportModal, p);
+  await clickSync();
+  await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await clickSync();
+  expect(syncClaudeAI).toHaveBeenCalledTimes(2);
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
+  );
+  expect(p.onimported).not.toHaveBeenCalled();
+  expect(screen.queryByText("Server conflict text")).toBeNull();
+  expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ code: "claude_ai_sync_running" }),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(syncClaudeAI).toHaveBeenCalledTimes(3);
+  progress[1]!({ imported: 7, updated: 0, skipped: 0, errors: 0 });
+  await tick();
+  expect(screen.getByText("7 conversations processed...")).toBeTruthy();
+  progress[0]!({ imported: 128, updated: 0, skipped: 0, errors: 0 });
+  rejectOld(new Error("Stopped old run"));
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  expect(screen.getByText("7 conversations processed...")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  expect(retrySignal.aborted).toBe(false);
+  resolveNew(stats);
+  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledTimes(2));
 });
 
 it("offers browser sign-in after auth failure", async () => {
@@ -190,22 +253,6 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])(
   },
 );
 
-it("shows and reports an overlapping Chrome Sync refusal", async () => {
-  syncClaudeAI.mockRejectedValueOnce(
-    new ApiError(409, "Server conflict text", "claude_ai_sync_running"),
-  );
-  render(ImportModal, props());
-  await clickSync();
-  await waitFor(() =>
-    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
-  );
-  expect(screen.queryByText("Server conflict text")).toBeNull();
-  expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ code: "claude_ai_sync_running" }),
-  );
-  expect(syncButton().disabled).toBe(false);
-});
-
 it("clears a Sync conflict after closing while status hangs", async () => {
   syncClaudeAI.mockRejectedValueOnce(
     new ApiError(409, "Server conflict text", "claude_ai_sync_running"),
@@ -220,12 +267,14 @@ it("clears a Sync conflict after closing while status hangs", async () => {
     }),
   );
   await fireEvent.click(syncButton());
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
+  );
   await waitFor(() => expect(chromeStatus).toHaveBeenCalledTimes(2));
   await view.rerender({ ...p, open: false });
   await view.rerender({ ...p, open: true });
-  resolve(ready);
-  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-  await tick();
+  resolve({ connected: false });
+  await waitFor(() => expect(screen.getByText("Not connected")).toBeTruthy());
   expect(screen.queryByText("Chrome Sync is already running.")).toBeNull();
 });
 

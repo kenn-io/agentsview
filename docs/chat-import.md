@@ -168,9 +168,12 @@ those turns, but dropped pins and notes stay in the Trash copy. Trashed and
 permanently deleted chats stay deleted.
 
 Each chat has a 32 MiB response limit. Larger chats count as failed while Sync
-continues. An expired sign-in or two chat failures in a row ends Sync. Closing
-the dialog cancels it. Completed chats stay imported, and the next Sync fetches
-unfinished chats.
+continues. An expired sign-in or two chat failures in a row ends Sync. You can
+cancel Sync with the X, Cancel, Escape, or by clicking outside the dialog.
+Completed chats stay imported and refresh in the session list. The next Sync
+fetches unfinished chats. After **Stop** or dialog dismissal, the server may
+briefly report that Chrome Sync is already running; wait a moment, then click
+**Retry**.
 
 Sign-in persists in the browser that holds it. To sign out of Chrome, open
 Claude.ai itself in Chrome and use its log-out menu. In the desktop app, open
