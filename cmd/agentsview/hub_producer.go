@@ -11,7 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
@@ -49,12 +48,8 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 }
 
 // newProducerHub preserves the remote credential policy and native request signing.
-func newProducerHub(cfg config.Config) (*vector.HTTPHub, error) {
+func newProducerHub(cfg config.Config) (*httpHub, error) {
 	client, err := remotecred.Client(cfg.Remote.URL, cfg.Remote.AllowInsecureHTTP)
-	if err != nil {
-		return nil, err
-	}
-	client, err = requestsign.ClientFromEnvironment(cfg.Remote.URL, client)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +60,7 @@ func newProducerHub(cfg config.Config) (*vector.HTTPHub, error) {
 			return nil, err
 		}
 	}
-	return &vector.HTTPHub{URL: cfg.Remote.URL, Token: token, Client: client}, nil
+	return &httpHub{URL: cfg.Remote.URL, Token: token, Client: client}, nil
 }
 
 func producerRecipe(ctx context.Context, cfg config.Config) (config.VectorEmbeddingsConfig, error) {

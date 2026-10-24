@@ -1,20 +1,11 @@
 package vector
 
 import (
-	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
-	"strings"
-
-	"github.com/klauspost/compress/zstd"
-	"go.kenn.io/agentsview/internal/remotecred"
 )
 
 const (
@@ -115,81 +106,4 @@ func DecodeHubVector(encoded string, dimension int) ([]float32, error) {
 		}
 	}
 	return values, nil
-}
-
-// HTTPHub uses the configured remote's credential and redirect-safe client.
-type HTTPHub struct {
-	URL, Token string
-	Client     *http.Client
-}
-
-func (h *HTTPHub) HubVectorGeneration(ctx context.Context) (out HubGeneration, err error) {
-	err = h.request(ctx, http.MethodGet, "generation", nil, &out)
-	return
-}
-
-func (h *HTTPHub) LookupHubVectors(ctx context.Context, in HubLookupRequest) (out HubLookupReply, err error) {
-	if err = in.Validate(); err != nil {
-		return
-	}
-	err = h.request(ctx, http.MethodPost, "lookup", in, &out)
-	return
-}
-
-func (h *HTTPHub) request(ctx context.Context, method, path string, body, out any) error {
-	if h.Client == nil {
-		return errors.New("remote vector HTTP client unavailable")
-	}
-	var raw []byte
-	var err error
-	if body != nil {
-		raw, err = json.Marshal(body)
-		if err != nil {
-			return err
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(h.URL, "/")+"/api/v1/vectors/"+path, bytes.NewReader(raw))
-	if err != nil {
-		return errors.New("invalid remote vector URL")
-	}
-	req.Header.Set("Authorization", "Bearer "+h.Token)
-	req.Header.Set("Accept-Encoding", "zstd")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.Client.Do(req)
-	if err == nil && resp.StatusCode == http.StatusConflict {
-		resp.Body.Close()
-		return ErrHubGenerationChanged
-	}
-	resp, err = remotecred.ResponsePolicy(h.URL)(resp, err) //nolint:bodyclose // ResponsePolicy closes rejected bodies; successful bodies are deferred below.
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("remote %s vector endpoint unavailable (HTTP %d)", remotecred.Redact(h.URL), resp.StatusCode)
-	}
-	var reader io.Reader = resp.Body
-	switch resp.Header.Get("Content-Encoding") {
-	case "zstd":
-		decoder, err := zstd.NewReader(resp.Body, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(64<<20))
-		if err != nil {
-			return errors.New("invalid compressed hub vectors")
-		}
-		defer decoder.Close()
-		reader = decoder
-	case "", "identity":
-	default:
-		return errors.New("unsupported hub vector encoding")
-	}
-	raw, err = io.ReadAll(io.LimitReader(reader, MaxHubLookupBytes+1))
-	if err != nil {
-		return errors.New("reading hub vectors failed")
-	}
-	if len(raw) > MaxHubLookupBytes {
-		return errors.New("hub vector response exceeds 32 MiB")
-	}
-	if err = json.Unmarshal(raw, out); err != nil {
-		return errors.New("invalid hub vector response")
-	}
-	return nil
 }

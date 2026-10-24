@@ -260,7 +260,8 @@ func TestRemoteProducerSignsForRestrictedListener(t *testing.T) {
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
-	bare := &vector.HTTPHub{URL: server.URL, Token: "token", Client: &http.Client{Transport: transport}}
+	t.Setenv("AGENTSVIEW_SIGNING_URL", "")
+	bare := &httpHub{URL: server.URL, Token: "token", Client: &http.Client{Transport: transport}}
 	_, err = bare.HubVectorGeneration(t.Context())
 	require.ErrorContains(t, err, "401")
 	t.Setenv("AGENTSVIEW_SIGNING_URL", server.URL)
