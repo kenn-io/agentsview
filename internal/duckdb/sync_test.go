@@ -1480,7 +1480,7 @@ func TestSessionFingerprintsWriteColumn(t *testing.T) {
 
 func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 	ctx := t.Context()
-	local := newLocalDBWithoutPricing(t)
+	local := dbtest.OpenTestDB(t)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
@@ -2240,17 +2240,12 @@ type syncFixture struct {
 
 func newLocalDB(t *testing.T) *db.DB {
 	t.Helper()
-	local := newLocalDBWithoutPricing(t)
+	local := dbtest.OpenTestDB(t)
 	// Avoid copying the full fallback pricing table on every push.
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "duckdb-test-seed",
 	}}))
 	return local
-}
-
-func newLocalDBWithoutPricing(t *testing.T) *db.DB {
-	t.Helper()
-	return dbtest.OpenTestDB(t)
 }
 
 func newTestSync(
