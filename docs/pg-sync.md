@@ -215,13 +215,14 @@ available provider roots. The interval acts as a floor: even if filesystem
 events are missed or a root cannot be watched because of OS watch limits, the
 next interval push catches up.
 
-When this watcher owns the local archive, it also pulls every configured
-`[[remote_hosts]]` entry at startup, including a hub with no local session
-roots. Hosts with a positive `interval` continue to sync on that cadence.
-Committed remote sessions queue a push, including sessions committed before
-an import fails. With `--embed`, they also notify the existing background
-embedding scheduler; vectors ship on a later push floor. Host outcomes are
-logged in the watcher log.
+When this watcher owns the local archive, it pulls configured `[[remote_hosts]]`
+entries with a positive `interval` at startup and on that cadence, including a
+hub with no local session roots. A zero or omitted `interval` means manual sync
+only. Full rebuilds preserve archived sessions from manual hosts without pulling
+those hosts. Committed remote sessions queue a push, including sessions
+committed before an import fails. With `--embed`, they also notify the existing
+background embedding scheduler; vectors ship on a later push floor. Host
+outcomes are logged in the watcher log.
 
 ```toml
 [[remote_hosts]]

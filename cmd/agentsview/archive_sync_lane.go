@@ -51,11 +51,11 @@ func (w archivePushWatch) run(ctx context.Context) error {
 	lane.fullPending.Store(w.full)
 	stopRemotes := func() {}
 	defer func() { stopRemotes() }()
-	lane.onReady = stdsync.OnceFunc(func() {
+	lane.onReady = func() {
 		if w.startRemotes != nil {
 			stopRemotes = w.startRemotes(ctx, lane.loop)
 		}
-	})
+	}
 	loop, stopLoop := newArchivePushLoop(
 		w.hooks, w.label, w.debounce, w.interval,
 		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
