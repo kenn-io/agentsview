@@ -27,6 +27,11 @@ import (
 
 func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *atomic.Int32) {
 	t.Helper()
+	return hubProducerScopeFixture(t, false, status...)
+}
+
+func hubProducerScopeFixture(t *testing.T, includeAutomated bool, status ...int) (config.Config, *db.DB, *atomic.Int32) {
+	t.Helper()
 	cfg := vectorTestConfig(t.TempDir())
 	cfg.Vector.Producer = "remote"
 	cfg.Remote.SpokeHost = "node"
@@ -49,7 +54,7 @@ func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *at
 				w.WriteHeader(status[0])
 				return
 			}
-			assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+			assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion(), IncludeAutomated: includeAutomated}))
 			return
 		}
 		calls.Add(1)
@@ -58,13 +63,22 @@ func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *at
 			return
 		}
 		assert.Equal(t, g.Fingerprint(), req.Fingerprint)
-		if !assert.Len(t, req.Identities, 1) {
-			return
+		want := []string{"node~local"}
+		if includeAutomated {
+			want = append(want, "node~auto")
 		}
-		assert.Equal(t, "node~local", req.Identities[0].SessionID)
+		got := make([]string, len(req.Identities))
+		for i, identity := range req.Identities {
+			got[i] = identity.SessionID
+		}
+		assert.ElementsMatch(t, want, got)
 		v, err := vector.EncodeHubVector([]float32{1, 0, 0, 0})
 		assert.NoError(t, err)
-		assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: v}}}))
+		chunks := make([]vector.HubChunk, len(req.Identities))
+		for i := range chunks {
+			chunks[i] = vector.HubChunk{Index: i, ChunkCount: 1, Vector: v}
+		}
+		assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: chunks}))
 	}))
 	t.Cleanup(server.Close)
 	cfg.Remote.URL = server.URL
@@ -383,4 +397,88 @@ func TestDirectLocalBuildCompletesPersistedHubStage(t *testing.T) {
 	missing, err := ix.MissingEmbeddedDocs(t.Context(), active, nil)
 	require.NoError(t, err)
 	assert.Zero(t, missing)
+}
+
+// The build request overrides config for one completed generation. A later push
+// validates that snapshot's scope while the next planned build still uses config.
+func TestRemoteProducerExportsExplicitBuildScope(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		configured, requested bool
+		wantSessions          []string
+	}{
+		{"include automated", false, true, []string{"local", "auto"}},
+		{"exclude automated", true, false, []string{"local"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range []string{"manager", "direct"} {
+				t.Run(mode, func(t *testing.T) {
+					ctx := t.Context()
+					cfg, database, _ := hubProducerScopeFixture(t, tc.requested)
+					require.NoError(t, database.SetSessionDataVersionsContext(ctx, []string{"local", "foreign", "other~mirror", "auto"}, db.CurrentDataVersion()))
+					cfg.Vector.IncludeAutomated = tc.configured
+					req := vector.BuildRequest{IncludeAutomated: tc.requested}
+					if mode == "manager" {
+						ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false, cfg.Vector.Embeddings.MaxInputChars)
+						require.NoError(t, err)
+						m := embeddingManager(ix, database, vector.EncoderSet{}, cfg, vector.MessageIndexSpec().Name)
+						ran, err := m.TryBuild(ctx, req)
+						m.Shutdown()
+						require.NoError(t, ix.Close())
+						require.NoError(t, err)
+						require.True(t, ran)
+					} else {
+						require.NoError(t, runEmbeddingsBuildDirect(ctx, io.Discard, cfg, req))
+					}
+					ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), true, cfg.Vector.Embeddings.MaxInputChars)
+					require.NoError(t, err)
+					raw, ok, err := ix.BeginExport(ctx, nil)
+					require.NoError(t, err)
+					require.True(t, ok)
+					require.NotNil(t, raw.Generation().IncludeAutomated)
+					assert.Equal(t, tc.requested, *raw.Generation().IncludeAutomated)
+					assert.Equal(t, db.CurrentDataVersion(), raw.Generation().DataVersion)
+					want := vectorGeneration(publishedRecipeConfig("hub-model"))
+					assert.Equal(t, want.Fingerprint(), raw.Generation().Fingerprint)
+					hashes, err := raw.SessionDocHashes(ctx, nil)
+					require.NoError(t, err)
+					require.Len(t, hashes, len(tc.wantSessions))
+					for _, session := range tc.wantSessions {
+						assert.Contains(t, hashes, session)
+					}
+					require.NoError(t, raw.Close())
+					require.NoError(t, ix.Close())
+
+					src := newVectorPushSource(cfg).(*vectorPushSource)
+					defer src.Close()
+					// Planning a future configured build must still reject this hub scope.
+					_, err = src.plannedGeneration(ctx)
+					require.ErrorContains(t, err, "automated scope mismatch")
+					// Exercise the ordinary source first, then the --embed wrapper.
+					for _, source := range []storage.VectorPushSource{src, &replicaEmbedder{source: src}} {
+						exported, ok, err := source.BeginExport(ctx, nil)
+						require.NoError(t, err)
+						require.True(t, ok)
+						got := exported.Generation()
+						assert.Equal(t, want.Fingerprint(), got.Fingerprint)
+						assert.Equal(t, want.Params, got.Params)
+						require.NotNil(t, got.IncludeAutomated)
+						assert.Equal(t, tc.requested, *got.IncludeAutomated)
+						assert.Equal(t, db.CurrentDataVersion(), got.DataVersion)
+						for _, session := range tc.wantSessions {
+							docs, hash, err := exported.SessionDocs(ctx, session)
+							require.NoError(t, err)
+							assert.Equal(t, hashes[session], hash)
+							require.Len(t, docs, 1)
+							require.Len(t, docs[0].Chunks, 1)
+							assert.Equal(t, []float32{1, 0, 0, 0}, docs[0].Chunks[0].Embedding)
+						}
+						require.NoError(t, exported.Close())
+					}
+					_, err = src.plannedGeneration(ctx)
+					require.ErrorContains(t, err, "automated scope mismatch", "export must not mutate the configured next build")
+				})
+			}
+		})
+	}
 }

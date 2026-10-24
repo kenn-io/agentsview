@@ -72,12 +72,12 @@ func TestPullRepairOwnsOnlyQueuedTargets(t *testing.T) {
 				require.Error(t, err)
 			}
 			if outcome == "absent" {
-				assert.ErrorIs(t, err, ErrHubRepairIncomplete)
+				require.ErrorIs(t, err, ErrHubRepairIncomplete)
 			} else {
-				assert.NotErrorIs(t, err, ErrHubRepairIncomplete)
+				require.NotErrorIs(t, err, ErrHubRepairIncomplete)
 			}
 			if outcome == "failure" || outcome == "statistics" {
-				assert.ErrorIs(t, err, lookupFailed)
+				require.ErrorIs(t, err, lookupFailed)
 			}
 			assert.Equal(t, 1, calls)
 			assert.False(t, result.Activated)
@@ -190,7 +190,7 @@ func TestPullRepairPinsQueuedSessionIdentities(t *testing.T) {
 				assert.Zero(t, result.Fill.Documents)
 				assert.Equal(t, 1, result.Repair.Remaining)
 			}
-			assert.NotErrorIs(t, err, ErrHubRepairIncomplete)
+			require.NotErrorIs(t, err, ErrHubRepairIncomplete)
 			switch outcome {
 			case "changed before fetch":
 				require.ErrorIs(t, err, kitvec.ErrStale)

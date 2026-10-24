@@ -121,9 +121,19 @@ func (s *vectorPushSource) BeginExport(
 	// Publish the recipe only for the generation the configured recipe
 	// produces: params must rebuild the fingerprint they are stored with.
 	out := &vectorPushExport{export: exp}
-	configured, err := s.plannedGeneration(ctx)
-	if err != nil {
-		return nil, false, errors.Join(err, exp.Close())
+	configured := s.configuredGeneration()
+	if s.cfg.Vector.Producer == "remote" {
+		cfg := s.cfg
+		// A completed build may have overridden the configured next-build scope.
+		if scope := exp.Generation().IncludeAutomated; scope != nil {
+			cfg.Vector.IncludeAutomated = *scope
+		}
+		recipe, err := producerRecipe(ctx, cfg)
+		if err != nil {
+			return nil, false, errors.Join(err, exp.Close())
+		}
+		gen := vectorGeneration(recipe)
+		configured = storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Params: gen.Params}
 	}
 	if exp.Generation().Fingerprint == configured.Fingerprint {
 		out.params = configured.Params
@@ -133,8 +143,8 @@ func (s *vectorPushSource) BeginExport(
 	return out, true, nil
 }
 
-// plannedGeneration resolves the effective hub recipe before planning or publishing
-// a remote-produced generation. A stale active generation cannot publish that recipe.
+// plannedGeneration resolves the effective hub recipe for a prospective build
+// using the configured automation scope.
 func (s *vectorPushSource) plannedGeneration(ctx context.Context) (storage.VectorGenerationInfo, error) {
 	if s.cfg.Vector.Producer != "remote" {
 		return s.configuredGeneration(), nil

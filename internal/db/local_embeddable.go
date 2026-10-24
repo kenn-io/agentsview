@@ -63,7 +63,8 @@ func (s localEmbeddableSource) EmbeddingCorpusFingerprint(ctx context.Context) (
 
 func embeddingCorpusFingerprint(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, localOnly bool) (string, error) {
+}, localOnly bool,
+) (string, error) {
 	if !localOnly {
 		return "archive:all:v1", nil
 	}
