@@ -91,7 +91,8 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 				Progress:   progress,
 			})
 			if !errors.Is(err, vector.ErrHubGenerationChanged) {
-				if err != nil || !req.LocalProducer {
+				repairIncomplete := req.RepairInvalid && req.LocalProducer && errors.Is(err, vector.ErrHubRepairIncomplete)
+				if !req.LocalProducer || (err != nil && !repairIncomplete) {
 					return result, err
 				}
 				built, err := ix.Build(ctx, database.LocalEmbeddableSource(), enc, vectorGeneration(recipe), vector.BuildOptions{
@@ -100,7 +101,14 @@ func hubProducerBuild(ix *vector.Index, database *db.DB, cfg config.Config) func
 					ModelContextTokens: recipe.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens,
 					Concurrency: server.Concurrency, Progress: progress,
 				})
-				built.Repair = result.Repair
+				if req.RepairInvalid {
+					built.Repair.Scanned = result.Repair.Scanned
+					built.Repair.ScanComplete = result.Repair.ScanComplete
+					built.Repair.Documents = result.Repair.Documents
+					built.Repair.Chunks = result.Repair.Chunks
+				} else {
+					built.Repair = result.Repair
+				}
 				return built, err
 			}
 		}
