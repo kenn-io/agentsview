@@ -83,10 +83,10 @@ func TestReplicaWatchPullsRemoteHostsAndJoinsWorkers(t *testing.T) {
 					// The loop reports the error after releasing the import lock.
 					// Hold that worker at its error boundary so final local sync
 					// cannot stand in for the worker join.
-					return remotesync.SyncStats{}, heldRemoteCancellation{report: func() {
+					return remotesync.SyncStats{}, heldRemoteCancellation{report: stdsync.OnceFunc(func() {
 						close(canceled)
 						<-release
-					}}
+					})}
 				}
 				return remotesync.SyncStats{}, c.Err()
 			}
@@ -212,26 +212,37 @@ func (remoteWatchPusher) Close() error { return nil }
 
 func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		destination      storage.Replica
-		full, manualOnly bool
-		want             []string
+		name                             string
+		destination                      storage.Replica
+		full, manualOnly                 bool
+		want                             []string
+		invalidTimeout, invalidTransport bool
+		wantErr                          string
 	}{
 		{name: "PostgreSQL incremental", destination: pgReplica{}, want: []string{"scheduled"}},
 		{name: "PostgreSQL full", destination: pgReplica{}, full: true, want: []string{"scheduled"}},
 		{name: "PostgreSQL manual only", destination: pgReplica{}, manualOnly: true},
 		{name: "ClickHouse", destination: clickhouse.Backend{}},
+		{name: "ClickHouse invalid remote config", destination: clickhouse.Backend{}, invalidTimeout: true, invalidTransport: true},
+		{name: "PostgreSQL negative timeout", destination: pgReplica{}, invalidTimeout: true, wantErr: "invalid sync_timeout"},
+		{name: "PostgreSQL malformed transport", destination: pgReplica{}, invalidTransport: true, wantErr: "transport"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			cfg := config.Config{DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{}, RemoteHosts: []config.RemoteHost{
 				{Host: "manual", Transport: config.RemoteTransportSSH},
 			}}
+			if tc.invalidTimeout {
+				cfg.RemoteHosts[0].SyncTimeout = -time.Second
+			}
+			if tc.invalidTransport {
+				cfg.RemoteHosts[0].Transport = "invalid"
+			}
 			if !tc.manualOnly {
 				cfg.RemoteHosts = append(cfg.RemoteHosts, config.RemoteHost{Host: "scheduled", Transport: config.RemoteTransportSSH, Interval: time.Hour})
 			}
 			missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "archived-manual", Project: "remote", Agent: "claude", Machine: "manual", FilePath: &missingPath, MessageCount: 1}))
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "manual~archived", Project: "remote", Agent: "claude", Machine: "manual", FilePath: &missingPath, MessageCount: 1}))
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			oldSync, oldPrepare := runRemoteHostSync, prepareHTTPRebuildCLI
@@ -254,12 +265,18 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 					return func() {}, func() {}, nil
 				},
 			}}
-			require.NoError(t, backend.ReplicaPushWatch(ctx, tc.destination, embedTarget(), ReplicaPushConfig{Full: tc.full}, nil, nil, time.Second, time.Hour))
+			err := backend.ReplicaPushWatch(ctx, tc.destination, embedTarget(), ReplicaPushConfig{Full: tc.full}, nil, nil, time.Second, time.Hour)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				assert.Empty(t, pulled, "invalid PostgreSQL configuration must fail before collection")
+				return
+			}
+			require.NoError(t, err)
 			assert.Equal(t, tc.want, pulled)
 			session, err := database.GetSession(t.Context(), "manual-session")
 			require.NoError(t, err)
 			assert.Nil(t, session, "watch startup must not fetch a manual host")
-			preserved, err := database.GetSession(t.Context(), "archived-manual")
+			preserved, err := database.GetSession(t.Context(), "manual~archived")
 			require.NoError(t, err)
 			assert.NotNil(t, preserved, "a full rebuild must preserve archived manual-host sessions")
 		})
