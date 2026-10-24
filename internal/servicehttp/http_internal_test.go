@@ -214,7 +214,7 @@ func TestRemotePolicyServiceErrorsRedactConfiguredURL(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits++
 				if tt.readOnly {
-					t.Errorf("local rejection sent HTTP %s %s", r.Method, r.URL.Path)
+					assert.Failf(t, "local rejection sent HTTP request", "%s %s", r.Method, r.URL.Path)
 				}
 				w.WriteHeader(http.StatusNotImplemented)
 			}))
