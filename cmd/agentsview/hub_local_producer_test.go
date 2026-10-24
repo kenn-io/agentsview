@@ -28,12 +28,16 @@ func localProducerRequest(t *testing.T, extra string) vector.BuildRequest {
 
 func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	cfg, database, _ := hubProducerFixture(t)
+	for _, id := range []string{"local", "foreign", "other~mirror", "auto"} {
+		require.NoError(t, database.SetSessionDataVersion(t.Context(), id, db.CurrentDataVersion()))
+	}
 	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
 	require.NoError(t, err)
 	defer ix.Close()
 	_, err = hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
 	require.NoError(t, err)
 	dbtest.SeedSessionWithMessages(t, database, "missing", "project", []db.Message{dbtest.UserMsg("missing", 0, "missing content")})
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), "missing", db.CurrentDataVersion()))
 	g := vectorGeneration(publishedRecipeConfig("hub-model"))
 	var encoded atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +84,9 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "hash mismatch or hub coverage missing", before.Reason)
 	require.EqualValues(t, 1, before.Unmatched)
+	sourceVersion, err := database.EmbeddingDataVersion(t.Context(), false)
+	require.NoError(t, err)
+	require.Equal(t, db.CurrentDataVersion(), sourceVersion)
 	m := embeddingManager(ix, database, vector.EncoderSet{}, cfg, "messages")
 	defer m.Shutdown()
 	ran, err := m.TryBuild(t.Context(), localProducerRequest(t, `,"using":"local"`))
@@ -93,6 +100,11 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	require.EqualValues(t, 2, gens[0].Embedded)
 	require.Zero(t, gens[0].Missing)
 	require.Equal(t, "active", gens[0].State)
+	exported, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, db.CurrentDataVersion(), exported.Generation().DataVersion)
+	require.NoError(t, exported.Close())
 	m.Shutdown()
 	require.NoError(t, ix.Close())
 	assertHubStatusReporting(t, cfg, vector.HubPullStatus{Fingerprint: g.Fingerprint(), Unmatched: 0})

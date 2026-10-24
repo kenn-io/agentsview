@@ -14,6 +14,10 @@ func (db *DB) LocalEmbeddableSource() localEmbeddableSource { return localEmbedd
 
 type localEmbeddableSource struct{ db *DB }
 
+func (s localEmbeddableSource) EmbeddingDataVersion(ctx context.Context, scope bool) (int, error) {
+	return s.db.EmbeddingDataVersion(ctx, scope)
+}
+
 func (s localEmbeddableSource) ScanEmbeddableUnits(ctx context.Context, since string, scope bool, maxRunes int, fn func(EmbeddableUnit) error) (string, error) {
 	release, err := s.db.acquireBulkRead(ctx)
 	if err != nil {
