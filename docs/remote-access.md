@@ -11,6 +11,19 @@ it. To make the UI available from other devices, you need to do two things:
 
 In current releases, bearer-token auth is controlled by `require_auth`.
 
+## Collect sessions on a hub
+
+A hub can pull configured SSH or HTTP hosts and publish their sessions with
+`agentsview pg push --watch --embed`. It does not need local session roots.
+The watcher imports hosts with a positive `interval` at startup and on that
+cadence. A zero or omitted `interval` means manual sync only. It owns the
+archive while running, so stop it before running a separate `agentsview sync`
+against that archive.
+
+See [PostgreSQL watch mode](/docs/pg-sync/#automatic-push-watcher) for the host
+configuration, per-attempt deadlines and one-shot import workflow. Embeddings
+run in the background and reach PostgreSQL on a later push floor.
+
 ## Quick Setup
 
 For a one-off background server, enable auth in `~/.agentsview/config.toml`:

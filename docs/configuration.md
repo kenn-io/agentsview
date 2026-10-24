@@ -366,6 +366,77 @@ matches every connection. The PostgreSQL driver ignores a missing passfile, so a
 missing mount shows up as a PostgreSQL authentication error rather than an error
 naming the file.
 
+### Hub container SSH
+
+On unreleased `main`, the container image includes an SSH client so a hub can
+pull workstation transcripts through [SSH remote sync](/docs/remote-access/#ssh-remote-sync).
+The workstation needs `sh`, `tar`, `gzip`, `mktemp`, `find`, and `uname`.
+
+The image runs as root. Mount a directory containing only a dedicated private
+key, a pinned `known_hosts`, and an SSH `config` read-only at `/root/.ssh`.
+Never mount your personal `.ssh` directory or an agent socket. For example,
+put this in the mounted directory's `config`:
+
+```sshconfig
+Host devbox1
+    HostName workstation.example.com
+    User collector
+    IdentityFile /root/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+```
+
+Set `transport = "ssh"` and `destination = "devbox1"` on the matching
+`[[remote_hosts]]` entry. Before mounting the dedicated files in `hub-ssh/`,
+make the directory and files owned by root as seen inside the container.
+Use mode `0700` for the directory, `0600` for the private key and `config`,
+and `0644` for `known_hosts`. OpenSSH rejects an ordinary user's ownership
+of `/root/.ssh/config` with `Bad owner or permissions`, even on a read-only
+mount.
+
+For rootful Docker on Linux without user namespace remapping, prepare only
+this dedicated directory after creating its files:
+
+```bash
+sudo chown 0:0 hub-ssh hub-ssh/id_ed25519 hub-ssh/config hub-ssh/known_hosts
+sudo chmod 0700 hub-ssh
+sudo chmod 0600 hub-ssh/id_ed25519 hub-ssh/config
+sudo chmod 0644 hub-ssh/known_hosts
+```
+
+For rootless Docker or containers with user namespace remapping, use the
+host UID/GID mapped to root inside that container. Host UID/GID `0:0` may
+not map to container root. Prepare ownership using that mapping before the
+read-only mount, and keep the same modes.
+
+Then preflight the same image and mounts:
+
+```bash
+docker run --rm --entrypoint ssh \
+  --mount type=bind,src="$PWD/hub-ssh",dst=/root/.ssh,readonly \
+  IMAGE -o BatchMode=yes devbox1 true
+```
+
+This must exit 0 with empty stdout. Then pull the configured host once, using
+the directory containing the hub's `config.toml` as `hub-data/`:
+
+```bash
+docker run --rm \
+  --mount type=bind,src="$PWD/hub-ssh",dst=/root/.ssh,readonly \
+  --mount type=bind,src="$PWD/hub-data",dst=/data \
+  IMAGE sync --host devbox1
+```
+
+The hub key can run arbitrary commands as that workstation account.
+`authorized_keys` options (`from=`, `no-port-forwarding`,
+`no-agent-forwarding`, `no-X11-forwarding`, `no-pty`) reduce exposure but are
+not a command sandbox. A fixed serve-only forced command is incompatible
+with the current provisioning protocol. Verify the source address sshd
+actually sees before relying on `from=`.
+
+The image build checks `ssh -V`. To check a built image yourself, run
+`docker run --rm --entrypoint ssh IMAGE -V`.
+
 ## Remote Hosts
 
 Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw
@@ -380,7 +451,16 @@ transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 interval = "5m" # optional; zero or omitted means manual sync only
+sync_timeout = "10m" # optional; incremental attempt deadline
+full_sync_timeout = "0s" # optional; no full-import deadline by default
 ```
+
+On unreleased `main`, scheduled pulls by the collector daemon and periodic
+pulls by `pg push --watch` use these per-attempt deadlines. `sync_timeout`
+defaults to ten minutes. First pulls, empty mirrors, and data-version rebuilds
+use `full_sync_timeout`, which defaults to no deadline. Set either to `0s` to
+remove its bound. Attempts still stop on shutdown. One-shot `sync` commands
+keep their existing timeout behavior.
 
 An SSH entry needs no daemon and no install on the remote host. It runs your
 `ssh` client. SSH transport is available in 0.46.0 and later:
@@ -407,6 +487,7 @@ Configuration is rejected when:
 - An SSH entry sets `url` or `token`.
 - An SSH entry's destination starts with `-`. The destination is `destination`,
   or `host` when `destination` is omitted.
+- Either timeout is negative.
 
 HTTP remote sync calls the remote daemon's archive endpoints and always uses a
 bearer token, even when the rest of that daemon has `require_auth = false`. The

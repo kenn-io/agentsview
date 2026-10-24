@@ -15,6 +15,18 @@ The latest release is
   hashes with PostgreSQL instead of downloading the session's old text.
   Sessions with rows written before control-character cleanup are rewritten once.
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
+- PostgreSQL push watchers can collect remote hosts with positive sync
+  intervals, including hubs with no local session roots. Hosts with zero or
+  omitted intervals stay manual-only. Incremental pulls have a configurable
+  timeout, and committed sessions still reach the push and embedding queues
+  after a partial import fails.
+- Scheduled daemon pulls also use the ten-minute incremental timeout. Set
+  `sync_timeout = "0s"` in a remote-host entry to keep those pulls unbounded.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message
