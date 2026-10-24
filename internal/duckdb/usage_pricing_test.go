@@ -181,7 +181,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 
 func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 	ctx := t.Context()
-	local := newLocalDB(t)
+	local := newLocalDBWithoutPricing(t)
 
 	tokenUsage := jsontext.Value(
 		`{"input_tokens":1000000,"output_tokens":0}`)
