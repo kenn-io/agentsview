@@ -1451,6 +1451,24 @@ DELETE FROM %s WHERE doc_key IN (
 	return len(rows), nil
 }
 
+var errEmbeddableUnitFound = errors.New("embeddable unit found")
+
+// hasEmbeddableUnitsForSession uses the archive's eligibility rules, stopping
+// at the first unit so eviction does not materialize a transcript under the
+// PostgreSQL ownership lock. Only our callback's sentinel ends a scan cleanly.
+func hasEmbeddableUnitsForSession(
+	ctx context.Context, sessionID string,
+	scan func(context.Context, string, bool, int, func(db.EmbeddableUnit) error) error,
+) (bool, error) {
+	err := scan(ctx, sessionID, true, 0, func(db.EmbeddableUnit) error {
+		return errEmbeddableUnitFound
+	})
+	if errors.Is(err, errEmbeddableUnitFound) {
+		return true, nil
+	}
+	return false, err
+}
+
 // evictVectorSessions removes each session's chunks and push state for the
 // scoped generation and prunes its now-orphaned shared doc rows. If the archive
 // has no embeddable units even with automated sessions included, all generations
@@ -1495,11 +1513,8 @@ func (s *Sync) evictVectorSessions(
 		// Absence from the export can also mean an automated-scope exclusion.
 		// Consult the archive with that filter disabled before invalidating
 		// other generations, under the same ownership reservation as deletion.
-		hasUnits := false
-		if err := s.local.ScanEmbeddableUnitsForSession(ctx, sessionID, true, 0, func(db.EmbeddableUnit) error {
-			hasUnits = true
-			return nil
-		}); err != nil {
+		hasUnits, err := hasEmbeddableUnitsForSession(ctx, sessionID, s.local.ScanEmbeddableUnitsForSession)
+		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("checking evicted session content %s: %w", sessionID, err)
 		}
