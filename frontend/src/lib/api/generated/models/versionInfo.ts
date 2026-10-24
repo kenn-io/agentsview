@@ -8,6 +8,7 @@ export interface VersionInfo {
   build_date: string;
   commit: string;
   data_version: number;
+  friction_available: boolean;
   insight_generation_available: boolean;
   read_only?: boolean;
   session_stats_available: boolean;

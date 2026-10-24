@@ -349,7 +349,7 @@ func (s *Server) generateCannedInsight(
 	}
 
 	var id int64
-	err = s.serializeArchiveWrite(ctx, func() error {
+	err = s.SerializeArchiveWrite(ctx, func() error {
 		var insertErr error
 		id, insertErr = s.db.InsertInsight(ctx, db.Insight{
 			Type:            insight.CannedType,

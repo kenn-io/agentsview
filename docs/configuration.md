@@ -2027,6 +2027,9 @@ transcript a second time.
 ```toml
 [friction]
 enabled = true
+backfill_days = 7
+timezone = "" # Local time on SQLite, UTC on PostgreSQL; or an IANA zone.
+seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
 ```
 
 Restart the daemon after changing this setting. When enabled:
@@ -2044,6 +2047,34 @@ Restart the daemon after changing this setting. When enabled:
   restored archive-only database. Its sessions are reviewed before a
   PostgreSQL push. A `--no-sync` daemon also catches up after it restarts with
   automatic sync.
+
+An hourly job builds one stored digest per completed local day, catching up
+within `backfill_days` (1–3650, default 7). It never builds today. Set
+`AGENTSVIEW_FRICTION_TZ` to override the configured timezone. Seat patterns label
+digest findings from session paths without changing the stored detections.
+
+Digests keep Markdown, schema 1 summary JSON, frozen findings and usage,
+session membership, and pattern recurrence. SQLite keeps this state through a
+full resync when the archive retains transcript text. Usage-only SQLite archives
+do not build or update digests. PostgreSQL builds its own digests from pushed
+findings when its serving role can write the review tables. Read APIs and CLI
+commands arrive in a later slice; this change stores the digests but does not
+expose a digest page.
+
+Local days wait until their sessions have current findings; the wait does not
+expire. Other completed days can build while review catches up. PostgreSQL uses
+the findings pushed by each source, including other rules versions, and skips
+sessions whose source has not enabled review. Sessions over the review budget
+are excluded immediately.
+
+Catch-up fills missing dates throughout `backfill_days`, including empty days,
+and revisits dates with unrecorded sessions inside that window, so late
+syncs and pushes update an existing digest. A session belongs to only one digest
+even if it resumes later, and rebuilding does not count its patterns twice.
+Sessions that arrive or finish review outside the window require a larger
+`backfill_days` setting. Each daily build holds the sync lock only for that day.
+PostgreSQL defaults to UTC; configure the same timezone on every process serving
+the same hub.
 
 Hosted raw sync reviews sessions as it projects them, whatever this setting
 says. See [Hosted Raw Sync](/docs/hosted-raw-sync/).
