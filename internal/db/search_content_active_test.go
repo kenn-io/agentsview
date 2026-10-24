@@ -237,40 +237,69 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 	}
 }
 
-func TestSelectSurvivingVectorHitsErrors(t *testing.T) {
+func TestSelectSurvivingVectorHitsLifecycle(t *testing.T) {
 	failure := errors.New("search failed")
 	for _, tc := range []struct {
-		name                 string
-		searchErr, lookupErr error
-		cancelAfterLookup    bool
+		name                             string
+		prepareErr, searchErr, lookupErr error
+		cancelAfterLookup, expand        bool
+		wantErr                          error
+		wantCalls                        int
 	}{
-		{"search", failure, nil, false},
-		{"session lookup", nil, failure, false},
-		{"canceled during expansion", nil, nil, true},
+		{name: "success", wantCalls: 1},
+		{name: "candidate expansion", expand: true, wantCalls: 2},
+		{name: "preparation error", prepareErr: failure, wantErr: failure},
+		{name: "search error", searchErr: failure, wantErr: failure, wantCalls: 1},
+		{name: "session lookup error", lookupErr: failure, wantErr: failure, wantCalls: 1},
+		{name: "parent canceled during expansion", cancelAfterLookup: true, wantErr: context.Canceled, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
+			parent, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			searcher := &fakeVectorSearcher{err: tc.searchErr}
-			if tc.lookupErr != nil {
-				searcher.hits = []VectorHit{{SessionID: "session"}}
+			var preparedCtx context.Context
+			preparations := 0
+			searcher := &fakeVectorSearcher{
+				prepareErr: tc.prepareErr,
+				err:        tc.searchErr,
+				hits:       []VectorHit{{SessionID: "session"}},
+				recordCtx: func(ctx context.Context) {
+					preparedCtx = ctx
+					preparations++
+					assert.NoError(t, ctx.Err(), "preparation must start with a live context")
+				},
 			}
-			_, err := SelectSurvivingVectorHits(ctx, ContentSearchFilter{Limit: 3, ExcludeActiveSince: activityCutoff}, searcher, 200,
-				func(_ context.Context, _ ContentSearchFilter, sessionIDs []string) (map[string]bool, error) {
+			if tc.expand {
+				searcher.hits = make([]VectorHit, 200, 201)
+				for i := range searcher.hits {
+					searcher.hits[i] = VectorHit{SessionID: "active", OrdinalStart: i, OrdinalEnd: i}
+				}
+				searcher.hits = append(searcher.hits, VectorHit{SessionID: "session"})
+			}
+			hits, err := SelectSurvivingVectorHits(parent, ContentSearchFilter{Limit: 1, ExcludeActiveSince: activityCutoff}, searcher, 200,
+				func(ctx context.Context, _ ContentSearchFilter, sessionIDs []string) (map[string]bool, error) {
+					assert.Equal(t, preparedCtx, ctx, "all filtering must use the pinned preparation context")
+					assert.NoError(t, ctx.Err(), "snapshot must remain live while filtering candidates")
 					if tc.lookupErr != nil {
 						assert.Equal(t, []string{"session"}, sessionIDs)
 					}
 					if tc.cancelAfterLookup {
 						cancel()
 					}
-					return nil, tc.lookupErr
+					return map[string]bool{"active": false, "session": true}, tc.lookupErr
 				})
-			if tc.cancelAfterLookup {
-				require.ErrorIs(t, err, context.Canceled)
-			} else {
-				require.ErrorIs(t, err, failure)
+			assert.Equal(t, tc.wantErr, err, "selection must preserve the actual error")
+			if tc.wantErr == nil {
+				assert.Equal(t, []VectorHit{{SessionID: "session"}}, hits)
 			}
-			assert.Equal(t, 1, searcher.calls)
+			require.NotNil(t, preparedCtx)
+			require.ErrorIs(t, preparedCtx.Err(), context.Canceled, "selection must release its prepared snapshot before returning")
+			if tc.cancelAfterLookup {
+				require.ErrorIs(t, parent.Err(), context.Canceled)
+			} else {
+				require.NoError(t, parent.Err(), "selection must leave the reusable parent alive")
+			}
+			assert.Equal(t, 1, preparations, "candidate expansion must reuse one preparation")
+			assert.Equal(t, tc.wantCalls, searcher.calls)
 		})
 	}
 }
