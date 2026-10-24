@@ -2611,5 +2611,4 @@ func TestVectorPushInvalidatesCrossGenerationRevision(t *testing.T) {
 	var documents int
 	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id='A'`).Scan(&documents))
 	assert.Zero(t, documents, "scope eviction removes shared documents once all chunks are gone")
-
 }
