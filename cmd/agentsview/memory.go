@@ -139,13 +139,12 @@ func runMemorySessionStartCommand(
 		Server: strings.TrimSpace(server),
 		PG:     pg,
 	}
-	// Preserve the hosted-reader validation diagnostic before resolving a
-	// default target or opening a credential.
-	if req.Mode == memoryModeHostedReader && req.Server != "" && req.PG {
-		return req.validate(strings.TrimSpace(serverTokenFile) != "")
-	}
-	if err := validateTargetFlags(cmd); err != nil {
-		return err
+	// Validate explicit credentials before default injection changes Server.
+	// Preserve memory's existing ambiguous-target diagnostic as well.
+	tokenFileSet := strings.TrimSpace(serverTokenFile) != ""
+	if req.Mode == memoryModeHostedReader &&
+		((req.Server != "" && req.PG) || (tokenFileSet && req.Server == "")) {
+		return req.validate(tokenFileSet)
 	}
 	if req.Mode == memoryModeHostedReader {
 		selected, err := resolveReadTarget(cmd, readTargetDefault)
@@ -156,17 +155,14 @@ func runMemorySessionStartCommand(
 			req.Mode, req.Target = memoryModeLocal, ""
 		} else if selected.Kind == readTargetRemote {
 			req.Server, req.ServerToken, req.HTTPClient = selected.URL, selected.Cred, selected.client
+		} else if selected.Kind == readTargetServer {
+			req.ServerToken = selected.Cred
 		}
-	}
-	if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
+	} else if err := validateTargetFlags(cmd); err != nil {
 		return err
 	}
-	if req.Server != "" && req.HTTPClient == nil {
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return err
-		}
-		req.ServerToken = token
+	if err := req.validate(tokenFileSet); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(
 		cmd.Context(), memorySessionStartTimeout,
@@ -270,14 +266,14 @@ func (r memorySessionStartRequest) validate(tokenFileSet bool) error {
 			)
 		}
 	case memoryModeHostedReader:
-		if (r.Server != "") == r.PG {
-			return errors.New(
-				"memory session-start: hosted-reader mode requires exactly one of --server or --pg",
-			)
-		}
 		if tokenFileSet && r.Server == "" {
 			return errors.New(
 				"memory session-start: --server-token-file requires --server",
+			)
+		}
+		if (r.Server != "") == r.PG {
+			return errors.New(
+				"memory session-start: hosted-reader mode requires exactly one of --server or --pg",
 			)
 		}
 		if r.Target != "" && !r.PG {
