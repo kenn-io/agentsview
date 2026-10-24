@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const getURL = vi.fn(() => "chrome-extension://test/claude_ai_requests.txt");
-const fetchShapes = vi.fn(
-  async () => new Response(readFileSync("../internal/importer/claude_ai_requests.txt", "utf8")),
-);
+const getURL = vi.fn((file: string) => `chrome-extension://test/${file}`);
+const fetchShapes = vi.fn(async (url: string) => {
+  const file = url.slice(url.lastIndexOf("/") + 1);
+  return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
+});
 vi.stubGlobal("chrome", { runtime: { getURL } });
 vi.stubGlobal("fetch", fetchShapes);
-let allowedPath: (path: string) => Promise<boolean>;
+let allowedPath: (platform: string, path: string) => Promise<boolean>;
 beforeEach(async () => {
   vi.resetModules();
   ({ allowedPath } = await import("./paths.js"));
@@ -22,13 +23,13 @@ describe("Claude request allowlist", () => {
   it.each(["network", "HTTP"])("retries after a %s shapes load failure", async (failure) => {
     if (failure === "network") fetchShapes.mockRejectedValueOnce(new Error("Network unavailable"));
     else fetchShapes.mockResolvedValueOnce(new Response(null, { status: 503 }));
-    await expect(allowedPath("/api/organizations")).rejects.toThrow();
-    expect(await allowedPath("/api/organizations")).toBe(true);
-    expect(await allowedPath("/api/settings")).toBe(false);
+    await expect(allowedPath("claude-ai", "/api/organizations")).rejects.toThrow();
+    expect(await allowedPath("claude-ai", "/api/organizations")).toBe(true);
+    expect(await allowedPath("claude-ai", "/api/settings")).toBe(false);
   });
 
   it("loads the packaged request shapes", async () => {
-    expect(await allowedPath("/api/organizations")).toBe(true);
+    expect(await allowedPath("claude-ai", "/api/organizations")).toBe(true);
     expect(getURL).toHaveBeenCalledExactlyOnceWith("claude_ai_requests.txt");
     expect(fetchShapes).toHaveBeenCalledExactlyOnceWith(
       "chrome-extension://test/claude_ai_requests.txt",
@@ -42,7 +43,7 @@ describe("Claude request allowlist", () => {
     detail,
     detail.replace("11111111-1111-4111-8111-111111111111", "abcdefab-abcd-abcd-abcd-abcdefabcdef"),
     detail.replace("22222222-2222-4222-8222-222222222222", "ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF"),
-  ])("accepts %s", async (path) => expect(await allowedPath(path)).toBe(true));
+  ])("accepts %s", async (path) => expect(await allowedPath("claude-ai", path)).toBe(true));
 
   it.each([
     "",
@@ -65,5 +66,93 @@ describe("Claude request allowlist", () => {
     `${detail}&extra=true`,
     list.replace("offset=0", "offset="),
     list.replace("offset=0", "offset=1.5"),
-  ])("refuses %s", async (path) => expect(await allowedPath(path)).toBe(false));
+  ])("refuses %s", async (path) => expect(await allowedPath("claude-ai", path)).toBe(false));
+});
+
+describe("ChatGPT request allowlist", () => {
+  const listPath = (offset: string, archived = "false") =>
+    `/backend-api/conversations?offset=${offset}&limit=50&order=updated&is_archived=${archived}`;
+  const detailPath = (id: string) => `/backend-api/conversation/${id}`;
+
+  it.each([
+    listPath("0"),
+    listPath("50"),
+    listPath("0", "true"),
+    listPath("50", "true"),
+    detailPath("22222222-2222-4222-8222-222222222222"),
+  ])("accepts %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(true));
+
+  it.each([
+    "",
+    "/api/auth/session",
+    "/backend-api/auth/session",
+    "/backend-api/accounts/check",
+    "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
+    listPath("0", "invalid"),
+    listPath("-1"),
+    listPath("1.5"),
+    listPath("1&extra=true"),
+    listPath("0").replace("limit=50", "limit=100"),
+    `${listPath("0")}&extra=true`,
+    detailPath("not-a-uuid"),
+    detailPath("../settings"),
+    "/backend-api/conversation/22222222-2222-4222-8222-222222222222?include=all",
+    "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0",
+  ])("refuses %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(false));
+
+  it("rejects unknown platforms", async () => {
+    expect(await allowedPath("grok-web", listPath("0"))).toBe(false);
+  });
+});
+
+describe("Gemini request allowlist", () => {
+  const rpc = "/_/BardChatUi/data/batchexecute?rpcids=";
+  const list = (cursor = "") => `${rpc}MaZiqc&cursor=${cursor}`;
+  const detail = (chat: string, cursor = "") => `${rpc}hNvQHb&chat=${chat}&cursor=${cursor}`;
+
+  it.each([
+    list(),
+    list("Ab12%2Bcd%2F%3D"),
+    detail("c_0123456789abcdef"),
+    detail("c_0123456789abcdef", "Ab12%2Bcd%2F%3D"),
+  ])("accepts %s", async (path) => expect(await allowedPath("gemini", path)).toBe(true));
+
+  it.each([
+    "",
+    "/app",
+    `${rpc}ESY5D&cursor=`,
+    `${list()}&rpcids=ESY5D`,
+    list("a&rpcids=ESY5D"),
+    list("a/b"),
+    detail("0123456789abcdef"),
+    detail("c_../app"),
+    detail("c_0123%2F"),
+    `${detail("c_0123456789abcdef")}#x`,
+    `https://gemini.google.com${list()}`,
+  ])("refuses %s", async (path) => expect(await allowedPath("gemini", path)).toBe(false));
+});
+
+describe("Grok request allowlist", () => {
+  const conversations = "/rest/app-chat/conversations";
+  const token = "33333333-3333-4333-8333-333333333333";
+  const chat = "44444444-4444-4444-8444-444444444444";
+
+  it.each([
+    `${conversations}?pageSize=100`,
+    `${conversations}?pageSize=100&pageToken=${token}`,
+    `${conversations}/${chat}/responses`,
+  ])("accepts %s", async (path) => expect(await allowedPath("grok", path)).toBe(true));
+
+  it.each([
+    "",
+    `${conversations}?pageSize=100&pageToken=`,
+    `${conversations}?pageSize=1000`,
+    `${conversations}?pageSize=100&pageToken=${token}&extra=1`,
+    `${conversations}?pageSize=100&pageToken=a%26b`,
+    `${conversations}/${chat}/response-node?includeThreads=true`,
+    `${conversations}/${chat}/load-responses`,
+    `${conversations}/../settings/responses`,
+    `${conversations}/${chat}`,
+    `https://grok.com${conversations}?pageSize=100`,
+  ])("refuses %s", async (path) => expect(await allowedPath("grok", path)).toBe(false));
 });
