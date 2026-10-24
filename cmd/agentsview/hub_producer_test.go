@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -41,25 +42,29 @@ func hubProducerFixture(t *testing.T, status ...int) (config.Config, *db.DB, *at
 	g := vectorGeneration(publishedRecipeConfig("hub-model"))
 	calls := new(atomic.Int32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer token", r.Header.Get("Authorization"))
 		if r.Method == http.MethodGet {
 			if len(status) > 0 {
 				calls.Add(1)
 				w.WriteHeader(status[0])
 				return
 			}
-			require.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+			assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
 			return
 		}
 		calls.Add(1)
 		var req vector.HubLookupRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.Equal(t, g.Fingerprint(), req.Fingerprint)
-		require.Len(t, req.Identities, 1)
-		require.Equal(t, "node~local", req.Identities[0].SessionID)
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		assert.Equal(t, g.Fingerprint(), req.Fingerprint)
+		if !assert.Len(t, req.Identities, 1) {
+			return
+		}
+		assert.Equal(t, "node~local", req.Identities[0].SessionID)
 		v, err := vector.EncodeHubVector([]float32{1, 0, 0, 0})
-		require.NoError(t, err)
-		require.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: v}}}))
+		assert.NoError(t, err)
+		assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: v}}}))
 	}))
 	t.Cleanup(server.Close)
 	cfg.Remote.URL = server.URL
@@ -216,16 +221,20 @@ func TestRemoteProducerSignsForRestrictedListener(t *testing.T) {
 	g := vectorGeneration(publishedRecipeConfig("hub-model"))
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		verifier.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+			assert.Equal(t, "Bearer token", r.Header.Get("Authorization"))
 			if r.Method == http.MethodGet {
-				require.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
+				assert.NoError(t, json.MarshalWrite(w, vector.HubGeneration{Fingerprint: g.Fingerprint(), Model: g.Model, Dimension: g.Dimensions, Params: g.Params, DataVersion: db.CurrentDataVersion()}))
 				return
 			}
 			var req vector.HubLookupRequest
-			require.NoError(t, json.UnmarshalRead(r.Body, &req))
-			require.Len(t, req.Identities, 1)
-			require.Equal(t, "node~local", req.Identities[0].SessionID)
-			require.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: "AACAPwAAAAAAAAAAAAAAAA=="}}}))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+				return
+			}
+			if !assert.Len(t, req.Identities, 1) {
+				return
+			}
+			assert.Equal(t, "node~local", req.Identities[0].SessionID)
+			assert.NoError(t, json.MarshalWrite(w, vector.HubLookupReply{Version: vector.HubVectorVersion, Fingerprint: g.Fingerprint(), Chunks: []vector.HubChunk{{Index: 0, ChunkCount: 1, Vector: "AACAPwAAAAAAAAAAAAAAAA=="}}}))
 		}), nil, nil).ServeHTTP(w, r)
 	}))
 	defer server.Close()

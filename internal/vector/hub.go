@@ -127,6 +127,7 @@ func (h *HTTPHub) HubVectorGeneration(ctx context.Context) (out HubGeneration, e
 	err = h.request(ctx, http.MethodGet, "generation", nil, &out)
 	return
 }
+
 func (h *HTTPHub) LookupHubVectors(ctx context.Context, in HubLookupRequest) (out HubLookupReply, err error) {
 	if err = in.Validate(); err != nil {
 		return
@@ -134,6 +135,7 @@ func (h *HTTPHub) LookupHubVectors(ctx context.Context, in HubLookupRequest) (ou
 	err = h.request(ctx, http.MethodPost, "lookup", in, &out)
 	return
 }
+
 func (h *HTTPHub) request(ctx context.Context, method, path string, body, out any) error {
 	if h.Client == nil {
 		return errors.New("remote vector HTTP client unavailable")
@@ -158,7 +160,7 @@ func (h *HTTPHub) request(ctx context.Context, method, path string, body, out an
 		resp.Body.Close()
 		return ErrHubGenerationChanged
 	}
-	resp, err = remotecred.ResponsePolicy(h.URL)(resp, err)
+	resp, err = remotecred.ResponsePolicy(h.URL)(resp, err) //nolint:bodyclose // ResponsePolicy closes rejected bodies; successful bodies are deferred below.
 	if err != nil {
 		return err
 	}

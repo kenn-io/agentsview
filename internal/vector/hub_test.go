@@ -65,9 +65,9 @@ func TestHubHTTPBoundedWire(t *testing.T) {
 	for _, mode := range []string{"plain", "zstd", "oversize", "changed"} {
 		t.Run(mode, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+				assert.Equal(t, "Bearer token", r.Header.Get("Authorization"))
 				if mode == "changed" {
-					w.WriteHeader(409)
+					w.WriteHeader(http.StatusConflict)
 					return
 				}
 				var body []byte
@@ -75,7 +75,9 @@ func TestHubHTTPBoundedWire(t *testing.T) {
 					body = []byte(`{"fingerprint":"fp","model":"m","dimension":1,"include_automated":false}`)
 				} else {
 					var req HubLookupRequest
-					require.NoError(t, json.UnmarshalRead(r.Body, &req))
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+						return
+					}
 					assert.Equal(t, "fp", req.Fingerprint)
 					body = []byte(`{"version":"vectors.v1","fingerprint":"fp","chunks":[{"index":0,"chunk_index":0,"chunk_count":1,"vector":"AACAPw=="}],"absent":[]}`)
 				}
@@ -84,7 +86,9 @@ func TestHubHTTPBoundedWire(t *testing.T) {
 				}
 				if mode != "plain" {
 					enc, err := zstd.NewWriter(nil)
-					require.NoError(t, err)
+					if !assert.NoError(t, err) {
+						return
+					}
 					defer enc.Close()
 					body = enc.EncodeAll(body, nil)
 					w.Header().Set("Content-Encoding", "zstd")

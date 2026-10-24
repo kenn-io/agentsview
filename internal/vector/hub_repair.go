@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
 )
 
 // pullInvalidRepair uses only this projection's existing durable repair queue.
 // The caller selects the target projection before entering this helper.
-func (ix *Index) pullInvalidRepair(ctx context.Context, src UnitSource, reserved snapshotSource, hub HubLookup, gen kitvec.Generation, o PullOptions) (result BuildResult, retErr error) {
+func (ix *Index) pullInvalidRepair(ctx context.Context, reserved snapshotSource, hub HubLookup, gen kitvec.Generation, o PullOptions) (result BuildResult, retErr error) {
 	target := gen.Fingerprint()
 	result.Fingerprint = target
 	repair, err := ix.repairInvalidVectors(ctx, target)
@@ -31,10 +30,6 @@ func (ix *Index) pullInvalidRepair(ctx context.Context, src UnitSource, reserved
 	if err != nil {
 		return result, err
 	}
-	captured := pullSource{UnitSource: src, identities: map[string]HubIdentity{}, mapSession: o.MapSession}
-	if _, err := captured.ScanEmbeddableUnits(ctx, "", o.IncludeAutomated, RunMaxRunes(ix.split.MaxRunes), func(db.EmbeddableUnit) error { return nil }); err != nil {
-		return result, err
-	}
 	var after string
 	for {
 		batch, err := store.pendingAfter(ctx, target, after, 256)
@@ -46,35 +41,28 @@ func (ix *Index) pullInvalidRepair(ctx context.Context, src UnitSource, reserved
 		}
 		after = batch[len(batch)-1].Doc
 		identities := make([]HubIdentity, len(batch))
-		for i, p := range batch {
-			identities[i] = captured.identities[p.Doc]
-			if identities[i].ContentHash != p.Revision {
-				return result, errors.New("local document changed before invalid vector repair")
+		err = ix.withPullIdentities(ctx, reserved, batch, o, func(current map[string]HubIdentity) error {
+			for i, p := range batch {
+				identities[i] = current[p.Doc]
+				if identities[i].ContentHash != p.Revision {
+					return errors.New("local document changed before invalid vector repair")
+				}
+				if o.MapSession != nil {
+					identities[i].SessionID = o.MapSession(identities[i].SessionID)
+				}
 			}
+			return nil
+		})
+		if err != nil {
+			return result, err
 		}
 		vectors, absent, err := ix.pullBatch(ctx, hub, target, gen.Dimensions, batch, identities)
 		if err != nil {
 			return result, err
 		}
-		err = reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
-			current := pullSource{identities: map[string]HubIdentity{}}
-			sessions := map[string]bool{}
-			occurrences := map[string]int{}
-			for _, p := range batch {
-				var sid string
-				if err := ix.db.QueryRowContext(ctx, "SELECT session_id FROM "+ix.spec.DocsTable+" WHERE doc_key=?", p.Doc).Scan(&sid); err != nil {
-					return err
-				}
-				if sessions[sid] {
-					continue
-				}
-				sessions[sid] = true
-				if err := snapshot.ScanEmbeddableUnitsForSession(ctx, sid, o.IncludeAutomated, RunMaxRunes(ix.split.MaxRunes), func(u db.EmbeddableUnit) error { current.record(u, occurrences); return nil }); err != nil {
-					return err
-				}
-			}
+		err = ix.withPullIdentities(ctx, reserved, batch, o, func(current map[string]HubIdentity) error {
 			for i, p := range batch {
-				if absent[i] || current.identities[p.Doc].ContentHash != identities[i].ContentHash {
+				if absent[i] || current[p.Doc].ContentHash != identities[i].ContentHash {
 					continue
 				}
 				if err := store.SaveVectors(ctx, target, p.Doc, p.Revision, vectors[i]); err != nil {

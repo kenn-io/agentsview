@@ -553,6 +553,7 @@ func (m *Manager) isRunning() bool {
 func (m *Manager) SetDocumentBuildPolicy(policy func(context.Context, BuildRequest, func(BuildProgress)) (BuildResult, error)) {
 	m.documentBuild = policy
 }
+
 func (m *Manager) usesDocumentPolicy() bool {
 	return m.documentBuild != nil && m.ix.spec.Name == MessageIndexSpec().Name
 }

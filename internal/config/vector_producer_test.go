@@ -10,7 +10,6 @@ import (
 )
 
 func TestVectorProducerConfiguration(t *testing.T) {
-
 	for _, tc := range []struct{ name, producer, url, host, endpoint, recipe, want string }{
 		{"adopt", "remote", "https://hub.example", "node", "http://127.0.0.1:8080/v1/embeddings", "", ""},
 		{"explicit recipe", "remote", "https://hub.example", "node", "http://127.0.0.1:8080/v1/embeddings", "model='hub'\ndimension=4", ""},

@@ -1,8 +1,9 @@
 package db
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLocalEmbeddableSourceFiltersMachinesAndPrefixes(t *testing.T) {

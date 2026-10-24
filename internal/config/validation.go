@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -95,10 +96,10 @@ func invalidTargetLayout(format string, args ...any) error {
 func (c *Config) validateVector() error {
 	if c.Vector.Producer == "remote" {
 		if strings.TrimSpace(c.Remote.URL) == "" {
-			return fmt.Errorf("[remote].url is required for vector producer=remote")
+			return errors.New("[remote].url is required for vector producer=remote")
 		}
 		if strings.TrimSpace(c.Remote.SpokeHost) == "" {
-			return fmt.Errorf("[remote].spoke_host is required for vector producer=remote")
+			return errors.New("[remote].spoke_host is required for vector producer=remote")
 		}
 	}
 	return c.Vector.Validate()

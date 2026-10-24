@@ -19,6 +19,7 @@ func (s localEmbeddableSource) ScanEmbeddableUnits(ctx context.Context, since st
 	defer release()
 	return scanEmbeddableUnits(ctx, s.db.getReader(), since, "", scope, maxRunes, true, fn)
 }
+
 func (s localEmbeddableSource) ScanEmbeddableUnitsForSession(ctx context.Context, id string, scope bool, maxRunes int, fn func(EmbeddableUnit) error) error {
 	if id == "" {
 		return errors.New("session ID is required")
@@ -26,6 +27,7 @@ func (s localEmbeddableSource) ScanEmbeddableUnitsForSession(ctx context.Context
 	_, err := scanEmbeddableUnits(ctx, s.db.getReader(), "", id, scope, maxRunes, true, fn)
 	return err
 }
+
 func (s localEmbeddableSource) WithEmbeddableSnapshot(ctx context.Context, fn func(EmbeddableSnapshot) error) error {
 	return s.db.withEmbeddableSnapshot(ctx, true, fn)
 }

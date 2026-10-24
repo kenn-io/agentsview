@@ -78,7 +78,7 @@ func (ix *Index) Pull(ctx context.Context, src UnitSource, hub HubLookup, gen ki
 		if err != nil {
 			return BuildResult{Fingerprint: fp}, err
 		}
-		return projection.forGeneration(gen).pullInvalidRepair(ctx, src, reserved, hub, gen, o)
+		return projection.forGeneration(gen).pullInvalidRepair(ctx, reserved, hub, gen, o)
 	}
 	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
 	if err != nil {
@@ -186,27 +186,9 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		if err != nil {
 			return result, err
 		}
-		err = reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
-			current := pullSource{identities: map[string]HubIdentity{}}
-			sessions := map[string]bool{}
-			occurrences := map[string]int{}
-			// Use local identities for validation; hub namespace mapping never touches keys.
-			for _, p := range batch {
-				var sid string
-				err := ix.db.QueryRowContext(ctx, "SELECT session_id FROM "+ix.spec.DocsTable+" WHERE doc_key=?", p.Doc).Scan(&sid)
-				if err != nil {
-					return err
-				}
-				if sessions[sid] {
-					continue
-				}
-				sessions[sid] = true
-				if err := snapshot.ScanEmbeddableUnitsForSession(ctx, sid, o.IncludeAutomated, RunMaxRunes(ix.split.MaxRunes), func(u db.EmbeddableUnit) error { current.record(u, occurrences); return nil }); err != nil {
-					return err
-				}
-			}
+		err = ix.withPullIdentities(ctx, reserved, batch, o, func(current map[string]HubIdentity) error {
 			for i, p := range batch {
-				if (absent[i] && len(vectors[i]) != 0) || current.identities[p.Doc].ContentHash != identities[i].ContentHash {
+				if (absent[i] && len(vectors[i]) != 0) || current[p.Doc].ContentHash != identities[i].ContentHash {
 					continue
 				}
 				if err := store.SaveVectors(ctx, target, p.Doc, p.Revision, vectors[i]); err != nil && !errors.Is(err, kitvec.ErrStale) {
@@ -253,6 +235,33 @@ func (ix *Index) pull(ctx context.Context, src UnitSource, reserved snapshotSour
 		return nil
 	})
 	return result, err
+}
+
+// withPullIdentities pins affected sessions under the archive writer reservation.
+// These identities and document keys stay in the local archive namespace.
+func (ix *Index) withPullIdentities(ctx context.Context, reserved snapshotSource, batch []kitvec.Pending[string], o PullOptions, fn func(map[string]HubIdentity) error) error {
+	return reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
+		current := pullSource{identities: map[string]HubIdentity{}}
+		sessions := map[string]bool{}
+		occurrences := map[string]int{}
+		for _, p := range batch {
+			var sid string
+			if err := ix.db.QueryRowContext(ctx, "SELECT session_id FROM "+ix.spec.DocsTable+" WHERE doc_key=?", p.Doc).Scan(&sid); err != nil {
+				return err
+			}
+			if sessions[sid] {
+				continue
+			}
+			sessions[sid] = true
+			if err := snapshot.ScanEmbeddableUnitsForSession(ctx, sid, o.IncludeAutomated, RunMaxRunes(ix.split.MaxRunes), func(u db.EmbeddableUnit) error {
+				current.record(u, occurrences)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return fn(current.identities)
+	})
 }
 
 // Resolve the bounded key page before loading content. This preserves kit's
