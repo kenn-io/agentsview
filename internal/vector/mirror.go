@@ -19,6 +19,16 @@ import (
 // RFC3339 ended_at value; Recall uses a monotonic corpus revision.
 const refreshWatermarkKey = "refresh_watermark"
 
+// sourceDataVersionKey certifies the persisted source parser version reconciled
+// by a full refresh. Incremental refreshes may retain, but never upgrade, it.
+const sourceDataVersionKey = "source_data_version"
+
+// dataVersionSource is optional: legacy and non-archive sources can still build
+// and publish vectors, without claiming parser compatibility for hub discovery.
+type dataVersionSource interface {
+	EmbeddingDataVersion(context.Context, bool) (int, error)
+}
+
 // scopeIncludeAutomatedKey is the metadata-table key holding the
 // include-automated scope ("true"/"false") the mirror was last refreshed
 // under. Build compares it against the requested scope on every call: the
@@ -203,6 +213,19 @@ func (ix *Index) Refresh(
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
 	}
+	var sourceVersion int
+	proofSource, hasProofSource := src.(dataVersionSource)
+	if hasProofSource {
+		var err error
+		sourceVersion, err = proofSource.EmbeddingDataVersion(ctx, includeAutomated)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+	}
+	previousProof, _, err := ix.metaGet(ctx, sourceDataVersionKey)
+	if err != nil {
+		return RefreshStats{}, err
+	}
 
 	journal, hasJournal := src.(sessionJournalSource)
 	var (
@@ -304,6 +327,11 @@ func (ix *Index) Refresh(
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
+	// Refresh commits incrementally. A failed scan must not leave a previous
+	// full-scan proof certifying a partially rewritten corpus.
+	if err := ix.metaDelete(ctx, sourceDataVersionKey); err != nil {
+		return RefreshStats{}, err
+	}
 	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
@@ -380,6 +408,17 @@ func (ix *Index) Refresh(
 		}
 		if err := ix.metaSet(ctx, sessionDeletionDatabaseIDKey, databaseID); err != nil {
 			return RefreshStats{}, err
+		}
+	}
+	if sourceVersion > 0 && (full || previousProof == strconv.Itoa(sourceVersion)) {
+		settledVersion, err := proofSource.EmbeddingDataVersion(ctx, includeAutomated)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		if settledVersion == sourceVersion {
+			if err := ix.metaSet(ctx, sourceDataVersionKey, strconv.Itoa(sourceVersion)); err != nil {
+				return RefreshStats{}, err
+			}
 		}
 	}
 

@@ -2,8 +2,47 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 )
+
+// EmbeddingDataVersion reports the persisted parser version of a ready,
+// uniform source corpus. Zero means pending, mixed, or unknown provenance.
+// It does not certify the running binary's version or change archive state.
+func (db *DB) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (int, error) {
+	if db.NeedsResync() {
+		return 0, nil
+	}
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return embeddingDataVersion(ctx, tx, includeAutomated)
+}
+
+func embeddingDataVersion(ctx context.Context, source interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, includeAutomated bool,
+) (int, error) {
+	version, _, err := readUserVersion(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+	if version > dataVersion {
+		return 0, &DataVersionTooNewError{DatabaseVersion: version, BinaryVersion: dataVersion}
+	}
+	var pending bool
+	err = source.QueryRowContext(ctx, `SELECT
+ EXISTS (SELECT 1 FROM stats WHERE key='scoped_upgrade_pending') OR
+ EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+   AND (? OR COALESCE(is_automated, 0)=0)
+   AND COALESCE(data_version, 0)<>?)`, includeAutomated, version).Scan(&pending)
+	if err != nil || pending || version <= 0 {
+		return 0, err
+	}
+	return version, nil
+}
 
 // ErrSemanticUnavailable is returned by SearchContent for modes "semantic"
 // and "hybrid" when no VectorSearcher has been wired in (SetVectorSearcher

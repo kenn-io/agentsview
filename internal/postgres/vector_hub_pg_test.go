@@ -122,6 +122,7 @@ func TestVectorHubLookupRoundTrip(t *testing.T) {
 func TestVectorHubLookupPagination(t *testing.T) {
 	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_pages_test")
 	seedVectorSession(t, local, "A")
+	require.NoError(t, local.SetSessionDataVersion(t.Context(), "A", db.CurrentDataVersion()))
 	// A real producer build supplies the chunk count and recipe together.
 	content := strings.Repeat("a", 20000)
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "A", []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", Content: content, ContentLength: len(content)}}))
@@ -184,6 +185,7 @@ func hubRecipeSource(fingerprint string, params map[string]string) *fakeVectorSo
 	source := recipeSource(fingerprint, params)
 	value := false
 	source.gen.IncludeAutomated = &value
+	source.gen.DataVersion = db.CurrentDataVersion()
 	return source
 }
 
