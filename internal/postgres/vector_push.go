@@ -936,8 +936,8 @@ func (s *Sync) registerVectorGeneration(
 
 // resolveVectorGeneration registers the generation, creates its chunk table,
 // and reads whether this machine has completed a generation-wide push with
-// the current parser version and automated-session scope. Its id identifies the
-// generation instance, which a scoped push compares against the last one it
+// the actual source parser proof and automated-session scope. Its id identifies
+// the generation instance, which a scoped push compares against the last one it
 // reconciled generation-wide to decide whether to promote; whether this
 // scoped witness predated this call is captured first, because that record is
 // the incarnation witness the promotion check falls back on when a recreated
@@ -949,7 +949,7 @@ func (s *Sync) resolveVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, err
 	}
-	resolved, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey, gen.IncludeAutomated)
+	resolved, found, err := s.lookupVectorGeneration(ctx, gen, witnessKey)
 	if err != nil {
 		return vectorGeneration{}, err
 	}

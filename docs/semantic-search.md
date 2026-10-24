@@ -883,17 +883,18 @@ A legacy mirror without parser proof or a stored scope keeps publishing vectors,
 but hub discovery remains unavailable until a full refresh establishes both.
 Run `agentsview embeddings build --backstop` to reconcile the full mirror without
 forcing unchanged documents to be embedded again.
-New or changed publishers stay unverified until a complete push
-succeeds. First certification rewrites coverage even when old aggregate hashes or interrupted full-push checkpoints match. Interrupted scope changes also remain unknown, and a completed push
-retires the same publisher's old machine names. Updating a session invalidates
-coverage in other generations when document keys or content differ and removes
-those generations' session chunks in the same transaction. Those generations must
-re-push the session before serving it again. An unchanged set remains covered in
-both. Ordinal and offset corrections still update the shared document metadata
-without discarding compatible vectors. Removing the last embeddable document
-clears retained coverage even when the replacement generation has never pushed
-that session. Project and automated-session exclusions preserve retained history.
-A writer that cannot add the optional
+New or changed publishers stay unverified until a complete push succeeds. First
+certification rewrites coverage even when old aggregate hashes or interrupted
+full-push checkpoints match. Interrupted scope changes also remain unknown, and
+a completed push retires the same publisher's old machine names. Updating a
+session invalidates coverage in other generations when document keys or content
+differ and removes those generations' session chunks in the same transaction.
+Those generations must re-push the session before serving it again. An unchanged
+set remains covered in both. Ordinal and offset corrections still update the
+shared document metadata without discarding compatible vectors. Removing the
+last embeddable document clears retained coverage even when the replacement
+generation has never pushed that session. Project and automated-session
+exclusions preserve retained history. A writer that cannot add the optional
 compatibility or chunk-provenance columns keeps publishing vectors and updates
 the metadata its schema supports. Hub compatibility remains unavailable until an
 owner adds the missing columns and a complete push certifies them.

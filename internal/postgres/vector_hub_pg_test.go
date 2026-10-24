@@ -360,7 +360,7 @@ func TestVectorHubCompatibilityWitnessTrust(t *testing.T) {
 			info.IncludeAutomated = requestedScope
 			resolved, err := sync.resolveVectorGeneration(t.Context(), info, key)
 			require.NoError(t, err)
-			lookedUp, found, err := sync.lookupVectorGeneration(t.Context(), info.Fingerprint, key, requestedScope)
+			lookedUp, found, err := sync.lookupVectorGeneration(t.Context(), info, key)
 			require.NoError(t, err)
 			require.True(t, found)
 			expected := tc.expected
@@ -829,7 +829,7 @@ func TestVectorHubLegacyWitnessRetirement(t *testing.T) {
 						ctx, cancel = context.WithCancel(ctx)
 						cancel()
 					}
-					ok, err := sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
+					ok, err := sync.recordVectorGenerationMachine(ctx, source.gen, generation, key)
 					want := []string{key, unrelated, otherScope}
 					if filtered {
 						want = append(want, previous, current, previous+suffix, filteredScope)
@@ -844,7 +844,7 @@ func TestVectorHubLegacyWitnessRetirement(t *testing.T) {
 					} else {
 						require.NoError(t, err)
 						require.True(t, ok)
-						ok, err = sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
+						ok, err = sync.recordVectorGenerationMachine(ctx, source.gen, generation, key)
 						require.NoError(t, err)
 						require.True(t, ok, "repeated certification is idempotent")
 					}
