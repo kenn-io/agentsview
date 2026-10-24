@@ -21,6 +21,21 @@ func (db *DB) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (
 	return embeddingDataVersion(ctx, tx, includeAutomated)
 }
 
+// Both columns are NOT NULL in the original schema and their legacy migrations.
+// Separate ranges let SQLite seek each automation partition without scanning
+// current rows or stale automated rows excluded from this embedding corpus.
+const embeddingReadinessQuery = `SELECT
+ EXISTS (SELECT 1 FROM stats WHERE key='scoped_upgrade_pending') OR
+ EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+   AND is_automated=0 AND data_version<?2) OR
+ EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+   AND is_automated=0 AND data_version>?2) OR
+ (?1 AND (
+   EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+     AND is_automated=1 AND data_version<?2) OR
+   EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+     AND is_automated=1 AND data_version>?2)))`
+
 func embeddingDataVersion(ctx context.Context, source interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, includeAutomated bool,
@@ -33,11 +48,7 @@ func embeddingDataVersion(ctx context.Context, source interface {
 		return 0, &DataVersionTooNewError{DatabaseVersion: version, BinaryVersion: dataVersion}
 	}
 	var pending bool
-	err = source.QueryRowContext(ctx, `SELECT
- EXISTS (SELECT 1 FROM stats WHERE key='scoped_upgrade_pending') OR
- EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
-   AND (? OR COALESCE(is_automated, 0)=0)
-   AND COALESCE(data_version, 0)<>?)`, includeAutomated, version).Scan(&pending)
+	err = source.QueryRowContext(ctx, embeddingReadinessQuery, includeAutomated, version).Scan(&pending)
 	if err != nil || pending || version <= 0 {
 		return 0, err
 	}
