@@ -600,6 +600,7 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			details := 0
+			filled := false
 			const laterID = "00000003-0000-4000-8000-000000000000"
 			fetch := func(_ context.Context, path string) (ClaudeAIResponse, error) {
 				switch path {
@@ -609,6 +610,9 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + chatGPTSyncID + `","update_time":1},{"id":"` + laterID + `","update_time":1}],"total":2}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
 					details++
+					if filled {
+						return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTSyncDetail(1, false, "Question"))}, nil
+					}
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"id":"` + chatGPTSyncID + `","update_time":1,` + tc.fields + `}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, laterID, 0, false):
 					details++
@@ -631,10 +635,21 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 2, stats.Skipped)
 			assert.Zero(t, stats.Errors)
-			assert.Equal(t, 2, details, "the second sync makes no detail requests")
+			assert.Equal(t, 3, details,
+				"an empty detail stays retryable instead of pinning the chat as imported")
 			session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
 			require.NoError(t, err)
 			assert.Nil(t, session, "empty chats stay out of the archive")
+
+			// The chat gains content later. The retry must import it instead of
+			// treating the empty snapshot as the chat's final state.
+			filled = true
+			stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Imported)
+			session, err = d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.NotNil(t, session, "a chat that gains content must import")
 		})
 	}
 }

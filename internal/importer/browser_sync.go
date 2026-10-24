@@ -107,9 +107,14 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	write := func() error {
 		result, err := chat.parse(detail)
 		if err == nil && result.Session.ID == "" {
-			err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(before))
+			// A detail body with no session proves nothing about the chat's
+			// freshness. Recording a hash here would make every later sync
+			// consider it up to date and skip it, even after the detail
+			// catches up. Leave the change pending so a later sync retries it.
+			s.stats.record(id, importSkipped, nil)
+			return nil
 		}
-		if err != nil || result.Session.ID == "" {
+		if err != nil {
 			s.stats.record(id, importSkipped, err)
 			detailErr = err
 			return nil
