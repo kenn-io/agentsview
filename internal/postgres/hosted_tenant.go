@@ -120,6 +120,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, vectorBaseDDL); err != nil {
 		return err
 	}
+	if err = ensureVectorRecipeColumn(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `CREATE TABLE hosted_tenant_binding(singleton SMALLINT PRIMARY KEY,tenant_id TEXT NOT NULL)`); err != nil {
 		return err
 	}

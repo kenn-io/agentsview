@@ -154,6 +154,32 @@ func TestHostedVectorCatalogRejectsAlteredGenerationBinding(t *testing.T) {
 	require.Error(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
 
+func TestHostedVectorAdoptsMirrorWithoutRecipeColumn(t *testing.T) {
+	pg := newHostedLegacyFixture(t)
+	var schema string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
+	// Restore the pre-recipe mirror shape created before params was published.
+	_, err := pg.ExecContext(t.Context(), `ALTER TABLE vector_generations DROP COLUMN params;
+ INSERT INTO vector_generations(fingerprint,model,dimension) VALUES('legacy','legacy-model',4)`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-adoption"))
+	gen := kitvec.Generation{Model: "synthetic", Dimensions: 4, Params: map[string]string{"max_input_chars": "64"}}
+	id, err := EnsureHostedVectorGeneration(t.Context(), pg, schema, "tenant-adoption", gen)
+	require.NoError(t, err)
+	var params []byte
+	var state string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT g.params,h.state FROM vector_generations g JOIN hosted_vector_generations h ON h.generation_id=g.id WHERE g.id=$1`, id).Scan(&params, &state))
+	var decoded map[string]string
+	require.NoError(t, json.Unmarshal(params, &decoded))
+	assert.Equal(t, gen.Params, decoded)
+	assert.Equal(t, "building", state)
+	var model string
+	var dimension int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT model,dimension FROM vector_generations WHERE fingerprint='legacy'`).Scan(&model, &dimension))
+	assert.Equal(t, "legacy-model", model)
+	assert.Equal(t, 4, dimension)
+}
+
 func TestHostedVectorUpgradePreservesExistingTenant(t *testing.T) {
 	f := newHostedFixture(t, "tenant-upgrade")
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('saved','project','device','claude')`)
