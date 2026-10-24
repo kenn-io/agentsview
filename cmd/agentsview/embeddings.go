@@ -329,6 +329,13 @@ func newVectorEncoder(
 	if err != nil {
 		return nil, err
 	}
+	return newVectorEncoderForServer(c, name, server, role, retryRateLimits)
+}
+
+func newVectorEncoderForServer(
+	c config.VectorEmbeddingsConfig, name string, server config.VectorEmbeddingsServerConfig,
+	role embedconfig.Role, retryRateLimits bool,
+) (kitvec.EncodeFunc, error) {
 	transport, err := server.EmbedTransport()
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)

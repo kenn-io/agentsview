@@ -1015,7 +1015,11 @@ func TestHubPreparedSearchPinsRecipeAndHydration(t *testing.T) {
 			hits, _, err := search(t.Context(), 1)
 			require.NoError(t, err)
 			require.Len(t, hits, 1)
-			require.Contains(t, hits[0].Snippet, "beta")
+			expected := strings.Repeat("x", 35) + "\n\nbeta " + strings.Repeat("y", 58)
+			if mode == "run" {
+				expected = "beta " + strings.Repeat("y", 58)
+			}
+			require.Equal(t, expected, hits[0].Snippet)
 			if mode == "run" {
 				require.Equal(t, 2, hits[0].Ordinal)
 			}

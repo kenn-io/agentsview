@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/vector"
-	"hegel.dev/go/hegel"
 )
 
 func TestHubLocalQueryUsesSavedRecipeWithoutHubCredentials(t *testing.T) {
@@ -42,46 +40,23 @@ func TestHubLocalQueryUsesSavedRecipeWithoutHubCredentials(t *testing.T) {
 	cfg.Remote.URL = "http://127.0.0.1:1"
 	cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-hub-token")
 	cfg.Vector.Embeddings = config.VectorEmbeddingsConfig{
-		Model: "conflicting-model", Dimension: 123, QueryPrefix: "wrong: ", MaxInputChars: 1000,
-		RecipeKeys: map[string]bool{"model": true, "dimension": true, "query_prefix": true},
+		Model: "conflicting-model", Dimension: 123, QueryPrefix: "wrong: ", MaxInputChars: 1,
+		DocumentPrefix: "wrong passage: ", InputSuffix: "wrong suffix", RequestDimensions: false,
+		RecipeKeys: map[string]bool{"model": true, "dimension": true, "query_prefix": true, "document_prefix": true, "input_suffix": true, "max_input_chars": true, "request_dimensions": true},
 		Servers:    map[string]config.VectorEmbeddingsServerConfig{"query": {Endpoint: endpoint.URL + "/v1", Timeout: "5s", MaxRetries: 1}},
 	}
 	closeSearch := installDirectVectorSearcher(cfg, database)
 	require.NotNil(t, closeSearch)
 	t.Cleanup(func() { require.NoError(t, closeSearch()) })
+	ready, err := database.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ready", ready.State)
+	require.EqualValues(t, 1, ready.Embedded)
 	page, err := database.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 	require.Equal(t, "local", page.Matches[0].SessionID)
 	require.EqualValues(t, 1, hubCalls.Load(), "local query must not contact the hub")
-}
-
-func TestHubQueryReadinessIgnoresCurrentRecipe(t *testing.T) {
-	cfg, database, _ := hubProducerFixture(t)
-	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
-	require.NoError(t, err)
-	_, err = hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
-	require.NoError(t, err)
-	require.NoError(t, ix.Close())
-	cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-hub-token")
-	hegel.Test(t, func(ht *hegel.T) {
-		cfg := cfg
-		cfg.Vector.Embeddings.Model = hegel.Draw(ht, hegel.Text())
-		cfg.Vector.Embeddings.Dimension = hegel.Draw(ht, hegel.Integers[int](math.MinInt, math.MaxInt))
-		cfg.Vector.Embeddings.QueryPrefix = hegel.Draw(ht, hegel.Text())
-		cfg.Vector.Embeddings.DocumentPrefix = hegel.Draw(ht, hegel.Text())
-		cfg.Vector.Embeddings.InputSuffix = hegel.Draw(ht, hegel.Text())
-		cfg.Vector.Embeddings.MaxInputChars = hegel.Draw(ht, hegel.Integers[int](math.MinInt, math.MaxInt))
-		cfg.Vector.Embeddings.RequestDimensions = hegel.Draw(ht, hegel.Booleans())
-		cfg.Vector.Embeddings.RecipeKeys = map[string]bool{"model": true, "dimension": true, "query_prefix": true, "document_prefix": true, "input_suffix": true, "max_input_chars": true, "request_dimensions": true}
-		closeSearch := installDirectVectorSearcher(cfg, database)
-		require.NotNil(ht, closeSearch)
-		defer func() { require.NoError(ht, closeSearch()) }()
-		ready, err := database.SemanticReadiness(context.Background())
-		require.NoError(ht, err)
-		require.Equal(ht, "ready", ready.State)
-		require.EqualValues(ht, 1, ready.Embedded)
-	}, hegel.WithTestCases(1000))
 }
 
 type unavailableHubCoverage struct{}

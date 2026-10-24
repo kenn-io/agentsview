@@ -1470,6 +1470,9 @@ func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
 	) {
 		gotPath = r.URL.Path
 		gotOrigin = r.Header.Get("Origin")
+		var body map[string]any
+		require.NoError(t, json.UnmarshalRead(r.Body, &body))
+		assert.Equal(t, true, body["local_producer"])
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{}`))
@@ -1477,7 +1480,7 @@ func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	client := embeddingsDaemonClient{baseURL: ts.URL + "/viewer"}
-	err := client.startBuild(t.Context(), vector.BuildRequest{})
+	err := client.startBuild(t.Context(), vector.BuildRequest{LocalProducer: true})
 
 	require.NoError(t, err)
 	assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)

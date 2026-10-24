@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/vector"
@@ -54,7 +54,12 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 			}
 			require.NoError(t, json.UnmarshalRead(r.Body, &body))
 			require.Equal(t, "hub-model", body.Model)
-			require.Equal(t, []string{"passage: missing content"}, body.Input)
+			require.Len(t, body.Input, 1)
+			if body.Input[0] == "query: needle" {
+				require.Equal(t, []string{"query: needle"}, body.Input)
+			} else {
+				require.Equal(t, []string{"passage: missing content"}, body.Input)
+			}
 			require.Equal(t, 4, body.Dimensions)
 			require.NoError(t, json.MarshalWrite(w, map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0}}}}))
 		default:
@@ -66,6 +71,12 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	server := cfg.Vector.Embeddings.Servers["local"]
 	server.Endpoint = endpoint.URL + "/v1"
 	cfg.Vector.Embeddings.Servers["local"] = server
+	_, err = hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
+	require.NoError(t, err)
+	before, err := ix.HubPullStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "hash mismatch or hub coverage missing", before.Reason)
+	require.EqualValues(t, 1, before.Unmatched)
 	m := embeddingManager(ix, database, vector.EncoderSet{}, cfg, "messages")
 	defer m.Shutdown()
 	ran, err := m.TryBuild(t.Context(), localProducerRequest(t, ""))
@@ -79,6 +90,18 @@ func TestHubLocalProducerFillsOnlyMissing(t *testing.T) {
 	require.EqualValues(t, 2, gens[0].Embedded)
 	require.Zero(t, gens[0].Missing)
 	require.Equal(t, "active", gens[0].State)
+	m.Shutdown()
+	require.NoError(t, ix.Close())
+	assertHubStatusReporting(t, cfg, vector.HubPullStatus{Fingerprint: g.Fingerprint(), Unmatched: 0})
+	cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-token")
+	cfg.Remote.URL = "http://127.0.0.1:1"
+	closeSearch := installDirectVectorSearcher(cfg, database)
+	require.NotNil(t, closeSearch)
+	defer func() { require.NoError(t, closeSearch()) }()
+	page, err := database.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 2)
+
 }
 
 func TestHubLocalProducerRefusesRebuildAndRecall(t *testing.T) {
@@ -102,24 +125,17 @@ func TestHubLocalProducerRefusesRebuildAndRecall(t *testing.T) {
 	}
 }
 
-func TestHubLocalProducerDaemonTransport(t *testing.T) {
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
-		require.Equal(t, true, body["local_producer"])
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer endpoint.Close()
-	require.NoError(t, (embeddingsDaemonClient{baseURL: endpoint.URL}).startBuild(context.Background(), localProducerRequest(t, "")))
-}
-
 func TestHubPullStatusSurvivesReopen(t *testing.T) {
-	for _, reason := range []string{"data version mismatch", "automated scope mismatch", "recipe mismatch", "hash mismatch or hub coverage missing"} {
+	for _, reason := range []string{"data version mismatch", "automated scope mismatch", "recipe mismatch", "hash mismatch or hub coverage missing", "hub pull unavailable"} {
 		t.Run(reason, func(t *testing.T) {
 			cfg, database, _ := hubProducerFixture(t)
+			healthy := cfg
 			req := vector.BuildRequest{IncludeAutomated: reason == "automated scope mismatch"}
 			if reason == "recipe mismatch" {
 				cfg.Vector.Embeddings.RecipeKeys = map[string]bool{"model": true}
+			}
+			if reason == "hub pull unavailable" {
+				cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-token")
 			}
 			if reason == "hash mismatch or hub coverage missing" || reason == "data version mismatch" {
 				version := db.CurrentDataVersion()
@@ -140,14 +156,41 @@ func TestHubPullStatusSurvivesReopen(t *testing.T) {
 			ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
 			require.NoError(t, err)
 			_, err = hubProducerBuild(ix, database, cfg)(t.Context(), req, nil)
+			missing := int64(-1)
+			fingerprint := ""
 			if reason == "hash mismatch or hub coverage missing" {
 				require.NoError(t, err)
+				missing = 1
+				fingerprint = vectorGeneration(publishedRecipeConfig("hub-model")).Fingerprint()
 			} else {
-				require.ErrorContains(t, err, reason)
+				require.Error(t, err)
 			}
 			require.NoError(t, ix.Close())
-			t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
-			text := fmt.Sprintf(`[vector]
+			assertHubStatusReporting(t, cfg, vector.HubPullStatus{Fingerprint: fingerprint, Unmatched: missing, Reason: reason})
+
+			ix, err = vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
+			require.NoError(t, err)
+			if missing > 0 {
+				cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-token")
+				_, err = hubProducerBuild(ix, database, cfg)(t.Context(), vector.BuildRequest{}, nil)
+				require.Error(t, err)
+				require.NoError(t, ix.Close())
+				assertHubStatusReporting(t, cfg, vector.HubPullStatus{Fingerprint: fingerprint, Unmatched: missing, Reason: "hub pull unavailable"})
+				ix, err = vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
+				require.NoError(t, err)
+			}
+			result, err := hubProducerBuild(ix, database, healthy)(t.Context(), vector.BuildRequest{}, nil)
+			require.NoError(t, err)
+			require.NoError(t, ix.Close())
+			assertHubStatusReporting(t, healthy, vector.HubPullStatus{Fingerprint: result.Fingerprint, Unmatched: 0})
+		})
+	}
+}
+
+func assertHubStatusReporting(t *testing.T, cfg config.Config, want vector.HubPullStatus) {
+	t.Helper()
+	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+	text := fmt.Sprintf(`[vector]
 enabled = true
 producer = "remote"
 [vector.embeddings.servers.local]
@@ -158,47 +201,32 @@ spoke_host = "node"
 allow_insecure_http = true
 token_file = %q
 `, filepath.Join(cfg.DataDir, "missing-token"))
-			require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(text), 0600))
-			var out bytes.Buffer
-			require.NoError(t, runEmbeddingsList(t.Context(), &out, true, ""))
-			var got struct {
-				HubPull struct {
-					Reason    string `json:"reason"`
-					Unmatched int64  `json:"unmatched"`
-				} `json:"hub_pull"`
-			}
-			require.NoError(t, json.Unmarshal(out.Bytes(), &got))
-			require.Equal(t, reason, got.HubPull.Reason)
-			if reason == "hash mismatch or hub coverage missing" {
-				require.EqualValues(t, 1, got.HubPull.Unmatched)
-			} else {
-				require.EqualValues(t, -1, got.HubPull.Unmatched)
-			}
-
-			out.Reset()
-			cmd := newDoctorCommand()
-			cmd.SetOut(&out)
-			cmd.SetArgs([]string{"embeddings"})
-			require.NoError(t, cmd.Execute())
-			require.Contains(t, out.String(), reason)
-			if got.HubPull.Unmatched > 0 {
-				require.Contains(t, out.String(), "--local-producer")
-			}
-			if reason == "hash mismatch or hub coverage missing" {
-				ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 1000)
-				require.NoError(t, err)
-				defer ix.Close()
-				before, err := ix.HubPullStatus(t.Context())
-				require.NoError(t, err)
-				cfg.Remote.TokenFile = filepath.Join(t.TempDir(), "missing-token")
-				_, err = hubProducerBuild(ix, database, cfg)(t.Context(), req, nil)
-				require.Error(t, err)
-				after, err := ix.HubPullStatus(t.Context())
-				require.NoError(t, err)
-				require.Equal(t, before.Fingerprint, after.Fingerprint)
-				require.Equal(t, before.Unmatched, after.Unmatched)
-				require.Equal(t, "hub pull unavailable", after.Reason)
-			}
-		})
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(text), 0600))
+	status, err := readHubPullStatus(t.Context(), cfg)
+	require.NoError(t, err)
+	require.Equal(t, &want, status)
+	var out bytes.Buffer
+	require.NoError(t, runEmbeddingsList(t.Context(), &out, true, ""))
+	var got struct {
+		HubPull vector.HubPullStatus `json:"hub_pull"`
 	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+	require.Equal(t, want, got.HubPull)
+	out.Reset()
+	cmd := newDoctorCommand()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"embeddings"})
+	require.NoError(t, cmd.Execute())
+	line := "Hub vectors: unmatched document count unavailable"
+	if want.Unmatched >= 0 {
+		line = fmt.Sprintf("Hub vectors: %d unmatched documents", want.Unmatched)
+	}
+	if want.Reason != "" {
+		line += "; " + want.Reason
+	}
+	expected := "Embedding producer: remote\n" + line + "\n"
+	if want.Unmatched > 0 {
+		expected += "Fill unmatched documents with 'agentsview embeddings build --local-producer'.\n"
+	}
+	require.Equal(t, expected, out.String())
 }

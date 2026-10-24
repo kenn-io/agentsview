@@ -151,22 +151,20 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 }
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
-	fake := &fakeEmbeddingsManager{}
-	s := newEmbeddingsTestServer(t, fake)
-
-	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
-		vector.BuildRequest{FullRebuild: true})
-	assertRecorderStatus(t, w, http.StatusAccepted)
-
-	var body struct {
-		Started bool `json:"started"`
+	for _, req := range []vector.BuildRequest{{FullRebuild: true}, {LocalProducer: true}} {
+		t.Run(fmt.Sprintf("local_producer=%t", req.LocalProducer), func(t *testing.T) {
+			fake := &fakeEmbeddingsManager{}
+			s := newEmbeddingsTestServer(t, fake)
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", req)
+			assertRecorderStatus(t, w, http.StatusAccepted)
+			var body struct {
+				Started bool `json:"started"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.True(t, body.Started)
+			require.Equal(t, []vector.BuildRequest{req}, fake.startBuildCalls)
+		})
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.True(t, body.Started)
-
-	require.Len(t, fake.startBuildCalls, 1)
-	assert.True(t, fake.startBuildCalls[0].FullRebuild)
-	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
 }
 
 func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
@@ -452,17 +450,4 @@ func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {
 		map[string]bool{"force": false})
 	assertRecorderStatus(t, w, http.StatusNotFound)
 	assert.Contains(t, w.Body.String(), "999")
-}
-
-func TestEmbeddingsLocalProducerTransport(t *testing.T) {
-	fake := &fakeEmbeddingsManager{}
-	s := newEmbeddingsTestServer(t, fake)
-	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", map[string]any{"local_producer": true})
-	assertRecorderStatus(t, w, http.StatusAccepted)
-	require.Len(t, fake.startBuildCalls, 1)
-	raw, err := json.Marshal(fake.startBuildCalls[0])
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Equal(t, true, got["local_producer"])
 }
