@@ -52,9 +52,6 @@ func validateTargetFlags(cmd *cobra.Command) error {
 // resolveReadTarget chooses a target before opening any selected credential or
 // setting up local storage. Memory callers apply their existing env flags first.
 func resolveReadTarget(cmd *cobra.Command, intent readTargetIntent) (readTarget, error) {
-	if err := validateTargetFlags(cmd); err != nil {
-		return readTarget{}, err
-	}
 	server, _ := cmd.Flags().GetString("server")
 	if server != "" {
 		token, err := explicitServerToken(cmd)
@@ -65,6 +62,9 @@ func resolveReadTarget(cmd *cobra.Command, intent readTargetIntent) (readTarget,
 			source = "AGENTSVIEW_SERVER_TOKEN"
 		}
 		return readTarget{Kind: readTargetServer, URL: server, Cred: token, Origin: "--server", CredentialSource: source}, err
+	}
+	if err := validateTargetFlags(cmd); err != nil {
+		return readTarget{}, err
 	}
 	if pgReadRequested(cmd) {
 		return readTarget{Kind: readTargetPG, Origin: "--pg"}, nil
@@ -119,7 +119,7 @@ func (t readTarget) remoteError(err error) error {
 	if err == nil || t.Kind != readTargetRemote {
 		return err
 	}
-	return fmt.Errorf("remote %s failed; try --local: %w", remotecred.Redact(t.URL), err)
+	return remotecred.WrapError(t.URL, err)
 }
 
 func (t readTarget) backend(caps *servicehttp.HTTPServerCapabilities) service.SessionService {

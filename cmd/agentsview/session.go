@@ -153,11 +153,6 @@ func resolveWritableServiceWithIntent(
 	cmd *cobra.Command, fresh bool,
 ) (service.SessionService, func(), error) {
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --pg are mutually exclusive",
-			)
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -165,6 +160,10 @@ func resolveWritableServiceWithIntent(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
+	if err := validateTargetFlags(cmd); err != nil {
+		return nil, nil, err
+	}
+
 	if pgReadRequested(cmd) {
 		return nil, nil, errors.New(
 			"--pg is read-only and cannot be used with write commands",

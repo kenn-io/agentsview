@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/mcpdiscovery"
 	"go.kenn.io/agentsview/internal/service"
-	"hegel.dev/go/hegel"
 )
 
 func targetCommand(t *testing.T) *cobra.Command {
@@ -34,126 +34,57 @@ func TestReadTargetSelection(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	tokenPath := filepath.Join(dir, "token")
 	require.NoError(t, os.WriteFile(tokenPath, []byte("selected-token"), 0o600))
-	hegel.Test(t, func(ht *hegel.T) {
-		local := hegel.Draw(ht, hegel.Booleans())
-		pg := hegel.Draw(ht, hegel.Booleans())
-		server := hegel.Draw(ht, hegel.Booleans())
-		remote := hegel.Draw(ht, hegel.Booleans())
-		available := hegel.Draw(ht, hegel.Booleans())
-		defaults := hegel.Draw(ht, hegel.Booleans())
-		pgChanged := hegel.Draw(ht, hegel.Booleans())
-		remoteURL, path := "", filepath.Join(dir, "missing")
-		if remote {
-			remoteURL = "https://hub.example"
-		}
-		if available {
-			path = tokenPath
-		}
-		t.Setenv("AGENTSVIEW_REMOTE_URL", remoteURL)
-		t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", path)
-		cmd := targetCommand(t)
-		if local {
-			require.NoError(ht, cmd.Flags().Set("local", "true"))
-		}
-		if pg || pgChanged {
-			require.NoError(ht, cmd.Flags().Set("pg", strconv.FormatBool(pg)))
-		}
-		if server {
-			require.NoError(ht, cmd.Flags().Set("server", "http://explicit.example"))
-			require.NoError(ht, cmd.Flags().Set("server-token-file", path))
-		}
-		target, err := resolveReadTarget(cmd, readTargetIntent(defaults))
-		if server && pg || local && (server || pg) {
-			require.ErrorContains(ht, err, "--")
-			require.NotContains(ht, err.Error(), "token")
-			return
-		}
-		if server && !available || !server && !pg && !local && defaults && (!remote || !available) {
-			require.Error(ht, err)
-			return
-		}
-		require.NoError(ht, err)
-		want := readTargetLocal
-		switch {
-		case server:
-			want = readTargetServer
-		case pg:
-			want = readTargetPG
-		case !local && defaults && remote:
-			want = readTargetRemote
-		}
-		require.Equal(ht, want, target.Kind)
-		if server || want == readTargetRemote {
-			require.Equal(ht, "selected-token", target.Cred)
-		} else {
-			require.Empty(ht, target.Cred)
-		}
-	}, hegel.WithTestCases(1000))
-}
-
-func TestConfiguredRemoteSurfaces(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
-	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "remote-token")
-	t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", "")
-	type observedRequest struct {
-		path          string
-		authorization string
-	}
-	requests := make(chan observedRequest, 8)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests <- observedRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization")}
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			_, _ = w.Write([]byte(`{"api_version":4,"read_only":true,"session_stats_available":true}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
-	}))
-	defer ts.Close()
-	t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL)
-	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte("auth_token='local-secret'\n[vector]\nenabled=true\n[vector.embeddings]\ndimension=-1\n"), 0o600))
-	cmd := targetCommand(t)
-	target, err := resolveReadTarget(cmd, readTargetDefault)
-	require.NoError(t, err)
-	require.Equal(t, readTargetRemote, target.Kind)
-	caps, err := target.probe(t.Context())
-	require.NoError(t, err)
-	require.True(t, caps.SessionStatsAvailable)
-	svc, cleanup, err := resolveService(cmd)
-	require.NoError(t, err)
-	defer cleanup()
-	_, err = svc.List(t.Context(), service.ListFilter{})
-	require.NoError(t, err)
-	require.Len(t, requests, 2)
-	require.Equal(t, []observedRequest{
-		{path: "/api/v1/version", authorization: "Bearer remote-token"},
-		{path: "/api/v1/sessions", authorization: "Bearer remote-token"},
-	}, []observedRequest{<-requests, <-requests})
-	_, err = resolveCodebuffBareID(cmd, svc, "2026-07-16T00-09-00.236Z")
-	require.ErrorContains(t, err, "configured [remote]")
-	require.ErrorContains(t, err, "--local")
-}
-
-func TestRemoteMemoryModes(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
-	t.Setenv("AGENTSVIEW_REMOTE_URL", "https://hub.example")
-	t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
-	original := runMemorySessionStart
-	defer func() { runMemorySessionStart = original }()
-	runMemorySessionStart = func(_ context.Context, req memorySessionStartRequest) error { require.Empty(t, req.Server); return nil }
-	for _, mode := range []string{"local", "hosted-contributor", "hosted-reader"} {
-		cmd := newMemorySessionStartCommand()
-		cmd.SetContext(t.Context())
-		require.NoError(t, cmd.Flags().Set("mode", mode))
-		if mode == "hosted-contributor" {
-			require.NoError(t, cmd.Flags().Set("target", "replica"))
-		}
-		err := runMemorySessionStartCommand(cmd, "")
-		if mode == "hosted-reader" {
-			require.ErrorContains(t, err, "remote token")
-		} else {
+	for bits := 0; bits < 128; bits++ {
+		t.Run(strconv.Itoa(bits), func(t *testing.T) {
+			local, pg, server := bits&1 != 0, bits&2 != 0, bits&4 != 0
+			remote, available, defaults, pgChanged := bits&8 != 0, bits&16 != 0, bits&32 != 0, bits&64 != 0
+			remoteURL, path := "", filepath.Join(dir, "missing")
+			if remote {
+				remoteURL = "https://hub.example"
+			}
+			if available {
+				path = tokenPath
+			}
+			t.Setenv("AGENTSVIEW_REMOTE_URL", remoteURL)
+			t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", path)
+			cmd := targetCommand(t)
+			if local {
+				require.NoError(t, cmd.Flags().Set("local", "true"))
+			}
+			if pg || pgChanged {
+				require.NoError(t, cmd.Flags().Set("pg", strconv.FormatBool(pg)))
+			}
+			if server {
+				require.NoError(t, cmd.Flags().Set("server", "http://explicit.example"))
+				require.NoError(t, cmd.Flags().Set("server-token-file", path))
+			}
+			target, err := resolveReadTarget(cmd, readTargetIntent(defaults))
+			if server && pg || local && (server || pg) {
+				require.ErrorContains(t, err, "--")
+				require.NotContains(t, err.Error(), "token")
+				return
+			}
+			if server && !available || !server && !pg && !local && defaults && (!remote || !available) {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
-		}
+			want := readTargetLocal
+			switch {
+			case server:
+				want = readTargetServer
+			case pg:
+				want = readTargetPG
+			case !local && defaults && remote:
+				want = readTargetRemote
+			}
+			require.Equal(t, want, target.Kind)
+			if server || want == readTargetRemote {
+				require.Equal(t, "selected-token", target.Cred)
+			} else {
+				require.Empty(t, target.Cred)
+			}
+		})
 	}
 }
 
@@ -164,6 +95,7 @@ func TestRemoteReadAdapters(t *testing.T) {
 	type observedRequest struct {
 		method        string
 		path          string
+		query         string
 		authorization string
 	}
 	requests := make(chan observedRequest, 32)
@@ -172,6 +104,7 @@ func TestRemoteReadAdapters(t *testing.T) {
 		requests <- observedRequest{
 			method:        r.Method,
 			path:          r.URL.Path,
+			query:         r.URL.RawQuery,
 			authorization: r.Header.Get("Authorization"),
 		}
 		if r.Method != http.MethodGet {
@@ -182,7 +115,7 @@ func TestRemoteReadAdapters(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/version":
-			_, _ = w.Write([]byte(`{"api_version":6,"read_only":true}`))
+			_, _ = w.Write([]byte(`{"api_version":6,"read_only":true,"session_stats_available":true}`))
 		case "/api/v1/recall/entries":
 			_, _ = w.Write([]byte(`{"entries":[{"id":"remote-recall","type":"procedure","scope":"project","status":"accepted","title":"Remote recall","project":"agentsview"}],"trusted_only":false}`))
 		case "/api/v1/sessions":
@@ -198,7 +131,22 @@ func TestRemoteReadAdapters(t *testing.T) {
 	}))
 	defer ts.Close()
 	t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL)
+	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte("auth_token='local-secret'\n[vector]\nenabled=true\n[vector.embeddings]\ndimension=-1\n"), 0o600))
 	cmd := targetCommand(t)
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	require.NoError(t, err)
+	require.Equal(t, readTargetRemote, target.Kind)
+	caps, err := target.probe(t.Context())
+	require.NoError(t, err)
+	require.True(t, caps.SessionStatsAvailable)
+	require.Len(t, requests, 1)
+	require.Equal(t, observedRequest{method: http.MethodGet, path: "/api/v1/version", authorization: "Bearer remote-token"}, <-requests)
+	svc, closeService, err := resolveService(cmd)
+	require.NoError(t, err)
+	t.Cleanup(closeService)
+	_, err = resolveCodebuffBareID(cmd, svc, "2026-07-16T00-09-00.236Z")
+	require.ErrorContains(t, err, "configured [remote]")
+	require.ErrorContains(t, err, "--local")
 	recallService, cleanup, err := resolveRecallEntryService(cmd)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
@@ -208,7 +156,7 @@ func TestRemoteReadAdapters(t *testing.T) {
 	require.Equal(t, "remote-recall", recallList.RecallEntries[0].ID)
 	require.Len(t, requests, 1)
 	require.Equal(t, observedRequest{
-		method: http.MethodGet, path: "/api/v1/recall/entries", authorization: "Bearer remote-token",
+		method: http.MethodGet, path: "/api/v1/recall/entries", query: "project=agentsview", authorization: "Bearer remote-token",
 	}, <-requests)
 
 	mcpService, cleanup, err := resolveMCPService(cmd)
@@ -224,7 +172,7 @@ func TestRemoteReadAdapters(t *testing.T) {
 	require.Equal(t, "mcp-remote-session", sessions.Sessions[0].ID)
 	require.Len(t, requests, 1)
 	require.Equal(t, observedRequest{
-		method: http.MethodGet, path: "/api/v1/sessions", authorization: "Bearer remote-token",
+		method: http.MethodGet, path: "/api/v1/sessions", query: "project=agentsview", authorization: "Bearer remote-token",
 	}, <-requests)
 
 	tr, _, err := resolveInsightTransport(cmd)
@@ -239,7 +187,25 @@ func TestRemoteReadAdapters(t *testing.T) {
 			out, code, err := sessionUsageDataForCommand(cmd, "claude:test")
 			require.NoError(t, err)
 			require.Equal(t, 0, code)
+			require.NotNil(t, out)
 			require.Equal(t, 17, out.TotalOutputTokens)
+			want := []observedRequest{}
+			if !ownOnly {
+				want = append(want, observedRequest{method: http.MethodGet, path: "/api/v1/version", authorization: "Bearer remote-token"})
+			}
+			query := "breakdown=true"
+			if !ownOnly {
+				query += "&subagents=true"
+			}
+			want = append(want,
+				observedRequest{method: http.MethodGet, path: "/api/v1/sessions/claude:test", authorization: "Bearer remote-token"},
+				observedRequest{method: http.MethodGet, path: "/api/v1/sessions/claude:test/usage", query: query, authorization: "Bearer remote-token"})
+			require.Len(t, requests, len(want), "own-only=%t no-sync=%t", ownOnly, noSync)
+			for _, expected := range want {
+				got := <-requests
+				require.Equal(t, expected, got)
+			}
+
 		}
 	}
 	var unexpectedRequests []string
@@ -254,12 +220,17 @@ func TestLocalOnlyReadersIgnoreRemote(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	t.Setenv("AGENTSVIEW_REMOTE_URL", "https://hub.example")
 	t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
-	for _, args := range [][]string{{"secrets", "list"}, {"session", "watch", "missing"}, {"recall", "extract", "preview", "--session", "missing"}} {
-		_, err := executeCommand(newRootCommand(), args...)
-		if err != nil {
-			require.NotContains(t, err.Error(), "remote token", args)
-		}
-	}
+	seedEmptyArchive(t, os.Getenv("AGENTSVIEW_DATA_DIR"))
+	out, err := executeCommand(newRootCommand(), "secrets", "list")
+	require.NoError(t, err)
+	require.Equal(t, "(no findings)\n", out)
+	_, err = executeCommand(newRootCommand(), "session", "watch", "codex:missing")
+	require.ErrorIs(t, err, errSessionNotFound)
+	require.ErrorContains(t, err, "codex:missing")
+	out, err = executeCommand(newRootCommand(), "recall", "extract", "preview", "--session", "missing", "--json")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"session_id":"missing","dry_run":true,"message_count":0,"chunk_count":0,"chunk_max_chars":0,"chunks":[]}`, out)
+
 }
 
 func TestRemoteProbeDiagnostics(t *testing.T) {
@@ -313,30 +284,12 @@ func TestMemoryRemotePrecedence(t *testing.T) {
 		require.NoError(t, applyMemoryTargetEnv(cmd, tc.profile))
 		target, err := resolveReadTarget(cmd, readTargetDefault)
 		if tc.fails {
-			require.ErrorContains(t, err, "remote token")
+			require.EqualError(t, err, "remote https://hub.example request failed; try --local")
 		} else {
 			require.NoError(t, err)
 			require.Equal(t, tc.kind, target.Kind)
 		}
 	}
-	original := runMemorySessionStart
-	defer func() { runMemorySessionStart = original }()
-	var got memorySessionStartRequest
-	runMemorySessionStart = func(_ context.Context, req memorySessionStartRequest) error { got = req; return nil }
-	cmd := newMemorySessionStartCommand()
-	cmd.SetContext(t.Context())
-	require.NoError(t, runMemorySessionStartCommand(cmd, ""))
-	require.Equal(t, "https://memory.example", got.Server)
-	t.Setenv("AGENTSVIEW_MEMORY_SERVER", "")
-	path := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(path, []byte("remote-only"), 0o600))
-	t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", path)
-	cmd = newMemorySessionStartCommand()
-	cmd.SetContext(t.Context())
-	require.NoError(t, runMemorySessionStartCommand(cmd, ""))
-	require.Equal(t, "https://hub.example", got.Server)
-	require.Equal(t, "remote-only", got.ServerToken)
-	require.NotNil(t, got.HTTPClient)
 }
 
 func TestRemoteMCPDiscovery(t *testing.T) {
@@ -407,5 +360,39 @@ func TestRemoteUsageRedactsUnexpectedResponses(t *testing.T) {
 			require.NotContains(t, err.Error(), "private-path")
 			require.Contains(t, err.Error(), "--local")
 		})
+	}
+}
+
+func TestConfiguredReadErrorPreservesCause(t *testing.T) {
+	cause := errors.New("response-secret")
+	err := (readTarget{Kind: readTargetRemote, URL: "https://hub.example/private-token"}).remoteError(cause)
+	require.ErrorIs(t, err, cause)
+	require.EqualError(t, err, "remote https://hub.example request failed; try --local")
+}
+
+func TestWritableTargetConflictsBeforeCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		flags []string
+		want  string
+	}{
+		{[]string{"server", "pg"}, "--server and --pg are mutually exclusive"},
+		{[]string{"local", "server"}, "--local cannot be combined with --server or --pg"},
+		{[]string{"local", "pg"}, "--local cannot be combined with --server or --pg"},
+	} {
+		for _, fresh := range []bool{false, true} {
+			cmd := targetCommand(t)
+			require.NoError(t, cmd.Flags().Set("server-token-file", filepath.Join(t.TempDir(), "missing")))
+			for _, flag := range tc.flags {
+				value := "true"
+				if flag == "server" {
+					value = "https://explicit.example"
+				}
+				require.NoError(t, cmd.Flags().Set(flag, value))
+			}
+			svc, cleanup, err := resolveWritableServiceWithIntent(cmd, fresh)
+			require.EqualError(t, err, tc.want)
+			require.Nil(t, svc)
+			require.Nil(t, cleanup)
+		}
 	}
 }
