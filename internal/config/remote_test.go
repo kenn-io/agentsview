@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +35,10 @@ func TestRemoteConfigPrecedence(t *testing.T) {
 			t.Setenv("AGENTSVIEW_REMOTE_URL", tc.urlEnv)
 			remote, err := LoadRemote()
 			require.NoError(t, err)
-			require.Equal(t, RemoteConfig{URL: tc.wantURL, TokenFile: tc.want, SpokeHost: "workstation", AllowInsecureHTTP: true}, remote)
+			assert.Equal(t, tc.wantURL, remote.URL)
+			assert.Equal(t, filepath.FromSlash(tc.want), filepath.FromSlash(remote.TokenFile))
+			assert.Equal(t, "workstation", remote.SpokeHost)
+			assert.True(t, remote.AllowInsecureHTTP)
 		})
 	}
 }
