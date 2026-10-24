@@ -520,7 +520,7 @@ func (hs RemoteSync) prepare(
 		return nil, err
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
-	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
+	hs.reportProgressDetail("Fetching and comparing session manifest from " + hs.Host)
 	// The mirror is compared while the manifest streams in. The diff only
 	// reads the mirror, and the lock keeps other syncs from changing it.
 	_, mirrorStatErr := os.Stat(mirrorRoot)
@@ -528,7 +528,13 @@ func (hs RemoteSync) prepare(
 	diff := newMirrorDiff(mirrorRoot)
 	defer func() { err = errors.Join(err, diff.close()) }()
 	manifestStarted := time.Now()
-	supported, err := hs.Source.Manifest(ctx, dirScoped, diff.add)
+	supported, err := hs.Source.Manifest(ctx, dirScoped, func(entry ManifestEntry) error {
+		err := diff.add(entry)
+		if _, remote := errors.AsType[*manifestOrderError](err); err == nil || remote {
+			return err
+		}
+		return fmt.Errorf("compare with local mirror: %w", err)
+	})
 	logRemotePhase(hs.Host, "manifest", manifestStarted)
 	if err != nil {
 		return nil, err
@@ -939,26 +945,6 @@ func (hs RemoteSync) prepareMirror(
 			return nil, fmt.Errorf("persist mirror journal recovery marker: %w", replaceErr)
 		}
 	}
-	fetchCount, deletionCount := delta.Fetch.Len(), delta.Deletions.Len()
-	hs.reportProgressDetail(fmt.Sprintf(
-		"Compared session manifest from %s: %d total, %d changed, %d deleted",
-		hs.Host, delta.Total, fetchCount, deletionCount,
-	))
-	// A change too large for the journal's path entries is journaled as a
-	// full import and applied in batches read back from the delta lists, so
-	// its paths are never all in memory. A list that moved to disk takes the
-	// same path, as reading it back whole would undo the move.
-	large := delta.Fetch.Spilled() || delta.Deletions.Spilled() ||
-		fetchCount+deletionCount > mirrorJournalMaxEntries
-	var fetch, deletions []string
-	if !large {
-		if fetch, err = collectPaths(delta.Fetch); err != nil {
-			return nil, err
-		}
-		if deletions, err = collectPaths(delta.Deletions); err != nil {
-			return nil, err
-		}
-	}
 	pendingFileScopedDirs := journal.FileScopedDirs
 	fileScopedDirs := targets.fileScoped.Dirs
 	if pendingFileScopedDirs != nil {
@@ -1008,9 +994,6 @@ func (hs RemoteSync) prepareMirror(
 	// A deferred file-scoped snapshot is processed as it stands, so its
 	// files stay in the mirror.
 	keepDeletions := func(localPaths []string) ([]string, error) {
-		if !deferFileScopedRefresh {
-			return localPaths, nil
-		}
 		kept := localPaths[:0]
 		for _, localPath := range localPaths {
 			path, normalizeErr := mirrorRelativeLocalChangePath(
@@ -1029,15 +1012,40 @@ func (hs RemoteSync) prepareMirror(
 		}
 		return kept, nil
 	}
-	if deletions, err = keepDeletions(deletions); err != nil {
-		return nil, err
+	// Protected files are dropped before counting, so a snapshot they fill
+	// never looks like a change.
+	if deferFileScopedRefresh {
+		kept, filterErr := filterMirrorList(
+			mirrorRoot, "deletions", delta.Deletions, keepDeletions,
+		)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		defer func() { retErr = errors.Join(retErr, kept.Close()) }()
+		delta.Deletions = kept
+	}
+	fetchCount, deletionCount := delta.Fetch.Len(), delta.Deletions.Len()
+	hs.reportProgressDetail(fmt.Sprintf(
+		"Compared session manifest from %s: %d total, %d changed, %d deleted",
+		hs.Host, delta.Total, fetchCount, deletionCount,
+	))
+	// A change too large for the journal's path entries is journaled as a
+	// full import and applied in batches read back from the delta lists, so
+	// its paths are never all in memory. A list that moved to disk takes the
+	// same path, as reading it back whole would undo the move.
+	large := delta.Fetch.Spilled() || delta.Deletions.Spilled() ||
+		fetchCount+deletionCount > mirrorJournalMaxEntries
+	var fetch, deletions []string
+	if !large {
+		if fetch, err = collectPaths(delta.Fetch); err != nil {
+			return nil, err
+		}
+		if deletions, err = collectPaths(delta.Deletions); err != nil {
+			return nil, err
+		}
 	}
 	refreshFileScoped := !targets.fileScoped.IsEmpty() && !deferFileScopedRefresh
-	pendingDeletions := len(deletions)
-	if large {
-		pendingDeletions = deletionCount
-	}
-	mutatesMirror := pendingDeletions > 0 || fetchCount > 0 || refreshFileScoped
+	mutatesMirror := deletionCount > 0 || fetchCount > 0 || refreshFileScoped
 	observed := make([]string, 0, len(fetch)+len(deletions))
 	forceFullParseObserved := make([]string, 0, len(fetch))
 	for _, remotePath := range fetch {
@@ -1182,7 +1190,7 @@ func (hs RemoteSync) prepareMirror(
 	// re-populated by its separate full archive below.
 	if large {
 		if err := hs.applyLargeMirrorChange(
-			ctx, targets.dirScoped, delta, keepDeletions, mirrorRoot,
+			ctx, targets.dirScoped, delta, mirrorRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -1215,9 +1223,15 @@ func (hs RemoteSync) prepareMirror(
 			return nil, err
 		}
 	}
-	hs.reportProgressDetail(fmt.Sprintf(
-		"Planning import from %s: %d pending paths", hs.Host, len(journal.Entries),
-	))
+	if journal.FullImport {
+		hs.reportProgressDetail(fmt.Sprintf(
+			"Planning import from %s: every session will be re-read", hs.Host,
+		))
+	} else {
+		hs.reportProgressDetail(fmt.Sprintf(
+			"Planning import from %s: %d pending paths", hs.Host, len(journal.Entries),
+		))
+	}
 	dataRebuild := journal.RequiredDataVersion != 0
 	attemptCacheDataVersion := 0
 	if dataRebuild {

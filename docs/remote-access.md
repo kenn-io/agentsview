@@ -320,8 +320,9 @@ host's syncable source corpus for it.
    files for fetch and removes mirror files that disappeared from the manifest.
    Each list stays in memory up to 4 MiB of paths and moves to a temporary file
    next to the mirror past that. Before changing the mirror, it durably merges
-   those paths into a bounded recovery journal next to the mirror. A change too
-   large for the journal is recorded as one full import.
+   those paths into a bounded recovery journal next to the mirror. When more
+   than 8,192 files change, the journal records one full import instead, and
+   that sync re-reads every session from the host.
 1. The collector requests only missing or changed files, in requests of at
    most 4 MiB of paths each. When every manifest file needs fetching, it
    requests a full archive instead of sending the full file list. Archive
@@ -433,6 +434,11 @@ remote-sync protocol version. Every target, manifest, and archive request
 carries that version, and successful responses echo it. A missing or mismatched
 request version returns HTTP 426 before targets or archive data are exchanged,
 so upgrade both hosts before syncing again after either side changes protocol.
+
+An HTTP remote on Windows that runs an AgentsView release from before
+mirror-path sorting fails every sync with a message to upgrade AgentsView on
+the remote host. Its manifest uses a different file order under the same
+protocol version.
 
 The normal mirror comparison detects interrupted extraction when the resulting
 file size or modification time differs from the manifest, and the next sync

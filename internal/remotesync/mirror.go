@@ -97,7 +97,6 @@ type mirrorDiff struct {
 	root    string
 	next    func() (mirrorFile, error, bool)
 	stop    func()
-	started bool
 	local   *mirrorFile
 	lastKey string
 	delta   MirrorDelta
@@ -105,11 +104,51 @@ type mirrorDiff struct {
 
 func newMirrorDiff(mirrorRoot string) *mirrorDiff {
 	next, stop := iter.Pull2(sortedMirrorFiles(mirrorRoot))
-	dir, name := filepath.Split(mirrorRoot)
 	return &mirrorDiff{root: mirrorRoot, next: next, stop: stop, delta: MirrorDelta{
-		Fetch:     spill.New(dir, "."+name+"-fetch-*", mirrorListMemoryBytes),
-		Deletions: spill.New(dir, "."+name+"-deletions-*", mirrorListMemoryBytes),
+		Fetch:     newMirrorList(mirrorRoot, "fetch"),
+		Deletions: newMirrorList(mirrorRoot, "deletions"),
 	}}
+}
+
+// newMirrorList returns an empty delta list whose temporary file, if it needs
+// one, sits next to the mirror.
+func newMirrorList(mirrorRoot, kind string) *spill.List {
+	dir, name := filepath.Split(mirrorRoot)
+	return spill.New(dir, "."+name+"-"+kind+"-*", mirrorListMemoryBytes)
+}
+
+// manifestOrderError reports a manifest that is not sorted by mirror path.
+// Remotes before mirror-path sorting order a Windows manifest by its raw
+// backslash paths.
+type manifestOrderError struct{ key, last string }
+
+func (e *manifestOrderError) Error() string {
+	return fmt.Sprintf("manifest is not sorted by mirror path: %q follows %q", e.key, e.last)
+}
+
+func (e *manifestOrderError) FailureSummary() string {
+	return "remote sync failed: the remote host runs an older agentsview " +
+		"that lists its files in a different order; upgrade agentsview on " +
+		"the remote host"
+}
+
+// mirrorListError reports a delta list that could not be written to or read
+// from its temporary file next to the mirror.
+type mirrorListError struct {
+	op  string
+	err error
+}
+
+func (e *mirrorListError) Error() string {
+	return e.op + " temporary change list next to the mirror: " + e.err.Error()
+}
+
+func (e *mirrorListError) Unwrap() error { return e.err }
+
+func (e *mirrorListError) FailureSummary() string {
+	return "remote sync failed: could not " + e.op + " a temporary change " +
+		"list next to the local mirror; check that the data directory is " +
+		"writable and has free space"
 }
 
 // add compares one manifest entry.
@@ -126,21 +165,17 @@ func (d *mirrorDiff) add(entry ManifestEntry) error {
 		return fmt.Errorf("manifest path %q: %w", entry.Path, err)
 	}
 	key := filepath.ToSlash(rel)
-	if d.started {
+	if d.delta.Total > 0 {
 		// Two remote spellings of one path map to the same mirror file.
 		if key == d.lastKey {
 			return nil
 		}
 		if key < d.lastKey {
-			return fmt.Errorf(
-				"manifest is not sorted by mirror path: %q follows %q",
-				key, d.lastKey,
-			)
+			return &manifestOrderError{key: key, last: d.lastKey}
 		}
 	} else if err := d.advance(); err != nil {
 		return err
 	}
-	d.started = true
 	d.lastKey = key
 	d.delta.Total++
 	for d.local != nil && d.local.rel < key {
@@ -163,7 +198,7 @@ func (d *mirrorDiff) add(entry ManifestEntry) error {
 	}
 	d.noteCodexIndex(local)
 	if err := d.delta.Fetch.Append(entry.Path); err != nil {
-		return fmt.Errorf("record mirror fetch: %w", err)
+		return &mirrorListError{op: "write", err: err}
 	}
 	return nil
 }
@@ -171,7 +206,7 @@ func (d *mirrorDiff) add(entry ManifestEntry) error {
 // finish queues the mirror files after the last entry for deletion. The
 // caller owns the returned delta and must close it.
 func (d *mirrorDiff) finish() (MirrorDelta, error) {
-	if !d.started {
+	if d.delta.Total == 0 {
 		if err := d.advance(); err != nil {
 			return MirrorDelta{}, err
 		}
@@ -224,7 +259,7 @@ func (d *mirrorDiff) noteCodexIndex(localPath string) {
 func (d *mirrorDiff) remove(file mirrorFile) error {
 	d.noteCodexIndex(file.path)
 	if err := d.delta.Deletions.Append(file.path); err != nil {
-		return fmt.Errorf("record mirror deletion: %w", err)
+		return &mirrorListError{op: "write", err: err}
 	}
 	return nil
 }
@@ -234,11 +269,40 @@ func collectPaths(list *spill.List) ([]string, error) {
 	paths := make([]string, 0, list.Len())
 	for path, err := range list.All() {
 		if err != nil {
-			return nil, fmt.Errorf("read mirror change list: %w", err)
+			return nil, &mirrorListError{op: "read", err: err}
 		}
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+// filterMirrorList copies the paths that keep retains, batch by batch, into a
+// new list next to the mirror. The caller must close the returned list.
+func filterMirrorList(
+	mirrorRoot, kind string, list *spill.List,
+	keep func([]string) ([]string, error),
+) (_ *spill.List, err error) {
+	kept := newMirrorList(mirrorRoot, kind)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, kept.Close())
+		}
+	}()
+	for batch, err := range pathBatches(list, mirrorBatchBytes) {
+		if err != nil {
+			return nil, err
+		}
+		paths, err := keep(batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range paths {
+			if err := kept.Append(path); err != nil {
+				return nil, &mirrorListError{op: "write", err: err}
+			}
+		}
+	}
+	return kept, nil
 }
 
 // mirrorBatchBytes bounds the paths in one batch of a large mirror change,
@@ -253,7 +317,7 @@ func pathBatches(list *spill.List, maxBytes int) iter.Seq2[[]string, error] {
 		size := 0
 		for path, err := range list.All() {
 			if err != nil {
-				yield(nil, fmt.Errorf("read mirror change list: %w", err))
+				yield(nil, &mirrorListError{op: "read", err: err})
 				return
 			}
 			if len(batch) > 0 && size+len(path) > maxBytes {

@@ -59,6 +59,10 @@ func TestDecodeManifestBoundsEachEntry(t *testing.T) {
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Equal(t, []string{"/first"}, paths)
+				assert.Equal(t, "remote sync failed: the remote host sent a file "+
+					"entry larger than 256 KiB, which no real file path needs; "+
+					"check that agentsview on the remote host is up to date",
+					FailureSummary(err))
 				return
 			}
 			require.NoError(t, err)

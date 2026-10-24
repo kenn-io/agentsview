@@ -13,9 +13,24 @@ import (
 // which stays under this even with every character escaped.
 const manifestEntryMaxBytes = 256 << 10
 
-var errManifestEntryTooLarge = fmt.Errorf(
-	"manifest entry is larger than %d KiB", manifestEntryMaxBytes>>10,
-)
+// errManifestEntryTooLarge reports a manifest entry past
+// manifestEntryMaxBytes.
+var errManifestEntryTooLarge error = manifestEntryTooLargeError{}
+
+type manifestEntryTooLargeError struct{}
+
+func (manifestEntryTooLargeError) Error() string {
+	return fmt.Sprintf("manifest entry is larger than %d KiB", manifestEntryMaxBytes>>10)
+}
+
+// FailureSummary names the remote, as no real file path is this long.
+func (manifestEntryTooLargeError) FailureSummary() string {
+	return fmt.Sprintf(
+		"remote sync failed: the remote host sent a file entry larger than "+
+			"%d KiB, which no real file path needs; check that agentsview on "+
+			"the remote host is up to date", manifestEntryMaxBytes>>10,
+	)
+}
 
 // DecodeManifest reads a manifest reply and passes each entry to visit as it
 // arrives, so a manifest of any length is never held in memory. A visit error

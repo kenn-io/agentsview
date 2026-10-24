@@ -351,7 +351,7 @@ func TestPrepareHTTPSyncReportsManifestComparisonBeforeTransfer(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"Resolving agent directories on devbox",
-		"Fetching session manifest from devbox",
+		"Fetching and comparing session manifest from devbox",
 		"Compared session manifest from devbox: 1 total, 1 changed, 0 deleted",
 		"Downloading session archive from devbox",
 		"Extracting session archive from devbox",
@@ -2537,6 +2537,23 @@ func TestHTTPSyncRejectsNonJSONManifest(t *testing.T) {
 	assert.Empty(t, remote.archiveRequests)
 }
 
+func TestHTTPSyncReportsAMirrorFailureAsLocal(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "a.jsonl",
+		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+	// A file where the mirror directory belongs makes the mirror walk fail.
+	mirrorRoot := MirrorDir(dataDir, hs.Host)
+	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorRoot), 0o755))
+	require.NoError(t, os.WriteFile(mirrorRoot, nil, 0o644))
+
+	_, err := hs.Run(t.Context())
+
+	require.ErrorContains(t, err, "compare with local mirror")
+	assert.NotContains(t, err.Error(), "decode remote manifest")
+}
+
 func TestHTTPSyncFallsBackToFullWhenDeltaRejected(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	base := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
@@ -2801,6 +2818,49 @@ func TestHTTPSyncDisarmedFullReplayDefersFileScopedRefresh(t *testing.T) {
 			assert.NoFileExists(t, journalPath)
 		})
 	}
+}
+
+func TestHTTPSyncDisarmedFullReplayKeepsALargeFileScopedSnapshot(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	stateDB := remote.addWindsurfFileScopedAgent(t)
+	dataDir := t.TempDir()
+	database, hs := newMirrorSync(t, remote, dataDir)
+	mirrorRoot := MirrorDir(dataDir, hs.Host)
+	journalPath := mirrorJournalPath(mirrorRoot)
+	require.NoError(t, replaceMirrorChangeJournal(journalPath, MirrorChangeJournal{
+		Version:          mirrorJournalVersion,
+		FullImport:       true,
+		FullImportReason: FullImportJournalRecovery,
+		InvalidateAll:    true,
+	}))
+	first, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+	// A parser failure skipped on an earlier sync.
+	skipped := map[string]int64{filepath.Join(remote.dir, "broken.jsonl"): 1}
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), hs.Host, skipped))
+	// The manifest never lists file-scoped exports, so each of these looks
+	// deleted. There are more than the journal holds as entries.
+	mirroredStateDB, err := safeRemappedRemotePath(mirrorRoot, stateDB)
+	require.NoError(t, err)
+	exports := filepath.Join(filepath.Dir(mirroredStateDB), "exports")
+	require.NoError(t, os.MkdirAll(exports, 0o755))
+	for i := range mirrorJournalMaxEntries + 1 {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(exports, fmt.Sprintf("%05d", i)), nil, 0o644,
+		))
+	}
+
+	second, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Close()) })
+
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
+	require.NoError(t, err)
+	assert.Equal(t, skipped, cache,
+		"protected exports must not clear saved parser-failure skips")
+	assert.FileExists(t, filepath.Join(exports, "00000"))
+	assert.FileExists(t, mirroredStateDB)
 }
 
 func TestHTTPSyncDisarmedFullReplayKeepsRemovedFileScopedTarget(t *testing.T) {

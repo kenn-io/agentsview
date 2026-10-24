@@ -146,14 +146,26 @@ func (hs RemoteSync) downloadIntoMirror(
 	fetch []string,
 	full bool,
 	mirrorRoot string,
+) error {
+	return hs.downloadFilesIntoMirror(
+		ctx, targets, fetch, full, mirrorRoot,
+		fmt.Sprintf("%d changed files", len(fetch)),
+	)
+}
+
+// downloadFilesIntoMirror is downloadIntoMirror with files naming the fetched
+// files in its progress labels.
+func (hs RemoteSync) downloadFilesIntoMirror(
+	ctx context.Context,
+	targets TargetSet,
+	fetch []string,
+	full bool,
+	mirrorRoot string,
+	files string,
 ) (err error) {
 	request := ArchiveRequest{TargetSet: targets}
-	downloadLabel := fmt.Sprintf(
-		"Downloading %d changed files from %s", len(fetch), hs.Host,
-	)
-	extractLabel := fmt.Sprintf(
-		"Extracting %d changed files from %s", len(fetch), hs.Host,
-	)
+	downloadLabel := fmt.Sprintf("Downloading %s from %s", files, hs.Host)
+	extractLabel := fmt.Sprintf("Extracting %s from %s", files, hs.Host)
 	if full {
 		downloadLabel = "Downloading session archive from " + hs.Host
 		extractLabel = "Extracting session archive from " + hs.Host
@@ -217,18 +229,13 @@ func (hs RemoteSync) applyLargeMirrorChange(
 	ctx context.Context,
 	targets TargetSet,
 	delta MirrorDelta,
-	keepDeletions func([]string) ([]string, error),
 	mirrorRoot string,
 ) error {
 	for batch, err := range pathBatches(delta.Deletions, mirrorBatchBytes) {
 		if err != nil {
 			return err
 		}
-		kept, err := keepDeletions(batch)
-		if err != nil {
-			return err
-		}
-		if err := ApplyMirrorDeletions(mirrorRoot, kept); err != nil {
+		if err := ApplyMirrorDeletions(mirrorRoot, batch); err != nil {
 			return err
 		}
 	}
@@ -240,6 +247,8 @@ func (hs RemoteSync) applyLargeMirrorChange(
 		if err != nil || !refused {
 			return err
 		}
+		hs.reportProgressDetail(hs.Host +
+			" refused a partial download; downloading the full session archive instead")
 	}
 	// The full archive omits a file that vanished after the manifest listed
 	// it, so the old copies go first.
@@ -266,6 +275,14 @@ func (hs RemoteSync) downloadMirrorBatches(
 	fetch *spill.List,
 	mirrorRoot string,
 ) (refused bool, err error) {
+	batches := 0
+	for _, err := range pathBatches(fetch, mirrorBatchBytes) {
+		if err != nil {
+			return false, err
+		}
+		batches++
+	}
+	number, done := 0, 0
 	for batch, err := range pathBatches(fetch, mirrorBatchBytes) {
 		if err != nil {
 			return false, err
@@ -273,7 +290,11 @@ func (hs RemoteSync) downloadMirrorBatches(
 		if err := RemoveMirrorTypeConflicts(mirrorRoot, batch); err != nil {
 			return false, err
 		}
-		err = hs.downloadIntoMirror(ctx, targets, batch, false, mirrorRoot)
+		number++
+		done += len(batch)
+		err = hs.downloadFilesIntoMirror(ctx, targets, batch, false, mirrorRoot, fmt.Sprintf(
+			"batch %d of %d (%d of %d changed files)", number, batches, done, fetch.Len(),
+		))
 		if isRemoteRefusal(err) {
 			return true, nil
 		}

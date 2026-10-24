@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -201,6 +203,7 @@ func TestRemoteSyncAppliesAChangeTooLargeToHoldInMemory(t *testing.T) {
 				filepath.Join(padDir, "000", "00000000-"+strings.Repeat("a", 200)), "old",
 				time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC))
 			var deltas []int
+			var progress []syncpkg.Progress
 
 			stats, err := RemoteSync{
 				Host: "devbox", DataDir: dataDir, DB: database,
@@ -208,6 +211,7 @@ func TestRemoteSyncAppliesAChangeTooLargeToHoldInMemory(t *testing.T) {
 					dirSource: source, padDir: padDir,
 					refuseDelta: tt.refuseDelta, deltas: &deltas,
 				},
+				Progress: func(p syncpkg.Progress) { progress = append(progress, p) },
 			}.Run(t.Context())
 
 			require.NoError(t, err)
@@ -215,6 +219,29 @@ func TestRemoteSyncAppliesAChangeTooLargeToHoldInMemory(t *testing.T) {
 			assert.Len(t, deltas, tt.wantDeltas)
 			for _, size := range deltas {
 				assert.LessOrEqual(t, size, mirrorBatchBytes)
+			}
+			details := uniqueProgressDetails(progress)
+			assert.Contains(t, details, "Planning import from devbox: every session will be re-read")
+			batch := regexp.MustCompile(
+				`^Downloading batch (\d) of 2 \((\d+) of (\d+) changed files\) from devbox$`,
+			)
+			var batches []string
+			for _, detail := range details {
+				if m := batch.FindStringSubmatch(detail); m != nil {
+					batches = append(batches, m[1])
+					if m[1] == "2" {
+						assert.Equal(t, m[3], m[2], "the last batch completes the change")
+					}
+				}
+			}
+			fallback := "devbox refused a partial download; downloading the full session archive instead"
+			if tt.refuseDelta {
+				// The first batch is refused before any of it downloads.
+				assert.Empty(t, batches)
+				assert.Contains(t, details, fallback)
+			} else {
+				assert.Equal(t, []string{"1", "2"}, batches)
+				assert.NotContains(t, details, fallback)
 			}
 			assert.NoFileExists(t, stale)
 			assert.NoFileExists(t, vanished)

@@ -175,9 +175,17 @@ func (s *Source) Manifest(
 	ctx context.Context, targets remotesync.TargetSet,
 	visit func(remotesync.ManifestEntry) error,
 ) (bool, error) {
+	// A visit failure is the collector's own and keeps its error.
+	var visitErr error
 	err := s.call(ctx, OpManifest, serveRequest{Targets: &targets}, func(r io.Reader) error {
-		return remotesync.DecodeManifest(r, visit)
+		return remotesync.DecodeManifest(r, func(entry remotesync.ManifestEntry) error {
+			visitErr = visit(entry)
+			return visitErr
+		})
 	})
+	if visitErr != nil {
+		return false, visitErr
+	}
 	if cmdErr, ok := errors.AsType[*CommandError](err); ok &&
 		cmdErr.Remote != nil && cmdErr.Remote.Code == CodeUnsupported {
 		return false, nil
@@ -259,9 +267,24 @@ func (c *zstdChecked) Close() error { return c.closer.Close() }
 // anyway.
 const maxTargetsBytes = maxServeRequestBytes
 
-var errTargetsTooLarge = fmt.Errorf(
-	"targets reply is larger than the %d MiB request limit", maxTargetsBytes>>20,
-)
+// errTargetsTooLarge reports a targets reply past maxTargetsBytes.
+var errTargetsTooLarge error = targetsTooLargeError{}
+
+type targetsTooLargeError struct{}
+
+func (targetsTooLargeError) Error() string {
+	return fmt.Sprintf(
+		"targets reply is larger than the %d MiB request limit", maxTargetsBytes>>20,
+	)
+}
+
+func (targetsTooLargeError) FailureSummary() string {
+	return fmt.Sprintf(
+		"SSH remote sync failed: the remote host lists more agent directories "+
+			"than fit in the %d MiB request limit; check the agent directories "+
+			"configured on the remote host", maxTargetsBytes>>20,
+	)
+}
 
 // decodeTargets decodes a targets reply of at most maxTargetsBytes. A reply
 // that runs past the cap fails, even when a complete value ends at it.

@@ -151,36 +151,29 @@ func TestMirrorDiffRejectsAManifestOutOfOrder(t *testing.T) {
 	_, err := diffManifest(t.TempDir(), m)
 
 	require.ErrorContains(t, err, "not sorted by mirror path")
+	assert.Equal(t, "remote sync failed: the remote host runs an older "+
+		"agentsview that lists its files in a different order; upgrade "+
+		"agentsview on the remote host", FailureSummary(err))
 }
 
-func TestMirrorDiffListsAChangeLargerThanItsMemoryLimit(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "mirror")
-	stale := writeMirrorFile(t, root, "/home/u/stale.jsonl", "x",
-		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC))
-	// Each path is 4 KiB, so the fetch list passes the memory limit.
-	count := mirrorListMemoryBytes/4096 + 1
+func TestMirrorDiffNamesTheDataDirectoryWhenItsListCannotSpill(t *testing.T) {
+	// The mirror's parent does not exist, so the list's temporary file cannot
+	// be created once the list passes its memory limit.
+	root := filepath.Join(t.TempDir(), "missing", "mirror")
 	m := Manifest{}
-	for i := range count {
+	for i := range mirrorListMemoryBytes/4096 + 1 {
 		name := fmt.Sprintf("/home/u/new/%08d-", i)
 		m.Files = append(m.Files, ManifestEntry{
 			Path: name + strings.Repeat("a", 4096-len(name)), Size: 1, MtimeNS: 1,
 		})
 	}
 
-	delta, err := diffManifest(root, m)
+	_, err := diffManifest(root, m)
 
-	require.NoError(t, err)
-	assert.Equal(t, count, delta.Total)
-	require.Len(t, delta.Fetch, count)
-	assert.Equal(t, m.Files[0].Path, delta.Fetch[0])
-	assert.Equal(t, m.Files[count-1].Path, delta.Fetch[count-1])
-	assert.Equal(t, []string{stale}, delta.Deletions)
-	// Closing the delta removes the list's temporary file.
-	entries, err := os.ReadDir(parent)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "mirror", entries[0].Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, "remote sync failed: could not write a temporary change "+
+		"list next to the local mirror; check that the data directory is "+
+		"writable and has free space", FailureSummary(err))
 }
 
 func TestApplyMirrorDeletionsConfinedToRoot(t *testing.T) {

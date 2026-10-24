@@ -95,7 +95,16 @@ func (s HTTPSource) Manifest(
 		defer gz.Close()
 		reader = gz
 	}
-	if err := DecodeManifest(reader, visit); err != nil {
+	// A visit failure is the collector's own and keeps its error.
+	var visitErr error
+	err = DecodeManifest(reader, func(entry ManifestEntry) error {
+		visitErr = visit(entry)
+		return visitErr
+	})
+	if visitErr != nil {
+		return false, visitErr
+	}
+	if err != nil {
 		if bodyReader.err != nil {
 			err = bodyReader.err
 		}
