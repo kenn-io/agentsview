@@ -11,6 +11,19 @@ it. To make the UI available from other devices, you need to do two things:
 
 In current releases, bearer-token auth is controlled by `require_auth`.
 
+## Collect sessions on a hub
+
+A hub can pull configured SSH or HTTP hosts and publish their sessions with
+`agentsview pg push --watch --embed`. It does not need local session roots.
+The watcher imports hosts with a positive `interval` at startup and on that
+cadence. A zero or omitted `interval` means manual sync only. It owns the
+archive while running, so stop it before running a separate `agentsview sync`
+against that archive.
+
+See [PostgreSQL watch mode](/docs/pg-sync/#automatic-push-watcher) for the host
+configuration, per-attempt deadlines and one-shot import workflow. Embeddings
+run in the background and reach PostgreSQL on a later push floor.
+
 ## Quick Setup
 
 For a one-off background server, enable auth in `~/.agentsview/config.toml`:
@@ -85,6 +98,37 @@ load the HTML shell, but API requests fail with `401` until the correct token is
 supplied.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
+
+## Query a Hub From the CLI
+
+On unreleased `main`, configure a [default remote read target](/docs/configuration/#default-remote-reads)
+to query a hub without repeating `--server` and its token:
+
+```bash
+agentsview session list
+agentsview session get <id>
+agentsview session usage <id>
+agentsview doctor remote
+agentsview --local session list
+```
+
+The default applies to session list, get, messages, tool-calls, search and
+usage; recall reads; insight reads; health; and MCP. `doctor remote` reports the
+effective target, configuration origin, redacted URL, credential source and
+probe result. It never prints the credential.
+
+For `mcp --profile memory` and `memory session-start --mode hosted-reader`,
+existing memory target variables take precedence over `[remote]`. Explicit
+target flags keep their existing priority, including `--pg=false` suppressing
+memory environment injection. `--local` suppresses that injection too. Local
+and hosted-contributor memory lifecycle modes ignore `[remote]`.
+
+Writes such as session sync, label and parent, insight generate and recall
+import require their existing explicit target selection. Local-only commands
+and `doctor memory` ignore `[remote]`. A remote read uses the remote credential
+rather than the local daemon's `auth_token`. Configured-remote session usage
+reads archived values without asking the hub to sync source transcripts;
+`--no-sync` is accepted and ignored for this target.
 
 ## HTTP Remote Sync
 

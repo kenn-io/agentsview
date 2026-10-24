@@ -770,9 +770,15 @@ components:
       properties:
         destination:
           type: string
+        full_sync_timeout:
+          format: int64
+          type: integer
         host:
           type: string
         interval:
+          format: int64
+          type: integer
+        sync_timeout:
           format: int64
           type: integer
         transport:

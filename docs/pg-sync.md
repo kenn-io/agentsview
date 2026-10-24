@@ -215,6 +215,44 @@ available provider roots. The interval acts as a floor: even if filesystem
 events are missed or a root cannot be watched because of OS watch limits, the
 next interval push catches up.
 
+When this watcher owns the local archive, it pulls configured `[[remote_hosts]]`
+entries with a positive `interval` at startup and on that cadence, including a
+hub with no local session roots. A zero or omitted `interval` means manual sync
+only. Full rebuilds preserve archived sessions from manual hosts without pulling
+those hosts. Committed remote sessions queue a push, including sessions
+committed before an import fails. With `--embed`, they also notify the existing
+background embedding scheduler; vectors ship on a later push floor. Host
+outcomes are logged in the watcher log.
+
+```toml
+[[remote_hosts]]
+host = "workstation"
+transport = "ssh"
+interval = "5m"
+sync_timeout = "10m"
+full_sync_timeout = "0s"
+```
+
+`sync_timeout` defaults to ten minutes for incremental attempts. First pulls,
+empty mirrors and data-version rebuilds use `full_sync_timeout`, which defaults
+to no deadline. Set either to `0s` to remove that deadline. Every attempt still
+stops on shutdown. Remote imports share the local sync lock, so a stalled
+incremental attempt can delay push settling up to its `sync_timeout`. `--full`
+applies to the coordinated startup sync and its retries until the rebuild
+succeeds. Recoverable startup failures keep pushes paused while the watcher
+retries. Periodic remote polling starts before the initial push, after startup
+sync succeeds; later polling attempts are incremental.
+
+One-shot `pg push` keeps its existing local-only sync. To import a host before
+a one-shot push, run:
+
+```bash
+agentsview sync --host workstation
+agentsview pg push --embed
+```
+
+Stop an owning push watcher before running another archive-writing sync.
+
 Operational details:
 
 - Only one watcher can run per AgentsView data directory; a runtime lock
