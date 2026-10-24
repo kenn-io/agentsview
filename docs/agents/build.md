@@ -34,9 +34,6 @@ ancestor permissions satisfy their checks.
 
 - Build with `CGO_ENABLED=1`; the SQLite driver requires CGO.
 - Use the `fts5` build tag for full-text search.
-- Do not add the `kit_posthog_disabled` tag to `go test`. The telemetry reporter
-  disables itself under `testing.Testing()`. E2E binaries run as real
-  processes, so their build keeps the tag.
 
 ## Frontend
 

@@ -835,8 +835,9 @@ empty searches, visible errors, and failed sync attempts. The events include
 `$process_person_profile=false` and `$geoip_disable=true`. It does not include
 session, project, prompt, file path, account, or machine identity. Disable
 telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
-`DO_NOT_TRACK=1`. Only release builds send telemetry, and it stays off in CI and
-Go test binaries.
+`DO_NOT_TRACK=1`. Only release builds send telemetry, because release builds set
+the PostHog project key at link time. Source builds and Go test binaries have no
+key and send nothing. Telemetry also stays off in CI.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 )
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
@@ -23,15 +24,17 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	assert.False(t, EnabledFromEnv())
 }
 
-func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
+func TestNewReporterDisabledWithoutProjectKey(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	clearTelemetryVetoes(t)
 	t.Setenv(GenericEnabledEnv, "1")
 
-	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id"})
+	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id", Version: "v1.2.3"})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
 
 	assert.False(t, reporter.Enabled())
+	assert.True(t, reporter.EventAllowed(EventDaemonActive))
 }
 
 func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
@@ -54,10 +57,13 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	clearTelemetryVetoes(t)
 	t.Setenv(GenericEnabledEnv, "1")
 
-	client, err := newKitReporter(Options{
+	opts := Options{
 		ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"),
 		InstallationID:   "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
-	})
+	}
+	kitOpts := kitOptions(opts)
+	kitOpts.APIKey = "phc_test"
+	client, err := kittelemetry.NewReporter(kitOpts, allowedEventOptions(opts)...)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
