@@ -387,8 +387,29 @@ Host devbox1
 ```
 
 Set `transport = "ssh"` and `destination = "devbox1"` on the matching
-`[[remote_hosts]]` entry. With the dedicated files in `hub-ssh/`, preflight
-the same image and mounts:
+`[[remote_hosts]]` entry. Before mounting the dedicated files in `hub-ssh/`,
+make the directory and files owned by root as seen inside the container.
+Use mode `0700` for the directory, `0600` for the private key and `config`,
+and `0644` for `known_hosts`. OpenSSH rejects an ordinary user's ownership
+of `/root/.ssh/config` with `Bad owner or permissions`, even on a read-only
+mount.
+
+For rootful Docker on Linux without user namespace remapping, prepare only
+this dedicated directory after creating its files:
+
+```bash
+sudo chown 0:0 hub-ssh hub-ssh/id_ed25519 hub-ssh/config hub-ssh/known_hosts
+sudo chmod 0700 hub-ssh
+sudo chmod 0600 hub-ssh/id_ed25519 hub-ssh/config
+sudo chmod 0644 hub-ssh/known_hosts
+```
+
+For rootless Docker or containers with user namespace remapping, use the
+host UID/GID mapped to root inside that container. Host UID/GID `0:0` may
+not map to container root. Prepare ownership using that mapping before the
+read-only mount, and keep the same modes.
+
+Then preflight the same image and mounts:
 
 ```bash
 docker run --rm --entrypoint ssh \
