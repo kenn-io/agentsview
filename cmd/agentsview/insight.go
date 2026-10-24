@@ -107,7 +107,7 @@ func newInsightListCommand() *cobra.Command {
 
 			var result insightListResponse
 			if err := json.UnmarshalRead(resp.Body, &result); err != nil {
-				return fmt.Errorf("decoding insight list: %w", err)
+				return tr.remoteError(fmt.Errorf("decoding insight list: %w", err))
 			}
 			if result.Insights == nil {
 				result.Insights = []db.Insight{}
@@ -149,7 +149,7 @@ func newInsightGetCommand() *cobra.Command {
 			if err != nil {
 				httpErr, hasHttpErr := errors.AsType[*insightHTTPError](err)
 				if hasHttpErr &&
-					httpErr.status == http.StatusNotFound {
+					httpErr.status == http.StatusNotFound && tr.httpClient == nil {
 					return fmt.Errorf("insight %d not found", id)
 				}
 				return err
@@ -158,7 +158,7 @@ func newInsightGetCommand() *cobra.Command {
 
 			var result db.Insight
 			if err := json.UnmarshalRead(resp.Body, &result); err != nil {
-				return fmt.Errorf("decoding insight: %w", err)
+				return tr.remoteError(fmt.Errorf("decoding insight: %w", err))
 			}
 			return printInsight(cmd, &result)
 		},
@@ -259,7 +259,8 @@ func doInsightRequest(
 	token, method, path string,
 	query url.Values,
 	body io.Reader,
-) (*http.Response, error) {
+) (resp *http.Response, err error) {
+	defer func() { err = tr.remoteError(err) }()
 	baseURL := strings.TrimSuffix(tr.URL, "/")
 	if baseURL == "" {
 		return nil, errors.New("insight server URL is empty")
@@ -292,7 +293,7 @@ func doInsightRequest(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	resp, err = client.Do(req)
 	if tr.httpClient != nil {
 		resp, err = remotecred.ResponsePolicy(tr.URL)(resp, err)
 	}
@@ -309,6 +310,15 @@ func doInsightRequest(
 		}
 	}
 	return resp, nil
+}
+
+// A supplied client selects configured-remote policy; legacy explicit servers
+// keep their existing diagnostics.
+func (tr transport) remoteError(err error) error {
+	if tr.httpClient != nil {
+		return remotecred.WrapError(tr.URL, err)
+	}
+	return err
 }
 
 func insightRequestBaseURL(raw string) string {

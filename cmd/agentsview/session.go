@@ -176,6 +176,10 @@ func resolveWritableServiceWithIntent(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
+	if err := validateTargetFlags(cmd); err != nil {
+		return nil, nil, err
+	}
+
 	if pgReadRequested(cmd) {
 		return nil, nil, cliUsageError(errors.New(
 			"--pg is read-only and cannot be used with write commands",
