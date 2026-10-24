@@ -29,6 +29,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -641,11 +642,44 @@ type AutomatedConfig struct {
 	ExactMatches []string `toml:"exact_matches" json:"exact_matches,omitempty"`
 }
 
-// FrictionConfig controls Friction Log analysis. It is off by default because
-// reviewing transcripts costs CPU that users without a digest do not need.
+// DefaultFrictionBackfillDays bounds catch-up to recent complete local dates.
+const DefaultFrictionBackfillDays = 7
+
+// FrictionConfig controls the opt-in Friction Log review.
 type FrictionConfig struct {
 	// Enabled reviews changed sessions in the background after each sync.
 	Enabled bool `toml:"enabled" json:"enabled,omitempty"`
+	// Timezone is the IANA zone digests are dated in. An empty value uses
+	// the local zone; AGENTSVIEW_FRICTION_TZ overrides this setting.
+	Timezone string `json:"timezone,omitempty" toml:"timezone"`
+	// BackfillDays bounds catch-up to recent complete local dates.
+	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
+	// SeatPatterns are globs over session file paths with one {seat} capture.
+	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+}
+
+// Validate checks the zone name, backfill bound, and seat patterns.
+func (c FrictionConfig) Validate() error {
+	if tz := strings.TrimSpace(c.Timezone); tz != "" {
+		if tz == "Local" {
+			return fmt.Errorf("[friction] timezone %q is not an IANA zone", tz)
+		}
+		if _, err := time.LoadLocation(tz); err != nil {
+			return fmt.Errorf("[friction] timezone %q is not an IANA zone", tz)
+		}
+	}
+	if c.BackfillDays < 1 || c.BackfillDays > 3650 {
+		return errors.New("[friction] backfill_days must be between 1 and 3650")
+	}
+	for _, p := range c.SeatPatterns {
+		if strings.Count(p, "{seat}") != 1 {
+			return fmt.Errorf("[friction] seat_patterns entry %q must contain exactly one {seat}", p)
+		}
+	}
+	if _, err := friction.CompileSeatPatterns(c.SeatPatterns); err != nil {
+		return fmt.Errorf("[friction] seat_patterns: %w", err)
+	}
+	return nil
 }
 
 // AgentConfig holds per-agent runtime overrides.
@@ -1343,6 +1377,7 @@ func Default() (Config, error) {
 				FailureBackoff:   "1h",
 			},
 		},
+		Friction: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays},
 	}, nil
 }
 
@@ -2072,6 +2107,23 @@ func (c *Config) applyConfigTOML(data string) error {
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
 	}
+	if meta.IsDefined("friction", "enabled") {
+		c.Friction.Enabled = file.Friction.Enabled
+	}
+	if meta.IsDefined("friction", "timezone") {
+		c.Friction.Timezone = strings.TrimSpace(file.Friction.Timezone)
+	}
+	if meta.IsDefined("friction", "backfill_days") {
+		c.Friction.BackfillDays = file.Friction.BackfillDays
+	}
+	if meta.IsDefined("friction", "seat_patterns") {
+		c.Friction.SeatPatterns = make([]string, 0, len(file.Friction.SeatPatterns))
+		for _, p := range file.Friction.SeatPatterns {
+			if p = strings.TrimSpace(p); p != "" {
+				c.Friction.SeatPatterns = append(c.Friction.SeatPatterns, p)
+			}
+		}
+	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
 	// ignore the latter.
@@ -2080,9 +2132,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
-	}
-	if meta.IsDefined("friction", "enabled") {
-		c.Friction.Enabled = file.Friction.Enabled
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes

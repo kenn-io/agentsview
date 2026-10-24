@@ -598,6 +598,9 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
 		"friction_findings":                               true,
+		"friction_digests":                                true,
+		"friction_digest_sessions":                        true,
+		"friction_patterns":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -639,6 +642,9 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
 		"friction_findings":                               true,
+		"friction_digests":                                true,
+		"friction_digest_sessions":                        true,
+		"friction_patterns":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,

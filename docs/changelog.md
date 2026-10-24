@@ -9,6 +9,15 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- When Friction Log review is enabled, AgentsView stores daily digests and
+  catches up on completed days missed while offline, including sessions that
+  arrive late within the configured backfill window. Digests retain findings,
+  usage, and pattern recurrence, and survive full resyncs that retain transcript
+  text. PostgreSQL hubs build their own digests. Read APIs and CLI commands
+  remain planned.
+
 **Improvements**
 
 - `pg push` saves download traffic when a session grows by comparing short
