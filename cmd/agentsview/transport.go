@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -72,6 +73,7 @@ func autoStartBackgroundServe(
 // transport captures how to reach the session-data layer from a
 // CLI subcommand. Either the HTTP daemon (URL set) or the local DB.
 type transport struct {
+	httpClient         *http.Client
 	Mode               transportMode
 	URL                string
 	BrowserURL         string

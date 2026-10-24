@@ -25,6 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -52,7 +53,7 @@ func newSessionUsageCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("no-sync", false,
-		"Use archived usage without synchronizing source transcripts")
+		"Use archived usage without synchronizing source transcripts (ignored for a configured remote)")
 	cmd.Flags().Bool("own-only", false,
 		"Report only this session's own usage, excluding subagents")
 	return cmd
@@ -99,23 +100,20 @@ func sessionUsageDataForCommand(
 		SessionID: sessionID, OwnOnly: ownOnly, NoSync: noSync,
 	}
 
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, tokenUseExitErr, errors.New("--server and --pg are mutually exclusive")
-		}
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return nil, tokenUseExitErr, err
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	if target.isHTTP() {
+		if target.Kind == readTargetRemote {
+			query.NoSync = true
 		}
 		if !query.OwnOnly {
-			if err := requireRemoteSubagentUsageSupport(
-				ctx, remote, token, !query.NoSync,
-			); err != nil {
-				return nil, tokenUseExitErr, err
+			if err := requireRemoteSubagentUsageSupportWithClient(ctx, target.URL, target.Cred, !query.NoSync, target.client); err != nil {
+				return nil, tokenUseExitErr, target.remoteError(err)
 			}
 		}
-		return httpSessionUsageData(ctx, remote, token, query)
+		return httpSessionUsageDataWithClient(ctx, target.URL, target.Cred, query, target.client)
 	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
@@ -146,12 +144,8 @@ func sessionUsageDataForCommand(
 	return backend.SessionUsage(ctx, query)
 }
 
-func requireRemoteSubagentUsageSupport(
-	ctx context.Context, baseURL, token string, refresh bool,
-) error {
-	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
-		ctx, baseURL, token,
-	)
+func requireRemoteSubagentUsageSupportWithClient(ctx context.Context, baseURL, token string, refresh bool, client *http.Client) error {
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilitiesWithClient(ctx, baseURL, token, client)
 	if err != nil {
 		return err
 	}
@@ -187,11 +181,15 @@ func httpSessionUsageData(
 	token string,
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
+	return httpSessionUsageDataWithClient(ctx, baseURL, token, query, nil)
+}
+
+func httpSessionUsageDataWithClient(ctx context.Context, baseURL, token string, query sessionUsageQuery, client *http.Client) (*sessionUsageOutput, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	sessionID := query.SessionID
-	backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
+	backend := servicehttp.NewHTTPBackendWithClient(baseURL, token, false, "", client)
 	resolvedID, err := resolveServiceSessionID(ctx, backend, sessionID)
 	if err != nil {
 		if !errors.Is(err, errSessionNotFound) {
@@ -242,7 +240,13 @@ func httpSessionUsageData(
 	// Request the full breakdown so the remote path matches the
 	// shape returned by the direct store paths, and the same subagent
 	// attribution scope so --server and local agree field for field.
-	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
+	var policy func(*http.Response, error) (*http.Response, error)
+	if client != nil {
+		policy = remotecred.ResponsePolicy(baseURL) //nolint:bodyclose // The generated API client consumes and closes response bodies.
+	} else {
+		client = sessionUsageHTTPClient
+	}
+	api, err := apiclient.NewHTTPClientWithResponsePolicy(baseURL, token, client, policy)
 	if err != nil {
 		return nil, tokenUseExitErr, err
 	}
@@ -254,15 +258,21 @@ func httpSessionUsageData(
 		PathParams: &apiclient.GetAPIV1SessionsIDUsagePath{ID: url.PathEscape(resolvedID)},
 		Query:      &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true), Subagents: subagents},
 	})
+	if response != nil && response.HTTPResponse.StatusCode == http.StatusNotFound {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		return nil, tokenUseExitNotFound, nil
+	}
+	if policy != nil && err != nil {
+		return nil, tokenUseExitErr, fmt.Errorf("remote %s usage response failed; try --local", remotecred.Redact(baseURL))
+	}
 	if response == nil {
 		return nil, tokenUseExitErr, err
 	}
 	resp := response.HTTPResponse
-	if resp.StatusCode == http.StatusNotFound {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-		return nil, tokenUseExitNotFound, nil
-	}
 	if resp.StatusCode != http.StatusOK {
+		if policy != nil {
+			return nil, tokenUseExitErr, fmt.Errorf("remote %s usage returned HTTP %d; try --local", remotecred.Redact(baseURL), resp.StatusCode)
+		}
 		body := response.Body
 		return nil, tokenUseExitErr, fmt.Errorf(
 			"usage: HTTP %d: %s", resp.StatusCode, body,

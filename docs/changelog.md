@@ -17,6 +17,31 @@ The latest release is
 - `pg push` reduces writes when a session grows by rewriting only the messages
   from the first changed message onward instead of the whole session.
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
+- PostgreSQL push watchers can collect remote hosts with positive sync
+  intervals, including hubs with no local session roots. Hosts with zero or
+  omitted intervals stay manual-only. Incremental pulls have a configurable
+  timeout, and committed sessions still reach the push and embedding queues
+  after a partial import fails.
+- Scheduled daemon pulls also use the ten-minute incremental timeout. Set
+  `sync_timeout = "0s"` in a remote-host entry to keep those pulls unbounded.
+
+- CLI session, recall, insight and MCP reads can use a configured hub by default.
+  Use `--local` for local data and `doctor remote` to check the selected target.
+  Remote credentials use bounded file reads and redirects stay on the same
+  origin. Memory lifecycle hooks use this default only in hosted-reader mode.
+- PostgreSQL hubs can serve pinned document embeddings over authenticated HTTP,
+  with bounded, resumable responses and optional zstd compression.
+
+- PostgreSQL vector pushes now record parser and automated-session scope
+  compatibility. Changed document keys or content invalidate stale coverage from
+  other generations before clients can reuse its embeddings. Ordinal and offset
+  corrections preserve compatible vectors. Existing writers keep publishing
+  when they cannot add the optional compatibility columns.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message

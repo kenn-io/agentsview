@@ -1,9 +1,12 @@
 package remotesync
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync"
+
+	"go.kenn.io/agentsview/internal/lockctx"
 )
 
 type cleanupRetrier interface {
@@ -35,6 +38,7 @@ func (e *PendingCleanupError) Unwrap() error {
 // of failed cleanup owners. Every retained owner must release before later
 // work can start, so ownership cannot be overwritten or grow without bound.
 type CleanupRegistry struct {
+	waiter  lockctx.Waiter
 	mu      sync.Mutex
 	pending error
 }
@@ -45,7 +49,14 @@ type CleanupRegistry struct {
 func (r *CleanupRegistry) Run(
 	run func() (SyncStats, error),
 ) (SyncStats, error) {
-	r.mu.Lock()
+	return r.RunCtx(context.Background(), run)
+}
+
+// RunCtx lets a canceled caller stop waiting for the cleanup registry.
+func (r *CleanupRegistry) RunCtx(ctx context.Context, run func() (SyncStats, error)) (SyncStats, error) {
+	if err := lockctx.LockQueued(ctx, &r.mu, &r.waiter); err != nil {
+		return SyncStats{}, err
+	}
 	defer r.mu.Unlock()
 
 	if r.pending != nil {

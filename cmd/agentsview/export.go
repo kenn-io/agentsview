@@ -98,11 +98,12 @@ func newExportCommand() *cobra.Command {
 
 func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "export",
-		Short:        "Export local archive data",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
+		Use:              "export",
+		Short:            "Export local archive data",
+		GroupID:          groupData,
+		SilenceUsage:     true,
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) { noticeLocalArchive(cmd) },
+		Args:             cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},

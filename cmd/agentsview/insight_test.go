@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -685,4 +686,53 @@ func TestInsightCommandHelpListsScope(t *testing.T) {
 	assert.NotContains(t, out.String(), "--kind")
 	assert.NotContains(t, out.String(), "--force-refresh")
 	assert.NotContains(t, out.String(), "--llm-opt-in")
+}
+
+func TestInsightResponseErrors(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		for _, status := range []int{http.StatusOK, http.StatusNotFound, http.StatusServiceUnavailable} {
+			for _, args := range [][]string{{"list"}, {"get", "1"}} {
+				t.Run(fmt.Sprintf("configured=%t/status=%d/%s", configured, status, args[0]), func(t *testing.T) {
+					t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+					t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", "")
+					calls := 0
+					ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						assert.Contains(t, r.URL.Path, "/api/v1/insights")
+						w.WriteHeader(status)
+						_, _ = w.Write([]byte(`{"response-secret":1,"response-secret":2}`))
+					}))
+					defer ts.Close()
+					cmdArgs := append([]string{"insight"}, args...)
+					if configured {
+						t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL+"/private-token/url-secret")
+					} else {
+						t.Setenv("AGENTSVIEW_REMOTE_URL", "")
+						cmdArgs = append(cmdArgs, "--server", ts.URL)
+					}
+					_, err := executeCommand(newRootCommand(), cmdArgs...)
+					require.Error(t, err)
+					require.Equal(t, 1, calls)
+					if configured {
+						require.Contains(t, err.Error(), ts.URL)
+						require.Contains(t, err.Error(), "--local")
+						for _, secret := range []string{"response-secret", "private-token", "url-secret"} {
+							require.NotContains(t, err.Error(), secret)
+						}
+					} else if status == http.StatusOK {
+						require.Contains(t, err.Error(), "response-secret")
+					}
+					if status == http.StatusOK {
+						var decodeErr *jsontext.SyntacticError
+						require.ErrorAs(t, err, &decodeErr)
+					}
+					if status != http.StatusOK && (configured || args[0] == "list" || status != http.StatusNotFound) {
+						var statusErr *insightHTTPError
+						require.ErrorAs(t, err, &statusErr)
+						require.Equal(t, status, statusErr.status)
+					}
+				})
+			}
+		}
+	}
 }

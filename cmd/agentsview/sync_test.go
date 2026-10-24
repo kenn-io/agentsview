@@ -890,7 +890,7 @@ token = "remote-token"
 		rh config.RemoteHost, full bool,
 	) (remotesync.SyncStats, error) {
 		httpCalls++
-		assert.Equal(t, config.RemoteHost{Host: "one-box", URL: "https://one.example.test", Token: "remote-token"}, rh)
+		assert.Equal(t, config.RemoteHost{Host: "one-box", URL: "https://one.example.test", Token: "remote-token", SyncTimeout: 10 * time.Minute}, rh)
 		assert.True(t, full)
 		return remotesync.SyncStats{}, nil
 	}
@@ -1050,6 +1050,7 @@ destination = "user@ssh-box.example.test"
 		Host:        "ssh-box",
 		Transport:   config.RemoteTransportSSH,
 		Destination: "user@ssh-box.example.test",
+		SyncTimeout: 10 * time.Minute,
 	}}, got)
 }
 

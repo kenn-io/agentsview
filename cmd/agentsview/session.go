@@ -64,19 +64,16 @@ func newSessionCommand() *cobra.Command {
 func resolveService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --pg are mutually exclusive",
-			)
-		}
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return nil, nil, err
-		}
-		return servicehttp.NewHTTPBackend(remote, token, false, ""),
-			func() {}, nil
+	return resolveServiceWithIntent(cmd, readTargetDefault)
+}
+
+func resolveServiceWithIntent(cmd *cobra.Command, intent readTargetIntent) (service.SessionService, func(), error) {
+	target, err := resolveReadTarget(cmd, intent)
+	if err != nil {
+		return nil, nil, err
+	}
+	if target.isHTTP() {
+		return target.backend(nil), func() {}, nil
 	}
 	scope := config.ScopeLocal
 	for _, name := range []string{"semantic", "hybrid"} {
@@ -156,11 +153,6 @@ func resolveWritableServiceWithIntent(
 	cmd *cobra.Command, fresh bool,
 ) (service.SessionService, func(), error) {
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --pg are mutually exclusive",
-			)
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -168,6 +160,10 @@ func resolveWritableServiceWithIntent(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
+	if err := validateTargetFlags(cmd); err != nil {
+		return nil, nil, err
+	}
+
 	if pgReadRequested(cmd) {
 		return nil, nil, errors.New(
 			"--pg is read-only and cannot be used with write commands",
@@ -235,6 +231,11 @@ func pgReadRequested(cmd *cobra.Command) bool {
 }
 
 func explicitServerToken(cmd *cobra.Command) (string, error) {
+	if cmd != nil {
+		if err := validateTargetFlags(cmd); err != nil {
+			return "", err
+		}
+	}
 	if cmd == nil {
 		return "", nil
 	}

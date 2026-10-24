@@ -1,10 +1,12 @@
 package servicehttp
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -152,10 +155,129 @@ func TestMessagesMapsSourceChangedConflict(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := NewHTTPBackend(srv.URL, "", false, "").Messages(
+	backend := NewHTTPBackendWithClient(
+		srv.URL+"/private/path?token=secret", "", false, "", srv.Client(),
+	)
+	_, err := backend.Messages(
 		t.Context(), "session", service.MessageFilter{ExpectedRevision: "old"},
 	)
 	require.ErrorIs(t, err, service.ErrSourceChanged)
+	assert.NotContains(t, err.Error(), "private")
+	assert.NotContains(t, err.Error(), "secret")
+}
+
+func TestRemotePolicyWatchPreservesHTTPFailures(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusNotImplemented, http.StatusConflict, http.StatusServiceUnavailable} {
+		for _, body := range []string{"", "private token=secret", `{"detail":"private token=secret"}`} {
+			t.Run(fmt.Sprintf("%d/%q", status, body), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(body))
+				}))
+				t.Cleanup(srv.Close)
+				backend := NewHTTPBackendWithClient(srv.URL+"/private/path", "url-secret", false, "", srv.Client())
+				events, err := backend.Watch(t.Context(), "session-a")
+				require.Nil(t, events)
+				want := fmt.Sprintf("watch: HTTP %d", status)
+				if status == http.StatusNotFound {
+					want = "watch: session not found: session-a"
+				}
+				require.EqualError(t, err, "remote "+srv.URL+" request failed; try --local")
+				// The sanitized JSON reaches the generated client's HTTP error
+				// branch, and the remote wrapper retains Watch's status cause.
+				require.EqualError(t, errors.Unwrap(err), want)
+				assert.NotContains(t, err.Error(), "private")
+				assert.NotContains(t, err.Error(), "secret")
+			})
+		}
+	}
+}
+
+func TestRemotePolicy503RecallPreservesSemanticTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":503,"detail":"private token=secret"}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendWithClient(
+		srv.URL+"/private/path?token=secret", "", false, "", srv.Client(),
+	)
+
+	_, err := backend.QueryRecallEntries(t.Context(), service.RecallQuery{
+		Query: "example", Mode: "vector", Limit: 10,
+	})
+	require.ErrorIs(t, err, db.ErrSemanticTransient)
+	require.ErrorContains(t, err, "--local")
+	require.ErrorContains(t, err, "127.0.0.1")
+	assert.NotContains(t, err.Error(), "private")
+	assert.NotContains(t, err.Error(), "secret")
+}
+
+func TestRemotePolicyServiceErrorsRedactConfiguredURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		readOnly bool
+		call     func(*httpBackend) error
+	}{
+		{"local sync rejection", true, func(b *httpBackend) error {
+			_, err := b.Sync(t.Context(), service.SyncInput{})
+			return err
+		}},
+		{"local annotation rejection", true, func(b *httpBackend) error {
+			_, err := b.UpdateSessionLabels(t.Context(), "session", []string{"label"}, nil, false)
+			return err
+		}},
+		{"session stats 501", false, func(b *httpBackend) error {
+			_, err := b.Stats(t.Context(), service.StatsFilter{})
+			return err
+		}},
+		{"usage summary 501", false, func(b *httpBackend) error {
+			_, err := b.UsageSummary(t.Context(), service.UsageRequest{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				if tt.readOnly {
+					assert.Failf(t, "local rejection sent HTTP request", "%s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(http.StatusNotImplemented)
+			}))
+			defer srv.Close()
+			backend := NewHTTPBackendWithClient(srv.URL+"/private/path?token=url-secret", "", tt.readOnly, "", srv.Client()).(*httpBackend)
+			err := tt.call(backend)
+			require.ErrorIs(t, err, db.ErrReadOnly)
+			require.ErrorContains(t, err, "--local")
+			if tt.readOnly {
+				assert.Zero(t, hits)
+			} else {
+				assert.Equal(t, 1, hits)
+			}
+			assert.NotContains(t, err.Error(), "/private/path")
+			assert.NotContains(t, err.Error(), "url-secret")
+			assert.Contains(t, err.Error(), "127.0.0.1")
+		})
+	}
+}
+
+func TestRemotePolicyConflictErrorRedactsRequestURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"status":409,"code":"conflict","detail":"private token=secret"}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendWithClient(
+		srv.URL+"/private/path?token=url-secret", "", false, "", srv.Client(),
+	)
+
+	_, err := backend.Messages(t.Context(), "session", service.MessageFilter{ExpectedRevision: "old"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "/private/path")
+	assert.NotContains(t, err.Error(), "url-secret")
+	assert.NotContains(t, err.Error(), "token=secret")
 }
 
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
@@ -350,4 +472,62 @@ func TestUsageModelGroupsQuery(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestRemotePolicyUnexpectedSuccessRedactsBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("private-path?token=response-secret"))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendWithClient(srv.URL, "", false, "", srv.Client())
+	_, err := backend.Get(t.Context(), "session")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTP 206")
+	assert.NotContains(t, err.Error(), "private-path")
+	assert.NotContains(t, err.Error(), "response-secret")
+}
+
+func TestRemotePolicyRecall501PreservesReadOnly(t *testing.T) {
+	for _, mode := range []string{"vector", "hybrid"} {
+		for _, tc := range []struct {
+			name, body string
+			want       error
+		}{
+			{"read only", `{"error":"not available in remote mode","detail":"response-secret"}`, db.ErrReadOnly},
+			{"plain read only", "not available in remote mode", db.ErrReadOnly},
+			{"oversize marker", `{"error":"not available in remote mode","detail":"` + strings.Repeat("x", 65536) + `"}`, service.ErrSemanticUnavailable},
+			{"unavailable", `{"error":"index is building: response-secret"}`, service.ErrSemanticUnavailable},
+			{"untrusted suffix", `{"error":"not available in remote mode: response-secret"}`, service.ErrSemanticUnavailable},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNotImplemented)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				t.Cleanup(srv.Close)
+				backend := NewHTTPBackendWithClient(srv.URL, "", false, "", srv.Client())
+				_, err := backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "example", Mode: mode, Limit: 10})
+				require.ErrorIs(t, err, tc.want)
+				require.ErrorContains(t, err, "--local")
+				require.ErrorContains(t, err, "127.0.0.1")
+				assert.NotContains(t, err.Error(), "response-secret")
+			})
+		}
+	}
+}
+
+func TestRemotePolicyMalformedSuccessRedactsDecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; private=header-secret")
+		_, _ = w.Write([]byte(`{"response-secret":1,"response-secret":2}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendWithClient(srv.URL, "", false, "", srv.Client())
+	_, err := backend.Get(t.Context(), "session")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "response-secret")
+	assert.NotContains(t, err.Error(), "header-secret")
+	assert.Contains(t, err.Error(), "127.0.0.1")
+	assert.Contains(t, err.Error(), "--local")
 }

@@ -10,7 +10,9 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/stringutil"
 	"go.kenn.io/kit/embedmodel"
+	"go.kenn.io/kit/search/sqlquery"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
 )
 
 // snippetMaxRunes bounds the length of a Hit's Snippet; longer chunks are
@@ -108,6 +110,8 @@ func (ix *Index) Search(
 func (ix *Index) SearchPage(
 	ctx context.Context, enc kitvec.EncodeFunc, query string, limit int,
 ) ([]Hit, bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	search, err := ix.PrepareSearch(ctx, enc, query)
 	if err != nil {
 		return nil, false, err
@@ -115,29 +119,67 @@ func (ix *Index) SearchPage(
 	return search(ctx, limit)
 }
 
-// PrepareSearch pins the active generation and encodes once for candidate expansion within a request.
+// PrepareSearch pins the active generation, recipe, vectors and hydration in
+// one SQLite read snapshot. The caller must cancel ctx when candidate expansion
+// ends to release the snapshot. SearchPage owns this lifetime for single reads.
 func (ix *Index) PrepareSearch(
 	ctx context.Context, enc kitvec.EncodeFunc, query string,
 ) (func(context.Context, int) ([]Hit, bool, error), error) {
 	if ix.versionMismatch {
 		return nil, ErrMirrorVersionMismatch
 	}
-
-	active, hasActive, err := ix.ActiveFingerprint(ctx)
+	tx, err := ix.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
-	if !hasActive {
+	ready := false
+	defer func() {
+		if !ready {
+			_ = tx.Rollback()
+		}
+	}()
+	var active string
+	err = tx.QueryRowContext(ctx, `SELECT gen_key FROM `+ix.spec.generationsTable()+` WHERE state='active' ORDER BY ordinal DESC LIMIT 1`).Scan(&active)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
 		return nil, ix.noActiveGenerationError(ctx)
 	}
-
+	if err != nil {
+		return nil, err
+	}
+	searchIndex := *ix
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM `+ix.spec.MetaTable+` WHERE key=?`, generationSplitKey+active).Scan(&raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if err == nil {
+		searchIndex.split, err = splitFromRecipe(raw, active)
+		if err != nil {
+			return nil, err
+		}
+	}
 	queryVector, err := kitvec.EncodeOne(ctx, enc, query)
 	if err != nil {
 		return nil, &QueryEncodeError{Err: err}
 	}
-
+	ready = true
 	return func(ctx context.Context, limit int) ([]Hit, bool, error) {
-		hits, err := ix.store.QueryGeneration(ctx, active, queryVector, limit)
+		q, err := ix.store.BuildCandidateQuery(ctx, tx, active, queryVector, sqlitevec.CandidateQuery{
+			CandidateLimit: limit,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("search: %w", err)
+		}
+		hits, err := q.All(ctx, tx, func(row *sql.Rows) (kitvec.Hit[string], error) {
+			var h kitvec.Hit[string]
+			var distance float64
+			if err := row.Scan(&h.Doc, &h.ChunkIndex, &h.Revision, &distance); err != nil {
+				return h, err
+			}
+			h.Score, err = sqlitevec.ScoreFromDistance(distance)
+			return h, err
+		})
 		if err != nil {
 			return nil, false, fmt.Errorf("search: %w", err)
 		}
@@ -146,11 +188,7 @@ func (ix *Index) PrepareSearch(
 		if err != nil {
 			return nil, false, fmt.Errorf("search: %w", err)
 		}
-		if len(hits) > limit {
-			hits = hits[:limit]
-		}
-
-		hydrated, err := ix.hydrateHits(ctx, hits)
+		hydrated, err := searchIndex.hydrateHitsOn(ctx, tx, hits)
 		return hydrated, exhausted, err
 	}, nil
 }
@@ -215,6 +253,10 @@ type mirrorDoc struct {
 // reconciled it away) are dropped rather than erroring, since the search
 // itself still succeeded.
 func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]Hit, error) {
+	return ix.hydrateHitsOn(ctx, ix.db, hits)
+}
+
+func (ix *Index) hydrateHitsOn(ctx context.Context, reader sqlquery.Queryer, hits []kitvec.Hit[string]) ([]Hit, error) {
 	if len(hits) == 0 {
 		return nil, nil
 	}
@@ -223,7 +265,7 @@ func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]
 	for i, h := range hits {
 		docKeys[i] = h.Doc
 	}
-	docs, err := ix.lookupMirrorDocs(ctx, docKeys)
+	docs, err := ix.lookupMirrorDocsOn(ctx, reader, docKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -371,10 +413,14 @@ func anchorMemberIndex(offsets []db.UnitOffset, start, end int) int {
 // by a concurrent Refresh (see evictSlotOccupant) are excluded the same way:
 // mid-refresh state must never hydrate into a hit with a negative ordinal.
 func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[string]mirrorDoc, error) {
+	return ix.lookupMirrorDocsOn(ctx, ix.db, docKeys)
+}
+
+func (ix *Index) lookupMirrorDocsOn(ctx context.Context, reader sqlquery.Queryer, docKeys []string) (map[string]mirrorDoc, error) {
 	docs := make(map[string]mirrorDoc, len(docKeys))
 	err := chunkKeys(docKeys, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
-		rows, err := ix.db.QueryContext(ctx, `
+		rows, err := reader.QueryContext(ctx, `
 SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
   FROM `+ix.spec.DocsTable+`
  WHERE ordinal >= 0 AND doc_key IN `+placeholders, args...)

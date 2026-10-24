@@ -19,6 +19,16 @@ import (
 // RFC3339 ended_at value; Recall uses a monotonic corpus revision.
 const refreshWatermarkKey = "refresh_watermark"
 
+// sourceDataVersionKey certifies the persisted source parser version reconciled
+// by a full refresh. Incremental refreshes may retain, but never upgrade, it.
+const sourceDataVersionKey = "source_data_version"
+
+// dataVersionSource is optional: legacy and non-archive sources can still build
+// and publish vectors, without claiming parser compatibility for hub discovery.
+type dataVersionSource interface {
+	EmbeddingDataVersion(context.Context, bool) (int, error)
+}
+
 // scopeIncludeAutomatedKey is the metadata-table key holding the
 // include-automated scope ("true"/"false") the mirror was last refreshed
 // under. Build compares it against the requested scope on every call: the
@@ -139,6 +149,16 @@ func DocKey(kind, sessionID, sourceUUID string, ordinal, occurrence int) string 
 	return ordinalPrefix + session + ":" + strconv.Itoa(ordinal)
 }
 
+// unitOccurrence shares the archive scan-order identity rule with hub lookups.
+func unitOccurrence(u db.EmbeddableUnit, occurrences map[string]int) int {
+	if u.SourceUUID == "" {
+		return 1
+	}
+	key := u.SessionID + "\x00" + u.SourceUUID
+	occurrences[key]++
+	return occurrences[key]
+}
+
 // escapeDocKeyComponent percent-encodes the characters DocKey uses as
 // delimiters — ':', '#', and '%' itself — so a session_id or source_uuid
 // containing them cannot be mistaken for key structure, keeping DocKey
@@ -201,6 +221,19 @@ func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
+		return RefreshStats{}, err
+	}
+	var sourceVersion int
+	proofSource, hasProofSource := src.(dataVersionSource)
+	if hasProofSource {
+		var err error
+		sourceVersion, err = proofSource.EmbeddingDataVersion(ctx, includeAutomated)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+	}
+	previousProof, _, err := ix.metaGet(ctx, sourceDataVersionKey)
+	if err != nil {
 		return RefreshStats{}, err
 	}
 
@@ -270,12 +303,7 @@ func (ix *Index) Refresh(
 		return RefreshStats{}, err
 	}
 	visitUnit := func(u db.EmbeddableUnit) error {
-		occurrence := 1
-		if u.SourceUUID != "" {
-			occKey := u.SessionID + "\x00" + u.SourceUUID
-			occurrences[occKey]++
-			occurrence = occurrences[occKey]
-		}
+		occurrence := unitOccurrence(u, occurrences)
 		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
 		if u.Deleted {
 			deleted, err := ix.deleteMirrorDocument(ctx, key)
@@ -304,6 +332,11 @@ func (ix *Index) Refresh(
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
+	// Refresh commits incrementally. A failed scan must not leave a previous
+	// full-scan proof certifying a partially rewritten corpus.
+	if err := ix.metaDelete(ctx, sourceDataVersionKey); err != nil {
+		return RefreshStats{}, err
+	}
 	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
@@ -380,6 +413,17 @@ func (ix *Index) Refresh(
 		}
 		if err := ix.metaSet(ctx, sessionDeletionDatabaseIDKey, databaseID); err != nil {
 			return RefreshStats{}, err
+		}
+	}
+	if sourceVersion > 0 && (full || previousProof == strconv.Itoa(sourceVersion)) {
+		settledVersion, err := proofSource.EmbeddingDataVersion(ctx, includeAutomated)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		if settledVersion == sourceVersion {
+			if err := ix.metaSet(ctx, sourceDataVersionKey, strconv.Itoa(sourceVersion)); err != nil {
+				return RefreshStats{}, err
+			}
 		}
 	}
 
@@ -724,6 +768,10 @@ func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok boo
 	if !ok {
 		return false, false, nil
 	}
+	return decodeIncludeAutomatedScope(raw)
+}
+
+func decodeIncludeAutomatedScope(raw string) (value, ok bool, err error) {
 	parsed, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, false, fmt.Errorf("parsing stored include-automated scope %q: %w", raw, err)

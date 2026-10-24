@@ -1007,6 +1007,8 @@ func SelectSurvivingVectorHits(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 	allowedSessions func(context.Context, ContentSearchFilter, []string) (map[string]bool, error),
 ) ([]VectorHit, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	search, ceiling, err := searcher.PrepareSemanticSearch(ctx, f.Pattern)
 	if err != nil {
 		return nil, err

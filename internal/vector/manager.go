@@ -382,6 +382,13 @@ func (m *Manager) Activate(ctx context.Context, id int64, force bool) error {
 	if err != nil {
 		return err
 	}
+	stage, err := m.ix.pendingPullStage(ctx, target.key)
+	if err != nil {
+		return err
+	}
+	if stage != m.ix {
+		return refusedf("generation %d has staged hub documents; finish embeddings pull or build before activation", id)
+	}
 	if !force && target.Missing > 0 {
 		return refusedf("generation %d still has %d documents needing embedding; use --force",
 			id, target.Missing)
