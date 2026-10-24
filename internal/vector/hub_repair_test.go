@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	kitvec "go.kenn.io/kit/vector"
 )
 
 func TestPullRepairRequiresExistingGeneration(t *testing.T) {
@@ -47,12 +49,13 @@ func TestPullRepairOwnsOnlyQueuedTargets(t *testing.T) {
 			before, err := ix.Generations(t.Context())
 			require.NoError(t, err)
 			calls := 0
+			lookupFailed := errors.New("lookup failed")
 			hub := lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
 				calls++
 				require.Len(t, r.Identities, 1)
 				assert.Equal(t, "u1", r.Identities[0].SourceUUID)
 				if outcome == "failure" || outcome == "statistics" {
-					return HubLookupReply{}, errors.New("lookup failed")
+					return HubLookupReply{}, lookupFailed
 				}
 				reply := HubLookupReply{Version: HubVectorVersion, Fingerprint: gen.Fingerprint()}
 				if outcome == "absent" {
@@ -67,6 +70,14 @@ func TestPullRepairOwnsOnlyQueuedTargets(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.Error(t, err)
+			}
+			if outcome == "absent" {
+				assert.ErrorIs(t, err, ErrHubRepairIncomplete)
+			} else {
+				assert.NotErrorIs(t, err, ErrHubRepairIncomplete)
+			}
+			if outcome == "failure" || outcome == "statistics" {
+				assert.ErrorIs(t, err, lookupFailed)
 			}
 			assert.Equal(t, 1, calls)
 			assert.False(t, result.Activated)
@@ -97,38 +108,55 @@ func TestPullRepairOwnsOnlyQueuedTargets(t *testing.T) {
 
 // Repair reads only the queued sessions, including their duplicate occurrences.
 type queuedRepairSource struct {
-	*fakeUnitSource
+	*db.DB
 	sessions []string
+}
+
+type queuedRepairSnapshot struct {
+	db.EmbeddableSnapshot
+	sessions *[]string
+}
+
+func (queuedRepairSnapshot) ScanEmbeddableUnits(context.Context, string, bool, int, func(db.EmbeddableUnit) error) (string, error) {
+	return "", errors.New("repair must not scan the entire archive")
+}
+
+func (s queuedRepairSnapshot) ScanEmbeddableUnitsForSession(ctx context.Context, id string, scope bool, limit int, fn func(db.EmbeddableUnit) error) error {
+	*s.sessions = append(*s.sessions, id)
+	return s.EmbeddableSnapshot.ScanEmbeddableUnitsForSession(ctx, id, scope, limit, fn)
 }
 
 func (*queuedRepairSource) ScanEmbeddableUnits(context.Context, string, bool, int, func(db.EmbeddableUnit) error) (string, error) {
 	return "", errors.New("repair must not scan the entire archive")
 }
 
-func (s *queuedRepairSource) WithEmbeddableSnapshot(_ context.Context, fn func(db.EmbeddableSnapshot) error) error {
-	return fn(s)
-}
-
-func (s *queuedRepairSource) ScanEmbeddableUnitsForSession(ctx context.Context, id string, scope bool, limit int, fn func(db.EmbeddableUnit) error) error {
-	s.sessions = append(s.sessions, id)
-	return s.fakeUnitSource.ScanEmbeddableUnitsForSession(ctx, id, scope, limit, fn)
+func (s *queuedRepairSource) WithEmbeddableSnapshot(ctx context.Context, fn func(db.EmbeddableSnapshot) error) error {
+	return s.DB.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
+		return fn(queuedRepairSnapshot{snapshot, &s.sessions})
+	})
 }
 
 func TestPullRepairPinsQueuedSessionIdentities(t *testing.T) {
-	for _, outcome := range []string{"ready", "changed before fetch", "changed during fetch", "canceled"} {
+	for _, outcome := range []string{"ready", "changed before fetch", "changed during fetch", "changed during absent fetch", "canceled"} {
 		t.Run(outcome, func(t *testing.T) {
 			ix := openTestIndex(t)
-			src := &queuedRepairSource{fakeUnitSource: &fakeUnitSource{rows: []fakeUnit{
-				{unit: userDoc("s", "duplicate", 0, "first"), endedAt: "2024-01-01"},
-				{unit: userDoc("s", "duplicate", 1, "second"), endedAt: "2024-01-01"},
-				{unit: userDoc("unrelated", "other", 0, "other"), endedAt: "2024-01-01"},
-			}}}
+			archive := dbtest.OpenTestDB(t)
+			dbtest.SeedSession(t, archive, "s", "project")
+			replace := func(content string) {
+				require.NoError(t, archive.ReplaceSessionMessages(t.Context(), "s", []db.Message{
+					{SessionID: "s", SourceUUID: "duplicate", Ordinal: 0, Role: "user", Content: "first"},
+					{SessionID: "s", SourceUUID: "duplicate", Ordinal: 1, Role: "user", Content: content},
+				}))
+			}
+			replace("second")
+			dbtest.SeedSessionWithMessages(t, archive, "unrelated", "project", []db.Message{{SessionID: "unrelated", Ordinal: 0, SourceUUID: "other", Role: "user", Content: "other"}})
+			src := &queuedRepairSource{DB: archive}
 			gen := fakeGeneration("hub")
-			require.NoError(t, buildWithoutResult(ix, t.Context(), src.fakeUnitSource, gen))
+			require.NoError(t, buildWithoutResult(ix, t.Context(), archive, gen))
 			_, err := ix.db.ExecContext(t.Context(), `UPDATE message_vectors_v1 SET embedding=zeroblob(12) WHERE rowid=(SELECT vec_rowid FROM message_vectors_chunks WHERE doc_key='u:s:duplicate#2')`)
 			require.NoError(t, err)
 			if outcome == "changed before fetch" {
-				src.rows[1].unit.Content = "changed"
+				replace("changed")
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -141,11 +169,14 @@ func TestPullRepairPinsQueuedSessionIdentities(t *testing.T) {
 				assert.Equal(t, "duplicate", id.SourceUUID)
 				assert.Equal(t, 2, id.Occurrence)
 				assert.Equal(t, 1, id.Ordinal)
-				if outcome == "changed during fetch" {
-					src.rows[1].unit.Content = "changed"
+				if outcome == "changed during fetch" || outcome == "changed during absent fetch" {
+					replace("changed")
 				}
 				if outcome == "canceled" {
 					cancel()
+				}
+				if outcome == "changed during absent fetch" {
+					return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Absent: []int{0}}, nil
 				}
 				return HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint, Chunks: []HubChunk{{Index: 0, ChunkCount: 1, Vector: "AACAPwAAgD8AAIA/"}}}, nil
 			})
@@ -159,11 +190,18 @@ func TestPullRepairPinsQueuedSessionIdentities(t *testing.T) {
 				assert.Zero(t, result.Fill.Documents)
 				assert.Equal(t, 1, result.Repair.Remaining)
 			}
+			assert.NotErrorIs(t, err, ErrHubRepairIncomplete)
 			switch outcome {
 			case "changed before fetch":
+				require.ErrorIs(t, err, kitvec.ErrStale)
 				require.ErrorContains(t, err, "local document changed before invalid vector repair")
 				assert.Zero(t, calls)
 				assert.Equal(t, []string{"s"}, src.sessions)
+			case "changed during fetch", "changed during absent fetch":
+				require.ErrorIs(t, err, kitvec.ErrStale)
+				assert.Equal(t, 1, result.Fill.Stale)
+				assert.Equal(t, 1, calls)
+				assert.Equal(t, []string{"s", "s"}, src.sessions)
 			case "canceled":
 				require.ErrorIs(t, err, context.Canceled)
 				assert.Equal(t, 1, calls)
@@ -182,7 +220,7 @@ func TestPullRepairPinsQueuedSessionIdentities(t *testing.T) {
 	}
 }
 
-func TestPullRepairUsesPendingProjection(t *testing.T) {
+func TestPullRepairFetchesPendingProjection(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
 	old, next := fakeGeneration("local"), fakeGeneration("hub")

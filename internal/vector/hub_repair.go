@@ -8,6 +8,11 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 )
 
+// ErrHubRepairIncomplete means a completed hub repair pass left queued targets
+// without hub coverage. Other failures, including stale source data, do not match
+// this error and must not trigger local producer fallback.
+var ErrHubRepairIncomplete = errors.New("hub invalid vector repair incomplete")
+
 // pullInvalidRepair uses only this projection's existing durable repair queue.
 // The caller selects the target projection before entering this helper.
 func (ix *Index) pullInvalidRepair(ctx context.Context, reserved snapshotSource, hub HubLookup, gen kitvec.Generation, o PullOptions) (result BuildResult, retErr error) {
@@ -23,8 +28,11 @@ func (ix *Index) pullInvalidRepair(ctx context.Context, reserved snapshotSource,
 		remaining, known, countErr := repairRemaining(ctx, store, max(result.Repair.Documents-result.Fill.Documents, 0))
 		result.Repair.Remaining, result.Repair.RemainingKnown = remaining, known
 		retErr = errors.Join(retErr, countErr)
+		if result.Fill.Stale > 0 {
+			retErr = errors.Join(retErr, kitvec.ErrStale)
+		}
 		if retErr == nil && remaining > 0 {
-			retErr = fmt.Errorf("invalid vector repair incomplete: %d targets remain queued", remaining)
+			retErr = fmt.Errorf("%w: %d targets remain queued", ErrHubRepairIncomplete, remaining)
 		}
 	}()
 	if err != nil {
@@ -45,7 +53,7 @@ func (ix *Index) pullInvalidRepair(ctx context.Context, reserved snapshotSource,
 			for i, p := range batch {
 				identities[i] = current[p.Doc]
 				if identities[i].ContentHash != p.Revision {
-					return errors.New("local document changed before invalid vector repair")
+					return fmt.Errorf("local document changed before invalid vector repair: %w", kitvec.ErrStale)
 				}
 				if o.MapSession != nil {
 					identities[i].SessionID = o.MapSession(identities[i].SessionID)
@@ -62,7 +70,11 @@ func (ix *Index) pullInvalidRepair(ctx context.Context, reserved snapshotSource,
 		}
 		err = ix.withPullIdentities(ctx, reserved, batch, o, func(current map[string]HubIdentity) error {
 			for i, p := range batch {
-				if absent[i] || current[p.Doc].ContentHash != identities[i].ContentHash {
+				if current[p.Doc].ContentHash != identities[i].ContentHash {
+					result.Fill.Stale++
+					continue
+				}
+				if absent[i] {
 					continue
 				}
 				if err := store.SaveVectors(ctx, target, p.Doc, p.Revision, vectors[i]); err != nil {
