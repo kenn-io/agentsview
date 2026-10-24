@@ -80,7 +80,7 @@ func (b *httpBackend) ToolAnalytics(
 		Machine: f.machine, IncludeOneShot: f.includeOneShot, IncludeAutomated: f.includeAutomated,
 	}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
@@ -104,7 +104,7 @@ func (b *httpBackend) SignalAnalytics(
 		Machine: f.machine, IncludeOneShot: f.includeOneShot, IncludeAutomated: f.includeAutomated,
 	}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func (b *httpBackend) SignalSessions(
 	}
 	response, err := api.GetAPIV1AnalyticsSignalSessionsWithResponse(ctx, &apiclient.GetAPIV1AnalyticsSignalSessionsRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (b *httpBackend) ActivityReport(
 	}
 	response, err := api.GetAPIV1ActivityReportWithResponse(ctx, &apiclient.GetAPIV1ActivityReportRequestOptions{Query: q}, acceptJSON)
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ func (b *httpBackend) ActivityReport(
 			},
 		})
 		if page == nil {
-			return nil, err
+			return nil, b.responseError(nil, nil, err)
 		}
 		if err := b.responseError(page.HTTPResponse, page.Body, err); err != nil {
 			return nil, err
@@ -214,14 +214,14 @@ func (b *httpBackend) ActivityReport(
 			// The archive changed mid-read; start over from the refreshed
 			// report's first page.
 			if refreshes == maxActivityRefreshes {
-				return nil, errors.New("activity data kept changing while reading its sessions; try again")
+				return nil, b.remoteError(errors.New("activity data kept changing while reading its sessions; try again"))
 			}
 			refreshes++
 			report = body.Report
 			continue
 		}
 		if len(body.Sessions) == 0 {
-			return nil, errors.New("daemon returned an empty activity session page")
+			return nil, b.remoteError(errors.New("daemon returned an empty activity session page"))
 		}
 		report.BySession = append(report.BySession, body.Sessions...)
 		report.SessionsNextCursor = ""

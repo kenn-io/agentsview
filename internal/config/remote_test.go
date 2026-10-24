@@ -7,62 +7,107 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 func TestRemoteConfigPrecedence(t *testing.T) {
 	dir := t.TempDir()
+	home := t.TempDir()
+	cwd := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	hegel.Test(t, func(ht *hegel.T) {
-		env := hegel.Draw(ht, hegel.Booleans())
-		urlEnv := hegel.Draw(ht, hegel.Booleans())
-		kind := hegel.Draw(ht, hegel.Integers(0, 5))
-		absolute := kind == 1 || kind == 4 || kind == 5
-		name := fmt.Sprintf("token-%d", hegel.Draw(ht, hegel.Integers(0, 100000)))
-		path := name
-		switch kind {
-		case 1:
-			path = filepath.Join(dir, name)
-		case 2:
-			path = filepath.Join("nested", name)
-		case 3:
-			path = filepath.Join("..", name)
-		case 4:
-			path = "~/" + name
-		case 5:
-			path = ""
-		}
-		require.NoError(ht, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(fmt.Sprintf("[remote]\nurl='https://file.example'\ntoken_file='%s'\nspoke_host='workstation'\n", filepath.ToSlash(path))), 0o600))
-		value := ""
-		if env {
-			value = path
-		}
-		t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", value)
-		t.Setenv("AGENTSVIEW_REMOTE_URL", "")
-		if urlEnv {
-			t.Setenv("AGENTSVIEW_REMOTE_URL", "https://env.example")
-		}
-		remote, err := LoadRemote()
-		require.NoError(ht, err)
-		wantURL, base := "https://file.example", dir
-		if urlEnv {
-			wantURL = "https://env.example"
-		}
-		if env {
-			base, err = os.Getwd()
-			require.NoError(ht, err)
-		}
-		want := path
-		if kind == 4 {
-			home, e := os.UserHomeDir()
-			require.NoError(ht, e)
-			want = filepath.Join(home, name)
-		}
-		if !absolute {
-			want = filepath.Join(base, path)
-		}
-		require.Equal(ht, wantURL, remote.URL)
-		require.Equal(ht, filepath.Clean(want), filepath.Clean(remote.TokenFile))
-		require.Equal(ht, "workstation", remote.SpokeHost)
-	}, hegel.WithTestCases(1000))
+	t.Chdir(cwd)
+	for _, tc := range []struct{ name, file, env, want, urlEnv, wantURL string }{
+		{"file relative", "file.token", "", filepath.Join(dir, "file.token"), "", "https://file.example"},
+		{"env relative", "file.token", "env.token", filepath.Join(cwd, "env.token"), "https://env.example", "https://env.example"},
+		{"nested file", "nested/file.token", "", filepath.Join(dir, "nested", "file.token"), "https://env.example", "https://env.example"},
+		{"parent file", "../file.token", "", filepath.Join(dir, "..", "file.token"), "", "https://file.example"},
+		{"file absolute", filepath.Join(dir, "absolute-file.token"), "", filepath.Join(dir, "absolute-file.token"), "", "https://file.example"},
+		{"env absolute", "file.token", filepath.Join(cwd, "absolute-env.token"), filepath.Join(cwd, "absolute-env.token"), "", "https://file.example"},
+		{"file home", "~/home-file.token", "", filepath.Join(home, "home-file.token"), "", "https://file.example"},
+		{"env home", "~/home-file.token", "~/home-env.token", filepath.Join(home, "home-env.token"), "", "https://file.example"},
+		{"no token", "", "", "", "", "https://file.example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(fmt.Sprintf("[remote]\nurl='https://file.example'\ntoken_file='%s'\nspoke_host='workstation'\nallow_insecure_http=true\n", filepath.ToSlash(tc.file))), 0o600))
+			t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", tc.env)
+			t.Setenv("AGENTSVIEW_REMOTE_URL", tc.urlEnv)
+			remote, err := LoadRemote()
+			require.NoError(t, err)
+			require.Equal(t, RemoteConfig{URL: tc.wantURL, TokenFile: tc.want, SpokeHost: "workstation", AllowInsecureHTTP: true}, remote)
+		})
+	}
+}
+
+func TestRemoteIgnoresLocalValidation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_REMOTE_URL", "")
+	t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`[remote]
+url="https://hub.example"
+token_file="missing.token"
+[vector.embeddings]
+max_batch_tokens=123
+`), 0o600))
+	remote, err := LoadRemote()
+	require.NoError(t, err)
+	require.Equal(t, "https://hub.example", remote.URL)
+	_, err = LoadReadOnly()
+	require.ErrorContains(t, err, "max_batch_tokens")
+}
+
+func TestRemoteReadOnlyFormats(t *testing.T) {
+	for _, tc := range []struct {
+		name, toml, json, url, token string
+		bad                          bool
+	}{
+		{name: "legacy JSON", json: `{"remote":{"url":"https://legacy.example","token_file":"legacy.token"},"vector":{"embeddings":{"max_batch_tokens":123}}}`, url: "https://legacy.example", token: "legacy.token"},
+		{name: "TOML wins", toml: "[remote]\nurl='https://toml.example'\ntoken_file='toml.token'\n", json: `{"remote":{"url":"https://legacy.example","token_file":"legacy.token"}}`, url: "https://toml.example", token: "toml.token"},
+		{name: "missing config"},
+		{name: "malformed TOML", toml: "[remote", bad: true},
+		{name: "malformed JSON", json: `{"remote":`, bad: true},
+		{name: "invalid remote field", toml: "[remote]\nurl=123\n", bad: true},
+		{name: "legacy trailing JSON", json: `{"remote":{}} {}`, bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_REMOTE_URL", "")
+			t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", "")
+			if tc.toml != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(tc.toml), 0o600))
+			}
+			if tc.json != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(tc.json), 0o600))
+			}
+			// A full local loader would reject this identity. Remote selection must never read it.
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte("invalid"), 0o600))
+			before, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			remote, err := LoadRemote()
+			if tc.bad {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.url, remote.URL)
+				want := ""
+				if tc.token != "" {
+					want = filepath.Join(dir, tc.token)
+				}
+				require.Equal(t, want, remote.TokenFile)
+			}
+			after, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			for name, want := range map[string]string{"config.toml": tc.toml, "config.json": tc.json, "telemetry-install-id": "invalid"} {
+				if want == "" {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(dir, name))
+				require.NoError(t, err)
+				require.Equal(t, want, string(data))
+			}
+		})
+	}
 }

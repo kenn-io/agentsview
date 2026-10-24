@@ -1,8 +1,12 @@
 package config
 
 import (
+	"encoding/json/v2"
+	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/BurntSushi/toml"
 
 	"go.kenn.io/agentsview/internal/pathutil"
 )
@@ -43,17 +47,35 @@ func (c *Config) applyRemoteEnv() {
 // LoadRemote reads only configuration layers, without migrating files, resolving
 // source roots, generating secrets, or reading local installation metadata.
 func LoadRemote() (RemoteConfig, error) {
-	cfg, err := Default()
-	if err != nil {
+	dir := dataDirFromEnv()
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return RemoteConfig{}, fmt.Errorf("determining home directory: %w", err)
+		}
+		dir = filepath.Join(home, ".agentsview")
+	}
+	cfg := Config{DataDir: dir}
+	if err := expandDataDir(&cfg); err != nil {
 		return RemoteConfig{}, err
 	}
-	cfg.validationScope = ScopeLocal
-	cfg.loadEnv()
-	if err = expandDataDir(&cfg); err != nil {
-		return RemoteConfig{}, err
+	var file struct {
+		Remote RemoteConfig `json:"remote" toml:"remote"`
 	}
-	if err = cfg.loadFileReadOnly(); err != nil {
-		return RemoteConfig{}, err
+	data, err := os.ReadFile(cfg.configPath())
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile(cfg.jsonConfigPath())
+		if err == nil {
+			err = json.Unmarshal(data, &file)
+		}
+	} else if err == nil {
+		_, err = toml.Decode(string(data), &file)
 	}
+	if err != nil && !os.IsNotExist(err) {
+		return RemoteConfig{}, fmt.Errorf("loading remote config: %w", err)
+	}
+	cfg.Remote = file.Remote
+	cfg.Remote.TokenFile = remoteTokenPath(cfg.Remote.TokenFile, filepath.Dir(cfg.configPath()))
+	cfg.applyRemoteEnv()
 	return cfg.Remote, nil
 }

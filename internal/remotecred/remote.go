@@ -130,6 +130,14 @@ func closeBody(body io.ReadCloser) {
 	}
 }
 
+// WrapError adds safe remote diagnostics without exposing or losing the cause.
+func WrapError(raw string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &remoteError{safe: Redact(raw), cause: err}
+}
+
 type remoteError struct {
 	safe  string
 	cause error

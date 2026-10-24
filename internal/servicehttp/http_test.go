@@ -1,10 +1,13 @@
 package servicehttp
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/remotecred"
@@ -26,43 +29,119 @@ func TestPolicyClientCapabilities(t *testing.T) {
 				require.True(t, caps.SessionStatsAvailable)
 			} else {
 				require.Error(t, err)
+				assert.ErrorContains(t, err, ts.URL)
+				assert.ErrorContains(t, err, "--local")
 			}
 		})
 	}
 }
 
 func TestRemotePolicyUsedByLazyProbe(t *testing.T) {
-	hits := 0
-	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
-	defer sink.Close()
-	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, sink.URL+"/secret-path?key=secret", http.StatusFound)
-	}))
-	defer source.Close()
-	client, err := remotecred.Client(source.URL+"/private?token=secret", false)
-	require.NoError(t, err)
-	backend := NewHTTPBackendWithClient(source.URL+"/private?token=secret", "remote-only", true, "", client)
-	_, err = backend.List(t.Context(), service.ListFilter{Labels: []string{"urgent"}})
-	require.Error(t, err)
-	require.Zero(t, hits)
-	require.NotContains(t, err.Error(), "secret")
-	require.NotContains(t, err.Error(), "private")
-	require.Contains(t, err.Error(), "--local")
+	for _, tc := range []struct {
+		name   string
+		filter service.ListFilter
+		path   string
+		failed bool
+	}{
+		{"filtered probe failure", service.ListFilter{Labels: []string{"urgent"}}, "/api/v1/version", true},
+		{"plain read", service.ListFilter{}, "/api/v1/sessions", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := []string{}
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				assert.Equal(t, tc.path, r.URL.Path)
+				switch r.URL.Path {
+				case "/api/v1/version":
+					http.Error(w, "private token=secret", http.StatusNotImplemented)
+				case "/api/v1/sessions":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"example"}],"total":1}`))
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					w.WriteHeader(500)
+				}
+			}))
+			defer source.Close()
+			client, err := remotecred.Client(source.URL, false)
+			require.NoError(t, err)
+			backend := NewHTTPBackendWithClient(source.URL, "remote-only", true, "", client)
+			result, err := backend.List(t.Context(), tc.filter)
+			assert.Equal(t, []string{tc.path}, paths)
+			if tc.failed {
+				require.ErrorIs(t, err, errHTTPNotImplemented)
+				assert.NotContains(t, err.Error(), "secret")
+				assert.NotContains(t, err.Error(), "private")
+				assert.ErrorContains(t, err, "--local")
+				assert.ErrorContains(t, err, source.URL)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, result.Sessions, 1)
+				assert.Equal(t, "example", result.Sessions[0].ID)
+			}
+		})
+	}
 }
 
 func TestRemotePolicyRedactsFailures(t *testing.T) {
-	for _, status := range []int{http.StatusUnauthorized, http.StatusBadGateway} {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte("secret /private?token=secret"))
-		}))
-		client, err := remotecred.Client(ts.URL, false)
-		require.NoError(t, err)
-		_, err = ProbeHTTPServerCapabilitiesWithClient(t.Context(), ts.URL+"/private?token=secret", "remote-only", client)
-		require.Error(t, err)
-		require.NotContains(t, err.Error(), "secret")
-		require.NotContains(t, err.Error(), "private")
-		require.Contains(t, err.Error(), "--local")
-		ts.Close()
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		readBody  string
+		truncated bool
+		want      error
+		decode    bool
+	}{
+		{name: "unauthorized", status: 401, body: "private secret"},
+		{name: "bad gateway", status: 502, body: "private secret"},
+		{name: "missing endpoint", status: 404, body: "private secret", want: errHTTPNotFound},
+		{name: "unsupported endpoint", status: 501, body: "private secret", want: errHTTPNotImplemented},
+		{name: "malformed JSON", status: 200, body: `{"response-secret":`, decode: true},
+		{name: "wrong version type", status: 200, body: `{"api_version":"response-secret"}`, readBody: `{"sessions":"response-secret"}`, decode: true},
+		{name: "truncated body", status: 200, body: `{"api_version":4}`, truncated: true, want: io.ErrUnexpectedEOF},
+	} {
+		for _, probe := range []bool{true, false} {
+			t.Run(tc.name+"/probe="+strconv.FormatBool(probe), func(t *testing.T) {
+				hits := 0
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					hits++
+					body := tc.body
+					if !probe && tc.readBody != "" {
+						body = tc.readBody
+					}
+					assert.Equal(t, "Bearer remote-only", r.Header.Get("Authorization"))
+					w.Header().Set("Content-Type", "application/json; private=header-secret")
+					if tc.truncated {
+						w.Header().Set("Content-Length", strconv.Itoa(len(body)+10))
+					}
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer ts.Close()
+				target := ts.URL + "/private?token=url-secret"
+				client, err := remotecred.Client(target, false)
+				require.NoError(t, err)
+				if probe {
+					_, err = ProbeHTTPServerCapabilitiesWithClient(t.Context(), target, "remote-only", client)
+				} else {
+					backend := NewHTTPBackendWithClient(target, "remote-only", true, "", client)
+					_, err = backend.List(t.Context(), service.ListFilter{})
+				}
+				require.Error(t, err)
+				assert.Equal(t, 1, hits)
+				assert.ErrorContains(t, err, ts.URL)
+				assert.ErrorContains(t, err, "--local")
+				assert.NotContains(t, err.Error(), "private")
+				assert.NotContains(t, err.Error(), "secret")
+				if tc.want != nil {
+					assert.ErrorIs(t, err, tc.want)
+				}
+				if tc.decode {
+					var decode *runtime.ResponseDecodeError
+					assert.ErrorAs(t, err, &decode)
+				}
+			})
+		}
 	}
 }
