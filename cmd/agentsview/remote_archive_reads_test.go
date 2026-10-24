@@ -334,7 +334,7 @@ func TestRemoteReportDecodeDiagnostics(t *testing.T) {
 				}
 				require.Error(t, err)
 				var syntax *jsontext.SyntacticError
-				assert.ErrorAs(t, err, &syntax, "preserve the decoder cause")
+				require.ErrorAs(t, err, &syntax, "preserve the decoder cause")
 				if kind == readTargetRemote {
 					assert.NotContains(t, err.Error(), "private-member")
 					assert.Contains(t, err.Error(), "--local")
