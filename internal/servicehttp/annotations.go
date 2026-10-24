@@ -29,7 +29,7 @@ func (b *httpBackend) UpdateSessionLabels(
 			},
 		})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	return b.annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
 }
@@ -48,7 +48,7 @@ func (b *httpBackend) SetSessionParent(
 			Body:       &apiclient.PutAPIV1SessionsIDParentBody{ParentSessionID: &parentID},
 		})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	return b.annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
 }
@@ -60,7 +60,7 @@ func (b *httpBackend) annotationClient(
 ) (*apiclient.Client, error) {
 	if b.readOnly {
 		return nil, fmt.Errorf("%s: daemon at %s is read-only: %w",
-			op, b.diagnosticURL(), db.ErrReadOnly)
+			op, b.diagnosticURL(), b.remoteError(db.ErrReadOnly))
 	}
 	if err := b.requireSessionAnnotations(ctx); err != nil {
 		return nil, err
@@ -76,13 +76,13 @@ func (b *httpBackend) annotationResult[T any](
 		if b.remotePolicy {
 			target = b.diagnosticURL()
 		}
-		return nil, fmt.Errorf("%s: %w; stop the read-only serve process and use the local DB, or start a local daemon", target, db.ErrReadOnly)
+		return nil, fmt.Errorf("%s: %w; stop the read-only serve process and use the local DB, or start a local daemon", target, b.remoteError(db.ErrReadOnly))
 	}
 	if err := b.responseError(response, body, err); err != nil {
 		return nil, err
 	}
 	if out == nil {
-		return nil, fmt.Errorf("unexpected empty response from %s", response.Request.URL.Path)
+		return nil, b.remoteError(fmt.Errorf("unexpected empty response from %s", response.Request.URL.Path))
 	}
 	return out, nil
 }

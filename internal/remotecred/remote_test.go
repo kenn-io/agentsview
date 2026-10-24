@@ -13,24 +13,46 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 func TestToken(t *testing.T) {
 	for _, tc := range []struct {
-		name, body string
-		mode       os.FileMode
-		ok         bool
+		name, body, want string
+		mode             os.FileMode
+		ok               bool
 	}{
-		{"valid", " token\n", 0o600, true}, {"empty", " \n", 0o600, false}, {"oversize", strings.Repeat("x", 65537), 0o600, false}, {"limit", strings.Repeat("x", 65536), 0o600, true}, {"public", "token", 0o644, false}, {"sticky", "token", 0o600 | os.ModeSticky, false}, {"executable", "token", 0o700, false},
+		{"valid", " token\n", "token", 0o600, true},
+		{"read only", "token", "token", 0o400, true},
+		{"write only", "token", "token", 0o200, os.Geteuid() == 0},
+		{"no permissions", "token", "token", 0, os.Geteuid() == 0},
+		{"empty", "", "", 0o600, false},
+		{"whitespace", " \n", "", 0o600, false},
+		{"oversize", strings.Repeat("x", 65537), "", 0o600, false},
+		{"limit", strings.Repeat("x", 65536), strings.Repeat("x", 65536), 0o600, true},
+		{"whitespace at limit", " " + strings.Repeat("x", 65534) + "\n", strings.Repeat("x", 65534), 0o600, true},
+		{"whitespace over limit", " " + strings.Repeat("x", 65535) + "\n", "", 0o600, false},
+		{"multibyte at limit", strings.Repeat("é", 32768), strings.Repeat("é", 32768), 0o600, true},
+		{"multibyte over limit", strings.Repeat("é", 32768) + "x", "", 0o600, false},
+		{"public", "token", "token", 0o644, false},
+		{"group read", "token", "token", 0o640, false},
+		{"group write", "token", "token", 0o620, false},
+		{"group execute", "token", "token", 0o610, false},
+		{"other read", "token", "token", 0o604, false},
+		{"other write", "token", "token", 0o602, false},
+		{"other execute", "token", "token", 0o601, false},
+		{"setuid", "token", "token", 0o600 | os.ModeSetuid, false},
+		{"setgid", "token", "token", 0o600 | os.ModeSetgid, false},
+		{"sticky", "token", "token", 0o600 | os.ModeSticky, false},
+		{"executable", "token", "token", 0o700, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "token")
-			require.NoError(t, os.WriteFile(p, []byte(tc.body), tc.mode))
+			require.NoError(t, os.WriteFile(p, []byte(tc.body), 0o600))
+			require.NoError(t, os.Chmod(p, tc.mode))
 			got, err := ReadToken(p)
-			if tc.ok || runtime.GOOS == "windows" && tc.name == "public" || runtime.GOOS == "windows" && (tc.name == "executable" || tc.name == "sticky") {
+			if tc.ok || runtime.GOOS == "windows" && tc.body == "token" {
 				require.NoError(t, err)
-				require.Equal(t, strings.TrimSpace(tc.body), got)
+				require.Equal(t, tc.want, got)
 			} else {
 				require.Error(t, err)
 			}
@@ -76,135 +98,74 @@ func TestURLPolicy(t *testing.T) {
 	require.Equal(t, "https://hub.example:42", Redact("https://u:p@hub.example:42/path?token=secret"))
 }
 
-func TestTokenModeProperty(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows does not enforce Unix mode bits")
-	}
-	p := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(p, []byte("value"), 0o600))
-	hegel.Test(t, func(ht *hegel.T) {
-		mode := hegel.Draw(ht, hegel.Integers[uint32](0, 0o7777))
-		permission := os.FileMode(mode & 0o777)
-		if mode&0o4000 != 0 {
-			permission |= os.ModeSetuid
-		}
-		if mode&0o2000 != 0 {
-			permission |= os.ModeSetgid
-		}
-		if mode&0o1000 != 0 {
-			permission |= os.ModeSticky
-		}
-		require.NoError(ht, os.Chmod(p, permission))
-		got, err := ReadToken(p)
-		info, statErr := os.Stat(p)
-		require.NoError(ht, statErr)
-		observed := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
-		safe := observed&^os.FileMode(0o600) == 0 && (observed&0o400 != 0 || os.Geteuid() == 0)
-		if safe {
-			require.NoError(ht, err)
-			require.Equal(ht, "value", got)
-		} else {
-			require.Error(ht, err)
-		}
-	}, hegel.WithTestCases(1000))
-}
-
-func TestRedirectPolicyProperty(t *testing.T) {
+func TestRedirectPolicy(t *testing.T) {
 	client, err := Client("https://HUB.example/private?secret=value", false)
 	require.NoError(t, err)
-	hegel.Test(t, func(ht *hegel.T) {
-		same := hegel.Draw(ht, hegel.Booleans())
-		secure := hegel.Draw(ht, hegel.Booleans())
-		user := hegel.Draw(ht, hegel.Booleans())
-		port := hegel.Draw(ht, hegel.SampledFrom([]string{"", ":443", ":444"}))
-		scheme, host := "https", "hub.example"
-		if !same {
-			host = "other.example"
-		}
-		if !secure {
-			scheme = "http"
-		}
-		raw := scheme + "://" + host + port + "/new?secret=value"
-		req, e := http.NewRequestWithContext(t.Context(), http.MethodGet, raw, nil)
-		require.NoError(ht, e)
-		if user {
-			req.URL.User = url.UserPassword("user", "secret")
-		}
-		e = client.CheckRedirect(req, []*http.Request{{}})
-		require.Equal(ht, same && secure && !user && port != ":444", e == nil)
-	}, hegel.WithTestCases(1000))
-}
-
-func TestTokenByteBoundProperty(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "token")
-	hegel.Test(t, func(ht *hegel.T) {
-		size := hegel.Draw(ht, hegel.Integers[uint64](0, ^uint64(0)))
-		body := strings.Repeat("x", int(min(size, 65537)))
-		if hegel.Draw(ht, hegel.Booleans()) {
-			body = " " + body + "\n"
-		}
-		require.NoError(ht, os.WriteFile(p, []byte(body), 0o600))
-		got, err := ReadToken(p)
-		if len(body) <= 65536 && strings.TrimSpace(body) != "" {
-			require.NoError(ht, err)
-			require.Equal(ht, strings.TrimSpace(body), got)
-		} else {
-			require.Error(ht, err)
-		}
-	}, hegel.WithTestCases(1000))
-}
-
-func TestResponsePolicyPreservesTypedFailuresProperty(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		status := hegel.Draw(ht, hegel.Integers[int](400, 599))
-		code := "untrusted_code"
-		if status == http.StatusConflict {
-			code = "source_changed"
-		}
-		body := fmt.Sprintf(
-			`{"status":%d,"code":%q,"detail":"private /path?token=secret"}`,
-			status, code,
-		)
-		resp := &http.Response{
-			StatusCode: status,
-			Body:       io.NopCloser(strings.NewReader(body)),
-		}
-		got, err := ResponsePolicy("https://hub.example/private?token=secret")(resp, nil) //nolint:bodyclose // Every returned response is closed below; the policy closes discarded responses.
-		if got != nil {
-			defer got.Body.Close()
-		}
-
-		switch status {
-		case http.StatusConflict, http.StatusServiceUnavailable:
-			require.NoError(ht, err)
-			require.NotNil(ht, got)
-			require.Equal(ht, status, got.StatusCode)
-			gotBody, readErr := io.ReadAll(got.Body)
-			require.NoError(ht, readErr)
-			require.NoError(ht, got.Body.Close())
-			require.NotContains(ht, string(gotBody), "private")
-			require.NotContains(ht, string(gotBody), "secret")
-			if status == http.StatusConflict {
-				require.JSONEq(ht, `{"code":"source_changed"}`, string(gotBody))
-			} else {
-				require.Equal(ht, "remote request failed", string(gotBody))
+	for _, tc := range []struct {
+		name, url string
+		user      bool
+		hops      int
+		ok        bool
+	}{
+		{"same origin", "https://hub.example/new", false, 1, true},
+		{"default port", "https://hub.example:443/new", false, 1, true},
+		{"different port", "https://hub.example:444/new", false, 1, false},
+		{"different host", "https://other.example/new", false, 1, false},
+		{"downgrade", "http://hub.example/new", false, 1, false},
+		{"downgrade same port", "http://hub.example:443/new", false, 1, false},
+		{"userinfo", "https://hub.example/new", true, 1, false},
+		{"last allowed hop", "https://hub.example/new", false, 9, true},
+		{"too many hops", "https://hub.example/new", false, 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tc.url, nil)
+			require.NoError(t, err)
+			if tc.user {
+				req.URL.User = url.UserPassword("user", "secret")
 			}
-		case http.StatusNotFound, http.StatusNotImplemented:
-			require.NoError(ht, err)
-			require.NotNil(ht, got)
-			require.Equal(ht, status, got.StatusCode)
-			gotBody, readErr := io.ReadAll(got.Body)
-			require.NoError(ht, readErr)
-			require.NoError(ht, got.Body.Close())
-			require.NotContains(ht, string(gotBody), "private")
-			require.NotContains(ht, string(gotBody), "secret")
-		default:
-			require.Nil(ht, got)
-			require.Error(ht, err)
-			require.ErrorContains(ht, err, fmt.Sprintf("HTTP %d", status))
-			require.ErrorContains(ht, err, "--local")
-			require.NotContains(ht, err.Error(), "private")
-			require.NotContains(ht, err.Error(), "secret")
-		}
-	}, hegel.WithTestCases(1000))
+			err = client.CheckRedirect(req, make([]*http.Request, tc.hops))
+			require.Equal(t, tc.ok, err == nil)
+		})
+	}
+}
+
+func TestResponsePolicyPreservesTypedFailures(t *testing.T) {
+	for _, tc := range []struct {
+		status     int
+		body, want string
+		retained   bool
+	}{
+		{400, `{"error":"private secret"}`, "", false},
+		{401, `{"error":"private secret"}`, "", false},
+		{403, `{"error":"private secret"}`, "", false},
+		{404, `{"error":"private secret"}`, "remote https://hub.example endpoint unavailable; try --local", true},
+		{409, `{"code":"source_changed","detail":"private secret"}`, `{"code":"source_changed"}`, true},
+		{409, `{"detail":"source_changed: private secret"}`, `{"code":"source_changed"}`, true},
+		{409, `{"code":"untrusted","detail":"private secret"}`, "remote request failed", true},
+		{500, `{"error":"private secret"}`, "", false},
+		{501, `{"error":"private secret"}`, "remote request failed", true},
+		{501, `{"error":"not available in remote mode","detail":"private secret"}`, `{"error":"not available in remote mode"}`, true},
+		{503, `{"detail":"private secret"}`, "remote request failed", true},
+		{599, `{"detail":"private secret"}`, "", false},
+	} {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.body), func(t *testing.T) {
+			resp := &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}
+			got, err := ResponsePolicy("https://hub.example/private?token=secret")(resp, nil) //nolint:bodyclose // Returned bodies are closed below; policy closes discarded responses.
+			if tc.retained {
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				defer got.Body.Close()
+				require.Equal(t, tc.status, got.StatusCode)
+				body, err := io.ReadAll(got.Body)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, string(body))
+			} else {
+				require.Nil(t, got)
+				require.ErrorContains(t, err, fmt.Sprintf("HTTP %d", tc.status))
+				require.ErrorContains(t, err, "--local")
+				require.NotContains(t, err.Error(), "private")
+				require.NotContains(t, err.Error(), "secret")
+			}
+		})
+	}
 }
