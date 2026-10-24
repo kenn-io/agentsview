@@ -130,12 +130,12 @@ func (ix *Index) Build(
 	}
 	// Keep this operation's recipe separate from concurrent searches.
 	ix = ix.forGeneration(gen)
-	if o.RepairInvalid {
-		return ix.buildInvalidRepair(ctx, enc, gen, o)
-	}
 	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
 	if err != nil {
 		return BuildResult{}, err
+	}
+	if o.RepairInvalid {
+		return stage.forGeneration(gen).buildInvalidRepair(ctx, enc, gen, o)
 	}
 	if stage != ix {
 		reserved, ok := src.(snapshotSource)

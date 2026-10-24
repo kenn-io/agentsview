@@ -275,3 +275,126 @@ func TestPullRecipeChangePreservesActiveProjection(t *testing.T) {
 		})
 	}
 }
+
+// Repair a retained hub generation through the same public entry points used by
+// local builds. The queued target belongs to the stage, not the active mirror.
+func TestPullRepairUsesPendingProjection(t *testing.T) {
+	for _, mode := range []string{"local Build repair", "Manager repair"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := t.Context()
+			archive := dbtest.OpenTestDB(t)
+			dbtest.SeedSessionWithMessages(t, archive, "local", "project", []db.Message{dbtest.UserMsg("local", 0, "repair content")})
+			version := db.CurrentDataVersion() - 1
+			seedPullDataVersion(t, archive, version, "local")
+			ix := openTestIndex(t)
+			old, next := fakeGeneration("local"), fakeGeneration("hub")
+			enc := fakeBuildEncoder()
+			_, err := ix.Build(ctx, archive, enc, old, BuildOptions{})
+			require.NoError(t, err)
+			before, err := ix.Search(ctx, enc, "repair", 10)
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+			dbtest.SeedSessionWithMessages(t, archive, "pending", "project", []db.Message{dbtest.UserMsg("pending", 0, "pending content")})
+			result, err := ix.Pull(ctx, archive, lookupFunc(func(_ context.Context, r HubLookupRequest) (HubLookupReply, error) {
+				reply := HubLookupReply{Version: HubVectorVersion, Fingerprint: r.Fingerprint}
+				for i, id := range r.Identities {
+					switch id.SessionID {
+					case "local":
+						reply.Chunks = append(reply.Chunks, HubChunk{Index: i, ChunkCount: 1, Vector: "AACAPwAAAAAAAAAA"})
+					case "pending":
+						reply.Absent = append(reply.Absent, i)
+					default:
+						assert.Fail(t, "unexpected hub identity", "%s", id.SessionID)
+					}
+				}
+				return reply, nil
+			}), next, PullOptions{IncludeAutomated: true})
+			require.NoError(t, err)
+			require.False(t, result.Activated)
+			stage, err := ix.pendingPullStage(ctx, next.Fingerprint())
+			require.NoError(t, err)
+			require.NotSame(t, ix, stage)
+			prefix := stage.spec.VectorsPrefix
+			ordinal, err := stage.ordinalForFingerprint(ctx, next.Fingerprint())
+			require.NoError(t, err)
+			_, err = ix.db.ExecContext(ctx, fmt.Sprintf("UPDATE %s_v%d SET embedding=?", prefix, ordinal), make([]byte, 3*4))
+			require.NoError(t, err)
+			stopped := errors.New("encoder unavailable")
+			result, err = stage.Build(ctx, archive, func(context.Context, []string) ([][]float32, error) {
+				return nil, stopped
+			}, next, BuildOptions{RepairInvalid: true})
+			require.ErrorIs(t, err, stopped)
+			require.True(t, result.Repair.RemainingKnown)
+			require.Equal(t, 1, result.Repair.Remaining)
+			var queued int
+			require.NoError(t, ix.db.QueryRowContext(ctx, "SELECT count(*) FROM "+stage.spec.repairQueueTable()+" WHERE ordinal=?", ordinal).Scan(&queued))
+			require.Equal(t, 1, queued, "a failed real repair retains its target")
+			dbtest.SeedSessionWithMessages(t, archive, "unrelated", "project", []db.Message{dbtest.UserMsg("unrelated", 0, "unrelated content")})
+			encoded := 0
+			repairEncoder := func(_ context.Context, texts []string) ([][]float32, error) {
+				encoded += len(texts)
+				assert.Equal(t, []string{"repair content"}, texts, "repair must encode only the queued stage target")
+				return enc(ctx, texts)
+			}
+			// Any attempt to refresh or discover source documents fails directly.
+			src := failingRefreshSource{err: errors.New("repair must not scan the archive")}
+			if mode == "local Build repair" {
+				result, err = ix.Build(ctx, src, repairEncoder, next, BuildOptions{RepairInvalid: true})
+			} else {
+				manager := NewManager(ix, src, soloEncoders(repairEncoder), next)
+				defer manager.Shutdown()
+				var ran bool
+				ran, err = manager.TryBuild(ctx, BuildRequest{RepairInvalid: true})
+				require.True(t, ran)
+				status := manager.Status()
+				require.NotNil(t, status.LastResult)
+				result = *status.LastResult
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 1, encoded)
+			assert.Equal(t, 1, result.Fill.Documents)
+			assert.True(t, result.Repair.RemainingKnown)
+			assert.Zero(t, result.Repair.Remaining)
+			assert.False(t, result.Activated)
+			assert.Zero(t, result.Refresh)
+			require.NoError(t, ix.db.QueryRowContext(ctx, "SELECT count(*) FROM "+stage.spec.repairQueueTable()+" WHERE ordinal=?", ordinal).Scan(&queued))
+			assert.Zero(t, queued)
+			var retained string
+			require.NoError(t, ix.db.QueryRowContext(ctx, "SELECT value FROM vector_meta WHERE key=?", pullStageKey+next.Fingerprint()).Scan(&retained))
+			assert.Equal(t, prefix, retained, "repair retains the unpublished stage")
+			infos, err := ix.Generations(ctx)
+			require.NoError(t, err)
+			require.Len(t, infos, 2)
+			assert.Equal(t, "active", infos[0].State)
+			assert.EqualValues(t, 1, infos[0].Embedded)
+			assert.Zero(t, infos[0].Missing)
+			assert.Equal(t, "building", infos[1].State)
+			assert.EqualValues(t, 1, infos[1].Embedded)
+			assert.EqualValues(t, 1, infos[1].Missing, "unrelated pending stage work stays pending")
+			scope, found, err := stage.storedIncludeAutomatedScope(ctx)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.True(t, scope, "repair preserves the stage scope")
+			active, ok, err := ix.ActiveFingerprint(ctx)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, old.Fingerprint(), active)
+			after, err := ix.Search(ctx, enc, "repair", 10)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			export, ok, err := ix.BeginExport(ctx, nil)
+			require.NoError(t, err)
+			require.True(t, ok)
+			defer export.Close()
+			assert.Equal(t, version, export.Generation().DataVersion)
+			require.NotNil(t, export.Generation().IncludeAutomated)
+			assert.False(t, *export.Generation().IncludeAutomated)
+			docs, _, err := export.SessionDocs(ctx, "local")
+			require.NoError(t, err)
+			assert.Len(t, docs, 1)
+			docs, _, err = export.SessionDocs(ctx, "unrelated")
+			require.NoError(t, err)
+			assert.Empty(t, docs)
+		})
+	}
+}
