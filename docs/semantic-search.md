@@ -926,6 +926,10 @@ writer adds the column. Legacy chunks without proof are then returned as absent
 until their owner republishes them; another publisher cannot certify that
 coverage. A document with any unproven chunk is absent as a whole.
 
+An explicitly recorded chunk-hash version other than version 1 makes the
+generation unavailable. Legacy null versions remain valid when compatibility
+metadata and chunk provenance satisfy the checks above.
+
 Every lookup page rechecks publisher compatibility in the same read snapshot
 as its chunks. Unavailable
 compatibility returns `generation_changed`, even without prior discovery.

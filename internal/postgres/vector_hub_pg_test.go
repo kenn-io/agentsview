@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"math"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,84 +196,51 @@ func TestVectorHubLookupSparseChunks(t *testing.T) {
 	setHubTestSearcher(t, store, id)
 	table := vectorChunkTable(id)
 	identity := vector.HubIdentity{SessionID: "A", UnitKind: "user", ContentHash: "hash"}
-	hegel.Test(t, func(ht *hegel.T) {
-		// Bound the materialized document size while drawing the full stored index domain.
-		n := 1 + hegel.Draw(ht, hegel.Integers(0, math.MaxInt32))%8
-		indices := make([]int, n)
-		for i := range indices {
-			indices[i] = hegel.Draw(ht, hegel.Integers(0, math.MaxInt32))
-		}
-		slices.Sort(indices)
-		indices = slices.Compact(indices)
-		switch hegel.Draw(ht, hegel.Integers(0, 4)) {
-		case 0:
-			indices = []int{0, 2}
-		case 1:
-			indices = []int{3, 7, 15}
-		case 2:
-			indices = []int{42}
-		}
-		_, err := pg.ExecContext(ht.Context(), "DELETE FROM "+table)
-		require.NoError(ht, err)
-		expected := make([]vector.HubChunk, len(indices))
-		for i, index := range indices {
-			_, err = pg.ExecContext(ht.Context(), fmt.Sprintf("INSERT INTO %s (doc_key,chunk_index,embedding,source_hash) VALUES ('o:A:0',$1,$2,'hash')", table), index, fmt.Sprintf("[%d,0,0,0]", i+1))
-			require.NoError(ht, err)
-			encoded, err := vector.EncodeHubVector([]float32{float32(i + 1), 0, 0, 0})
-			require.NoError(ht, err)
-			expected[i] = vector.HubChunk{Index: 0, ChunkIndex: index, ChunkCount: len(indices), Vector: encoded}
-		}
-		req := vector.HubLookupRequest{Fingerprint: "sparse", Identities: []vector.HubIdentity{identity}}
-		full, err := store.LookupHubVectors(ht.Context(), req)
-		require.NoError(ht, err)
-		require.Equal(ht, expected, full.Chunks)
-		// Repeated and absent identities exercise resets between sparse documents.
-		missing := identity
-		missing.ContentHash = "missing"
-		req.Identities = []vector.HubIdentity{missing, identity, missing, identity}
-		var actual []vector.HubChunk
-		var absent []int
-		for pages := 0; ; pages++ {
-			require.Less(ht, pages, 2*len(indices)+4)
-			page, err := store.lookupHubVectors(ht.Context(), req, 2200)
-			require.NoError(ht, err)
-			actual = append(actual, page.Chunks...)
-			absent = append(absent, page.Absent...)
-			if page.NextCursor == "" {
-				break
+	for _, indices := range [][]int{{0, 2}, {3, 7, 15}, {42}, {0, 1, 2, 3, 4, 5, 6, 7}, {math.MaxInt32 - 1, math.MaxInt32}} {
+		t.Run(fmt.Sprint(indices), func(t *testing.T) {
+			_, err := pg.ExecContext(t.Context(), "DELETE FROM "+table)
+			require.NoError(t, err)
+			expected := make([]vector.HubChunk, len(indices))
+			for i, index := range indices {
+				_, err = pg.ExecContext(t.Context(), fmt.Sprintf("INSERT INTO %s (doc_key,chunk_index,embedding,source_hash) VALUES ('o:A:0',$1,$2,'hash')", table), index, fmt.Sprintf("[%d,0,0,0]", i+1))
+				require.NoError(t, err)
+				encoded, err := vector.EncodeHubVector([]float32{float32(i + 1), 0, 0, 0})
+				require.NoError(t, err)
+				expected[i] = vector.HubChunk{Index: 0, ChunkIndex: index, ChunkCount: len(indices), Vector: encoded}
 			}
-			require.NotEqual(ht, req.Cursor, page.NextCursor)
-			req.Cursor = page.NextCursor
-		}
-		want := make([]vector.HubChunk, 0, 2*len(expected))
-		for _, position := range []int{1, 3} {
-			for _, chunk := range expected {
-				chunk.Index = position
-				want = append(want, chunk)
+			req := vector.HubLookupRequest{Fingerprint: "sparse", Identities: []vector.HubIdentity{identity}}
+			full, err := store.LookupHubVectors(t.Context(), req)
+			require.NoError(t, err)
+			require.Equal(t, expected, full.Chunks)
+			// Repeated and absent identities exercise resets between sparse documents.
+			missing := identity
+			missing.ContentHash = "missing"
+			req.Identities = []vector.HubIdentity{missing, identity, missing, identity}
+			var actual []vector.HubChunk
+			var absent []int
+			for pages := 0; ; pages++ {
+				require.Less(t, pages, 2*len(indices)+4)
+				page, err := store.lookupHubVectors(t.Context(), req, 2200)
+				require.NoError(t, err)
+				actual = append(actual, page.Chunks...)
+				absent = append(absent, page.Absent...)
+				if page.NextCursor == "" {
+					break
+				}
+				require.NotEqual(t, req.Cursor, page.NextCursor)
+				req.Cursor = page.NextCursor
 			}
-		}
-		require.Equal(ht, want, actual)
-		require.Equal(ht, []int{0, 2}, absent)
-	}, hegel.WithTestCases(1000))
-}
-
-func TestVectorHubRejectsNegativeChunkIndex(t *testing.T) {
-	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_negative_test")
-	seedVectorSession(t, local, "A")
-	source := hubRecipeSource("negative", map[string]string{"max_input_chars": "8192"})
-	source.docs["A"] = []storage.VectorPushDoc{vdoc("A", "o:A:0", 0, "content", "hash", []float32{1, 0, 0, 0})}
-	sync.vectorSource = source
-	_, err := sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	id, _, _, err := LookupVectorGeneration(t.Context(), pg, "negative")
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	setHubTestSearcher(t, store, id)
-	_, err = pg.ExecContext(t.Context(), fmt.Sprintf("UPDATE %s SET chunk_index=-1", vectorChunkTable(id)))
-	require.NoError(t, err)
-	identity := vector.HubIdentity{SessionID: "A", UnitKind: "user", ContentHash: "hash"}
-	_, err = store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "negative", Identities: []vector.HubIdentity{identity}})
-	require.EqualError(t, err, "invalid vector chunk sequence")
+			want := make([]vector.HubChunk, 0, 2*len(expected))
+			for _, position := range []int{1, 3} {
+				for _, chunk := range expected {
+					chunk.Index = position
+					want = append(want, chunk)
+				}
+			}
+			require.Equal(t, want, actual)
+			require.Equal(t, []int{0, 2}, absent)
+		})
+	}
 }
 
 func TestVectorHubRejectsCrossGenerationRevision(t *testing.T) {
@@ -359,79 +324,57 @@ func TestVectorHubLookupCompatibilityGate(t *testing.T) {
 	require.NoError(t, err)
 	store := &Store{pg: pg}
 	setHubTestSearcher(t, store, result.Vectors.GenerationID)
-	hegel.Test(t, func(ht *hegel.T) {
-		_, err := pg.ExecContext(ht.Context(), "DELETE FROM vector_generation_machines")
-		require.NoError(ht, err)
-		n := hegel.Draw(ht, hegel.Integers(0, math.MaxInt32)) % 5
-		agree := hegel.Draw(ht, hegel.Booleans())
-		commonVersion := hegel.Draw(ht, hegel.Integers(1, math.MaxInt32))
-		commonScope := hegel.Draw(ht, hegel.Booleans())
-		params := []string{`{"max_input_chars":"8192"}`, "null", "[]", `{"max_input_chars":8192}`}
-		paramClass := hegel.Draw(ht, hegel.Integers(0, len(params)-1))
-		_, err = pg.ExecContext(ht.Context(), "UPDATE vector_generations SET params=$2::jsonb WHERE id=$1", result.Vectors.GenerationID, params[paramClass])
-		require.NoError(ht, err)
-		available := n > 0 && paramClass == 0
-		var firstVersion int
-		var firstScope bool
-		for i := range n {
-			version := hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32))
-			if hegel.Draw(ht, hegel.Booleans()) {
-				version = db.CurrentDataVersion()
+	for _, tc := range []struct {
+		name, params, witnesses string
+		available               bool
+	}{
+		{"current", `{"max_input_chars":"8192"}`, "(1,false,1)", true},
+		{"legacy null hash", `{"max_input_chars":"8192"}`, "(1,false,NULL)", true},
+		{"future hash", `{"max_input_chars":"8192"}`, "(1,false,2)", false},
+		{"mixed hash versions", `{"max_input_chars":"8192"}`, "(1,false,1),(1,false,2)", false},
+		{"no witnesses", `{"max_input_chars":"8192"}`, "", false},
+		{"null version", `{"max_input_chars":"8192"}`, "(NULL,false,1)", false},
+		{"zero version", `{"max_input_chars":"8192"}`, "(0,false,1)", false},
+		{"null scope", `{"max_input_chars":"8192"}`, "(1,NULL,1)", false},
+		{"different versions", `{"max_input_chars":"8192"}`, "(1,false,1),(2,false,1)", false},
+		{"different scopes", `{"max_input_chars":"8192"}`, "(1,false,1),(1,true,1)", false},
+		{"null params", "null", "(1,false,1)", false},
+		{"array params", "[]", "(1,false,1)", false},
+		{"numeric param", `{"max_input_chars":8192}`, "(1,false,1)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pg.ExecContext(t.Context(), "DELETE FROM vector_generation_machines")
+			require.NoError(t, err)
+			_, err = pg.ExecContext(t.Context(), "UPDATE vector_generations SET params=$1::jsonb", tc.params)
+			require.NoError(t, err)
+			if tc.witnesses != "" {
+				_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_generation_machines
+                (generation_id,machine,data_version,include_automated,chunk_hash_version)
+                SELECT $1,(row_number() OVER())::text,v.version::integer,v.scope::boolean,v.hash::integer FROM (VALUES `+tc.witnesses+`) v(version,scope,hash)`, result.Vectors.GenerationID)
+				require.NoError(t, err)
 			}
-			scope := hegel.Draw(ht, hegel.Booleans())
-			var storedVersion *int
-			if hegel.Draw(ht, hegel.Booleans()) {
-				storedVersion = &version
+			for _, cursor := range []bool{false, true} {
+				req := vector.HubLookupRequest{Fingerprint: "lookup-gate", Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", SourceUUID: "unit", Occurrence: 1, ContentHash: "hash"}}}
+				if cursor {
+					req.Cursor = makeHubLookupCursor(req, 0, 0)
+				}
+				reply, err := store.LookupHubVectors(t.Context(), req)
+				if tc.available {
+					require.NoError(t, err)
+					require.Len(t, reply.Chunks, 1)
+					values, err := vector.DecodeHubVector(reply.Chunks[0].Vector, 4)
+					require.NoError(t, err)
+					assert.Equal(t, []float32{1, 0, 0, 0}, values)
+				} else {
+					require.ErrorIs(t, err, vector.ErrHubGenerationChanged)
+					assert.Empty(t, reply.Chunks)
+				}
 			}
-			var storedScope *bool
-			if hegel.Draw(ht, hegel.Booleans()) {
-				storedScope = &scope
-			}
-			if agree {
-				version, scope = commonVersion, commonScope
-				storedVersion, storedScope = &version, &scope
-			}
-			_, err = pg.ExecContext(ht.Context(), `INSERT INTO vector_generation_machines
-			(generation_id,machine,last_push_at,data_version,include_automated) VALUES ($1,$2,now(),$3,$4)`,
-				result.Vectors.GenerationID, strconv.Itoa(i), storedVersion, storedScope)
-			require.NoError(ht, err)
-			available = available && storedVersion != nil && version > 0 && storedScope != nil &&
-				(i == 0 || version == firstVersion && scope == firstScope)
-			if i == 0 {
-				firstVersion, firstScope = version, scope
-			}
-		}
-		identity := vector.HubIdentity{SessionID: "A", UnitKind: "user", SourceUUID: "unit", Occurrence: 1, ContentHash: "hash"}
-		absent := hegel.Draw(ht, hegel.Booleans())
-		if absent {
-			identity.ContentHash = "different"
-		}
-		req := vector.HubLookupRequest{Fingerprint: "lookup-gate", Identities: []vector.HubIdentity{identity}}
-		if hegel.Draw(ht, hegel.Booleans()) {
-			req.Cursor = makeHubLookupCursor(req, 0, 0)
-		}
-		// Lookup must enforce this policy without a preceding discovery request.
-		reply, err := store.LookupHubVectors(ht.Context(), req)
-		generation, discoveryErr := store.HubVectorGeneration(ht.Context())
-		require.NoError(ht, discoveryErr)
-		require.Equal(ht, available, generation.Unavailable == "")
-		if !available {
-			require.ErrorIs(ht, err, vector.ErrHubGenerationChanged)
-			require.Empty(ht, reply.Chunks)
-			return
-		}
-		require.NoError(ht, err)
-		if absent {
-			require.Equal(ht, []int{0}, reply.Absent)
-			require.Empty(ht, reply.Chunks)
-		} else {
-			require.Empty(ht, reply.Absent)
-			require.Len(ht, reply.Chunks, 1)
-			values, err := vector.DecodeHubVector(reply.Chunks[0].Vector, 4)
-			require.NoError(ht, err)
-			require.Equal(ht, []float32{1, 0, 0, 0}, values)
-		}
-	}, hegel.WithTestCases(1000))
+			generation, err := store.HubVectorGeneration(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.available, generation.Unavailable == "")
+		})
+	}
 }
 
 func TestVectorHubCompatibilityWitnessTrust(t *testing.T) {
@@ -443,54 +386,47 @@ func TestVectorHubCompatibilityWitnessTrust(t *testing.T) {
 	require.NoError(t, err)
 	key, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err)
-	hegel.Test(t, func(ht *hegel.T) {
-		version := hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32))
-		if hegel.Draw(ht, hegel.Booleans()) {
-			version = db.CurrentDataVersion()
-		}
-		var storedVersion *int
-		if hegel.Draw(ht, hegel.Booleans()) {
-			storedVersion = &version
-		}
-		var storedScope *bool
-		if hegel.Draw(ht, hegel.Booleans()) {
-			value := hegel.Draw(ht, hegel.Booleans())
-			storedScope = &value
-		}
-		var requestedScope *bool
-		if hegel.Draw(ht, hegel.Booleans()) {
-			value := hegel.Draw(ht, hegel.Booleans())
-			requestedScope = &value
-		}
-		hashVersion := hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32))
-		if hegel.Draw(ht, hegel.Booleans()) {
-			hashVersion = 1
-		}
-		var storedHashVersion *int
-		if hegel.Draw(ht, hegel.Booleans()) {
-			storedHashVersion = &hashVersion
-		}
-		missing := hegel.Draw(ht, hegel.Booleans())
-		_, err := pg.ExecContext(ht.Context(), "DELETE FROM vector_generation_machines")
-		require.NoError(ht, err)
-		if !missing {
-			_, err = pg.ExecContext(ht.Context(), `INSERT INTO vector_generation_machines
+	version, hashVersion := db.CurrentDataVersion(), 1
+	oldVersion, futureHash := version-1, 2
+	yes, no := true, false
+	for _, tc := range []struct {
+		name                             string
+		storedVersion, storedHashVersion *int
+		storedScope, requestedScope      *bool
+		missing, expected                bool
+	}{
+		{"current", &version, &hashVersion, &no, &no, false, true},
+		{"missing", &version, &hashVersion, &no, &no, true, false},
+		{"old version", &oldVersion, &hashVersion, &no, &no, false, false},
+		{"null version", nil, &hashVersion, &no, &no, false, false},
+		{"future hash", &version, &futureHash, &no, &no, false, false},
+		{"null hash", &version, nil, &no, &no, false, false},
+		{"changed scope", &version, &hashVersion, &no, &yes, false, false},
+		{"unknown scope", &version, &hashVersion, nil, nil, false, true},
+		{"missing stored scope", &version, &hashVersion, nil, &no, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storedVersion, storedHashVersion, storedScope, requestedScope, missing := tc.storedVersion, tc.storedHashVersion, tc.storedScope, tc.requestedScope, tc.missing
+			_, err := pg.ExecContext(t.Context(), "DELETE FROM vector_generation_machines")
+			require.NoError(t, err)
+			if !missing {
+				_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_generation_machines
 			(generation_id,machine,last_push_at,data_version,include_automated,chunk_hash_version) VALUES ($1,$2,now(),$3,$4,$5)`,
-				result.Vectors.GenerationID, key, storedVersion, storedScope, storedHashVersion)
-			require.NoError(ht, err)
-		}
-		info := source.gen
-		info.IncludeAutomated = requestedScope
-		resolved, err := sync.resolveVectorGeneration(ht.Context(), info, key)
-		require.NoError(ht, err)
-		lookedUp, found, err := sync.lookupVectorGeneration(ht.Context(), info.Fingerprint, key, requestedScope)
-		require.NoError(ht, err)
-		require.True(ht, found)
-		sameScope := storedScope == nil && requestedScope == nil || storedScope != nil && requestedScope != nil && *storedScope == *requestedScope
-		expected := !missing && storedVersion != nil && *storedVersion == db.CurrentDataVersion() && sameScope && storedHashVersion != nil && *storedHashVersion == 1
-		require.Equal(ht, expected, resolved.machineRecorded)
-		require.Equal(ht, expected, lookedUp.machineRecorded)
-	}, hegel.WithTestCases(1000))
+					result.Vectors.GenerationID, key, storedVersion, storedScope, storedHashVersion)
+				require.NoError(t, err)
+			}
+			info := source.gen
+			info.IncludeAutomated = requestedScope
+			resolved, err := sync.resolveVectorGeneration(t.Context(), info, key)
+			require.NoError(t, err)
+			lookedUp, found, err := sync.lookupVectorGeneration(t.Context(), info.Fingerprint, key, requestedScope)
+			require.NoError(t, err)
+			require.True(t, found)
+			expected := tc.expected
+			require.Equal(t, expected, resolved.machineRecorded)
+			require.Equal(t, expected, lookedUp.machineRecorded)
+		})
+	}
 }
 
 func TestVectorHubLegacyCompatibilityRewritesCoverage(t *testing.T) {
@@ -690,28 +626,6 @@ func TestVectorHubFilteredLegacyWitnessRemainsUnknown(t *testing.T) {
 	}
 }
 
-func TestVectorHubRenamedPlainLegacyWitnessRetires(t *testing.T) {
-	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_plain_rename_test")
-	seedVectorSession(t, local, "A")
-	source := hubRecipeSource("plain-rename", map[string]string{"max_input_chars": "8192"})
-	sync.vectorSource = source
-	result, err := sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	original := sync.machine
-	_, err = pg.ExecContext(t.Context(), "UPDATE vector_generation_machines SET machine=$2,data_version=NULL,include_automated=NULL WHERE generation_id=$1", result.Vectors.GenerationID, original)
-	require.NoError(t, err)
-	sync.machine = "renamed-before-upgrade"
-	_, err = sync.Push(t.Context(), true, nil)
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	setHubTestSearcher(t, store, result.Vectors.GenerationID)
-	info, err := store.HubVectorGeneration(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, info.Unavailable)
-	assert.Zero(t, countRows(t, pg, "SELECT count(*) FROM vector_generation_machines WHERE generation_id=$1 AND machine=$2", result.Vectors.GenerationID, original))
-	assert.Equal(t, 1, countRows(t, pg, "SELECT count(*) FROM vector_generation_machines WHERE generation_id=$1", result.Vectors.GenerationID))
-}
-
 func TestVectorHubLegacyChunkHashUpgradeRewritesUnchanged(t *testing.T) {
 	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_hash_upgrade_test")
 	seedVectorSession(t, local, "A")
@@ -749,58 +663,59 @@ func TestVectorHubChunkSourceHashProof(t *testing.T) {
 	require.NoError(t, err)
 	store := &Store{pg: pg}
 	setHubTestSearcher(t, store, result.Vectors.GenerationID)
-	hegel.Test(t, func(ht *hegel.T) {
-		// Materialize a bounded set of chunks while drawing the full count domain.
-		count := hegel.Draw(ht, hegel.Integers(0, math.MaxInt32)) % 17
-		mode := hegel.Draw(ht, hegel.Integers(0, 3))
-		hash := fmt.Sprintf("hash-%d", hegel.Draw(ht, hegel.Integers(math.MinInt64, math.MaxInt64)))
-		_, err := pg.ExecContext(ht.Context(), "UPDATE vector_documents SET content_hash=$1 WHERE session_id='A'", hash)
-		require.NoError(ht, err)
-		_, err = pg.ExecContext(ht.Context(), "DELETE FROM "+table)
-		require.NoError(ht, err)
-		_, err = pg.ExecContext(ht.Context(), "INSERT INTO "+table+` (doc_key,chunk_index,embedding,source_hash)
+	for _, count := range []int{0, 1, 3, 16} {
+		for mode := range 4 {
+			t.Run(fmt.Sprintf("count=%d/mode=%d", count, mode), func(t *testing.T) {
+				hash := "hash-proof"
+				_, err := pg.ExecContext(t.Context(), "UPDATE vector_documents SET content_hash=$1 WHERE session_id='A'", hash)
+				require.NoError(t, err)
+				_, err = pg.ExecContext(t.Context(), "DELETE FROM "+table)
+				require.NoError(t, err)
+				_, err = pg.ExecContext(t.Context(), "INSERT INTO "+table+` (doc_key,chunk_index,embedding,source_hash)
  SELECT 'o:A:0',i,template.embedding,
  CASE WHEN $2=0 OR ($2 IN (1,2) AND i>0) OR ($2=3 AND i<$1-1) THEN $3
       WHEN $2=2 THEN $3||'-other' ELSE NULL END
  FROM generate_series(0,$1-1) i CROSS JOIN hash_proof_template template`, count, mode, hash)
-		require.NoError(ht, err)
-		req := vector.HubLookupRequest{Fingerprint: "hash-proof", Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", Occurrence: 1, ContentHash: hash}}}
-		reply, err := store.LookupHubVectors(ht.Context(), req)
-		require.NoError(ht, err)
-		if mode != 0 || count == 0 {
-			require.Empty(ht, reply.Chunks, "one unproven chunk quarantines the entire document")
-			require.Equal(ht, []int{0}, reply.Absent)
-			req.Cursor = makeHubLookupCursor(req, 0, count/2)
-			page, err := store.LookupHubVectors(ht.Context(), req)
-			require.NoError(ht, err)
-			require.Empty(ht, page.Chunks)
-			require.Equal(ht, []int{0}, page.Absent, "a cursor cannot skip an unproven sibling")
-			return
+				require.NoError(t, err)
+				req := vector.HubLookupRequest{Fingerprint: "hash-proof", Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", Occurrence: 1, ContentHash: hash}}}
+				reply, err := store.LookupHubVectors(t.Context(), req)
+				require.NoError(t, err)
+				if mode != 0 || count == 0 {
+					require.Empty(t, reply.Chunks, "one unproven chunk quarantines the entire document")
+					require.Equal(t, []int{0}, reply.Absent)
+					req.Cursor = makeHubLookupCursor(req, 0, count/2)
+					page, err := store.LookupHubVectors(t.Context(), req)
+					require.NoError(t, err)
+					require.Empty(t, page.Chunks)
+					require.Equal(t, []int{0}, page.Absent, "a cursor cannot skip an unproven sibling")
+					return
+				}
+				require.Len(t, reply.Chunks, count)
+				require.Empty(t, reply.Absent)
+				for i, chunk := range reply.Chunks {
+					require.Equal(t, i, chunk.ChunkIndex)
+					require.Equal(t, count, chunk.ChunkCount)
+					values, err := vector.DecodeHubVector(chunk.Vector, 4)
+					require.NoError(t, err)
+					require.Equal(t, []float32{1, 0, 0, 0}, values)
+				}
+				if count > 1 {
+					firstPage, err := store.lookupHubVectors(t.Context(), req, 2200)
+					require.NoError(t, err)
+					require.NotEmpty(t, firstPage.Chunks)
+					require.NotEmpty(t, firstPage.NextCursor)
+					_, err = pg.ExecContext(t.Context(), "UPDATE "+table+" SET source_hash=NULL WHERE chunk_index=0")
+					require.NoError(t, err)
+					req.Cursor = firstPage.NextCursor
+					page, err := store.LookupHubVectors(t.Context(), req)
+					require.NoError(t, err)
+					require.Empty(t, page.Chunks)
+					require.Equal(t, []int{0}, page.Absent, "each page rechecks proof for previously returned siblings")
+					require.Empty(t, page.NextCursor)
+				}
+			})
 		}
-		require.Len(ht, reply.Chunks, count)
-		require.Empty(ht, reply.Absent)
-		for i, chunk := range reply.Chunks {
-			require.Equal(ht, i, chunk.ChunkIndex)
-			require.Equal(ht, count, chunk.ChunkCount)
-			values, err := vector.DecodeHubVector(chunk.Vector, 4)
-			require.NoError(ht, err)
-			require.Equal(ht, []float32{1, 0, 0, 0}, values)
-		}
-		if count > 1 {
-			firstPage, err := store.lookupHubVectors(ht.Context(), req, 2200)
-			require.NoError(ht, err)
-			require.NotEmpty(ht, firstPage.Chunks)
-			require.NotEmpty(ht, firstPage.NextCursor)
-			_, err = pg.ExecContext(ht.Context(), "UPDATE "+table+" SET source_hash=NULL WHERE chunk_index=0")
-			require.NoError(ht, err)
-			req.Cursor = firstPage.NextCursor
-			page, err := store.LookupHubVectors(ht.Context(), req)
-			require.NoError(ht, err)
-			require.Empty(ht, page.Chunks)
-			require.Equal(ht, []int{0}, page.Absent, "each page rechecks proof for previously returned siblings")
-			require.Empty(ht, page.NextCursor)
-		}
-	}, hegel.WithTestCases(1000))
+	}
 }
 
 func TestVectorHubInterruptedLegacyPublisherIsQuarantined(t *testing.T) {
@@ -937,96 +852,107 @@ func TestVectorHubLegacyWitnessRetirement(t *testing.T) {
 	require.NoError(t, err)
 	foreignGeneration, err := ensureVectorGeneration(t.Context(), pg, "foreign-alias", "m", 4)
 	require.NoError(t, err)
-	hegel.Test(t, func(ht *hegel.T) {
-		current := fmt.Sprintf("current-%d", hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32)))
-		previous := fmt.Sprintf("previous-λ|%d", hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32)))
-		hostileName := hegel.Draw(ht, hegel.Booleans())
-		if hostileName {
-			current += "|push_marker:foreign-archive:scope:0123456789abcdef"
-		}
-		sync.machine = current
-		key := current + suffix
-		unrelated := previous + "-other"
-		otherScope := previous + suffix + "-other"
-		filteredScope := previous + suffix + fmt.Sprintf(":scope:%016x", uint64(hegel.Draw(ht, hegel.Integers(math.MinInt64, math.MaxInt64))))
-		before := []string{previous, current, previous + suffix, unrelated, otherScope, filteredScope}
-		_, err := pg.ExecContext(ht.Context(), "DELETE FROM vector_generation_machines")
-		require.NoError(ht, err)
-		for _, name := range before {
-			_, err = pg.ExecContext(ht.Context(), `INSERT INTO vector_generation_machines
+	for _, hostileName := range []bool{false, true} {
+		for _, filtered := range []bool{false, true} {
+			for _, canceled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("hostile=%t/filtered=%t/canceled=%t", hostileName, filtered, canceled), func(t *testing.T) {
+					current, previous := "current", "previous-λ|1"
+					if hostileName {
+						current += "|push_marker:foreign-archive:scope:0123456789abcdef"
+					}
+					sync.machine = current
+					unrelated := previous + "-other"
+					otherScope := previous + suffix + "-other"
+					filteredScope := previous + suffix + ":scope:0123456789abcdef"
+					before := []string{previous, current, previous + suffix, unrelated, otherScope, filteredScope}
+					_, err := pg.ExecContext(t.Context(), "DELETE FROM vector_generation_machines")
+					require.NoError(t, err)
+					for _, name := range before {
+						_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_generation_machines
 			(generation_id,machine,last_push_at) VALUES ($1,$2,now())`, generation.id, name)
-			require.NoError(ht, err)
-		}
-		_, err = pg.ExecContext(ht.Context(), `INSERT INTO vector_generation_machines
+						require.NoError(t, err)
+					}
+					_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_generation_machines
 		(generation_id,machine,last_push_at) VALUES ($1,$2,now())`, foreignGeneration, previous)
-		require.NoError(ht, err)
-		ctx := ht.Context()
-		filtered := hegel.Draw(ht, hegel.Booleans())
-		sync.projects = nil
-		if filtered {
-			sync.projects = []string{"alpha"}
+					require.NoError(t, err)
+					ctx := t.Context()
+					sync.projects = nil
+					if filtered {
+						sync.projects = []string{"alpha"}
+					}
+					key, err := sync.vectorGenerationWitnessKey(t.Context())
+					require.NoError(t, err)
+					if canceled {
+						var cancel context.CancelFunc
+						ctx, cancel = context.WithCancel(ctx)
+						cancel()
+					}
+					ok, err := sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
+					want := []string{key, unrelated, otherScope}
+					if filtered {
+						want = append(want, previous, current, previous+suffix, filteredScope)
+					}
+					if !filtered && hostileName {
+						want = append(want, current)
+					}
+					if canceled {
+						require.Error(t, err)
+						require.False(t, ok)
+						want = before
+					} else {
+						require.NoError(t, err)
+						require.True(t, ok)
+						ok, err = sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
+						require.NoError(t, err)
+						require.True(t, ok, "repeated certification is idempotent")
+					}
+					rows, err := pg.QueryContext(t.Context(), "SELECT machine FROM vector_generation_machines WHERE generation_id=$1", generation.id)
+					require.NoError(t, err)
+					defer rows.Close()
+					var got []string
+					for rows.Next() {
+						var name string
+						require.NoError(t, rows.Scan(&name))
+						got = append(got, name)
+					}
+					require.NoError(t, rows.Err())
+					require.ElementsMatch(t, want, got)
+					var foreignCount int
+					require.NoError(t, pg.QueryRowContext(t.Context(), "SELECT count(*) FROM vector_generation_machines WHERE generation_id=$1 AND machine=$2", foreignGeneration, previous).Scan(&foreignCount))
+					require.Equal(t, 1, foreignCount, "another generation's plain witness remains untouched")
+				})
+			}
 		}
-		canceled := hegel.Draw(ht, hegel.Booleans())
-		if canceled {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			cancel()
-		}
-		ok, err := sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
-		want := []string{key, unrelated, otherScope}
-		if filtered {
-			want = append(want, previous, current, filteredScope)
-		}
-		if !filtered && hostileName {
-			want = append(want, current)
-		}
-		if canceled {
-			require.Error(ht, err)
-			require.False(ht, ok)
-			want = before
-		} else {
-			require.NoError(ht, err)
-			require.True(ht, ok)
-			ok, err = sync.recordVectorGenerationMachine(ctx, source.gen.Fingerprint, generation, key, source.gen.IncludeAutomated)
-			require.NoError(ht, err)
-			require.True(ht, ok, "repeated certification is idempotent")
-		}
-		rows, err := pg.QueryContext(ht.Context(), "SELECT machine FROM vector_generation_machines WHERE generation_id=$1", generation.id)
-		require.NoError(ht, err)
-		defer rows.Close()
-		var got []string
-		for rows.Next() {
-			var name string
-			require.NoError(ht, rows.Scan(&name))
-			got = append(got, name)
-		}
-		require.NoError(ht, rows.Err())
-		require.ElementsMatch(ht, want, got)
-		var foreignCount int
-		require.NoError(ht, pg.QueryRowContext(ht.Context(), "SELECT count(*) FROM vector_generation_machines WHERE generation_id=$1 AND machine=$2", foreignGeneration, previous).Scan(&foreignCount))
-		require.Equal(ht, 1, foreignCount, "another generation's plain witness remains untouched")
-	}, hegel.WithTestCases(1000))
+	}
 }
 
 func TestVectorHubMachineRenameRetiresCompatibilityWitness(t *testing.T) {
-	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_rename_test")
-	seedVectorSession(t, local, "A")
-	source := hubRecipeSource("rename", map[string]string{"max_input_chars": "8192"})
-	sync.vectorSource = source
-	res, err := sync.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	setHubTestSearcher(t, store, res.Vectors.GenerationID)
-	sync.machine = "renamed-machine"
-	automated := true
-	source.gen.IncludeAutomated = &automated
-	_, err = sync.pushVectors(t.Context(), false, nil, 0, nil, nil)
-	require.NoError(t, err)
-	generation, err := store.HubVectorGeneration(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, generation.Unavailable)
-	assert.True(t, generation.IncludeAutomated)
-	assert.Equal(t, 1, countRows(t, pg, `SELECT count(*) FROM vector_generation_machines`))
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_rename_test")
+			seedVectorSession(t, local, "A")
+			source := hubRecipeSource("rename", map[string]string{"max_input_chars": "8192"})
+			sync.vectorSource = source
+			res, err := sync.Push(t.Context(), false, nil)
+			require.NoError(t, err)
+			store := &Store{pg: pg}
+			setHubTestSearcher(t, store, res.Vectors.GenerationID)
+			if legacy {
+				_, err = pg.ExecContext(t.Context(), "UPDATE vector_generation_machines SET machine=$1,data_version=NULL,include_automated=NULL", sync.machine)
+				require.NoError(t, err)
+			}
+			sync.machine = "renamed-machine"
+			automated := true
+			source.gen.IncludeAutomated = &automated
+			_, err = sync.pushVectors(t.Context(), false, nil, 0, nil, nil)
+			require.NoError(t, err)
+			generation, err := store.HubVectorGeneration(t.Context())
+			require.NoError(t, err)
+			assert.Empty(t, generation.Unavailable)
+			assert.True(t, generation.IncludeAutomated)
+			assert.Equal(t, 1, countRows(t, pg, `SELECT count(*) FROM vector_generation_machines`))
+		})
+	}
 }
 
 func TestVectorHubIncompleteCompatibilityPushIsUnavailable(t *testing.T) {

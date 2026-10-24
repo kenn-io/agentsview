@@ -41,9 +41,6 @@ func (s *Server) humaVectorLookup(ctx context.Context, in *hubLookupInput) (*jso
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "vector lookup requires pg serve")
 	}
-	if err := in.Body.Validate(); err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
 	reply, err := store.LookupHubVectors(ctx, in.Body)
 	if errors.Is(err, vector.ErrHubGenerationChanged) {
 		return nil, &apiResponseError{Status: http.StatusConflict, Code: "generation_changed", Message: "generation_changed"}

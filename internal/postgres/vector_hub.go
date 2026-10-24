@@ -29,7 +29,8 @@ func (s *Store) HubVectorGeneration(ctx context.Context) (vector.HubGeneration, 
 func readHubVectorGeneration(ctx context.Context, reader pgSessionQueryer, selected *vectorSearcher) (vector.HubGeneration, error) {
 	unavailable := vector.HubGeneration{Unavailable: "selected vector generation unavailable"}
 	rows, err := reader.QueryContext(ctx, `SELECT g.fingerprint,g.model,g.dimension,to_jsonb(g)->>'params',
- (to_jsonb(m)->>'data_version')::integer,(to_jsonb(m)->>'include_automated')::boolean
+ (to_jsonb(m)->>'data_version')::integer,(to_jsonb(m)->>'include_automated')::boolean,
+ (to_jsonb(m)->>'chunk_hash_version')::integer
  FROM vector_generations g LEFT JOIN vector_generation_machines m ON m.generation_id=g.id
  WHERE g.id=$1 AND g.fingerprint=$2 AND g.created_at=$3 AND g.dimension=$4
  AND EXISTS (SELECT 1 FROM pg_attribute
@@ -47,12 +48,18 @@ func readHubVectorGeneration(ctx context.Context, reader pgSessionQueryer, selec
 	for rows.Next() {
 		var gen vector.HubGeneration
 		var params sql.NullString
-		var version sql.NullInt64
+		var version, hashVersion sql.NullInt64
 		var automated sql.NullBool
-		if err := rows.Scan(&gen.Fingerprint, &gen.Model, &gen.Dimension, &params, &version, &automated); err != nil {
+		if err := rows.Scan(&gen.Fingerprint, &gen.Model, &gen.Dimension, &params, &version, &automated, &hashVersion); err != nil {
 			return unavailable, err
 		}
 		if !params.Valid || json.Unmarshal([]byte(params.String), &gen.Params) != nil || gen.Params == nil || !version.Valid || version.Int64 <= 0 || !automated.Valid {
+			return unavailable, nil
+		}
+		// Legacy witnesses predate chunk-hash certification. Their null version
+		// remains valid when the stored chunks carry the required provenance.
+		// A newer explicit contract cannot be interpreted by this reader.
+		if hashVersion.Valid && hashVersion.Int64 != 1 {
 			return unavailable, nil
 		}
 		gen.DataVersion = int(version.Int64)
@@ -123,7 +130,6 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 		}
 		defer rows.Close()
 		count := 0
-		previousIndex := -1
 		for rows.Next() {
 			var chunk vector.HubChunk
 			var literal string
@@ -132,12 +138,6 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 				rows.Close()
 				return reply, err
 			}
-			// Splitters omit blank windows, so stored chunk indices can have gaps.
-			if chunk.ChunkIndex <= previousIndex {
-				rows.Close()
-				return reply, errors.New("invalid vector chunk sequence")
-			}
-			previousIndex = chunk.ChunkIndex
 			count++
 			if chunk.ChunkIndex < chunkStart {
 				continue

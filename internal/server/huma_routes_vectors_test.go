@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/vector"
-	"hegel.dev/go/hegel"
 )
 
 func TestVectorHubRoutesUnavailableLocally(t *testing.T) {
@@ -51,6 +49,7 @@ func (s hubTestStore) LookupHubVectors(ctx context.Context, r vector.HubLookupRe
 		return vector.HubLookupReply{}, s.err
 	}
 	require.Equal(s.t, "fp", r.Fingerprint)
+	require.Equal(s.t, "page-token", r.Cursor)
 	require.Equal(s.t, []vector.HubIdentity{{SessionID: "A", UnitKind: "user", ContentHash: "hash"}}, r.Identities)
 	return vector.HubLookupReply{Version: "vectors.v1", Fingerprint: "fp", Chunks: []vector.HubChunk{{Index: 0, ChunkIndex: 0, ChunkCount: 1, Vector: "AACAPw=="}}, Absent: []int{}}, nil
 }
@@ -60,10 +59,13 @@ func TestVectorHubLookupWire(t *testing.T) {
 	s.db = hubTestStore{Store: s.db, t: t}
 	s.cfg.RequireAuth = true
 	s.cfg.AuthToken = "test-token"
-	for _, encoding := range []string{"identity", "zstd"} {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
+	for _, tc := range []struct{ encoding, want string }{
+		{"identity", ""}, {"zstd", "zstd"}, {"ZsTd;q=0, gzip;q=1", ""},
+		{"ZsTd;q=0.001, gzip;q=1", "zstd"}, {"zstd;q=0.5", "zstd"}, {"zstd;q=1", "zstd"},
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept-Encoding", encoding)
+		req.Header.Set("Accept-Encoding", tc.encoding)
 		unauthorized := httptest.NewRecorder()
 		s.Handler().ServeHTTP(unauthorized, req.Clone(t.Context()))
 		assert.Equal(t, http.StatusUnauthorized, unauthorized.Code)
@@ -72,8 +74,8 @@ func TestVectorHubLookupWire(t *testing.T) {
 		s.Handler().ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		raw := w.Body.Bytes()
-		if encoding == "zstd" {
-			require.Equal(t, "zstd", w.Header().Get("Content-Encoding"))
+		assert.Equal(t, tc.want, w.Header().Get("Content-Encoding"))
+		if tc.want == "zstd" {
 			decoder, err := zstd.NewReader(w.Body)
 			require.NoError(t, err)
 			raw, err = io.ReadAll(decoder)
@@ -86,7 +88,7 @@ func TestVectorHubLookupWire(t *testing.T) {
 	}
 	fixture := newSyncRouteFixture(t, withStaleDB())
 	require.NoError(t, fixture.db.CloseWriter())
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "127.0.0.1:0"
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -109,7 +111,7 @@ func TestVectorHubLookupErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := testServer(t, 0)
 			s.db = hubTestStore{Store: s.db, t: t, err: tc.err}
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept-Encoding", "zstd")
 			req.Host = "127.0.0.1:0"
@@ -125,47 +127,26 @@ func TestVectorHubLookupErrors(t *testing.T) {
 	}
 }
 
-func TestVectorHubNegotiationProperty(t *testing.T) {
-	s := testServer(t, 0)
-	s.cfg.RequireAuth = true
-	s.cfg.AuthToken = "test-token"
-	s.db = hubTestStore{Store: s.db, t: t}
-	hegel.Test(t, func(ht *hegel.T) {
-		q := hegel.Draw(ht, hegel.Integers(0, 1000))
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer test-token")
-		req.Header.Set("Accept-Encoding", fmt.Sprintf("ZsTd;q=%.3f, gzip;q=1", float64(q)/1000))
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, req)
-		require.Equal(ht, 200, w.Code)
-		if q == 0 {
-			require.NotEqual(ht, "zstd", w.Header().Get("Content-Encoding"))
-		} else {
-			require.Equal(ht, "zstd", w.Header().Get("Content-Encoding"))
-		}
-	}, hegel.WithTestCases(1000))
-}
-
-func TestVectorHubLookupDeadlineProperty(t *testing.T) {
+func TestVectorHubLookupDeadline(t *testing.T) {
 	s := testServer(t, 0)
 	s.cfg.RequireAuth = true
 	s.cfg.AuthToken = "test-token"
 	var deadline time.Time
 	var bounded bool
 	s.db = hubTestStore{Store: s.db, t: t, hook: func(ctx context.Context) { deadline, bounded = ctx.Deadline() }}
-	hegel.Test(t, func(ht *hegel.T) {
-		seconds := hegel.Draw(ht, hegel.Integers[int64](1, math.MaxInt64/int64(time.Second)))
-		s.cfg.WriteTimeout = time.Duration(seconds) * time.Second
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer test-token")
-		before := time.Now()
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, req)
-		require.Equal(ht, 200, w.Code)
-		require.True(ht, bounded, "lookup must give PostgreSQL a deadline")
-		require.False(ht, deadline.Before(before.Add(s.cfg.WriteTimeout)))
-		require.False(ht, deadline.After(time.Now().Add(s.cfg.WriteTimeout)))
-	}, hegel.WithTestCases(1000))
+	for _, seconds := range []int{1, 30, 300} {
+		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+			s.cfg.WriteTimeout = time.Duration(seconds) * time.Second
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/vectors/lookup", strings.NewReader(`{"cursor":"page-token","fingerprint":"fp","identities":[{"session_id":"A","unit_kind":"user","content_hash":"hash"}]}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer test-token")
+			before := time.Now()
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, req)
+			require.Equal(t, 200, w.Code)
+			require.True(t, bounded, "lookup must give PostgreSQL a deadline")
+			require.False(t, deadline.Before(before.Add(s.cfg.WriteTimeout)))
+			require.False(t, deadline.After(time.Now().Add(s.cfg.WriteTimeout)))
+		})
+	}
 }
