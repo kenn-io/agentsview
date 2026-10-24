@@ -1494,6 +1494,12 @@ type ParsedSession struct {
 	SourceVersion      string
 	GroupKey           string `json:"group_key,omitempty"`
 	KeepStoredGroupKey bool   `json:"keep_stored_group_key,omitempty"`
+	// KeepStoredWorkspace and KeepStoredParent mark a working directory or
+	// parent supplied outside the transcript (Antigravity's
+	// conversation_summaries.db). Sync keeps a stored value, so the store only
+	// fills an empty one and a missing or blank value never clears it.
+	KeepStoredWorkspace bool `json:"keep_stored_workspace,omitempty"`
+	KeepStoredParent    bool `json:"keep_stored_parent,omitempty"`
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback

@@ -1781,6 +1781,14 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE NOT (
 				session_project_identity_snapshots.recorded_git_remote != ''
 				AND (excluded.remote_resolution = 'ambiguous' OR trim(excluded.git_remote) = '')
+			) AND NOT (
+				-- An old placeholder with no identity key and no recorded root
+				-- carries no historical evidence, so it never replaces a
+				-- publishable identity the rebuild just recorded.
+				trim(excluded.key_source) = '' AND trim(excluded.worktree_root_path) = ''
+				AND trim(excluded.root_path) = ''
+				AND (trim(session_project_identity_snapshots.key_source) != ''
+					OR trim(session_project_identity_snapshots.worktree_root_path) != '')
 			)`); err != nil {
 			return fmt.Errorf("copying session project identity snapshots: %w", err)
 		}

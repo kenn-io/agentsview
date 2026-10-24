@@ -1234,13 +1234,13 @@ func TestHTTPUnchangedMirrorBackfillsAntigravityTitles(t *testing.T) {
 					require.NoError(t, err)
 					var record antigravityTitleVerification
 					require.NoError(t, json.Unmarshal(raw, &record))
-					assert.Equal(t, 1, record.Version)
+					assert.Equal(t, antigravityTitleVerificationVersion, record.Version)
 					idle, err := hs.Run(t.Context())
 					require.NoError(t, err)
 					assert.Equal(t, SyncStats{}, idle)
 				}
 
-				newer := []byte(`{"version":2,"states":{}}`)
+				newer := []byte(`{"version":3,"states":{}}`)
 				require.NoError(t, os.WriteFile(sidecar, newer, 0o600))
 				_, err = hs.Run(t.Context())
 				require.NoError(t, err)

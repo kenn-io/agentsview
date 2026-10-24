@@ -74,6 +74,7 @@ For CI runner selection and caching, read the
   Put implementation details after that outcome, and include them only when
   they help the reader act or understand a limit.
 - Keep pull request titles and descriptions in sync with the current diff.
+- Write all pull request titles and descriptions, and all issues, in English.
 - Do not post pull request or issue comments unless the user asks.
 
 ## Documentation

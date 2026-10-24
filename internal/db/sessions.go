@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/lockctx"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -2740,6 +2741,147 @@ func (db *DB) refreshSessionName(ctx context.Context, id string, sessionName *st
 	return tx.Commit()
 }
 
+// NativeSessionMetadata is a working directory and parent an agent keeps
+// outside the transcript (Antigravity's conversation_summaries.db).
+type NativeSessionMetadata struct {
+	Cwd string
+	// Project is the effective project for Cwd, after worktree mappings.
+	Project         string
+	ParentSessionID string
+	// Identity, when its Project is set, is the project identity observed
+	// for Cwd; IdentitySnapshotProject is the parser-time label it keeps.
+	Identity                export.ProjectIdentityObservation
+	IdentitySnapshotProject string
+}
+
+// FillNativeSessionMetadata fills a session's empty working directory and
+// project, and its parent when the parser recorded none, from metadata the
+// agent keeps outside the transcript. Stored values are never replaced. A
+// native parent takes precedence over a launcher link, as a reparse would.
+// Trashed rows are filled too, so a restore shows them.
+func (db *DB) FillNativeSessionMetadata(
+	ctx context.Context, id string, m NativeSessionMetadata,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var s struct{ project, cwd, parent, parserParent, relationship, parserRelationship string }
+	err = tx.QueryRowContext(ctx, `
+		SELECT project, COALESCE(cwd, ''), COALESCE(parent_session_id, ''),
+		       COALESCE(parser_parent_session_id, ''), COALESCE(relationship_type, ''),
+		       COALESCE(parser_relationship_type, '')
+		FROM sessions WHERE id = ?`, id,
+	).Scan(&s.project, &s.cwd, &s.parent, &s.parserParent, &s.relationship, &s.parserRelationship)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking session %s: %w", id, err)
+	}
+	fillCwd := s.cwd == "" && m.Cwd != ""
+	fillParent := s.parserParent == "" && m.ParentSessionID != ""
+	if !fillCwd && !fillParent {
+		return nil
+	}
+	cwd, project := s.cwd, s.project
+	if fillCwd {
+		cwd = m.Cwd
+		if m.Project != "" {
+			project = m.Project
+		}
+	}
+	parent, parserParent := s.parent, s.parserParent
+	relationship, parserRelationship := s.relationship, s.parserRelationship
+	if fillParent {
+		parent, parserParent = m.ParentSessionID, m.ParentSessionID
+		if relationship == "" {
+			relationship = "subagent"
+		}
+		if parserRelationship == "" {
+			parserRelationship = "subagent"
+		}
+	}
+	// A moved parent changes the hierarchy, so friction results are cleared
+	// as the session upsert and linking paths do.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions SET cwd = ?, project = ?,
+		    parent_session_id = ?, parser_parent_session_id = ?,
+		    relationship_type = ?, parser_relationship_type = ?,
+		    friction_rules_version = CASE WHEN ? THEN '' ELSE friction_rules_version END,
+		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?`,
+		cwd, project, parent, parserParent, relationship, parserRelationship,
+		parent != s.parent, id,
+	); err != nil {
+		return err
+	}
+	queryRow := func(ctx context.Context, query string, args ...any) rowScanner {
+		return tx.QueryRowContext(ctx, query, args...)
+	}
+	if fillParent {
+		// A native parent can close a cycle with a launcher link, so the
+		// affected launcher links are recomputed as session upserts do.
+		if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext, queryRow, []string{id}); err != nil {
+			return err
+		}
+	}
+	// A user project assignment may have kept the stored project.
+	var currentProject string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT project FROM sessions WHERE id = ?`, id,
+	).Scan(&currentProject); err != nil {
+		return fmt.Errorf("reading filled project for %s: %w", id, err)
+	}
+	projects := []string{s.project, currentProject}
+	writeIdentity := fillCwd && strings.TrimSpace(m.Identity.Project) != ""
+	if writeIdentity {
+		// The filled workspace replaces the insert-time placeholder snapshot.
+		// Aggregates are republished from snapshots for the placeholder's and
+		// the new evidence key, so they follow the project each session stores
+		// (a user assignment keeps its identity) and skip trashed sessions.
+		var machine, root, gitRemote string
+		err := tx.QueryRowContext(ctx, `
+			SELECT machine, root_path, git_remote
+			FROM session_project_identity_snapshots WHERE session_id = ?`, id,
+		).Scan(&machine, &root, &gitRemote)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("reading session project identity snapshot: %w", err)
+		}
+		identity := m.Identity
+		identity.SessionID, identity.Project = id, currentProject
+		identity, err = normalizeProjectIdentityObservation(identity)
+		if err != nil {
+			return err
+		}
+		label := m.IdentitySnapshotProject
+		if strings.TrimSpace(label) == "" {
+			label = currentProject
+		}
+		if err := writeSessionProjectIdentitySnapshotExec(
+			ctx, tx, queryRow, identity, label, false, true,
+		); err != nil {
+			return err
+		}
+		if machine != "" {
+			if err := reconcileProjectIdentityAggregateKeyExec(
+				ctx, tx, machine, root, gitRemote, projects,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	if writeIdentity || currentProject != s.project {
+		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, tx, id, projects); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // FindSessionIDsByPartial returns up to limit session IDs that contain the
 // given literal, case-sensitive substring. Used by CLI lookups so users can
 // reference sessions by a short prefix shown in list output.
@@ -4376,14 +4518,19 @@ func (db *DB) ListStaleForkSessionIDsByFilePath(ctx context.Context,
 const sessionMachineBatchSize = 500
 
 // SessionWriteIdentity is the stored state used to preserve immutable source
-// attribution and parser-owned Codex titles across session writes and rebuilds.
+// attribution, parser-owned titles, and metadata kept outside the transcript
+// across session writes and rebuilds.
 type SessionWriteIdentity struct {
-	Machine     string
-	Agent       string
-	Cwd         string
-	FilePath    string
-	FileHash    string
-	SessionName *string
+	Machine               string
+	Agent                 string
+	Cwd                   string
+	FilePath              string
+	FileHash              string
+	SessionName           *string
+	ParserParentSessionID string
+	// SourceProject is the parser-time project label kept in the session's
+	// project identity snapshot.
+	SourceProject string
 }
 
 // ListSessionWriteIdentitiesByID returns stored source attribution and parser
@@ -4420,12 +4567,15 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				args[i] = id
 			}
 			rows, err := db.getReader().QueryContext(ctx, `
-			SELECT id, machine, agent, COALESCE(cwd, ''),
-			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
-			       session_name
-			FROM sessions
-			WHERE id IN (`+placeholders+`)
-			ORDER BY id`, args...)
+			SELECT s.id, s.machine, s.agent, COALESCE(s.cwd, ''),
+			       COALESCE(s.file_path, ''), COALESCE(s.file_hash, ''),
+			       s.session_name, COALESCE(s.parser_parent_session_id, ''),
+			       COALESCE(snap.project, '')
+			FROM sessions s
+			LEFT JOIN session_project_identity_snapshots snap
+			    ON snap.session_id = s.id
+			WHERE s.id IN (`+placeholders+`)
+			ORDER BY s.id`, args...)
 			if err != nil {
 				return fmt.Errorf("listing session write identities by ID: %w", err)
 			}
@@ -4436,6 +4586,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				if err := rows.Scan(
 					&id, &identity.Machine, &identity.Agent, &identity.Cwd,
 					&identity.FilePath, &identity.FileHash, &identity.SessionName,
+					&identity.ParserParentSessionID, &identity.SourceProject,
 				); err != nil {
 					_ = rows.Close()
 					return fmt.Errorf(

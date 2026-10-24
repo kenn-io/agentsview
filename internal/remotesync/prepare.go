@@ -1228,6 +1228,12 @@ func (hs RemoteSync) prepareMirror(
 	}, nil
 }
 
+// antigravityTitleVerificationVersion tracks what a mirror's sidecar proves.
+// Version 1 only covered session titles. Version 2 also covers the workspace
+// folder and parent conversation, so a version-1 record must not be treated as
+// applied: it would skip the import that reconciles existing sessions.
+const antigravityTitleVerificationVersion = 2
+
 type antigravityTitleVerification struct {
 	Version int                                    `json:"version"`
 	States  map[string]parser.SQLiteContainerState `json:"states"`
@@ -1239,7 +1245,8 @@ func loadAntigravityTitleVerification(root string) antigravityTitleVerification 
 		return antigravityTitleVerification{}
 	}
 	var applied antigravityTitleVerification
-	if json.Unmarshal(data, &applied) != nil || applied.Version != 1 {
+	if json.Unmarshal(data, &applied) != nil ||
+		applied.Version != antigravityTitleVerificationVersion {
 		return antigravityTitleVerification{}
 	}
 	return applied
@@ -1261,7 +1268,7 @@ func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
 		}
 	}
 	applied := loadAntigravityTitleVerification(p.root)
-	if applied.Version != 1 {
+	if applied.Version != antigravityTitleVerificationVersion {
 		return true, nil
 	}
 	return !maps.Equal(current, applied.States), nil
@@ -1275,11 +1282,15 @@ func (p *PreparedRemote) persistAntigravityTitleStates() error {
 		var applied struct {
 			Version int `json:"version"`
 		}
-		if json.Unmarshal(data, &applied) == nil && applied.Version > 1 {
+		if json.Unmarshal(data, &applied) == nil &&
+			applied.Version > antigravityTitleVerificationVersion {
 			return nil
 		}
 	}
-	data, err := json.Marshal(antigravityTitleVerification{Version: 1, States: p.mirrorImport.pending.antigravityTitleStates})
+	data, err := json.Marshal(antigravityTitleVerification{
+		Version: antigravityTitleVerificationVersion,
+		States:  p.mirrorImport.pending.antigravityTitleStates,
+	})
 	if err != nil {
 		return err
 	}

@@ -3971,6 +3971,28 @@ schemas keep their existing ordering behavior.
   the collector read its own mirror. Main-database and WAL changes still
   resolve to their conversation or title refresh.
 
+- **Workspace evidence:** The same `conversation_summaries` table can carry a
+  `workspace_uris` column (a JSON array of `file://` URIs, or a single URI
+  string) and a `parent_conversation_id` column. Both are observed in the
+  Antigravity desktop app's store; neither is documented upstream, so the
+  reader checks `PRAGMA table_info` and reads titles alone when a column is
+  absent. The first non-empty workspace URI becomes the session's working
+  directory (percent-decoding, Windows drive letters, `localhost` and UNC
+  hosts handled) and the project is derived from it, through active worktree
+  mappings; a JSON string, even a blank one, is read as that URI, and only
+  text that is not JSON is read as a raw path. A non-empty parent ID links the
+  session to that conversation as a subagent, ahead of a launcher link.
+  These values only fill a session that has none: parsing and each sync pass
+  (including usage-only archives and rebuilds) copy them onto stored sessions
+  without a working directory or parser parent, and keep a recorded working
+  directory, its stored project and parent when the store later changes,
+  blanks or loses them, or cannot be read. The cwd allow-list judges the
+  recorded working directory. Following later workspace changes is not
+  supported. Checked 2026-10-18 with synthetic stores covering the URI shapes
+  above, blank and JSON-empty-string values, missing rows, unreadable stores,
+  changed workspaces, removed checkouts, worktree mappings, cwd allow-lists,
+  usage-only archives, rebuilds, and stores that lack the optional columns.
+
 ## Antigravity CLI (`antigravity-cli`)
 
 - **Format:** Newer per-session SQLite databases or older encrypted protobuf

@@ -52,14 +52,17 @@ var nativeTitleSources = []nativeTitleSource{
 
 // Reconcile after parsing so an older parsed title cannot win.
 func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncStats) {
-	if e.db.ArchiveContent().UsageOnly() {
-		return
-	}
+	// Usage-only archives keep no titles. Antigravity still fills workspace
+	// and parent from the same store.
+	usageOnly := e.db.ArchiveContent().UsageOnly()
 	sources := e.sources()
 	if e.appliedNativeTitles == nil {
 		e.appliedNativeTitles = make(map[string]appliedNativeTitleStore)
 	}
 	for _, source := range nativeTitleSources {
+		if usageOnly && source.agent != parser.AgentAntigravity {
+			continue
+		}
 		if _, enabled := sources.providerFactories[source.agent]; !enabled {
 			continue
 		}
@@ -80,11 +83,24 @@ func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncSta
 			}
 			delete(e.appliedNativeTitles, store)
 			parser.InvalidateSQLiteTitles(store)
-			titles, state, err := source.read(ctx, store)
-			if err == nil {
-				var n int
-				n, err = e.applyNativeStoreTitles(ctx, source, root, titles)
-				stats.TitlesUpdated += n
+			var err error
+			if source.agent == parser.AgentAntigravity {
+				parser.InvalidateAntigravityTitles(store)
+				var summaries map[string]parser.AntigravitySummary
+				summaries, state, err = parser.AntigravityStoreSummaries(ctx, store)
+				if err == nil {
+					var n int
+					n, err = e.applyAntigravityStoreSummaries(ctx, root, summaries)
+					stats.TitlesUpdated += n
+				}
+			} else {
+				var titles map[string]string
+				titles, state, err = source.read(ctx, store)
+				if err == nil {
+					var n int
+					n, err = e.applyNativeStoreTitles(ctx, source, root, titles)
+					stats.TitlesUpdated += n
+				}
 			}
 			if err != nil {
 				stats.RecordFailed()
@@ -93,6 +109,9 @@ func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncSta
 					retry.Paths = watchAppendUniqueString(retry.Paths, store)
 				}
 				parser.InvalidateSQLiteTitles(store)
+				if source.agent == parser.AgentAntigravity {
+					parser.InvalidateAntigravityTitles(store)
+				}
 				log.Printf("%s titles %s: %v", source.agent, store, err)
 				continue
 			}
@@ -117,6 +136,9 @@ func (e *Engine) invalidateNativeTitleCache(paths []string) {
 		if paths == nil {
 			for store := range reachable {
 				parser.InvalidateSQLiteTitles(store)
+				if source.agent == parser.AgentAntigravity {
+					parser.InvalidateAntigravityTitles(store)
+				}
 			}
 			continue
 		}
@@ -132,6 +154,9 @@ func (e *Engine) invalidateNativeTitleCache(paths []string) {
 			}
 			delete(e.appliedNativeTitles, store)
 			parser.InvalidateSQLiteTitles(store)
+			if source.agent == parser.AgentAntigravity {
+				parser.InvalidateAntigravityTitles(store)
+			}
 		}
 	}
 }

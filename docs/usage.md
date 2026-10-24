@@ -428,7 +428,11 @@ Each session item shows:
 
 Antigravity sessions show the conversation title Antigravity saves in
 `conversation_summaries.db`. Renames appear shortly after that file changes,
-or on the next `agentsview sync`. Names set in AgentsView still win.
+or on the next `agentsview sync`. Names set in AgentsView still win. The same
+file also gives each session its workspace folder, which sets the project, and
+its parent conversation when it has one. AgentsView records these once: a
+workspace or parent already recorded is kept even if Antigravity later changes
+or drops it.
 
 Qoder's database title lookup applies to `~/.qoder/projects` and
 `~/.qoder-cn/projects`. The Qoder app stores titles in `main.sqlite` under
