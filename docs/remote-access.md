@@ -15,9 +15,10 @@ In current releases, bearer-token auth is controlled by `require_auth`.
 
 A hub can pull configured SSH or HTTP hosts and publish their sessions with
 `agentsview pg push --watch --embed`. It does not need local session roots.
-The watcher imports configured hosts at startup, then continues hosts whose
-`interval` is positive. It owns the archive while running, so stop it before
-running a separate `agentsview sync` against that archive.
+The watcher imports hosts with a positive `interval` at startup and on that
+cadence. A zero or omitted `interval` means manual sync only. It owns the
+archive while running, so stop it before running a separate `agentsview sync`
+against that archive.
 
 See [PostgreSQL watch mode](/docs/pg-sync/#automatic-push-watcher) for the host
 configuration, per-attempt deadlines and one-shot import workflow. Embeddings
