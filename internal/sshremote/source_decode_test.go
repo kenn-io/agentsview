@@ -51,8 +51,8 @@ func TestDecodeTargetsCapsTheDecompressedReply(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Equal(t, "SSH remote sync failed: the remote host lists "+
 					"more agent directories than fit in the 64 MiB request "+
-					"limit; check the agent directories configured on the "+
-					"remote host", remotesync.FailureSummary(err))
+					"limit; check that agentsview on the remote host is up "+
+					"to date", remotesync.FailureSummary(err))
 				return
 			}
 			require.NoError(t, err)

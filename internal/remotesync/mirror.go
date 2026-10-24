@@ -146,9 +146,29 @@ func (e *mirrorListError) Error() string {
 func (e *mirrorListError) Unwrap() error { return e.err }
 
 func (e *mirrorListError) FailureSummary() string {
+	check := "readable"
+	if e.op == "write" {
+		check = "writable and has free space"
+	}
 	return "remote sync failed: could not " + e.op + " a temporary change " +
-		"list next to the local mirror; check that the data directory is " +
-		"writable and has free space"
+		"list next to the local mirror; check that the data directory is " + check
+}
+
+// mirrorWalkError reports a local mirror that could not be listed.
+type mirrorWalkError struct {
+	path string
+	err  error
+}
+
+func (e *mirrorWalkError) Error() string {
+	return fmt.Sprintf("walk mirror %q: %v", e.path, e.err)
+}
+
+func (e *mirrorWalkError) Unwrap() error { return e.err }
+
+func (e *mirrorWalkError) FailureSummary() string {
+	return "remote sync failed: could not read the local mirror for this " +
+		"host; check the data directory permissions"
 }
 
 // add compares one manifest entry.
@@ -366,7 +386,7 @@ func walkSortedMirrorDir(
 		if os.IsNotExist(err) {
 			return true
 		}
-		yield(mirrorFile{}, fmt.Errorf("walk mirror %q: %w", dir, err))
+		yield(mirrorFile{}, &mirrorWalkError{path: dir, err: err})
 		return false
 	}
 	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
@@ -386,7 +406,7 @@ func walkSortedMirrorDir(
 			if os.IsNotExist(err) {
 				continue
 			}
-			yield(mirrorFile{}, fmt.Errorf("walk mirror %q: %w", path, err))
+			yield(mirrorFile{}, &mirrorWalkError{path: path, err: err})
 			return false
 		}
 		if !info.Mode().IsRegular() {

@@ -2556,6 +2556,8 @@ func TestHTTPSyncReportsAMirrorFailureAsLocal(t *testing.T) {
 
 	require.ErrorContains(t, err, "compare with local mirror")
 	assert.NotContains(t, err.Error(), "decode remote manifest")
+	assert.Equal(t, "remote sync failed: could not read the local mirror "+
+		"for this host; check the data directory permissions", FailureSummary(err))
 }
 
 func TestHTTPSyncFallsBackToFullWhenDeltaRejected(t *testing.T) {

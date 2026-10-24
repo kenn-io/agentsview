@@ -292,9 +292,13 @@ func (hs RemoteSync) downloadMirrorBatches(
 		}
 		number++
 		done += len(batch)
-		err = hs.downloadFilesIntoMirror(ctx, targets, batch, false, mirrorRoot, fmt.Sprintf(
-			"batch %d of %d (%d of %d changed files)", number, batches, done, fetch.Len(),
-		))
+		files := fmt.Sprintf("%d changed files", len(batch))
+		if batches > 1 {
+			files = fmt.Sprintf(
+				"batch %d of %d (%d of %d changed files)", number, batches, done, fetch.Len(),
+			)
+		}
+		err = hs.downloadFilesIntoMirror(ctx, targets, batch, false, mirrorRoot, files)
 		if isRemoteRefusal(err) {
 			return true, nil
 		}

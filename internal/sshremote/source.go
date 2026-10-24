@@ -281,8 +281,8 @@ func (targetsTooLargeError) Error() string {
 func (targetsTooLargeError) FailureSummary() string {
 	return fmt.Sprintf(
 		"SSH remote sync failed: the remote host lists more agent directories "+
-			"than fit in the %d MiB request limit; check the agent directories "+
-			"configured on the remote host", maxTargetsBytes>>20,
+			"than fit in the %d MiB request limit; check that agentsview on the "+
+			"remote host is up to date", maxTargetsBytes>>20,
 	)
 }
 
