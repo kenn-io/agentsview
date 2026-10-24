@@ -107,7 +107,7 @@ func (ix *Index) exportSnapshot(ctx context.Context, fingerprint string, open fu
 	var scope *bool
 	err = conn.QueryRowContext(ctx, "SELECT value FROM "+ix.spec.MetaTable+" WHERE key=?", scopeIncludeAutomatedKey).Scan(&raw)
 	if err == nil {
-		value, parseErr := strconv.ParseBool(raw)
+		value, _, parseErr := decodeIncludeAutomatedScope(raw)
 		if parseErr != nil {
 			return nil, nil, parseErr
 		}

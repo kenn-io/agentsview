@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 func recipeColumnExists(t *testing.T, pg *sql.DB) bool {
@@ -142,7 +143,16 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			if unavailable != "" {
 				t.Skip(unavailable)
 			}
-			genID, err := ensureVectorGeneration(ctx, admin, "fp-role", "m", 4)
+			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = localDB.Close() })
+			seedVectorSession(t, localDB, "A")
+			require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), "A", []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", SourceUUID: "uuid", Content: "content", ContentLength: 7}}))
+			ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 8192)
+			require.NoError(t, err)
+			defer ix.Close()
+			source := builtVectorSource(t, ix, localDB, "m")
+			genID, err := ensureVectorGeneration(ctx, admin, source.gen.Fingerprint, source.gen.Model, 4)
 			require.NoError(t, err)
 			require.NoError(t, ensureVectorChunkTable(ctx, admin, genID, 4))
 			if tc.dropCompatibility {
@@ -200,25 +210,16 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = restricted.Close() })
 
-			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = localDB.Close() })
-			seedVectorSession(t, localDB, "A")
 			sync := &Sync{
 				pg: restricted, local: localDB, machine: "test-machine",
 				schema: schema, schemaDone: true,
 			}
-			sync.vectorSource = recipeSource("fp-role", map[string]string{"query_prefix": "query: "})
+			sync.vectorSource = source
 
 			pushed, err := sync.Push(ctx, false, nil)
 			require.NoError(t, err)
 			res := pushed.Vectors
-			if tc.dropCompatibility {
-				assert.True(t, res.Skipped)
-				assert.Contains(t, res.SkippedReason, "privileges")
-				assert.Equal(t, 0, countRows(t, admin, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)))
-				return
-			}
+
 			assert.False(t, res.Skipped, res.SkippedReason)
 			assert.Equal(t, 1, res.SessionsPushed)
 			assert.Equal(t, 1, countRows(t, admin,
@@ -226,8 +227,34 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			gens, err := ListVectorGenerationInfo(ctx, admin)
 			require.NoError(t, err)
 			require.Len(t, gens, 1)
-			assert.Nil(t, gens[0].Params, "params stay NULL for a writer that cannot publish")
+			if tc.dropCompatibility {
+				assert.NotNil(t, gens[0].Params, "recipe publication retains its original privilege")
+				store := &Store{pg: admin}
+				setHubTestSearcher(t, store, genID)
+				metadata, err := store.HubVectorGeneration(ctx)
+				require.NoError(t, err)
+				assert.NotEmpty(t, metadata.Unavailable, "legacy writes cannot certify missing compatibility")
+			} else {
+				assert.Nil(t, gens[0].Params, "params stay NULL for a writer that cannot publish")
+			}
 			assert.Equal(t, !tc.dropColumn, recipeColumnExists(t, admin))
+			if tc.dropCompatibility {
+				// Legacy witnesses still support scoped writes and full retries.
+				_, err = sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
+				require.NoError(t, err)
+				_, err = sync.Push(ctx, true, nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, countRows(t, admin, `SELECT count(*) FROM `+vectorChunkTable(genID)))
+				// An owner upgrade certifies only after a complete publication.
+				upgraded := &Sync{pg: admin, local: localDB, machine: "test-machine", schema: schema, schemaDone: true, vectorSource: source}
+				_, err = upgraded.Push(ctx, true, nil)
+				require.NoError(t, err)
+				store := &Store{pg: admin}
+				setHubTestSearcher(t, store, genID)
+				metadata, err := store.HubVectorGeneration(ctx)
+				require.NoError(t, err)
+				require.Empty(t, metadata.Unavailable)
+			}
 		})
 	}
 }

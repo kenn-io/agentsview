@@ -879,10 +879,13 @@ mirror without a stored scope publishes it as unknown until embeddings are
 rebuilt. New or changed publishers stay unverified until a complete push
 succeeds. Interrupted scope changes also remain unknown, and a completed push
 retires the same publisher's old machine names. Updating a session invalidates
-coverage in other generations when their document set differs and removes those
-generations' session chunks in the same transaction. Those generations must
+coverage in other generations when document keys or content differ and removes
+those generations' session chunks in the same transaction. Those generations must
 re-push the session before serving it again. An unchanged set remains covered in
-both.
+both. Ordinal and offset corrections still update the shared document metadata
+without discarding compatible vectors. A writer that cannot add the optional
+compatibility columns keeps publishing vectors. Hub compatibility remains
+unavailable until an owner adds those columns and a complete push certifies them.
 
 The hub backend pins the selected generation's fingerprint, dimension and
 creation time when the serving process starts. If that generation is removed or

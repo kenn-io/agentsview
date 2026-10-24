@@ -125,7 +125,11 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 				rows.Close()
 				return reply, err
 			}
-			if chunk.ChunkIndex != count || chunkStart >= chunk.ChunkCount {
+			if chunkStart >= chunk.ChunkCount {
+				rows.Close()
+				return reply, fmt.Errorf("%w: cursor chunk outside document", vector.ErrHubLookupInvalid)
+			}
+			if chunk.ChunkIndex != count {
 				rows.Close()
 				return reply, errors.New("invalid vector chunk sequence")
 			}

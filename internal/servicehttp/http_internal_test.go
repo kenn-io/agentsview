@@ -1,6 +1,7 @@
 package servicehttp
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -181,7 +182,10 @@ func TestRemotePolicyWatchPreservesHTTPFailures(t *testing.T) {
 				if status == http.StatusNotFound {
 					want = "watch: session not found: session-a"
 				}
-				require.EqualError(t, err, want)
+				require.EqualError(t, err, "remote "+srv.URL+" request failed; try --local")
+				// The sanitized JSON reaches the generated client's HTTP error
+				// branch, and the remote wrapper retains Watch's status cause.
+				require.EqualError(t, errors.Unwrap(err), want)
 				assert.NotContains(t, err.Error(), "private")
 				assert.NotContains(t, err.Error(), "secret")
 			})

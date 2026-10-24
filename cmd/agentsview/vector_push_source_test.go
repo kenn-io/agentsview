@@ -239,6 +239,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
+	cfg.Vector.IncludeAutomated = true
 
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
@@ -251,6 +252,8 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	assert.NotEmpty(t, export.Generation().Fingerprint)
 	assert.Equal(t, "fake-model", export.Generation().Model)
 	assert.Equal(t, 4, export.Generation().Dimension)
+	require.NotNil(t, export.Generation().IncludeAutomated)
+	assert.False(t, *export.Generation().IncludeAutomated, "configured next-build scope must not describe the stored vectors")
 
 	hashes, err := export.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
@@ -377,18 +380,4 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		require.NotEqual(t, vectorGeneration(cfg.Vector.Embeddings).Fingerprint(), got.Fingerprint)
 		assert.Nil(t, got.Params)
 	})
-}
-
-func TestVectorPushMetadataUsesStoredScope(t *testing.T) {
-	cfg := enabledVectorConfig(t)
-	buildTestVectorsDB(t, cfg)
-	cfg.Vector.IncludeAutomated = true
-	source := newVectorPushSource(cfg)
-	closePushSource(t, source)
-	export, ok, err := source.BeginExport(t.Context(), nil)
-	require.NoError(t, err)
-	require.True(t, ok)
-	defer export.Close()
-	require.NotNil(t, export.Generation().IncludeAutomated)
-	assert.False(t, *export.Generation().IncludeAutomated, "configured next-build scope must not describe the stored vectors")
 }

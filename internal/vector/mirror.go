@@ -724,6 +724,10 @@ func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok boo
 	if !ok {
 		return false, false, nil
 	}
+	return decodeIncludeAutomatedScope(raw)
+}
+
+func decodeIncludeAutomatedScope(raw string) (value, ok bool, err error) {
 	parsed, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, false, fmt.Errorf("parsing stored include-automated scope %q: %w", raw, err)

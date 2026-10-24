@@ -33,8 +33,10 @@ The latest release is
   origin. Memory lifecycle hooks use this default only in hosted-reader mode.
 
 - PostgreSQL vector pushes now record parser and automated-session scope
-  compatibility. A changed session invalidates stale coverage from other
-  generations before clients can reuse its embeddings.
+  compatibility. Changed document keys or content invalidate stale coverage from
+  other generations before clients can reuse its embeddings. Ordinal and offset
+  corrections preserve compatible vectors. Existing writers keep publishing
+  when they cannot add the optional compatibility columns.
 
 **Bug fixes**
 

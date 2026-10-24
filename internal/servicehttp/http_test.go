@@ -120,7 +120,7 @@ func TestRemotePolicyRedactsFailures(t *testing.T) {
 				}))
 				defer ts.Close()
 				target := ts.URL + "/private?token=url-secret"
-				client, err := remotecred.Client(target, false)
+				client, err := remotecred.Client(ts.URL, false)
 				require.NoError(t, err)
 				if probe {
 					_, err = ProbeHTTPServerCapabilitiesWithClient(t.Context(), target, "remote-only", client)
