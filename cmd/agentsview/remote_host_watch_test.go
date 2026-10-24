@@ -83,7 +83,7 @@ func TestReplicaWatchPullsRemoteHostsAndJoinsWorkers(t *testing.T) {
 					// The loop reports the error after releasing the import lock.
 					// Hold that worker at its error boundary so final local sync
 					// cannot stand in for the worker join.
-					return remotesync.SyncStats{}, heldRemoteCancellation{report: stdsync.OnceFunc(func() {
+					return remotesync.SyncStats{}, heldRemoteCancellationError{report: stdsync.OnceFunc(func() {
 						close(canceled)
 						<-release
 					})}
@@ -224,6 +224,8 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 		{name: "PostgreSQL manual only", destination: pgReplica{}, manualOnly: true},
 		{name: "ClickHouse", destination: clickhouse.Backend{}},
 		{name: "ClickHouse invalid remote config", destination: clickhouse.Backend{}, invalidTimeout: true, invalidTransport: true},
+		{name: "PostgreSQL manual-only negative timeout", destination: pgReplica{}, manualOnly: true, invalidTimeout: true, wantErr: "invalid sync_timeout"},
+		{name: "PostgreSQL manual-only malformed transport", destination: pgReplica{}, manualOnly: true, invalidTransport: true, wantErr: "transport"},
 		{name: "PostgreSQL negative timeout", destination: pgReplica{}, invalidTimeout: true, wantErr: "invalid sync_timeout"},
 		{name: "PostgreSQL malformed transport", destination: pgReplica{}, invalidTransport: true, wantErr: "transport"},
 	} {
@@ -241,6 +243,8 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 			if !tc.manualOnly {
 				cfg.RemoteHosts = append(cfg.RemoteHosts, config.RemoteHost{Host: "scheduled", Transport: config.RemoteTransportSSH, Interval: time.Hour})
 			}
+			originalID, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
 			missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "manual~archived", Project: "remote", Agent: "claude", Machine: "manual", FilePath: &missingPath, MessageCount: 1}))
 			ctx, cancel := context.WithCancel(t.Context())
@@ -257,7 +261,20 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 				for _, remote := range syncs {
 					pulled = append(pulled, remote.Host)
 				}
-				return &fakeCLIPreparedHTTPRebuild{}, nil
+				root := t.TempDir()
+				project := filepath.Join(root, "project")
+				require.NoError(t, os.MkdirAll(project, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(project, "collected.jsonl"), []byte(`{"type":"user","sessionId":"collected","timestamp":"2026-07-12T00:00:00Z","message":{"content":"scheduled contributor message"}}
+`), 0o600))
+				return &fakeCLIPreparedHTTPRebuild{options: syncpkg.RebuildOptions{
+					Contributors: []syncpkg.RebuildContributor{{
+						Name: "scheduled",
+						Config: syncpkg.EngineConfig{
+							AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+							Machine:   "scheduled", IDPrefix: "scheduled~", Ephemeral: true,
+						},
+					}},
+				}}, nil
 			}
 			backend := &localArchiveWriteBackend{appCfg: cfg, database: database, watchHooks: &archivePushWatchHooks{
 				startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
@@ -265,7 +282,7 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 					return func() {}, func() {}, nil
 				},
 			}}
-			err := backend.ReplicaPushWatch(ctx, tc.destination, embedTarget(), ReplicaPushConfig{Full: tc.full}, nil, nil, time.Second, time.Hour)
+			err = backend.ReplicaPushWatch(ctx, tc.destination, embedTarget(), ReplicaPushConfig{Full: tc.full}, nil, nil, time.Second, time.Hour)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				assert.Empty(t, pulled, "invalid PostgreSQL configuration must fail before collection")
@@ -273,6 +290,15 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, pulled)
+			if tc.full {
+				rebuiltID, err := database.GetDatabaseID(t.Context())
+				require.NoError(t, err)
+				require.NotEqual(t, originalID, rebuiltID, "full startup must complete the database swap")
+				messages, err := database.GetMessages(t.Context(), "scheduled~collected", 0, 10, true)
+				require.NoError(t, err)
+				require.Len(t, messages, 1, "the real provider contributor must be imported")
+				assert.Equal(t, "scheduled contributor message", messages[0].Content)
+			}
 			session, err := database.GetSession(t.Context(), "manual-session")
 			require.NoError(t, err)
 			assert.Nil(t, session, "watch startup must not fetch a manual host")
@@ -283,11 +309,11 @@ func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 	}
 }
 
-// heldRemoteCancellation pauses failure reporting after the import has ended.
-type heldRemoteCancellation struct{ report func() }
+// heldRemoteCancellationError pauses failure reporting after the import has ended.
+type heldRemoteCancellationError struct{ report func() }
 
-func (e heldRemoteCancellation) Error() string {
+func (e heldRemoteCancellationError) Error() string {
 	e.report()
 	return context.Canceled.Error()
 }
-func (heldRemoteCancellation) Unwrap() error { return context.Canceled }
+func (heldRemoteCancellationError) Unwrap() error { return context.Canceled }
