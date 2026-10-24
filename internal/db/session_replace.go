@@ -60,7 +60,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if err != nil {
 		return "", err
 	}
-	if transcriptMessagesEqual(stored, write.Messages) {
+	if transcriptMessagesEqual(stored, write.Messages) && (!db.usageOnlyStorage() || write.Session.MessageCount >= src.MessageCount) {
 		return "", ErrReplaceUnchanged
 	}
 

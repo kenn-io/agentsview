@@ -2607,6 +2607,8 @@
   "import_claude_open_chrome": "AgentsView genişləndirməsi aktiv olan Chrome-u açın. Quraşdırmanı AgentsView-u başlatdıqdan sonra işlətmisinizsə, AgentsView-u yenidən başladın.",
   "import_claude_tab_note": "Açıq claude.ai vərəqi yoxdursa, sinxronizasiya arxa planda vərəq açır. Vərəq sinxronizasiyadan sonra açıq qalır.",
   "import_claude_signed_out": "AgentsView genişləndirməsinin olduğu Chrome profilində claude.ai hesabına daxil olun. Genişləndirməni yalnız bir Chrome profilində aktivləşdirin. Sinxronizasiya ilk qoşulan profildən istifadə edir.",
+  "import_chatgpt_tab_note": "Açıq chatgpt.com vərəqi yoxdursa, sinxronizasiya arxa planda vərəq açır. Vərəq sinxronizasiyadan sonra açıq qalır.",
+  "import_chatgpt_signed_out": "AgentsView genişləndirməsinin olduğu Chrome profilində ChatGPT hesabına daxil olun. Genişləndirməni yalnız bir Chrome profilində aktivləşdirin. Sinxronizasiya ilk qoşulan profildən istifadə edir.",
   "import_claude_reload_extension": "Sonra {url} ünvanında genişləndirməni yenidən yükləyin.",
   "import_claude_update_app": "AgentsView-i yeniləmisinizsə, onu yenidən başladın.",
   "import_claude_syncing": "Sinxronizasiya edilir...",
