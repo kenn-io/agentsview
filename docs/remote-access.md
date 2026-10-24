@@ -125,6 +125,10 @@ The default applies to these read commands:
 | `export`, `token-use` | Read the local archive and print a notice on stderr |
 | `usage cursor`, other local-only commands | Keep their local behavior |
 
+`usage cursor` rejects `--server`, `--pg`, and `--server-token-file` before
+opening the local archive. Root `--local` remains accepted for local-only
+commands.
+
 `--server` and `--pg` select an explicit target ahead of `[remote]`. `--local`
 bypasses the default remote; it cannot be combined with either target flag.
 `doctor remote` reports the effective target, configuration origin, redacted

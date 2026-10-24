@@ -596,7 +596,6 @@ func newUsageCommand() *cobra.Command {
 	cmd.AddCommand(newUsageDailyCommand())
 	cmd.AddCommand(newUsageStatuslineCommand())
 	cmd.AddCommand(newUsageCursorCommand())
-	registerRemoteReadFlags(cmd.PersistentFlags())
 	return cmd
 }
 
@@ -623,6 +622,7 @@ func newUsageDailyCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
 	cmd.Flags().StringVar(&cfg.Timezone, "timezone", "", "IANA timezone for date bucketing")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -644,6 +644,7 @@ func newUsageStatuslineCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only (ignored for remote reads)")
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying (ignored for remote reads)")
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 

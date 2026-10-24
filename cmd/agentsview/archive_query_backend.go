@@ -42,11 +42,15 @@ type archiveQueryPolicy struct {
 	DirectReadOnlyAction string
 }
 
-type archiveQueryBackend interface {
+type archiveReportBackend interface {
 	ActivityReport(context.Context, ActivityReportConfig) (activity.Report, error)
 	DailyUsage(context.Context, dailyUsageQuery) (dailyUsageReport, error)
-	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
 	MachineLabels(context.Context) (service.MachineLabelCatalog, error)
+}
+
+type archiveQueryBackend interface {
+	archiveReportBackend
+	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
 }
 
 // sessionUsageQuery selects the session and the attribution scope for
@@ -79,7 +83,7 @@ type dailyUsageQuery struct {
 func resolveArchiveQueryBackend(
 	ctx context.Context,
 	policy archiveQueryPolicy,
-) (archiveQueryBackend, func(), error) {
+) (archiveReportBackend, func(), error) {
 	if policy.Command != nil {
 		target, err := resolveReadTarget(policy.Command, readTargetDefault)
 		if err != nil {
@@ -105,7 +109,7 @@ func resolveArchiveQueryBackend(
 			if priced, ok := store.(customPricingStore); ok {
 				priced.SetCustomPricing(cfg.CustomModelPricing)
 			}
-			return pgArchiveQueryBackend{store: store, cfg: cfg}, cleanup, nil
+			return pgArchiveQueryBackend{store: store}, cleanup, nil
 		}
 	}
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
@@ -306,17 +310,21 @@ func (b localArchiveQueryBackend) DailyUsage(
 	ensureUsagePricing(
 		b.database, b.offline, b.cfg.CustomModelPricing,
 	)
+	return storeDailyUsage(ctx, b.database, query)
+}
+
+func storeDailyUsage(ctx context.Context, store db.Store, query dailyUsageQuery) (dailyUsageReport, error) {
 	filter := localDailyUsageFilter(query)
 	var err error
-	filter.Machine, err = db.ResolveMachineFilter(ctx, b.database, filter.Machine)
+	filter.Machine, err = db.ResolveMachineFilter(ctx, store, filter.Machine)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
-	result, err := b.database.GetDailyUsage(ctx, filter)
+	result, err := store.GetDailyUsage(ctx, filter)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
-	planUsage, err := b.database.GetPlanUsageSessionCounts(ctx, filter)
+	planUsage, err := store.GetPlanUsageSessionCounts(ctx, filter)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
@@ -330,7 +338,11 @@ func (b localArchiveQueryBackend) DailyUsage(
 func (b localArchiveQueryBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
-	labels, err := b.database.GetMachineLabels(ctx)
+	return storeMachineLabels(ctx, b.database)
+}
+
+func storeMachineLabels(ctx context.Context, store db.Store) (service.MachineLabelCatalog, error) {
+	labels, err := store.GetMachineLabels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -469,22 +481,10 @@ func transportAPIClient(tr transport, token string, fallback *http.Client) (*api
 
 type pgArchiveQueryBackend struct {
 	store db.Store
-	cfg   config.Config
 }
 
 func (b pgArchiveQueryBackend) DailyUsage(ctx context.Context, query dailyUsageQuery) (dailyUsageReport, error) {
-	filter := localDailyUsageFilter(query)
-	var err error
-	filter.Machine, err = db.ResolveMachineFilter(ctx, b.store, filter.Machine)
-	if err != nil {
-		return dailyUsageReport{}, err
-	}
-	result, err := b.store.GetDailyUsage(ctx, filter)
-	if err != nil {
-		return dailyUsageReport{}, err
-	}
-	counts, err := b.store.GetPlanUsageSessionCounts(ctx, filter)
-	return dailyUsageReport{DailyUsageResult: result, PlanOnlySessions: counts.PlanOnly, PartlyCapturedSessions: counts.PartlyCaptured}, err
+	return storeDailyUsage(ctx, b.store, query)
 }
 
 func (b pgArchiveQueryBackend) ActivityReport(ctx context.Context, cfg ActivityReportConfig) (activity.Report, error) {
@@ -497,10 +497,5 @@ func (b pgArchiveQueryBackend) ActivityReport(ctx context.Context, cfg ActivityR
 }
 
 func (b pgArchiveQueryBackend) MachineLabels(ctx context.Context) (service.MachineLabelCatalog, error) {
-	labels, err := b.store.GetMachineLabels(ctx)
-	return service.MachineLabelCatalog(labels), err
-}
-
-func (b pgArchiveQueryBackend) SessionUsage(_ context.Context, query sessionUsageQuery) (*sessionUsageOutput, int, error) {
-	return storeSessionUsageData("pg", b.cfg, b.store, query)
+	return storeMachineLabels(ctx, b.store)
 }
