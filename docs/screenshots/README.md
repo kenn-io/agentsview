@@ -6,11 +6,11 @@ revisions. It rebuilds the application, imports the corpus, captures every view,
 and builds a website preview twice. A successful receipt requires identical
 application builds, PNG files, browser versions, and generated-asset commits.
 
-This repository supplies the worker commands. The operator service owns job
-submission, private storage, access control, worker installation, and retained
-results. Keep corpus files, preparation bundles, logs, and receipts in private
-managed storage. Teammates review the job's screenshots and preview through that
-service; they do not need a local session archive or Docker installation.
+This repository supplies the worker commands. A separate operator service is
+still needed for team submission, private storage, access control, worker
+installation, and retained results. Keep corpus files, preparation bundles,
+logs, and receipts in private managed storage. Connect the commands to that
+service before offering routine capture to teammates.
 
 ## Prepare the worker inputs
 

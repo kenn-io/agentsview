@@ -7,10 +7,13 @@ managed storage, outside source and generated-asset branches.
 
 ## Create a generation
 
-Run generation on the managed worker. Retain a frozen selection of native files
-and a JSON recipe. Record each original file's SHA-256 before generation.
-Include the native directory structure and companion files needed by the
-parsers, including subagent transcripts and persisted tool outputs.
+Run generation on the managed worker, inside the retained builder image
+described in [the worker guide](README.md#prepare-the-worker-inputs). This pins
+the Python interpreter and timezone database. Retain the image digest with the
+recipe. Retain a frozen selection of native files and a JSON recipe. Record each
+original file's SHA-256 before generation. Include the native directory
+structure and companion files needed by the parsers, including subagent
+transcripts and persisted tool outputs.
 
 The recipe has this structure. Replace example checksums and revision with the
 real values; the examples are not a runnable corpus.
@@ -71,10 +74,15 @@ can also use `encrypted_content` for readable agent messages. Review this loss
 when selecting examples; the generator does not infer which values to keep.
 
 ```bash
-python3 docs/screenshots/corpus.py generate \
-  --recipe /managed/intake/recipe.json \
-  --source /managed/intake/files \
-  --output /managed/corpora/example-1
+docker run --rm --pull=never --network=none --platform=linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,source=/managed/source/agentsview/docs/screenshots,target=/capture,readonly \
+  --mount type=bind,source=/managed/intake,target=/intake,readonly \
+  --mount type=bind,source=/managed/corpora,target=/corpora \
+  --entrypoint python "$BUILDER_IMAGE" /capture/corpus.py generate \
+  --recipe /intake/recipe.json \
+  --source /intake/files \
+  --output /corpora/example-1
 ```
 
 The output must not exist. A successful command prints the manifest SHA-256. The
@@ -107,7 +115,8 @@ fixture check validates targets against the database created by normal sync.
 `content`, with optional `project` and `model`. Their creation time comes from
 `reference_now`. Add examples needed by the visible capture cases deliberately.
 
-The browser uses the recorded clock and timezone. Daily activity captures show
-the preceding calendar day. Choose a reference time with activity in that
-window. Changing the reference time, selection, policy, or annotations creates a
-new generation; keep earlier generations for earlier documentation releases.
+The browser uses the recorded clock and timezone. Activity captures select the
+day one week before the reference time and its completed calendar week. Choose a
+reference time with activity in those windows. Changing the reference time,
+selection, policy, or annotations creates a new generation; keep earlier
+generations for earlier documentation releases.
