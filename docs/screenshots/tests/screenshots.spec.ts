@@ -436,9 +436,11 @@ test.describe('Dashboard', () => {
 
 test.describe('Activity dashboard', () => {
   async function navigateToActivity(page: Page, path = '/activity') {
+    // Use the completed previous week. The current week's report is clamped
+    // to the server's wall clock, independently of the browser's fixed clock.
     const date = new Intl.DateTimeFormat('en-CA', {
       timeZone: CORPUS.timezone,
-    }).format(new Date(CAPTURE_NOW.getTime() - 86_400_000));
+    }).format(new Date(CAPTURE_NOW.getTime() - 7 * 86_400_000));
     await page.goto(`${path}${path.includes('?') ? '&' : '?'}date=${date}`);
     await page.waitForSelector('.activity-page', { timeout: 10_000 });
     await expect(
@@ -1016,6 +1018,7 @@ test.describe('Message viewer', () => {
     });
     await page.goto(`/sessions/${encodeURIComponent(remote.id)}`);
     await expect(page.locator('.message').first()).toBeVisible();
+    await expect(page.locator('.cost-badge')).toBeVisible();
     await page.locator('.resume-btn').click();
     const menu = page.locator('.open-menu');
     await expect(menu.getByRole('button', { name: 'Copy command', exact: true })).toBeVisible();

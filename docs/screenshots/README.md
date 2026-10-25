@@ -140,10 +140,13 @@ content must fail; it must not silently leave an old PNG in the result.
 
 Most captures use a 1440×900 viewport at scale 1, dark mode, and English. The
 corpus supplies the timezone and reference time. One worker runs cases in order.
-Captures hide session identifiers and refresh timing labels; measured request
-latency varies between machines even with a fixed browser clock. Response
-fixtures illustrate unavailable integrations and selected analysis states.
-Capture does not invoke models, contact GitHub, or start cloud sync.
+Activity captures use the completed previous week so the server's live cutoff
+cannot move between runs. The browser disables partial rasterization to avoid
+different edge pixels after identical page loads. Captures hide session
+identifiers and refresh timing labels; measured request latency varies between
+machines even with a fixed browser clock. Response fixtures illustrate
+unavailable integrations and selected analysis states. Capture does not invoke
+models, contact GitHub, or start cloud sync.
 
 Run focused pipeline tests before preparing a new capture revision:
 

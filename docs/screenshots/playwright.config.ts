@@ -15,6 +15,8 @@ export default defineConfig({
     deviceScaleFactor: 1,
     reducedMotion: 'reduce',
     timezoneId: process.env.SCREENSHOT_TIMEZONE,
+    // Partial rasterization can produce different edge pixels after identical loads.
+    launchOptions: { args: ['--disable-partial-raster'] },
   },
   projects: [
     {

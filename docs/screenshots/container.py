@@ -12,7 +12,7 @@ def run(command, cidfile, log_path):
     previous = signal.signal(signal.SIGTERM, interrupt)
     try:
         with log_path.open("wb") as log:
-            subprocess.run(command[:2] + ["--cidfile", str(cidfile)] + command[2:],
+            subprocess.run(command[:2] + ["--pull=never", "--cidfile", str(cidfile)] + command[2:],
                            stdout=log, stderr=subprocess.STDOUT, check=True)
     finally:
         try:
