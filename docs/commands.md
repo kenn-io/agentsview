@@ -356,10 +356,11 @@ unless `--background` is specified. This is the same writable server managed by
 
 `serve` reuses or replaces an existing local writable daemon according to the
 [replacement rules below](#background-mode). Read-only replica servers are left
-running. When reusing a server, `serve` reports its URL and exits. Open that URL
-to use the web UI. Stopping the server with either `daemon stop` or `serve stop`
-also stops its sync and file watchers. `--no-sync` disables automatic sync in
-that process; it does not create a separate sync daemon.
+running. When reusing a server, `serve` reports its URL and exits with status 1
+so systemd's `Restart=on-failure` retries; `--background` exits with status 0.
+Open that URL to use the web UI. Stopping the server with either `daemon stop`
+or `serve stop` also stops its sync and file watchers. `--no-sync` disables
+automatic sync in that process; it does not create a separate sync daemon.
 
 ```bash
 agentsview serve [flags]
