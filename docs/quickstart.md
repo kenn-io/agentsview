@@ -95,9 +95,9 @@ The installer detects your OS and architecture, downloads the latest release
 from GitHub Releases, verifies the SHA-256 checksum, and installs the binary.
 
 On macOS and Linux, it installs to `/usr/local/bin` when that directory is
-writable, or `~/.local/bin` otherwise. Follow the installer's `PATH` instructions
-and run `command -v agentsview` to check which binary your shell uses. When
-the standalone CLI and bundled CLI use different directories, put the
+writable, or `~/.local/bin` otherwise. Follow the installer's `PATH`
+instructions and run `command -v agentsview` to check which binary your shell
+uses. When the standalone CLI and bundled CLI use different directories, put the
 standalone install directory first in `PATH` to select it.
 
 !!! note
@@ -217,7 +217,8 @@ agentsview serve
 ```
 
 Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
-compatible server is already running, it reports that server's URL and exits with an error (status 1).
+compatible server is already running, it reports that server's URL and exits
+with an error (status 1).
 
 This will:
 
