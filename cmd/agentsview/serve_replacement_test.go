@@ -365,7 +365,7 @@ func TestPrepareForegroundServeDaemonFailsWhenCompatibleDaemonRuns(t *testing.T)
 		host, port, withRuntimeVersion("1.1.0"),
 	))
 	setTestVersion(t, "1.1.0")
-	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be reused")
+	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be left running")
 
 	cont, release, err := prepareForegroundServeDaemon(t.Context(),
 		&config.Config{DataDir: dir}, serveReplacementOptions{},

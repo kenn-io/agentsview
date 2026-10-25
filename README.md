@@ -84,7 +84,7 @@ machine, syncs them into a local SQLite database, and serves a web UI at
 The daemon is the server: the web UI, API, session sync, and file watchers share
 one process. Choose `serve` for a foreground process or `daemon start` for a
 background process. Running `serve` when a compatible daemon is already running
-reports its URL and exits. `daemon stop` and `serve stop` both stop that
+reports its URL and exits with an error (status 1) in the foreground. `daemon stop` and `serve stop` both stop that
 writable server, including sync; `serve stop` also stops read-only mirror
 servers for the same data directory.
 

@@ -58,14 +58,10 @@ func prepareForegroundServeDaemon(ctx context.Context,
 		}
 		return true, releaseLaunchLock, nil
 	case serveReplacementUseExisting:
-		rt := decision.Runtime
-		if rt != nil {
-			return false, noRelease, fmt.Errorf(
-				"agentsview already running at %s (pid %d)",
-				urlFromDaemonRuntime(rt), rt.Record.PID,
-			)
-		}
-		return false, noRelease, errors.New("agentsview already running")
+		return false, noRelease, fmt.Errorf(
+			"agentsview already running at %s (pid %d)",
+			urlFromDaemonRuntime(decision.Runtime), decision.Runtime.Record.PID,
+		)
 	case serveReplacementAuto, serveReplacementExplicit:
 		if err := checkForegroundReplacementDataVersion(ctx,
 			*cfg, decision,
