@@ -534,7 +534,7 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey returns the key read from a deployment secret file, else the
+// APIKey returns the deployment-provided key, else the
 // environment variable named by APIKeyEnv. Returns "" when neither is set.
 func (c VectorEmbeddingsServerConfig) APIKey() string {
 	if c.apiKey != "" {

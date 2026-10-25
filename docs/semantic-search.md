@@ -899,16 +899,16 @@ A serving host without `[vector]` can adopt a published recipe instead. Under
 `AGENTSVIEW_EMBEDDINGS_ENDPOINT` and, when the endpoint needs a key, either
 `AGENTSVIEW_EMBEDDINGS_API_KEY` or `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` (never
 both) to an embeddings server that serves the published model. `pg serve` and
-`--pg` reads then use the single published recipe whose
-parameters rebuild its fingerprint. A `[vector]` section in `config.toml` can't
-be combined with the `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If
-PostgreSQL holds several published recipes, adoption refuses to guess and
-semantic search reports the count; stop the hub's `pg push --watch --embed`,
-remove obsolete generations with `agentsview pg vectors drop <id>`, then start
-the watcher and restart `pg serve`. Generations pushed before recipe publication
-have no recipe until a configured machine pushes them again. If `pg serve`
-starts before a workstation pushes its first generation, restart `pg serve`
-after that push to enable semantic search.
+`--pg` reads then use the single published recipe whose parameters rebuild its
+fingerprint. A `[vector]` section in `config.toml` can't be combined with the
+`AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If PostgreSQL holds several
+published recipes, adoption refuses to guess and semantic search reports the
+count; stop the hub's `pg push --watch --embed`, remove obsolete generations
+with `agentsview pg vectors drop <id>`, then start the watcher and restart
+`pg serve`. Generations pushed before recipe publication have no recipe until a
+configured machine pushes them again. If `pg serve` starts before a workstation
+pushes its first generation, restart `pg serve` after that push to enable
+semantic search.
 
 If no generation matches, `pg serve` starts normally but semantic and hybrid
 search return the 501 "not available" error carrying the mismatch reason, which

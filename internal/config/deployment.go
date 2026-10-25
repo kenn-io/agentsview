@@ -179,11 +179,11 @@ func (c *Config) ApplyDeploymentEmbeddings() error {
 		server.apiKey = key
 	}
 	if keyPathSet {
-		key, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
+		fileKey, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
 		if err != nil {
 			return err
 		}
-		server.apiKey = key
+		server.apiKey = fileKey
 	}
 	if err := server.validate(deploymentEmbeddingsServer, 0); err != nil {
 		if batchSet {
