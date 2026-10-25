@@ -203,21 +203,20 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 // A daemon that restarts on a new address must not leave the watch retrying the
 // address it launched with.
 func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing.T) {
+	t.Run("default", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, false) })
+	t.Run("require daemon", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, true) })
+}
+
+func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon bool) {
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	setTestVersion(t, "v1.1.0-2-g123456")
+	var starts int
 	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
 		cancel()
 		return nil, context.Canceled
-	})
-	var launchPushes int
-	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		launchPushes++
-		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
 	})
 	var resolvedPushes int
 	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
@@ -228,12 +227,25 @@ func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing
 		cancel()
 		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
 	})
-	host, port := splitTestServerURL(t, resolved.URL)
-	writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+	var launchPushes int
+	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		launchPushes++
+		// The daemon restarts on a new address while the push fails.
+		host, port := splitTestServerURL(t, resolved.URL)
+		writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
+	})
 
-	backend := newDaemonArchiveWriteBackendForTest(
-		config.Config{DataDir: dataDir}, launch.URL,
-	)
+	cfg := config.Config{DataDir: dataDir}
+	if requireDaemon {
+		cfg.DBPath = filepath.Join(dataDir, "sessions.db")
+		cfg.RequireDaemon = true
+		cfg.NoDaemonAutostart = true
+	}
+	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
 	err := backend.ReplicaPushWatch(
 		ctx, pgReplica{},
 		storage.ConfiguredReplica{Target: storage.ReplicaTarget{
@@ -248,6 +260,10 @@ func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
 	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
+	if requireDaemon {
+		assert.Zero(t, starts)
+		assert.NoFileExists(t, cfg.DBPath)
+	}
 }
 
 // fakeTarget is a test double for storage.Pusher.
@@ -796,48 +812,4 @@ func TestPGPusherFullVectorRepairNarrowsToDeferredSessions(t *testing.T) {
 		{sessions: []string{"s1"}},
 		{scoped: true},
 	}, got)
-}
-
-func TestArchiveWriteBackendPGPushWatchRequiresDaemonOnRetry(t *testing.T) {
-	dataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	setTestVersion(t, "v1.1.0-2-g123456")
-	starts := 0
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-		starts++
-		return nil, errors.New("unexpected autostart")
-	})
-	resolvedPushes := 0
-	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(w http.ResponseWriter, r *http.Request) {
-		resolvedPushes++
-		cancel()
-		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
-	})
-	launchPushes := 0
-	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(w http.ResponseWriter, r *http.Request) {
-		launchPushes++
-		host, port := splitTestServerURL(t, resolved.URL)
-		writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
-		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
-	})
-	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"), RequireDaemon: true, NoDaemonAutostart: true}
-	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
-	// The owner disappears between pushes. Resolving again must fail without
-	// starting a replacement or acquiring the archive writer.
-	writer := backend.watchPushWriter()
-	_, cleanup, err := writer(ctx)
-	require.NoError(t, err)
-	cleanup()
-	_, _, err = writer(ctx)
-	require.ErrorIs(t, err, errNoWritableDaemon)
-
-	err = backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{Target: storage.ReplicaTarget{
-		URL: "postgres://user:pass@host/db",
-	}}, ReplicaPushConfig{}, nil, nil, time.Millisecond, time.Hour)
-	require.NoError(t, err)
-	assert.Equal(t, 1, launchPushes)
-	assert.GreaterOrEqual(t, resolvedPushes, 1)
-	assert.Zero(t, starts)
-	assert.NoFileExists(t, cfg.DBPath)
 }

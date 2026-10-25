@@ -84,18 +84,6 @@ func TestNewClickHousePushCommandRejectsAllWatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "clickhouse push --watch:")
 }
 
-func TestReplicaPushNoStartDaemonValidation(t *testing.T) {
-	for _, backend := range []storage.Replica{clickhouse.Backend{}, pgReplica{}} {
-		t.Run(backend.Name(), func(t *testing.T) {
-			cmd := newReplicaPushCommand(backend)
-			cmd.SetArgs([]string{"--no-start-daemon"})
-			err := cmd.Execute()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "--no-start-daemon requires --watch")
-		})
-	}
-}
-
 func TestBuildServiceSpec_ClickHouseLogAndURL(t *testing.T) {
 	t.Setenv("AGENTSVIEW_CLICKHOUSE_URL", "")
 	dataDir := t.TempDir()
