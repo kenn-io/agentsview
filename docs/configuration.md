@@ -334,7 +334,8 @@ mode instead.
 | `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                 |
 
 The inline embeddings API key is visible in container inspection; use the file
-form to keep the value out of the environment.
+form to keep the value out of the environment. A selector counts as set even
+when its value is empty; unset the unused selector.
 
 The image sets `AGENTSVIEW_MODE=serve`, `AGENTSVIEW_HOST=0.0.0.0`,
 `AGENTSVIEW_REQUIRE_AUTH=true`, and `AGENTSVIEW_NO_BROWSER=true`. An explicit

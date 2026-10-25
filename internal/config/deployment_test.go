@@ -454,6 +454,7 @@ func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
 		{name: "missing key file", endpoint: new("http://e/v1"), keyFile: "missing", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
 		{name: "blank inline key", endpoint: new("http://e/v1"), inlineKey: new(" \n"), want: "must not be blank"},
 		{name: "both key selectors", endpoint: new("http://e/v1"), inlineKey: new("inline-secret"), keyFile: "key-secret", want: "set only one"},
+		{name: "empty inline key with key file", endpoint: new("http://e/v1"), inlineKey: new(""), keyFile: "key-secret", want: "set only one"},
 		{name: "batch size without endpoint", batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "batch size with vector section", vector: true, batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_*"},
 		{name: "non-integer batch size", endpoint: new("http://e/v1"), batchSize: new("1.5"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
