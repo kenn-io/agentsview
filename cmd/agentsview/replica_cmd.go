@@ -90,7 +90,7 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
 	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
 	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Run continuously, pushing on change plus a periodic floor")
-	cmd.Flags().BoolVar(&cfg.NoStartDaemon, "no-start-daemon", false, "With --watch, wait for a running daemon instead of starting one or opening the archive")
+	cmd.Flags().BoolVar(&cfg.NoStartDaemon, "no-start-daemon", false, "With --watch, require a running writable daemon and exit if unavailable")
 	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
 	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
 	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")

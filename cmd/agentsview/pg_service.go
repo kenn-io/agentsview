@@ -55,7 +55,7 @@ func newServiceInstallCommand(kind serviceKind) *cobra.Command {
 			runServiceInstall(kind, noStartDaemon)
 		},
 	}
-	cmd.Flags().BoolVar(&noStartDaemon, "no-start-daemon", false, "Wait for a running daemon instead of starting one or opening the archive")
+	cmd.Flags().BoolVar(&noStartDaemon, "no-start-daemon", false, "Require a running writable daemon; the service manager retries if unavailable")
 	return cmd
 }
 

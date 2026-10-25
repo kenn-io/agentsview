@@ -340,7 +340,7 @@ func watchRecoveryForBatch(
 	}
 }
 
-var errNoWritableDaemon = errors.New("no writable agentsview daemon is running")
+var errNoWritableDaemon = errors.New("no writable agentsview daemon is running; start the agentsview collector or server")
 
 func resolveArchiveWriteBackend(
 	ctx context.Context,
