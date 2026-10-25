@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -574,5 +575,18 @@ func TestPromptYesNo(t *testing.T) {
 	for _, c := range cases {
 		got := promptYesNo(strings.NewReader(c.in), "Continue?")
 		assert.Equal(t, c.want, got, "promptYesNo(%q)", c.in)
+	}
+}
+
+func TestServiceRenderNoStartDaemon(t *testing.T) {
+	for _, kind := range []serviceKind{pgServiceKind, clickHouseServiceKind} {
+		t.Run(kind.Name, func(t *testing.T) {
+			kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+			spec := serviceSpec{Kind: kind, BinPath: "/usr/local/bin/agentsview", DataDir: "/data", LogPath: "/data/watch.log"}
+			unit := (&systemdManager{kind: kind}).render(spec)
+			assert.Contains(t, unit, `ExecStart="/usr/local/bin/agentsview" `+kind.Name+` push --watch --no-start-daemon`)
+			plist := (&launchdManager{kind: kind}).render(spec)
+			assert.Contains(t, plist, "<string>--watch</string>\n\t\t<string>--no-start-daemon</string>")
+		})
 	}
 }

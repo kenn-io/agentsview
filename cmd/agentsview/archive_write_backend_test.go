@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1724,4 +1725,96 @@ func TestDeferredDuckDBWatchPushKeepsFullUntilARebuild(t *testing.T) {
 	}
 	assert.Equal(t, []bool{true, true, true, false}, fullArgs)
 	assert.Equal(t, []bool{true, true, false, false}, notStarted)
+}
+
+func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
+	for _, state := range []string{"absent", "unreachable", "read-only"} {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
+			starts := 0
+			stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+				starts++
+				return nil, errors.New("unexpected autostart")
+			})
+			switch state {
+			case "unreachable":
+				writeUnreachableDaemonRuntime(t, dir, false)
+			case "read-only":
+				host, port := testPingServer(t)
+				writeDaemonRuntimeForTest(t, dir, host, port, version, true)
+			}
+			_, cleanup, err := resolveArchiveWriteBackend(t.Context(), cfg, transportIntentLongLived)
+			if cleanup != nil {
+				cleanup()
+			}
+			assert.ErrorIs(t, err, errNoWritableDaemon)
+			assert.Zero(t, starts)
+			assert.NoFileExists(t, cfg.DBPath)
+		})
+	}
+}
+
+func TestWaitForArchiveDaemon(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
+	old := archiveDaemonWaitInterval
+	archiveDaemonWaitInterval = time.Millisecond
+	t.Cleanup(func() { archiveDaemonWaitInterval = old })
+	starts := 0
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		return nil, errors.New("unexpected autostart")
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var logs syncBuffer
+	oldLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
+	type result struct {
+		writer  archiveWriteBackend
+		cleanup func()
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		writer, cleanup, err := waitForArchiveDaemon(ctx, cfg, "pg")
+		done <- result{writer, cleanup, err}
+	}()
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "waiting for an agentsview daemon") }, time.Second, time.Millisecond)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	res := <-done
+	require.NoError(t, res.err)
+	defer res.cleanup()
+	assert.IsType(t, daemonArchiveWriteBackend{}, res.writer)
+	assert.Equal(t, 1, strings.Count(logs.String(), "waiting for an agentsview daemon"))
+	assert.Zero(t, starts)
+	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestWaitForArchiveDaemonCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		cfg := config.Config{DataDir: t.TempDir(), RequireDaemon: true}
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := waitForArchiveDaemon(ctx, cfg, "pg")
+			done <- err
+		}()
+		synctest.Wait()
+		cancel()
+		assert.ErrorIs(t, <-done, context.Canceled)
+	})
+}
+
+func TestWaitForArchiveDaemonIncompatible(t *testing.T) {
+	dir := t.TempDir()
+	host, port := testPingServer(t)
+	writeIncompatibleDaemonRuntime(t, dir, host, port, "old", false)
+	_, _, err := waitForArchiveDaemon(t.Context(), config.Config{DataDir: dir, RequireDaemon: true}, "pg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "API version")
 }

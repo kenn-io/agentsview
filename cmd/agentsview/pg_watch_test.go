@@ -797,3 +797,47 @@ func TestPGPusherFullVectorRepairNarrowsToDeferredSessions(t *testing.T) {
 		{scoped: true},
 	}, got)
 }
+
+func TestArchiveWriteBackendPGPushWatchRequiresDaemonOnRetry(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	setTestVersion(t, "v1.1.0-2-g123456")
+	starts := 0
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		return nil, errors.New("unexpected autostart")
+	})
+	resolvedPushes := 0
+	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(w http.ResponseWriter, r *http.Request) {
+		resolvedPushes++
+		cancel()
+		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
+	})
+	launchPushes := 0
+	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(w http.ResponseWriter, r *http.Request) {
+		launchPushes++
+		host, port := splitTestServerURL(t, resolved.URL)
+		writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
+	})
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"), RequireDaemon: true}
+	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
+	// The owner disappears between pushes. Resolving again must fail without
+	// starting a replacement or acquiring the archive writer.
+	writer := backend.watchPushWriter()
+	_, cleanup, err := writer(ctx)
+	require.NoError(t, err)
+	cleanup()
+	_, _, err = writer(ctx)
+	require.ErrorIs(t, err, errNoWritableDaemon)
+
+	err = backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+		URL: "postgres://user:pass@host/db",
+	}}, ReplicaPushConfig{}, nil, nil, time.Millisecond, time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, launchPushes)
+	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.Zero(t, starts)
+	assert.NoFileExists(t, cfg.DBPath)
+}

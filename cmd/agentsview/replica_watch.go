@@ -352,8 +352,18 @@ func runReplicaPushWatch(
 	// --embed builds in this process, so it never auto-starts a daemon; a
 	// live daemon still wins the writer and rejects the request.
 	appCfg.NoDaemonAutostart = cfg.Embed
-	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
+	appCfg.RequireDaemon = cfg.NoStartDaemon
+	var writer archiveWriteBackend
+	var cleanup func()
+	if cfg.NoStartDaemon {
+		writer, cleanup, err = waitForArchiveDaemon(ctx, appCfg, name)
+	} else {
+		writer, cleanup, err = resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
+	}
 	if err != nil {
+		if cfg.NoStartDaemon && ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("opening writer: %w", err)
 	}
 	defer cleanup()
@@ -363,4 +373,27 @@ func runReplicaPushWatch(
 		return err
 	}
 	return nil
+}
+
+var archiveDaemonWaitInterval = 2 * time.Second
+
+func waitForArchiveDaemon(ctx context.Context, appCfg config.Config, name string) (archiveWriteBackend, func(), error) {
+	waiting := false
+	for {
+		writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
+		if !errors.Is(err, errNoWritableDaemon) && !errors.Is(err, errServeStartupInProgress) {
+			return writer, cleanup, err
+		}
+		if !waiting {
+			log.Printf("%s watch: waiting for an agentsview daemon", name)
+			waiting = true
+		}
+		timer := time.NewTimer(archiveDaemonWaitInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

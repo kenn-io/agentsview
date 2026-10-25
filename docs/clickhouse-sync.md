@@ -115,6 +115,7 @@ agentsview clickhouse push [target] [flags]
 | `--exclude-projects` |         | Comma-separated projects to exclude                                       |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                            |
 | `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                 |
+| `--no-start-daemon`  | `false` | With `--watch`, wait for a writable daemon; never start one or open the archive directly |
 | `--debounce`         | `30s`   | Coalesce window after a filesystem change before pushing (`--watch` only) |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                             |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                        |
@@ -395,6 +396,13 @@ The generated unit runs `agentsview clickhouse push --watch`, pins
 `AGENTSVIEW_DATA_DIR` to the data directory used at install time, and writes
 logs to `~/.agentsview/clickhouse-watch.log` unless you changed the data
 directory.
+
+If you run your own collector service, use
+`agentsview clickhouse service install --no-start-daemon`. The push service
+waits for that daemon at startup and retries pushes while it restarts, without
+starting a daemon or opening the archive directly. Reinstall existing units with
+this flag to enable it. The default installation still starts a missing daemon
+for hosts that run only the push service.
 
 `install` requires a literal ClickHouse URL in the effective default target of
 `~/.agentsview/config.toml`, either the legacy `[clickhouse].url` or the target

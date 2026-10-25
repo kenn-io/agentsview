@@ -340,6 +340,8 @@ func watchRecoveryForBatch(
 	}
 }
 
+var errNoWritableDaemon = errors.New("no writable agentsview daemon is running")
+
 func resolveArchiveWriteBackend(
 	ctx context.Context,
 	appCfg config.Config,
@@ -359,6 +361,9 @@ func resolveArchiveWriteBackend(
 			appCfg: appCfg,
 			tr:     tr,
 		}, func() {}, nil
+	}
+	if appCfg.RequireDaemon {
+		return nil, nil, errNoWritableDaemon
 	}
 	if tr.Mode != transportHTTP && tr.DirectReadOnly {
 		return nil, nil, errors.New(

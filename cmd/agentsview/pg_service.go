@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,15 +45,18 @@ func newServiceCommands(kind serviceKind) *cobra.Command {
 }
 
 func newServiceInstallCommand(kind serviceKind) *cobra.Command {
-	return &cobra.Command{
+	var noStartDaemon bool
+	cmd := &cobra.Command{
 		Use:          "install",
 		Short:        "Install and start the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceInstall(kind)
+			runServiceInstall(kind, noStartDaemon)
 		},
 	}
+	cmd.Flags().BoolVar(&noStartDaemon, "no-start-daemon", false, "Wait for a running daemon instead of starting one or opening the archive")
+	return cmd
 }
 
 func newServiceUninstallCommand(kind serviceKind) *cobra.Command {
@@ -130,8 +134,11 @@ func loadServiceConfig(kind serviceKind) config.Config {
 	return appCfg
 }
 
-func runServiceInstall(kind serviceKind) {
+func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 	appCfg := loadServiceConfig(kind)
+	if noStartDaemon {
+		kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+	}
 	spec, err := buildServiceSpec(appCfg, kind)
 	if err != nil {
 		fatal("%s service install: %v", kind.Name, err)

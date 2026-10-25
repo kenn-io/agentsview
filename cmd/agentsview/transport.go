@@ -257,7 +257,7 @@ func ensureTransportContext(
 	}
 	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
 	// invocation only, without touching the process environment.
-	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart
+	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout

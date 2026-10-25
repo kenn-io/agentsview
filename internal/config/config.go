@@ -1069,6 +1069,9 @@ type Config struct {
 	// NoDaemonAutostart suppresses daemon autostart for this invocation
 	// only; pg push --embed sets it to keep the archive writer local.
 	NoDaemonAutostart bool `json:"-" toml:"-"`
+	// RequireDaemon sends archive writes only through a live writable daemon;
+	// never autostart one or open the archive directly.
+	RequireDaemon bool `json:"-" toml:"-"`
 
 	// vectorSectionDefined records a [vector] section in config.toml.
 	vectorSectionDefined bool

@@ -28,6 +28,11 @@ The latest release is
 
 **Bug fixes**
 
+- PostgreSQL and ClickHouse push services can wait for a separately managed
+  collector with `service install --no-start-daemon`, avoiding competing daemons
+  and archive write locks during restarts. Reinstall existing units with the
+  flag to enable it.
+
 - Claude Code channel questions appear in transcripts, search, and user-message
   totals. Rewinding after a channel conversation keeps that conversation as a
   separate fork and preserves the retry's session ID and saved items. Existing
