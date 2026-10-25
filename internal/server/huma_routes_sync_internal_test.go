@@ -1632,6 +1632,27 @@ func TestHumaLocalSyncReportsIncompleteArchiveRebuild(t *testing.T) {
 	}
 }
 
+// TestHumaWorkerResyncReportsIncompleteArchiveRebuild covers the worker-backed
+// runner, which also falls back to an incremental pass and returns complete
+// stats when the rebuild safety-aborts.
+func TestHumaWorkerResyncReportsIncompleteArchiveRebuild(t *testing.T) {
+	ran := false
+	f := newSyncRouteFixture(t, withStaleDB(), withLocalResyncRunner(
+		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+			ran = true
+			return syncpkg.SyncStats{TotalSessions: 1, Synced: 1}, nil
+		},
+	))
+	require.True(t, f.db.NeedsResync())
+
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil).Body.String()
+
+	require.True(t, ran)
+	assert.Contains(t, body, "event: error")
+	assert.NotContains(t, body, "event: done")
+	assert.Contains(t, body, "the required archive rebuild did not complete")
+}
+
 // TestHumaTriggerSyncWorkerBackedRejectsStaleArchive pins the new UX: with the
 // worker-backed runner wired, /sync on a stale archive returns 409 pointing at
 // /resync and never runs the runner, since the worker refuses to swap the

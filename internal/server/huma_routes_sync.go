@@ -79,8 +79,8 @@ func requireProcessingComplete(stats syncpkg.SyncStats) error {
 	return errors.New("local sync processing incomplete")
 }
 
-// requireArchiveRebuilt fails an in-process sync that left the archive stale.
-// When a required rebuild aborts, the engine falls back to an incremental pass,
+// requireArchiveRebuilt fails a sync that left the archive stale. When a
+// required rebuild aborts, the sync runners fall back to an incremental pass,
 // so without this check the caller would see success while sessions that need
 // the new parsers stay missing.
 func (s *Server) requireArchiveRebuilt() error {
@@ -434,7 +434,7 @@ func (s *Server) humaTriggerResync(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats, err := s.runResyncWithFallback(ctx, engine, nil)
+			stats, err := s.runResyncRoute(ctx, engine, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
 					apiResponseError{Message: err.Error()})
@@ -443,7 +443,7 @@ func (s *Server) humaTriggerResync(
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats, err := s.runResyncWithFallback(ctx, engine, func(p syncpkg.Progress) {
+		stats, err := s.runResyncRoute(ctx, engine, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
@@ -478,7 +478,19 @@ func (s *Server) runResyncWithFallback(
 	if err != nil {
 		return stats, err
 	}
-	if err := requireProcessingComplete(stats); err != nil {
+	return stats, requireProcessingComplete(stats)
+}
+
+// runResyncRoute runs a /resync request. Both resync runners fall back to an
+// incremental pass when the rebuild safety-aborts and report that pass as
+// success, so the route checks the archive itself. Push shares
+// runResyncWithFallback but keeps pushing after such a fallback.
+func (s *Server) runResyncRoute(
+	ctx context.Context, engine *syncpkg.Engine,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	stats, err := s.runResyncWithFallback(ctx, engine, progress)
+	if err != nil {
 		return stats, err
 	}
 	return stats, s.requireArchiveRebuilt()
