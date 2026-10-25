@@ -54,6 +54,10 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 				return fmt.Errorf("%s push: %w", name,
 					errors.New("--embed cannot be combined with --all"))
 			}
+			if cfg.Embed && cfg.NoStartDaemon {
+				return fmt.Errorf("%s push: %w", name,
+					errors.New("--embed cannot be combined with --no-start-daemon"))
+			}
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"%s push --watch: %w", name,

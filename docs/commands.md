@@ -1253,7 +1253,7 @@ agentsview pg push [target] [flags]
 | `--all-projects`     | `false` | Ignore configured project filters for this run                                                                     |
 | `--all`              | `false` | Push every configured PostgreSQL target sequentially                                                               |
 | `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                                                          |
-| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running                                                |
+| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running; incompatible with `--embed`                    |
 | `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only)                                                     |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                      |
 

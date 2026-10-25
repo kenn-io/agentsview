@@ -748,6 +748,7 @@ func TestReplicaPushEmbedFlagValidation(t *testing.T) {
 		{args: []string{"pg", "push", "--embed", "--no-vectors"}, want: "--embed cannot be combined with --no-vectors"},
 		{args: []string{"pg", "push", "--embed", "--all"}, want: "--embed cannot be combined with --all"},
 		{args: []string{"pg", "push", "--embed", "--all", "--watch"}, want: "--embed cannot be combined with --all"},
+		{args: []string{"pg", "push", "--watch", "--embed", "--no-start-daemon"}, want: "--embed cannot be combined with --no-start-daemon"},
 		{args: []string{"clickhouse", "push", "--no-start-daemon"}, want: "--no-start-daemon requires --watch"},
 		{args: []string{"clickhouse", "push", "--embed"}, want: "unknown flag: --embed"},
 	} {
