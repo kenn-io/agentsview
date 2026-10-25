@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -135,7 +134,7 @@ func loadServiceConfig(kind serviceKind) config.Config {
 }
 
 func withNoStartDaemon(kind serviceKind) serviceKind {
-	kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+	kind.Args = append(kind.Args, "--no-start-daemon")
 	return kind
 }
 
