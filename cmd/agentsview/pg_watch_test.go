@@ -298,6 +298,7 @@ func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, replica storage.R
 		time.Hour,
 	)
 	require.NoError(t, err)
+	assert.ErrorIs(t, ctx.Err(), context.Canceled, "recovery must cancel the watch before its deadline")
 	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
 	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
 	if requireDaemon {
