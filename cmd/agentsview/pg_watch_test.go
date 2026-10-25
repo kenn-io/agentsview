@@ -14,8 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/archivepush"
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestResolvePushProjects(t *testing.T) {
@@ -203,11 +205,15 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 // A daemon that restarts on a new address must not leave the watch retrying the
 // address it launched with.
 func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing.T) {
-	t.Run("default", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, false) })
-	t.Run("require daemon", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, true) })
+	t.Run("default", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, pgReplica{}, false) })
+	for _, backend := range []storage.Replica{pgReplica{}, clickhouse.Backend{}} {
+		t.Run("require daemon "+backend.Name(), func(t *testing.T) {
+			testPushWatchRetriesStartupOnResolvedDaemon(t, backend, true)
+		})
+	}
 }
 
-func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon bool) {
+func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, replica storage.Replica, requireDaemon bool) {
 	t.Helper()
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -220,23 +226,28 @@ func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon boo
 		return nil, context.Canceled
 	})
 	var resolvedPushes int
-	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
+	pushPath := "/api/v1/push/" + replica.Name()
+	resolved := pushRuntimeServer(t, pushPath, func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		resolvedPushes++
-		cancel()
+		if !requireDaemon {
+			cancel()
+		}
 		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
 	})
 	var launchPushes int
-	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(
+	launch := pushRuntimeServer(t, pushPath, func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		launchPushes++
-		// The daemon restarts on a new address while the push fails.
-		host, port := splitTestServerURL(t, resolved.URL)
-		writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+		if !requireDaemon {
+			// The daemon restarts on a new address while the push fails.
+			host, port := splitTestServerURL(t, resolved.URL)
+			writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+		}
 		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
 	})
 
@@ -246,10 +257,41 @@ func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon boo
 		cfg.RequireDaemon = true
 	}
 	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
+	var retriedWithoutDaemon bool
+	var recovered bool
+	if requireDaemon {
+		backend.watchHooks = &archivePushWatchHooks{
+			newLoop: func(
+				label string, debounce, interval time.Duration,
+				push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
+			) (*pushLoop, func()) {
+				loop, ticker := newPushLoopWithLabel(label, debounce, interval, func(ctx context.Context, reason pushReason, batch *syncpkg.WatchBatch) error {
+					err := push(ctx, reason, batch)
+					if errors.Is(err, errNoWritableDaemon) && !retriedWithoutDaemon {
+						retriedWithoutDaemon = true
+						assert.Zero(t, starts)
+						assert.NoFileExists(t, cfg.DBPath)
+						host, port := splitTestServerURL(t, resolved.URL)
+						writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+					}
+					if err == nil && retriedWithoutDaemon {
+						recovered = true
+						cancel()
+					}
+					return err
+				})
+				return loop, ticker.Stop
+			},
+		}
+	}
+	targetURL := "postgres://user:pass@host/db"
+	if replica.Name() == "clickhouse" {
+		targetURL = "clickhouse://user:pass@host/db?secure=true"
+	}
 	err := backend.ReplicaPushWatch(
-		ctx, pgReplica{},
+		ctx, replica,
 		storage.ConfiguredReplica{Target: storage.ReplicaTarget{
-			URL: "postgres://user:pass@host/db",
+			URL: targetURL,
 		}},
 		ReplicaPushConfig{},
 		nil,
@@ -261,6 +303,8 @@ func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon boo
 	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
 	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
 	if requireDaemon {
+		assert.True(t, retriedWithoutDaemon, "a retry observes the collector outage before its replacement is published")
+		assert.True(t, recovered, "a later retry completes through the replacement daemon")
 		assert.Zero(t, starts)
 		assert.NoFileExists(t, cfg.DBPath)
 	}

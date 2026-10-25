@@ -126,7 +126,7 @@ agentsview pg push [target] [flags]
 | `--exclude-projects` |         | Comma-separated projects to exclude                                                                                            |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                                                                                 |
 | `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                                                                      |
-| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running; incompatible with `--embed`                                |
+| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running                                                            |
 | `--debounce`         | `30s`   | Coalesce window after a filesystem change before pushing (`--watch` only)                                                      |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                                  |
 
