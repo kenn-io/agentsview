@@ -683,7 +683,7 @@ docs-assets-branch:
 	bash docs/assets/update-static-assets-branch.sh
 
 docs-generated-assets-branch:
-	bash docs/screenshots/update-generated-assets-branch.sh
+	bash docs/screenshots/update-generated-assets-branch.sh --source "$(CAPTURE_ASSETS)"
 
 docs-deploy-staging:
 	vercel deploy docs
