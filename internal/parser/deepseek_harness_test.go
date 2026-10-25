@@ -1700,12 +1700,18 @@ func TestDeepSeekHarnessV4SessionWithJobEventsParses(t *testing.T) {
 	records := deepSeekHarnessV4Fixture("v4-jobs")
 	job := map[string]any{
 		"jobId": "pwsh-c76209594049476e", "owner": "session-v4-jobs",
-		"kind": "pwsh", "label": "Get-ChildItem",
+		"kind": "pwsh", "label": "Get-ChildItem", "startedAt": 1700000000013,
+		"toolCall": map[string]any{"callId": "call-1", "rootCallId": "call-1"},
 	}
+	settledJob := maps.Clone(job)
+	maps.Copy(settledJob, map[string]any{
+		"finishedAt": 1700000000014, "status": "completed", "cause": "producer",
+		"producerReported": true, "detail": "exit code: 0",
+	})
 	registered := deepSeekHarnessFixtureEvent(0, "job/registered", job, nil)
-	settled := deepSeekHarnessFixtureEvent(0, "job/settled", job, nil)
-	records = append(records[:13], append([]any{registered}, records[13:]...)...)
-	records = append(records[:15], append([]any{settled}, records[15:]...)...)
+	settled := deepSeekHarnessFixtureEvent(0, "job/settled", settledJob, nil)
+	// Producers write the job pair after the tool call and before its result.
+	records = append(records[:13], append([]any{registered, settled}, records[13:]...)...)
 	for index, record := range records[1:] {
 		record.(map[string]any)["seq"] = index
 		record.(map[string]any)["time"] = 1700000000001 + index

@@ -2962,9 +2962,17 @@ schemas keep their existing ordering behavior.
     `d743267388641bc76f17c45ce8b4c231aed1d32c`, retains generation 4 and adds
     [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/session/working-directory/src/index.ts),
     also metadata; the producer separately emits readable directory-change
-    text. Desktop `0.2.1-rc.2` generation-4 logs from sessions that run shell
-    commands carry paired `job/registered` and `job/settled` events with only
-    job bookkeeping (`jobId`, `owner`, `kind`, `label`); these are metadata.
+    text. Release `dsh-v0.2.1-alpha.3`, commit
+    `2fbf4359b82fb94c03dcce0b831660d87f12ea5c`, retains generation 4 and adds
+    paired `job/registered` and `job/settled` events for jobs such as shell
+    commands. Release `dsh-v0.2.1-rc.2`, commit
+    `687f282e8625c6b8d11ff58211a90524be2e4317`, defines them as log-only
+    [job lifecycle records](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/jobs/jobs/src/types.ts)
+    in its
+    [known event types](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/core/session/src/known-event-types.ts).
+    They carry job identity, the creating tool call, timing, and the terminal
+    status, but no model-visible output, so they are metadata. The tool output
+    remains in the paired `tool/result`.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
@@ -3244,8 +3252,8 @@ schemas keep their existing ordering behavior.
   detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
   `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and
   `TestSyncClaudeAIBranchSwitch`. Usage-only message and user-turn counts
-  follow the selected branch, including shorter branches. Verified
-  2026-10-22 with the reconstructed fixture in
+  follow the selected branch, including shorter branches. Verified 2026-10-22
+  with the reconstructed fixture in
   `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather than a live
   observation of count behavior. Shorter zip exports remain refused. See
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
@@ -3523,14 +3531,14 @@ schemas keep their existing ordering behavior.
   ledger rows plus each token bucket's uncovered summary remainder, so calls
   count once and keep their recorded model. Missing ledgers retain summary
   accounting; ledgers without `task` describe main usage. Member fingerprints
-  include ordered ledger keys and accounting fields for both Hermes and
-  Augure Desktop. Reverified the producer's delta transaction: main ledger
-  costs use the summary's cost basis, leaving only positive uncovered cost
-  on its model. Unknown summary cost preserves known ledger costs and lets
-  catalog pricing fill unknown costs. Sourced actual and included zeros remain
-  known; default zero estimates remain unknown. Malformed numeric rows warn and
-  are omitted, preserving valid rows and leaving uncovered main usage in the
-  session summary. Nullable ledger token counters count as zero.
+  include ordered ledger keys and accounting fields for both Hermes and Augure
+  Desktop. Reverified the producer's delta transaction: main ledger costs use
+  the summary's cost basis, leaving only positive uncovered cost on its model.
+  Unknown summary cost preserves known ledger costs and lets catalog pricing
+  fill unknown costs. Sourced actual and included zeros remain known; default
+  zero estimates remain unknown. Malformed numeric rows warn and are omitted,
+  preserving valid rows and leaving uncovered main usage in the session
+  summary. Nullable ledger token counters count as zero.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
