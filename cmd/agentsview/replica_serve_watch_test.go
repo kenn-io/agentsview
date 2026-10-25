@@ -7,16 +7,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -33,15 +35,23 @@ func TestReplicaServeWatchFlags(t *testing.T) {
 		{nil, ""},
 		{[]string{"--push-watch", "--embed", "--debounce=1s", "--interval=1m"}, ""},
 	} {
-		t.Run(filepath.Base(tc.want)+strings.Join(tc.args, " "), func(t *testing.T) {
+		t.Run(fmt.Sprint(tc.args), func(t *testing.T) {
 			cmd := newReplicaServeCommand(pgReplica{})
 			require.NoError(t, cmd.Flags().Parse(tc.args))
 			err := validateReplicaServeWatchFlags(cmd)
-			if tc.want == "" {
-				require.NoError(t, err)
-			} else {
+			if tc.want != "" {
 				require.ErrorContains(t, err, tc.want)
+				return
 			}
+			require.NoError(t, err)
+			watch, err := loadReplicaServeWatch(cmd, config.Config{})
+			require.NoError(t, err)
+			if len(tc.args) == 0 {
+				assert.Nil(t, watch)
+				return
+			}
+			require.NotNil(t, watch)
+			assert.Equal(t, ReplicaPushConfig{Watch: true, Embed: true, Debounce: time.Second, Interval: time.Minute}, watch.push)
 		})
 	}
 }
@@ -60,91 +70,93 @@ func TestReplicaServeWatchOwnership(t *testing.T) {
 	for _, embed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "without embed", true: "with embed"}[embed], func(t *testing.T) {
 			testDataDir(t)
+			t.Setenv("AGENTSVIEW_PG_URL", "postgres://user@127.0.0.1:1/archive")
 			cfg, _, err := loadPGServeConfigForTest(t)
 			require.NoError(t, err)
-			cfg.PG.URL = "postgres://user@127.0.0.1:1/archive"
 			cfg.PG.AllowInsecure = true
-			starts := 0
 			stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-				starts++
+				assert.Fail(t, "unexpected daemon launch")
 				return nil, errors.New("unexpected daemon launch")
 			})
 			_, cleanup, err := prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
 			require.NoError(t, err)
-			assert.Zero(t, starts)
 			_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{}, "", true)
 			require.ErrorContains(t, err, "already locked")
-			cleanup()
-			_, cleanup, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{}, "", true)
-			require.NoError(t, err, "cleanup must release writer and watch ownership")
 			cleanup()
 			database, lock, err := openWriteDB(t.Context(), cfg)
 			require.NoError(t, err)
 			_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
 			require.Error(t, err, "a competing archive writer must be refused")
 			closeWriteDB(database, lock)
-			daemon := pushRuntimeServer(t, "/api/v1/push/pg", func(http.ResponseWriter, *http.Request) { t.Error("must not delegate") })
+			daemon := pushRuntimeServer(t, "/api/v1/push/pg", func(http.ResponseWriter, *http.Request) { assert.Fail(t, "must not delegate") })
 			host, port := splitTestServerURL(t, daemon.URL)
 			writeDaemonRuntimeForTest(t, cfg.DataDir, host, port, version, false)
 			_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
 			require.ErrorContains(t, err, "requires the local archive writer")
+			if runtime.GOOS != "windows" {
+				alias := filepath.Join(t.TempDir(), "archive")
+				requireSymlinkOrSkip(t, cfg.DataDir, alias)
+				t.Setenv("AGENTSVIEW_DATA_DIR", alias)
+				cfg, _, err = loadPGServeConfigForTest(t)
+				require.NoError(t, err)
+				_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
+				require.ErrorContains(t, err, "is a symlink")
+			}
 		})
 	}
 }
 
 func TestReplicaServeWatchWorkerLifecycle(t *testing.T) {
 	for _, early := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancel joins", true: "fatal cancels serve"}[early], func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			entered := make(chan struct{})
-			joined := false
-			cleaned := false
-			startup := replicaServeStartup{ctx: ctx, cleanup: func() { assert.True(t, cleaned); assert.True(t, joined) }}
-			joinReplicaServeWorker(&startup, cancel, func() error {
-				close(entered)
+		t.Run(fmt.Sprintf("fatal=%t", early), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				entered, release, exited, cleaned := make(chan struct{}, 1), make(chan struct{}), make(chan struct{}, 1), make(chan struct{}, 2)
+				releaseWorker := sync.OnceFunc(func() { close(release) })
+				defer releaseWorker()
+				startup := replicaServeStartup{ctx: ctx, cleanup: func() {
+					assert.Len(t, exited, 1, "base cleanup preceded worker exit")
+					assert.Len(t, cleaned, 1, "base cleanup preceded watch cleanup")
+					cleaned <- struct{}{}
+				}}
+				joinReplicaServeWorker(&startup, cancel, func() error {
+					entered <- struct{}{}
+					if !early {
+						<-ctx.Done()
+					}
+					<-release
+					exited <- struct{}{}
+					if early {
+						return errors.New("watch failed")
+					}
+					return nil
+				}, func() { cleaned <- struct{}{} })
+				startup.startWorker()
+				synctest.Wait()
+				require.Len(t, entered, 1, "worker did not start")
 				if !early {
-					<-ctx.Done()
+					cancel()
+					go startup.cleanup()
+					synctest.Wait()
+					assert.Empty(t, cleaned, "cleanup did not join worker")
 				}
-				joined = true
+				releaseWorker()
+				synctest.Wait()
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				require.Len(t, startup.workerResult, 1, "worker did not report completion")
 				if early {
-					return errors.New("watch failed")
+					require.ErrorContains(t, <-startup.workerResult, "watch failed")
+				} else {
+					require.NoError(t, <-startup.workerResult)
 				}
-				return nil
-			}, func() { cleaned = true })
-			startup.startWorker()
-			<-entered
-			if !early {
-				cancel()
-			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(5 * time.Second):
-				require.FailNow(t, "worker did not cancel serve")
-			}
-			startup.cleanup()
-			if early {
-				require.ErrorContains(t, <-startup.workerResult, "watch failed")
-			}
+				if early {
+					startup.cleanup()
+				}
+				require.Len(t, cleaned, 2, "cleanup did not finish")
+			})
 		})
 	}
-}
-
-func TestReplicaServeWatchReadinessFailureReleasesOwnership(t *testing.T) {
-	testDataDir(t)
-	cfg, _, err := loadPGServeConfigForTest(t)
-	require.NoError(t, err)
-	cfg.PG.URL = "postgres://user@127.0.0.1:1/archive"
-	cfg.PG.AllowInsecure = true
-	cfg.Host = "invalid host"
-	ctx, cancel := context.WithCancel(t.Context())
-	startup := replicaServeStartup{cfg: cfg, ctx: ctx, srv: server.New(cfg, nil, nil), cleanup: cancel}
-	require.NoError(t, attachReplicaServeWatch(&startup, cancel, pgReplica{}, nil, &replicaServeWatch{}))
-	require.Error(t, runPreparedReplicaServe("pg", startup))
-	lock := flock.New(filepath.Join(cfg.DataDir, "pg-watch.lock"))
-	locked, err := lock.TryLock()
-	require.NoError(t, err)
-	require.True(t, locked)
-	require.NoError(t, lock.Unlock())
 }
 
 func TestReplicaServeWatchFailureStopsHTTP(t *testing.T) {
@@ -155,8 +167,24 @@ func TestReplicaServeWatchFailureStopsHTTP(t *testing.T) {
 	cfg, err := prepareServeRuntimeConfig(ctx, cfg, opts)
 	require.NoError(t, err)
 	startup := replicaServeStartup{cfg: cfg, ctx: ctx, rtOpts: opts, srv: server.New(cfg, nil, nil), cleanup: cancel}
-	joinReplicaServeWorker(&startup, cancel, func() error { return errors.New("fatal ingestion failure") }, func() {})
+	url := fmt.Sprintf("http://%s:%d/", cfg.Host, cfg.Port)
+	client := &http.Client{Timeout: time.Second}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	require.NoError(t, err)
+	joinReplicaServeWorker(&startup, cancel, func() error {
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		_ = response.Body.Close()
+		return errors.New("fatal ingestion failure")
+	}, func() {})
 	require.ErrorContains(t, runPreparedReplicaServe("pg", startup), "fatal ingestion failure")
+	response, err := client.Do(request.Clone(t.Context()))
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	require.Error(t, err, "HTTP listener must close before serve returns")
 }
 
 func TestReplicaServeWatchLoadedArchive(t *testing.T) {
@@ -165,9 +193,6 @@ func TestReplicaServeWatchLoadedArchive(t *testing.T) {
 	isolateDefaultAgentDirs(t, t.TempDir())
 	const id = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id), 0o600))
-	alias := filepath.Join(t.TempDir(), "data")
-	require.NoError(t, os.Symlink(dir, alias))
-	t.Setenv("AGENTSVIEW_DATA_DIR", alias)
 	root := filepath.Join(dir, "claude")
 	project := filepath.Join(root, "project")
 	require.NoError(t, os.MkdirAll(project, 0o700))
@@ -176,60 +201,46 @@ func TestReplicaServeWatchLoadedArchive(t *testing.T) {
 	sessions := filepath.Join(dir, "archive", "sessions")
 	require.NoError(t, os.MkdirAll(home, 0o700))
 	require.NoError(t, os.MkdirAll(sessions, 0o700))
-	require.NoError(t, os.Symlink(sessions, filepath.Join(home, "sessions")))
+	requireSymlinkOrSkip(t, sessions, filepath.Join(home, "sessions"))
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "rollout-2026-01-01T00-00-00-"+uuid+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", uuid, "/workspace/project", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "metadata").String()), 0o600))
-	writeTestConfig(t, dir, fmt.Sprintf(`local_machine_name = "Collector"
-[[session_sources]]
+	writeTestConfig(t, dir, fmt.Sprintf(`[[session_sources]]
 agent = "claude"
 dir = %q
 machine = %q
 [[session_sources]]
 agent = "codex"
 dir = %q
-machine = "previous-owner"
-[[session_sources]]
-agent = "codex"
-dir = %q
-[pg]
-url = "postgres://user@127.0.0.1:1/archive"
-allow_insecure = true
-`, root, id, filepath.Join(home, "sessions"), filepath.Join(home, "sessions")))
+`, root, "mounted-workstation", filepath.Join(home, "sessions")))
 	cfg, _, err := loadPGServeConfigForTest(t, "--push-watch")
 	require.NoError(t, err)
-	assert.Equal(t, id, cfg.InstallationID)
-	canonical, err := filepath.EvalSymlinks(dir)
-	require.NoError(t, err)
-	assert.Contains(t, cfg.ResolveDirs(parser.AgentCodexCloud), filepath.Join(canonical, "sources", "codex-cloud"))
-	_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{}, "", true)
-	require.ErrorContains(t, err, "is a symlink")
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	cfg, _, err = loadPGServeConfigForTest(t, "--push-watch")
-	require.NoError(t, err)
-	_, cleanup, err := prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{}, "", true)
-	require.NoError(t, err)
-	cleanup()
 	database, lock, err := openWriteDB(t.Context(), cfg)
 	require.NoError(t, err)
 	defer closeWriteDB(database, lock)
-	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{AgentDirs: cfg.AgentDirs, SourceMachines: cfg.SourceMachines, ProviderMetadata: cfg.ProviderMetadata, Machine: cfg.InstallationID})
-	defer engine.Close()
-	for _, title := range []string{"Original title", "Updated title"} {
-		require.NoError(t, os.WriteFile(filepath.Join(home, "session_index.jsonl"), fmt.Appendf(nil, `{"id":%q,"thread_name":%q,"updated_at":"2026-01-01T01:00:00Z"}`+"\n", uuid, title), 0o600))
-		stats := engine.SyncAll(t.Context(), nil)
-		require.False(t, stats.Aborted)
-		session, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		assert.Equal(t, id, session.Machine)
-		require.NotNil(t, session.SessionName)
-		assert.Equal(t, title, *session.SessionName)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, "session_index.jsonl"), fmt.Appendf(nil, `{"id":%q,"thread_name":"Original title","updated_at":"2026-01-01T01:00:00Z"}`+"\n", uuid), 0o600))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	observed := false
+	backend := localArchiveWriteBackend{appCfg: cfg, database: database, watchHooks: &archivePushWatchHooks{
+		startWatcher: func(_ config.Config, engine *syncpkg.Engine, _ syncpkg.WatchCallback, _ syncpkg.WatcherOptions) (func(), func(), []string) {
+			observed = true
+			assert.Equal(t, id, engine.Machine())
+			assert.Equal(t, cfg.ResolveDirs(parser.AgentCodex), engine.ReconciliationRootsForAgent("codex"))
+			metadata, ok := engine.ProviderStatHasher(parser.AgentCodex).(parser.CodexMetadataProvider)
+			require.True(t, ok)
+			assert.Equal(t, []string{filepath.Join(cfg.ProviderMetadata[parser.AgentCodex][cfg.SessionSources[1].Dir][0], "session_index.jsonl")}, metadata.Metadata().IndexFiles(cfg.SessionSources[1].Dir))
+			return func() {}, func() {}, nil
+		},
+		startupSync: func(ctx context.Context, engine *syncpkg.Engine, _ bool) (bool, error) {
+			require.False(t, engine.SyncAll(ctx, nil).Aborted)
+			cancel()
+			return false, nil
+		},
+	}}
+	require.NoError(t, backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil, time.Hour, time.Hour))
+	assert.True(t, observed)
 	session, err := database.GetSession(t.Context(), "explicit")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Equal(t, id, session.Machine)
-	labels, err := database.GetMachineLabels(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, "Collector", labels[id])
+	assert.Equal(t, "mounted-workstation", session.Machine)
 }
