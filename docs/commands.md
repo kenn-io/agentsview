@@ -1312,7 +1312,8 @@ launchd on macOS and `systemd --user` on Linux. See
 for setup notes.
 
 Use `agentsview pg service install --no-start-daemon` to wait for your own
-collector daemon; reinstall existing units to enable it.
+collector daemon. For an existing unit, run `agentsview pg service stop` first,
+then install with the flag. Installation starts the service.
 
 ```bash
 agentsview pg service install
@@ -1407,7 +1408,9 @@ ClickHouse has no vector phase. `--all --watch` is rejected.
 user unit and writes `clickhouse-watch.log`.
 
 Use `agentsview clickhouse service install --no-start-daemon` to wait for your
-own collector daemon; reinstall existing units to enable it.
+own collector daemon. For an existing unit, run
+`agentsview clickhouse service stop` first, then install with the flag.
+Installation starts the service.
 
 ______________________________________________________________________
 

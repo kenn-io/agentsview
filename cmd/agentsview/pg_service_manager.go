@@ -263,7 +263,7 @@ type lingerChecker interface {
 }
 
 // newServiceManager returns the manager for the current platform.
-func newServiceManager(kind serviceKind) (serviceManager, error) {
+var newServiceManager = func(kind serviceKind) (serviceManager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving home dir: %w", err)

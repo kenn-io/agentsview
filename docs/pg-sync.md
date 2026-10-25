@@ -433,9 +433,11 @@ to the data directory used at install time, and writes logs to
 If you run your own collector service, use
 `agentsview pg service install --no-start-daemon`. The push service waits for
 that daemon at startup and retries pushes while it restarts, without starting a
-daemon or opening the archive directly. Reinstall existing units with this flag
-to enable it. The default installation still starts a missing daemon for hosts
-that run only the push service.
+daemon or opening the archive directly. To update an existing unit, run
+`agentsview pg service stop`, then
+`agentsview pg service install --no-start-daemon`. Installation starts the
+service with the new flag. The default installation still starts a missing
+daemon for hosts that run only the push service.
 
 `install` requires a literal PostgreSQL URL in the effective default target of
 `~/.agentsview/config.toml`, either the legacy `[pg].url` or the target selected

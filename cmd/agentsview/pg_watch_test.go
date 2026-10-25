@@ -821,7 +821,7 @@ func TestArchiveWriteBackendPGPushWatchRequiresDaemonOnRetry(t *testing.T) {
 		writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
 		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
 	})
-	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"), RequireDaemon: true}
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"), RequireDaemon: true, NoDaemonAutostart: true}
 	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
 	// The owner disappears between pushes. Resolving again must fail without
 	// starting a replacement or acquiring the archive writer.

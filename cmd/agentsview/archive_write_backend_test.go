@@ -1731,7 +1731,7 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 	for _, state := range []string{"absent", "unreachable", "read-only"} {
 		t.Run(state, func(t *testing.T) {
 			dir := t.TempDir()
-			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
+			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true, NoDaemonAutostart: true}
 			starts := 0
 			stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
 				starts++
@@ -1757,7 +1757,7 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 
 func TestWaitForArchiveDaemon(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
+	cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true, NoDaemonAutostart: true}
 	old := archiveDaemonWaitInterval
 	archiveDaemonWaitInterval = time.Millisecond
 	t.Cleanup(func() { archiveDaemonWaitInterval = old })
@@ -1798,7 +1798,7 @@ func TestWaitForArchiveDaemonCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		cfg := config.Config{DataDir: t.TempDir(), RequireDaemon: true}
+		cfg := config.Config{DataDir: t.TempDir(), RequireDaemon: true, NoDaemonAutostart: true}
 		done := make(chan error, 1)
 		go func() {
 			_, _, err := waitForArchiveDaemon(ctx, cfg, "pg")
@@ -1814,7 +1814,7 @@ func TestWaitForArchiveDaemonIncompatible(t *testing.T) {
 	dir := t.TempDir()
 	host, port := testPingServer(t)
 	writeIncompatibleDaemonRuntime(t, dir, host, port, "old", false)
-	_, _, err := waitForArchiveDaemon(t.Context(), config.Config{DataDir: dir, RequireDaemon: true}, "pg")
+	_, _, err := waitForArchiveDaemon(t.Context(), config.Config{DataDir: dir, RequireDaemon: true, NoDaemonAutostart: true}, "pg")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "API version")
 }

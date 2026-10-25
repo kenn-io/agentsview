@@ -63,9 +63,6 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 			if cfg.NoStartDaemon && !cfg.Watch {
 				return fmt.Errorf("%s push: --no-start-daemon requires --watch", name)
 			}
-			if cfg.NoStartDaemon && cfg.Embed {
-				return fmt.Errorf("%s push: --no-start-daemon cannot be combined with --embed", name)
-			}
 			if cfg.Watch {
 				if err := runReplicaPushWatch(backend, cfg, targetName); err != nil {
 					return fmt.Errorf("%s push --watch: %w", name, err)

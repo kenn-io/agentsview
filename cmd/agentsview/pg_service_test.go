@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -578,15 +577,47 @@ func TestPromptYesNo(t *testing.T) {
 	}
 }
 
-func TestServiceRenderNoStartDaemon(t *testing.T) {
+func TestServiceInstallNoStartDaemon(t *testing.T) {
 	for _, kind := range []serviceKind{pgServiceKind, clickHouseServiceKind} {
 		t.Run(kind.Name, func(t *testing.T) {
-			kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
-			spec := serviceSpec{Kind: kind, BinPath: "/usr/local/bin/agentsview", DataDir: "/data", LogPath: "/data/watch.log"}
-			unit := (&systemdManager{kind: kind}).render(spec)
-			assert.Contains(t, unit, `ExecStart="/usr/local/bin/agentsview" `+kind.Name+` push --watch --no-start-daemon`)
-			plist := (&launchdManager{kind: kind}).render(spec)
-			assert.Contains(t, plist, "<string>--watch</string>\n\t\t<string>--no-start-daemon</string>")
+			dataDir := testDataDir(t)
+			t.Setenv("AGENTSVIEW_PG_URL", "")
+			t.Setenv("AGENTSVIEW_CLICKHOUSE_URL", "")
+			writeTestConfig(t, dataDir, `
+[pg]
+url = "postgres://user:pass@db.example.test/agentsview"
+[clickhouse]
+url = "clickhouse://db.example.test:9000/agentsview"
+`)
+			for _, platform := range []string{"systemd", "launchd"} {
+				t.Run(platform, func(t *testing.T) {
+					rr := &recordingRunner{outputs: map[string]string{
+						"loginctl show-user me --property=Linger": "Linger=yes\n",
+					}}
+					home := t.TempDir()
+					var mgr serviceManager
+					original := newServiceManager
+					newServiceManager = func(kind serviceKind) (serviceManager, error) {
+						if platform == "systemd" {
+							mgr = &systemdManager{kind: kind, user: "me", home: home, run: rr.run}
+						} else {
+							mgr = &launchdManager{kind: kind, uid: 501, home: home, run: rr.run}
+						}
+						return mgr, nil
+					}
+					t.Cleanup(func() { newServiceManager = original })
+					cmd := newServiceInstallCommand(kind)
+					cmd.SetArgs([]string{"--no-start-daemon"})
+					require.NoError(t, cmd.Execute())
+					unit, err := os.ReadFile(mgr.unitPath())
+					require.NoError(t, err)
+					if platform == "systemd" {
+						assert.Contains(t, string(unit), " "+kind.Name+" push --watch --no-start-daemon\n")
+					} else {
+						assert.Contains(t, string(unit), "<string>--watch</string>\n\t\t<string>--no-start-daemon</string>")
+					}
+				})
+			}
 		})
 	}
 }

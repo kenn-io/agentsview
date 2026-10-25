@@ -94,11 +94,6 @@ func TestReplicaPushNoStartDaemonValidation(t *testing.T) {
 			assert.Contains(t, err.Error(), "--no-start-daemon requires --watch")
 		})
 	}
-	cmd := newReplicaPushCommand(pgReplica{})
-	cmd.SetArgs([]string{"--watch", "--no-start-daemon", "--embed"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--no-start-daemon cannot be combined with --embed")
 }
 
 func TestBuildServiceSpec_ClickHouseLogAndURL(t *testing.T) {

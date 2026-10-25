@@ -400,9 +400,11 @@ directory.
 If you run your own collector service, use
 `agentsview clickhouse service install --no-start-daemon`. The push service
 waits for that daemon at startup and retries pushes while it restarts, without
-starting a daemon or opening the archive directly. Reinstall existing units with
-this flag to enable it. The default installation still starts a missing daemon
-for hosts that run only the push service.
+starting a daemon or opening the archive directly. To update an existing unit,
+run `agentsview clickhouse service stop`, then
+`agentsview clickhouse service install --no-start-daemon`. Installation starts
+the service with the new flag. The default installation still starts a missing
+daemon for hosts that run only the push service.
 
 `install` requires a literal ClickHouse URL in the effective default target of
 `~/.agentsview/config.toml`, either the legacy `[clickhouse].url` or the target
