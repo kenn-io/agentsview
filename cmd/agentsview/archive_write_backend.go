@@ -362,14 +362,17 @@ func resolveArchiveWriteBackend(
 			tr:     tr,
 		}, func() {}, nil
 	}
-	if appCfg.RequireDaemon {
-		return nil, nil, errNoWritableDaemon
-	}
 	if tr.Mode != transportHTTP && tr.DirectReadOnly {
 		return nil, nil, errors.New(
 			"local daemon owns the SQLite archive but is not " +
 				"responding; refusing to write directly",
 		)
+	}
+	if appCfg.RequireDaemon {
+		if tr.Mode == transportHTTP {
+			return nil, nil, fmt.Errorf("daemon at %s is read-only: %w", tr.URL, db.ErrReadOnly)
+		}
+		return nil, nil, errNoWritableDaemon
 	}
 
 	database, writeLock, err := openWriteDB(ctx, appCfg)

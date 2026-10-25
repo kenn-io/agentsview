@@ -1727,8 +1727,17 @@ func TestDeferredDuckDBWatchPushKeepsFullUntilARebuild(t *testing.T) {
 }
 
 func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
-	for _, state := range []string{"absent", "unreachable", "read-only"} {
-		t.Run(state, func(t *testing.T) {
+	for _, tt := range []struct {
+		state       string
+		wantErr     error
+		wantMessage string
+	}{
+		{state: "absent", wantErr: errNoWritableDaemon},
+		{state: "unreachable", wantMessage: "local daemon owns the SQLite archive but is not responding; refusing to write directly"},
+		{state: "read-only", wantErr: db.ErrReadOnly, wantMessage: "is read-only"},
+		{state: "incompatible", wantMessage: "daemon API version 0 is incompatible with client API version"},
+	} {
+		t.Run(tt.state, func(t *testing.T) {
 			dir := t.TempDir()
 			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
 			starts := 0
@@ -1736,18 +1745,28 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 				starts++
 				return nil, errors.New("unexpected autostart")
 			})
-			switch state {
+			switch tt.state {
 			case "unreachable":
 				writeUnreachableDaemonRuntime(t, dir, false)
 			case "read-only":
 				host, port := testPingServer(t)
 				writeDaemonRuntimeForTest(t, dir, host, port, version, true)
+			case "incompatible":
+				host, port := testPingServer(t)
+				writeIncompatibleDaemonRuntime(t, dir, host, port, version, false)
 			}
 			_, cleanup, err := resolveArchiveWriteBackend(t.Context(), cfg, transportIntentLongLived)
 			if cleanup != nil {
 				cleanup()
 			}
-			require.ErrorIs(t, err, errNoWritableDaemon)
+			require.Error(t, err)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
+			if tt.wantMessage != "" {
+				assert.ErrorContains(t, err, tt.wantMessage)
+				assert.NotErrorIs(t, err, errNoWritableDaemon)
+			}
 			assert.Zero(t, starts)
 			assert.NoFileExists(t, cfg.DBPath)
 		})

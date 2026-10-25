@@ -545,6 +545,9 @@ when no compatible daemon is running. That includes local `sync`,
 daemon is known to own the archive but is not reachable, these commands refuse
 instead of writing directly.
 
+With `--no-start-daemon`, `pg push --watch` and `clickhouse push --watch` require
+an existing writable daemon.
+
 Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. Commands that require
 the daemon refuse while it is disabled. Direct write commands acquire the local
 write-owner lock before opening SQLite. If another process owns that lock, the
@@ -1315,7 +1318,8 @@ for setup notes.
 Use `service install --no-start-daemon` with your own collector. The push
 service exits if no writable daemon is running, and the service manager restarts
 it until the collector answers. Reinstalling restarts the service with the new
-arguments. The default installation still starts a missing daemon.
+arguments. The default installation still starts a missing daemon. Reinstalling
+without `--no-start-daemon` restores daemon autostart.
 
 ```bash
 agentsview pg service install
@@ -1407,7 +1411,8 @@ ClickHouse has no vector phase. `--all --watch` is rejected.
 
 `clickhouse serve` accepts the same serve flags as `pg serve`.
 `clickhouse service` installs `clickhouse push --watch` as a launchd or systemd
-user unit and writes `clickhouse-watch.log`.
+user unit and writes `clickhouse-watch.log`. Use
+`clickhouse service install --no-start-daemon` with your own collector.
 
 ______________________________________________________________________
 
