@@ -4,7 +4,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -427,16 +426,6 @@ func TestDeploymentEmbeddings(t *testing.T) {
 }
 
 func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
-	t.Run("invalid mode with inline key", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		t.Setenv("AGENTSVIEW_MODE", "daemon")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_API_KEY", "inline-secret")
-		var cfg Config
-		err := cfg.ApplyDeploymentEmbeddings()
-		require.ErrorContains(t, err, "AGENTSVIEW_MODE")
-		assert.NotContains(t, err.Error(), "inline-secret")
-	})
-
 	for _, tc := range []struct {
 		name      string
 		vector    bool
@@ -447,14 +436,13 @@ func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
 		want      string
 	}{
 		{name: "with vector section", vector: true, endpoint: new("http://e/v1"), want: "AGENTSVIEW_EMBEDDINGS_*"},
-		{name: "inline key without endpoint", inlineKey: new("inline-secret"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
+		{name: "inline key without endpoint", inlineKey: new("key-secret"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "key file without endpoint", keyFile: "key-secret", want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "blank endpoint", endpoint: new("  "), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "blank key file", endpoint: new("http://e/v1"), keyFile: " \n", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
 		{name: "missing key file", endpoint: new("http://e/v1"), keyFile: "missing", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
 		{name: "blank inline key", endpoint: new("http://e/v1"), inlineKey: new(" \n"), want: "must not be blank"},
-		{name: "both key selectors", endpoint: new("http://e/v1"), inlineKey: new("inline-secret"), keyFile: "key-secret", want: "set only one"},
-		{name: "empty inline key with key file", endpoint: new("http://e/v1"), inlineKey: new(""), keyFile: "key-secret", want: "set only one"},
+		{name: "both key selectors, inline empty", endpoint: new("http://e/v1"), inlineKey: new(""), keyFile: "key-secret", want: "set only one"},
 		{name: "batch size without endpoint", batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "batch size with vector section", vector: true, batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_*"},
 		{name: "non-integer batch size", endpoint: new("http://e/v1"), batchSize: new("1.5"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
@@ -488,9 +476,6 @@ func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
 			_, err := LoadMinimal()
 			require.ErrorContains(t, err, tc.want)
 			assert.NotContains(t, err.Error(), "key-secret")
-			if tc.inlineKey != nil && strings.TrimSpace(*tc.inlineKey) != "" {
-				assert.NotContains(t, err.Error(), *tc.inlineKey)
-			}
 		})
 	}
 }

@@ -144,6 +144,10 @@ func TestInvalidDeploymentModeAppliesNoDeploymentSettings(t *testing.T) {
 			err := cfg.ApplyDeploymentEmbeddings()
 			return cfg.DeploymentEmbeddings != nil, err
 		}},
+		{name: "embeddings inline key", env: "AGENTSVIEW_EMBEDDINGS_API_KEY", value: "key-secret", apply: func(cfg *Config) (bool, error) {
+			err := cfg.ApplyDeploymentEmbeddings()
+			return cfg.DeploymentEmbeddings != nil, err
+		}},
 		{name: "pg allow insecure", env: "AGENTSVIEW_PG_ALLOW_INSECURE", value: "true", apply: func(cfg *Config) (bool, error) {
 			pg, err := cfg.ResolvePG()
 			return pg.AllowInsecure, err
