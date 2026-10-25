@@ -361,6 +361,9 @@ so systemd's `Restart=on-failure` retries; `--background` exits with status 0.
 Open that URL to use the web UI. Stopping the server with either `daemon stop`
 or `serve stop` also stops its sync and file watchers. `--no-sync` disables
 automatic sync in that process; it does not create a separate sync daemon.
+When an upgrade needs a full archive rebuild, `--no-sync` skips it at startup
+and says so. Until the rebuild runs, sessions that need the new parsers are
+missing. Click **Sync** in the web UI or run `agentsview sync` to rebuild.
 
 ```bash
 agentsview serve [flags]

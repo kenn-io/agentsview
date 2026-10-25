@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "Keyboard shortcuts (?)",
   "status_bar_archive_stale": "Archive results may be stale.",
   "status_bar_archive_rebuilding": "Archive results may be stale. Changes are paused until the rebuild finishes.",
+  "status_bar_archive_stale_rebuild": "Archive results may be stale. Click to rebuild.",
+  "status_bar_sync_failed": "Sync failed",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

@@ -79,6 +79,19 @@ func requireProcessingComplete(stats syncpkg.SyncStats) error {
 	return errors.New("local sync processing incomplete")
 }
 
+// requireArchiveRebuilt fails an in-process sync that left the archive stale.
+// When a required rebuild aborts, the engine falls back to an incremental pass,
+// so without this check the caller would see success while sessions that need
+// the new parsers stay missing.
+func (s *Server) requireArchiveRebuilt() error {
+	if !s.archiveStale() {
+		return nil
+	}
+	return errors.New("the required archive rebuild did not complete, so " +
+		"sessions that need the new parsers may be missing; check the " +
+		"server log for the reason, then run Sync again")
+}
+
 type remoteSyncFailure struct {
 	Host config.RemoteHost `json:"host"`
 	Err  string            `json:"error"`
@@ -404,7 +417,10 @@ func (s *Server) runSyncWithResyncFallback(
 	if err != nil {
 		return stats, err
 	}
-	return stats, requireProcessingComplete(stats)
+	if err := requireProcessingComplete(stats); err != nil {
+		return stats, err
+	}
+	return stats, s.requireArchiveRebuilt()
 }
 
 func (s *Server) humaTriggerResync(
@@ -462,7 +478,10 @@ func (s *Server) runResyncWithFallback(
 	if err != nil {
 		return stats, err
 	}
-	return stats, requireProcessingComplete(stats)
+	if err := requireProcessingComplete(stats); err != nil {
+		return stats, err
+	}
+	return stats, s.requireArchiveRebuilt()
 }
 
 func (s *Server) humaSyncRemotes(

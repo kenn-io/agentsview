@@ -40,6 +40,12 @@ The latest release is
 
 **Bug fixes**
 
+- When an upgrade leaves the archive needing a full rebuild, the **Sync**
+  button now runs that rebuild on every server, and the status bar shows when a
+  sync fails instead of staying silent. A rebuild that does not finish is
+  reported as a failed sync rather than a success, so sessions missing from
+  updated parsers, such as newer OpenCode sessions, no longer go unnoticed.
+  `serve --no-sync` also says at startup when the archive needs a rebuild.
 - Usage notes keep a straight accent on the leading edge of the card. The
   accent no longer bends around the card's rounded corners.
 - Foreground `agentsview serve` now exits with status 1 when a server is already

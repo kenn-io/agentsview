@@ -367,6 +367,86 @@ describe("SyncStore.triggerSync", () => {
   });
 });
 
+describe("SyncStore.triggerSync stale archive", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const s = sync as unknown as Record<string, unknown>;
+    s.syncing = false;
+    s.progress = null;
+    s.serverVersion = null;
+    s.archiveStale = false;
+    s.lastSyncError = null;
+    s.syncCompleteListeners = [];
+  });
+
+  afterEach(() => {
+    const s = sync as unknown as Record<string, unknown>;
+    s.archiveStale = false;
+    s.lastSyncError = null;
+  });
+
+  it("rebuilds the archive instead of syncing when it is stale", async () => {
+    mockResyncSuccess();
+    const s = sync as unknown as Record<string, unknown>;
+    s.archiveStale = true;
+    const onComplete = vi.fn();
+
+    sync.triggerSync(onComplete);
+
+    await vi.waitFor(() => {
+      expect(onComplete).toHaveBeenCalled();
+    });
+    expect(api.triggerSync).not.toHaveBeenCalled();
+    expect(api.triggerResync).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds the archive when the server rejects a sync as needing one", async () => {
+    vi.mocked(api.triggerSync).mockReturnValue({
+      abort: vi.fn(),
+      done: Promise.reject(new api.ApiError(409, "archive data version changed")),
+    });
+    mockResyncSuccess();
+    const onComplete = vi.fn();
+
+    sync.triggerSync(onComplete);
+
+    await vi.waitFor(() => {
+      expect(onComplete).toHaveBeenCalled();
+    });
+    expect(api.triggerSync).toHaveBeenCalledTimes(1);
+    expect(api.triggerResync).toHaveBeenCalledTimes(1);
+    expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+    expect(sync.lastSyncError).toBeNull();
+    expect(reportSyncFailed).not.toHaveBeenCalled();
+  });
+
+  it("keeps a sync failure for the status bar until a sync succeeds", async () => {
+    const error = new Error("the required archive rebuild did not complete");
+    vi.mocked(api.triggerSync).mockReturnValue({ abort: vi.fn(), done: Promise.reject(error) });
+
+    sync.triggerSync();
+
+    await vi.waitFor(() => {
+      expect(sync.lastSyncError).toBe(error.message);
+    });
+    expect(api.triggerResync).not.toHaveBeenCalled();
+    expect(sync.syncing).toBe(false);
+
+    vi.mocked(api.triggerSync).mockReturnValue({
+      abort: vi.fn(),
+      done: Promise.resolve(MOCK_STATS),
+    });
+    mockResyncSuccess();
+    const onComplete = vi.fn();
+    sync.triggerSync(onComplete);
+
+    await vi.waitFor(() => {
+      expect(onComplete).toHaveBeenCalled();
+    });
+    expect(sync.lastSyncError).toBeNull();
+  });
+});
+
 describe("SyncStore.triggerResync", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -14,6 +14,21 @@ import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js
 
 type SyncCompleteListener = () => void;
 
+/**
+ * Sync, or rebuild the archive when the server says a plain sync cannot bring
+ * it current. A daemon with a stale archive answers /sync with 409 until the
+ * required full rebuild runs.
+ */
+function syncOrRebuild(onProgress?: (p: SyncProgress) => void): SyncHandle {
+  let current = triggerSync(onProgress);
+  const done = current.done.catch((err: unknown) => {
+    if (!(err instanceof ApiError && err.status === 409)) throw err;
+    current = triggerResync(onProgress);
+    return current.done;
+  });
+  return { abort: () => current.abort(), done };
+}
+
 const POLL_INTERVAL_MS = 10_000;
 
 /**
@@ -34,6 +49,9 @@ export function commitsDisagree(a: string | undefined, b: string | undefined): b
 class SyncStore {
   archiveStale: boolean = $state(false);
   syncing: boolean = $state(false);
+  // Message from the last sync or resync that failed, cleared when one
+  // succeeds. The header Sync button has no other place to report it.
+  lastSyncError: string | null = $state(null);
   progress: SyncProgress | null = $state(null);
   lastSync: string | null = $state(null);
   lastSyncStats: SyncStats | null = $state(null);
@@ -237,7 +255,9 @@ class SyncStore {
       void this.refreshReadOnly(onComplete);
       return;
     }
-    this.runSync(triggerSync, onComplete);
+    // A stale archive only becomes current through a full rebuild, which a
+    // plain sync does not run on a daemon with a sync engine.
+    this.runSync(this.archiveStale ? triggerResync : syncOrRebuild, onComplete);
   }
 
   triggerResync(onComplete?: () => void, onError?: (err: Error) => void): boolean {
@@ -287,6 +307,7 @@ class SyncStore {
 
     handle.done
       .then((s: SyncStats) => {
+        this.lastSyncError = null;
         this.lastSyncStats = s;
         void this.loadStats();
         finalizeSync();
@@ -311,7 +332,9 @@ class SyncStore {
       });
 
     handle.done.catch((err: unknown) => {
-      if (!isAbortError(err)) reportSyncFailed(err);
+      if (isAbortError(err)) return;
+      this.lastSyncError = err instanceof Error ? err.message : "Sync failed";
+      reportSyncFailed(err);
     });
 
     return true;

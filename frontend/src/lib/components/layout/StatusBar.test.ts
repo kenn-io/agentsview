@@ -46,6 +46,7 @@ describe("StatusBar", () => {
     sync.progress = null;
     sync.syncing = false;
     sync.archiveStale = false;
+    sync.lastSyncError = null;
   });
 
   it("shows stale results guidance until the archive is current", async () => {
@@ -76,6 +77,54 @@ describe("StatusBar", () => {
     sync.archiveStale = false;
     await tick();
     expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    await unmount(component);
+  });
+
+  it("offers to rebuild a stale archive from the status bar", async () => {
+    sync.archiveStale = true;
+    const triggerSync = vi.spyOn(sync, "triggerSync").mockImplementation(() => {});
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    const button = Array.from(document.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Click to rebuild."),
+    );
+    expect(button).toBeDefined();
+    button!.click();
+    expect(triggerSync).toHaveBeenCalledTimes(1);
+    triggerSync.mockRestore();
+    await unmount(component);
+  });
+
+  it("does not offer a rebuild on a read-only backend", async () => {
+    sync.archiveStale = true;
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      api_version: 10,
+      data_version: 1,
+      insight_generation_available: false,
+      friction_available: false,
+      session_stats_available: false,
+      read_only: true,
+    };
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Click to rebuild.");
+    await unmount(component);
+  });
+
+  it("shows the last sync failure until the next sync starts", async () => {
+    sync.lastSyncError = "the required archive rebuild did not complete";
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    const failure = document.querySelector('[role="alert"]');
+    expect(failure?.textContent?.trim()).toBe("Sync failed");
+    expect(failure?.getAttribute("title")).toBe(sync.lastSyncError);
+    sync.syncing = true;
+    await tick();
+    expect(document.body.textContent).not.toContain("Sync failed");
     await unmount(component);
   });
 

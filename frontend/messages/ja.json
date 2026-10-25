@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "キーボードショートカット(?)",
   "status_bar_archive_stale": "アーカイブの結果が古い可能性があります。",
   "status_bar_archive_rebuilding": "アーカイブの結果が古い可能性があります。再構築が完了するまで変更は一時停止されています。",
+  "status_bar_archive_stale_rebuild": "アーカイブの結果が古い可能性があります。クリックして再構築します。",
+  "status_bar_sync_failed": "同期に失敗しました",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

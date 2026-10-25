@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "键盘快捷键 (?)",
   "status_bar_archive_stale": "存档结果可能已过时。",
   "status_bar_archive_rebuilding": "存档结果可能已过时。重建完成前，修改操作已暂停。",
+  "status_bar_archive_stale_rebuild": "存档结果可能已过时。点击以重建。",
+  "status_bar_sync_failed": "同步失败",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

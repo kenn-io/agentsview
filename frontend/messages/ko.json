@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "키보드 단축키 (?)",
   "status_bar_archive_stale": "아카이브 결과가 오래되었을 수 있습니다.",
   "status_bar_archive_rebuilding": "아카이브 결과가 오래되었을 수 있습니다. 재구축이 끝날 때까지 변경이 일시 중지됩니다.",
+  "status_bar_archive_stale_rebuild": "아카이브 결과가 오래되었을 수 있습니다. 클릭하여 재구축하세요.",
+  "status_bar_sync_failed": "동기화 실패",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

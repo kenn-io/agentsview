@@ -3894,3 +3894,25 @@ func TestCollectWatchRootsWatchesAliasHomeIndexes(t *testing.T) {
 	require.True(t, ok, "the alias home must be watched for session_index.jsonl")
 	assert.False(t, aliasRoot.recursive)
 }
+
+func TestNoSyncRebuildNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		noSync, archiveOnly, needsSync bool
+		want                           bool
+	}{
+		{"no-sync with stale archive", true, false, true, true},
+		{"no-sync with current archive", true, false, false, false},
+		{"syncing daemon rebuilds at startup", false, false, true, false},
+		{"archive-only rebuilds at startup", true, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notice := noSyncRebuildNotice(tc.noSync, tc.archiveOnly, tc.needsSync)
+			if tc.want {
+				assert.Contains(t, notice, "Click Sync")
+			} else {
+				assert.Empty(t, notice)
+			}
+		})
+	}
+}

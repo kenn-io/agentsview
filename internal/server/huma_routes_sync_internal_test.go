@@ -1603,6 +1603,35 @@ func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
 	assertOnlySessionFirstMessageContains(t, f.db, "stale no sync route")
 }
 
+// TestHumaLocalSyncReportsIncompleteArchiveRebuild covers a --no-sync daemon
+// whose required rebuild aborts. The engine falls back to an incremental pass,
+// so the route must report the still-stale archive instead of success.
+func TestHumaLocalSyncReportsIncompleteArchiveRebuild(t *testing.T) {
+	for _, path := range []string{"/api/v1/sync", "/api/v1/resync"} {
+		t.Run(path, func(t *testing.T) {
+			f := newSyncRouteFixture(t, withStaleDB())
+			// An archived file-backed session whose source is gone makes the
+			// rebuild find nothing to replace it with, so the swap aborts.
+			first := "archived before the upgrade"
+			require.NoError(t, f.db.UpsertSession(t.Context(), db.Session{
+				ID: "claude:gone", Agent: "claude", Project: "proj",
+				FirstMessage: &first, MessageCount: 1,
+				FilePath: new(filepath.Join(f.claudeDir, "proj", "gone.jsonl")),
+			}))
+			require.NoError(t, os.MkdirAll(f.claudeDir, 0o755))
+			require.True(t, f.db.NeedsResync())
+			require.Nil(t, f.srv.engine)
+
+			body := serveJSON(t, f.handler, http.MethodPost, path, nil).Body.String()
+
+			assert.Contains(t, body, "event: error")
+			assert.NotContains(t, body, "event: done")
+			assert.Contains(t, body, "the required archive rebuild did not complete")
+			assert.True(t, f.db.NeedsResync())
+		})
+	}
+}
+
 // TestHumaTriggerSyncWorkerBackedRejectsStaleArchive pins the new UX: with the
 // worker-backed runner wired, /sync on a stale archive returns 409 pointing at
 // /resync and never runs the runner, since the worker refuses to swap the
