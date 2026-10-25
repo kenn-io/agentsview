@@ -1710,3 +1710,31 @@ func projectIdentitySHA(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+func TestCopySessionMetadataKeepsFreshIdentityOverEmptyPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	ctx := t.Context()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(ctx, oldPath)
+	require.NoError(t, err)
+	// The insert trigger leaves a keyless placeholder with no root.
+	require.NoError(t, oldDB.UpsertSession(ctx, Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "antigravity",
+	}))
+	require.NoError(t, oldDB.Close())
+
+	fresh := testDB(t)
+	root := filepath.Join(dir, "workspace")
+	require.NoError(t, fresh.UpsertSession(ctx, Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "antigravity", Cwd: root,
+	}))
+	require.NoError(t, fresh.UpsertProjectIdentityObservation(ctx, export.ProjectIdentityObservation{
+		SessionID: "session-a", Project: "app", Machine: "host", RootPath: root,
+	}))
+
+	require.NoError(t, fresh.CopySessionMetadataFrom(oldPath))
+	publishable, err := fresh.ListPublishableSessionProjectIdentitySnapshots(ctx, []string{"session-a"}, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, publishable, 1, "an evidence-free placeholder must not replace the fresh identity")
+	assert.Equal(t, root, publishable[0].RootPath)
+}
