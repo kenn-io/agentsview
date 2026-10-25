@@ -36,6 +36,9 @@ type ReplicaPushConfig struct {
 	// Embed builds pending embeddings in this process before each push
 	// (pg push --embed). It requires the local archive writer.
 	Embed bool
+	// OnPushSuccess refreshes serve-side capabilities after a watch push. It
+	// is set only by the combined PG serve/watch owner.
+	OnPushSuccess func(context.Context)
 	// ScopeVectorsToChangedSessions is set internally by the watch
 	// loop for change-triggered pushes; it has no CLI flag.
 	ScopeVectorsToChangedSessions bool
@@ -524,18 +527,26 @@ func loadReplicaServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 }
 
 type replicaServeStartup struct {
-	cfg         config.Config
-	ctx         context.Context
-	rtOpts      serveRuntimeOptions
-	srv         *server.Server
-	cleanup     func()
-	startWorker func()
+	cfg          config.Config
+	ctx          context.Context
+	rtOpts       serveRuntimeOptions
+	srv          *server.Server
+	cleanup      func()
+	startWorker  func()
+	workerResult <-chan error
 }
 
 var prepareReplicaServe = prepareReplicaServeImpl
 
 func prepareReplicaServeImpl(
 	backend storage.Replica, appCfg config.Config, basePath string,
+) (replicaServeStartup, error) {
+	return prepareReplicaServeWithWatch(backend, appCfg, basePath, nil)
+}
+
+func prepareReplicaServeWithWatch(
+	backend storage.Replica, appCfg config.Config, basePath string,
+	watch *replicaServeWatch,
 ) (replicaServeStartup, error) {
 	name := backend.Name()
 	if err := validateServeConfig(appCfg); err != nil {
@@ -636,10 +647,17 @@ func prepareReplicaServeImpl(
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(rtOpts.BasePath))
 	}
-	return replicaServeStartup{
+	startup := replicaServeStartup{
 		cfg: appCfg, ctx: ctx, rtOpts: rtOpts,
 		srv: server.New(appCfg, store, nil, opts...), cleanup: cleanup,
-	}, nil
+	}
+	if watch != nil {
+		if err := attachReplicaServeWatch(&startup, stop, backend, store, watch); err != nil {
+			cleanup()
+			return replicaServeStartup{}, err
+		}
+	}
+	return startup, nil
 }
 
 // supportsInsightGeneration reports whether a replica store proved at startup
@@ -650,6 +668,10 @@ func supportsInsightGeneration(store storage.ReplicaStore) bool {
 }
 
 func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath string) {
+	runReplicaServeWithWatch(backend, appCfg, basePath, nil)
+}
+
+func runReplicaServeWithWatch(backend storage.Replica, appCfg config.Config, basePath string, watch *replicaServeWatch) {
 	name := backend.Name()
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
@@ -658,7 +680,13 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 		}
 	}
 
-	startup, err := prepareReplicaServe(backend, appCfg, basePath)
+	var startup replicaServeStartup
+	var err error
+	if watch == nil {
+		startup, err = prepareReplicaServe(backend, appCfg, basePath)
+	} else {
+		startup, err = prepareReplicaServeWithWatch(backend, appCfg, basePath, watch)
+	}
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -719,6 +747,14 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		return fmt.Errorf("%s serve: %w", name, err)
+	}
+	if startup.workerResult != nil {
+		// The worker sends before cancelling the serve context.
+		select {
+		case err := <-startup.workerResult:
+			return err
+		default:
+		}
 	}
 	return nil
 }
