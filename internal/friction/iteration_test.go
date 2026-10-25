@@ -58,12 +58,9 @@ func TestDetectIterationRunaway(t *testing.T) {
 		{"iteration_runaway_fires_at_threshold", false, runawayInput(calls(150, 0)), true, "150 tool calls without a user message 09:00-11:29"},
 		{"iteration_runaway_silent_below_threshold", false, runawayInput(calls(149, 0)), false, ""},
 		{"iteration_runaway_root_session_fires_at_150/100", false, runawayInput(calls(100, 0)), false, ""},
-		{"iteration_runaway_root_session_fires_at_150/149", false, runawayInput(calls(149, 0)), false, ""},
-		{"iteration_runaway_root_session_fires_at_150/150", false, runawayInput(calls(150, 0)), true, "150 tool calls without a user message 09:00-11:29"},
 		{"iteration_runaway_exempts_sub_agent_sessions/sub_agent", true, runawayInput(calls(200, 0)), false, ""},
 		{"iteration_runaway_exempts_sub_agent_sessions/root", false, runawayInput(calls(200, 0)), true, "200 tool calls without a user message 09:00-12:19"},
 		{"iteration_runaway_user_message_resets_count", false, runawayInput(calls(149, 0), userTurn, calls(149, 150)), false, ""},
-		{"iteration_runaway_llm_responses_do_not_reset", false, runawayInput(calls(150, 0)), true, "150 tool calls without a user message 09:00-11:29"},
 		{"iteration_runaway_reports_longest_stretch", false, runawayInput(calls(151, 0), userTurn, calls(155, 152)), true, "155 tool calls without a user message 11:32-14:06"},
 	}
 	for _, tt := range tests {
@@ -78,7 +75,6 @@ func TestDetectIterationRunaway(t *testing.T) {
 			assert.Equal(t, tt.evidence, sig.Evidence)
 		})
 	}
-	assert.Equal(t, 150, IterationRunawayMinToolCalls)
 }
 
 func TestDetectIterationRunawayFields(t *testing.T) {

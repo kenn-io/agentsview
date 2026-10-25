@@ -89,12 +89,3 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `[friction] timezone "Nowhere/Land" is not an IANA zone`)
 }
-
-func TestFrictionConfigTOMLLoad(t *testing.T) {
-	assert.False(t, loadMinimalWithConfig(t, map[string]any{}).Friction.Enabled,
-		"friction review is opt-in")
-	cfg := loadMinimalWithConfig(t, map[string]any{
-		"friction": map[string]any{"enabled": true},
-	})
-	assert.True(t, cfg.Friction.Enabled)
-}

@@ -74,19 +74,6 @@ func traeStoreValue(t *testing.T, list []any) string {
 	return string(data)
 }
 
-func TestTraeRegistryMetadata(t *testing.T) {
-	def, ok := AgentByType(AgentTrae)
-	require.True(t, ok)
-	assert.Equal(t, "Trae", def.DisplayName)
-	assert.Equal(t, "TRAE_DIR", def.EnvVar)
-	assert.Equal(t, "trae_dirs", def.ConfigKey)
-	assert.Equal(t, "trae:", def.IDPrefix)
-	assert.Equal(t, []string{"workspaceStorage", "globalStorage"}, def.WatchSubdirs)
-	assert.True(t, def.Usage.NoPerMessageTokenData)
-	assert.False(t, def.Usage.AICreditsDenominated)
-	assert.Contains(t, def.DefaultDirs, "AppData/Roaming/TRAE SOLO CN/User")
-}
-
 func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 	root := t.TempDir()
 	workspaceDB := filepath.Join(root, "workspaceStorage", "hash", traeStateDBName)

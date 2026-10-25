@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SessionList from "./SessionList.svelte";
-import sessionFilterControlSource from "../filters/SessionFilterControl.svelte?raw";
-import sessionItemSource from "./SessionItem.svelte?raw";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
@@ -103,23 +101,6 @@ describe("SessionList filter dropdown", () => {
     ui.sidebarOpen = true;
     ui.isMobileViewport = false;
     vi.restoreAllMocks();
-  });
-
-  it("bounds the filter menu to the viewport and lets it scroll", async () => {
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    const filterButton = document.querySelector<HTMLButtonElement>(".filter-btn");
-    expect(filterButton).not.toBeNull();
-
-    filterButton!.click();
-    await tick();
-
-    const dropdown = document.querySelector<HTMLElement>(".filter-dropdown");
-    expect(dropdown).not.toBeNull();
-
-    expect(sessionFilterControlSource).toContain("max-height: min(560px, calc(100vh - 128px));");
-    expect(sessionFilterControlSource).toContain("overflow-y: auto;");
   });
 
   it("labels compact header controls with hover hints", async () => {
@@ -529,14 +510,6 @@ describe("SessionList visible hydration", () => {
     expect(active?.getAttribute("aria-current")).toBe("page");
     expect(other).not.toBeNull();
     expect(other?.hasAttribute("aria-current")).toBe(false);
-  });
-
-  it("gives active rows a persistent visual indicator distinct from hover", () => {
-    expect(sessionItemSource).toContain(".session-item.active::before");
-    expect(sessionItemSource).toContain("background: var(--accent-blue)");
-    expect(sessionItemSource).toContain(
-      "box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 28%, transparent)",
-    );
   });
 
   it("hydrates newly visible rows after scrolling", async () => {

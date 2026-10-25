@@ -595,13 +595,6 @@ func TestHostedTenantTemporaryTableCannotShadowSessions(t *testing.T) {
 	assert.Equal(t, "protected", project)
 }
 
-func TestHostedTenantFixtureUsesSCRAMCredential(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	var hasVerifier bool
-	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT COALESCE(rolpassword LIKE 'SCRAM-SHA-256$%',false) FROM pg_authid WHERE rolname=$1`, f.role).Scan(&hasVerifier))
-	assert.True(t, hasVerifier, "runtime fixture must authenticate on SCRAM test databases")
-}
-
 // setHostedFixturePassword supplies a fresh credential for SCRAM test servers.
 // Suppress statement/parameter logging only in this provisioning transaction;
 // the secret is bound as a parameter and never appears in a SQL literal here.

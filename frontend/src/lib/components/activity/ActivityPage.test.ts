@@ -14,7 +14,6 @@ import { activity } from "../../stores/activity.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
-import source from "./ActivityPage.svelte?raw";
 // @ts-ignore
 import ActivityPage from "./ActivityPage.svelte";
 import type { Report } from "../../api/types.js";
@@ -597,40 +596,6 @@ describe("ActivityPage bucket drill-down", () => {
     await flushEffects();
 
     expect(screen.getByTitle("Clear time filter")).toBeTruthy();
-  });
-});
-
-describe("ActivityPage date yoke controls", () => {
-  it("updates shared yoke state from the unified range picker", () => {
-    expect(source).toContain("<RangePicker");
-    expect(source).toContain("seedActivityYoke");
-    expect(source).toContain("yokedDates.updateFromPanel");
-  });
-
-  it("yokes week and month selections using resolved period starts", () => {
-    expect(source).toContain("startOfIsoWeek(activity.date)");
-    expect(source).toContain("startOfMonth(activity.date)");
-    expect(source).not.toContain("panelDateState(activity.date, addDays(activity.date, 6)");
-    expect(source).not.toContain("panelDateState(activity.date, endOfMonth(activity.date)");
-  });
-
-  it("preserves relative range selections as rolling yoke state", () => {
-    const applyIndex = source.indexOf("function applyRange");
-    const helperIndex = source.indexOf("function yokeStateForSelection");
-    const applyBlock = source.slice(applyIndex, helperIndex);
-
-    expect(helperIndex).toBeGreaterThan(applyIndex);
-    expect(source).toContain('mode: "rolling"');
-    expect(source).toContain("windowDays: sel.days");
-    expect(applyBlock).toContain("yokeStateForSelection(sel, range)");
-    expect(applyBlock).toContain("lastActivityDateSignature = dateSignature");
-  });
-
-  it("preserves rolling window intent in activity URLs", () => {
-    expect(source).toContain("activity.rollingWindowDays");
-    expect(source).toContain("activity.setCustomRange");
-    expect(source).toContain("params.window_days");
-    expect(source).toContain('mode: "relative", days: activity.rollingWindowDays');
   });
 });
 

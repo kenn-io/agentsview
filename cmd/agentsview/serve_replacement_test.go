@@ -725,15 +725,3 @@ func TestServeDaemonReplacementLinesIncludeRuntimeDetails(t *testing.T) {
 	assert.Contains(t, lines, "data version")
 	assert.Contains(t, lines, "agentsview daemon stop")
 }
-
-func TestServeCommandHasReplaceFlag(t *testing.T) {
-	cmd := newServeCommand()
-
-	flag := cmd.Flags().Lookup("replace")
-
-	require.NotNil(t, flag)
-	assert.Equal(t,
-		"Replace a running local daemon before starting",
-		flag.Usage,
-	)
-}

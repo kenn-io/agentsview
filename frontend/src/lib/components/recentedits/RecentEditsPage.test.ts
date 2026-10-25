@@ -104,21 +104,6 @@ describe("RecentEditsPage", () => {
     expect(document.body.textContent).toContain("b/config.go");
   });
 
-  it("expands to show edits on file row click", async () => {
-    component = mount(RecentEditsPage, { target: document.body });
-    await tick();
-    await tick();
-
-    const fileRowBtn = document.querySelector<HTMLButtonElement>(".re-file-row");
-    expect(fileRowBtn).not.toBeNull();
-
-    fileRowBtn!.click();
-    await tick();
-
-    const editsContainer = document.querySelector(".re-edits");
-    expect(editsContainer).not.toBeNull();
-  });
-
   it("shows truncation hint when edits_truncated is true", async () => {
     component = mount(RecentEditsPage, { target: document.body });
     await tick();

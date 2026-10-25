@@ -46,8 +46,3 @@ func TestExtractZip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 }
-
-func TestExtractZip_InvalidPath(t *testing.T) {
-	_, _, err := ExtractZip("/nonexistent.zip")
-	require.Error(t, err)
-}

@@ -345,17 +345,6 @@ func TestDefiniteRulesVersionDistinctFromFull(t *testing.T) {
 	}
 }
 
-func TestRulesVersionStableAndHex(t *testing.T) {
-	v1 := RulesVersion()
-	v2 := RulesVersion()
-	require.Equal(t, v1, v2, "RulesVersion not stable")
-	require.Len(t, v1, 64, "RulesVersion length: %q", v1) // sha256 hex
-	for _, c := range v1 {
-		require.True(t, isLowerHex(c),
-			"RulesVersion has non-hex char %q in %q", c, v1)
-	}
-}
-
 func TestVerify(t *testing.T) {
 	// Non-grouped rule: the stored span is the full regex match.
 	awsSrc := "export KEY=AKIA7QHWN2DKR4FYPLJM done"

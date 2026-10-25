@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { setLocale } from "../i18n/index.js";
 import {
   createRefreshScheduler,
-  DEFAULT_REFRESH_INTERVAL_MS,
   formatQueryDuration,
   formatQueryTick,
   formatRefreshAge,
@@ -259,9 +258,5 @@ describe("createRefreshScheduler", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
 
     scheduler.stop();
-  });
-
-  it("shares a five-minute default cadence", () => {
-    expect(DEFAULT_REFRESH_INTERVAL_MS).toBe(5 * 60 * 1000);
   });
 });

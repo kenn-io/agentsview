@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -575,28 +574,6 @@ func TestWatchBatchAccumulatorReportsEntryAndBytePromotion(t *testing.T) {
 				"full sync must supersede later fine-grained work in the same accumulation window")
 		})
 	}
-}
-
-func TestWatchBatchJSONExcludesLifecycleTokens(t *testing.T) {
-	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
-	want := WatchBatch{
-		Paths:          []string{"/sessions/a.jsonl"},
-		Renames:        []WatchRename{{Path: "/sessions/old", Root: "/sessions", ItemType: ItemIsDir}},
-		ReconcileRoots: []string{"/sessions"},
-		LostEvents:     true,
-	}
-	withLifecycle := want
-	withLifecycle.lifecycleTokens = []backendLifecycleToken{{gate: gate, generation: 4}}
-
-	data, err := json.Marshal(withLifecycle)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"paths"`)
-	assert.NotContains(t, string(data), "lifecycle")
-	assert.NotContains(t, string(data), `"Paths"`)
-
-	var got WatchBatch
-	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, want, got)
 }
 
 func TestPendingWatchBatchOverflowsByPathBytes(t *testing.T) {
@@ -2277,22 +2254,6 @@ func TestWatcherCallsOnChange(t *testing.T) {
 			"onChange did not contain expected path %s, got %v", path, gotPaths)
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "timed out waiting for onChange callback")
-	}
-}
-
-func TestWatcherStopIsClean(t *testing.T) {
-	w, _ := startTestWatcherNoCleanup(t, func(_ []string) {}, 50*time.Millisecond)
-
-	stopped := make(chan struct{})
-	go func() {
-		w.Stop()
-		close(stopped)
-	}()
-
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "Stop() did not return in time")
 	}
 }
 

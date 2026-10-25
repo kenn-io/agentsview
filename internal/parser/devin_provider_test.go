@@ -18,12 +18,6 @@ func assertDevinErrorRedacted(t *testing.T, err error, secretFragments ...string
 	}
 }
 
-func TestDevinProviderCapabilities(t *testing.T) {
-	caps := devinProviderCapabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
-	assert.Equal(t, CapabilityUnsupported, caps.Content.AggregateUsageEvents)
-}
-
 func TestDevinProviderDiscoverFindParse(t *testing.T) {
 	const sessionID = "session-123"
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{

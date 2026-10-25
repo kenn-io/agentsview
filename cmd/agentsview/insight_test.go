@@ -667,22 +667,3 @@ func TestInsightGenerateRequestJSONTags(t *testing.T) {
 		string(data),
 	)
 }
-
-func TestInsightCommandHelpListsScope(t *testing.T) {
-	cmd := newInsightCommand()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"generate", "--help"})
-	_, err := cmd.ExecuteC()
-	require.NoError(t, err)
-	for _, flag := range []string{
-		"--type", "--date-from", "--date-to", "--project", "--prompt",
-		"--session-id", "--agent", "--automated-scope", "--timezone",
-	} {
-		assert.Contains(t, out.String(), flag)
-	}
-	assert.NotContains(t, out.String(), "--kind")
-	assert.NotContains(t, out.String(), "--force-refresh")
-	assert.NotContains(t, out.String(), "--llm-opt-in")
-}

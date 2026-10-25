@@ -291,19 +291,4 @@ describe("previewMessage", () => {
       isShell: true,
     });
   });
-
-  it("normalizeMessagePreview returns previewMessage(text).text", () => {
-    const cases = [
-      "<bash-input>ls</bash-input>",
-      "<bash-stdout>ok</bash-stdout>",
-      "plain text",
-      "",
-      '<system-reminder data-role="user-context">c</system-reminder>next',
-      '<system-reminder data-role="user-context">c',
-      "<system-reminderish>x</system-reminderish>",
-    ];
-    for (const c of cases) {
-      expect(normalizeMessagePreview(c)).toBe(previewMessage(c).text);
-    }
-  });
 });

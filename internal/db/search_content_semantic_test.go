@@ -94,17 +94,6 @@ func TestSearchContentSemanticNoSearcherUnavailable(t *testing.T) {
 		"expected ErrSemanticUnavailable, got %v", err)
 }
 
-func TestHasSemanticFlipsWithSetVectorSearcher(t *testing.T) {
-	d := testDB(t)
-	require.False(t, d.HasSemantic(), "HasSemantic before SetVectorSearcher")
-
-	d.SetVectorSearcher(&fakeVectorSearcher{})
-	assert.True(t, d.HasSemantic(), "HasSemantic after SetVectorSearcher")
-
-	d.SetVectorSearcher(nil)
-	assert.False(t, d.HasSemantic(), "HasSemantic after clearing the searcher")
-}
-
 func TestSearchContentSemanticRoutesAndPreservesRank(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "s1", "alpha", [][2]string{

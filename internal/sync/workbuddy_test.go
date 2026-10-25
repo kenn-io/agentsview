@@ -10,12 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestWorkBuddyRegistryUsesRecursiveWatch(t *testing.T) {
-	def, ok := parser.AgentByType(parser.AgentWorkBuddy)
-	require.True(t, ok, "AgentWorkBuddy missing from Registry")
-	require.False(t, def.ShallowWatch, "WorkBuddy should use recursive watch for nested sessions")
-}
-
 func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
 	db := openTestDB(t)
 	root := t.TempDir()

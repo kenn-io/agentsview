@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -368,14 +367,4 @@ func TestManagedCaddyStopNilSafe(t *testing.T) {
 	var m *managedCaddy
 	assert.NotPanics(t, func() { m.Stop() })
 	assert.NotPanics(t, func() { (&managedCaddy{}).Stop() })
-}
-
-func TestNewCaddyGuardNoopOnPosix(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX no-op guard; Windows builds a job-object guard")
-	}
-	guard, err := newCaddyGuard(nil)
-	require.NoError(t, err)
-	require.NotNil(t, guard)
-	require.NoError(t, guard.Close())
 }

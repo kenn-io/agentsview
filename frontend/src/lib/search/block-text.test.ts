@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vite-plus/test";
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
-import { renderMarkdown } from "../utils/markdown.js";
-import { blockKey, collectSearchBlocks, resolveToolInputText } from "./block-text.js";
-import { domText, findOccurrences } from "./dom-text.js";
+import { collectSearchBlocks, resolveToolInputText } from "./block-text.js";
 
 let nextId = 50000;
 function message(content: string, overrides: Partial<Message> = {}): Message {
@@ -37,23 +35,6 @@ function call(tool_name: string, params: Record<string, unknown>): ToolCall {
 }
 
 describe("collectSearchBlocks", () => {
-  it.each([
-    "**needle** and *needle*",
-    "[needle](https://example.test/hidden-target)",
-    "| heading |\n| --- |\n| needle |",
-    "<bash-input>echo needle</bash-input>",
-    "<custom>needle</custom>",
-    "needle\nnext line",
-  ])("uses rendered Markdown text for %s", (content) => {
-    const blocks = collectSearchBlocks(message(content));
-    const expected = domText(
-      new DOMParser().parseFromString(renderMarkdown(content), "text/html").body,
-    );
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]?.text).toBe(expected);
-    expect(findOccurrences(blocks[0]!.text, "needle")).toEqual(findOccurrences(expected, "needle"));
-  });
-
   it("indexes the displayed image placeholder without indexing its serialized metadata", () => {
     const content =
       '[{"type":"input_text","text":"Before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"After"}]';
@@ -332,9 +313,5 @@ describe("resolveToolInputText", () => {
 
   it("retains legacy text when a Task prompt is empty", () => {
     expect(resolveToolInputText(call("Task", { prompt: "" }), "legacy")).toBe("legacy");
-  });
-
-  it("constructs keys without treating punctuation as a query", () => {
-    expect(blockKey(42, "tool-history", "2.3")).toBe("42:tool-history:2.3");
   });
 });

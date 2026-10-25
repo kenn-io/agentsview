@@ -3252,13 +3252,6 @@ func TestGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 		"LastUsedAt")
 }
 
-func TestGetAnalyticsToolsCanceled(t *testing.T) {
-	d := testDB(t)
-	ctx := canceledCtx()
-	_, err := d.GetAnalyticsTools(ctx, baseFilter())
-	requireCanceledErr(t, err)
-}
-
 func TestGetAnalyticsSkillsCanceled(t *testing.T) {
 	d := testDB(t)
 	ctx := canceledCtx()

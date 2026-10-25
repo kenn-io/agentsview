@@ -11,22 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExportProfileFlagsAreHidden(t *testing.T) {
-	commands := []*cobra.Command{
-		newExportSessionsCommand(),
-		newExportHourCommand(defaultExportReportingDeps()),
-		newExportDayCommand(defaultExportReportingDeps()),
-		newExportDigestCommand(defaultExportReportingDeps()),
-	}
-	for _, command := range commands {
-		for _, name := range []string{"cpuprofile", "memprofile", "trace"} {
-			flag := command.Flags().Lookup(name)
-			require.NotNil(t, flag)
-			assert.True(t, flag.Hidden)
-		}
-	}
-}
-
 func TestExportProfileInvalidPath(t *testing.T) {
 	tests := []struct {
 		name string

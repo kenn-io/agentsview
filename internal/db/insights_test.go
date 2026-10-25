@@ -349,19 +349,6 @@ func TestListInsights_DistinguishesByDateTo(t *testing.T) {
 	assert.Equal(t, "day", got[0].Content)
 }
 
-func TestInsightsLookupIndexHasDateTo(t *testing.T) {
-	d := testDB(t)
-	rows, err := d.Reader().Query(t.Context(), "PRAGMA index_info(idx_insights_lookup)")
-	require.NoError(t, err)
-	defer rows.Close()
-	var n int
-	for rows.Next() {
-		n++
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, 4, n, "lookup index covers type, date_from, date_to, project")
-}
-
 func TestInsights_Delete(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

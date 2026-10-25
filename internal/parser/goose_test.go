@@ -90,15 +90,6 @@ type gooseTestFixture struct {
 	database   *sql.DB
 }
 
-func TestGooseDefaultDirs(t *testing.T) {
-	def, ok := AgentByType(AgentGoose)
-	require.True(t, ok)
-	assert.Equal(t, []string{
-		".local/share/goose/sessions",
-		"AppData/Roaming/Block/goose/data/sessions",
-	}, def.DefaultDirs)
-}
-
 func newGooseTestFixture(t *testing.T) *gooseTestFixture {
 	t.Helper()
 

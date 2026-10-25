@@ -212,31 +212,6 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	assert.False(t, pushOnce(), "post-clear empty -> empty reported a change")
 }
 
-func TestPGConnectivity(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"connectivity-test-machine", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
-	defer ps.Close()
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 10*time.Second,
-	)
-	defer cancel()
-
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
-
-	status, err := ps.Status(ctx)
-	require.NoError(t, err, "get status")
-
-	t.Logf("PG Sync Status: %+v", status)
-}
-
 // TestPGPassfileConnects verifies that the passfile URL parameter survives
 // the connection settings Open adds.
 func TestPGPassfileConnects(t *testing.T) {

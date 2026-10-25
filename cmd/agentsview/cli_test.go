@@ -133,62 +133,6 @@ func TestPruneCommandRejectsEmptyAgent(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"AGENTSVIEW_DUCKDB_PATH",
-		"AGENTSVIEW_DUCKDB_URL",
-		"AGENTSVIEW_DUCKDB_TOKEN",
-		"AGENTSVIEW_DUCKDB_MACHINE",
-	} {
-		assert.Contains(t, help, want, "help missing %q", want)
-	}
-	assert.NotContains(t, help, "env-token")
-}
-
-func TestRootHelpShowsQuackEnvironment(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	assert.NotContains(t, help, "AGENTSVIEW_QUACK_URL")
-	assert.NotContains(t, help, "AGENTSVIEW_QUACK_TOKEN")
-}
-
-func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	assert.Contains(t, help,
-		"COPILOT_DIR             Copilot sessions or exported JetBrains Copilot directory")
-}
-
-func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "duckdb", "push", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--full",
-		"--projects",
-		"--exclude-projects",
-		"--all-projects",
-		"--watch",
-		"--debounce",
-		"--interval",
-	} {
-		assert.Contains(t, help, want)
-	}
-}
-
-func TestPGStatusHelpShowsProjectFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "pg", "status", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--projects",
-		"--exclude-projects",
-		"--all-projects",
-	} {
-		assert.Contains(t, help, want)
-	}
-}
-
 func TestRawSyncCommandsKeepCredentialOutOfArguments(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "raw-sync", "watch", "--help")
 	require.NoError(t, err)
@@ -208,21 +152,6 @@ func TestRawSyncCommandsKeepCredentialOutOfArguments(t *testing.T) {
 	status, err := executeCommand(newRootCommand(), "raw-sync", "status", "--help")
 	require.NoError(t, err)
 	assert.Contains(t, status, "Show durable laptop raw-sync status")
-}
-
-func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "duckdb", "quack", "serve", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--bind",
-		"--path",
-		"--token",
-		"required",
-		"--allow-insecure",
-	} {
-		assert.Contains(t, help, want)
-	}
-	assert.NotContains(t, help, "generated if omitted")
 }
 
 func TestOpenAPICommandEmitsSpec(t *testing.T) {

@@ -14,10 +14,6 @@ func TestParsedSessionName(t *testing.T) {
 		name := db.ParsedSessionName(parser.ParsedSession{})
 		require.Nil(t, name)
 	})
-	t.Run("empty SessionName returns nil", func(t *testing.T) {
-		name := db.ParsedSessionName(parser.ParsedSession{SessionName: ""})
-		require.Nil(t, name)
-	})
 	t.Run("non-empty SessionName returns pointer", func(t *testing.T) {
 		name := db.ParsedSessionName(parser.ParsedSession{SessionName: "My Session"})
 		require.NotNil(t, name)

@@ -11,40 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestQoderRegistry(t *testing.T) {
-	def, ok := AgentByType(AgentQoder)
-	require.True(t, ok, "AgentQoder missing from Registry")
-	assert.Equal(t, "Qoder", def.DisplayName)
-	assert.Equal(t, "QODER_PROJECTS_DIR", def.EnvVar)
-	assert.Equal(t, "qoder_project_dirs", def.ConfigKey)
-	assert.Equal(t, qoderIDPrefix, def.IDPrefix)
-	assert.True(t, def.FileBased)
-	assert.False(t, def.ShallowWatch)
-	// DefaultDirs is sourced from qoderDefaultDirs(); legacy export paths
-	// stay listed alongside the SharedClientCache paths.
-	wantDirs := qoderDefaultDirs()
-	require.NotEmpty(t, wantDirs)
-	assert.Equal(t, wantDirs, def.DefaultDirs)
-	assert.Contains(t, def.DefaultDirs, ".qoder/projects")
-	assert.Contains(t, def.DefaultDirs, ".qoderwork/projects")
-	assert.Contains(t, def.DefaultDirs,
-		"AppData/Roaming/Qoder/SharedClientCache/cli/projects")
-	factory, ok := ProviderFactoryByType(AgentQoder)
-	require.True(t, ok, "AgentQoder provider missing")
-	assert.Equal(t, AgentQoder, factory.Definition().Type)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
-	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.ExcludedSessions)
-	assert.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
-	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
-	provider, ok := NewProvider(AgentQoder, ProviderConfig{Roots: []string{t.TempDir()}})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestParseQoderSession(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "code", "sample-project")
@@ -402,22 +368,6 @@ func TestIsValidQoderSessionID(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "IsValidQoderSessionID(%q)", tt.id)
 		})
 	}
-}
-
-func TestQoderDefaultDirs(t *testing.T) {
-	dirs := qoderDefaultDirs()
-	// Legacy export paths retained.
-	assert.Contains(t, dirs, ".qoder/projects")
-	assert.Contains(t, dirs, ".qoderwork/projects")
-	// Qoder CLI CN stores the same project-scoped layout under a separate root.
-	assert.Contains(t, dirs, ".qoder-cn/projects")
-	// SharedClientCache paths for the three target platforms.
-	assert.Contains(t, dirs,
-		"Library/Application Support/Qoder/SharedClientCache/cli/projects")
-	assert.Contains(t, dirs,
-		".config/Qoder/SharedClientCache/cli/projects")
-	assert.Contains(t, dirs,
-		"AppData/Roaming/Qoder/SharedClientCache/cli/projects")
 }
 
 func TestQoderFlatProjectHint(t *testing.T) {

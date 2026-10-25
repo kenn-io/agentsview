@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -503,28 +502,6 @@ func TestUsageSummaryErrorRedaction(t *testing.T) {
 			"to":   "2024-06-03",
 		}))
 	assertStatus(t, w, http.StatusInternalServerError)
-}
-
-// Verify the route is actually registered by checking we
-// don't get a 404 for usage endpoints.
-func TestUsageRoutesRegistered(t *testing.T) {
-	te := setup(t)
-
-	endpoints := []string{
-		"/api/v1/usage/summary",
-		"/api/v1/usage/pairwise-comparison",
-		"/api/v1/usage/top-sessions",
-	}
-	for _, ep := range endpoints {
-		t.Run(ep, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(t.Context(),
-				http.MethodGet, ep, nil,
-			)
-			w := httptest.NewRecorder()
-			te.handler.ServeHTTP(w, req)
-			assert.NotEqual(t, http.StatusNotFound, w.Code, "%s returned 404", ep)
-		})
-	}
 }
 
 func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {

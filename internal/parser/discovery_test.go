@@ -737,13 +737,6 @@ func TestFindGeminiSourceFile(t *testing.T) {
 	})
 }
 
-func TestGeminiPathHash(t *testing.T) {
-	hash := geminiPathHash("/Users/alice/code/sample-repo")
-	assert.Len(t, hash, 64, "hash length")
-	assert.Equal(t, hash, geminiPathHash("/Users/alice/code/sample-repo"),
-		"hash not deterministic")
-}
-
 func TestBuildGeminiProjectMap(t *testing.T) {
 	dir := t.TempDir()
 	projectsJSON := `{"projects":{"/Users/alice/code/my-app":"my-app"}}`

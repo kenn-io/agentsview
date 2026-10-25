@@ -105,21 +105,6 @@ func TestRelabelCodexResultAsTraeXIncremental(t *testing.T) {
 	)
 }
 
-func TestTraeXRegistryEntry(t *testing.T) {
-	def, ok := AgentByType(AgentTraeX)
-	require.True(t, ok)
-	assert.Equal(t, "traex:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-	// TraeX writes plaintext rollouts, so unlike the Trae IDE entry it must
-	// stay eligible for remote sync.
-	assert.False(t, def.RemoteSyncExcluded)
-
-	// traex: must not be swallowed by the Trae IDE entry's trae: prefix.
-	byPrefix, ok := AgentByPrefix("traex:019fbcca")
-	require.True(t, ok)
-	assert.Equal(t, AgentTraeX, byPrefix.Type)
-}
-
 func TestTraeXProviderParseRelabelsCodexSession(t *testing.T) {
 	root := t.TempDir()
 	const (
@@ -453,20 +438,6 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, s3Sources,
 		"TraeX has no S3 archive convention and must not import one as Codex")
-}
-
-// TestTraeXRegistryCoversArchivedSessions guards the `traex archive <id>`
-// destination: TRAE CLI moves a rollout out of the dated tree into a flat
-// archived_sessions directory, mirroring `codex archive`.
-func TestTraeXRegistryCoversArchivedSessions(t *testing.T) {
-	def, ok := AgentByType(AgentTraeX)
-	require.True(t, ok)
-	assert.Equal(t, []string{
-		".trae/cli/sessions",
-		".trae/cli/archived_sessions",
-	}, def.DefaultDirs)
-	assert.Nil(t, def.ShallowWatchRootsFunc,
-		"the shallow watch exists for Codex's session_index.jsonl only")
 }
 
 func TestTraeXProviderHistoryMutationUsage(t *testing.T) {

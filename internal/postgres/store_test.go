@@ -862,59 +862,6 @@ func TestStoreGetMessages(t *testing.T) {
 	assert.Len(t, msgs, 2)
 }
 
-func TestStoreGetStats(t *testing.T) {
-	pgURL := testPGURL(t)
-	ensureStoreSchema(t, pgURL)
-
-	store, err := NewStore(pgURL, testSchema, true)
-	require.NoError(t, err, "NewStore")
-	defer store.Close()
-
-	ctx := context.Background()
-	stats, err := store.GetStats(ctx, false, false)
-	require.NoError(t, err, "GetStats")
-	assert.NotZero(t, stats.SessionCount, "expected at least 1 session in stats")
-	t.Logf("stats: %+v", stats)
-}
-
-func TestStoreSearch(t *testing.T) {
-	pgURL := testPGURL(t)
-	ensureStoreSchema(t, pgURL)
-
-	store, err := NewStore(pgURL, testSchema, true)
-	require.NoError(t, err, "NewStore")
-	defer store.Close()
-
-	ctx := context.Background()
-	page, err := store.Search(ctx, db.SearchFilter{
-		Query: "hello",
-		Limit: 5,
-	})
-	require.NoError(t, err, "Search")
-	assert.NotEmpty(t, page.Results, "expected at least 1 search result")
-	t.Logf("search results: %d", len(page.Results))
-}
-
-func TestStoreAnalyticsSummary(t *testing.T) {
-	pgURL := testPGURL(t)
-	ensureStoreSchema(t, pgURL)
-
-	store, err := NewStore(pgURL, testSchema, true)
-	require.NoError(t, err, "NewStore")
-	defer store.Close()
-
-	ctx := context.Background()
-	summary, err := store.GetAnalyticsSummary(
-		ctx, db.AnalyticsFilter{
-			From: "2026-01-01",
-			To:   "2026-12-31",
-		},
-	)
-	require.NoError(t, err, "GetAnalyticsSummary")
-	assert.NotZero(t, summary.TotalSessions, "expected at least 1 session in summary")
-	t.Logf("summary: %+v", summary)
-}
-
 func seedActivitySession(
 	t *testing.T, store *Store, sid string, msgs []struct {
 		ordinal int

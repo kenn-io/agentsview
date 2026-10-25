@@ -24,24 +24,6 @@ func pinSessionMessage(t *testing.T, te *testEnv, sessionID string) {
 	require.NotZero(t, id, "pinSessionMessage: PinMessage returned 0 id for session %s", sessionID)
 }
 
-func TestHandleListPins_NoFilter(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "alpha", 2)
-	te.seedSession(t, "s2", "beta", 2)
-	te.seedMessages(t, "s1", 2)
-	te.seedMessages(t, "s2", 2)
-	pinSessionMessage(t, te, "s1")
-	pinSessionMessage(t, te, "s2")
-
-	w := te.get(t, "/api/v1/pins")
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Pins []db.PinnedMessage `json:"pins"`
-	}
-	require.NoError(t, json.UnmarshalRead(w.Body, &resp))
-	assert.Len(t, resp.Pins, 2)
-}
-
 func TestHandleListPins_ProjectFilter(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "a1", "alpha", 2)

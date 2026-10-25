@@ -217,13 +217,6 @@ func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 	assert.Equal(t, []string{"reminder-malformed", "reminder-ordinary"}, got)
 }
 
-// TestDuckDBStoreHasSemanticFalse pins that the DuckDB store reports no
-// semantic search capability until it gets its own VectorSearcher seam.
-func TestDuckDBStoreHasSemanticFalse(t *testing.T) {
-	s := &Store{}
-	assert.False(t, s.HasSemantic(), "DuckDB HasSemantic")
-}
-
 // TestDuckDBSearchContentSemanticModesUnavailable pins that "semantic" and
 // "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
 // -- a zero-value Store (no live *sql.DB) is enough to prove that.

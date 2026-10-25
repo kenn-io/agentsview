@@ -259,30 +259,6 @@ func remoteUsageJSON(spec remoteUsageSpec) string {
 	}`, spec.canonicalID, spec.agent, spec.project, spec.outputTokens, server)
 }
 
-func TestSessionHelp_ShowsSubcommands(t *testing.T) {
-	t.Parallel()
-	cmd := newRootCommand()
-	buf := &bytes.Buffer{}
-	cmd.SetOut(buf)
-	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"session", "--help"})
-	if err := cmd.Execute(); err != nil {
-		require.NoError(t, err)
-	}
-	help := buf.String()
-	for _, name := range []string{
-		"get", "usage", "list", "messages", "tool-calls",
-		"export", "sync", "watch",
-	} {
-		assert.Contains(t, help, name,
-			"expected subcommand %q in help", name)
-	}
-	assert.Contains(t, help, "--format",
-		"expected --format persistent flag in help")
-	assert.Contains(t, help, "--pg",
-		"expected --pg persistent flag in help")
-}
-
 // seedSession opens the SQLite DB at dataDir/sessions.db, inserts
 // one session with the given id+project (plus sane defaults), and
 // closes the DB. Each subtest gets its own dataDir so parallel

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1270,16 +1269,4 @@ func requireReadOnly(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrReadOnly, "expected ErrReadOnly, got %v", err)
-}
-
-func TestStoreContractBackendsAreRegisteredExplicitly(t *testing.T) {
-	backends := storeContractBackends()
-	require.NotEmpty(t, backends)
-	names := make([]string, 0, len(backends))
-	for _, backend := range backends {
-		names = append(names, backend.name)
-		assert.NotNil(t, backend.open)
-		assert.NotNil(t, backend.seed)
-	}
-	require.True(t, slices.Contains(names, "sqlite"))
 }

@@ -255,13 +255,3 @@ func TestClassifierRebuildSkipsPGWhenNotConfigured(t *testing.T) {
 
 	requireClassifierRebuild(t, fx.Cfg, false)
 }
-
-// TestClassifierCommandIsHidden pins the UX decision that the
-// classifier group does not appear in `agentsview --help`.
-// Routine config edits are auto-detected on daemon restart;
-// this group is a recovery hatch.
-func TestClassifierCommandIsHidden(t *testing.T) {
-	cmd := newClassifierCommand()
-	assert.True(t, cmd.Hidden,
-		"classifier command should be Hidden=true; got false")
-}

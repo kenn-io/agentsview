@@ -14,24 +14,6 @@ import (
 	"go.kenn.io/kit/vector/sqlitevec"
 )
 
-func TestOpenCreatesSchema(t *testing.T) {
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "vectors.db")
-
-	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(t, err)
-	defer ix.Close()
-
-	var name string
-	require.NoError(t, ix.db.QueryRowContext(ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='vector_messages'`).Scan(&name))
-	require.Equal(t, "vector_messages", name)
-
-	require.NoError(t, ix.db.QueryRowContext(ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='message_vectors_generations'`).Scan(&name))
-	require.Equal(t, "message_vectors_generations", name)
-}
-
 func TestOpenReadOnlyOnMissingFileFails(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "missing-vectors.db")

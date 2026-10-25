@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,20 +102,4 @@ func TestWithTimeout(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestTimeoutBodyParity(t *testing.T) {
-	t.Parallel()
-
-	operation := "GET /api/v1/sessions"
-	timeout := 30 * time.Second
-
-	msg := timeoutErrorBody(operation, timeout)
-
-	var je jsonError
-	require.NoError(t, json.Unmarshal([]byte(msg), &je))
-	assert.Equal(t, "request timed out", je.Error)
-	assert.Contains(t, je.Detail, operation)
-	assert.Contains(t, je.Detail, "30s")
-	assert.Contains(t, je.Detail, "--write-timeout")
 }

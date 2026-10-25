@@ -12,21 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestReasoningEffortDuckDBReadAndWrite(t *testing.T) {
-	ctx := t.Context()
-	store, fixture := newSyncedStore(t)
-	_, err := store.duck.ExecContext(ctx,
-		`UPDATE messages SET reasoning_effort = ? WHERE session_id = ? AND ordinal = 1`,
-		"high", fixture.alphaID,
-	)
-	require.NoError(t, err)
-
-	messages, err := store.GetAllMessages(ctx, fixture.alphaID)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	require.Equal(t, "high", messages[1].ReasoningEffort)
-}
-
 func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)

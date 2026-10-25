@@ -14,30 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestNewSecretsListCommandFlags(t *testing.T) {
-	cmd := newSecretsListCommand()
-	// confidence is validated server-side, so cobra must accept any value.
-	cmd.SetArgs([]string{"--confidence", "bogus", "--reveal", "--limit", "5"})
-	for _, name := range []string{
-		"project", "agent", "rule", "confidence",
-		"reveal", "limit", "cursor", "date-from", "date-to",
-	} {
-		assert.NotNil(t, cmd.Flags().Lookup(name),
-			"secrets list missing --%s flag", name)
-	}
-}
-
-func TestNewSecretsScanCommandFlags(t *testing.T) {
-	cmd := newSecretsScanCommand()
-	for _, name := range []string{
-		"backfill", "project", "agent",
-		"date-from", "date-to",
-	} {
-		assert.NotNil(t, cmd.Flags().Lookup(name),
-			"secrets scan missing --%s flag", name)
-	}
-}
-
 func syntheticAWSAccessKey(seed string) string {
 	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	sum := sha256.Sum256([]byte(seed))

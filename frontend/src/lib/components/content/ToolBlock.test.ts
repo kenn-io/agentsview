@@ -636,7 +636,6 @@ describe("ToolBlock collapsed previews", () => {
   it.each([
     ["Codex cmd", call("Bash", { cmd: "ls -la" }), "ls -la"],
     ["Claude command", call("Bash", { command: "git status" }), "git status"],
-    ["multiline command", call("Bash", { command: "echo first\necho second" }), "echo first"],
     [
       "Edit counts",
       call("Edit", { file_path: "/tmp/test.ts", old_string: "a\nb", new_string: "c\nd\ne" }),

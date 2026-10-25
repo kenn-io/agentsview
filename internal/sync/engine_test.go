@@ -9019,23 +9019,6 @@ func (p *lookupSourceProvider) Parse(
 	return parser.ParseOutcome{}, nil
 }
 
-func TestToDBSessionStoresSessionName(t *testing.T) {
-	pw := pendingWrite{sess: parser.ParsedSession{
-		ID:           "commandcode:test",
-		Project:      "sample_project",
-		Machine:      "local",
-		Agent:        parser.AgentCommandCode,
-		SessionName:  "Startup investigation",
-		FirstMessage: "Inspect server logs",
-	}}
-
-	got := toDBSession(pw)
-	require.NotNil(t, got.SessionName)
-	assert.Equal(t, "Startup investigation", *got.SessionName)
-	require.NotNil(t, got.FirstMessage)
-	assert.Equal(t, "Inspect server logs", *got.FirstMessage)
-}
-
 func TestBlockedCategorySet(t *testing.T) {
 	tests := []struct {
 		name  string

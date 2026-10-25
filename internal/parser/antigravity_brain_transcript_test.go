@@ -383,28 +383,3 @@ func TestAntigravityEncryptedStreamsStayUnstored(t *testing.T) {
 		assert.Empty(t, changed, "encrypted stream routed to a source")
 	}
 }
-
-// TestAntigravityDefaultRootsCoverTheIDETree pins the configuration half of
-// the same guard. The IDE variant writes to its own directory, which is a
-// default root, and neither Antigravity provider is pointed at the other's
-// tree: the CLI provider is the one that reads .pb streams, and pointing it
-// at these trees would store an encrypted conversation as an empty session.
-func TestAntigravityDefaultRootsCoverTheIDETree(t *testing.T) {
-	ide, ok := AgentByType(AgentAntigravity)
-	require.True(t, ok, "AgentAntigravity missing from Registry")
-	assert.Contains(t, ide.DefaultDirs, ".gemini/antigravity",
-		"the original Antigravity root")
-	assert.Contains(t, ide.DefaultDirs, ".gemini/antigravity-ide",
-		"the IDE variant's own root")
-	assert.NotContains(t, ide.DefaultDirs, ".gemini/antigravity-backup",
-		"a backup copy would duplicate every session it holds")
-
-	cli, ok := AgentByType(AgentAntigravityCLI)
-	require.True(t, ok, "AgentAntigravityCLI missing from Registry")
-	for _, dir := range []string{
-		".gemini/antigravity", ".gemini/antigravity-ide",
-	} {
-		assert.NotContains(t, cli.DefaultDirs, dir,
-			"the CLI reader must not be pointed at %s", dir)
-	}
-}

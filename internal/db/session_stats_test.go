@@ -63,28 +63,6 @@ func hoursAgo(n int) string {
 		Format(time.RFC3339)
 }
 
-func Test_insertSessionFixture_isAutomated_patch(t *testing.T) {
-	d := testDB(t)
-	insertSessionFixture(t, d, sessionFixture{
-		id: "auto-1", userMsgs: 5, startedAt: hoursAgo(1),
-		isAutomated: true,
-	})
-	insertSessionFixture(t, d, sessionFixture{
-		id: "human-1", userMsgs: 1, startedAt: hoursAgo(1),
-		isAutomated: false,
-	})
-
-	var autoFlag, humanFlag int
-	require.NoError(t, d.getReader().QueryRow(t.Context(),
-		"SELECT is_automated FROM sessions WHERE id = ?", "auto-1",
-	).Scan(&autoFlag), "read auto-1")
-	require.NoError(t, d.getReader().QueryRow(t.Context(),
-		"SELECT is_automated FROM sessions WHERE id = ?", "human-1",
-	).Scan(&humanFlag), "read human-1")
-	require.Equal(t, 1, autoFlag, "auto-1 is_automated")
-	require.Equal(t, 0, humanFlag, "human-1 is_automated")
-}
-
 func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{

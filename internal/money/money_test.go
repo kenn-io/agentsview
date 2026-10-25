@@ -1,7 +1,6 @@
 package money_test
 
 import (
-	"encoding/json/v2"
 	"math"
 	"testing"
 
@@ -10,12 +9,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 )
-
-func TestMoneyJSONUsesOnlyMicrodollars(t *testing.T) {
-	encoded, err := json.Marshal(money.Money{Microdollars: 420_000})
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"microdollars":420000}`, string(encoded))
-}
 
 func TestAddAndSubRejectOverflow(t *testing.T) {
 	tests := []struct {

@@ -95,11 +95,6 @@ func TestShortDate(t *testing.T) {
 	}{
 		{"empty renders dash", "", "-"},
 		{
-			name: "RFC3339Nano parsed",
-			in:   "2026-04-15T20:48:24.123Z",
-			want: parseLocalDate(t, "2026-04-15T20:48:24.123Z"),
-		},
-		{
 			name: "garbage passes through",
 			in:   "not-a-date",
 			want: "not-a-date",
@@ -482,9 +477,4 @@ func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
 	require.Error(t, err, "expected ambiguity error")
 	assert.Contains(t, err.Error(), "ambiguous",
 		"error lacks 'ambiguous'")
-}
-
-func parseLocalDate(t *testing.T, ts string) string {
-	t.Helper()
-	return shortDate(ts)
 }

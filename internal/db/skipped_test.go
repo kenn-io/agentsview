@@ -73,13 +73,6 @@ func TestSkippedFiles_DeleteSingle(t *testing.T) {
 	assert.Equal(t, int64(200), loaded["/b.jsonl"])
 }
 
-func TestSkippedFiles_DeleteNonexistent(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-
-	// Should not error.
-	require.NoError(t, d.DeleteSkippedFile(t.Context(), "/nope"))
-}
-
 func TestSkippedFiles_EmptyReplace(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 

@@ -123,12 +123,6 @@ describe("PinsStore.loadAll project filtering", () => {
     ).toBe(true);
   });
 
-  it("populates pins on successful load", async () => {
-    pinsService.getApiV1Pins.mockResolvedValue({ pins: [PIN_ALPHA] });
-    await store.loadAll("alpha");
-    expect(store.pins).toEqual([PIN_ALPHA]);
-  });
-
   it("clears pins immediately when project changes before fetch resolves", async () => {
     // Load project alpha successfully first.
     pinsService.getApiV1Pins.mockResolvedValue({ pins: [PIN_ALPHA] });

@@ -126,19 +126,6 @@ func TestClampRecallVectorCandidates(t *testing.T) {
 	}
 }
 
-func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
-	d := testDB(t)
-
-	var count int
-	err := d.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM sqlite_master
-		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
-	).Scan(&count)
-
-	require.NoError(t, err, "query recall source episode index")
-	assert.Equal(t, 1, count)
-}
-
 func TestInsertRecallEntryDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")

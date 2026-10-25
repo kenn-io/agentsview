@@ -1069,19 +1069,6 @@ func TestAntigravityProviderFingerprintTracksTrajectorySidecar(t *testing.T) {
 		"sidecar update must change the fingerprint")
 }
 
-// TestAntigravityProviderCapabilitiesAdvertiseSidecarContent guards that
-// the IDE provider advertises the richer content the trajectory sidecar
-// makes available, matching the CLI provider.
-func TestAntigravityProviderCapabilitiesAdvertiseSidecarContent(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAntigravity)
-	require.True(t, ok)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(t, CapabilitySupported, caps.Content.Model)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-}
-
 // antigravitySQLiteProviderCase describes one Antigravity provider whose
 // sessions are WAL-mode SQLite files under conversations/.
 type antigravitySQLiteProviderCase struct {

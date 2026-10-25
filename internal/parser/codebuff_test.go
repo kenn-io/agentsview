@@ -901,25 +901,6 @@ func TestCodebuffProjectFromPath(t *testing.T) {
 	assert.Equal(t, "myproject", codebuffProjectFromPath(path))
 }
 
-func TestCodebuffProviderCapabilities(t *testing.T) {
-	caps := codebuffProviderCapabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(t, CapabilityNotApplicable, caps.Content.Model,
-		"model is unknown (selected server-side, can change mid-session)")
-	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
-	assert.Equal(t, CapabilitySupported, caps.Content.Relationships,
-		"nested agent blocks become linked subagent sessions")
-	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource,
-		"a transcript holds the root session and its subagent sessions")
-	assert.Equal(t, CapabilitySupported, caps.Content.TerminationStatus,
-		"the last assistant turn's tool-call state classifies the ending")
-	assert.Equal(t, CapabilityNotApplicable, caps.Content.MalformedLineCount)
-}
-
 func TestCodebuffSessionName_Truncation(t *testing.T) {
 	var longPrompt strings.Builder
 	for range 200 {

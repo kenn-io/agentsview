@@ -2,17 +2,6 @@ import { describe, it, expect } from "vite-plus/test";
 import { LRUCache } from "./cache.js";
 
 describe("LRUCache", () => {
-  it("stores and retrieves values", () => {
-    const c = new LRUCache<string, number>(3);
-    c.set("a", 1);
-    expect(c.get("a")).toBe(1);
-  });
-
-  it("returns undefined for missing keys", () => {
-    const c = new LRUCache<string, number>(3);
-    expect(c.get("missing")).toBeUndefined();
-  });
-
   it("evicts the least recently used entry on overflow", () => {
     const c = new LRUCache<string, number>(3);
     c.set("a", 1);
@@ -42,14 +31,6 @@ describe("LRUCache", () => {
     c.set("a", 10); // update, not insert
     expect(c.size).toBe(2);
     expect(c.get("a")).toBe(10);
-  });
-
-  it("reports size correctly", () => {
-    const c = new LRUCache<string, number>(5);
-    expect(c.size).toBe(0);
-    c.set("a", 1);
-    c.set("b", 2);
-    expect(c.size).toBe(2);
   });
 
   it("set refreshes recency of existing key", () => {

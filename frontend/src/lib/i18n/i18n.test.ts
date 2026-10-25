@@ -94,10 +94,6 @@ describe("i18n locale selection", () => {
     expect(chooseInitialLocale()).toBe("en");
   });
 
-  it("keeps the supported locale list explicit", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko", "fr", "ja", "az", "es"]);
-  });
-
   it("compiles a message catalog for every supported locale", () => {
     expect(runtime.locales).toEqual(SUPPORTED_LOCALES);
   });

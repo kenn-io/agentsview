@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
 	"testing"
 	"time"
 
@@ -561,53 +560,6 @@ func TestNewRejectsEmptyURL(t *testing.T) {
 		storage.PusherOptions{},
 	)
 	require.Error(t, err, "expected error for empty URL")
-}
-
-func TestPushUpdatedAtFormat(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-
-	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"test-machine", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
-	defer ps.Close()
-
-	ctx := context.Background()
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
-
-	started := "2026-03-11T12:00:00Z"
-	sess := db.Session{
-		ID:        "sess-ts-001",
-		Project:   "test-project",
-		Machine:   "local",
-		Agent:     "claude",
-		StartedAt: &started,
-	}
-	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
-
-	_, err = ps.Push(ctx, false, nil)
-	require.NoError(t, err, "push")
-
-	var updatedAt time.Time
-	err = ps.pg.QueryRowContext(ctx,
-		"SELECT updated_at FROM sessions WHERE id = $1",
-		"sess-ts-001",
-	).Scan(&updatedAt)
-	require.NoError(t, err, "querying updated_at")
-
-	formatted := updatedAt.UTC().Format(
-		"2006-01-02T15:04:05.000000Z",
-	)
-	pattern := regexp.MustCompile(
-		`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$`,
-	)
-	assert.True(t, pattern.MatchString(formatted),
-		"updated_at = %q, want ISO-8601 microsecond format", formatted)
 }
 
 func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {

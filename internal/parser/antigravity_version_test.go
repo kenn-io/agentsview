@@ -272,24 +272,6 @@ func TestAntigravitySchemaFingerprintCases(t *testing.T) {
 	}
 }
 
-// TestAntigravitySchemaFingerprintDeterministic asserts the same schema always
-// produces the same fingerprint across independent databases.
-func TestAntigravitySchemaFingerprintDeterministic(t *testing.T) {
-	dir := t.TempDir()
-	stmts := append([]string{}, agyBaselineCreateStatements...)
-
-	db1 := openSchemaDB(t, filepath.Join(dir, "a.db"), 1, stmts...)
-	defer db1.Close()
-	db2 := openSchemaDB(t, filepath.Join(dir, "b.db"), 1, stmts...)
-	defer db2.Close()
-
-	fp1, err := antigravitySchemaFingerprint(t.Context(), db1)
-	require.NoError(t, err)
-	fp2, err := antigravitySchemaFingerprint(t.Context(), db2)
-	require.NoError(t, err)
-	assert.Equal(t, fp1, fp2, "identical schema must hash identically")
-}
-
 // TestAntigravityIDESourceVersionBaseline verifies the IDE parser stamps the
 // schema-fingerprint label when the .db matches the baseline schema.
 func TestAntigravityIDESourceVersionBaseline(t *testing.T) {

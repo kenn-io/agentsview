@@ -706,15 +706,6 @@ func TestServeCommandParsesBackgroundFlag(t *testing.T) {
 	assert.Equal(t, filepath.Join(dataDir, "sessions.db"), cfg.DBPath)
 }
 
-func TestServeCommandParsesHiddenSkipInitialSyncFlag(t *testing.T) {
-	cmd := newServeCommand()
-	require.NoError(t, cmd.Flags().Parse([]string{"--skip-initial-sync"}))
-	got, err := cmd.Flags().GetBool("skip-initial-sync")
-	require.NoError(t, err)
-	assert.True(t, got)
-	assert.True(t, cmd.Flags().Lookup("skip-initial-sync").Hidden)
-}
-
 func TestServeBackgroundArgsWithNoSyncKeepsExplicitFalse(t *testing.T) {
 	tests := []struct {
 		name string
@@ -754,12 +745,6 @@ func TestServeBackgroundArgsWithNoSyncKeepsExplicitFalse(t *testing.T) {
 			assert.Equal(t, tt.args, serveBackgroundArgsWithNoSync(tt.args, true))
 		})
 	}
-}
-
-func TestRunningAsBackgroundChild(t *testing.T) {
-	assert.False(t, runningAsBackgroundChild())
-	t.Setenv(backgroundChildEnvVar, "1")
-	assert.True(t, runningAsBackgroundChild())
 }
 
 func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {

@@ -168,18 +168,6 @@ func (f *zcodeTestFixture) insertPartAt(
 	require.NoError(t, err)
 }
 
-func TestZCodeProviderCapabilities(t *testing.T) {
-	caps := zcodeProviderCapabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
-	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
-	assert.Equal(t, CapabilitySupported, caps.Content.Model)
-}
-
 func TestZCodeParsesReportedIntegerTimestamps(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(

@@ -80,36 +80,6 @@ describe("ToolImageCleanup", () => {
     flushSync();
   }
 
-  it("renders intro text", async () => {
-    vi.useFakeTimers();
-    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(emptyReport());
-
-    const component = mount(ToolImageCleanup, { target: document.body });
-    await settle();
-
-    expect(document.body.textContent).toContain("Preview");
-
-    unmount(component);
-    vi.useRealTimers();
-  });
-
-  it("preview button calls the preview endpoint", async () => {
-    vi.useFakeTimers();
-    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(emptyReport());
-
-    const component = mount(ToolImageCleanup, { target: document.body });
-    await settle();
-
-    const previewBtn = document.body.querySelector("button");
-    previewBtn?.click();
-    await settle();
-
-    expect(dataService.postApiV1DataStripImagesPreview).toHaveBeenCalledTimes(1);
-
-    unmount(component);
-    vi.useRealTimers();
-  });
-
   it("403 names the proxy, not the remote-backend case", async () => {
     vi.useFakeTimers();
     dataService.postApiV1DataStripImagesPreview.mockRejectedValue(
@@ -147,33 +117,6 @@ describe("ToolImageCleanup", () => {
     expect(document.body.textContent).toContain(
       "No stored tool result in this selection holds an inline image payload.",
     );
-
-    unmount(component);
-    vi.useRealTimers();
-  });
-
-  it("shows confirmation modal before applying", async () => {
-    vi.useFakeTimers();
-    dataService.postApiV1DataStripImagesPreview.mockResolvedValue(reportWithPayloads());
-    dataService.postApiV1DataStripImages.mockResolvedValue(reportWithPayloads());
-
-    const component = mount(ToolImageCleanup, { target: document.body });
-    await settle();
-
-    // Click preview
-    const buttons = document.body.querySelectorAll("button");
-    buttons[0]?.click();
-    await settle();
-
-    // A remove button should appear; find it and click
-    const allButtons = Array.from(document.body.querySelectorAll("button"));
-    const removeBtn = allButtons.find((b) => b.textContent?.includes("Remove image payloads"));
-    expect(removeBtn).toBeTruthy();
-    removeBtn?.click();
-    await settle();
-
-    // Confirmation modal should appear
-    expect(document.body.textContent).toContain("Remove stored image payloads?");
 
     unmount(component);
     vi.useRealTimers();

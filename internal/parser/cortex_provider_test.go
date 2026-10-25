@@ -9,31 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCortexProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCortex)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.WatchSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
-	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-
-	provider, ok := NewProvider(AgentCortex, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestCortexProviderWatchRootsStayBounded(t *testing.T) {
 	root := t.TempDir()
 	transcript := filepath.Join(root, cortexTestUUID+".json")

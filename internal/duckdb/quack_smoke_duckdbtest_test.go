@@ -18,6 +18,8 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+const duckDBGoModuleVersion = "v2.10504.0"
+
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()

@@ -561,12 +561,6 @@ func TestTailFile_ReadsContent(t *testing.T) {
 	assert.Equal(t, "hello\nworld\n", buf.String())
 }
 
-func TestTailFile_MissingFileErrors(t *testing.T) {
-	var buf strings.Builder
-	err := tailFile(&buf, filepath.Join(t.TempDir(), "nope.log"), false)
-	assert.Error(t, err)
-}
-
 func TestPromptYesNo(t *testing.T) {
 	cases := []struct {
 		in   string

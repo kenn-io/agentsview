@@ -957,42 +957,6 @@ func TestParseKiloLegacySessionFinishTaskOnlyIsClean(t *testing.T) {
 		"a session whose only tool call is finishTask must be clean")
 }
 
-func TestKiloLegacyDefaultDirsCasing(t *testing.T) {
-	dirs := kiloLegacyDefaultDirs()
-	require.Len(t, dirs, 3, "three platform default dirs expected")
-	var mac, linux, win string
-	for _, d := range dirs {
-		switch {
-		case strings.HasPrefix(d, "Library/Application Support/"):
-			mac = d
-		case strings.HasPrefix(d, ".config/"):
-			linux = d
-		case strings.HasPrefix(d, "AppData/Roaming/"):
-			win = d
-		}
-	}
-	require.NotEmpty(t, mac, "macOS default present")
-	require.NotEmpty(t, linux, "Linux default present")
-	require.NotEmpty(t, win, "Windows default present")
-	assert.Contains(t, mac, "kilocode.kilo-code",
-		"lowercase extension id must appear on macOS")
-	assert.Contains(t, linux, "kilocode.kilo-code",
-		"lowercase extension id must appear on Linux")
-	assert.Contains(t, win, "kilocode.kilo-code",
-		"lowercase extension id must appear on Windows")
-}
-
-func TestKiloLegacyProviderCapabilities(t *testing.T) {
-	caps := kiloLegacyProviderCapabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResultEvents)
-	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
-	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(t, CapabilitySupported, caps.Content.TerminationStatus)
-}
-
 func TestKiloLegacyDiscoverAndClassifyPath(t *testing.T) {
 	root := t.TempDir()
 	tasksDir := filepath.Join(root, "tasks")

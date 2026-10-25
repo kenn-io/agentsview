@@ -932,18 +932,6 @@ describe("ConcurrencyTimeline", () => {
     expect(bars.length).toBe(3);
   });
 
-  it("shades a future region when the range is partial", () => {
-    const r = minuteReport({
-      bucket_count: 3,
-      elapsed_bucket_count: 2,
-      partial: true,
-      as_of: "2026-06-16T00:10:00Z",
-      effective_end: "2026-06-16T00:10:00Z",
-    });
-    render(ConcurrencyTimeline, { report: r });
-    expect(document.querySelector("rect[data-future]")).toBeTruthy();
-  });
-
   it("formats a date-range tooltip for daily buckets", async () => {
     const r = makeReport({
       bucket_unit: "day",

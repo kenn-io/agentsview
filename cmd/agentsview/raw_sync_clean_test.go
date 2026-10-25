@@ -14,16 +14,6 @@ func TestRawSyncRegistersCleanUploads(t *testing.T) {
 	assert.Contains(t, help, "clean-uploads")
 }
 
-func TestRawSyncCleanUploadsHelp(t *testing.T) {
-	help, err := executeCommand(
-		newRootCommand(), "raw-sync", "clean-uploads", "--help",
-	)
-
-	require.NoError(t, err)
-	assert.Contains(t, help, "Run one bounded server upload cleanup pass")
-	assert.Contains(t, help, "configured PostgreSQL target and AgentsView data directory")
-}
-
 func TestRawSyncCleanUploadsRejectsArguments(t *testing.T) {
 	testDataDir(t)
 

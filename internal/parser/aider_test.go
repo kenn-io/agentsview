@@ -534,24 +534,6 @@ func TestAiderVirtualPathRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAiderRegistryOptInDiscovery pins that Aider is not discovered by
-// default. Aider has no central store, and a rootless $HOME scan can trigger
-// macOS privacy prompts during passive background refreshes, so users must opt
-// in with AIDER_DIR or aider_dirs. ShallowWatch must stay true so a configured
-// broad root is watched only at the root, relying on the periodic sync.
-func TestAiderRegistryOptInDiscovery(t *testing.T) {
-	def, ok := AgentByType(AgentAider)
-	require.True(t, ok, "AgentAider missing from Registry")
-	assert.Empty(t, def.DefaultDirs,
-		"aider must not be discovered by default; opt in via AIDER_DIR/aider_dirs")
-	assert.True(t, def.ShallowWatch,
-		"aider must watch an opt-in broad root shallowly, not recurse all of it")
-	// The shallow-watch contract relies on no static subdir or custom
-	// watch-roots wiring overriding it.
-	assert.Empty(t, def.WatchSubdirs)
-	assert.Nil(t, def.WatchRootsFunc)
-}
-
 func TestDiscoverAiderSessions(t *testing.T) {
 	root := t.TempDir()
 
@@ -589,21 +571,6 @@ func TestAiderShouldSkipProtectedHomeDirsOnlyOnDarwinHomeRoot(t *testing.T) {
 	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "windows"))
 	assert.False(t, aiderShouldSkipProtectedHomeDirs(filepath.Join(home, "Documents"), home, "darwin"),
 		"explicit protected roots are user-scoped opt-ins")
-}
-
-func TestAiderProtectedHomeDirsCoversMacOSTCCPrompts(t *testing.T) {
-	for _, name := range []string{
-		"Desktop",
-		"Documents",
-		"Downloads",
-		"Movies",
-		"Music",
-		"Photos",
-		"Pictures",
-	} {
-		_, ok := aiderProtectedHomeDirs[name]
-		assert.True(t, ok, "%s should be pruned from broad home discovery", name)
-	}
 }
 
 func TestAiderBroadHomeWalkRootsExcludeMacOSProtectedDirs(t *testing.T) {

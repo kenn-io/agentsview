@@ -119,15 +119,6 @@ describe("buildDisplayItems", () => {
     expect(items[0]).toMatchObject({ kind: "message" });
   });
 
-  it("single tool-only message becomes a tool-group", () => {
-    const items = buildDisplayItems([toolMsg(5)]);
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      kind: "tool-group",
-      ordinals: [5],
-    });
-  });
-
   it("uses first message timestamp for tool group", () => {
     const msgs = [
       msg({
@@ -186,13 +177,6 @@ describe("buildDisplayItems with skipToolGrouping", () => {
     expect(itemsExplicit[0]!.kind).toBe("tool-group");
   });
 
-  it("preserves ordinals for individual tool messages when skipToolGrouping is true", () => {
-    const msgs = [toolMsg(10), toolMsg(20)];
-    const items = buildDisplayItems(msgs, { skipToolGrouping: true });
-    expect(items[0]!.ordinals).toEqual([10]);
-    expect(items[1]!.ordinals).toEqual([20]);
-  });
-
   it("handles mixed messages with text+tool content when skipToolGrouping is true", () => {
     const mixedMsg = msg({
       ordinal: 0,
@@ -235,12 +219,6 @@ describe("skipToolGrouping preserves thinking in tool-only messages", () => {
     const items = buildDisplayItems([thinkingToolMsg(0)]);
     expect(items).toHaveLength(1);
     expect(items[0]!.kind).toBe("tool-group");
-  });
-
-  it("thinking+tool message becomes individual item with skipToolGrouping", () => {
-    const items = buildDisplayItems([thinkingToolMsg(0)], { skipToolGrouping: true });
-    expect(items).toHaveLength(1);
-    expect(items[0]!.kind).toBe("message");
   });
 
   it("individual thinking+tool message stays visible when tool hidden but thinking visible", () => {

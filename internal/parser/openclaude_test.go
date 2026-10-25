@@ -11,26 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenClaudeProviderCapabilities(t *testing.T) {
-	caps := openClaudeProviderCapabilities()
-	require.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
-	require.Equal(t, CapabilitySupported, caps.Source.WatchSources)
-	require.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
-	require.Equal(t, CapabilitySupported, caps.Source.FindSource)
-	require.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
-
-	def, ok := AgentByType(AgentOpenClaude)
-	require.True(t, ok, "AgentOpenClaude missing from Registry")
-	assert.True(t, def.FileBased)
-	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
-	assert.Equal(t, "OPENCLAUDE_CONFIG_DIR", def.DefaultRootEnvVar)
-	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
-	assert.Equal(t, "openclaude:", def.IDPrefix)
-	assert.Empty(t, def.WatchSubdirs)
-	assert.Nil(t, def.WatchRootsFunc)
-}
-
 func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "my-project")

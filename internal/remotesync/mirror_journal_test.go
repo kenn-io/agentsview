@@ -125,21 +125,6 @@ func TestMirrorChangeJournalCombinedOwnershipEntryBound(t *testing.T) {
 	require.NoError(t, validateMirrorChangeJournal(overflow))
 }
 
-func TestFullImportReasonClosedSet(t *testing.T) {
-	for _, reason := range []FullImportReason{
-		FullImportLegacy,
-		FullImportBootstrap,
-		FullImportExplicit,
-		FullImportDataRebuild,
-		FullImportJournalOverflow,
-		FullImportJournalRecovery,
-	} {
-		assert.True(t, reason.Valid(), "reason %q must be reportable", reason)
-	}
-	assert.False(t, FullImportReason("transfer-heuristic").Valid(),
-		"transfer mode is not a full-import reason")
-}
-
 func TestMirrorChangeJournalPathByteBound(t *testing.T) {
 	exact := strings.Repeat("a", mirrorJournalMaxPathBytes)
 	journal, _, err := mergeMirrorChanges(

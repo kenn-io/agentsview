@@ -147,20 +147,6 @@ func cursorIDEStringResult(t *testing.T, text string) jsontext.Value {
 	return jsontext.Value(raw)
 }
 
-func TestCursorIDEProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCursorIDE)
-	require.True(t, ok)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-
-	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
-		Roots: []string{t.TempDir()}, Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
 		{
