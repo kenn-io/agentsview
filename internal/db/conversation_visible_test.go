@@ -237,8 +237,10 @@ func TestConversationVisibleCarriesSessionClassification(t *testing.T) {
 			require.NoError(t, err)
 			wire, err = json.Marshal(body)
 			require.NoError(t, err)
+			got.Session = nil
 			require.NoError(t, json.Unmarshal(wire, &got))
 			require.NotNil(t, got.Session)
+			assert.Equal(t, "codex", got.Session.Agent)
 			assert.Equal(t, tc.want, got.Session.Automation)
 			// Classification edits must reach incremental readers even without text edits.
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
@@ -251,6 +253,7 @@ func TestConversationVisibleCarriesSessionClassification(t *testing.T) {
 			assert.Equal(t, "session", delta.Changes[0].Type)
 			wire, err = json.Marshal(delta.Changes[0])
 			require.NoError(t, err)
+			got.Session = nil
 			require.NoError(t, json.Unmarshal(wire, &got))
 			require.NotNil(t, got.Session)
 			assert.Equal(t, "claude", got.Session.Agent)
