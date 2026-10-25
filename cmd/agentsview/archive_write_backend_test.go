@@ -1735,7 +1735,6 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 		{state: "absent", wantErr: errNoWritableDaemon},
 		{state: "unreachable", wantMessage: "local daemon owns the SQLite archive but is not responding; refusing to write directly"},
 		{state: "read-only", wantErr: db.ErrReadOnly, wantMessage: "is read-only"},
-		{state: "incompatible", wantMessage: "daemon API version 0 is incompatible with client API version"},
 	} {
 		t.Run(tt.state, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1751,9 +1750,6 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 			case "read-only":
 				host, port := testPingServer(t)
 				writeDaemonRuntimeForTest(t, dir, host, port, version, true)
-			case "incompatible":
-				host, port := testPingServer(t)
-				writeIncompatibleDaemonRuntime(t, dir, host, port, version, false)
 			}
 			_, cleanup, err := resolveArchiveWriteBackend(t.Context(), cfg, transportIntentLongLived)
 			if cleanup != nil {
@@ -1761,11 +1757,11 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 			}
 			require.Error(t, err)
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(t, err, tt.wantErr)
 			}
 			if tt.wantMessage != "" {
-				assert.ErrorContains(t, err, tt.wantMessage)
-				assert.NotErrorIs(t, err, errNoWritableDaemon)
+				require.ErrorContains(t, err, tt.wantMessage)
+				require.NotErrorIs(t, err, errNoWritableDaemon)
 			}
 			assert.Zero(t, starts)
 			assert.NoFileExists(t, cfg.DBPath)

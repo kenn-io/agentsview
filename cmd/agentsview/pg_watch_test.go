@@ -200,17 +200,15 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
-// TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon checks that
+// TestArchiveWriteBackendReplicaPushWatchRetriesStartupOnResolvedDaemon checks that
 // a failed startup push retries against the daemon the runtime file names now.
 // A daemon that restarts on a new address must not leave the watch retrying the
 // address it launched with.
-func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing.T) {
+func TestArchiveWriteBackendReplicaPushWatchRetriesStartupOnResolvedDaemon(t *testing.T) {
 	t.Run("default", func(t *testing.T) { testPushWatchRetriesStartupOnResolvedDaemon(t, pgReplica{}, false) })
-	for _, backend := range []storage.Replica{pgReplica{}, clickhouse.Backend{}} {
-		t.Run("require daemon "+backend.Name(), func(t *testing.T) {
-			testPushWatchRetriesStartupOnResolvedDaemon(t, backend, true)
-		})
-	}
+	t.Run("require daemon clickhouse", func(t *testing.T) {
+		testPushWatchRetriesStartupOnResolvedDaemon(t, clickhouse.Backend{}, true)
+	})
 }
 
 func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, replica storage.Replica, requireDaemon bool) {

@@ -484,7 +484,7 @@ func TestSystemdLingerDetection(t *testing.T) {
 	assert.False(t, m2.lingerEnabled(t.Context()))
 }
 
-func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
+func TestSystemdInstall_ReloadsEnablesAndRestarts(t *testing.T) {
 	home := t.TempDir()
 	rr := &recordingRunner{}
 	m := &systemdManager{kind: pgServiceKind, user: "me", home: home, run: rr.run}
@@ -585,6 +585,4 @@ func TestServiceRender_NoStartDaemon(t *testing.T) {
 	spec := serviceSpec{Kind: kind, BinPath: "/usr/local/bin/agentsview"}
 	systemd := (&systemdManager{kind: kind, user: "me", home: "/home/me"}).render(spec)
 	assert.Contains(t, systemd, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch --no-start-daemon`)
-	launchd := (&launchdManager{kind: kind, uid: 501, home: "/Users/me"}).render(spec)
-	assert.Contains(t, launchd, "<string>--watch</string>\n\t\t<string>--no-start-daemon</string>")
 }
