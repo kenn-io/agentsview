@@ -23,11 +23,11 @@ cleanup() {
   for pid in "$SERVER_PID" "$PG_SERVER_PID"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
-  chown -R "$CAPTURE_UID:$CAPTURE_GID" /result
 }
 trap cleanup EXIT
 cmp /capture/package-lock.json /opt/playwright/package-lock.json
 node -e 'const p = require("playwright"); const c = require("child_process"); console.log(JSON.stringify({node: process.version, playwright: require("playwright/package.json").version, browser: c.execFileSync(p.chromium.executablePath(), ["--version"], {encoding:"utf8"}).trim()}));' > /result/runtime.json
+chown "$CAPTURE_UID:$CAPTURE_GID" /result/runtime.json
 
 wait_ready() {
   local port="$1"
@@ -99,5 +99,10 @@ if curl -fsS -D - "http://127.0.0.1:$PORT/api/v1/stats" -o /dev/null \
   exit 1
 fi
 "$APP" usage daily --no-sync > /dev/null
+
+# Write browser artifacts as the worker, including when a container is killed.
+mkdir -p /work/home
+chown -R "$CAPTURE_UID:$CAPTURE_GID" /work
 PG_BASE_URL="http://127.0.0.1:$PG_PORT" \
-  node /opt/playwright/node_modules/@playwright/test/cli.js test --reporter=list
+  setpriv --reuid="$CAPTURE_UID" --regid="$CAPTURE_GID" --clear-groups \
+    env HOME=/work/home node /opt/playwright/node_modules/@playwright/test/cli.js test --reporter=list
