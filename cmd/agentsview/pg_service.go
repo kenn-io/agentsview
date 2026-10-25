@@ -134,10 +134,15 @@ func loadServiceConfig(kind serviceKind) config.Config {
 	return appCfg
 }
 
+func withNoStartDaemon(kind serviceKind) serviceKind {
+	kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+	return kind
+}
+
 func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 	appCfg := loadServiceConfig(kind)
 	if noStartDaemon {
-		kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+		kind = withNoStartDaemon(kind)
 	}
 	spec, err := buildServiceSpec(appCfg, kind)
 	if err != nil {

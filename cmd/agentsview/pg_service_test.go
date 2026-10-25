@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -497,8 +496,11 @@ func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
 	require.NoError(t, m.install(t.Context(), spec), "install")
 	_, err := os.Stat(m.unitPath())
 	require.NoError(t, err, "unit written")
-	assert.True(t, rr.sawContains("systemctl --user daemon-reload"))
-	assert.True(t, rr.sawContains("systemctl --user enable --now agentsview-pg-watch.service"))
+	assert.Equal(t, [][]string{
+		{"systemctl", "--user", "daemon-reload"},
+		{"systemctl", "--user", "enable", "agentsview-pg-watch.service"},
+		{"systemctl", "--user", "restart", "agentsview-pg-watch.service"},
+	}, rr.calls)
 }
 
 func TestSystemdStart_CallsStart(t *testing.T) {
@@ -579,8 +581,7 @@ func TestPromptYesNo(t *testing.T) {
 }
 
 func TestServiceRender_NoStartDaemon(t *testing.T) {
-	kind := clickHouseServiceKind
-	kind.Args = append(slices.Clip(kind.Args), "--no-start-daemon")
+	kind := withNoStartDaemon(clickHouseServiceKind)
 	spec := serviceSpec{Kind: kind, BinPath: "/usr/local/bin/agentsview"}
 	systemd := (&systemdManager{kind: kind, user: "me", home: "/home/me"}).render(spec)
 	assert.Contains(t, systemd, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch --no-start-daemon`)

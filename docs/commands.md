@@ -1240,18 +1240,19 @@ Sync sessions from local SQLite to PostgreSQL. See
 agentsview pg push [target] [flags]
 ```
 
-| Flag                 | Default | Description                                                    |
-| -------------------- | ------- | -------------------------------------------------------------- |
-| `--full`             | `false` | Force full local resync and re-push                            |
-| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
+| Flag                 | Default | Description                                                                                                        |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--full`             | `false` | Force full local resync and re-push                                                                                |
+| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                                                                 |
 | `--embed`            | `false` | Push sessions first, then build and push vectors; watch builds after syncs and pushes vectors on the next interval |
-| `--projects`         |         | Comma-separated projects to push (inclusive)                   |
-| `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
-| `--all-projects`     | `false` | Ignore configured project filters for this run                 |
-| `--all`              | `false` | Push every configured PostgreSQL target sequentially           |
-| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor      |
-| `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only) |
-| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                  |
+| `--projects`         |         | Comma-separated projects to push (inclusive)                                                                       |
+| `--exclude-projects` |         | Comma-separated projects to exclude from push                                                                      |
+| `--all-projects`     | `false` | Ignore configured project filters for this run                                                                     |
+| `--all`              | `false` | Push every configured PostgreSQL target sequentially                                                               |
+| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                                                          |
+| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running; incompatible with `--embed`                    |
+| `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only)                                                     |
+| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                      |
 
 See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
 details on how filtering interacts with the push watermark.
@@ -1311,7 +1312,10 @@ launchd on macOS and `systemd --user` on Linux. See
 [PostgreSQL Sync — `agentsview pg service`](/docs/pg-sync/#agentsview-pg-service)
 for setup notes.
 
-Use `service install --no-start-daemon` to wait for your collector; stop an existing push service before reinstalling.
+Use `service install --no-start-daemon` with your own collector. The push
+service exits if no writable daemon is running, and the service manager restarts
+it until the collector answers. Reinstalling restarts the service with the new
+arguments. The default installation still starts a missing daemon.
 
 ```bash
 agentsview pg service install

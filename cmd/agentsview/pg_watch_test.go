@@ -208,6 +208,7 @@ func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing
 }
 
 func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon bool) {
+	t.Helper()
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -243,7 +244,6 @@ func testPushWatchRetriesStartupOnResolvedDaemon(t *testing.T, requireDaemon boo
 	if requireDaemon {
 		cfg.DBPath = filepath.Join(dataDir, "sessions.db")
 		cfg.RequireDaemon = true
-		cfg.NoDaemonAutostart = true
 	}
 	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
 	err := backend.ReplicaPushWatch(

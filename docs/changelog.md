@@ -30,9 +30,9 @@ The latest release is
 
 - PostgreSQL and ClickHouse push services can wait for a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
-  and archive write locks during restarts. For an existing unit, run
-  `agentsview pg service stop` or `agentsview clickhouse service stop`, then
-  install with the flag. Installation starts the service.
+  and archive write locks during restarts. The push service exits if no writable
+  daemon is running, and the service manager restarts it until the collector
+  answers. Reinstalling restarts the service with the new arguments.
 
 - Claude Code channel questions appear in transcripts, search, and user-message
   totals. Rewinding after a channel conversation keeps that conversation as a
