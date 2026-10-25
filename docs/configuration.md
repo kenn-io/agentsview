@@ -333,9 +333,14 @@ mode instead.
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
 | `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                 |
 
-The inline embeddings API key is visible in container inspection; use the file
-form to keep the value out of the environment. A selector counts as set even
-when its value is empty; unset the unused selector.
+Anyone who can inspect the container can read `AGENTSVIEW_EMBEDDINGS_API_KEY`,
+and every process AgentsView starts, such as an agent CLI, inherits it. Use
+`AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` to keep the key out of the environment.
+Unlike `AGENTSVIEW_AUTH_TOKEN`, an empty `AGENTSVIEW_EMBEDDINGS_API_KEY` still
+counts as set: it stops startup on its own or next to the file form, so unset
+the form you don't use. Because the name belongs to the deployment server, a
+`[vector]` server can't read its key from it; startup stops while it is set, so
+give that server's `api_key_env` a different name.
 
 The image sets `AGENTSVIEW_MODE=serve`, `AGENTSVIEW_HOST=0.0.0.0`,
 `AGENTSVIEW_REQUIRE_AUTH=true`, and `AGENTSVIEW_NO_BROWSER=true`. An explicit

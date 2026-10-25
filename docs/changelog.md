@@ -17,6 +17,12 @@ The latest release is
   usage, and pattern recurrence, and survive full resyncs that retain transcript
   text. PostgreSQL hubs build their own digests. Read APIs and CLI commands
   remain planned.
+- Container deployments can pass the embeddings API key for PostgreSQL recipe
+  adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
+  Setting it together with `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup.
+  Under `AGENTSVIEW_MODE`, a `[vector]` server that reads its key from
+  `AGENTSVIEW_EMBEDDINGS_API_KEY` through `api_key_env` now stops startup;
+  rename that variable.
 
 **Improvements**
 
