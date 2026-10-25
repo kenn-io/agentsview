@@ -328,8 +328,9 @@ runs it needs no shell wrapper:
 
 - With `[vector]` in its `config.toml`, it builds with that recipe.
 - Without `[vector]`, it adopts the recipe a configured workstation published to
-  PostgreSQL. Set `AGENTSVIEW_EMBEDDINGS_ENDPOINT` (and
-  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` if the endpoint needs a key) under
+  PostgreSQL. Set `AGENTSVIEW_EMBEDDINGS_ENDPOINT` and, if the endpoint needs a
+  key, either `AGENTSVIEW_EMBEDDINGS_API_KEY` or
+  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` (never both) under
   [`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment). Adoption needs
   exactly one published recipe; see
   [semantic search: PostgreSQL](/docs/semantic-search/#postgresql).

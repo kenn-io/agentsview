@@ -329,6 +329,7 @@ mode instead.
 | `AGENTSVIEW_AUTH_TOKEN_FILE`         | File holding the bearer token; overrides `auth_token` in `config.toml`. `~/` expands to the home directory. Cannot be combined with `AGENTSVIEW_AUTH_TOKEN`                                 |
 | `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                    |
 | `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint for recipe adoption in `pg push --embed` and `pg serve`; local `serve` ignores it. See [semantic search on PostgreSQL](/docs/semantic-search/)        |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY`      | Inline API key for that endpoint; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT` and cannot be combined with the file form                                                                        |
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
 | `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                 |
 
@@ -349,8 +350,9 @@ These rules fail closed:
   `strconv.ParseBool` accepts. Any other value, an unknown `AGENTSVIEW_MODE`, or
   a blank `AGENTSVIEW_HOST` stops startup with an error naming the variable.
 - A missing, unreadable, or empty `AGENTSVIEW_AUTH_TOKEN_FILE` or
-  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup. AgentsView never falls
-  back to another secret source.
+  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup. A blank
+  `AGENTSVIEW_EMBEDDINGS_API_KEY`, or setting both API-key forms, also stops
+  startup. AgentsView never falls back to another secret source.
 - Any `AGENTSVIEW_EMBEDDINGS_*` variable together with a `[vector]` section
   stops startup, so one place owns the embedding recipe.
 

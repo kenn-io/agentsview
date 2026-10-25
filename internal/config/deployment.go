@@ -132,16 +132,23 @@ func (c *Config) ApplyDeploymentAuth() error {
 // A [vector] section owns its recipe and servers, so the two never combine.
 func (c *Config) ApplyDeploymentEmbeddings() error {
 	if active, err := deploymentVarsActive(
-		"AGENTSVIEW_EMBEDDINGS_ENDPOINT", "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
+		"AGENTSVIEW_EMBEDDINGS_ENDPOINT", "AGENTSVIEW_EMBEDDINGS_API_KEY",
+		"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
 		"AGENTSVIEW_EMBEDDINGS_BATCH_SIZE",
 	); err != nil || !active {
 		return err
 	}
 	endpoint, endpointSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_ENDPOINT")
-	keyPath, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
+	key, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY")
+	keyPath, keyPathSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
 	batchSize, batchSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE")
-	if !endpointSet && !keySet && !batchSet {
+	if !endpointSet && !keySet && !keyPathSet && !batchSet {
 		return nil
+	}
+	if keySet && keyPathSet {
+		return errors.New(
+			"set only one of AGENTSVIEW_EMBEDDINGS_API_KEY and " +
+				"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
 	}
 	if c.vectorSectionDefined {
 		return errors.New(
@@ -165,6 +172,13 @@ func (c *Config) ApplyDeploymentEmbeddings() error {
 		}
 	}
 	if keySet {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return errors.New("AGENTSVIEW_EMBEDDINGS_API_KEY must not be blank")
+		}
+		server.apiKey = key
+	}
+	if keyPathSet {
 		key, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
 		if err != nil {
 			return err

@@ -313,8 +313,9 @@ type VectorEmbeddingsServerConfig struct {
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
 
-	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the
-	// deployment server; it takes precedence over APIKeyEnv.
+	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY or
+	// AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it takes
+	// precedence over APIKeyEnv.
 	apiKey string
 }
 
