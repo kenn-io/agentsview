@@ -1748,7 +1748,7 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 			if cleanup != nil {
 				cleanup()
 			}
-			assert.ErrorIs(t, err, errNoWritableDaemon)
+			require.ErrorIs(t, err, errNoWritableDaemon)
 			assert.Zero(t, starts)
 			assert.NoFileExists(t, cfg.DBPath)
 		})

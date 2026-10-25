@@ -1311,9 +1311,7 @@ launchd on macOS and `systemd --user` on Linux. See
 [PostgreSQL Sync — `agentsview pg service`](/docs/pg-sync/#agentsview-pg-service)
 for setup notes.
 
-Use `agentsview pg service install --no-start-daemon` to wait for your own
-collector daemon. For an existing unit, run `agentsview pg service stop` first,
-then install with the flag. Installation starts the service.
+Use `service install --no-start-daemon` to wait for your collector; stop an existing push service before reinstalling.
 
 ```bash
 agentsview pg service install
@@ -1406,11 +1404,6 @@ ClickHouse has no vector phase. `--all --watch` is rejected.
 `clickhouse serve` accepts the same serve flags as `pg serve`.
 `clickhouse service` installs `clickhouse push --watch` as a launchd or systemd
 user unit and writes `clickhouse-watch.log`.
-
-Use `agentsview clickhouse service install --no-start-daemon` to wait for your
-own collector daemon. For an existing unit, run
-`agentsview clickhouse service stop` first, then install with the flag.
-Installation starts the service.
 
 ______________________________________________________________________
 
