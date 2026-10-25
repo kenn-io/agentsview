@@ -275,13 +275,6 @@ func (hs RemoteSync) downloadMirrorBatches(
 	fetch *spill.List,
 	mirrorRoot string,
 ) (refused bool, err error) {
-	batches := 0
-	for _, err := range pathBatches(fetch, mirrorBatchBytes) {
-		if err != nil {
-			return false, err
-		}
-		batches++
-	}
 	number, done := 0, 0
 	for batch, err := range pathBatches(fetch, mirrorBatchBytes) {
 		if err != nil {
@@ -293,10 +286,8 @@ func (hs RemoteSync) downloadMirrorBatches(
 		number++
 		done += len(batch)
 		files := fmt.Sprintf("%d changed files", len(batch))
-		if batches > 1 {
-			files = fmt.Sprintf(
-				"batch %d of %d (%d of %d changed files)", number, batches, done, fetch.Len(),
-			)
+		if number > 1 || done < fetch.Len() {
+			files = fmt.Sprintf("batch %d (%d of %d changed files)", number, done, fetch.Len())
 		}
 		err = hs.downloadFilesIntoMirror(ctx, targets, batch, false, mirrorRoot, files)
 		if isRemoteRefusal(err) {

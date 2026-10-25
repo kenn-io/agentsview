@@ -223,7 +223,7 @@ func TestRemoteSyncAppliesAChangeTooLargeToHoldInMemory(t *testing.T) {
 			details := uniqueProgressDetails(progress)
 			assert.Contains(t, details, "Planning import from devbox: every session will be re-read")
 			batch := regexp.MustCompile(
-				`^Downloading batch (\d) of 2 \((\d+) of (\d+) changed files\) from devbox$`,
+				`^Downloading batch (\d) \((\d+) of (\d+) changed files\) from devbox$`,
 			)
 			var batches []string
 			for _, detail := range details {
