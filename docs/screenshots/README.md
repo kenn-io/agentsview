@@ -53,8 +53,10 @@ python3 docs/screenshots/prepare.py prepare \
 Use full Git commit IDs, an explicit UTC build date, and image references of the
 form `sha256:...` or `registry/image@sha256:...`. `AGENTSVIEW_SRC` supplies the
 application checkout when `--source` is omitted. Documentation comes from the
-application revision; the capture checkout is recorded separately. Keep the
-capture revision available so a retry can check it out exactly.
+application revision; the preparation-tool checkout is recorded separately.
+Capture jobs pin their own script revision, so a capture-only change can reuse
+the same retained dependencies. Keep both source revisions available for
+retries.
 
 The output directory must be new. The command prints the SHA-256 of
 `prepared.json`. Retain the entire directory and record that digest with the
@@ -71,6 +73,7 @@ CORPUS_MANIFEST=/managed/corpora/example-1/manifest.json \
 CORPUS_SHA256="$APPROVED_CORPUS_SHA256" \
 PREPARED_INPUTS=/managed/prepared/release-1 \
 PREPARED_SHA256="$SEALED_PREPARATION_SHA256" \
+CAPTURE_REVISION="$CAPTURE_SCRIPT_REVISION" \
 CAPTURE_OUTPUT=/managed/attempts/request-1-attempt-1 \
   make docs-screenshots
 ```
@@ -118,6 +121,11 @@ bash docs/screenshots/update-generated-assets-branch.sh \
   --source /managed/attempts/request-1-attempt-1/run-1/capture/assets
 ```
 
+To reproduce the receipt's asset commit, run the import with `GIT_AUTHOR_DATE`
+and `GIT_COMMITTER_DATE` set to its `reference_now`, both Git names set to
+`Documentation Capture`, and both Git emails set to `docs@example.invalid`. The
+preview step supplies these values itself.
+
 This updates the local `docs-generated-assets` orphan branch. Publication
 remains a separate action; add `--push` only when authorized. Keep corpus and
 receipt files out of this branch. See the [maintainer guide](../README.md) for
@@ -132,8 +140,10 @@ content must fail; it must not silently leave an old PNG in the result.
 
 Most captures use a 1440×900 viewport at scale 1, dark mode, and English. The
 corpus supplies the timezone and reference time. One worker runs cases in order.
-Response fixtures illustrate unavailable integrations and selected analysis
-states. Capture does not invoke models, contact GitHub, or start cloud sync.
+Captures hide session identifiers and refresh timing labels; measured request
+latency varies between machines even with a fixed browser clock. Response
+fixtures illustrate unavailable integrations and selected analysis states.
+Capture does not invoke models, contact GitHub, or start cloud sync.
 
 Run focused pipeline tests before preparing a new capture revision:
 

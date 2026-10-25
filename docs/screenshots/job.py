@@ -71,7 +71,7 @@ def run(args):
     if digest(prepared_bytes) != args.prepared_sha256:
         raise ValueError("preparation checksum differs from sealed execution inputs")
     inputs = json.loads(prepared_bytes)
-    if capture_source() != inputs["capture_revision"]:
+    if capture_source() != args.capture_revision:
         raise ValueError("capture source differs from sealed execution inputs")
     # Validate all retained inputs before allocating an attempt.
     if inventory(prepared / "bundle") != inputs["files"]:
@@ -95,7 +95,7 @@ def run(args):
     receipt = {
         "schema": 1, "corpus_sha256": args.corpus_sha256,
         "prepared_sha256": args.prepared_sha256, "runs": receipts,
-        "capture_revision": inputs["capture_revision"],
+        "capture_revision": args.capture_revision,
         "publication_assets": "run-1/capture/assets", "preview": "run-1/preview/site",
     }
     (output / "receipt.json").write_bytes(canonical(receipt))
@@ -107,12 +107,14 @@ def main():
     for option, variable, kind in [
         ("corpus", "CORPUS_MANIFEST", Path), ("corpus-sha256", "CORPUS_SHA256", str),
         ("prepared", "PREPARED_INPUTS", Path), ("prepared-sha256", "PREPARED_SHA256", str),
+        ("capture-revision", "CAPTURE_REVISION", str),
         ("output", "CAPTURE_OUTPUT", Path),
     ]:
         parser.add_argument("--" + option, type=kind, default=os.environ.get(variable), help=variable)
     args = parser.parse_args()
     for option, variable in [("corpus", "CORPUS_MANIFEST"), ("corpus_sha256", "CORPUS_SHA256"),
                              ("prepared", "PREPARED_INPUTS"), ("prepared_sha256", "PREPARED_SHA256"),
+                             ("capture_revision", "CAPTURE_REVISION"),
                              ("output", "CAPTURE_OUTPUT")]:
         if not getattr(args, option):
             parser.error(f"{variable} or --{option.replace('_', '-')} is required")

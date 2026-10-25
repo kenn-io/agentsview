@@ -15,7 +15,7 @@ git rev-parse docs-generated-assets > /out/generated-asset-commit.txt
 cp -a /bundle/docs_venv docs/.venv
 python3 docs/scripts/check_markdown_sources.py
 bash docs/assets/hydrate-assets.sh
-(cd docs && uv run --offline --frozen bash ./zensical-docs.sh build && \
-  uv run --offline --frozen python scripts/check_built_site.py && \
-  uv run --offline --frozen python scripts/check_vercel_redirects.py)
+(cd docs && uv run --offline --frozen --no-dev bash ./zensical-docs.sh build && \
+  uv run --offline --frozen --no-dev python scripts/check_built_site.py && \
+  uv run --offline --frozen --no-dev python scripts/check_vercel_redirects.py)
 cp -a docs/site /out/site

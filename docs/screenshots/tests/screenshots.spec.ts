@@ -11,7 +11,10 @@ const CORPUS = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const CAPTURE_NOW = new Date(process.env.SCREENSHOT_NOW);
 if (!Number.isFinite(CAPTURE_NOW.getTime())) throw new Error('Invalid capture clock');
 const FULL = { width: 1440, height: 900 };
-const CAPTURE_STYLE = '.session-id { visibility: hidden !important; }';
+// Query latency is measured with performance.now(), independently of the fixed clock.
+const CAPTURE_STYLE = `
+  .session-id, .kit-refresh-control__text { visibility: hidden !important; }
+`;
 const PG_BASE_URL = process.env.PG_BASE_URL || '';
 
 test.beforeEach(async ({ page }) => {

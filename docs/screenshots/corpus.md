@@ -66,6 +66,10 @@ the recipe explicitly omits `encrypted_content`. Readable reasoning summaries
 remain. Select sessions without unreviewed inline images or other opaque
 attachments.
 
+Omission is by field name, including any plaintext stored under that name. Codex
+can also use `encrypted_content` for readable agent messages. Review this loss
+when selecting examples; the generator does not infer which values to keep.
+
 ```bash
 python3 docs/screenshots/corpus.py generate \
   --recipe /managed/intake/recipe.json \

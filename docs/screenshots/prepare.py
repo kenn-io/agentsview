@@ -88,7 +88,7 @@ def container(image, source, bundle, output, mode, environment, log_path):
 
 
 def prepare(args):
-    capture_revision = capture_source()
+    preparation_revision = capture_source()
     immutable_image(args.builder_image)
     immutable_image(args.runtime_image)
     if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
@@ -121,7 +121,7 @@ def prepare(args):
         "runtime_image": args.runtime_image, "platform": "linux/amd64",
         "build_script_sha256": digest((ROOT / "build.sh").read_bytes()),
         "docs_revision": docs_revision, "static_assets_revision": args.static_assets_revision,
-        "capture_revision": capture_revision,
+        "preparation_revision": preparation_revision,
         "files": inventory(bundle),
     }
     (output / "prepared.json").write_bytes(canonical(manifest))
