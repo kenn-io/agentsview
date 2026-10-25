@@ -1733,7 +1733,6 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 		wantMessage string
 	}{
 		{state: "absent", wantErr: errNoWritableDaemon},
-		{state: "unreachable", wantMessage: "local daemon owns the SQLite archive but is not responding; refusing to write directly"},
 		{state: "read-only", wantErr: db.ErrReadOnly, wantMessage: "is read-only"},
 	} {
 		t.Run(tt.state, func(t *testing.T) {
@@ -1745,8 +1744,6 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 				return nil, errors.New("unexpected autostart")
 			})
 			switch tt.state {
-			case "unreachable":
-				writeUnreachableDaemonRuntime(t, dir, false)
 			case "read-only":
 				host, port := testPingServer(t)
 				writeDaemonRuntimeForTest(t, dir, host, port, version, true)

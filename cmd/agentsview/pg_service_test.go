@@ -351,6 +351,12 @@ func TestSystemdRender_ClickHouseKind(t *testing.T) {
 	assert.Contains(t, got, "Description=agentsview ClickHouse auto-push")
 	assert.Contains(t, got, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch`)
 	assert.Contains(t, got, "clickhouse-watch.log")
+
+	kind := withNoStartDaemon(clickHouseServiceKind)
+	m.kind = kind
+	spec.Kind = kind
+	got = m.render(spec)
+	assert.Contains(t, got, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch --no-start-daemon`)
 }
 
 func TestLaunchdRender(t *testing.T) {
@@ -578,11 +584,4 @@ func TestPromptYesNo(t *testing.T) {
 		got := promptYesNo(strings.NewReader(c.in), "Continue?")
 		assert.Equal(t, c.want, got, "promptYesNo(%q)", c.in)
 	}
-}
-
-func TestServiceRender_NoStartDaemon(t *testing.T) {
-	kind := withNoStartDaemon(clickHouseServiceKind)
-	spec := serviceSpec{Kind: kind, BinPath: "/usr/local/bin/agentsview"}
-	systemd := (&systemdManager{kind: kind, user: "me", home: "/home/me"}).render(spec)
-	assert.Contains(t, systemd, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch --no-start-daemon`)
 }
