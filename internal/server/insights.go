@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -172,6 +173,11 @@ func (s *Server) humaGenerateCannedInsight(
 		return nil, apiError(http.StatusBadRequest,
 			"date_to must be >= date_from")
 	}
+	if kind == insight.CannedFrictionReview {
+		if err := s.validateFrictionReviewRequest(ctx, req); err != nil {
+			return nil, err
+		}
+	}
 	if req.Agent == "" {
 		req.Agent = s.insightDefaultAgent()
 	}
@@ -220,14 +226,20 @@ func (s *Server) generateCannedInsight(
 		return
 	}
 	generationOptions := s.currentInsightGenerateOptions(ctx)
-	payload, aggregateHash, cacheKey, err := s.buildCannedPayload(
+	build := s.buildCannedPayload
+	if kind == insight.CannedFrictionReview {
+		build = s.buildFrictionReviewPayload
+	}
+	payload, aggregateHash, cacheKey, err := build(
 		ctx, kind, req, filters, generationOptions,
 	)
 	if err != nil {
 		log.Printf("canned insight payload error: %v", err)
-		sendJSON("error", map[string]string{
-			"message": "failed to build canned insight payload",
-		})
+		message := "failed to build canned insight payload"
+		if errors.Is(err, errFrictionDigestNotFound) {
+			message = errFrictionDigestNotFound.Error()
+		}
+		sendJSON("error", map[string]string{"message": message})
 		return
 	}
 
