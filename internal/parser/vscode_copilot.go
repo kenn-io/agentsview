@@ -400,20 +400,31 @@ func parseVSCodeCopilotResponse(
 ) (string, []ParsedToolCall) {
 	var textParts []string
 	var toolCalls []ParsedToolCall
-	// VS Code can persist one tool call as two invocations that share a
-	// toolCallId: a hidden extension placeholder and the built-in tool it
-	// delegates to (copilot_fetchWebPage, then vscode_fetchWebPage_internal).
-	// Keep one call per ID so tool_use_id stays unique within the message,
-	// preferring the visible invocation, which carries the input.
-	callIndex := map[string]int{}
-	hiddenCall := map[string]bool{}
 
+	items := make([]vscodeCopilotResponseItem, 0, len(raw))
 	for _, r := range raw {
 		var item vscodeCopilotResponseItem
 		if err := json.Unmarshal(r, &item); err != nil {
 			continue
 		}
+		items = append(items, item)
+	}
 
+	// VS Code can persist one tool call as two invocations that share a
+	// toolCallId: a hidden extension placeholder and the built-in tool it
+	// delegates to (copilot_fetchWebPage, then vscode_fetchWebPage_internal).
+	// Keep one call per ID so tool_use_id stays unique within the message,
+	// preferring the visible invocation, which carries the input.
+	visibleCall := map[string]bool{}
+	for _, item := range items {
+		if item.Kind == "toolInvocationSerialized" &&
+			item.ToolID != "" && item.Presentation != "hidden" {
+			visibleCall[item.ToolCallID] = true
+		}
+	}
+	seenCall := map[string]bool{}
+
+	for _, item := range items {
 		switch item.Kind {
 		case "toolInvocationSerialized":
 			if item.ToolID != "" {
@@ -429,17 +440,11 @@ func parseVSCodeCopilotResponse(
 					item.PastTenseMessage,
 					item.ToolSpecificData,
 				)
-				hidden := item.Presentation == "hidden"
-				if i, seen := callIndex[tc.ToolUseID]; seen {
-					if hiddenCall[tc.ToolUseID] && !hidden {
-						toolCalls[i] = tc
-						hiddenCall[tc.ToolUseID] = false
+				if id := tc.ToolUseID; id != "" {
+					if seenCall[id] || (item.Presentation == "hidden" && visibleCall[id]) {
+						continue
 					}
-					continue
-				}
-				if tc.ToolUseID != "" {
-					callIndex[tc.ToolUseID] = len(toolCalls)
-					hiddenCall[tc.ToolUseID] = hidden
+					seenCall[id] = true
 				}
 				toolCalls = append(toolCalls, tc)
 			}
