@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 
@@ -15,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/sync"
@@ -29,6 +33,7 @@ const (
 )
 
 type archiveQueryPolicy struct {
+	Command              *cobra.Command
 	Offline              bool
 	NoSync               bool
 	AutoStart            bool
@@ -37,11 +42,15 @@ type archiveQueryPolicy struct {
 	DirectReadOnlyAction string
 }
 
-type archiveQueryBackend interface {
+type archiveReportBackend interface {
 	ActivityReport(context.Context, ActivityReportConfig) (activity.Report, error)
 	DailyUsage(context.Context, dailyUsageQuery) (dailyUsageReport, error)
-	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
 	MachineLabels(context.Context) (service.MachineLabelCatalog, error)
+}
+
+type archiveQueryBackend interface {
+	archiveReportBackend
+	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
 }
 
 // sessionUsageQuery selects the session and the attribution scope for
@@ -74,7 +83,35 @@ type dailyUsageQuery struct {
 func resolveArchiveQueryBackend(
 	ctx context.Context,
 	policy archiveQueryPolicy,
-) (archiveQueryBackend, func(), error) {
+) (archiveReportBackend, func(), error) {
+	if policy.Command != nil {
+		target, err := resolveReadTarget(policy.Command, readTargetDefault)
+		if err != nil {
+			return nil, nil, err
+		}
+		if target.isHTTP() {
+			return daemonArchiveQueryBackend{tr: transport{Mode: transportHTTP, URL: target.URL, httpClient: target.client}, authToken: target.Cred, target: target}, func() {}, nil
+		}
+		if target.Kind == readTargetPG {
+			cfg, err := config.LoadPFlagsFor(policy.Command.Flags(), config.ScopeLocal)
+			if err != nil {
+				return nil, nil, err
+			}
+			pgCfg, _, err := resolvePGReadConfig(policy.Command, cfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			store, cleanup, err := openPGReadStore(cfg, pgCfg)
+			if err != nil {
+				closeArchiveQueryBackend(cleanup)
+				return nil, nil, err
+			}
+			if priced, ok := store.(customPricingStore); ok {
+				priced.SetCustomPricing(cfg.CustomModelPricing)
+			}
+			return pgArchiveQueryBackend{store: store}, cleanup, nil
+		}
+	}
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
@@ -206,6 +243,7 @@ func openArchiveQueryDB(
 }
 
 type daemonArchiveQueryBackend struct {
+	target    readTarget
 	tr        transport
 	authToken string
 }
@@ -220,30 +258,31 @@ func (b daemonArchiveQueryBackend) ActivityReport(
 	if cfg.Preset != "custom" && cfg.From == "" && cfg.Date == "" {
 		cfg.Date = todayIn(cfg.Timezone)
 	}
-	return fetchHTTPActivityReport(ctx, b.tr, b.authToken, cfg)
+	out, err := fetchHTTPActivityReport(ctx, b.tr, b.authToken, cfg)
+	return out, b.target.remoteError(err)
 }
 
 func (b daemonArchiveQueryBackend) DailyUsage(
 	ctx context.Context,
 	query dailyUsageQuery,
 ) (dailyUsageReport, error) {
-	return fetchHTTPDailyUsage(ctx, b.tr, b.authToken, query)
+	out, err := fetchHTTPDailyUsage(ctx, b.tr, b.authToken, query)
+	return out, b.target.remoteError(err)
 }
 
 func (b daemonArchiveQueryBackend) SessionUsage(
 	ctx context.Context,
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
-	return httpSessionUsageData(ctx, b.tr.URL, b.authToken, query)
+	out, code, err := httpSessionUsageDataWithClient(ctx, b.tr.URL, b.authToken, query, b.tr.httpClient)
+	return out, code, b.target.remoteError(err)
 }
 
 func (b daemonArchiveQueryBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
-	return service.MachineLabels(
-		ctx,
-		servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, ""),
-	)
+	out, err := service.MachineLabels(ctx, servicehttp.NewHTTPBackendWithClient(b.tr.URL, b.authToken, b.tr.ReadOnly, "", b.tr.httpClient))
+	return out, b.target.remoteError(err)
 }
 
 type localArchiveQueryBackend struct {
@@ -271,17 +310,21 @@ func (b localArchiveQueryBackend) DailyUsage(
 	ensureUsagePricing(
 		b.database, b.offline, b.cfg.CustomModelPricing,
 	)
+	return storeDailyUsage(ctx, b.database, query)
+}
+
+func storeDailyUsage(ctx context.Context, store db.Store, query dailyUsageQuery) (dailyUsageReport, error) {
 	filter := localDailyUsageFilter(query)
 	var err error
-	filter.Machine, err = db.ResolveMachineFilter(ctx, b.database, filter.Machine)
+	filter.Machine, err = db.ResolveMachineFilter(ctx, store, filter.Machine)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
-	result, err := b.database.GetDailyUsage(ctx, filter)
+	result, err := store.GetDailyUsage(ctx, filter)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
-	planUsage, err := b.database.GetPlanUsageSessionCounts(ctx, filter)
+	planUsage, err := store.GetPlanUsageSessionCounts(ctx, filter)
 	if err != nil {
 		return dailyUsageReport{}, err
 	}
@@ -295,7 +338,11 @@ func (b localArchiveQueryBackend) DailyUsage(
 func (b localArchiveQueryBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
-	labels, err := b.database.GetMachineLabels(ctx)
+	return storeMachineLabels(ctx, b.database)
+}
+
+func storeMachineLabels(ctx context.Context, store db.Store) (service.MachineLabelCatalog, error) {
+	labels, err := store.GetMachineLabels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -416,4 +463,39 @@ func closeArchiveQueryBackend(cleanup func()) {
 	if cleanup != nil {
 		cleanup()
 	}
+}
+
+// transportAPIClient preserves the selected remote's transport and error policy.
+func transportAPIClient(tr transport, token string, fallback *http.Client) (*apiclient.Client, error) {
+	if tr.httpClient != nil {
+		client := *tr.httpClient
+		if fallback != nil {
+			client.Timeout = fallback.Timeout
+		}
+		//nolint:bodyclose // Successful response bodies are closed by the generated API runtime.
+		policy := remotecred.ResponsePolicy(tr.URL)
+		return apiclient.NewHTTPClientWithResponsePolicy(tr.URL, token, &client, policy)
+	}
+	return apiclient.NewHTTPClient(tr.URL, token, fallback)
+}
+
+type pgArchiveQueryBackend struct {
+	store db.Store
+}
+
+func (b pgArchiveQueryBackend) DailyUsage(ctx context.Context, query dailyUsageQuery) (dailyUsageReport, error) {
+	return storeDailyUsage(ctx, b.store, query)
+}
+
+func (b pgArchiveQueryBackend) ActivityReport(ctx context.Context, cfg ActivityReportConfig) (activity.Report, error) {
+	store, ok := b.store.(activityCLIStore)
+	if !ok {
+		return activity.Report{}, errors.New("activity reports not available from this PostgreSQL store")
+	}
+	cfg.ctx = ctx
+	return resolveActivityReport(cfg, store)
+}
+
+func (b pgArchiveQueryBackend) MachineLabels(ctx context.Context) (service.MachineLabelCatalog, error) {
+	return storeMachineLabels(ctx, b.store)
 }
