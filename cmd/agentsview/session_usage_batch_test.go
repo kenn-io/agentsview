@@ -92,7 +92,7 @@ func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 			raw := decodeCLIJSON[map[string][]map[string]any](t, output.String())
 			require.Len(t, raw["results"], 2)
 			assert.Equal(t, "codex:session-a", raw["results"][0]["requested_id"])
-			assert.Equal(t, float64(0), raw["results"][0]["exit_code"])
+			assert.InDelta(t, 0, raw["results"][0]["exit_code"], 0)
 			assert.Contains(t, raw["results"][0], "usage")
 			assert.NotContains(t, raw["results"][0], "error")
 			assert.Empty(t, reqs.SyncInput.ID)

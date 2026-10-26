@@ -56,7 +56,7 @@ func sessionUsageBatchDataForCommand(cmd *cobra.Command, ids []string) (*session
 		if err != nil {
 			result.Error = err.Error()
 		} else if code == tokenUseExitNotFound {
-			result.Error = fmt.Sprintf("session not found: %s", id)
+			result.Error = "session not found: " + id
 		}
 		out.Results = append(out.Results, result)
 	}
