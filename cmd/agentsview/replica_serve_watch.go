@@ -91,7 +91,7 @@ func joinReplicaServeWorker(startup *replicaServeStartup, stop context.CancelFun
 	}
 	previousCleanup := startup.cleanup
 	startup.cleanup = func() {
-		startup.joinWorker()
+		_ = startup.joinWorker()
 		cleanup()
 		previousCleanup()
 	}
