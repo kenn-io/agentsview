@@ -4023,7 +4023,7 @@ func TestCodexServiceTierMessages(t *testing.T) {
 		return `{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"` + tier + `"}}}`
 	}
 	turn := func(id string) string {
-		return `{"type":"turn_context","payload":{"turn_id":"` + id + `"}}`
+		return `{"type":"turn_context","payload":{"turn_id":"` + id + `","model":"gpt-6.1-sol"}}`
 	}
 	for _, tc := range []struct {
 		name  string
@@ -4038,7 +4038,7 @@ func TestCodexServiceTierMessages(t *testing.T) {
 			testjsonl.CodexFunctionCallJSON("shell", "run command", tsLate),
 			turn("second"), settings("ultrafast"),
 			testjsonl.CodexMsgJSON("assistant", "after tier change", tsLate),
-			turn("third"), settings("unknown"),
+			turn("third"), settings("default"),
 			testjsonl.CodexMsgJSON("assistant", "after reset", tsLateS5),
 		}, []string{"", "openai-priority", "openai-priority", "openai-ultrafast", ""}},
 		{"fork replay", []string{

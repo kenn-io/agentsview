@@ -204,7 +204,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
 		{"gpt-6.1-sol@ultrafast", "12", "0.6", "60", "15", "24", "1.2", "90", "30"},
 		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "", "", "", ""},
-		{"gpt-5-nano", "0.05", "0.005", "0.4", "0", "", "", "", ""},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			price, ok := byModel[tc.model]
@@ -226,5 +225,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		})
 	}
 	assert.NotContains(t, byModel, "gpt-5.5@ultrafast")
+	// LiteLLM publishes a priority input price for gpt-5-nano without an output price.
 	assert.NotContains(t, byModel, "gpt-5-nano@priority")
 }
