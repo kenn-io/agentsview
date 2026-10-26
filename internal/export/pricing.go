@@ -287,7 +287,7 @@ func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLook
 	if r == nil {
 		return lookup, nil
 	}
-	base := r.Lookup(pricedModel)
+	base := r.Lookup(lookup.Pattern)
 	pattern := catalog.TierPattern(base.Pattern, tier)
 	rates, ok := r.byModel[pattern]
 	if !ok {

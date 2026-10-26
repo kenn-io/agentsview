@@ -204,6 +204,20 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	t.Run("historical dated alias priority", func(t *testing.T) {
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		resolver := NewPricingResolver([]EffectivePricingRow{
+			{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.2")}},
+			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4")}},
+		})
+		_, lookup, err := resolver.ResolveBilledAt("openai-priority", "gpt-5.6-luna-2026-07-13", "gpt-5.6-luna-2026-07-13", time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		require.True(t, lookup.OK)
+		assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
+		assert.Equal(t, "gpt-5.6-luna@priority", lookup.Pattern)
+		assert.Equal(t, "openai-priority", lookup.Adjustment)
+	})
 	t.Run("historical published tier band", func(t *testing.T) {
 		embedded := pricingpkg.EmbeddedGenAIDocument()
 		resolver := NewPricingResolver([]EffectivePricingRow{
