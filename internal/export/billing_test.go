@@ -2,6 +2,8 @@ package export
 
 import (
 	"fmt"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -149,33 +151,55 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	data, err := os.ReadFile("../pricing/catalog/testdata/litellm_service_tiers.json")
+	require.NoError(t, err)
+	prices, err := catalog.ParseLiteLLMPricing(data)
+	require.NoError(t, err)
 	for _, tc := range []struct {
-		provider, model                                          string
-		source                                                   PricingRowSource
-		input, cached, output, wantInput, wantCached, wantOutput string
+		name, provider, model, input, cached, output, pattern, adjustment string
+		custom                                                            bool
 	}{
-		{"openai-priority", "gpt-6.1-sol", "", "2", "0.1", "10", "4", "0.2", "20"},
-		{"openai-priority", "gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
-		{"openai-priority", "openai/gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
-		{"openai-ultrafast", "gpt-6.1-sol", "", "2", "0.1", "10", "12", "0.6", "60"},
-		{"openai-ultrafast", "gpt-6-luna", "", "0.25", "0.025", "2", "0.25", "0.025", "2"},
+		{"priority", "openai-priority", "gpt-6.1-sol", "4", "0.2", "20", "gpt-6.1-sol@priority", "openai-priority", false},
+		{"ultrafast", "openai-ultrafast", "gpt-6.1-sol", "12", "0.6", "60", "gpt-6.1-sol@ultrafast", "openai-ultrafast", false},
+		{"default", "", "gpt-6.1-sol", "2", "0.1", "10", "gpt-6.1-sol", "", false},
+		{"unknown", "unknown", "gpt-6.1-sol", "2", "0.1", "10", "gpt-6.1-sol", "", false},
+		{"missing tier", "openai-ultrafast", "gpt-5.5", "5", "0.5", "30", "gpt-5.5", "", false},
+		{"custom", "openai-priority", "gpt-6.1-sol", "7", "0.7", "70", "gpt-6.1-sol", "", true},
+		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "1.25", "75", "gpt-5.5@priority", "openai-priority", false},
 	} {
-		t.Run(tc.provider+"/"+tc.model+"/"+string(tc.source), func(t *testing.T) {
-			resolver := NewPricingResolver([]EffectivePricingRow{{
-				ModelPattern: tc.model,
-				Rates: ModelRates{
-					InputPerMTok:     money.MustParseDollars(tc.input),
-					CacheReadPerMTok: money.MustParseDollars(tc.cached),
-					OutputPerMTok:    money.MustParseDollars(tc.output),
-					Source:           tc.source,
-				},
-			}})
-			_, lookup, err := resolver.ResolveBilledAt(tc.provider, "reported-alias", tc.model, time.Time{})
+		t.Run(tc.name, func(t *testing.T) {
+			var rows []EffectivePricingRow
+			for _, price := range prices {
+				rates := ModelRates{
+					InputPerMTok: price.InputPerMTok, OutputPerMTok: price.OutputPerMTok,
+					CacheReadPerMTok: price.CacheReadPerMTok, CacheWritePerMTok: price.CacheCreationPerMTok,
+					Source: PricingRowSourceFetched,
+				}
+				for _, band := range price.Bands {
+					rates.Bands = append(rates.Bands, PricingBand{
+						AboveInputTokens: band.AboveInputTokens, InputPerMTok: band.InputPerMTok,
+						OutputPerMTok: band.OutputPerMTok, CacheReadPerMTok: band.CacheReadPerMTok,
+						CacheWritePerMTok: band.CacheCreationPerMTok,
+					})
+				}
+				if tc.custom && price.ModelPattern == tc.model {
+					rates = ModelRates{InputPerMTok: money.MustParseDollars("7"), CacheReadPerMTok: money.MustParseDollars("0.7"), OutputPerMTok: money.MustParseDollars("70"), Source: PricingRowSourceCustom}
+				}
+				rows = append(rows, EffectivePricingRow{ModelPattern: price.ModelPattern, Rates: rates})
+			}
+			resolver := NewPricingResolver(rows)
+			_, lookup, err := resolver.ResolveBilledAt(tc.provider, tc.model, tc.model, time.Time{})
 			require.NoError(t, err)
 			require.True(t, lookup.OK)
-			assert.Equal(t, money.MustParseDollars(tc.wantInput), lookup.Rates.InputPerMTok)
-			assert.Equal(t, money.MustParseDollars(tc.wantCached), lookup.Rates.CacheReadPerMTok)
-			assert.Equal(t, money.MustParseDollars(tc.wantOutput), lookup.Rates.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.cached), lookup.Rates.CacheReadPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.output), lookup.Rates.OutputPerMTok)
+			assert.Equal(t, tc.pattern, lookup.Pattern)
+			assert.Equal(t, tc.adjustment, lookup.Adjustment)
+			if tc.name == "priority" {
+				require.Len(t, lookup.Rates.Bands, 1)
+				assert.Equal(t, money.MustParseDollars("8"), lookup.Rates.Bands[0].InputPerMTok)
+			}
 		})
 	}
 }

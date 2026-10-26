@@ -20,6 +20,9 @@ func TestCodexServiceTierSessionCosts(t *testing.T) {
 		cost                  string
 	}{
 		{"priority", 20360, 6912, 808, "0.071334"},
+		// Round the tier cost once, rather than multiplying the rounded standard cost.
+		{"ultrafast", 22016, 15872, 817, "0.132271"},
+		{"default", 20360, 12032, 862, "0.026479"},
 	} {
 		t.Run(tc.tier, func(t *testing.T) {
 			sessions := filepath.Join(t.TempDir(), "sessions")
@@ -31,6 +34,16 @@ func TestCodexServiceTierSessionCosts(t *testing.T) {
 				InputPerMTok:     money.MustParseDollars("2"),
 				CacheReadPerMTok: money.MustParseDollars("0.10"),
 				OutputPerMTok:    money.MustParseDollars("10"),
+			}, {
+				ModelPattern:     "gpt-6.1-sol@priority",
+				InputPerMTok:     money.MustParseDollars("4"),
+				CacheReadPerMTok: money.MustParseDollars("0.2"),
+				OutputPerMTok:    money.MustParseDollars("20"),
+			}, {
+				ModelPattern:     "gpt-6.1-sol@ultrafast",
+				InputPerMTok:     money.MustParseDollars("12"),
+				CacheReadPerMTok: money.MustParseDollars("0.6"),
+				OutputPerMTok:    money.MustParseDollars("60"),
 			}}))
 			const uuid = "019f0000-0000-7000-8000-00000000c001"
 			path := env.writeCodexSession(t, filepath.Join("2026", "10", "26"), "rollout-2026-10-26T10-00-00-"+uuid+".jsonl", testjsonl.JoinJSONL(

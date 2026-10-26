@@ -414,7 +414,7 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 		b.handleResponseItem(ctx, payload, ts)
 	case codexTypeEventMsg:
 		if payload.Get("type").Str == "thread_settings_applied" {
-			b.handleEventMsg(payload)
+			b.applyThreadSettings(payload)
 			return false, nil
 		}
 		if b.suppresses(codexTypeEventMsg, payload) {
@@ -599,18 +599,20 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	})
 }
 
+func (b *codexSessionBuilder) applyThreadSettings(payload gjson.Result) {
+	switch payload.Get("thread_settings.service_tier").Str {
+	case "priority":
+		b.serviceTierProviderID = pricing.OpenAIPriorityProviderID
+	case "ultrafast":
+		b.serviceTierProviderID = pricing.OpenAIUltrafastProviderID
+	default:
+		b.serviceTierProviderID = ""
+	}
+}
+
 func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 	eventType := payload.Get("type").Str
 	switch eventType {
-	case "thread_settings_applied":
-		switch payload.Get("thread_settings.service_tier").Str {
-		case "priority":
-			b.serviceTierProviderID = pricing.OpenAIPriorityProviderID
-		case "ultrafast":
-			b.serviceTierProviderID = pricing.OpenAIUltrafastProviderID
-		default:
-			b.serviceTierProviderID = ""
-		}
 	case "task_started", "task_complete", "turn_aborted":
 		b.observeTaskEvent(eventType)
 	case "token_count":

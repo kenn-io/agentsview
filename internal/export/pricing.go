@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 type PricingRowSource string
@@ -262,25 +263,35 @@ func (r *PricingResolver) ResolveBilled(providerID, reportedModel, canonicalMode
 // timestamp before applying one exact provider adjustment.
 func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalModel string, timestamp time.Time) (string, PricingLookup, error) {
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, timestamp)
-	policy, ok := pricingpkg.BillingPolicyFor(providerID)
-	if !ok || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+	if !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
 		return pricedModel, lookup, nil
 	}
-	numerator, denominator := policy.Numerator, policy.Denominator
-	if policy.ModelRatios != nil {
-		ratio, ok := pricingpkg.Resolve(policy.ModelRatios, pricedModel)
-		if !ok {
-			return pricedModel, lookup, nil
-		}
-		numerator, denominator = ratio.Numerator, ratio.Denominator
+	if tier, ok := pricingpkg.ServiceTierFor(providerID); ok {
+		return pricedModel, r.withServiceTier(pricedModel, lookup, tier), nil
 	}
-	rates, err := scaleModelRates(lookup.Rates, numerator, denominator)
+	policy, ok := pricingpkg.BillingPolicyFor(providerID)
+	if !ok {
+		return pricedModel, lookup, nil
+	}
+	rates, err := scaleModelRates(lookup.Rates, policy.Numerator, policy.Denominator)
 	if err != nil {
 		return "", PricingLookup{}, err
 	}
 	lookup.Rates = rates
 	lookup.Adjustment = policy.Service + "@" + policy.Version
 	return pricedModel, lookup, nil
+}
+
+func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLookup, tier string) PricingLookup {
+	base := r.Lookup(pricedModel)
+	pattern := catalog.TierPattern(base.Pattern, tier)
+	if rates, ok := r.byModel[pattern]; ok {
+		lookup.Rates = rates
+		lookup.Pattern = pattern
+		lookup.Adjustment = "openai-" + tier
+		return clonePricingLookup(lookup)
+	}
+	return lookup
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {

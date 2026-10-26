@@ -26,6 +26,12 @@ const (
 	litellmURL         = litellmBaseURL + "main/" + litellmPricingFile
 )
 
+// ServiceTiers lists the service tiers imported from LiteLLM.
+var ServiceTiers = []string{"priority", "ultrafast"}
+
+// TierPattern identifies a model's service-tier pricing row.
+func TierPattern(pattern, tier string) string { return pattern + "@" + tier }
+
 // ModelPricing holds per-model token pricing in cost per million tokens.
 // CacheCreation1hPerMTok prices 1-hour-TTL cache writes; zero means the
 // catalog publishes no separate 1h rate and writes bill at
@@ -151,11 +157,42 @@ func ParseLiteLLMPricing(
 			CacheCreation1hPerMTok: cacheCreation1h,
 			CacheReadPerMTok:       cacheRead,
 		}
-		p.Bands, err = parsePricingBands(model, fields, p)
+		p.Bands, err = parsePricingBands(model, fields, p, inputThresholdRatePattern)
 		if err != nil {
 			return nil, err
 		}
 		prices = append(prices, p)
+		for _, tier := range ServiceTiers {
+			input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+tier)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s %s input price: %w", model, tier, err)
+			}
+			if !present {
+				continue
+			}
+			tp := p
+			tp.ModelPattern = TierPattern(model, tier)
+			tp.InputPerMTok = input
+			for field, dest := range map[string]*money.Money{
+				"output_cost_per_token":           &tp.OutputPerMTok,
+				"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
+				"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
+			} {
+				rate, present, err := parseOptionalRate(fields, field+"_"+tier)
+				if err != nil {
+					return nil, fmt.Errorf("parsing %s %s: %w", tp.ModelPattern, field, err)
+				}
+				if present {
+					*dest = rate
+				}
+			}
+			tp.Bands, err = parsePricingBands(model, fields, tp,
+				regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_`+tier+`$`))
+			if err != nil {
+				return nil, err
+			}
+			prices = append(prices, tp)
+		}
 	}
 	return prices, nil
 }
@@ -164,11 +201,12 @@ func parsePricingBands(
 	model string,
 	fields map[string]jsontext.Value,
 	base ModelPricing,
+	thresholdPattern *regexp.Regexp,
 ) ([]PricingBand, error) {
 	var bands []PricingBand
 	thresholds := make(map[int]struct{})
 	for key := range fields {
-		matches := inputThresholdRatePattern.FindStringSubmatch(key)
+		matches := thresholdPattern.FindStringSubmatch(key)
 		if matches == nil {
 			continue
 		}

@@ -85,13 +85,15 @@ and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
 
 A band applies only when whole-request input is strictly greater than its
 threshold; when several bands exist, the highest eligible threshold wins.
-The catalog importer excludes Batch, Flex, Priority, Ultrafast, and regional
-rate fields. Codex's `thread_settings_applied` events identify the configured
-Fast or Ultrafast tier. Its billing policies maintain an explicit model table
-from the Fast and Ultrafast rates in
-[OpenAI's pricing](https://developers.openai.com/api/docs/pricing), checked
-2026-10-26. Models outside that table keep standard rates. See
-[Codex billing](../token-usage.md#codex-fast-and-ultrafast-billing) for the ratios.
+The catalog importer excludes Batch, Flex, and regional rate fields. Codex's
+`thread_settings_applied` events identify the configured Fast or Ultrafast tier.
+Checked 2026-10-26, the
+[LiteLLM catalog](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+publishes `_priority` and `_ultrafast` input, output, cache-read, and
+cache-creation prices, plus tier-specific `_above_272k_tokens` bands. The
+importer stores these as `<model>@priority` and `<model>@ultrafast` rows on the
+next pricing refresh. Models without a tier price keep standard rates. See
+[Codex billing](../token-usage.md#codex-fast-and-ultrafast-billing).
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this

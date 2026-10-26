@@ -103,7 +103,7 @@ The latest release is
   matching sessions. Ambiguous IDs still require the full session ID.
 - Codex Fast and Ultrafast sessions now use their service-tier prices.
   Existing Codex sessions whose rollout files are still on disk are repriced
-  on upgrade.
+  after the next pricing refresh.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
   button now runs that rebuild on every server, and the status bar shows when a
   sync fails instead of staying silent. A rebuild that does not finish is
