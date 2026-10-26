@@ -35,6 +35,11 @@ The latest release is
   blindness. Past the tenth series, colors repeat with a pattern: hatched
   Usage bars, areas, and treemap tiles, and dashed Trends lines.
 
+- `pg status` and `clickhouse status` show how many sessions are waiting to
+  push and how long ago the last successful push started. Run them with
+  `--max-pending 15m` from a timer or monitor to alert when a machine's push
+  keeps failing, for example after the server loses a permission the push
+  needs. Machines with nothing new to push never fail the check.
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
   and archive write locks during restarts. The push service exits if no writable

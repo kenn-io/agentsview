@@ -6677,39 +6677,12 @@ func (db *DB) ListSessionsForMirrorWindow(
 	ctx context.Context, since string,
 	projects, excludeProjects []string,
 ) ([]Session, error) {
-	query := "SELECT " + sessionFullCols + " FROM sessions"
-	var (
-		args  []any
-		where []string
-	)
-	if since != "" {
-		normalized, err := normalizeMirrorWindowBound(since)
-		if err != nil {
-			return nil, err
-		}
-		where = append(where, "sync_marker >= ?")
-		args = append(args, normalized)
+	where, args, err := mirrorWindowWhere(since, projects, excludeProjects)
+	if err != nil {
+		return nil, err
 	}
-	if len(projects) > 0 {
-		placeholders := make([]string, len(projects))
-		for i, p := range projects {
-			placeholders[i] = "?"
-			args = append(args, p)
-		}
-		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
-	}
-	if len(excludeProjects) > 0 {
-		placeholders := make([]string, len(excludeProjects))
-		for i, p := range excludeProjects {
-			placeholders[i] = "?"
-			args = append(args, p)
-		}
-		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
-	}
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
-	}
-	query += " ORDER BY created_at"
+	query := "SELECT " + sessionFullCols + " FROM sessions" + where +
+		" ORDER BY created_at"
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -6891,6 +6864,66 @@ const writerHandoffNoticeAfter = 5 * time.Second
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the
 // bound compares correctly against trigger-maintained markers.
+// CountSessionsForMirrorWindow counts the sessions ListSessionsForMirrorWindow
+// would return for the same window and project filters.
+func (db *DB) CountSessionsForMirrorWindow(
+	ctx context.Context, since string,
+	projects, excludeProjects []string,
+) (int, error) {
+	where, args, err := mirrorWindowWhere(since, projects, excludeProjects)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.getReader().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions"+where, args...,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf(
+			"counting sessions for mirror window since %s: %w", since, err,
+		)
+	}
+	return n, nil
+}
+
+// mirrorWindowWhere builds the WHERE clause, with its leading space, shared by
+// the mirror window queries. It is empty when nothing filters the window.
+func mirrorWindowWhere(
+	since string, projects, excludeProjects []string,
+) (string, []any, error) {
+	var (
+		args  []any
+		where []string
+	)
+	if since != "" {
+		normalized, err := normalizeMirrorWindowBound(since)
+		if err != nil {
+			return "", nil, err
+		}
+		where = append(where, "sync_marker >= ?")
+		args = append(args, normalized)
+	}
+	if len(projects) > 0 {
+		placeholders := make([]string, len(projects))
+		for i, p := range projects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(excludeProjects) > 0 {
+		placeholders := make([]string, len(excludeProjects))
+		for i, p := range excludeProjects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(where) == 0 {
+		return "", nil, nil
+	}
+	return " WHERE " + strings.Join(where, " AND "), args, nil
+}
+
 func normalizeMirrorWindowBound(bound string) (string, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, bound)
 	if err != nil {

@@ -434,6 +434,25 @@ func TestListSessionsForMirrorWindowInclusiveLowerBoundUnboundedAbove(t *testing
 	none, err := database.ListSessionsForMirrorWindow(ctx, "", []string{"other"}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, none)
+
+	// The count covers the same window and filters as the list.
+	counts := []struct {
+		since            string
+		projects, except []string
+		want             int
+	}{
+		{since: "2026-07-01T10:00:00.000Z", want: 3},
+		{since: "2026-07-01T10:00:00.001Z", want: 2},
+		{since: "", want: 4},
+		{since: "", projects: []string{"other"}, want: 0},
+		{since: "2026-07-01T10:00:00.000Z", projects: []string{"p"}, want: 3},
+		{since: "2026-07-01T10:00:00.000Z", except: []string{"p"}, want: 0},
+	}
+	for _, c := range counts {
+		n, err := database.CountSessionsForMirrorWindow(ctx, c.since, c.projects, c.except)
+		require.NoError(t, err)
+		assert.Equal(t, c.want, n, "since=%q projects=%v exclude=%v", c.since, c.projects, c.except)
+	}
 }
 
 // TestSyncMarkerMalformedCreatedAtIsDropped pins the no-raw-fallback

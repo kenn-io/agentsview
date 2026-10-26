@@ -199,7 +199,13 @@ func (Backend) Status(
 	if status.SchemaMissing {
 		rows = append(rows, storage.StatusRow{Label: "Schema:", Value: "not created yet"})
 	}
-	return storage.ReplicaStatus{Rows: rows}, nil
+	// Without the archive id the keys read are the unscoped ones, which are
+	// not this archive's cursor.
+	return storage.ReplicaStatus{
+		Rows:          rows,
+		PushCursor:    status.LastPushCutoff,
+		HasPushCursor: archiveID != "",
+	}, nil
 }
 
 // LastPushAt reads this archive's cursor from the mirror metadata.

@@ -371,6 +371,23 @@ print every configured target sequentially.
 Use the same `--projects`, `--exclude-projects`, or `--all-projects` filter
 flags as `clickhouse push`.
 
+The `Pending push:` row counts the archive sessions that changed since the last
+successful push started, and how long ago that push started. A healthy
+[watcher](#automatic-push-watcher) keeps that under a minute. When changes keep
+waiting, pushes are failing; `agentsview clickhouse service logs` shows why.
+
+To alert on a stalled push, run status from a timer or monitor with
+`--max-pending`. It exits non-zero when sessions are pending and the last
+successful push started longer ago than the limit:
+
+```bash
+agentsview clickhouse status --max-pending 15m
+```
+
+Pick a limit well above the watcher's `--interval`. A machine with no new
+sessions never fails the check, however old its last push. A machine that never
+pushed fails it as soon as it has sessions.
+
 ### `agentsview clickhouse service`
 
 Install and manage the [`clickhouse push --watch`](#automatic-push-watcher)

@@ -393,11 +393,15 @@ flags as `pg push` to inspect the matching filtered or unfiltered watermark.
 Output:
 
 ```
-Machine:     my-laptop
-Last push:   2026-03-24T10:30:00Z
-PG sessions: 1842
-PG messages: 47291
+Machine:      my-laptop
+Last push:    2026-03-24T10:30:00Z
+PG sessions:  1842
+PG messages:  47291
+Pending push: none
 ```
+
+`Pending push:` and `--max-pending` work as described for
+[`clickhouse status`](/docs/clickhouse-sync/#agentsview-clickhouse-status).
 
 | Field       | Description                                                |
 | ----------- | ---------------------------------------------------------- |

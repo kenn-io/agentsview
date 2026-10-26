@@ -60,6 +60,9 @@ type ReplicaStatusConfig struct {
 	ProjectsFlag    string
 	ExcludeProjects string
 	AllProjects     bool
+	// MaxPending fails the status when archive changes have waited longer
+	// than this for a push. Zero disables the check.
+	MaxPending time.Duration
 }
 
 // replicaServeExtras is implemented by a replica registered in
@@ -495,8 +498,72 @@ func runReplicaStatusTarget(
 	if err != nil {
 		return err
 	}
+	if database == nil || !status.HasPushCursor {
+		writeReplicaStatus(os.Stdout, status)
+		if cfg.MaxPending > 0 {
+			return errors.New(
+				"--max-pending needs the local archive and the target's push cursor",
+			)
+		}
+		return nil
+	}
+	pending, err := database.CountSessionsForMirrorWindow(
+		ctx, status.PushCursor, projects, excludeProjects,
+	)
+	if err != nil {
+		return err
+	}
+	row, pendingErr := replicaPendingPush(
+		backend.Name(), status.PushCursor, pending, time.Now(), cfg.MaxPending,
+	)
+	status.Rows = append(status.Rows, row)
 	writeReplicaStatus(os.Stdout, status)
-	return nil
+	return pendingErr
+}
+
+// replicaPendingPush describes the archive sessions changed since the push
+// cursor. The cursor is when the last successful push started, so with
+// changes pending its age bounds how long they have waited. It returns an
+// error when changes are pending and that wait exceeds maxPending; a zero
+// maxPending only reports. A cursor that is never written means every
+// session is pending. name is the backend whose service logs the error
+// points to.
+func replicaPendingPush(
+	name, cursor string, pending int, now time.Time, maxPending time.Duration,
+) (storage.StatusRow, error) {
+	row := storage.StatusRow{Label: "Pending push:"}
+	if pending == 0 {
+		row.Value = "none"
+		return row, nil
+	}
+	if cursor == "" {
+		row.Value = fmt.Sprintf("%d session(s), never pushed", pending)
+		if maxPending > 0 {
+			return row, fmt.Errorf(
+				"%d archive session(s) have never been pushed; "+
+					"run `agentsview %s service logs` to see why pushes fail",
+				pending, name,
+			)
+		}
+		return row, nil
+	}
+	since, err := time.Parse(time.RFC3339Nano, cursor)
+	if err != nil {
+		return row, fmt.Errorf("parsing push cursor %q: %w", cursor, err)
+	}
+	waited := max(now.Sub(since), 0).Round(time.Second)
+	row.Value = fmt.Sprintf(
+		"%d session(s) changed since the push that started %s ago",
+		pending, waited,
+	)
+	if maxPending > 0 && waited > maxPending {
+		return row, fmt.Errorf(
+			"%d archive session(s) have waited %s to push, more than --max-pending %s; "+
+				"run `agentsview %s service logs` to see why pushes fail",
+			pending, waited, maxPending, name,
+		)
+	}
+	return row, nil
 }
 
 // writeReplicaStatus prints one label/value row per line with the values

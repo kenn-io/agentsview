@@ -229,12 +229,15 @@ func (b Backend) Status(
 	projects, excludeProjects []string,
 ) (storage.ReplicaStatus, error) {
 	lastPush := ""
+	hasLastPush := false
 	if local != nil {
 		var err error
 		lastPush, err = b.LastPushAt(ctx, local, target, projects, excludeProjects)
 		if err != nil {
 			log.Printf("warning: reading last_push_at: %v", err)
 			lastPush = ""
+		} else {
+			hasLastPush = true
 		}
 	}
 	status, err := ReadStatus(
@@ -244,12 +247,17 @@ func (b Backend) Status(
 	if err != nil {
 		return storage.ReplicaStatus{}, err
 	}
-	return storage.ReplicaStatus{Rows: []storage.StatusRow{
-		{Label: "Machine:", Value: status.Machine},
-		{Label: "Last push:", Value: db.ValueOrNever(status.LastPushAt)},
-		{Label: "PG sessions:", Value: strconv.Itoa(status.PGSessions)},
-		{Label: "PG messages:", Value: strconv.Itoa(status.PGMessages)},
-	}}, nil
+	return storage.ReplicaStatus{
+		Rows: []storage.StatusRow{
+			{Label: "Machine:", Value: status.Machine},
+			{Label: "Last push:", Value: db.ValueOrNever(status.LastPushAt)},
+			{Label: "PG sessions:", Value: strconv.Itoa(status.PGSessions)},
+			{Label: "PG messages:", Value: strconv.Itoa(status.PGMessages)},
+		},
+		// last_push_at is the cutoff each push starts its window from.
+		PushCursor:    lastPush,
+		HasPushCursor: hasLastPush,
+	}, nil
 }
 
 // LastPushAt reads the per-target watermark PostgreSQL pushes keep in the

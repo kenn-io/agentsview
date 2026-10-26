@@ -128,6 +128,7 @@ func newReplicaStatusCommand(backend storage.Replica) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects whose push status to show")
 	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of excluded projects whose push status to show")
 	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this status")
+	cmd.Flags().DurationVar(&cfg.MaxPending, "max-pending", 0, "Exit non-zero when archive changes have waited longer than this to push (for example 15m)")
 	return cmd
 }
 

@@ -116,6 +116,12 @@ type ReplicaStore interface {
 // label/value rows the CLI aligns. Each backend decides which rows it has.
 type ReplicaStatus struct {
 	Rows []StatusRow
+	// PushCursor is the archive sync_marker bound the next incremental push
+	// reads from: the start of the last successful push. Empty means the
+	// target has never been pushed. It is meaningful only when HasPushCursor
+	// is true; a backend that could not read it leaves HasPushCursor false.
+	PushCursor    string
+	HasPushCursor bool
 }
 
 // StatusRow is one line of `<backend> status` output.
