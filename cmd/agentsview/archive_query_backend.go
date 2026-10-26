@@ -376,7 +376,6 @@ func (b localArchiveQueryBackend) SessionUsage(
 				"session usage is not yet available; retry after the archive rebuild finishes",
 			)
 		}
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	if stale && !b.skipFreshData && !query.NoSync {

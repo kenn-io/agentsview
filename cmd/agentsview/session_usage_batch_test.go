@@ -160,13 +160,36 @@ func TestSessionUsageBatchErrors(t *testing.T) {
 	_, err = sessionUsageBatchDataForCommand(cmd, []string{"codex:a"})
 	require.ErrorContains(t, err, "mutually exclusive")
 	for _, format := range []string{"json", "human"} {
-		err := renderSessionUsageBatch(failingUsageWriter{}, out, format)
+		err := renderSessionUsageBatch(&failingRawSyncWriter{err: errors.New("output unavailable")}, out, format)
 		require.ErrorContains(t, err, "output unavailable")
 	}
 }
 
-type failingUsageWriter struct{}
-
-func (failingUsageWriter) Write([]byte) (int, error) {
-	return 0, errors.New("output unavailable")
+func TestSessionUsageBatchMissingDiagnostic(t *testing.T) {
+	newAgentDataDir(t)
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/usage") {
+			http.NotFound(w, r)
+		} else {
+			writeJSONResponse(w, `{"id":"codex:missing","agent":"codex"}`)
+		}
+	})
+	for _, format := range []string{"human", "json"} {
+		t.Run(format, func(t *testing.T) {
+			root := newRootCommand()
+			root.SetArgs([]string{"session", "usage-batch", "codex:missing", "--server", ts.URL, "--own-only", "--format", format})
+			var output strings.Builder
+			root.SetOut(&output)
+			stderr := captureStderr(t, func() { require.NoError(t, root.Execute()) })
+			assert.Empty(t, stderr)
+			assert.Equal(t, 1, strings.Count(output.String(), "session not found: codex:missing"))
+		})
+	}
+	cmd := sessionUsageCommand(t, "session", "usage", "codex:missing", "--server", ts.URL, "--own-only")
+	stderr := captureStderr(t, func() {
+		_, code, err := sessionUsageDataForCommand(cmd, "codex:missing")
+		require.NoError(t, err)
+		assert.Equal(t, tokenUseExitNotFound, code)
+	})
+	assert.Equal(t, "session not found: codex:missing\n", stderr)
 }

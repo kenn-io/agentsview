@@ -76,9 +76,7 @@ func renderSessionUsageBatch(w io.Writer, out *sessionUsageBatchOutput, format s
 		if result.Error != "" {
 			fmt.Fprintln(&text, sanitizeTerminal(result.Error))
 		} else if result.Usage != nil {
-			if err := renderSessionUsageHuman(&text, result.Usage); err != nil {
-				return err
-			}
+			_ = renderSessionUsageHuman(&text, result.Usage)
 		}
 	}
 	_, err := io.WriteString(w, text.String())

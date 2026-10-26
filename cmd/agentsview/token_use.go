@@ -263,5 +263,9 @@ func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutpu
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	return backend.SessionUsage(ctx, sessionUsageQuery{SessionID: sessionID})
+	out, code, err := backend.SessionUsage(ctx, sessionUsageQuery{SessionID: sessionID})
+	if err == nil && code == tokenUseExitNotFound {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+	}
+	return out, code, err
 }

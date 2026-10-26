@@ -92,7 +92,11 @@ func sessionUsageDataForCommand(
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	return read(sessionID)
+	out, code, err := read(sessionID)
+	if err == nil && code == tokenUseExitNotFound {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+	}
+	return out, code, err
 }
 
 // resolveSessionUsageReader selects and opens one backend for all requested IDs.
@@ -222,7 +226,6 @@ func httpSessionUsageData(
 			return nil, tokenUseExitErr, err
 		}
 		if query.OwnOnly || query.NoSync {
-			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 			return nil, tokenUseExitNotFound, nil
 		}
 		startupPending, archiveStale, statusErr := httpSessionSyncStatus(
@@ -246,7 +249,6 @@ func httpSessionUsageData(
 			if !errors.Is(err, errSessionNotFound) {
 				return nil, tokenUseExitErr, err
 			}
-			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 			return nil, tokenUseExitNotFound, nil
 		}
 	}
@@ -279,7 +281,6 @@ func httpSessionUsageData(
 		return nil, tokenUseExitErr, fmt.Errorf("usage: %w", err)
 	}
 	if usage == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	out := &sessionUsageOutput{
@@ -331,7 +332,6 @@ func storeSessionUsageData(
 			return nil, tokenUseExitErr,
 				fmt.Errorf("resolving %s session id: %w", storeName, err)
 		}
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 
@@ -343,7 +343,6 @@ func storeSessionUsageData(
 			fmt.Errorf("querying %s session usage: %w", storeName, err)
 	}
 	if u == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	out := &sessionUsageOutput{SessionUsageReport: *u}
