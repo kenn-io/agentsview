@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -306,4 +307,82 @@ func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *tes
 		"serve", "--background", "--host", "0.0.0.0", "--restart-port", "18080",
 		"--require-auth",
 	}, args)
+}
+
+func stubDistribution(t *testing.T, value string) {
+	t.Helper()
+	orig := distribution
+	distribution = value
+	t.Cleanup(func() { distribution = orig })
+}
+
+func TestUpdateRefusesInstallForPackageManagedBuild(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution string
+		wantErr      string
+	}{
+		{
+			name:         "homebrew",
+			distribution: "homebrew",
+			wantErr:      "Homebrew manages this installation; run `brew upgrade agentsview` instead",
+		},
+		{
+			name:         "other package manager",
+			distribution: "nix",
+			wantErr:      "nix manages this installation; upgrade agentsview through it instead",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubDistribution(t, tt.distribution)
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+			_, err := executeCommand(newRootCommand(), "update", "--yes")
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantErr, err.Error())
+			// The refusal happens before any update check runs.
+			assert.NoFileExists(t, filepath.Join(dataDir, "update_check.json"))
+		})
+	}
+}
+
+func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution string
+		wantGuidance bool
+	}{
+		{name: "homebrew", distribution: "homebrew", wantGuidance: true},
+		{name: "direct install", distribution: "", wantGuidance: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubDistribution(t, tt.distribution)
+			origVersion := version
+			version = "dev"
+			t.Cleanup(func() { version = origVersion })
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			// A fresh cached check lets --check answer without the network.
+			cache := `{"checked_at":"` + time.Now().UTC().Format(time.RFC3339) +
+				`","version":"v9.9.9"}`
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dataDir, "update_check.json"), []byte(cache), 0o600,
+			))
+
+			out, err := executeCommand(newRootCommand(), "update", "--check")
+
+			require.NoError(t, err)
+			assert.Contains(t, out, "Latest release: v9.9.9")
+			guidance := "run `brew upgrade agentsview` instead"
+			if tt.wantGuidance {
+				assert.Contains(t, out, guidance)
+			} else {
+				assert.NotContains(t, out, guidance)
+			}
+		})
+	}
 }

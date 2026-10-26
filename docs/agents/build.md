@@ -37,6 +37,10 @@ ancestor permissions satisfy their checks.
 - The Makefile's `LDFLAGS` set the PostHog project key with
   `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Builds without it send no
   telemetry, so keep it out of test and e2e builds.
+- `DISTRIBUTION` sets `main.distribution` to the package manager that owns the
+  binary. Builds with it refuse `agentsview update` installs and point users at
+  the package manager. `make homebrew` is the release build with
+  `DISTRIBUTION=homebrew`, written to `$(BINDIR)/agentsview`.
 
 ## Frontend
 

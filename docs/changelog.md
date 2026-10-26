@@ -9,6 +9,12 @@ The latest release is
 
 ## Unreleased
 
+**Improvements**
+
+- Homebrew installs built with `make homebrew` no longer replace themselves.
+  `agentsview update` stops and tells you to run `brew upgrade agentsview`;
+  `agentsview update --check` still reports new releases with the same advice.
+
 **Bug fixes**
 
 - Claude Code channel questions appear in transcripts, search, and user-message

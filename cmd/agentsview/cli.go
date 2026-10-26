@@ -484,8 +484,12 @@ func newUpdateCommand() *cobra.Command {
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runUpdate(cmd.Context(), cfg)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if distribution != "" && !cfg.Check {
+				return managedUpdateError(distribution)
+			}
+			runUpdate(cmd.Context(), cfg, cmd.OutOrStdout())
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Check, "check", false, "Check for updates without installing")

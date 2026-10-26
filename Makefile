@@ -7,12 +7,19 @@ BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Public PostHog ingest key. Builds without it send no telemetry.
 POSTHOG_PROJECT_KEY ?= phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf
 
-LDFLAGS := -X main.version=$(VERSION) \
-           -X main.commit=$(COMMIT) \
-           -X main.buildDate=$(BUILD_DATE) \
-           -X go.kenn.io/kit/telemetry/posthog.projectKey=$(POSTHOG_PROJECT_KEY)
+# Package manager that owns the binary, such as "homebrew". Builds with a
+# distribution refuse to self-update and point users at the package manager.
+DISTRIBUTION ?=
+BINDIR ?= .
 
-LDFLAGS_RELEASE := $(LDFLAGS) -s -w
+# Recursive (=) so target-specific DISTRIBUTION values reach the linker.
+LDFLAGS = -X main.version=$(VERSION) \
+          -X main.commit=$(COMMIT) \
+          -X main.buildDate=$(BUILD_DATE) \
+          -X main.distribution=$(DISTRIBUTION) \
+          -X go.kenn.io/kit/telemetry/posthog.projectKey=$(POSTHOG_PROJECT_KEY)
+
+LDFLAGS_RELEASE = $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 GOLANGCI_LINT_VERSION ?= v2.14.0
 # Isolate each checkout from stale sibling-worktree fixes and issue positions.
@@ -40,7 +47,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -74,6 +81,12 @@ build: pricing-snapshot frontend
 build-release: pricing-snapshot frontend
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
+
+# Homebrew build profile: the release build with cgo and
+# DISTRIBUTION=homebrew, written to $(BINDIR)/agentsview.
+homebrew: DISTRIBUTION := homebrew
+homebrew: pricing-snapshot frontend
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -buildvcs=false -o "$(BINDIR)/agentsview" ./cmd/agentsview
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin.
 # Copy to a temp file in the destination directory, then rename into place.
@@ -701,6 +714,7 @@ help:
 	@echo ""
 	@echo "  build          - Build with embedded frontend"
 	@echo "  build-release  - Release build (optimized, stripped)"
+	@echo "  homebrew       - Release build for Homebrew (BINDIR=dir, DISTRIBUTION=homebrew)"
 	@echo "  pricing-snapshot - Restore LiteLLM snapshot from artifact branch"
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
 	@echo "  install-cjk-fts - Install agentsview with the optional CJK FTS sidecar"
