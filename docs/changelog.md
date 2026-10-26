@@ -61,6 +61,10 @@ The latest release is
   totals. Rewinding after a channel conversation keeps that conversation as a
   separate fork and preserves the retry's session ID and saved items. Existing
   Claude-format sources are reprocessed on upgrade.
+- VS Code Copilot sessions that fetched a web page now show their transcript
+  instead of a blank page. VS Code saves each web fetch as two tool calls with
+  the same ID, and AgentsView now keeps only the visible one. Existing VS Code
+  Copilot, Positron, and Windsurf sessions are reprocessed on upgrade.
 
 ## 0.46.1
 

@@ -2533,6 +2533,17 @@ schemas keep their existing ordering behavior.
   `result.metadata.toolCallRounds`. Each assistant message records the model
   that served its turn (`result.metadata.resolvedModel`, falling back to the
   request's prefixed `modelId`).
+- **Shared tool call IDs (2026-10-26):** One tool call can persist as two
+  `toolInvocationSerialized` items with the same `toolCallId`. A web fetch
+  stores a `presentation: "hidden"` `copilot_fetchWebPage` placeholder and the
+  `vscode_fetchWebPage_internal` invocation that carries the URL
+  ([#2454](https://github.com/kenn-io/agentsview/issues/2454), GitHub Copilot
+  Chat 0.54.0). `ToolInvocationPresentation.Hidden` in
+  [languageModelToolsService.ts](https://github.com/microsoft/vscode/blob/357b0857281c7c0c8673e8eba78ecc8ed9469e5a/src/vs/workbench/contrib/chat/common/tools/languageModelToolsService.ts)
+  at `357b0857281c7c0c8673e8eba78ecc8ed9469e5a` also marks real calls whose
+  output VS Code renders elsewhere, such as file edits and todo lists, so
+  Agentsview keeps hidden calls and only collapses repeated IDs. It keeps one
+  call per `toolCallId`, preferring a visible invocation over a hidden one.
 - **Session names (2026-09-30):** The session's `customTitle` holds both a name
   set with `/rename` and the title VS Code generates after the first request;
   nothing marks which one it is. See `setSessionTitle` and
@@ -2929,11 +2940,10 @@ schemas keep their existing ordering behavior.
   job control: they carry no transcript content, they are not surface events,
   and the upstream type notes state that collecting model output from them is
   not required. They are in the known-event inventory and are ignored when a
-  session is rebuilt. Session IDs are arbitrary
-  non-empty strings and are injectively encoded before use as a directory
-  name. A sessions root belongs to one physical encoding; the upstream backend
-  rejects an opposite-suffix artifact rather than providing mixed-root
-  fallback or migration.
+  session is rebuilt. Session IDs are arbitrary non-empty strings and are
+  injectively encoded before use as a directory name. A sessions root belongs
+  to one physical encoding; the upstream backend rejects an opposite-suffix
+  artifact rather than providing mixed-root fallback or migration.
 
 - **Evidence:** `source`.
 

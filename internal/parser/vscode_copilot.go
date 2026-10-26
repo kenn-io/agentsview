@@ -91,6 +91,7 @@ type vscodeCopilotResponseItem struct {
 	Value             string         `json:"value,omitempty"`
 	ToolID            string         `json:"toolId,omitempty"`
 	ToolCallID        string         `json:"toolCallId,omitempty"`
+	Presentation      string         `json:"presentation,omitempty"`
 	InvocationMessage jsontext.Value `json:"invocationMessage,omitempty"`
 	PastTenseMessage  jsontext.Value `json:"pastTenseMessage,omitempty"`
 	ToolName          string         `json:"toolName,omitempty"`
@@ -399,6 +400,13 @@ func parseVSCodeCopilotResponse(
 ) (string, []ParsedToolCall) {
 	var textParts []string
 	var toolCalls []ParsedToolCall
+	// VS Code can persist one tool call as two invocations that share a
+	// toolCallId: a hidden extension placeholder and the built-in tool it
+	// delegates to (copilot_fetchWebPage, then vscode_fetchWebPage_internal).
+	// Keep one call per ID so tool_use_id stays unique within the message,
+	// preferring the visible invocation, which carries the input.
+	callIndex := map[string]int{}
+	hiddenCall := map[string]bool{}
 
 	for _, r := range raw {
 		var item vscodeCopilotResponseItem
@@ -421,6 +429,18 @@ func parseVSCodeCopilotResponse(
 					item.PastTenseMessage,
 					item.ToolSpecificData,
 				)
+				hidden := item.Presentation == "hidden"
+				if i, seen := callIndex[tc.ToolUseID]; seen {
+					if hiddenCall[tc.ToolUseID] && !hidden {
+						toolCalls[i] = tc
+						hiddenCall[tc.ToolUseID] = false
+					}
+					continue
+				}
+				if tc.ToolUseID != "" {
+					callIndex[tc.ToolUseID] = len(toolCalls)
+					hiddenCall[tc.ToolUseID] = hidden
+				}
 				toolCalls = append(toolCalls, tc)
 			}
 		case "prepareToolInvocation":

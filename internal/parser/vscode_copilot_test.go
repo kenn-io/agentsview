@@ -1478,3 +1478,37 @@ func TestParseVSCodeCopilotSession_AssistantMessageModel(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVSCodeCopilotSession_SharedToolCallID(t *testing.T) {
+	// VS Code stores one web fetch as a hidden extension placeholder and
+	// the built-in tool that carries the fetch, both under one toolCallId.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shared-call-id.jsonl")
+	lines := []string{
+		`{"kind":0,"v":{"version":3,"sessionId":"shared-call-id","creationDate":1786000235709,"requests":[]}}`,
+		`{"kind":2,"k":["requests"],"v":[{"requestId":"request-1","timestamp":1786000291425,"message":{"text":"What is the newest release?"},"response":[],"modelId":"copilot/claude-opus-4.8"}]}`,
+		`{"kind":2,"k":["requests",0,"response"],"v":[` +
+			`{"kind":"toolInvocationSerialized","presentation":"hidden","invocationMessage":"","isComplete":true,"toolCallId":"toolu_fetch","toolId":"copilot_fetchWebPage"},` +
+			`{"kind":"toolInvocationSerialized","invocationMessage":{"value":"Fetching https://example.com/releases"},"pastTenseMessage":{"value":"Fetched https://example.com/releases"},"isConfirmed":{"type":1},"isComplete":true,"toolCallId":"toolu_fetch","toolId":"vscode_fetchWebPage_internal"},` +
+			`{"kind":"toolInvocationSerialized","presentation":"hidden","pastTenseMessage":{"value":"Edited notes.md"},"isComplete":true,"toolCallId":"toolu_edit","toolId":"copilot_replaceString"},` +
+			`{"value":"The newest release is v2."}]}`,
+	}
+	require.NoError(t, os.WriteFile(
+		path, []byte(strings.Join(lines, "\n")+"\n"), 0o644,
+	))
+
+	_, msgs, err := parseVSCodeCopilotTestSession(
+		t, path, "project", "machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "user and assistant messages")
+
+	calls := msgs[1].ToolCalls
+	require.Len(t, calls, 2, "one call per toolCallId")
+	assert.Equal(t, "toolu_fetch", calls[0].ToolUseID)
+	assert.Equal(t, "vscode_fetchWebPage_internal", calls[0].ToolName)
+	assert.Contains(t, calls[0].InputJSON, "https://example.com/releases")
+	assert.Equal(t, "toolu_edit", calls[1].ToolUseID,
+		"a hidden call with its own ID is kept")
+	assert.Equal(t, "copilot_replaceString", calls[1].ToolName)
+}
