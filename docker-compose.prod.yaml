@@ -2,8 +2,6 @@ services:
   agentsview:
     image: ghcr.io/kenn-io/agentsview:latest
     restart: unless-stopped
-    # The final push has a 30s limit; Docker's default stop timeout is 10s.
-    stop_grace_period: 40s
     ports:
       - "127.0.0.1:8080:8080"
     environment:
@@ -11,12 +9,14 @@ services:
       CODEX_SESSIONS_DIR: /agents/codex
       FORGE_DIR: /agents/forge
       OPENCODE_DIR: /agents/opencode
-      # Set both of these to serve from PostgreSQL instead of the local archive.
-      # AGENTSVIEW_MODE: pg-serve
-      # AGENTSVIEW_PG_URL: postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require
       # Read the bearer token from a mounted secret instead of /data/config.toml.
       # AGENTSVIEW_AUTH_TOKEN_FILE: /run/secrets/agentsview_token
+    # Uncomment this block to serve from PostgreSQL and ingest mounted sessions.
+      # AGENTSVIEW_MODE: pg-serve
+      # AGENTSVIEW_PG_URL: postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require
     # command: ["--push-watch"]
+    # The final push has a 30s limit; Docker's default stop timeout is 10s.
+    # stop_grace_period: 40s
     volumes:
       - agentsview-data:/data
       - ${HOME}/.claude/projects:/agents/claude:ro

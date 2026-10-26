@@ -715,7 +715,7 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 		fmt.Println("Auth enabled. Token is configured.")
 	}
 	mode := name + " read-only"
-	if startup.startWorker != nil {
+	if startup.workerResult != nil {
 		mode = name + " read-only API, push-watch on"
 	}
 	if rt.PublicURL == rt.LocalURL {

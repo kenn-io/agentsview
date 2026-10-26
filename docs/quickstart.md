@@ -202,9 +202,10 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
-Add `--push-watch` to ingest and publish the mounted session roots from the same
-container. Give the container a 40-second stop timeout so the final push can
-finish.
+To ingest and publish sessions from the same container, enable the commented
+PostgreSQL and push-watch block in `docker-compose.prod.yaml` and set your
+database URL. That file mounts the session roots and `/data` and gives the
+container 40 seconds to finish its final push.
 
 ## Run
 
