@@ -2930,6 +2930,15 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionNotFound).toBe(true);
       expect(replace).not.toHaveBeenCalled();
     });
+    it("refuses ambiguity between a hosted branch and an ordinary canonical ID", async () => {
+      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({
+        ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`],
+      });
+      await sessions.navigateToSession(uuid);
+      expect(sessions.activeSessionId).toBe(uuid);
+      expect(sessions.activeSessionNotFound).toBe(true);
+      expect(replace).not.toHaveBeenCalled();
+    });
     it("does not resolve an exact Claude UUID hit", async () => {
       vi.mocked(api.getSession)
         .mockReset()

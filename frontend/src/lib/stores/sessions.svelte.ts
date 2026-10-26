@@ -1028,7 +1028,7 @@ class SessionsStore {
               { partial: sessionLookupPartial(id), raw_suffix: true, limit: 2 },
               { signal },
             );
-            const result = resolveSessionId(id, ids, false);
+            const result = resolveSessionId(id, ids, ids.length >= 2);
             if (
               result.kind === "resolved" &&
               result.id !== id &&
