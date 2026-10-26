@@ -93,6 +93,64 @@ func TestResolveBilledAtUsesHistoricalRates(t *testing.T) {
 	}
 }
 
+func TestResolveBilledCodexServiceTierHistoricalRates(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+		{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.2")}},
+		{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4")}},
+	})
+	_, lookup, err := resolver.ResolveBilledAt(
+		pricingpkg.OpenAIPriorityProviderID, "gpt-5.6-luna", "gpt-5.6-luna",
+		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	require.True(t, lookup.OK)
+	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
+}
+
+func TestResolveBilledCodexServiceTierScalesFieldsAndBands(t *testing.T) {
+	rows := []EffectivePricingRow{
+		{ModelPattern: "model", Rates: ModelRates{
+			InputPerMTok: money.Money{Microdollars: 10}, OutputPerMTok: money.Money{Microdollars: 20},
+			CacheWritePerMTok: money.Money{Microdollars: 30}, CacheReadPerMTok: money.Money{Microdollars: 40},
+			Bands: []PricingBand{{AboveInputTokens: 100,
+				InputPerMTok: money.Money{Microdollars: 100}, OutputPerMTok: money.Money{Microdollars: 200},
+				CacheWritePerMTok: money.Money{Microdollars: 300}, CacheWrite1hPerMTok: money.Money{Microdollars: 350},
+				CacheReadPerMTok: money.Money{Microdollars: 400},
+			}},
+		}},
+		{ModelPattern: "model@priority", Rates: ModelRates{
+			InputPerMTok: money.Money{Microdollars: 20}, OutputPerMTok: money.Money{Microdollars: 60},
+			CacheWritePerMTok: money.Money{Microdollars: 120}, CacheWrite1hPerMTok: money.Money{Microdollars: 500},
+			CacheReadPerMTok: money.Money{Microdollars: 200},
+		}},
+	}
+	for _, tc := range []struct {
+		base1h, want1h, wantBand1h int64
+	}{
+		{0, 0, 350},
+		{50, 500, 3500},
+	} {
+		rows[0].Rates.CacheWrite1hPerMTok = money.Money{Microdollars: tc.base1h}
+		resolver := NewPricingResolver(rows)
+		for range 2 {
+			_, lookup, err := resolver.ResolveBilled(pricingpkg.OpenAIPriorityProviderID, "model", "model")
+			require.NoError(t, err)
+			assert.Equal(t, ModelRates{
+				InputPerMTok: money.Money{Microdollars: 20}, OutputPerMTok: money.Money{Microdollars: 60},
+				CacheWritePerMTok: money.Money{Microdollars: 120}, CacheReadPerMTok: money.Money{Microdollars: 200},
+				CacheWrite1hPerMTok: money.Money{Microdollars: tc.want1h},
+				Bands: []PricingBand{{AboveInputTokens: 100,
+					InputPerMTok: money.Money{Microdollars: 200}, OutputPerMTok: money.Money{Microdollars: 600},
+					CacheWritePerMTok: money.Money{Microdollars: 1200}, CacheWrite1hPerMTok: money.Money{Microdollars: tc.wantBand1h},
+					CacheReadPerMTok: money.Money{Microdollars: 2000},
+				}},
+			}, lookup.Rates)
+		}
+	}
+}
+
 func TestResolveBilledPreservesExactServiceBoundary(t *testing.T) {
 	r := NewPricingResolver([]EffectivePricingRow{{ModelPattern: "m", Rates: ModelRates{OutputPerMTok: money.Money{Microdollars: 1_000_000}}}})
 	_, posit, err := r.ResolveBilled(pricingpkg.PositAssistantProviderID, "m", "m")

@@ -1677,8 +1677,8 @@ type ParsedMessage struct {
 
 	Model           string
 	ReasoningEffort string
-	// ProviderID identifies the billing provider for this response, such as
-	// Posit Assistant's "positai" managed service or BYO "anthropic".
+	// ProviderID carries the billing identity for this response, including Codex
+	// service tiers, Posit Assistant's "positai" service, or BYO "anthropic".
 	ProviderID       string
 	TokenUsage       jsontext.Value
 	ContextTokens    int

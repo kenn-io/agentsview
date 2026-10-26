@@ -267,7 +267,8 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 		return pricedModel, lookup, nil
 	}
 	if tier, ok := pricingpkg.ServiceTierFor(providerID); ok {
-		return pricedModel, r.withServiceTier(pricedModel, lookup, tier), nil
+		lookup, err := r.withServiceTier(pricedModel, lookup, tier)
+		return pricedModel, lookup, err
 	}
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
 	if !ok {
@@ -282,19 +283,50 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	return pricedModel, lookup, nil
 }
 
-func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLookup, tier string) PricingLookup {
+func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLookup, tier string) (PricingLookup, error) {
 	if r == nil {
-		return lookup
+		return lookup, nil
 	}
 	base := r.Lookup(pricedModel)
 	pattern := catalog.TierPattern(base.Pattern, tier)
 	if rates, ok := r.byModel[pattern]; ok {
-		lookup.Rates = rates
+		baseRates := r.byModel[base.Pattern]
+		lookup = clonePricingLookup(lookup)
+		for _, field := range []struct {
+			base, tier money.Money
+			resolved   *money.Money
+			band       func(*PricingBand) *money.Money
+		}{
+			{baseRates.InputPerMTok, rates.InputPerMTok, &lookup.Rates.InputPerMTok, func(b *PricingBand) *money.Money { return &b.InputPerMTok }},
+			{baseRates.OutputPerMTok, rates.OutputPerMTok, &lookup.Rates.OutputPerMTok, func(b *PricingBand) *money.Money { return &b.OutputPerMTok }},
+			{baseRates.CacheWritePerMTok, rates.CacheWritePerMTok, &lookup.Rates.CacheWritePerMTok, func(b *PricingBand) *money.Money { return &b.CacheWritePerMTok }},
+			{baseRates.CacheWrite1hPerMTok, rates.CacheWrite1hPerMTok, &lookup.Rates.CacheWrite1hPerMTok, func(b *PricingBand) *money.Money { return &b.CacheWrite1hPerMTok }},
+			{baseRates.CacheReadPerMTok, rates.CacheReadPerMTok, &lookup.Rates.CacheReadPerMTok, func(b *PricingBand) *money.Money { return &b.CacheReadPerMTok }},
+		} {
+			if field.base.Microdollars == 0 {
+				continue
+			}
+			values := []*money.Money{field.resolved}
+			for i := range lookup.Rates.Bands {
+				values = append(values, field.band(&lookup.Rates.Bands[i]))
+			}
+			for _, value := range values {
+				scaled, err := money.ScaleRatio(*value, field.tier.Microdollars, field.base.Microdollars)
+				if err != nil {
+					return PricingLookup{}, err
+				}
+				*value = scaled
+			}
+		}
 		lookup.Pattern = pattern
-		lookup.Adjustment = "openai-" + tier
-		return clonePricingLookup(lookup)
+		switch tier {
+		case "priority":
+			lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
+		case "ultrafast":
+			lookup.Adjustment = pricingpkg.OpenAIUltrafastProviderID
+		}
 	}
-	return lookup
+	return lookup, nil
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {
