@@ -198,7 +198,6 @@ describe("date range mode switching", () => {
       expect.any(Function),
     );
   });
-
 });
 
 describe("select", () => {

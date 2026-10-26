@@ -1428,7 +1428,6 @@ describe("SessionsStore", () => {
       expect(f.pr).toBe("");
       expect(parseFiltersFromParams({ pr: "  acme/widgets#42 " }).pr).toBe("acme/widgets#42");
     });
-
   });
 
   describe("filtersToParams", () => {

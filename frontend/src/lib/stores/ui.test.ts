@@ -53,7 +53,6 @@ describe("UIStore", () => {
       expect(ui.pendingScrollOrdinal).toBe(5);
       expect(ui.pendingScrollSession).toBe("sess-123");
     });
-
   });
 
   describe("scroll call link parameters", () => {
