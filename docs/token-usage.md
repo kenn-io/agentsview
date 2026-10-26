@@ -473,9 +473,9 @@ current as your installed version. For up-to-the-minute rates, leave `--offline`
 off.
 
 LiteLLM's standard whole-request 200K and 272K token rates are preserved in both
-fetched and embedded catalogs. Batch, Flex, and regional pricing are not inferred from stored usage. Codex
-Fast and Ultrafast billing use LiteLLM tier prices and the thread setting
-recorded in the rollout, as described below.
+fetched and embedded catalogs. Processing variants such as Batch, Flex,
+regional, and one-hour cache pricing are not inferred when the stored
+usage does not identify that service tier. Codex records its tier; see below.
 
 ### Anthropic Web Search Fee
 
@@ -590,7 +590,7 @@ names and raw `pricing.models` entries.
 For usage rows whose stored provider ID is exactly `positai`, AgentsView
 estimates computed token costs and cache savings at 110% of the selected catalog
 rates. Model, timestamp, and request-band selection happen before the
-adjustment. Positron rows with empty or other provider IDs — including observed
+adjustment. Rows with empty or other provider IDs — including observed
 `anthropic` bring-your-own-provider rows in the same session — use base rates.
 
 Custom pricing overrides are not adjusted. Explicit reported costs remain
@@ -598,23 +598,12 @@ authoritative, and fixed web-search fees remain at their published face value.
 
 ### Codex Fast and Ultrafast Billing
 
-Codex Fast usage rows use provider ID `openai-priority`; Ultrafast rows use
-`openai-ultrafast`. Their rates come from LiteLLM's `_priority` and `_ultrafast`
-price fields. The next pricing refresh stores these as `<model>@priority` and
-`<model>@ultrafast` rows. Until then, offline use keeps standard rates.
-
-A model with no price for its tier keeps standard rates. Tier prices include
-cache rates and the request bands LiteLLM publishes for that tier. When a tier
-has no request bands, even requests above 272K tokens use its base rate.
-Custom pricing overrides are not adjusted. A missing or unrecognized tier uses
-standard rates.
-
-AgentsView reads the thread setting from `thread_settings_applied` in the
-rollout, including snapshots written after a fork's replayed history. Each
-assistant or tool-call message uses the most recently recorded setting. The
-rollout records no request boundary, so a request that starts before a settings
-change and finishes afterward is priced at the new tier. Turn-only overrides
-do not appear in rollouts, so those turns use the recorded thread setting.
+Codex messages sent on the Fast or Ultrafast tier use LiteLLM's `_priority` or
+`_ultrafast` prices, including any request bands LiteLLM publishes for that
+tier. AgentsView reads the tier from the rollout's latest
+`thread_settings_applied` event. Tier prices arrive with the next pricing
+refresh. A model without a price for its tier, and any custom override, keeps
+its standard rates.
 
 ### Copilot CLI Token Metrics
 

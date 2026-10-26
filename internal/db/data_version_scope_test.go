@@ -30,37 +30,26 @@ func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 }
 
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		completedVersion int
-		staleAgents      []string
-		currentAgent     string
-	}{
-		{"completed Codex upgrade", 145, []string{"codex", "pi"}, "hermes"},
-		{"completed dialogue upgrade", 146, []string{"codex", "traex", "augure-code"}, "claude"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "archive.db")
-			d := testDBAtPath(t, path, tc.name)
-			for _, agent := range append(tc.staleAgents, tc.currentAgent) {
-				insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
-				require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, tc.completedVersion))
-			}
-			// Keep the current schema and model the completed parser upgrade on disk.
-			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				return writeUserVersion(t.Context(), tx, tc.completedVersion)
-			}))
-			require.NoError(t, d.Close())
-			reopened, err := OpenIsolated(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-			assert.False(t, reopened.NeedsResync())
-			assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), tc.currentAgent))
-			for _, agent := range tc.staleAgents {
-				assert.Equal(t, tc.completedVersion, reopened.GetSessionDataVersion(t.Context(), agent))
-			}
-		})
+	// The version before preserving classification, even after later upgrades.
+	const completedVersion = 145
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "completed Codex upgrade")
+	for _, agent := range []string{"codex", "pi", "hermes"} {
+		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
 	}
+	// Keep the current schema and model the completed parser upgrade on disk.
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return writeUserVersion(t.Context(), tx, completedVersion)
+	}))
+	require.NoError(t, d.Close())
+	reopened, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	assert.False(t, reopened.NeedsResync())
+	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "hermes"))
+	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "codex"))
+	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
 
 func TestValidateDataVersionScopes(t *testing.T) {

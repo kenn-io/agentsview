@@ -26,9 +26,6 @@ const (
 	litellmURL         = litellmBaseURL + "main/" + litellmPricingFile
 )
 
-// ServiceTiers lists the service tiers imported from LiteLLM.
-var ServiceTiers = []string{"priority", "ultrafast"}
-
 // TierPattern identifies a model's service-tier pricing row.
 func TierPattern(pattern, tier string) string { return pattern + "@" + tier }
 
@@ -162,7 +159,7 @@ func ParseLiteLLMPricing(
 			return nil, err
 		}
 		prices = append(prices, p)
-		for _, tier := range ServiceTiers {
+		for _, tier := range []string{"priority", "ultrafast"} {
 			input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+tier)
 			if err != nil {
 				return nil, fmt.Errorf("parsing %s %s input price: %w", model, tier, err)

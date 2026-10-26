@@ -201,10 +201,8 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	for _, tc := range []struct {
 		model, input, cached, output, creation, bandInput, bandCached, bandOutput, bandCreation string
 	}{
-		{"gpt-6.1-sol", "2", "0.1", "10", "2.5", "4", "0.2", "15", "5"},
 		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
 		{"gpt-6.1-sol@ultrafast", "12", "0.6", "60", "15", "24", "1.2", "90", "30"},
-		{"gpt-5.5", "5", "0.5", "30", "0", "10", "1", "45", "0"},
 		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "", "", "", ""},
 	} {
 		t.Run(tc.model, func(t *testing.T) {

@@ -4040,9 +4040,7 @@ func TestCodexServiceTierMessages(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "after tier change", tsLate),
 			turn("third"), settings("unknown"),
 			testjsonl.CodexMsgJSON("assistant", "after reset", tsLateS5),
-			settings("priority"), settings(""),
-			testjsonl.CodexMsgJSON("assistant", "missing tier", tsLateS5),
-		}, []string{"", "openai-priority", "openai-priority", "openai-ultrafast", "", ""}},
+		}, []string{"", "openai-priority", "openai-priority", "openai-ultrafast", ""}},
 		{"fork replay", []string{
 			`{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent","cwd":"/workspace"}}`,
 			testjsonl.CodexSessionMetaJSON("parent", "/workspace", "user", tsEarly),

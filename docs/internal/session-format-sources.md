@@ -85,15 +85,10 @@ and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
 
 A band applies only when whole-request input is strictly greater than its
 threshold; when several bands exist, the highest eligible threshold wins.
-The catalog importer excludes Batch, Flex, and regional rate fields. Codex's
-`thread_settings_applied` events identify the configured Fast or Ultrafast tier.
-Checked 2026-10-26, the
-[LiteLLM catalog](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
-publishes `_priority` and `_ultrafast` input, output, cache-read, and
-cache-creation prices, plus tier-specific `_above_272k_tokens` bands. The
-importer stores these as `<model>@priority` and `<model>@ultrafast` rows on the
-next pricing refresh. Models without a tier price keep standard rates. See
-[Codex billing](../token-usage.md#codex-fast-and-ultrafast-billing).
+Batch, Flex, and regional suffixes are excluded because stored usage does not
+identify those variants. The `_priority` and `_ultrafast` fields, including
+their `_above_272k_tokens` bands, are imported as `<model>@priority` and
+`<model>@ultrafast` rows for Codex Fast and Ultrafast billing.
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
@@ -636,26 +631,13 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexGeneratedImageStoredAsImageResult` and
   `TestCodexGeneratedImageUpgradeReparsesUnchangedSource`.
 
-- **Service-tier billing (checked 2026-10-26):** Rollouts record
+- **Service-tier billing (checked 2026-10-26):** Rollouts record the tier in
   `event_msg` / `thread_settings_applied` / `thread_settings.service_tier`
-  with observed values `default`, `priority`, and `ultrafast`. The pinned
-  [snapshot schema](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/protocol.rs#L2418-L2433)
-  confirms the optional field. Each event replaces the settings snapshot;
-  an absent tier resets billing to standard rates. Forks append the child's
-  snapshot after replayed history, as shown by the pinned
-  [fork persistence](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/mod.rs#L1783-L1810).
-  Each later assistant or tool-call message uses the latest recorded tier.
-  A request that starts before a settings change and finishes afterward is
-  priced at the new tier because the rollout records no request boundary.
-  The producer's
-  [captured step settings](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/step_settings.rs#L36-L50)
-  preserve settings already used by a request. The
-  [turn context](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/protocol.rs#L3522-L3565)
-  carries no service tier. Assistant messages retain the billing identity in
-  `provider_id`, including across incremental parses. A
-  [turn-only override](https://github.com/openai/codex/blob/beb34ce8d09779e1e4ed69069fce1c989a6c332e/codex-rs/core/src/session/turn_context.rs#L1193-L1215)
-  applies after the settings snapshot and does not appear in rollouts, so those
-  turns use the recorded thread setting for pricing.
+  (observed `default`, `priority`, `ultrafast`), per the pinned
+  [snapshot schema](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/protocol.rs#L2418-L2433).
+  Forks append the child's snapshot after replayed history
+  ([fork persistence](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/mod.rs#L1783-L1810)).
+  `turn_context` carries no tier.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
