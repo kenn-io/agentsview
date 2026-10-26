@@ -586,8 +586,10 @@ prefix use a single segment after `/sessions/`.
 
 Session URLs work as bookmarks and can be shared with teammates when using
 [PostgreSQL sync](/docs/pg-sync/) for shared deployments.
-A link with a bare UUID opens the matching session; if several sessions match,
-use the full ID with its provider prefix.
+
+A link from another tool that carries the agent's bare session ID (Pi, OMP,
+Codex) opens the matching session. If the ID is ambiguous, use the full ID with
+its provider prefix.
 
 ### Open a session by ID
 

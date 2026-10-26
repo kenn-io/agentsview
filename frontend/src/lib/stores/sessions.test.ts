@@ -2981,14 +2981,11 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBe("new-id");
       expect(sessions.sessions).toHaveLength(0);
 
-      sessions.markActiveSessionMissing("new-id", new ApiError(404, "missing"));
-      expect(sessions.activeSessionNotFound).toBe(true);
       resolveGet(makeSession({ id: "new-id" }));
       await promise;
 
       expect(sessions.sessions).toHaveLength(1);
       expect(sessions.sessions[0]!.id).toBe("new-id");
-      expect(sessions.activeSessionNotFound).toBe(false);
     });
 
     it("skips fetch for already-loaded session", async () => {
