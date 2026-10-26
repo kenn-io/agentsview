@@ -52,6 +52,41 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
 
+func TestCodexServiceTierUpgradePreservesSessionIdentity(t *testing.T) {
+	const completedVersion = 146
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "completed dialogue upgrade")
+	agents := []string{"codex", "traex", "augure-code", "claude"}
+	for _, agent := range agents {
+		insertSession(t, d, agent, "project", func(s *Session) {
+			s.Agent = agent
+			source := filepath.Join("sessions", agent+".jsonl")
+			s.FilePath = &source
+		})
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return writeUserVersion(t.Context(), tx, completedVersion)
+	}))
+	require.NoError(t, d.Close())
+	reopened, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	assert.False(t, reopened.NeedsResync(), "the tier upgrade reparses in place")
+	for _, agent := range agents {
+		wantVersion := completedVersion
+		if agent == "claude" {
+			wantVersion = CurrentDataVersion()
+		}
+		assert.Equal(t, wantVersion, reopened.GetSessionDataVersion(t.Context(), agent))
+		session, err := reopened.GetSessionFull(t.Context(), agent)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, agent, session.ID)
+		assert.Equal(t, filepath.Join("sessions", agent+".jsonl"), reopened.GetSessionFilePath(t.Context(), agent))
+	}
+}
+
 func TestValidateDataVersionScopes(t *testing.T) {
 	require.NoError(t, validateDataVersionScopes(dataVersionScopes),
 		"declared parser upgrades must stay within the scoped-upgrade rules")

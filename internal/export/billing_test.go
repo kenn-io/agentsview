@@ -156,14 +156,13 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	}{
 		{"openai-priority", "gpt-6.1-sol", "", "2", "0.1", "10", "4", "0.2", "20"},
 		{"openai-priority", "gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
-		{"openai-priority", "gpt-5.5-2026-04-23", "", "5", "0.5", "30", "12.5", "1.25", "75"},
 		{"openai-priority", "openai/gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
 		{"openai-priority", "gpt-5-mini", "", "0.25", "0.025", "2", "0.45", "0.045", "3.6"},
-		{"openai-priority", "openai/gpt-5-mini-2026-04-23", "", "0.25", "0.025", "2", "0.45", "0.045", "3.6"},
 		{"openai-ultrafast", "gpt-6.1-sol", "", "2", "0.1", "10", "12", "0.6", "60"},
 		{"openai-ultrafast", "gpt-6-luna", "", "0.25", "0.025", "2", "0.25", "0.025", "2"},
 		{"openai-priority", "unsupported-model", "", "2", "0.1", "10", "2", "0.1", "10"},
-		{"openai-priority", "gpt-6.1-sol", PricingRowSourceCustom, "2", "0.1", "10", "4", "0.2", "20"},
+		{"openai-priority", "gpt-6.1-sol", PricingRowSourceCustom, "2", "0.1", "10", "2", "0.1", "10"},
+		{"openai-ultrafast", "gpt-6.1-sol", PricingRowSourceCustom, "2", "0.1", "10", "2", "0.1", "10"},
 	} {
 		t.Run(tc.provider+"/"+tc.model+"/"+string(tc.source), func(t *testing.T) {
 			resolver := NewPricingResolver([]EffectivePricingRow{{

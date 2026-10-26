@@ -8,12 +8,11 @@ import (
 // BillingPolicy describes a published adjustment applied to model-derived
 // rates for one exact billing service identifier.
 type BillingPolicy struct {
-	Service          string
-	Version          string
-	SourceURL        string
-	Numerator        int64
-	Denominator      int64
-	SkipsCustomRates bool
+	Service     string
+	Version     string
+	SourceURL   string
+	Numerator   int64
+	Denominator int64
 
 	// ModelRatios limits a policy to these models when set. Bump Version when it changes.
 	ModelRatios map[string]BillingRatio
@@ -41,7 +40,6 @@ var billingPolicies = map[string]BillingPolicy{
 	PositAssistantProviderID: {
 		Service: PositAssistantService, Version: PositAssistantVersion,
 		SourceURL: PositAssistantSourceURL, Numerator: 11, Denominator: 10,
-		SkipsCustomRates: true,
 	},
 	OpenAIPriorityProviderID: {
 		Service: OpenAIPriorityProviderID, Version: "openai-priority-v1",

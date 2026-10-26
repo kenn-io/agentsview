@@ -604,12 +604,11 @@ for gpt-6-sol, gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-6.1-terra, gpt-5.6,
 gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-mini, gpt-5.2,
 gpt-5.1, gpt-5, and gpt-5.3-codex; 2.5x for gpt-5.5; and 1.8x for gpt-5-mini.
 Ultrafast rows use `openai-ultrafast` and cost 6x for gpt-6-astra and gpt-6.1-sol.
-Other models keep standard rates. Dated and provider-qualified names use the
-same multiplier as their base model.
+Other models keep standard rates. Provider-qualified names use the same
+multiplier as their base model.
 
-These adjustments include cache rates and request bands. Custom model prices
-represent standard rates, so the tier multiplier applies to them too. A
-missing or unrecognized tier uses standard rates.
+These adjustments include cache rates and request bands. Custom pricing
+overrides are not adjusted. A missing or unrecognized tier uses standard rates.
 
 AgentsView reads the thread setting from `thread_settings_applied` in the
 rollout, including snapshots written after a fork's replayed history. Each
